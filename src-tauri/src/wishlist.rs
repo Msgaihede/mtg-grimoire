@@ -151,6 +151,12 @@ pub struct WishRow {
     pub notes: Option<String>,
     pub needs_review: Option<String>,
     pub updated_at: i64,
+    /// JSON, verbatim: the joined printing's `legalities` object — the fact the Arena export
+    /// filter reads, and the only reader it has. [`crate::collection::CollectionRow::legalities`]
+    /// carries the argument for the blob over `legal_mask`, and the same `None`-is-an-orphan
+    /// rule as [`Self::type_line`] above: the `LEFT JOIN` coalesces an any-printing wish to the
+    /// newest printing of its oracle card, so only a genuine orphan answers `None`.
+    pub legalities: Option<String>,
     /// Where the wish is filed. `None` is the root, and it is on every row rather than
     /// implied by the query because the **Flatten** view asks for every wish at once and
     /// then has to say where each one lives.
@@ -823,9 +829,9 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
                 -- Appended rather than placed beside `c.mana_cost` where it belongs in the
                 -- struct: every `r.get(n)` below is a positional index, so inserting a column
                 -- mid-list renumbers eight of them by hand. Last costs one index and nothing
-                -- else. `c.id` arrived the same way and for the same reason, and so do the
-                -- two below it.
-                c.type_line, c.id,
+                -- else. `c.id` and `c.legalities` arrived the same way and for the same
+                -- reason, and so do the two below them.
+                c.type_line, c.id, c.legalities,
                 -- The other wishes for this same oracle card. Over the whole table on
                 -- purpose: the answer the row needs is about wishes this page did not fetch
                 -- and this folder does not hold.
@@ -872,8 +878,9 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
                     notes: r.get(13)?,
                     needs_review: r.get(14)?,
                     updated_at: r.get(15)?,
-                    folder_id: r.get(19)?,
-                    elsewhere: r.get(18)?,
+                    legalities: r.get(18)?,
+                    elsewhere: r.get(19)?,
+                    folder_id: r.get(20)?,
                 })
             },
         )
@@ -1170,6 +1177,58 @@ mod tests {
         assert_eq!(orphan.card_id.as_deref(), Some("bolt-lea"));
         assert_eq!(orphan.art_card_id, None);
         assert_eq!(orphan.name, "Lightning Bolt", "the wish still names itself");
+    }
+
+    /// **A wish row carries the joined printing's `legalities`, at the index the appended
+    /// column put it at.**
+    ///
+    /// Issue #192: the Arena export offers to leave out cards that are not in MTG Arena, and
+    /// this blob is the only fact that answers it. The verdict is TypeScript's
+    /// (`src/features/transfer/export/arena.ts`, which reads Scryfall's key *names*); this test
+    /// is about the column arriving, and arriving at the right index — it is the third
+    /// appended one, after `c.type_line` and `c.id`.
+    ///
+    /// **An any-printing wish carries one too**, which is the half worth pinning: the join
+    /// coalesces to the newest printing of the oracle card, exactly as it does for `type_line`
+    /// and `art_card_id`, so only a genuine orphan answers `None` — and an Arena export of the
+    /// wishlist would otherwise leave out every unpinned wish on it.
+    #[test]
+    fn a_wish_row_carries_the_joined_printings_legalities() {
+        let conn = seeded();
+        conn.execute(
+            "UPDATE cards SET legalities = '{\"timeless\":\"legal\"}' WHERE id = 'bolt-2ed'",
+            [],
+        )
+        .unwrap();
+        let any = add_wish(
+            &conn,
+            &WishInput {
+                oracle_id: Some("o1".into()),
+                quantity: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let pinned = add_wish(
+            &conn,
+            &WishInput {
+                card_id: Some("bolt-lea".into()),
+                quantity: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let rows = list_wishes(&conn, &WishlistQuery::default()).unwrap();
+        let of = |id: i64| rows.items.iter().find(|r| r.id == id).unwrap();
+        // The unpinned wish resolves to `bolt-2ed`, the printing `art_card_id` above draws.
+        assert_eq!(
+            of(any.id).legalities.as_deref(),
+            Some(r#"{"timeless":"legal"}"#)
+        );
+        // The neighbour an insertion would have displaced, and a printing with no blob.
+        assert_eq!(of(any.id).art_card_id.as_deref(), Some("bolt-2ed"));
+        assert_eq!(of(pinned.id).legalities, None);
     }
 
     /// An any-printing wish is not for a printing, so it must not quietly claim one: the
@@ -1659,6 +1718,7 @@ mod tests {
             notes: None,
             needs_review: None,
             updated_at: 1_800_000_000,
+            legalities: Some(r#"{"timeless":"legal"}"#.into()),
             folder_id: Some(7),
             elsewhere: 1,
         })
@@ -1672,6 +1732,7 @@ mod tests {
                 "quantity": 4, "preferredFinish": "foil",
                 "unitPrice": 40.0, "ownedQuantity": 2, "notes": null,
                 "needsReview": null, "updatedAt": 1800000000,
+                "legalities": "{\"timeless\":\"legal\"}",
                 "folderId": 7, "elsewhere": 1
             })
         );

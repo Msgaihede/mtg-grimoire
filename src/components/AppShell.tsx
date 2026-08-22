@@ -36,6 +36,7 @@ import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { LAYER } from "@/lib/layers";
 import { statusLine as statusLineMotion } from "@/lib/motion";
 import { useAppStore, type ViewId } from "@/lib/store";
+import { usePrefetchDeckSearchOpen } from "@/features/decks/useDeckSearchOpen";
 import { useCardZoomPersistence } from "@/lib/useCardZoomPersistence";
 import { useDelayedFlag } from "@/lib/useDelayedFlag";
 import { useMarketplace, useMarketplaceProgress } from "@/lib/useMarketplace";
@@ -135,6 +136,13 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   // the component that is always mounted, so a size is written whichever view the reader zoomed.
   // It renders nothing: the sizes go into the zustand store, where every wall already reads them.
   useCardZoomPersistence();
+  // The deck editor's search column, read here rather than where it is drawn — and that is a
+  // measurement rather than a preference for tidiness. Asked by the panel, the read queues behind
+  // `deck_get` on the read connection and lands ~700ms after the column has already been drawn
+  // the other way round, so a reader who had shut it watched it thrown open and yanked closed on
+  // every deck they opened. Asked here it resolves while they are still on the Search view. It
+  // renders nothing: the answer goes into the query cache, where `useDeckSearchOpen` reads it.
+  usePrefetchDeckSearchOpen();
   // The one `oracle-tags:progress` subscription, for the same reason again. Unlike the two
   // above it hands back what it heard: the taxonomy has no `useMarketplace`-shaped module of
   // its own to read the event out of a cache entry, and the ribbon is its only consumer today.
@@ -177,11 +185,22 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
     // instead of to the window, and the whole shell scrolls the document.
     <div className="flex h-screen flex-col overflow-hidden bg-bg text-text">
       {/* The window's caption, drawn by the app because `tauri.conf.json` sets
-          `decorations: false`. Outside `min-h-0` and above everything: it is chrome belonging
-          to the *window* rather than to the app, which is why it sits above the sidebar rather
-          than beside it — and why it is the one row here that is never covered by
-          `SyncProgress`'s first-run overlay. A reader on a blank first launch can still close
-          the app. */}
+          `decorations: false`. Outside `min-h-0`: it is chrome belonging to the *window*
+          rather than to the app, which is why it sits above the sidebar rather than beside it,
+          and why it is the one row here that nothing the app draws may cover. A reader on a
+          blank first launch can still close the app.
+
+          **That last sentence was false from the day this row replaced Windows' caption until
+          2026-08-22, and being written down is what hid it.** `SyncProgress`'s overlay and
+          `Dialog`'s scrim are both `fixed inset-0`, and this row is a flex item carrying no
+          z-index of its own — which does not lose the ordering contest so much as never enter
+          it. (Spelling that default as a class here would have Tailwind emit a rule for it,
+          which is why `layers.test.ts` sweeps comments too, and it caught this one.) Driven in the
+          shipped window: on a first launch `elementFromPoint` over the Close button answered
+          the overlay, and there was no caption on screen for the whole ~90s sync. It is kept
+          now by `LAYER.caption` in `TitleBar` itself, where the rung carries the argument; the
+          claim lives here because this is where the row is placed, and `layers.test.ts` is
+          what holds the two together. */}
       <TitleBar />
 
       <div className="flex min-h-0 flex-1">

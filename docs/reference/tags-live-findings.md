@@ -322,6 +322,29 @@ and a fresh install is the one population that cannot show an upgrade defect. An
 `ALTER TABLE … ADD COLUMN`s a value only an ingest can supply owes a test over a rewind fixture,
 not over the tree you are driving.
 
+**A rail row could be picked and not un-picked** —
+[issue #181](https://github.com/Msgaihede/mtg-grimoire/issues/181), reported from Discord the same
+day. The row pressed `addChip`, which answers an already-picked tag with the *same object*, so the
+second press re-rendered nothing: on to filter by, and no way off except the chip's ×, a control
+the reader had no reason to be looking at. It is a toggle now (`toggleChip`, `aria-pressed` on the
+row, and a menu row that names the half it will do).
+
+**Driven in the shipped window** on 2026-08-22 (debug build, the main checkout's `data/` copied
+in — 926 rail rows on `Both`, all `aria-pressed="false"` and none of their names carrying the old
+`, picked` suffix). On `polymorph, oracle tag, 39 cards`: press → `aria-pressed="true"`, the tick,
+and the chip `polymorph, oracle tag, included`; press again → `false`, no tick, no chip, and the
+row back to *"No tags picked yet."* The row menu read `Add this tag to the filter` before the pick
+and `Remove this tag from the filter` after it, and pressing that row took the tag off as well.
+
+It is here for the same reason as #180 — *why this pass missed it*. The checklist above drove
+every control on the page and found all of it working, because **it pressed each one once**. A
+one-way control passes a one-press check by construction: the exclude flip was driven both ways
+(the label flips, so the second press has something to assert), and the rail row was not, because
+its state was in its accessible **name** and the name after one press was the name it was supposed
+to have. The transferable form: **a checklist item that presses a control has to press it again**,
+and a control whose state a test reads as a *name* rather than as `aria-pressed` is one nobody has
+asked to go backwards.
+
 ## Still open
 
 1. **622 ms of blocked input** on entering the page, debug build (gate 1). Measure a release build

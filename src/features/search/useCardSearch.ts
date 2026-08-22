@@ -1,10 +1,31 @@
 import { useEffect, useMemo, useState } from "react";
-import { keepPreviousData, useInfiniteQuery } from "@tanstack/react-query";
-import { ipc, type SearchRequest, type SearchResponse, type SearchSortKey } from "@/lib/ipc";
+import { keepPreviousData, useInfiniteQuery, useQuery } from "@tanstack/react-query";
+import {
+  ipc,
+  type SearchRequest,
+  type SearchResponse,
+  type SearchSortKey,
+  type TagNamespace,
+} from "@/lib/ipc";
 import { MANA_KEYS, type ManaKey } from "@/lib/mana";
 import { applySort, type SortDir, type SortSpec } from "@/lib/sort";
 import { useMarketplace } from "@/lib/useMarketplace";
+import {
+  chipKey,
+  mergeTagTerms,
+  termsFor,
+  type TagChip,
+  type TagSelection,
+} from "@/features/tags/tagFilters";
 import { useCardFacets, type FacetRequest } from "./useCardFacets";
+import {
+  parseTagQuery,
+  removeToken,
+  setTokenNegated,
+  setTokenValue,
+  tokenKey,
+  type TagToken,
+} from "./tagQuery";
 
 /**
  * No tag chips — what a caller that has never heard of the Tags page passes.
@@ -367,34 +388,17 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   // inline, so it is a new identity on every render and nothing may depend on it.
   const defaultFormatValue = options.defaultFormat?.value ?? "";
   /**
-   * The tag chips, and the one string that identifies them.
+   * The caller's tag chips — the Tags page's whole filter, and half of what finally rides.
    *
-   * `tagKey` is the query-key segment. Derived from the payload rather than taken as a second
-   * parameter beside it, which is what makes "same payload, same key" hold by construction —
-   * two parameters are two things that can disagree, and a key that missed a chip would answer
-   * one search out of another's cached pages with nothing on screen to notice.
+   * The other half is typed into the search box, and the two are merged into `tagTerms` further
+   * down, once the typed names have been resolved. This is the raw caller half, kept apart so
+   * the merge has something to name.
    *
    * Nothing depends on the object's *identity*: the request payload is rebuilt inside `queryFn`
    * and the facet request is hashed by React Query with its keys sorted, so a caller building
    * this inline costs nothing.
    */
-  const tagTerms = options.tagTerms ?? EMPTY_TAG_TERMS;
-  const tagKey = JSON.stringify(options.tagTerms ?? null);
-  /**
-   * Whether a **tag** was picked — which is the reader asking something, even though no control
-   * on the filter row can set one.
-   *
-   * Read by `unfiltered` below, and it has to be the *slugs* rather than the presence of the
-   * object: an empty `artTags` adds no SQL at all (`filters::picked_tags`), so a payload
-   * carrying one asked nothing and its empty answer is still a statement about the database.
-   * The weight floor is deliberately not counted for the same reason — it narrows nothing
-   * without an include, and `termsFor` will not send one on its own.
-   */
-  const hasTagTerms =
-    (tagTerms.artTags?.include?.length ?? 0) > 0 ||
-    (tagTerms.artTags?.exclude?.length ?? 0) > 0 ||
-    (tagTerms.oracleTags?.include?.length ?? 0) > 0 ||
-    (tagTerms.oracleTags?.exclude?.length ?? 0) > 0;
+  const callerTagTerms = options.tagTerms ?? EMPTY_TAG_TERMS;
   // Which marketplace's prices this list is quoting. It is an input to the query rather than
   // a formatting choice: the backend prices the page with it, so it is in the key below and a
   // switch re-asks.
@@ -477,6 +481,155 @@ export function useCardSearch(options: CardSearchOptions = {}) {
     return () => clearTimeout(timer);
   }, [text]);
 
+  /**
+   * Scryfall's tagger syntax, read out of the box — `o:ramp`, `otag:"spot removal"`, `-a:dragon`
+   * — and the free text left over for FTS.
+   *
+   * Parsed from the **debounced** string rather than the live one, so the chips, the note and
+   * the wall all move together. A row that appeared a keystroke at a time while the wall waited
+   * would read as three controls arguing. The two gestures that are not typing — a chip's ✕ and
+   * its include/exclude toggle — flush the debounce themselves, because a press is a deliberate
+   * act and should not sit for 300 ms.
+   */
+  const parsed = useMemo(() => parseTagQuery(debouncedText), [debouncedText]);
+
+  /** The tokens as asks, and the one string that identifies them. Order matters: the answer is
+   *  positional, so two queries naming the same tags in a different order are two questions. */
+  const asks = useMemo(
+    () => parsed.tokens.map((t) => ({ namespace: t.namespace, value: t.value })),
+    [parsed],
+  );
+  const askKey = useMemo(() => asks.map(tokenKey).join(" "), [asks]);
+
+  /**
+   * The typed names, as the canonical slugs the filters match on.
+   *
+   * Keyed on {@link askKey} rather than on the whole query, so editing the free text beside a
+   * tag does not re-ask a question already answered — and so the two searches `a:dog bolt` and
+   * `bolt a:dog` share one answer.
+   */
+  const tagResolution = useQuery({
+    queryKey: ["tags", "resolve", askKey],
+    queryFn: () => ipc.tagResolve(asks),
+    enabled: asks.length > 0,
+  });
+
+  /**
+   * What the reader typed, as chips — and the tokens that could not be resolved.
+   *
+   * **Deduplicated by `chipKey`, first mode winning.** A chip's identity is the tag, while a
+   * token's is where it sits in the string, so `a:dog a:dog` is two terms and one chip. That is
+   * also what makes the ✕ honest: it removes *every* term that produced the chip, because a
+   * chip that vanished and left the wall still narrowed would be worse than no chip at all.
+   */
+  const typed = useMemo(() => {
+    const answers = tagResolution.data;
+    const chips: TagChip[] = [];
+    const seen = new Set<string>();
+    const unknown: TagToken[] = [];
+    parsed.tokens.forEach((token, i) => {
+      // Undefined while the query is in flight, which is why the search is gated below rather
+      // than being allowed to run against a half-resolved list.
+      const ref = answers?.[i];
+      if (ref === undefined) return;
+      if (ref === null) {
+        unknown.push(token);
+        return;
+      }
+      const key = chipKey(ref.namespace, ref.slug);
+      if (seen.has(key)) return;
+      seen.add(key);
+      chips.push({
+        slug: ref.slug,
+        label: ref.label,
+        namespace: ref.namespace,
+        mode: token.negated ? "exclude" : "include",
+      });
+    });
+    return { chips, unknown };
+  }, [parsed, tagResolution.data]);
+
+  /**
+   * The tag filter the typed syntax adds, in the shape a chip row already produces.
+   *
+   * Built through `termsFor` rather than by hand, so "a taxonomy nobody picked from is absent,
+   * not empty" is stated once for both gestures. The floor is `"any"`: the syntax has no
+   * keyword for it, because Scryfall has none to borrow.
+   */
+  const typedTerms = useMemo(
+    () => termsFor({ chips: typed.chips, namespace: "both", floor: "any" } satisfies TagSelection),
+    [typed.chips],
+  );
+
+  /**
+   * Every tag this search filters by: the caller's chips ANDed with the reader's typed ones.
+   *
+   * Both are narrowings the reader asked for, so they merge rather than one winning — see
+   * `mergeTagTerms`, which also sorts and dedupes each list so that chipping `dog` and typing
+   * `a:dog` is one predicate and, more to the point, one query key.
+   */
+  const tagTerms = useMemo(
+    () => mergeTagTerms(callerTagTerms, typedTerms),
+    [callerTagTerms, typedTerms],
+  );
+
+  /**
+   * The query-key segment for the tags, derived from the payload rather than taken beside it —
+   * which is what makes "same payload, same key" hold by construction. Two parameters are two
+   * things that can disagree, and a key that missed a tag would answer one search out of
+   * another's cached pages with nothing on screen to notice.
+   *
+   * **`"null"` when nothing at all is picked**, which is what keeps a plain search on any of
+   * this hook's three callers keyed exactly as it has always been: a segment that is constant
+   * across every reachable state of a view costs that view no second key. `mergeTagTerms`
+   * assigns a field only when there is one, so the empty case is an empty object and this is
+   * the one place that is spelled `null`.
+   */
+  const tagKey = JSON.stringify(tagTerms.artTags ?? tagTerms.oracleTags ? tagTerms : null);
+
+  /**
+   * Whether a **tag** was picked — the reader asking something, from either gesture.
+   *
+   * Read by `unfiltered` below, and it has to be the *slugs* rather than the presence of the
+   * object: an empty `artTags` adds no SQL at all (`filters::picked_tags`), so a payload
+   * carrying one asked nothing and its empty answer is still a statement about the database.
+   * The weight floor is deliberately not counted for the same reason — it narrows nothing
+   * without an include, and `termsFor` will not send one on its own.
+   */
+  const hasTagTerms =
+    (tagTerms.artTags?.include?.length ?? 0) > 0 ||
+    (tagTerms.artTags?.exclude?.length ?? 0) > 0 ||
+    (tagTerms.oracleTags?.include?.length ?? 0) > 0 ||
+    (tagTerms.oracleTags?.exclude?.length ?? 0) > 0;
+
+  /**
+   * Whether the typed tags are in a state the search may not be run in — and both arms of it
+   * **fail closed**, which is the opposite of what this file does everywhere else.
+   *
+   * *Pending*: the names are still being resolved. A search run now would go out with no tag
+   * filter at all and **cache the unfiltered corpus under the key that afterwards means
+   * "filtered"** — the whole wall wrong, served instantly, with nothing to notice.
+   *
+   * *Unknown*: a name that resolved to nothing. Answering it as though the term were not there
+   * shows the reader the unfiltered wall in reply to a narrowing they asked for, which is the
+   * one direction a search must never fail in. Scryfall 404s here; this draws an empty wall and
+   * `tagNotFound` is what the box says about it.
+   */
+  const tagsPending = asks.length > 0 && tagResolution.isPending;
+  const tagQueryBlocked = tagsPending || typed.unknown.length > 0;
+
+  /**
+   * Rewrite the box, and let the wall follow immediately.
+   *
+   * The debounce exists to keep a keystroke from becoming a query; a chip's press is already
+   * the reader's final answer, so it flushes. Without this the chip the ✕ removed sits on
+   * screen for another 300 ms and the press reads as dropped.
+   */
+  const rewrite = (next: string) => {
+    setText(next);
+    setDebouncedText(next);
+  };
+
   const colorsParam = colorParam(colors);
   // Sorted before they reach the key: picking two sets in either order is the same search
   // and must not cost a second round trip.
@@ -531,9 +684,13 @@ export function useCardSearch(options: CardSearchOptions = {}) {
     queryKey,
     queryFn: ({ pageParam }) =>
       ipc.searchCards({
+        // **The free text, not the box** — the tag terms have been lifted out of it, so
+        // `bolt a:dragon` searches FTS for `bolt` alone. Sending the raw string would have FTS
+        // hunting for a card whose text contains `a:dragon`, which is no card.
+        //
         // Blank strings are dropped rather than sent: the backend treats them as unset
         // anyway, and sending them would make the request payload lie about intent.
-        text: debouncedText || undefined,
+        text: parsed.text || undefined,
         // `format` and `playableOnly` together, from the one select that decides both. See
         // {@link formatParams} — including why a named format sends `playableOnly` too.
         ...formatParams(format),
@@ -574,12 +731,29 @@ export function useCardSearch(options: CardSearchOptions = {}) {
       }),
     initialPageParam: 0,
     getNextPageParam: (_last, pages) => nextOffset(pages),
+    // See `tagQueryBlocked`: a search that runs before its tag names have resolved caches the
+    // unfiltered corpus under the key that afterwards means "filtered", and one that runs with
+    // an unknown name answers a narrowing with the whole wall.
+    enabled: !tagQueryBlocked,
     // Filter changes keep the old rows on screen until the new ones land, so a search
     // that has to wait out an ingest's database lock does not blank the list first.
     placeholderData: keepPreviousData,
   });
 
-  const rows = useMemo(() => query.data?.pages.flatMap((p) => p.items) ?? [], [query.data]);
+  /**
+   * The page, or **nothing at all while the tag terms are not answerable**.
+   *
+   * The emptying is here rather than at each consumer for two reasons. `placeholderData:
+   * keepPreviousData` is doing its job — it hands back the *previous* search's rows while the
+   * query is disabled — so a wall left to itself would go on showing the cards from before the
+   * unknown tag was typed, which reads as "these are your results" and is the one lie this
+   * feature could tell. And it is one rule for three callers: a consumer that forgot it would
+   * fail exactly the same silent way.
+   */
+  const rows = useMemo(
+    () => (tagQueryBlocked ? [] : (query.data?.pages.flatMap((p) => p.items) ?? [])),
+    [query.data, tagQueryBlocked],
+  );
 
   /**
    * The same filters the page above is built from, and nothing else.
@@ -591,7 +765,10 @@ export function useCardSearch(options: CardSearchOptions = {}) {
    * above it.
    */
   const facetReq: FacetRequest = {
-    text: debouncedText || undefined,
+    // The free text, exactly as the page's payload spells it — the counts greying a chip and the
+    // wall that chip filters have to describe one corpus, and a facet request carrying the whole
+    // box would be counting over an FTS query the search never ran.
+    text: parsed.text || undefined,
     // Spelled through the same {@link formatParams} the page's payload is, so the counts
     // greying this row's chips and the wall those chips filter can never describe different
     // corpora. `playableOnly` is a filter the facets must carry (unlike `collapse`): it decides
@@ -674,6 +851,69 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   return {
     text,
     setText,
+    /**
+     * The tags the reader typed into the box, resolved — what the chip row under it draws.
+     *
+     * Empty on a box with no tagger syntax in it, and empty *while a name is resolving*, which
+     * is the state the row must not draw a half-answer in. Deduplicated by tag, so `a:dog
+     * a:dog` is one chip; see the note on `typed` for why the ✕ then removes both terms.
+     */
+    tagChips: typed.chips,
+    /**
+     * The typed names that name no tag — Scryfall's 404, as something the box can say.
+     *
+     * Non-empty means the wall is deliberately empty: see `tagQueryBlocked`. The tokens are
+     * carried whole rather than as strings, so the note can offer the near misses for one and
+     * the chip row can go on identifying the rest by position.
+     */
+    tagNotFound: typed.unknown,
+    /** Whether the typed names are still being looked up. The wall is empty and *not* a result
+     *  while this is true, which is what tells a spinner from an answer. */
+    tagsResolving: tagsPending,
+    /**
+     * Take one typed tag out of the query — a chip's ✕.
+     *
+     * Removes **every** term that produced the chip, because a chip that vanished and left the
+     * wall still narrowed would be worse than no chip at all. Spliced out of the box's own text
+     * rather than tracked beside it, so the string the reader can see stays the one source of
+     * truth for the query.
+     */
+    removeTagChip: (slug: string, namespace: TagNamespace) => {
+      const key = chipKey(namespace, slug);
+      // Right to left: every span is an offset into the string being edited, so removing a
+      // later term first leaves the earlier ones' spans still true.
+      const doomed = parsed.tokens
+        .map((token, i) => ({ token, ref: tagResolution.data?.[i] }))
+        .filter(({ ref }) => ref && chipKey(ref.namespace, ref.slug) === key)
+        .map(({ token }) => token)
+        .reverse();
+      rewrite(doomed.reduce((query, token) => removeToken(query, token), debouncedText));
+    },
+    /**
+     * Put a real tag in place of one the box could not find — pressing a suggestion under the
+     * "no such tag" note.
+     *
+     * Named by **token** rather than by tag, unlike the two above: an unresolved term has no
+     * tag to be identified by, and its position in the string is the only thing it has.
+     */
+    replaceTagToken: (token: TagToken, value: string) =>
+      rewrite(setTokenValue(debouncedText, token, value)),
+    /** Flip one typed tag between include and exclude — a chip's press. Rewrites every term
+     *  that produced the chip, for {@link removeTagChip}'s reason. */
+    toggleTagChipMode: (slug: string, namespace: TagNamespace) => {
+      const key = chipKey(namespace, slug);
+      const picked = typed.chips.find((c) => chipKey(c.namespace, c.slug) === key);
+      if (!picked) return;
+      const negated = picked.mode === "include";
+      const doomed = parsed.tokens
+        .map((token, i) => ({ token, ref: tagResolution.data?.[i] }))
+        .filter(({ ref }) => ref && chipKey(ref.namespace, ref.slug) === key)
+        .map(({ token }) => token)
+        .reverse();
+      rewrite(
+        doomed.reduce((query, token) => setTokenNegated(query, token, negated), debouncedText),
+      );
+    },
     /**
      * The format select's whole value — `""` (`Any format`, the default), {@link ANY_CARD}
      * (`Any card`), or a `legalities` key.
@@ -857,9 +1097,12 @@ export function useCardSearch(options: CardSearchOptions = {}) {
      */
     searchKey: JSON.stringify(queryKey),
     /** Size of the whole match set, not of `rows`. `0` until the first page answers. */
-    total: query.data?.pages[0]?.total ?? 0,
+    // Zero rather than the previous search's figure while the tag terms are unanswerable —
+    // `rows` is empty for the reason written at its definition, and a caption reading `5,000+`
+    // over an empty wall would be the same lie in one line.
+    total: tagQueryBlocked ? 0 : (query.data?.pages[0]?.total ?? 0),
     /** `total` is a floor, not a figure: render it as `5,000+`. */
-    totalIsCapped: query.data?.pages[0]?.totalIsCapped ?? false,
+    totalIsCapped: !tagQueryBlocked && (query.data?.pages[0]?.totalIsCapped ?? false),
     /**
      * Nothing was asked of the database at all. An empty answer to *this* is an empty
      * database, not a search that missed — the difference between "wait for the sync"

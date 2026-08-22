@@ -28,25 +28,28 @@
  * `MutedTag`                                     — `src-tauri/src/tags/muted.rs`
  * `TagTerms`                                     — `src-tauri/src/filters.rs`
  *
- * **Four settings carry no struct at all.** Each is one `app_meta` row: two answered as a bare
+ * **Five settings carry no struct at all.** Each is one `app_meta` row: two answered as a bare
  * string — `getMarketplace`/`setMarketplace` (`src-tauri/src/marketplace.rs`) and
  * `printingGroupBy`/`setPrintingGroupBy` (`src-tauri/src/card.rs`) — one, `cardZoom`/
- * `setCardZoom` (`src-tauri/src/zoom.rs`), as a bare `Record<string, number>`, and one,
- * `navCollapsed`/`setNavCollapsed` (`src-tauri/src/nav.rs`), as a bare `boolean`. All four are
+ * `setCardZoom` (`src-tauri/src/zoom.rs`), as a bare `Record<string, number>`, and two as a bare
+ * `boolean`: `navCollapsed`/`setNavCollapsed` (`src-tauri/src/nav.rs`) and
+ * `deckSearchOpen`/`setDeckSearchOpen` (`src-tauri/src/deck.rs`). All five are
  * the shape a stored preference has to have: the read falls back on its default for a row that
  * is missing *or* holds a value this build does not recognise, and only the *write* refuses.
  *
  * Three of them are therefore typed loosely here rather than as their unions: the narrowing
  * belongs to the module that owns the vocabulary (`@/lib/marketplace`,
  * `@/features/card/printings`, `@/lib/cardZoom`), and a row a newer build wrote must reach this
- * side as what it is. **`navCollapsed` is the one with no narrowing to do**, and that is the same
- * argument arriving at nothing rather than an exception to it: a boolean has no vocabulary for a
- * later build to have widened, so there is no third state a row could come back in. The far end
- * folds a missing row, a junk row and an unreadable one alike into `false` — the rail expanded,
- * which is what a reader who has never touched it sees — and `boolean` here is the whole of the
- * type, with nothing left for this side to decide.
+ * side as what it is. **The two booleans are the ones with no narrowing to do**, and that is the
+ * same argument arriving at nothing rather than an exception to it: a boolean has no vocabulary
+ * for a later build to have widened, so there is no third state a row could come back in. Each
+ * far end folds a missing row, a junk row and an unreadable one alike into its own default —
+ * `false` for the nav rail, which is expanded, and `true` for the deck editor's search column,
+ * which is open — and `boolean` here is the whole of the type, with nothing left for this side to
+ * decide. Both store `"1"`/`"0"` and read anything else as that default, so a hand-edit or a
+ * spelling a future build invents is already collapsed before it reaches the wire.
  *
- * The zoom row is the one of the four whose *shape* is a map, and the difference is worth a
+ * The zoom row is the one of the five whose *shape* is a map, and the difference is worth a
  * sentence: it has no single default to fall back on, because there are seven walls and each one
  * has been zoomed or not. So the backend answers only what it has, and a section it says nothing
  * about keeps the default the store was built with.
@@ -878,6 +881,21 @@ export interface CollectionRow {
    * than shown raw.
    */
   promoTypes: string | null;
+  /**
+   * JSON: **this printing's** legality blob, the same shape {@link DeckCard.legalities}
+   * carries — 23 keys and growing, so parse it and never index fixed fields.
+   *
+   * **It rides here for one reader, the Arena export filter** — issue #192,
+   * `src/features/transfer/export/arena.ts`. Nothing the collection screen draws touches it.
+   * The blob rather than `cards.legal_mask`, which would have been 8 bytes against this
+   * field's 483-byte average (528 at most, over the 116,712-printing corpus of 2026-08-22,
+   * where `promoTypes` above averages 23): bit positions are stored data Rust owns and freezes
+   * — `src-tauri/src/legalities.rs` — and a copy of that order over here would be a second
+   * place for it to drift. Scryfall's key *names* are public vocabulary and cannot.
+   *
+   * `null` is an orphan — the printing this entry names has left `cards`.
+   */
+  legalities: string | null;
 }
 
 export interface CollectionPage {
@@ -1066,6 +1084,16 @@ export interface WishRow {
   needsReview: string | null;
   /** Unix seconds. */
   updatedAt: number;
+  /**
+   * JSON: the joined printing's legality blob — the fact the Arena export filter reads
+   * (issue #192), and its only reader. {@link CollectionRow.legalities} carries the argument
+   * for the blob over a mask.
+   *
+   * **An any-printing wish carries one**, the same way {@link WishRow.typeLine} and
+   * {@link WishRow.artCardId} beside it do: the join coalesces to the newest printing of the
+   * wish's oracle card. `null` is a genuine orphan — no pinned printing, no oracle match.
+   */
+  legalities: string | null;
 }
 
 export interface WishlistPage {
@@ -1423,6 +1451,28 @@ export interface TheoryDiffRow {
    * deck's own live copies read as spare here — right for a person, wrong for a subtraction.
    */
   ownedSpare: number;
+  /**
+   * How many of this row's {@link TheoryDiffRow.quantity} the **live list already plays as a
+   * different printing or finish of the same card** — the copies that are an upgrade rather
+   * than a hole.
+   *
+   * The diff compares the exact card, so a plan naming one Sol Ring against a deck sleeving
+   * another is a full row here and reads as a card the reader has not got. For buying, that is
+   * right — they would still have to find it. For *playing*, it is not: the deck runs. This
+   * field is the difference between the two readings, and it is what the dialog's
+   * `Missing` / `Different printing` filter is computed from.
+   *
+   * **Never greater than {@link TheoryDiffRow.quantity}, and 0 for an orphan.** Copies are
+   * claimed per oracle card, in the list's own reading order, out of a pool the backend sizes
+   * as *live copies of that card minus the ones an exact line already matched* — so one live
+   * Bolt cannot excuse two rows, and a row whose printing has left the card database has no
+   * oracle card to be matched by.
+   *
+   * A row can be **partly both**: theory 2× art A against live 1× art B is `quantity: 2`,
+   * `heldAsOtherPrinting: 1` — one copy to find, one already on the table. Such a row shows
+   * under both filters at its full quantity, because the full quantity is what a press writes.
+   */
+  heldAsOtherPrinting: number;
 }
 
 /**
@@ -2901,6 +2951,24 @@ export interface TagRef {
 }
 
 /**
+ * One tag a reader named in a card search box — `tags::query::TagLookup`, the ask half of
+ * {@link ipc.tagResolve}.
+ *
+ * `tagQuery.ts`'s token minus what is the *box's* business: where the term sat in the string,
+ * and whether it was negated. Resolution answers "is there such a tag"; which of
+ * {@link TagTerms}' two lists the slug lands in is decided in TypeScript, because that is a
+ * conclusion rather than a fact.
+ */
+export interface TagLookup {
+  /** **Never `"both"`**, unlike {@link ipc.tagSearch}'s: a typed `o:` names one taxonomy, and
+   *  answering across both would let `o:dog` filter by the picture. */
+  namespace: TagNamespace;
+  /** What the reader typed after the keyword. Normalised by Rust, never here — two copies of
+   *  that rule would leave both halves self-consistent and the search matching nothing. */
+  value: string;
+}
+
+/**
  * One tag, as the Tags page draws it — `tags::query::TagHit`.
  *
  * Answered by both {@link ipc.tagSearch} and {@link ipc.tagChildren}, and a muted tag is absent
@@ -3527,9 +3595,33 @@ export const ipc = {
    * stands is short of — while this one reads the difference between the plan and the deck.
    * Neither nets out {@link TheoryDiffRow.ownedSpare}: it is a display field, and subtracting
    * it here would count the live list twice.
+   *
+   * **`only` narrows it to the rows the reader ticked** — `deck_theory.rs`'s own `group_key`
+   * strings, `` `${cardId}|${finish ?? ""}` ``, which is the same spelling
+   * {@link ipc.deckTheorySlots} answers in and `theoryMatch.ts` builds. Absent means the whole
+   * difference, so the footer's untouched press and every older caller mean what they always
+   * did. A key naming no row of the current difference writes nothing rather than refusing:
+   * the diff is re-read inside the write, so a row the reader ticked and then acquired in
+   * another window is simply not short any more.
+   *
+   * **An include list rather than an exclude list**, though the gesture it serves is exclusion.
+   * The two differ only for rows that appeared between the read and the press — and those are
+   * rows the reader never saw, so sending them would be the dialog acting on its own.
+   *
+   * **The wish is pinned to the printing the plan names** (2026-08-22), carrying its `foil` or
+   * `etched` finish with it, which is the same rule the comparison itself has followed since
+   * 2026-08-20: a plan naming a printing is a plan for that cardboard, and answering it with a
+   * wish for any printing hands the reader back the substitution they were tracking. The
+   * regular copy pins no finish — `null` is the unmarked case in `deck_cards`, and writing
+   * `nonfoil` would split this wish from every other one the app makes for that card.
+   *
+   * Because a pinned wish and an any-printing one are **different rows** on the wishlist grain
+   * `(oracleId, cardId, preferredFinish)`, a reader who pressed this before that change keeps
+   * their old any-printing line and gains a pinned one. Nothing is lost or double-counted; the
+   * upsert folds each into its own row.
    */
-  deckTheoryMissingToWishlist: (deckId: number) =>
-    invoke<number>("deck_theory_missing_to_wishlist", { deckId }),
+  deckTheoryMissingToWishlist: (deckId: number, only?: readonly string[]) =>
+    invoke<number>("deck_theory_missing_to_wishlist", { deckId, only }),
   /**
    * Put copies into a category, folding on `(deck, variant, category, card)` — the drag-in
    * and the click-to-add write, and **not** the stepper's.
@@ -3886,9 +3978,9 @@ export const ipc = {
    * Whether the reader has collapsed the global navigation rail, stored so it opens the way
    * they left it.
    *
-   * The fourth `app_meta` setting and the first that is a bare `boolean` — see this file's
-   * header. It is also the one that needs no narrowing on this side: the other three carry a
-   * vocabulary a newer build could have widened, and `true`/`false` has none, so there is no
+   * The **fourth** `app_meta` setting and the first that is a bare `boolean` — see this file's
+   * header. It is also one of the two that need no narrowing on this side: the other three carry
+   * a vocabulary a newer build could have widened, and `true`/`false` has none, so there is no
    * third state to fall back from. **The far end is infallible**: a missing row, a row holding
    * something that is not a boolean, and a row that cannot be read at all all answer `false` —
    * the rail expanded, which is what a reader who has never touched the control sees.
@@ -3900,6 +3992,23 @@ export const ipc = {
    * setting is worth less than the reader's hand: `@/lib/useNavCollapsed` has the argument.
    */
   setNavCollapsed: (collapsed: boolean) => invoke<void>("set_nav_collapsed", { collapsed }),
+  /**
+   * Whether the deck editor's card search column was last left open.
+   *
+   * The **fifth** `app_meta` setting and the second bare `boolean`, arriving on the same day as
+   * {@link navCollapsed} above and answering the same way — see this file's header. Its default
+   * is the other one's mirror image and both are the state the reader has never asked about:
+   * `true`, the column open, which is issue #183's reversal of a disclosure that used to open
+   * shut. `true` again for a row holding anything but the `"1"`/`"0"` the backend writes.
+   */
+  deckSearchOpen: () => invoke<boolean>("deck_search_open"),
+  /**
+   * Remember the answer. Nothing to refuse — a `bool` cannot carry a value the row could not
+   * hold — so unlike {@link setPrintingGroupBy} this one's only failure is the BUSY every write
+   * command takes while a sync holds the write connection, which costs the reader the next
+   * launch's starting state and nothing this session.
+   */
+  setDeckSearchOpen: (open: boolean) => invoke<void>("set_deck_search_open", { open }),
   /**
    * Download one marketplace's price feed and rewrite its rows. Answers the feed's state
    * afterwards.
@@ -4041,6 +4150,31 @@ export const ipc = {
    */
   tagChildren: (namespace: TagNamespace | "both", slug: string | null) =>
     invoke<TagHit[]>("tag_children", { namespace, slug }),
+  /**
+   * Turn tag names typed into a card search box into the slugs {@link SearchRequest.artTags} and
+   * {@link SearchRequest.oracleTags} match on — `tagQuery.ts`'s tokens, resolved.
+   *
+   * **One answer per ask, in the order asked, `null` where there is no such tag.** The misses
+   * ride along rather than being filtered out, because the box has to be able to name the token
+   * it could not find and a shortened list cannot say which one is missing.
+   *
+   * **Exact, where {@link ipc.tagSearch} is a substring, and the difference is the job.** That
+   * one is a type-ahead and should find `removal` from `remov`; this one builds a *filter*, and
+   * a substring here would resolve one token to many tags that would have to be ORed — while
+   * every tag filter in this app intersects, so `a:dragon` would silently also answer
+   * `dragonborn`. Separators and case are still noise (`otag:"spot removal"`,
+   * `otag:spot-removal` and `otag:SPOT-REMOVAL` are one tag, verified live 2026-08-20), because
+   * Rust matches through `slug_norm`.
+   *
+   * **A muted tag still resolves.** Muting hides a tag from the search box and the rail; it is
+   * documented never to hide a *card*, and nothing in the card filters consults that table. A
+   * reader who spells a tag out has named it rather than browsed onto it.
+   *
+   * A blank or all-punctuation value answers `null` and never a tag — see the Rust for why that
+   * is a guard rather than an accident.
+   */
+  tagResolve: (asks: readonly TagLookup[]) =>
+    invoke<(TagRef | null)[]>("tag_resolve", { asks }),
   /**
    * Stop offering a tag anywhere — Scryfall asks downstream apps for this in as many words,
    * because Tagger is crowdsourced and they cannot guarantee the data is free from abuse.

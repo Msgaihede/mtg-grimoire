@@ -125,9 +125,18 @@ Every one of these has its measurement and its story in
   never crop off a printed credit.
 - **Z-indexes come from `LAYER` in `src/lib/layers.ts`** and nowhere else; `src/lib/layers.test.ts`
   sweeps `src/` to keep it that way. The ladder is
-  `raised 10 < header 20 < popup 30 < dragTray 40 < overlay 45 < gate 50`. Equal z-indexes are
-  resolved by document order, and a popup inside a virtualised row is capped by that row's layer
-  whatever it asks for.
+  `raised 10 < header 20 < popup 30 < dragTray 40 < overlay 45 < tooltip 46 < gate 50 <
+  caption 60`. Equal z-indexes are resolved by document order, and a popup inside a virtualised
+  row is capped by that row's layer whatever it asks for.
+  **`caption` is the top rung and the only one that is not about the app** (2026-08-22): with
+  `decorations: false` the title bar *is* the window frame, so a surface that covers it takes
+  the window away rather than hiding a control. It shipped covered by both full-window surfaces
+  — `SyncProgress`'s gate for the length of a first sync and `Dialog`'s scrim for every modal —
+  because a `fixed inset-0` element paints over a flex item at `z-auto` whatever the numbers
+  say, so the bar never entered the contest. **Bounding each overlay at the bar's height is the
+  fix that does not scale**: it copies `BAR_H` into every such file and cannot be spelled as a
+  Tailwind class built from a constant. A new full-window surface needs no thought about this;
+  a new rung above `caption` needs a very good reason.
 - **Escape closes one layer per press, and the protocol is a handshake, not a z-index.** An
   inner dismissible layer listens on `window` in the **capture** phase and calls
   `preventDefault()`; an outer one listens in the bubble phase and returns early on
@@ -182,7 +191,17 @@ Every one of these has its measurement and its story in
   surface that is _worked out of_ earns a place in the layout — the deck editor's card search
   column, whose tiles are drag sources into the deck's own category columns, and the card detail
   pane, which is how a reader flips through a card's printings — and both of those are
-  collapsible or dismissible and **neither opens by default**.
+  collapsible or dismissible.
+  **Both of those halves moved on 2026-08-22 (issue #183), in opposite directions, and they moved
+  together.** The card pane stopped taking a place in the deck editor's layout at all: there it is
+  an **overlay** over one of the desk's two columns — over the search column for a card opened
+  from the deck, over the deck for a card opened from the search column, so that either way it
+  covers what the reader was _not_ looking at — and `App` draws the docked one for every other
+  view. With the 384px gone from the desk, the search column **opens by default** again and
+  remembers which way the reader last left it (`app_meta.deck_search_open`). The rule above is
+  unchanged and it is what decided both: a consulted surface is a modal, a worked-out-of surface
+  earns its place — and a surface worked out of _beside_ another one may not take the other's
+  width to do it.
 - **A modal is clamped to the window and scrolls inside itself — its content never decides its
   height.** Every panel here has something in it that can grow without a ceiling: a decklist, a
   validation list, a category list, an error carrying a Scryfall message. Unclamped, the panel
@@ -437,6 +456,21 @@ Every one of these has its measurement and its story in
   marketplace) or when **the reader arranged it themselves** (deck categories, the folder tree).
   Everything else sorts. Every exemption carries a comment at its own site saying which of the two
   it is — that comment is the record, and grepping `sortOptions` is how you count them.
+- **The card search box reads Scryfall's tagger syntax, and the parse is TypeScript's while the
+  slug is Rust's.** `o:ramp`, `otag:"spot removal"`, `-a:dragon` — `features/search/tagQuery.ts`
+  splits the box into tag terms and the free text left for FTS, `tag_resolve` turns each name into
+  a canonical slug, and `useCardSearch` merges the result with whatever chips its caller passed.
+  One wiring reaches both surfaces: the search page and the deck editor's docked panel are the
+  same `FilterBar` over the same hook. Three rules that are not obvious, each with its failure
+  written at its own site and all of it in
+  [tag-search-syntax.md](../docs/reference/tag-search-syntax.md): **`a:` and `o:` mean the two
+  taxonomies here and `artist:`/`oracle:` on Scryfall**, so those two keywords are spent and an
+  artist filter cannot have them; **resolution is exact where the Tags page's type-ahead is a
+  substring**, because a substring resolves one typed name to many tags that would have to be
+  ORed while every tag filter in this app intersects; and **this is the one search in the app that
+  fails closed** — an unresolved name empties the wall in the hook rather than at each call site,
+  because `keepPreviousData` would otherwise leave the *previous* search's cards on screen under a
+  query that asked something else.
 - **Global actions (Refresh, sync status, settings) live in the top ribbon, not in views**, and a
   long job registers an `Activity` (`src/lib/activity.ts`) rather than wiring itself in.
   Registration is declarative: pass the job or `null` every render.
@@ -450,6 +484,14 @@ Every one of these has its measurement and its story in
   `MIN_PANEL_WIDTH_PX` plus the gap) and every pixel the sidebar takes is a pixel off that.
   Widening the sidebar is a change to `DECK_FLOOR`'s arithmetic first. Both, with every figure:
   [frontend-design.md](../docs/reference/frontend-design.md).
+- **The app's own mark is `components/GrimoireMark`, never a bare `<img>` and never a re-pasted
+  SVG.** It takes a pixel `size` and picks its own variant at the **24px** detail floor: the
+  master is drawn on a 64-unit grid, so below that its hairlines land under a third of a pixel and
+  a caption drawn from the full artwork is a smudge of gold rather than a book. Strokes are
+  `currentColor` and fills are `var(--color-surface)`, so the caller sets the colour and the
+  tokens stay in charge; `logos/` is the artwork's source of truth. It is `aria-hidden` unless
+  given a `label` — the inverse of `GameChangerMark`'s "the mark names itself", because this mark
+  is always a duplicate of a name already set in type beside it.
 - **The window's caption is the app's, not Windows'** — `tauri.conf.json` sets
   `decorations: false` and `components/TitleBar.tsx` draws a 34px row above the sidebar and the
   ribbon (2026-08-20). Four rules it does not share with the rest of the chrome, each because the
@@ -466,8 +508,11 @@ Every one of these has its measurement and its story in
 - **`data-tauri-drag-region` does not inherit, so every element that should move the window
   carries its own** — Tauri reads the attribute off the element under the pointer and nothing
   else. A child without it is a hole in the grab area; an element *with* it that also handles a
-  click is a button that drags the window instead of pressing. The row and the wordmark have it,
-  the three buttons deliberately do not.
+  click is a button that drags the window instead of pressing. The row, the lockup wrapper and
+  the wordmark have it; the three buttons deliberately do not. **The mark inside the lockup is
+  the fourth case and takes neither answer**: an `<svg>` cannot usefully carry the attribute, so
+  it is `pointer-events-none` and the pointer resolves to the wrapper above it — which is free
+  only because the mark binds no tooltip, `pointer-events` being inherited.
 - **The maximize button's hover is state, never `:hover`, and the reason is native.**
   `tauri-plugin-snap-layout` parks a transparent Win32 child window over that button's rectangle
   so Windows 11 can answer `HTMAXBUTTON` to its own `WM_NCHITTEST` and raise the Snap Layouts

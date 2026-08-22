@@ -70,9 +70,12 @@ const isChip = (c: TagChip, key: string) => chipKey(c.namespace, c.slug) === key
 /**
  * Pick a tag, as an include.
  *
- * Adding a tag that is already picked gives back **the same object**, so a second click on a
- * row that is already chipped costs no re-render of the wall below it — and cannot flip a chip
- * the reader had set to exclude back to include behind their back.
+ * Adding a tag that is already picked gives back **the same object**, so an add that lands on a
+ * chipped tag costs no re-render of the wall below it — and cannot flip a chip the reader had set
+ * to exclude back to include behind their back.
+ *
+ * **Not what a rail row presses.** That is {@link toggleChip}: this reducer only ever adds, and a
+ * control wired straight to it can turn a filter on but never off. See there for issue #181.
  */
 export function addChip(s: TagSelection, hit: TagHit): TagSelection {
   const key = chipKey(hit.namespace, hit.slug);
@@ -84,6 +87,27 @@ export function addChip(s: TagSelection, hit: TagHit): TagSelection {
       { slug: hit.slug, label: hit.label, namespace: hit.namespace, mode: "include" },
     ],
   };
+}
+
+/**
+ * Pick a tag, or un-pick it — **what a press on a rail row does**.
+ *
+ * The rail used to press {@link addChip}, which answers an already-picked tag with the same
+ * object. So the row that turned a filter on could not turn it off: the only way back was to find
+ * the chip two controls away and press its ×, which is what issue #181 was reported as. A control
+ * that has one direction is half a control, and this is the half that was missing.
+ *
+ * **Mode is deliberately not part of the cycle.** An excluded chip is *picked* — the rail draws
+ * its tick, the wall is filtered by it — so a press takes it off rather than walking
+ * include → exclude → off. Include ↔ exclude is {@link toggleChipMode}, and it belongs to the
+ * chip, which is where both states are drawn and named; a rail row shows neither and would be
+ * cycling a reader through a state they cannot see from there.
+ */
+export function toggleChip(s: TagSelection, hit: TagHit): TagSelection {
+  const key = chipKey(hit.namespace, hit.slug);
+  return s.chips.some((c) => isChip(c, key))
+    ? removeChip(s, hit.slug, hit.namespace)
+    : addChip(s, hit);
 }
 
 /** Drop one chip. Naming a tag that is not picked gives back the same object. */
@@ -162,5 +186,54 @@ export function termsFor(s: TagSelection): {
 
   if (s.floor === "strong" && artInclude.length > 0) out.artWeightFloor = "strong";
 
+  return out;
+}
+
+/** One namespace's two lists, concatenated and put back in {@link termsFor}'s canonical shape. */
+function mergeOne(a: TagTerms | undefined, b: TagTerms | undefined): TagTerms | undefined {
+  if (!a) return b;
+  if (!b) return a;
+  const join = (x: readonly string[] = [], y: readonly string[] = []) =>
+    [...new Set([...x, ...y])].sort();
+  return { include: join(a.include, b.include), exclude: join(a.exclude, b.exclude) };
+}
+
+/**
+ * Two sets of tag terms as one — the chips a page picked, ANDed with the tags a reader typed
+ * into the search box.
+ *
+ * **Both halves are statements the reader made and both narrow**, so this is a union of the
+ * lists rather than one side winning: a Tags page reader who has chipped `dog` and then types
+ * `o:ramp` is asking for a dog that ramps, and either half silently dropping the other's tags
+ * would answer a question nobody asked. Includes still intersect at the far end —
+ * `filters::picked_tags` gives each slug its own `EXISTS` — so a longer list is a narrower wall,
+ * which is what both gestures mean.
+ *
+ * **A namespace neither side picked from stays absent, not empty**, which is `termsFor`'s rule
+ * and the reason this returns `undefined` rather than `{ include: [], exclude: [] }`: absent
+ * means no filter everywhere in this codebase, and an empty list riding on every request would
+ * be a payload that lies about intent.
+ *
+ * Each list is deduplicated and sorted, so chipping `dog` and *also* typing `a:dog` is one
+ * `EXISTS` and — more to the point — one **query key**: the key `useCardSearch` derives from
+ * this payload must not mint a second cache entry for a search that is the same search.
+ *
+ * **The floor is the caller's alone.** The typed syntax has no keyword for it — Scryfall has no
+ * such qualifier to borrow — so `b` never carries one, and taking `a`'s is both arms of the
+ * `??` doing the only thing they can.
+ */
+export function mergeTagTerms(
+  a: { artTags?: TagTerms; oracleTags?: TagTerms; artWeightFloor?: ArtWeightFloor },
+  b: { artTags?: TagTerms; oracleTags?: TagTerms; artWeightFloor?: ArtWeightFloor },
+): { artTags?: TagTerms; oracleTags?: TagTerms; artWeightFloor?: ArtWeightFloor } {
+  const out: { artTags?: TagTerms; oracleTags?: TagTerms; artWeightFloor?: ArtWeightFloor } = {};
+  const artTags = mergeOne(a.artTags, b.artTags);
+  const oracleTags = mergeOne(a.oracleTags, b.oracleTags);
+  // Assigned only when there is one, so the object's *keys* say what was picked — which is what
+  // makes `JSON.stringify` of it a usable query key rather than a constant.
+  if (artTags) out.artTags = artTags;
+  if (oracleTags) out.oracleTags = oracleTags;
+  const floor = a.artWeightFloor ?? b.artWeightFloor;
+  if (floor) out.artWeightFloor = floor;
   return out;
 }

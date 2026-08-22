@@ -5,8 +5,10 @@ import {
   addChip,
   chipKey,
   EMPTY_SELECTION,
+  mergeTagTerms,
   removeChip,
   termsFor,
+  toggleChip,
   toggleChipMode,
 } from "./tagFilters";
 
@@ -81,6 +83,44 @@ describe("removeChip", () => {
   it("gives back the same selection when there is nothing to remove", () => {
     const s = addChip(EMPTY_SELECTION, artHit("forest"));
     expect(removeChip(s, "forest", "oracle")).toBe(s);
+  });
+});
+
+describe("toggleChip", () => {
+  it("picks a tag that is not picked yet", () => {
+    const s = toggleChip(EMPTY_SELECTION, artHit("landscape"));
+    expect(s.chips.map((c) => c.slug)).toEqual(["landscape"]);
+    expect(s.chips[0].mode).toBe("include");
+  });
+
+  /**
+   * The whole of issue #181. The rail row was `addChip` alone, which answers an already-picked
+   * tag with the same object — so the press that turned a filter on could not turn it off, and
+   * the only way back was to find the chip and press its ×.
+   */
+  it("un-picks a tag that is already picked", () => {
+    const h = artHit("landscape");
+    expect(toggleChip(toggleChip(EMPTY_SELECTION, h), h).chips).toEqual([]);
+  });
+
+  /**
+   * An excluded chip is *picked* — the rail draws its tick and the wall is filtered by it — so a
+   * press takes it off rather than flipping it back to an include. Include ↔ exclude is
+   * `toggleChipMode`, and it lives on the chip, where both states are drawn and named.
+   */
+  it("takes an excluded chip off rather than flipping it back to an include", () => {
+    const h = artHit("forest");
+    const s = toggleChipMode(addChip(EMPTY_SELECTION, h), "forest", "art");
+    expect(s.chips[0].mode).toBe("exclude");
+    expect(toggleChip(s, h).chips).toEqual([]);
+  });
+
+  /** The two id spaces share plenty of slugs, so a toggle keyed on the slug alone would take the
+   *  other taxonomy's chip off with it. */
+  it("leaves the same slug in the other namespace alone", () => {
+    const s = addChip(addChip(EMPTY_SELECTION, artHit("dragon")), oracleHit("dragon"));
+    const t = toggleChip(s, artHit("dragon"));
+    expect(t.chips.map((c) => c.namespace)).toEqual(["oracle"]);
   });
 });
 
@@ -190,5 +230,68 @@ describe("chipKey", () => {
    *  onto `dragon` the rules text and drop one of the reader's two chips. */
   it("names the namespace as well as the slug", () => {
     expect(chipKey("art", "dragon")).not.toBe(chipKey("oracle", "dragon"));
+  });
+});
+
+/**
+ * The two gestures that pick a tag — a chip off the Tags page's rail, and a name typed into the
+ * search box — as one filter.
+ */
+describe("mergeTagTerms", () => {
+  it("unions each list rather than letting one side win", () => {
+    const merged = mergeTagTerms(
+      { artTags: { include: ["dog"], exclude: [] } },
+      { artTags: { include: ["forest"], exclude: ["water"] } },
+    );
+
+    expect(merged.artTags).toEqual({ include: ["dog", "forest"], exclude: ["water"] });
+  });
+
+  /**
+   * Absent means "no filter" everywhere in this codebase, and the Rust tests pin
+   * absent-means-no-predicate. An `include: []` riding on every request would be a payload that
+   * lies about intent — and, since the query key is derived from this object, a second cache
+   * entry for a search that asked nothing extra.
+   */
+  it("leaves a taxonomy neither side picked from absent rather than empty", () => {
+    expect(mergeTagTerms({}, {})).toEqual({});
+    expect(mergeTagTerms({ artTags: { include: ["dog"], exclude: [] } }, {}).oracleTags).toBeUndefined();
+  });
+
+  /**
+   * Chipping `dog` and *also* typing `a:dog` is one predicate at the far end
+   * (`filters::picked_tags` sorts and dedups) — and, more to the point here, one **query key**.
+   * Sorted for the same reason: the order the reader picked them in must not mint a second one.
+   */
+  it("deduplicates and sorts, so one tag picked twice is one key", () => {
+    const a = mergeTagTerms(
+      { artTags: { include: ["dog", "forest"], exclude: [] } },
+      { artTags: { include: ["forest"], exclude: [] } },
+    );
+    const b = mergeTagTerms(
+      { artTags: { include: ["forest"], exclude: [] } },
+      { artTags: { include: ["forest", "dog"], exclude: [] } },
+    );
+
+    expect(a.artTags).toEqual({ include: ["dog", "forest"], exclude: [] });
+    expect(JSON.stringify(a)).toBe(JSON.stringify(b));
+  });
+
+  /** The typed syntax has no keyword for the weight floor — Scryfall has none to borrow — so
+   *  the floor can only ever be the caller's. */
+  it("carries the floor through from whichever side has one", () => {
+    expect(
+      mergeTagTerms({ artTags: { include: ["dog"], exclude: [] }, artWeightFloor: "strong" }, {})
+        .artWeightFloor,
+    ).toBe("strong");
+    expect(mergeTagTerms({}, {}).artWeightFloor).toBeUndefined();
+  });
+
+  /** One side empty is the common case — a plain search on a page that passes no chips — and it
+   *  has to hand back exactly the other side. */
+  it("is the other side when one is empty", () => {
+    const typed = { oracleTags: { include: ["ramp"], exclude: [] } };
+    expect(mergeTagTerms({}, typed)).toEqual(typed);
+    expect(mergeTagTerms(typed, {})).toEqual(typed);
   });
 });

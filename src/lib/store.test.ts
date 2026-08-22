@@ -195,6 +195,92 @@ describe("the deck row a card was opened from", () => {
 });
 
 /**
+ * Which side of the desk the card pane is drawn over — the second thing the store keeps about an
+ * open card, and deliberately not the first one read backwards.
+ *
+ * The deck editor draws the pane as an overlay (issue #183): over the **search column** for a
+ * card opened anywhere else, and over the **deck** for a card opened in the search column, so
+ * that whichever way round it is the pane covers what the reader was not looking at.
+ *
+ * `paneDeckContext !== null` is the tempting complement and is the wrong one, which is what the
+ * third test here pins: that field means *this card is a row of the open deck*, and the
+ * validation panel's card names are deck cards opened through `setSelectedCardId`. Read
+ * backwards, they would put the pane over the very piles the sentence beside them is about.
+ */
+describe("which side of the desk the pane was opened from", () => {
+  it("marks a card opened in the search column, in one write", () => {
+    useAppStore.getState().openCardFromDeckSearch("p9");
+
+    expect(useAppStore.getState().selectedCardId).toBe("p9");
+    expect(useAppStore.getState().paneFromDeckSearch).toBe(true);
+    // And it is not a deck row, so nothing offers to swap a printing into one.
+    expect(useAppStore.getState().paneDeckContext).toBeNull();
+  });
+
+  /** The two openers exclude each other, in one `set` apiece — so the pane can never be told it
+   *  came from both sides at once, whichever order the reader presses in. */
+  it("is cleared by the deck's own opener, and clears it in turn", () => {
+    useAppStore.getState().openCardFromDeckSearch("p9");
+    useAppStore.getState().openCardFromDeck({
+      deckId: 4,
+      categoryId: 1,
+      categoryName: "Main deck",
+      cardId: "p1",
+      variant: "live",
+      finish: null,
+    });
+
+    expect(useAppStore.getState().paneFromDeckSearch).toBe(false);
+    expect(useAppStore.getState().paneDeckContext).not.toBeNull();
+
+    useAppStore.getState().openCardFromDeckSearch("p9");
+
+    expect(useAppStore.getState().paneFromDeckSearch).toBe(true);
+    expect(useAppStore.getState().paneDeckContext).toBeNull();
+  });
+
+  /**
+   * **The case that makes this a field of its own.** A validation-panel card name goes through
+   * `setSelectedCardId` — it is a deck card, but not a deck *row* the pane can swap into — so it
+   * leaves no context. Read as "no context means the search column", the pane would open over
+   * the deck and cover the cards the panel is complaining about.
+   */
+  it("says the deck side for an opener that leaves no deck row either", () => {
+    useAppStore.getState().openCardFromDeckSearch("p9");
+
+    useAppStore.getState().setSelectedCardId("p1");
+
+    expect(useAppStore.getState().paneDeckContext).toBeNull();
+    expect(useAppStore.getState().paneFromDeckSearch).toBe(false);
+  });
+
+  /** Browsing printings inside the pane is navigation, not a new opening: the pane must not
+   *  jump across the desk because the reader clicked a row in it. */
+  it("keeps its side while the reader browses printings inside the pane", () => {
+    useAppStore.getState().openCardFromDeckSearch("p9");
+
+    useAppStore.getState().viewPrinting("p10");
+
+    expect(useAppStore.getState().selectedCardId).toBe("p10");
+    expect(useAppStore.getState().paneFromDeckSearch).toBe(true);
+  });
+
+  /** Both navigations drop it, beside the deck row and for a sharper version of its reason: the
+   *  column this names only exists inside an editor. */
+  it("forgets it when the editor closes and when the view changes", () => {
+    useAppStore.setState({ openDeckId: 4 });
+    useAppStore.getState().openCardFromDeckSearch("p9");
+    useAppStore.getState().setOpenDeckId(null);
+    expect(useAppStore.getState().paneFromDeckSearch).toBe(false);
+
+    useAppStore.setState({ openDeckId: 4 });
+    useAppStore.getState().openCardFromDeckSearch("p9");
+    useAppStore.getState().setActiveView("collection");
+    expect(useAppStore.getState().paneFromDeckSearch).toBe(false);
+  });
+});
+
+/**
  * The channel between a card's menu and the printings modal.
  *
  * **One field, written by one action that touches nothing else** — which is the whole of what
@@ -492,8 +578,30 @@ describe("the export dialog's remembered choice", () => {
     useAppStore.getState().setExportPrefs("collection", {
       format: "csv",
       fields: ["quantity", "name", "condition"],
+      arenaOnly: false,
     });
     expect(useAppStore.getState().exportPrefs.collection.format).toBe("csv");
     expect(useAppStore.getState().exportPrefs.deck.format).toBe("plain");
+  });
+
+  /** The Arena filter is remembered the same way and is **off** everywhere on a first run: the
+   *  Arena export has written every card handed to it since it shipped, and a filter that
+   *  started on would quietly change what an existing reader's next export contains. */
+  it("opens with the Arena filter off on every surface", () => {
+    const { exportPrefs } = useAppStore.getState();
+    expect([
+      exportPrefs.deck.arenaOnly,
+      exportPrefs.collection.arenaOnly,
+      exportPrefs.wishlist.arenaOnly,
+    ]).toEqual([false, false, false]);
+  });
+
+  /** Per surface, like the pair beside it — a reader who filters their deck exports for Arena
+   *  has said nothing about what a collection export should contain. */
+  it("keeps the Arena filter apart by surface", () => {
+    const prefs = useAppStore.getState().exportPrefs.deck;
+    useAppStore.getState().setExportPrefs("deck", { ...prefs, arenaOnly: true });
+    expect(useAppStore.getState().exportPrefs.deck.arenaOnly).toBe(true);
+    expect(useAppStore.getState().exportPrefs.collection.arenaOnly).toBe(false);
   });
 });

@@ -22,6 +22,7 @@ import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { colorDisabled, countDisabled, facetTitle, optionDisabled } from "./facets";
 import { SetCombobox } from "./SetCombobox";
+import { TagQueryRow } from "./TagQueryRow";
 import { ANY_CARD, SEARCH_SORT_OPTIONS, type CardSearch } from "./useCardSearch";
 
 /**
@@ -193,294 +194,304 @@ export function FilterBar({
     search.sortSelection === "" ? undefined : (search.sort[0]?.dir ?? "asc");
   const tip = useTooltip();
   return (
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-      <label htmlFor="card-search-text" className="sr-only">
-        Search cards
-      </label>
-      <input
-        id="card-search-text"
-        type="search"
-        value={search.text}
-        onChange={(e) => search.setText(e.target.value)}
-        placeholder="Search cards…"
-        // `FILTER_FIELD` and not `FILTER_CONTROL`: the row's chips dip 3% under the press and
-        // a box the reader types into must not, or the native ✕ slides out from under the
-        // pointer clearing it. Issue #179 — the reason is on the constant.
-        className={cn(
-          FILTER_FIELD,
-          FILTER_FOCUS,
-          "min-w-56 flex-1 border-border bg-surface px-3 placeholder:text-dim focus:border-accent",
-        )}
-      />
+    // A column of two rows rather than one row, since the tagger syntax landed: the chips a
+    // typed `o:ramp` produces and the note an unknown name gets belong *under* the controls
+    // rather than wrapped in among them, where a chip would sit between the format select and
+    // the colour pips and read as one more filter control. `TagQueryRow` renders nothing at all
+    // until there is something to say, so a box with no tag syntax in it draws exactly the row
+    // it always did.
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <label htmlFor="card-search-text" className="sr-only">
+          Search cards
+        </label>
+        <input
+          id="card-search-text"
+          type="search"
+          value={search.text}
+          onChange={(e) => search.setText(e.target.value)}
+          placeholder="Search cards…"
+          // `FILTER_FIELD` and not `FILTER_CONTROL`: the row's chips dip 3% under the press and
+          // a box the reader types into must not, or the native ✕ slides out from under the
+          // pointer clearing it. Issue #179 — the reason is on the constant.
+          className={cn(
+            FILTER_FIELD,
+            FILTER_FOCUS,
+            "min-w-56 flex-1 border-border bg-surface px-3 placeholder:text-dim focus:border-accent",
+          )}
+        />
 
-      {/* Wider than the other groups' `gap-1`: a pressed chip's ring reaches 4px past its
-          edge, and at 4px apart two pressed chips look like one welded object. */}
-      <div role="group" aria-label="Color identity" className="flex gap-1.5">
-        {MANA_KEYS.map((key) => (
-          <ManaChip
-            key={key}
-            symbol={key}
-            pressed={search.colors.includes(key)}
-            // The one control on this row that does not ask "would this return nothing".
-            // `colors` is subset semantics, so pressing a chip with another already on
-            // *broadens* — the count is the size of the result set after the press, read
-            // against `facets.total`. And that total is the facets' own: printings, exact,
-            // and not the collapsed, capped number the results caption prints.
-            disabled={colorDisabled(
-              facets?.colors[key],
-              facets?.total ?? 0,
-              search.colors.includes(key),
-            )}
-            title={facetTitle(MANA_LABEL[key], facets?.colors[key])}
-            onClick={() => search.toggleColor(key)}
-          />
-        ))}
-      </div>
+        {/* Wider than the other groups' `gap-1`: a pressed chip's ring reaches 4px past its
+            edge, and at 4px apart two pressed chips look like one welded object. */}
+        <div role="group" aria-label="Color identity" className="flex gap-1.5">
+          {MANA_KEYS.map((key) => (
+            <ManaChip
+              key={key}
+              symbol={key}
+              pressed={search.colors.includes(key)}
+              // The one control on this row that does not ask "would this return nothing".
+              // `colors` is subset semantics, so pressing a chip with another already on
+              // *broadens* — the count is the size of the result set after the press, read
+              // against `facets.total`. And that total is the facets' own: printings, exact,
+              // and not the collapsed, capped number the results caption prints.
+              disabled={colorDisabled(
+                facets?.colors[key],
+                facets?.total ?? 0,
+                search.colors.includes(key),
+              )}
+              title={facetTitle(MANA_LABEL[key], facets?.colors[key])}
+              onClick={() => search.toggleColor(key)}
+            />
+          ))}
+        </div>
 
-      <ManaValueChips
-        selected={search.manaValues}
-        onToggle={search.toggleManaValue}
-        disabled={(value) =>
-          optionDisabled(facets?.manaValues, String(value), search.manaValues.includes(value))
-        }
-        // The chip hands its own label back, so "8 or more" is spelled in one place.
-        title={(value, label) => facetTitle(label, facets?.manaValues[String(value)])}
-        xSelected={search.manaX}
-        onToggleX={search.toggleManaX}
-        // `manaX` is a **field** of the facet response beside `manaValues` rather than a key
-        // inside it, so this reads a bare count — and `countDisabled` is the same rule the
-        // nine chips to its left grey by rather than a second one written next to it. Rust
-        // counts it off the same `Skip::Mana` base, so X greys when and only when its
-        // neighbours would: because nothing in this search has one.
-        xDisabled={countDisabled(facets?.manaX, search.manaX)}
-        xTitle={(label) => facetTitle(label, facets?.manaX)}
-      />
+        <ManaValueChips
+          selected={search.manaValues}
+          onToggle={search.toggleManaValue}
+          disabled={(value) =>
+            optionDisabled(facets?.manaValues, String(value), search.manaValues.includes(value))
+          }
+          // The chip hands its own label back, so "8 or more" is spelled in one place.
+          title={(value, label) => facetTitle(label, facets?.manaValues[String(value)])}
+          xSelected={search.manaX}
+          onToggleX={search.toggleManaX}
+          // `manaX` is a **field** of the facet response beside `manaValues` rather than a key
+          // inside it, so this reads a bare count — and `countDisabled` is the same rule the
+          // nine chips to its left grey by rather than a second one written next to it. Rust
+          // counts it off the same `Skip::Mana` base, so X greys when and only when its
+          // neighbours would: because nothing in this search has one.
+          xDisabled={countDisabled(facets?.manaX, search.manaX)}
+          xTitle={(label) => facetTitle(label, facets?.manaX)}
+        />
 
-      <SetCombobox selected={search.sets} onToggle={search.toggleSet} counts={facets?.sets} />
+        <SetCombobox selected={search.sets} onToggle={search.toggleSet} counts={facets?.sets} />
 
-      <label htmlFor="card-search-format" className="sr-only">
-        Format
-      </label>
-      <select
-        id="card-search-format"
-        value={search.format}
-        onChange={(e) => search.setFormat(e.target.value)}
-        className={cn(
-          FILTER_CONTROL,
-          FILTER_FOCUS,
-          "bg-surface px-2",
-          // Accent means "this is not where the control opens", which is a wider claim than
-          // "a filter is on" — `Any card` is a *widening* and lights the same way, because the
-          // reader needs to see that the wall in front of them has art cards and tokens in it.
-          // `Any format` is the default and the only value that reads as untouched.
-          search.format ? "border-accent text-accent" : "border-border text-dim",
-        )}
-      >
-        {/* **Two pinned rows above the sorted list, widest first — and they are what used to be
-            a select and an `Unplayable` chip.** Neither is a format: one is "no format filter at
-            all" and the other "no format filter, and no format required either", so both belong
-            where a reader reaches for them blind — first — whatever the alphabet and the facets
-            do to the formats below, and however many of them the search hands over.
-
-            They read as a ladder rather than as an alphabet: every card, every card that is
-            legal *somewhere*, then one named format. `Any format` is the default and the middle
-            rung, which is the shape a reader can predict without being told.
-
-            Neither carries a `title`. A `title` on an `<option>` is not drawn by Windows' native
-            dropdown, so the sentence explaining that "any card" means art cards, tokens and
-            emblems could only be read by a screen reader — and the labels stay this short on
-            purpose: a `<select>` is as wide as its widest option, and this row has to survive
-            the deck editor's docked panel at its 206px floor. */}
-        <option value={ANY_CARD}>Any card</option>
-        <option value="">Any format</option>
-        {formatOptions.map((f) => (
-          // The one place a real `disabled` is right: `<option disabled>` is native, and a
-          // listbox option is not a tab stop there is anything to lose. No count rides here
-          // — a `title` on an `<option>` is not drawn by Windows' native dropdown, so it
-          // would be a sentence nobody can read.
-          <option key={f.value} value={f.value} disabled={f.disabled}>
-            {f.label}
-          </option>
-        ))}
-      </select>
-
-      {/* Last of the filters, because it is the only one that is not a statement about the
-          card: everything left of it describes cardboard, and this describes the reader's
-          relationship to it. One chip and three states — the word on it is what says which
-          of the two questions is being asked, so an unpressed "Owned" cannot be mistaken
-          for a pressed "Missing".
-
-          **Never greyed**, whatever its counts say: greying a chip mid-cycle would strand
-          whoever is in it. The tooltip counts what the chip's *word* names, which is one
-          rule reading correctly in both directions — unpressed, it is what pressing would
-          give; pressed, it is what the reader is already looking at. */}
-      <ToggleChip
-        label={search.owned === false ? "Missing" : "Owned"}
-        pressed={search.owned !== undefined}
-        title={facetTitle(
-          search.owned === false ? "Missing" : "Owned",
-          search.owned === false ? facets?.owned.missing : facets?.owned.owned,
-        )}
-        onClick={search.toggleOwned}
-      />
-
-      {/* The sort, from the other end of the state the table's headers already drive. Picking
-          here *replaces* the sort with that one term; the headers refine and extend it. So the
-          picker follows a header press and a header's arrow follows the picker — one piece of
-          state with two controls on it, which is the collection's arrangement and the reason
-          this sits in the collection's place on the row: last, just before Reset all.
-
-          **Drawn in both layouts and on both surfaces, which is the whole of the feature.** The
-          grid has no headers to press, and the deck editor's docked panel is a grid with no
-          table to switch to at all — so `layoutToggle` is deliberately not the fence. That prop
-          says "this surface has no second layout", which names exactly the surface with no other
-          way to sort; fencing on it would take the control away from the one place it is the
-          only one.
-
-          The pair is boxed rather than left to the row's own `gap-x-3`, which would stand the
-          arrow 12px off the order it belongs to and let `flex-wrap` break the two onto separate
-          lines — a direction with its order on the line above is a button about nothing. 4px
-          apart, like the layout pair at the far end of the row.
-
-          It costs the docked panel nothing at its 206px floor. A `<select>` is as wide as its
-          widest option and `Default order` is the widest row this one has — two characters more
-          than the `Any format` beside it — which puts the whole pair well inside the `min-w-56`
-          (224px) the search box on the line above already asks for. Nothing added here is what
-          decides that column's width, and the box wraps as one. */}
-      <div className="flex items-center gap-1">
-        {/* **`Sort results`, and never shortened back to `Sort`.** The collection's twin is a bare
-            `Sort` and this one may not copy it, because this row is drawn on two surfaces and one
-            of them already has a `Sort`: the deck editor's toolbar sorts **the deck**, this sorts
-            **the search results**, and with the docked panel open both lists are on screen at
-            once. Two comboboxes with one name is not a WCAG failure — it is a control that cannot
-            be addressed unambiguously, by a screen reader walking the form, by anyone driving the
-            app by voice, or by a `getByLabelText("Sort")` that starts throwing "found multiple"
-            the day a test opens that panel.
-
-            The widening goes here rather than on the deck editor's label for the reason that
-            decides every one of these: that one has only to be unambiguous where it is mounted,
-            and this one has to be unambiguous *wherever* it is. `PrintingsFilterBar.tsx:380` made
-            the same call and wrote down the same trap — a bare verb names an action and not the
-            thing it acts on, which is why it draws `Sort printings by` and not `Sort by`. */}
-        <label htmlFor="card-search-sort" className="sr-only">
-          Sort results
+        <label htmlFor="card-search-format" className="sr-only">
+          Format
         </label>
         <select
-          id="card-search-sort"
-          value={search.sortSelection}
-          onChange={(e) => search.setSortKey(e.target.value as SearchSortKey | "")}
-          // **Never gold**, unlike the format select two controls back. Accent there means "this
-          // is not where the control opens", which is a state a filter can be in and out of. A
-          // list is always in *some* order, so a sort cannot be inactive — and a gold sort
-          // picker would be saying "a filter is on" about the one control on this row that is
-          // not a filter, and that Reset all deliberately does not clear.
-          className={cn(FILTER_CONTROL, FILTER_FOCUS, "border-border bg-surface px-2 text-dim")}
+          id="card-search-format"
+          value={search.format}
+          onChange={(e) => search.setFormat(e.target.value)}
+          className={cn(
+            FILTER_CONTROL,
+            FILTER_FOCUS,
+            "bg-surface px-2",
+            // Accent means "this is not where the control opens", which is a wider claim than
+            // "a filter is on" — `Any card` is a *widening* and lights the same way, because the
+            // reader needs to see that the wall in front of them has art cards and tokens in it.
+            // `Any format` is the default and the only value that reads as untouched.
+            search.format ? "border-accent text-accent" : "border-border text-dim",
+          )}
         >
-          {/* Pinned first and outside the sorted list, for the reason `Any format` is: it is not
-              an order to pick but the absence of one, and a reader reaching for the way back
-              reaches for it blind.
+          {/* **Two pinned rows above the sorted list, widest first — and they are what used to be
+              a select and an `Unplayable` chip.** Neither is a format: one is "no format filter at
+              all" and the other "no format filter, and no format required either", so both belong
+              where a reader reaches for them blind — first — whatever the alphabet and the facets
+              do to the formats below, and however many of them the search hands over.
 
-              Pickable, and **not** `disabled` like the collection's `Custom…` — the two rows
-              look alike and are opposites. That one is a state the control can only be *put*
-              into, from a header this select has no option for. This one is a real destination:
-              it is how a reader who sorted by accident gets the view's own order back, and on
-              the grid it is the only way, because the third press that clears a sort is a press
-              on a header the grid does not draw. */}
-          <option value="">Default order</option>
-          {SORT_ROWS.map((s) => (
-            <option key={s.value} value={s.value}>
-              {s.label}
+              They read as a ladder rather than as an alphabet: every card, every card that is
+              legal *somewhere*, then one named format. `Any format` is the default and the middle
+              rung, which is the shape a reader can predict without being told.
+
+              Neither carries a `title`. A `title` on an `<option>` is not drawn by Windows' native
+              dropdown, so the sentence explaining that "any card" means art cards, tokens and
+              emblems could only be read by a screen reader — and the labels stay this short on
+              purpose: a `<select>` is as wide as its widest option, and this row has to survive
+              the deck editor's docked panel at its 206px floor. */}
+          <option value={ANY_CARD}>Any card</option>
+          <option value="">Any format</option>
+          {formatOptions.map((f) => (
+            // The one place a real `disabled` is right: `<option disabled>` is native, and a
+            // listbox option is not a tab stop there is anything to lose. No count rides here
+            // — a `title` on an `<option>` is not drawn by Windows' native dropdown, so it
+            // would be a sentence nobody can read.
+            <option key={f.value} value={f.value} disabled={f.disabled}>
+              {f.label}
             </option>
           ))}
         </select>
 
-        {/* One arrow, turned over — never `ArrowDown` swapped in for `ArrowUp`. That is the rule
-            `SortableHeader.tsx:51-55` states and this is the reason it states it: a different
-            element in the same slot is unmounted and remounted, so the indicator *teleports*,
-            and the whole of what the press means is that the order reversed. Half a turn is that
-            fact, drawn. `initial={false}`, so a row that opens already descending draws its
-            arrow turned rather than spinning on first paint — the header's rule, for the
-            header's reason.
+        {/* Last of the filters, because it is the only one that is not a statement about the
+            card: everything left of it describes cardboard, and this describes the reader's
+            relationship to it. One chip and three states — the word on it is what says which
+            of the two questions is being asked, so an unpressed "Owned" cannot be mistaken
+            for a pressed "Missing".
 
-            `rotate` is a transform prop, so `MotionConfig reducedMotion="user"` reaches it and
-            no `useReducedMotion` opt-out is owed here (`docs/reference/motion.md` — the trap
-            there is the *non*-positional properties, and this animates none).
+            **Never greyed**, whatever its counts say: greying a chip mid-cycle would strand
+            whoever is in it. The tooltip counts what the chip's *word* names, which is one
+            rule reading correctly in both directions — unpressed, it is what pressing would
+            give; pressed, it is what the reader is already looking at. */}
+        <ToggleChip
+          label={search.owned === false ? "Missing" : "Owned"}
+          pressed={search.owned !== undefined}
+          title={facetTitle(
+            search.owned === false ? "Missing" : "Owned",
+            search.owned === false ? facets?.owned.missing : facets?.owned.owned,
+          )}
+          onClick={search.toggleOwned}
+        />
 
-            **The real `disabled`, and the row's `aria-disabled` rule does not bind.** That rule
-            is about a filter row greying *as the reader types*, where a control leaving the tab
-            order would shrink the row out from under a keyboard caret. This one can only grey
-            when the reader themselves puts the select back to `Default order`, and their caret
-            is on that select when they do it — the button never vanishes from under the thing
-            focusing it. */}
-        {/* **Wrapped, for the same reason `AllPrintingsDialog`'s end-of-walk chevron is.**
-            `aria-label` already carries the whole sentence, so the tooltip is `describes: false`
-            — pure redundancy for a pointer, which is the state this button spends most of a
-            default search in: `disabled={!sortDir}`. A `disabled` control fires no pointer
-            events at all, so `{...tip()}` bound to the button directly would be silently inert
-            in exactly the state a reader is likeliest to hover it, which is a real loss rather
-            than a no-op (Chromium still draws a native `title` on a disabled control today). The
-            wrapper adds no box beyond the button's own, so an enabled press and an enabled hover
-            both work exactly as before. */}
-        <span {...tip(sortDirectionName(sortDir), { describes: false })}>
-          <button
-            type="button"
-            onClick={search.flipSortDir}
-            disabled={!sortDir}
-            aria-label={sortDirectionName(sortDir)}
-            className={cn(
-              FILTER_CONTROL,
-              FILTER_FOCUS,
-              "flex size-9 items-center justify-center",
-              // Not `aria-pressed`, and never gold: descending is not a filter switched on, it is
-              // the other half of a control that is always doing something. `filterChipState`'s
-              // unpressed arm is what every other quiet control on this row wears, and its
-              // `unavailable` arm is the row's one greying treatment rather than a second one
-              // written next to it.
-              filterChipState(false, !sortDir),
-            )}
+        {/* The sort, from the other end of the state the table's headers already drive. Picking
+            here *replaces* the sort with that one term; the headers refine and extend it. So the
+            picker follows a header press and a header's arrow follows the picker — one piece of
+            state with two controls on it, which is the collection's arrangement and the reason
+            this sits in the collection's place on the row: last, just before Reset all.
+
+            **Drawn in both layouts and on both surfaces, which is the whole of the feature.** The
+            grid has no headers to press, and the deck editor's docked panel is a grid with no
+            table to switch to at all — so `layoutToggle` is deliberately not the fence. That prop
+            says "this surface has no second layout", which names exactly the surface with no other
+            way to sort; fencing on it would take the control away from the one place it is the
+            only one.
+
+            The pair is boxed rather than left to the row's own `gap-x-3`, which would stand the
+            arrow 12px off the order it belongs to and let `flex-wrap` break the two onto separate
+            lines — a direction with its order on the line above is a button about nothing. 4px
+            apart, like the layout pair at the far end of the row.
+
+            It costs the docked panel nothing at its 206px floor. A `<select>` is as wide as its
+            widest option and `Default order` is the widest row this one has — two characters more
+            than the `Any format` beside it — which puts the whole pair well inside the `min-w-56`
+            (224px) the search box on the line above already asks for. Nothing added here is what
+            decides that column's width, and the box wraps as one. */}
+        <div className="flex items-center gap-1">
+          {/* **`Sort results`, and never shortened back to `Sort`.** The collection's twin is a bare
+              `Sort` and this one may not copy it, because this row is drawn on two surfaces and one
+              of them already has a `Sort`: the deck editor's toolbar sorts **the deck**, this sorts
+              **the search results**, and with the docked panel open both lists are on screen at
+              once. Two comboboxes with one name is not a WCAG failure — it is a control that cannot
+              be addressed unambiguously, by a screen reader walking the form, by anyone driving the
+              app by voice, or by a `getByLabelText("Sort")` that starts throwing "found multiple"
+              the day a test opens that panel.
+
+              The widening goes here rather than on the deck editor's label for the reason that
+              decides every one of these: that one has only to be unambiguous where it is mounted,
+              and this one has to be unambiguous *wherever* it is. `PrintingsFilterBar.tsx:380` made
+              the same call and wrote down the same trap — a bare verb names an action and not the
+              thing it acts on, which is why it draws `Sort printings by` and not `Sort by`. */}
+          <label htmlFor="card-search-sort" className="sr-only">
+            Sort results
+          </label>
+          <select
+            id="card-search-sort"
+            value={search.sortSelection}
+            onChange={(e) => search.setSortKey(e.target.value as SearchSortKey | "")}
+            // **Never gold**, unlike the format select two controls back. Accent there means "this
+            // is not where the control opens", which is a state a filter can be in and out of. A
+            // list is always in *some* order, so a sort cannot be inactive — and a gold sort
+            // picker would be saying "a filter is on" about the one control on this row that is
+            // not a filter, and that Reset all deliberately does not clear.
+            className={cn(FILTER_CONTROL, FILTER_FOCUS, "border-border bg-surface px-2 text-dim")}
           >
-            {/* `flex` on the span is load-bearing and not decoration: a bare `<span>` is a
-                non-replaced inline box, a transform does not apply to one at all, and the rotation
-                would silently do nothing. `SortableHeader` carries the same class for the same
-                reason. */}
-            <motion.span
-              aria-hidden="true"
-              initial={false}
-              animate={{ rotate: sortDir === "desc" ? 180 : 0 }}
-              transition={TRANSITION.fast}
-              className="flex"
+            {/* Pinned first and outside the sorted list, for the reason `Any format` is: it is not
+                an order to pick but the absence of one, and a reader reaching for the way back
+                reaches for it blind.
+
+                Pickable, and **not** `disabled` like the collection's `Custom…` — the two rows
+                look alike and are opposites. That one is a state the control can only be *put*
+                into, from a header this select has no option for. This one is a real destination:
+                it is how a reader who sorted by accident gets the view's own order back, and on
+                the grid it is the only way, because the third press that clears a sort is a press
+                on a header the grid does not draw. */}
+            <option value="">Default order</option>
+            {SORT_ROWS.map((s) => (
+              <option key={s.value} value={s.value}>
+                {s.label}
+              </option>
+            ))}
+          </select>
+
+          {/* One arrow, turned over — never `ArrowDown` swapped in for `ArrowUp`. That is the rule
+              `SortableHeader.tsx:51-55` states and this is the reason it states it: a different
+              element in the same slot is unmounted and remounted, so the indicator *teleports*,
+              and the whole of what the press means is that the order reversed. Half a turn is that
+              fact, drawn. `initial={false}`, so a row that opens already descending draws its
+              arrow turned rather than spinning on first paint — the header's rule, for the
+              header's reason.
+
+              `rotate` is a transform prop, so `MotionConfig reducedMotion="user"` reaches it and
+              no `useReducedMotion` opt-out is owed here (`docs/reference/motion.md` — the trap
+              there is the *non*-positional properties, and this animates none).
+
+              **The real `disabled`, and the row's `aria-disabled` rule does not bind.** That rule
+              is about a filter row greying *as the reader types*, where a control leaving the tab
+              order would shrink the row out from under a keyboard caret. This one can only grey
+              when the reader themselves puts the select back to `Default order`, and their caret
+              is on that select when they do it — the button never vanishes from under the thing
+              focusing it. */}
+          {/* **Wrapped, for the same reason `AllPrintingsDialog`'s end-of-walk chevron is.**
+              `aria-label` already carries the whole sentence, so the tooltip is `describes: false`
+              — pure redundancy for a pointer, which is the state this button spends most of a
+              default search in: `disabled={!sortDir}`. A `disabled` control fires no pointer
+              events at all, so `{...tip()}` bound to the button directly would be silently inert
+              in exactly the state a reader is likeliest to hover it, which is a real loss rather
+              than a no-op (Chromium still draws a native `title` on a disabled control today). The
+              wrapper adds no box beyond the button's own, so an enabled press and an enabled hover
+              both work exactly as before. */}
+          <span {...tip(sortDirectionName(sortDir), { describes: false })}>
+            <button
+              type="button"
+              onClick={search.flipSortDir}
+              disabled={!sortDir}
+              aria-label={sortDirectionName(sortDir)}
+              className={cn(
+                FILTER_CONTROL,
+                FILTER_FOCUS,
+                "flex size-9 items-center justify-center",
+                // Not `aria-pressed`, and never gold: descending is not a filter switched on, it is
+                // the other half of a control that is always doing something. `filterChipState`'s
+                // unpressed arm is what every other quiet control on this row wears, and its
+                // `unavailable` arm is the row's one greying treatment rather than a second one
+                // written next to it.
+                filterChipState(false, !sortDir),
+              )}
             >
-              <ArrowUp className="size-4" />
-            </motion.span>
-          </button>
-        </span>
+              {/* `flex` on the span is load-bearing and not decoration: a bare `<span>` is a
+                  non-replaced inline box, a transform does not apply to one at all, and the rotation
+                  would silently do nothing. `SortableHeader` carries the same class for the same
+                  reason. */}
+              <motion.span
+                aria-hidden="true"
+                initial={false}
+                animate={{ rotate: sortDir === "desc" ? 180 : 0 }}
+                transition={TRANSITION.fast}
+                className="flex"
+              >
+                <ArrowUp className="size-4" />
+              </motion.span>
+            </button>
+          </span>
+        </div>
+
+        {/* Always drawn, greyed when there is nothing to clear — the rule lives in the control,
+            so every view that offers a reset offers the same one. This row is the reason it is
+            that way round: the search box above is `flex-1`, so a Reset that appeared on the
+            first press would take its width out of the box and slide all nine colour chips left
+            under the finger that just pressed one. */}
+        <ResetAll count={search.activeCount} onReset={search.resetAll} />
+
+        {/* A view mode rather than a filter, so it sits past the reset with the layout pair
+            rather than among the statements about which cards to show — and, like them, it
+            is untouched by Reset all. The search answers "which cards exist"; this is the way
+            through to "which printings", which is otherwise the card pane's question. */}
+        <ToggleChip
+          label="All printings"
+          pressed={search.allPrintings}
+          onClick={search.toggleAllPrintings}
+        />
+
+        {/* An `Unplayable` chip used to ride here, beside All printings, on the argument that
+            both said what there is to look *through* rather than what to look for. It is the
+            format select's `Any card` row now: the chip and that select were moving the same axis
+            in opposite directions, and the one state only the pair could reach — "Modern, and
+            also the art cards" — was a filter contradicting itself. One control, three rows, and
+            the row is counted and cleared by Reset all like the filter it always was. */}
+
+        {layoutToggle && <ViewToggle section={layoutFor} />}
       </div>
 
-      {/* Always drawn, greyed when there is nothing to clear — the rule lives in the control,
-          so every view that offers a reset offers the same one. This row is the reason it is
-          that way round: the search box above is `flex-1`, so a Reset that appeared on the
-          first press would take its width out of the box and slide all nine colour chips left
-          under the finger that just pressed one. */}
-      <ResetAll count={search.activeCount} onReset={search.resetAll} />
-
-      {/* A view mode rather than a filter, so it sits past the reset with the layout pair
-          rather than among the statements about which cards to show — and, like them, it
-          is untouched by Reset all. The search answers "which cards exist"; this is the way
-          through to "which printings", which is otherwise the card pane's question. */}
-      <ToggleChip
-        label="All printings"
-        pressed={search.allPrintings}
-        onClick={search.toggleAllPrintings}
-      />
-
-      {/* An `Unplayable` chip used to ride here, beside All printings, on the argument that
-          both said what there is to look *through* rather than what to look for. It is the
-          format select's `Any card` row now: the chip and that select were moving the same axis
-          in opposite directions, and the one state only the pair could reach — "Modern, and
-          also the art cards" — was a filter contradicting itself. One control, three rows, and
-          the row is counted and cleared by Reset all like the filter it always was. */}
-
-      {layoutToggle && <ViewToggle section={layoutFor} />}
+      <TagQueryRow search={search} />
     </div>
   );
 }
