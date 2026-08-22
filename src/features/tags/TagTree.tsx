@@ -7,7 +7,7 @@ import {
   type CSSProperties,
   type ReactNode,
 } from "react";
-import { Check, ChevronRight, EyeOff, Plus } from "lucide-react";
+import { Check, ChevronRight, EyeOff, Minus, Plus } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useContextMenu } from "@/components/menu/useContextMenu";
 import type { MenuItem } from "@/components/menu/types";
@@ -92,9 +92,10 @@ interface TagRailApi {
    *  rows, and opening the `forest` under `plant` must not open the one under `landscape`. */
   expanded: ReadonlySet<string>;
   toggle: (path: string) => void;
-  onPick: (hit: TagHit) => void;
+  onToggle: (hit: TagHit) => void;
   hide: (hit: TagHit) => void;
-  /** Chip keys, so a row already in the chip row can say so. */
+  /** Chip keys, so a row already in the chip row can say so — and so a press on it can take the
+   *  tag back off rather than doing nothing. */
   picked: ReadonlySet<string> | undefined;
   /** Whether a row draws its taxonomy. Only in `"both"`, where a column of identical marks
    *  would be noise but the two id spaces genuinely share slugs. */
@@ -124,7 +125,15 @@ export interface TagTreeProps {
   /** A search is in flight, including its debounce — the list says so rather than looking like
    *  a search that found nothing. */
   pending?: boolean;
-  onPick: (hit: TagHit) => void;
+  /**
+   * Turn a tag's filter on, or back off — **a toggle, not an add**.
+   *
+   * The rail is where a reader both finds a tag and un-picks it, so the same press has to do
+   * both: a row that only ever added left "off" reachable from the chip row alone, two controls
+   * away from the one that had just been used (issue #181). {@link picked} is what tells a row
+   * which half of the toggle it is offering, so a caller that supplies this must supply that.
+   */
+  onToggle: (hit: TagHit) => void;
   /**
    * Hide a tag everywhere. The write is the page's, because it is the page that has to
    * invalidate `tag_search` and `tag_children` afterwards; awaited here so the rail only claims
@@ -139,7 +148,7 @@ export function TagTree({
   namespace,
   hits,
   pending = false,
-  onPick,
+  onToggle,
   onMute,
   picked,
 }: TagTreeProps) {
@@ -179,8 +188,8 @@ export function TagTree({
   );
 
   const api = useMemo<TagRailApi>(
-    () => ({ expanded, toggle, onPick, hide, picked, showNamespace: namespace === "both" }),
-    [expanded, toggle, onPick, hide, picked, namespace],
+    () => ({ expanded, toggle, onToggle, hide, picked, showNamespace: namespace === "both" }),
+    [expanded, toggle, onToggle, hide, picked, namespace],
   );
 
   return (
@@ -350,9 +359,14 @@ function Aside({ children }: { children: ReactNode }) {
  * The disclosure is a **second button** rather than the row itself, because opening a branch and
  * picking a tag are two different intentions and a reader browsing a category must be able to
  * look inside it without filtering by it.
+ *
+ * **The tag is a toggle button, and both halves are this one press.** It used to only add — the
+ * page's handler was `addChip`, which answers an already-picked tag with the same object — so the
+ * reader who mis-clicked had to go and find the chip to undo it (issue #181). One control, two
+ * directions, and the state said the way ARIA says it.
  */
 function TagRow({ hit, path, level }: { hit: TagHit; path: string; level: number }) {
-  const { expanded, toggle, onPick, hide, picked, showNamespace } = useRail();
+  const { expanded, toggle, onToggle, hide, picked, showNamespace } = useRail();
   const { menu, menuKey } = useContextMenu();
   const tip = useTooltip();
 
@@ -363,9 +377,13 @@ function TagRow({ hit, path, level }: { hit: TagHit; path: string; level: number
   // between inline boxes, so this row would announce as "Forest" + "Art" + "3 illustrations" run
   // together — the same defect that made Reset all say "Reset all6". The visible label still
   // leads it (WCAG 2.5.3) and both other visible strings are in it.
-  const name = `${hit.label}, ${TAG_NAMESPACE_LABEL[hit.namespace].toLowerCase()} tag, ${reach}${
-    isPicked ? ", picked" : ""
-  }`;
+  //
+  // **Whether the tag is picked is NOT in here**, and it used to be: the row was not a toggle,
+  // so a button announcing "pressed" that ignored the next press would have been a control that
+  // lies, and the state went in the name instead. Issue #181 made the press a real toggle, so
+  // `aria-pressed` below is now both correct and the place a screen reader already looks — and a
+  // name that also said ", picked" would announce the same fact twice.
+  const name = `${hit.label}, ${TAG_NAMESPACE_LABEL[hit.namespace].toLowerCase()} tag, ${reach}`;
 
   /**
    * The row's menu, built on the press rather than on every render — a rail can be thousands of
@@ -381,9 +399,12 @@ function TagRow({ hit, path, level }: { hit: TagHit; path: string; level: number
       {
         kind: "action",
         id: "pick",
-        label: "Add this tag to the filter",
-        Icon: Plus,
-        onSelect: () => onPick(hit),
+        // **The row runs the same toggle the press does, so it has to name the half it will
+        // do.** A row that said "Add" over a picked tag and then removed it would be the worse
+        // reading of issue #181 rather than the fix for it.
+        label: isPicked ? "Remove this tag from the filter" : "Add this tag to the filter",
+        Icon: isPicked ? Minus : Plus,
+        onSelect: () => onToggle(hit),
       },
       { kind: "separator", id: "sep" },
       {
@@ -436,9 +457,13 @@ function TagRow({ hit, path, level }: { hit: TagHit; path: string; level: number
 
         <button
           type="button"
-          onClick={() => onPick(hit)}
+          onClick={() => onToggle(hit)}
           onContextMenu={menu(items)}
           onKeyDown={menuKey(items)}
+          // The ARIA toggle-button pattern, which is what this row now is: pressed means the
+          // tag is filtering the wall, and pressing again takes it off. The tick beside the
+          // label is the same fact drawn.
+          aria-pressed={isPicked}
           aria-label={name}
           // The tag's own description, where Scryfall gave it one. A description rather than part
           // of the name: most tags have none, and a row whose name grew a sentence would be

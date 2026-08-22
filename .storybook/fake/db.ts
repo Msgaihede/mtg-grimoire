@@ -797,17 +797,17 @@ export interface FakeDb {
    * `app_meta.nav_collapsed` — whether the reader has collapsed the global navigation sidebar
    * down to its icons.
    *
-   * **A plain `boolean`, and the only one of these five rows that is not nullable** — which is
+   * **A plain `boolean`, and the first of the two rows here that are not nullable** — which is
    * the whole of what is worth knowing about this field, because the shape is an argument
-   * rather than a shortcut. Its four neighbours are `string | null` (or `{}`) because each has
-   * two states a narrowed field could not reach: the row has never been written, and the row
-   * holds a word *this* build cannot place. This one has neither. `nav_collapsed` is infallible
-   * at the far end: a missing row, a junk row, a row a newer build wrote something else into —
-   * every one of them answers `false`, and the reader gets the expanded shell. So there is no
-   * "never set" for a story to stand in that is distinguishable from "set to the default", and
-   * a `boolean | null` here would be a third state the backend cannot produce, which is exactly
-   * the kind of fiction {@link FakeDb.marketplace}'s nullability exists to *avoid* rather than
-   * an instance of it.
+   * rather than a shortcut. Its string-and-map neighbours are `string | null` (or `{}`) because
+   * each has two states a narrowed field could not reach: the row has never been written, and
+   * the row holds a word *this* build cannot place. This one has neither. `nav_collapsed` is
+   * infallible at the far end: a missing row, a junk row, a row a newer build wrote something
+   * else into — every one of them answers `false`, and the reader gets the expanded shell. So
+   * there is no "never set" for a story to stand in that is distinguishable from "set to the
+   * default", and a `boolean | null` here would be a third state the backend cannot produce,
+   * which is exactly the kind of fiction {@link FakeDb.marketplace}'s nullability exists to
+   * *avoid* rather than an instance of it.
    *
    * The consequence for the pair of handlers is the same one, said twice: the read cannot fall
    * back because there is nothing to fall back from, and the write cannot refuse a value
@@ -815,6 +815,22 @@ export interface FakeDb {
    * {@link readHandlers.nav_collapsed} and {@link writeHandlers.set_nav_collapsed}.
    */
   navCollapsed: boolean;
+  /**
+   * `app_meta.deck_search_open` — whether the deck editor's card search column was last left
+   * open.
+   *
+   * The sixth row of the same key/value table and the **second** of the two booleans, landing
+   * the same day as {@link FakeDb.navCollapsed} above. Every word of that field's argument
+   * applies here unchanged — `deck_search_open` is infallible at the far end too, folding a
+   * missing row, a hand-edited one and an unreadable one alike into its default — so it is a
+   * plain `boolean` for the same reason and not by imitation.
+   *
+   * What differs is only which way the default points, and the two are worth reading together:
+   * a reader who has never touched either control gets the nav rail **expanded** and this column
+   * **open**. Both are "the app as it comes"; neither is a `false` that happens to be the
+   * language's default.
+   */
+  deckSearchOpen: boolean;
   /**
    * `marketplace_prices` — the table that made a third and fourth marketplace possible.
    *
@@ -1128,12 +1144,16 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // says nothing about zoom is standing in. A story that wants a restored session passes the
     // sections it cares about and leaves the rest out — an absent key is a wall nobody has zoomed.
     cardZoom: {},
-    // The fifth row, and the only one whose default is a *value* rather than an absence: a
-    // shell nobody has collapsed. `false` is what the backend answers for the row never having
-    // been written and for its holding something unreadable alike, so there is no third state
-    // for `null` to stand in — see {@link FakeDb.navCollapsed}. Every story that says nothing
-    // about the sidebar is standing in the expanded shell.
+    // The fifth row, and the first whose default is a *value* rather than an absence: a shell
+    // nobody has collapsed. `false` is what the backend answers for the row never having been
+    // written and for its holding something unreadable alike, so there is no third state for
+    // `null` to stand in — see {@link FakeDb.navCollapsed}. Every story that says nothing about
+    // the sidebar is standing in the expanded shell.
     navCollapsed: false,
+    // The sixth, on the same footing and pointing the other way: `deck_search_open` answers
+    // `true` for an editor nobody has told, so every deck story that says nothing about the
+    // search column is standing in the column the app ships open.
+    deckSearchOpen: true,
     // Empty here and filled by a seed, exactly as the card corpus is: a downloaded feed is a
     // table with rows in it, and "no rows" is the honest state of an install that has never
     // chosen Card Kingdom. `starterSeed` fills both from the corpus.
@@ -4983,9 +5003,9 @@ export function readHandlers(db: FakeDb) {
     /**
      * `nav::nav_collapsed` — whether the global navigation sidebar was left collapsed to icons.
      *
-     * The fifth `app_meta` setting, and **the one with no fallback in it at all**, which is the
-     * whole of how it differs from the four above. Each of those narrows on the way out because
-     * the row can hold a word this build cannot place; this row holds a boolean, and the
+     * The fifth `app_meta` setting, and **the first with no fallback in it at all**, which is
+     * the whole of how it differs from the four above. Each of those narrows on the way out
+     * because the row can hold a word this build cannot place; this row holds a boolean, and the
      * command is infallible at the far end — a missing row, a junk row, an unparseable one all
      * answer `false`, so the shell that greets a reader whose `app_meta` is nonsense is the
      * expanded one. That collapse happens in the Rust, before the value ever crosses the IPC
@@ -5001,6 +5021,22 @@ export function readHandlers(db: FakeDb) {
      * A read, so it answers through a sync like every other one here — the write below does not.
      */
     nav_collapsed: (): boolean => db.navCollapsed,
+
+    /**
+     * `deck::deck_search_open` — whether the editor's search column was last left open.
+     *
+     * The sixth `app_meta` setting and the **second** with nothing to decide, for every one of
+     * the reasons `nav_collapsed` above gives: the Rust folds a missing row, a hand-edited one
+     * and an unreadable one into its default before the value crosses the IPC boundary, so the
+     * stored boolean is the answer.
+     *
+     * Its first frame matters for the same reason and one of its own: this column is 384px of
+     * the desk, so a story seeded shut that opened wide and snapped closed would not merely
+     * flicker — it would re-pack the deck beside it on the way past.
+     *
+     * A read, so it answers through a sync like every other one here — the write below does not.
+     */
+    deck_search_open: (): boolean => db.deckSearchOpen,
 
     /**
      * `marketplace_feed::status` — one row per **feed-backed** marketplace, whether or not it
@@ -5925,9 +5961,18 @@ function ownedSpare(db: FakeDb, cardId: string, finish: DeckFinish): number {
   return Math.max(0, held - claimed);
 }
 
-/** One row of {@link theoryDiff}'s working form. The oracle id is deliberately **not** on
- *  `TheoryDiffRow` — the webview draws a printing and a count and has no use for it, while
- *  `deck_theory_missing_to_wishlist` cannot do without one: a wish is oracle-grained. */
+/**
+ * One row of {@link theoryDiff}'s working form. The oracle id is deliberately **not** on
+ * `TheoryDiffRow` — the webview draws a printing and a count and has no use for it — while the
+ * two things that need it here have nowhere else to read it from: every wish
+ * `deck_theory_missing_to_wishlist` writes names an oracle card, and
+ * {@link TheoryDiffRow.heldAsOtherPrinting} is claimed **per oracle card**, out of a pool the
+ * printing-grained key cannot see.
+ *
+ * `null` is an orphan — a row whose printing has left `cards` — and both of those read it the
+ * same way: skip. A card the database no longer has cannot be matched by another printing of
+ * itself, and cannot be wished for either.
+ */
 interface GroupedDiff {
   oracleId: string | null;
   row: TheoryDiffRow;
@@ -5949,6 +5994,15 @@ interface GroupedDiff {
  * editor lists first, and re-filing a card in one list and not the other is no difference.
  * Ordered by where that representative row falls in the editor's own reading order, so the
  * shopping list runs down the deck the way the deck is drawn.
+ *
+ * **`heldAsOtherPrinting` is that same comparison asked one grain wider**, and it is answered on
+ * this one pass rather than by a second walk of `deckCards`. The exact-card key is right for
+ * *buying* and wrong for *playing*: a plan naming one Sol Ring against a deck sleeving another
+ * is a full row here, and the deck nevertheless runs. So the live side is also summed per
+ * **oracle card**; the copies an exact key already matched are taken back out; and what is left
+ * is a pool the surviving rows draw from **in the reading order they are already in**. The pool
+ * is why one live Bolt cannot excuse two rows — each row's take comes off it — and the order is
+ * the whole of what makes *which* row got it a fact about the deck rather than about the caller.
  */
 function theoryDiff(db: FakeDb, deckId: number, mp: MarketplaceId): GroupedDiff[] {
   const rows = db.deckCards
@@ -5959,6 +6013,11 @@ function theoryDiff(db: FakeDb, deckId: number, mp: MarketplaceId): GroupedDiff[
     .sort(deckReadOrder(db));
   const wanted = new Map<string, number>();
   const held = new Map<string, number>();
+  // The live side again at the **oracle** grain, summed on this same pass — what
+  // `heldAsOtherPrinting` is paid out of. The category filter above has already run, so a row
+  // parked in a switched-off pile never reaches this map; re-filtering here would be the second
+  // place that rule lived.
+  const liveByOracle = new Map<string, number>();
   const order: [string, GroupedDiff][] = [];
   for (const dc of rows) {
     const card = cardById(db, dc.cardId);
@@ -5967,6 +6026,10 @@ function theoryDiff(db: FakeDb, deckId: number, mp: MarketplaceId): GroupedDiff[
     const key = `${dc.cardId}|${dc.finish ?? ""}`;
     if (dc.variant !== "theory") {
       held.set(key, (held.get(key) ?? 0) + dc.quantity);
+      // An orphan contributes nothing: there is no oracle card to file it under, so a printing
+      // the database has lost cannot stand in for anything.
+      const oracle = card?.oracleId;
+      if (oracle) liveByOracle.set(oracle, (liveByOracle.get(oracle) ?? 0) + dc.quantity);
       continue;
     }
     wanted.set(key, (wanted.get(key) ?? 0) + dc.quantity);
@@ -5987,9 +6050,24 @@ function theoryDiff(db: FakeDb, deckId: number, mp: MarketplaceId): GroupedDiff[
           collectorNumber: dc.collectorNumber,
           finish: dc.finish,
           ownedSpare: 0,
+          // Filled by the second pass below, once every exact match is known. Zero is already
+          // the right answer for an orphan and for a card the deck plays no other copy of.
+          heldAsOtherPrinting: 0,
         },
       },
     ]);
+  }
+  // Copies an **exact** key has already accounted for, per oracle card. Only a theory key can
+  // contribute one — `min(wanted, held)` is zero wherever nothing is wanted — so a printing that
+  // appears in the live list alone needs no entry here. Summed over **every** theory key and not
+  // only the surviving ones, because a key live has more of leaves the diff while the copies it
+  // matched stay spoken for.
+  const matchedByOracle = new Map<string, number>();
+  for (const [key, grouped] of order) {
+    const oracle = grouped.oracleId;
+    if (oracle === null) continue;
+    const matched = Math.min(wanted.get(key) ?? 0, held.get(key) ?? 0);
+    matchedByOracle.set(oracle, (matchedByOracle.get(oracle) ?? 0) + matched);
   }
   const diff: GroupedDiff[] = [];
   for (const [key, grouped] of order) {
@@ -5998,6 +6076,23 @@ function theoryDiff(db: FakeDb, deckId: number, mp: MarketplaceId): GroupedDiff[
     grouped.row.quantity = short;
     grouped.row.ownedSpare = ownedSpare(db, grouped.row.cardId, grouped.row.finish);
     diff.push(grouped);
+  }
+  // What is left of the live list once the exact lines have taken theirs. Floored for
+  // {@link ownedSpare}'s reason rather than because it can bind here — every copy counted into
+  // `matchedByOracle` was counted into `liveByOracle` first, so the subtraction is never
+  // negative, and a floor is still what a reader should meet if that ever stops being true.
+  const pool = new Map<string, number>();
+  for (const [oracle, live] of liveByOracle) {
+    pool.set(oracle, Math.max(0, live - (matchedByOracle.get(oracle) ?? 0)));
+  }
+  // Handed out down the list in the order it is already in, one copy excusing one copy. An
+  // orphan is passed over and keeps the zero it was built with.
+  for (const grouped of diff) {
+    const oracle = grouped.oracleId;
+    if (oracle === null) continue;
+    const take = Math.min(grouped.row.quantity, pool.get(oracle) ?? 0);
+    grouped.row.heldAsOtherPrinting = take;
+    pool.set(oracle, (pool.get(oracle) ?? 0) - take);
   }
   return diff;
 }
@@ -7897,20 +7992,50 @@ export function writeHandlers(db: FakeDb) {
      * `ownedSpare` here counts the live list's copies twice: `quantity` is already *wanted minus
      * held*, while `ownedSpare` nets out only the claims of decks that are **built** — so an
      * unbuilt deck's own live copies read as spare, which is right for a person and wrong for a
-     * subtraction. An orphan is skipped: a wish needs an oracle card, and an orphan has none.
+     * subtraction. {@link TheoryDiffRow.heldAsOtherPrinting} is not netted out either, for a
+     * plainer reason: it is a *filter*, and the reader who does not want those rows unticks
+     * them — a press writes what the reader ticked, at its full quantity.
+     *
+     * **`only` narrows it to exactly that** — {@link deck_theory_slots}' own `group_key`
+     * spelling, `` `${cardId}|${finish ?? ""}` ``. Absent is the whole difference, so the
+     * untouched press and every older caller mean what they always did; and a key naming no row
+     * of the *current* difference writes nothing rather than refusing, because the diff is
+     * re-read inside the write and a row the reader ticked and then acquired in another window
+     * is simply not short any more. **An include list though the gesture is exclusion**: the two
+     * spellings differ only for rows that appeared between the read and the press, and those are
+     * rows the reader never saw, so acting on them would be the dialog deciding for itself.
+     *
+     * **The wish is pinned to the printing the plan names** (2026-08-22), carrying its `foil` or
+     * `etched` finish with it. This used to write an any-printing wish — "a shopping list is not
+     * a printing preference" — and that is the wrong rule for *this* command: a plan naming a
+     * printing is a plan for **that** cardboard, which is the rule the comparison itself has
+     * followed since 2026-08-20, and answering it loosely hands the reader back the very
+     * substitution the plan was tracking. The regular copy pins **no** finish: `null` is the
+     * unmarked case in `deckCards`, and writing `nonfoil` would split this wish from every other
+     * one the app makes for that card on the grain `(oracleId, cardId, preferredFinish)`.
+     *
+     * An orphan is skipped, and that skip now carries two things rather than one: a wish needs
+     * an oracle card, *and* {@link addWish} refuses a `cardId` whose printing has left `cards`.
+     * The one row that could make this throw is the one row that never reaches it.
      */
-    deck_theory_missing_to_wishlist: (args: { deckId: number }): number => {
+    deck_theory_missing_to_wishlist: (args: { deckId: number; only?: string[] }): number => {
       refuseIfBusy(db);
       if (!db.decks.some((d) => d.id === args.deckId)) throw refuse(DECK_GONE);
+      const only = args.only === undefined ? null : new Set(args.only);
       let touched = 0;
       // The marketplace decides no part of *which* rows are short — it only prices them — so
       // the default is enough here, where nothing reads a price.
       for (const grouped of theoryDiff(db, args.deckId, DEFAULT_MARKETPLACE)) {
         if (grouped.oracleId === null) continue;
+        if (only && !only.has(`${grouped.row.cardId}|${grouped.row.finish ?? ""}`)) continue;
         addWish(db, {
           oracleId: grouped.oracleId,
+          cardId: grouped.row.cardId,
           name: grouped.row.name,
           quantity: grouped.row.quantity,
+          // `DeckFinish` is `null` for the regular copy and `WishInput.preferredFinish` says
+          // "no preference" with `undefined`; the two spellings of the unmarked case meet here.
+          preferredFinish: grouped.row.finish ?? undefined,
         });
         touched += 1;
       }
@@ -8135,6 +8260,26 @@ export function writeHandlers(db: FakeDb) {
     set_nav_collapsed: (args: { collapsed: boolean }): void => {
       refuseIfBusy(db);
       db.navCollapsed = args.collapsed;
+    },
+
+    /**
+     * `deck::set_deck_search_open` — remember whether the search column is open.
+     *
+     * The **second** write here with nothing but `busy` to refuse, and the paragraph above is
+     * the whole argument: a `boolean` off the IPC boundary has no junk state for a validation
+     * to catch, so adding one would invent a refusal the backend does not make.
+     *
+     * The row it writes holds `"1"`/`"0"` rather than a JSON boolean — `deck::store_deck_search_open`
+     * — and that is invisible from here on purpose: the fake stores the answered `boolean`,
+     * because the string is a storage detail with no state a story could stand in. Which
+     * spellings the Rust reads back is `deck.rs`'s own test, where the row really is text.
+     *
+     * It honours `busy` like every other ordinary write here — `deck.rs` takes the write
+     * connection through `sync::with_write`.
+     */
+    set_deck_search_open: (args: { open: boolean }): void => {
+      refuseIfBusy(db);
+      db.deckSearchOpen = args.open;
     },
 
     /**

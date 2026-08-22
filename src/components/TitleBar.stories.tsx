@@ -37,6 +37,45 @@ type Story = StoryObj<typeof meta>;
 export const Default: Story = {};
 
 /**
+ * The lockup in the top-left: `GrimoireMark` at 20px in gold, then the name in Cinzel.
+ *
+ * **Three things about it are invisible on the page and are what this story asserts.** The
+ * mark is *simplified* rather than the master artwork — 20px is under `GrimoireMark`'s 24px
+ * detail floor, so the component drops the casting circle, the runes and the clasp rivets on
+ * its own, and the size prop is the whole of what picks that. It is `pointer-events-none`, so
+ * the pointer over it hit-tests to the wrapper that carries `data-tauri-drag-region` and the
+ * mark is not a 20×20 patch of caption that refuses to drag the window — a thing no workbench
+ * and no jsdom test can be made to demonstrate, since neither hit-tests anything. And it is
+ * `aria-hidden`, because the wordmark beside it already sets the product's name in type and a
+ * named mark would be that name announced twice.
+ *
+ * Gold rather than the wordmark's `text-dim` is the one deliberate exception to
+ * `SyncProgress.tsx`'s rule that a name is not an action: that rule is about type and
+ * controls, and `logos/README.md` specifies `--color-accent` as the mark's own colour.
+ */
+export const Lockup: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const wordmark = await canvas.findByText("MTG GRIMOIRE");
+    const lockup = wordmark.parentElement;
+
+    // Both, because `data-tauri-drag-region` does not inherit: the wrapper is what puts the
+    // 10px of `gap-2.5` between the two into the grab area, and the wordmark still needs its
+    // own inside it.
+    await expect(lockup).toHaveAttribute("data-tauri-drag-region");
+    await expect(wordmark).toHaveAttribute("data-tauri-drag-region");
+
+    // Through the lockup rather than the canvas: the three caption buttons each draw a lucide
+    // `<svg>`, so an unscoped query would answer about the Minimize glyph and pass with the
+    // mark deleted.
+    const mark = lockup?.querySelector("svg");
+    await expect(mark).toHaveAttribute("width", "20");
+    await expect(mark).toHaveClass("pointer-events-none");
+    await expect(canvas.queryByRole("img")).toBeNull();
+  },
+};
+
+/**
  * Maximized, which is the *other* glyph and the other label — `Copy`'s two offset frames,
  * lucide's version of the two-rectangle "restore" mark Windows has drawn since 3.1.
  *

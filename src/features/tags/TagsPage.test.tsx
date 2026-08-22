@@ -295,9 +295,17 @@ function wrapInShell(ui: ReactElement) {
 /** The page's `art-tags:progress` handler, once it has subscribed. */
 let artProgress: ((e: TagProgressEvent) => void) | null = null;
 
-/** One rail row, by the accessible name `TagTree` composes: label, taxonomy, reach. */
+/**
+ * One rail row, by the accessible name `TagTree` composes: label, taxonomy, reach.
+ *
+ * **The reach is in the pattern and it is what makes this unambiguous.** A chip is named
+ * `Landscape, art tag, included`, so a needle that stopped at the taxonomy would match both the
+ * row and the chip the moment a tag is picked — and every test that presses the same row twice
+ * would fail with "found multiple elements" rather than with what it was asking about. A reach
+ * always starts with a digit; neither chip word does.
+ */
 const railRow = (label: string) =>
-  screen.findByRole("button", { name: new RegExp(`^${label}, (art|oracle) tag`) });
+  screen.findByRole("button", { name: new RegExp(`^${label}, (art|oracle) tag, \\d`) });
 
 /** The last `search_cards` payload — what every filter assertion below reads. */
 const lastRequest = () =>
@@ -438,6 +446,69 @@ describe("picking a tag", () => {
     expect(
       screen.getByRole("button", { name: /^Landscape, art tag, included/ }),
     ).toBeInTheDocument();
+  });
+
+  /**
+   * Issue #181, end to end: the row is a **toggle**, so the press that turned the filter on turns
+   * it off again. It used to only ever add — `addChip` answers an already-picked tag with the
+   * same object — which left "on" reachable from the rail and "off" reachable only from the
+   * chip's ×, two controls away from the one the reader had just used.
+   *
+   * `artTags` goes **absent** rather than empty, which is `termsFor`'s rule and not a detail: a
+   * taxonomy nobody picked from carries no predicate, and an `include: []` riding on the request
+   * would be a payload claiming a filter the reader has taken off.
+   */
+  it("takes the tag off again when its row is pressed a second time", async () => {
+    const user = userEvent.setup();
+    wrap(<TagsPage />);
+
+    await user.click(await railRow("Landscape"));
+    await waitFor(() => expect(lastRequest().artTags).toEqual({ include: ["landscape"], exclude: [] }));
+    await screen.findByRole("button", { name: /^Landscape, art tag, included/ });
+
+    await user.click(await railRow("Landscape"));
+
+    await waitFor(() => expect(lastRequest().artTags).toBeUndefined());
+    expect(
+      screen.queryByRole("button", { name: /^Landscape, art tag, included/ }),
+    ).not.toBeInTheDocument();
+  });
+
+  /** The rail says which rows are on, and `aria-pressed` is where a toggle button says it. */
+  it("presses the row in and lets it back out", async () => {
+    const user = userEvent.setup();
+    wrap(<TagsPage />);
+
+    expect(await railRow("Landscape")).toHaveAttribute("aria-pressed", "false");
+
+    await user.click(await railRow("Landscape"));
+    await waitFor(async () =>
+      expect(await railRow("Landscape")).toHaveAttribute("aria-pressed", "true"),
+    );
+
+    await user.click(await railRow("Landscape"));
+    await waitFor(async () =>
+      expect(await railRow("Landscape")).toHaveAttribute("aria-pressed", "false"),
+    );
+  });
+
+  /**
+   * The floor is settled on **every** write to the selection, and a toggle is a fourth path into
+   * the empty state — so un-picking the last art include has to take a `strong` floor down with
+   * it. Left set, `TagChips` would grey a control that is still on, which is the one state
+   * `filterChipState` says never occurs: a filter that is on and unreachable.
+   */
+  it("drops the weight floor when the last art include is toggled off", async () => {
+    const user = userEvent.setup();
+    wrap(<TagsPage />);
+
+    await user.click(await railRow("Landscape"));
+    await user.click(screen.getByRole("button", { name: new RegExp(`^${HIDE_BACKGROUND_LABEL}`) }));
+    await waitFor(() => expect(lastRequest().artWeightFloor).toBe("strong"));
+
+    await user.click(await railRow("Landscape"));
+
+    await waitFor(() => expect(lastRequest().artWeightFloor).toBeUndefined());
   });
 
   /** The two taxonomies AND with each other: "a landscape that removes something" is one ask. */
