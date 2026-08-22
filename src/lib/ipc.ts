@@ -3121,8 +3121,14 @@ export const ipc = {
    * (`src-tauri/src/collection_decks.rs`), so a caller that helpfully sent `null` here would get
    * a deserialization error rather than an empty list. Hand it `row.finish`.
    *
-   * Empty on a hand-kept collection, and on a row whose decks have since changed — it is a
-   * read, never a promise that the count it explains is still current.
+   * **Not gated on the setting.** `row_decks` has no flag check and queries `deck_cards`
+   * unconditionally, which is right: "which decks hold this printing" is a fact about decks and
+   * is true in either mode. What is mode-specific is who asks — the page only reaches for this
+   * where a {@link CollectionRow.deckCount} exists to explain, and that is `null` while the
+   * collection is hand-kept.
+   *
+   * A row whose decks have since changed answers whatever they hold now — it is a read, never
+   * a promise that the count it explains is still current.
    */
   collectionRowDecks: (cardId: string, finish: string, lang: string) =>
     invoke<RowDeck[]>("collection_row_decks", { cardId, finish, lang }),

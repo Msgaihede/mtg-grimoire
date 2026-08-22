@@ -121,6 +121,25 @@ preferred_finish`'s nullability one table over.
   the _live_ deck's stored claims, so `attribute_owned` filters `variant == LIVE` explicitly.
   Without that filter a plan is handed the copies the sleeved deck reserved, and it type-checks
   perfectly (`the_allocator_claims_nothing_for_the_theory_variant`).
+- **While the collection is deck driven the ledger is not written at all, and the short marks go
+  away** ([deck-driven-collection.md](deck-driven-collection.md), 2026-08-22). `allocate_deck`
+  returns `Ok(())` **above its own `DELETE`**, so the reader's existing `deck_allocations` rows
+  are left exactly as they were and switching the setting back off finds the ledger intact
+  rather than emptied by a mode that never used it. `attribute_owned` reports
+  `owned_quantity = quantity` for every `live` row, which is true by construction — that mode's
+  collection *is* the sum of those rows — so no live deck card draws the short mark and
+  `missing_to_wishlist` finds nothing missing on a live list. The theory fence above still
+  stands, for a second reason on top of the ledger one: a theory row is a card the reader has
+  said they do **not** have yet.
+  **The inactive category is where the two rules deliberately part company.** `allocate_deck`
+  claims nothing for a switched-off pile, and `collection_source::LIVE` carries no `is_active`
+  term and counts it — because an inactive Maybeboard is a statement about how the *deck* is
+  read, not about whether the cards are in the reader's hands. So under this setting a card in a
+  switched-off category reads as fully covered where the allocator would have given it nothing.
+  That is the departure, it is on purpose, and it is the reason
+  `deck_meta::deck_category_set_active` stays on a bare `sync::with_write` while thirteen other
+  deck commands moved to `collection_source::with_write_owned_if_derived`: flipping `is_active`
+  cannot change what a deck-driven collection holds.
 - **Switching the theory list on _moves_ the live deck into it. It does not copy it.** The deck
   the reader has built **is the plan**, so it becomes the theory list — and `live`, what is
   actually sleeved up, **starts empty** and fills as they acquire the cards. The guard is the one
