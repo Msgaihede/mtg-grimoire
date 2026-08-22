@@ -222,6 +222,37 @@ interface AppState {
    */
   openCardFromDeck: (context: PaneDeckContext) => void;
   /**
+   * Whether the open card was pressed in the deck editor's **docked search column**, rather
+   * than anywhere else in the app.
+   *
+   * It exists for one reason and it is a layout one (issue #183): the editor draws the card
+   * pane as an overlay now, and *which side* it is drawn on is decided by where the reader was
+   * looking when they opened it. A card pressed in the search column draws over the **deck**,
+   * attached to that column's left edge, so the search they are working through is not covered
+   * by the answer to it; a card pressed anywhere else draws over the **search column**, so the
+   * deck is not covered by a card the deck is about.
+   *
+   * **The complement is not {@link paneDeckContext}, and the difference is the whole reason
+   * this is a field of its own.** That one means *this card is a row of the open deck*, which
+   * is narrower: the validation panel's card names are deck cards opened through
+   * {@link setSelectedCardId}, so a side read off the context would draw the pane over the very
+   * piles the sentence beside it is complaining about. Here every opener that is not the search
+   * column reads as the deck side, including ones nobody has written yet.
+   */
+  paneFromDeckSearch: boolean;
+  /**
+   * Open a card **from the deck editor's search column** — the one write that sets
+   * {@link paneFromDeckSearch}, and the only way to set it.
+   *
+   * One action rather than a setter beside `setSelectedCardId`, which is
+   * {@link openCardFromDeck}'s design read a second time: every other way of opening a card
+   * clears this flag in the same `set`, so "the search column is the only surface that means
+   * it" is structural rather than a rule six call sites have to remember. The two openers
+   * exclude each other — this clears the deck context and that one clears this — so the pane can
+   * never be told it came from both sides at once.
+   */
+  openCardFromDeckSearch: (cardId: string) => void;
+  /**
    * Show another printing of the card the pane is already on — navigation *inside* the pane,
    * from a click on a printings row.
    *
@@ -449,6 +480,7 @@ export const useAppStore = create<AppState>((set) => ({
       activeView,
       selectedCardId: null,
       paneDeckContext: null,
+      paneFromDeckSearch: false,
       openDeckId: null,
       returnToDeckId: null,
     }),
@@ -512,10 +544,20 @@ export const useAppStore = create<AppState>((set) => ({
   // of them opens something that is *not* the deck row the context named. Clearing it here is
   // what makes that true by construction instead of by six call sites remembering to say so;
   // the one surface that does mean it says so through `openCardFromDeck`.
-  setSelectedCardId: (selectedCardId) => set({ selectedCardId, paneDeckContext: null }),
+  setSelectedCardId: (selectedCardId) =>
+    set({ selectedCardId, paneDeckContext: null, paneFromDeckSearch: false }),
   paneDeckContext: null,
   openCardFromDeck: (paneDeckContext) =>
-    set({ selectedCardId: paneDeckContext.cardId, paneDeckContext }),
+    set({
+      selectedCardId: paneDeckContext.cardId,
+      paneDeckContext,
+      // The two openers exclude each other in one `set` apiece, which is what makes "the pane
+      // came from one side" a fact about one write rather than an agreement between two.
+      paneFromDeckSearch: false,
+    }),
+  paneFromDeckSearch: false,
+  openCardFromDeckSearch: (selectedCardId) =>
+    set({ selectedCardId, paneDeckContext: null, paneFromDeckSearch: true }),
   // Deliberately not touching `paneDeckContext` — see the interface doc.
   viewPrinting: (selectedCardId) => set({ selectedCardId }),
   // Decks opens on the gallery: a deck is something the reader picks, and reopening the last
@@ -531,6 +573,10 @@ export const useAppStore = create<AppState>((set) => ({
     set((s) => ({
       openDeckId,
       paneDeckContext: null,
+      // Beside the context and for a sharper version of its reason: the flag is about a column
+      // that only exists inside an editor, so carrying it across an open or a close would aim
+      // the pane at a surface that is not on screen.
+      paneFromDeckSearch: false,
       returnToDeckId: openDeckId === null ? s.openDeckId : s.returnToDeckId,
     })),
   returnToDeckId: null,

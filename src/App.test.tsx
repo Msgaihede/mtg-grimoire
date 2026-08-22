@@ -31,6 +31,13 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     // empty row is a database nobody has zoomed, so every wall opens at its default.
     cardZoom: vi.fn().mockResolvedValue({}),
     setCardZoom: vi.fn().mockResolvedValue(undefined),
+    // The deck editor's search column reads which way it was last left, and writes on every
+    // press. Mocked rather than left off for `cardZoom`'s reason one row up — the read is a
+    // query and would merely fail, but a *press* calls the setter straight out of a click
+    // handler, where `undefined` is a synchronous TypeError nothing catches. `true` is the
+    // shipped default, so the column is drawn open exactly as a fresh install draws it.
+    deckSearchOpen: vi.fn().mockResolvedValue(true),
+    setDeckSearchOpen: vi.fn().mockResolvedValue(undefined),
     // And the sidebar's own width, read once on the way up for the same reason. `false` is a
     // database nobody has collapsed the rail in, so every test here gets the six named entries
     // it has always queried by name.
@@ -760,6 +767,50 @@ it("closes the card on Escape from inside a wishlist row's controls", async () =
   await userEvent.keyboard("{Escape}");
 
   expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+});
+
+/**
+ * **One card pane at a time, and inside a deck editor it is the editor's** (issue #183).
+ *
+ * The shell docks the pane beside every view, which is right for a wall of search results and
+ * was wrong for the deck builder: 384px plus a gap came out of the desk on every click, so
+ * opening a card re-packed the piles and collapsed the search column beside them. The editor
+ * draws its own as an overlay and this component steps aside for it (`inDeckEditor`).
+ *
+ * **Suppression, not relocation, is what has to be asserted**, and this is the only file that
+ * can: leaving the docked one up would put a second `CardDetailPane` on the same card and a
+ * second `complementary` landmark in the tree — which the other tests here would then hit as an
+ * ambiguous `getByRole` rather than as the thing that is actually wrong. So the count is the
+ * claim, twice: one pane in the editor, and one again on the way out of it, drawn by this
+ * component with nothing about the trip having leaked.
+ */
+it("hands the card pane to the deck editor, and takes it back", async () => {
+  deckList.mockResolvedValue([BURN]);
+  deckGet.mockResolvedValue(detail([DECK_BOLT]));
+  cardPrintings.mockResolvedValue({ items: [ALPHA, M10], total: 2 });
+  searchCards.mockResolvedValue({ items: [], total: 0, totalIsCapped: false });
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: "Decks" }));
+  await userEvent.click(await screen.findByRole("button", { name: /^Burn/ }));
+  await screen.findByLabelText("Deck name");
+
+  await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+  await screen.findByRole("complementary", { name: /card details/i });
+
+  // Inside the editor's own page column rather than beside it in the shell — the whole of what
+  // "takes no width from the deck" rests on. The editor is the `region` its deck name field
+  // sits in; a pane the shell had drawn would be a sibling of that, not a descendant.
+  const panes = screen.getAllByRole("complementary", { name: /card details/i });
+  expect(panes).toHaveLength(1);
+  expect(screen.getByLabelText("Deck name").closest("section")).toContainElement(panes[0]);
+
+  // Out of the deck. The card stays open — `setOpenDeckId` keeps `selectedCardId` on purpose,
+  // because the pane belongs to the reader and not to the view behind it — so this is the swap
+  // back, and one pane is still one pane.
+  await userEvent.click(screen.getByRole("button", { name: "Back to decks" }));
+  await screen.findByRole("button", { name: "New deck" });
+
+  expect(screen.getAllByRole("complementary", { name: /card details/i })).toHaveLength(1);
 });
 
 /**

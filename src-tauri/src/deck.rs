@@ -92,6 +92,56 @@ pub const DEFAULT_GAME: &str = crate::schema::DECK_GAMES[0];
 /// reader last did", not "what the reader chose in a settings panel".
 pub const K_LAST_DECK_FORMAT: &str = "last_deck_format";
 
+/// The `app_meta` key holding whether the deck editor's card search column was last left open.
+///
+/// The fourth key of its kind, after [`crate::marketplace::K_MARKETPLACE`],
+/// [`crate::card::K_PRINTING_GROUP_BY`] and [`K_LAST_DECK_FORMAT`], and it takes that family's
+/// whole argument with it: `app_meta` is the *application's* key/value table (schema v6),
+/// deliberately not `sync_meta` — a row in that one the sync did not write makes every later
+/// timing claim a fiction — and **no migration**, because a key in a table that has existed
+/// since v6 is a preference that cannot fail a launch.
+///
+/// **Stored as `"1"`/`"0"` rather than as `"true"`/`"false"`.** `app_meta` is a text table and
+/// every other key in it holds a word the app chose; a boolean has no word of its own, and the
+/// two SQLite itself would write for one are these. Anything else in the row is
+/// [`DEFAULT_DECK_SEARCH_OPEN`], by [`stored_deck_search_open`]'s argument.
+pub const K_DECK_SEARCH_OPEN: &str = "deck_search_open";
+
+/// Whether the deck editor's card search column is open when nobody has chosen.
+///
+/// `true`, and the reversal is issue #183's: the column used to open shut, on the argument that
+/// a search is a thing you ask for. What that costs is paid on *every* deck opened — a reader
+/// who searches while they build presses the same disclosure every time, and the app forgets
+/// the press the moment the deck closes. Remembering the answer is what makes a default
+/// defensible at all, so the two halves ship together: this is only the state of a database
+/// nobody has expressed a preference in.
+pub const DEFAULT_DECK_SEARCH_OPEN: bool = true;
+
+/// Whether the search column was last left open, or [`DEFAULT_DECK_SEARCH_OPEN`].
+///
+/// Three cases collapse into the default, exactly as [`crate::card::stored_group_by`]'s do: no
+/// row at all (a fresh install, and the common one), an unreadable row (`get_app_meta` swallows
+/// the error), and a row holding something that is neither `"1"` nor `"0"` — what a hand-edit
+/// or a differently-spelled build leaves behind. None of the three is worth failing over: the
+/// worst a wrong answer costs is one press of a disclosure that is on screen either way.
+pub fn stored_deck_search_open(conn: &Connection) -> bool {
+    match crate::update::get_app_meta(conn, K_DECK_SEARCH_OPEN).as_deref() {
+        Some("1") => true,
+        Some("0") => false,
+        _ => DEFAULT_DECK_SEARCH_OPEN,
+    }
+}
+
+/// Remember whether the search column is open.
+///
+/// No refusal to write, unlike [`crate::card::store_group_by`], and the difference is the type
+/// rather than a softer rule: a `bool` has arrived narrowed and there is no third value a caller
+/// could send for this one to reject.
+pub fn store_deck_search_open(conn: &Connection, open: bool) -> Result<(), String> {
+    crate::update::set_app_meta(conn, K_DECK_SEARCH_OPEN, if open { "1" } else { "0" })
+        .map_err(|e| format!("could not save the search column state: {e}"))
+}
+
 /// What [`add_card`] says when it is handed neither a category id nor a name to find or make
 /// one by. The two are alternatives, not a pair — an explicit id is a drop onto a named
 /// column, a name is the add path's "file it where this card belongs" (TypeScript's
@@ -3793,6 +3843,38 @@ pub async fn deck_last_format(
     .map_err(|e| format!("the last deck format could not be read: {e}"))
 }
 
+/// Whether the deck editor's card search column was last left open. **Read-only.**
+///
+/// Read-only connection on the blocking pool, exactly as [`crate::card::printing_group_by`]
+/// runs and for the same reason: this is read as a deck is being opened, and a preference that
+/// queued behind an ~80 s ingest on the write connection would hold the whole editor behind it.
+/// The `Result` is `spawn_blocking`'s join and nothing else — every way the read itself could go
+/// wrong is already a reason to answer [`DEFAULT_DECK_SEARCH_OPEN`].
+#[tauri::command]
+pub async fn deck_search_open(state: tauri::State<'_, Arc<AppState>>) -> Result<bool, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        stored_deck_search_open(&crate::sync::lock_db_read(&state))
+    })
+    .await
+    .map_err(|e| format!("the search column state could not be read: {e}"))
+}
+
+/// Remember whether the search column is open. Answers [`crate::db::BUSY`] if a sync holds the
+/// write connection — the bound every write command in this crate takes.
+#[tauri::command]
+pub async fn set_deck_search_open(
+    state: tauri::State<'_, Arc<AppState>>,
+    open: bool,
+) -> Result<(), String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::sync::with_write(&state, |conn| store_deck_search_open(conn, open))
+    })
+    .await
+    .map_err(|e| format!("the search column state could not be saved: {e}"))?
+}
+
 /// The one click: everything this deck is short of, onto the wishlist.
 #[tauri::command]
 pub async fn deck_missing_to_wishlist(
@@ -5790,6 +5872,55 @@ mod tests {
         crate::marketplace::store(&conn, "cardmarket").unwrap();
 
         create_deck(&conn, &input("Burn", "modern")).unwrap();
+
+        assert_eq!(last_deck_format(&conn).as_deref(), Some("modern"));
+        assert_eq!(crate::card::stored_group_by(&conn), "set");
+        assert_eq!(crate::marketplace::stored(&conn), "cardmarket");
+    }
+
+    /// The search column's own row, in all four states a read can find it in — and the point of
+    /// the last two is that a database this build cannot make sense of is still a database the
+    /// editor opens. `"true"` is the spelling a reader hand-editing the table would reach for
+    /// first, which is exactly why it has to read as the default rather than as `true`: the
+    /// column stores `"1"`/`"0"` and nothing else, and a second accepted spelling would be a
+    /// second thing to keep in step.
+    #[test]
+    fn the_search_column_state_survives_a_round_trip_and_falls_back_otherwise() {
+        let conn = seeded();
+
+        assert!(
+            stored_deck_search_open(&conn),
+            "a database nobody has expressed a preference in opens the column"
+        );
+
+        store_deck_search_open(&conn, false).unwrap();
+        assert!(!stored_deck_search_open(&conn));
+
+        store_deck_search_open(&conn, true).unwrap();
+        assert!(stored_deck_search_open(&conn));
+
+        crate::update::set_app_meta(&conn, K_DECK_SEARCH_OPEN, "true").unwrap();
+        assert_eq!(
+            stored_deck_search_open(&conn),
+            DEFAULT_DECK_SEARCH_OPEN,
+            "a value this build does not write reads as the default"
+        );
+    }
+
+    /// The fourth `app_meta` key, held against the three that were there first — the same claim
+    /// `a_create_leaves_the_other_app_meta_rows_standing` makes one row over, and it is worth
+    /// making again in this direction: a disclosure is pressed far more often than a deck is
+    /// created, so a write here that replaced the table rather than upserting into it would take
+    /// the reader's marketplace, their printing grouping *and* their New deck format with it,
+    /// every time they opened the search.
+    #[test]
+    fn the_search_column_write_leaves_the_other_app_meta_rows_standing() {
+        let conn = seeded();
+        crate::card::store_group_by(&conn, "set").unwrap();
+        crate::marketplace::store(&conn, "cardmarket").unwrap();
+        create_deck(&conn, &input("Burn", "modern")).unwrap();
+
+        store_deck_search_open(&conn, false).unwrap();
 
         assert_eq!(last_deck_format(&conn).as_deref(), Some("modern"));
         assert_eq!(crate::card::stored_group_by(&conn), "set");
