@@ -2,6 +2,7 @@
   "name": "mtg-grimoire",
   "private": true,
   "version": "0.13.0",
+  "license": "AGPL-3.0-or-later",
   "type": "module",
   "types": ".design-sync/dist/.design-sync/entry.d.ts",
   "scripts": {
