@@ -36,6 +36,22 @@ pub struct WishInput {
     pub quantity: i64,
     pub preferred_finish: Option<String>,
     pub notes: Option<String>,
+    /// Where to file the wish. **Absent is the root**, which is where every wish landed
+    /// before schema v23 and where every wish still lands unless a menu names a folder —
+    /// nothing has to be created for the list to work.
+    ///
+    /// It is the fourth term of [`WISHLIST_GRAIN`], which is what makes "Add to Ordered" an
+    /// **add** rather than a move: the conflict target already includes the folder, so a
+    /// wish for a card the reader filed last week and a wish for the same card added today
+    /// at the root are two rows, and no `DO UPDATE` clause below touches this column. It
+    /// could not usefully be in one — an add that reached across folders would undo a filing
+    /// decision as a side effect of shopping, and moving a wish between folders is its own
+    /// explicit act (`wishlist_folders::set_wish_folder`).
+    ///
+    /// Not fenced against `wishlist_folders` here: the column carries a real foreign key
+    /// (`ON DELETE SET NULL`), so an id naming no folder is refused by the database on the
+    /// insert rather than by a lookup this command would have to make first.
+    pub folder_id: Option<i64>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -59,6 +75,24 @@ pub struct WishlistQuery {
     /// [`crate::collection::CollectionQuery`]'s field, verbatim; see
     /// [`crate::sorting::Marketplace`].
     pub marketplace: crate::sorting::Marketplace,
+    /// Which folder the list is being read at. `None` is the **root** — a real place with
+    /// wishes in it, not the absence of a question — and it is read as one only when
+    /// [`WishlistQuery::flatten`] is false.
+    ///
+    /// Direct members only: a folder's page lists what is filed *in it*, never what is filed
+    /// in the folders inside it. The gallery's tree does the summing, for the reason
+    /// `wishlist_folder_summary` gives — SQL that walked the tree would be a second
+    /// implementation of arithmetic `folderTree.ts` already does.
+    pub folder_id: Option<i64>,
+    /// `true` ignores [`WishlistQuery::folder_id`] entirely and answers every wish, wherever
+    /// it is filed — the page's **Flatten** switch.
+    ///
+    /// **This is what tells "the root" apart from "no folder filter"; a nullable field alone
+    /// cannot.** `folder_id: None` already means the root, so there is no value left in that
+    /// field for "do not filter by folder at all", and a second field is the only way to ask
+    /// the question. Default `false`, so every caller written before folders existed keeps
+    /// reading the root — which is the list it has always shown.
+    pub flatten: bool,
     pub limit: u32,
     pub offset: u32,
 }
@@ -117,6 +151,29 @@ pub struct WishRow {
     pub notes: Option<String>,
     pub needs_review: Option<String>,
     pub updated_at: i64,
+    /// Where the wish is filed. `None` is the root, and it is on every row rather than
+    /// implied by the query because the **Flatten** view asks for every wish at once and
+    /// then has to say where each one lives.
+    pub folder_id: Option<i64>,
+    /// How many **other** wishes are on the list for the same oracle card — in another
+    /// folder, at the root, pinned to another printing, in another finish. `0` is the
+    /// ordinary answer and the row draws nothing.
+    ///
+    /// This is the mitigation for the price [`WISHLIST_GRAIN`]'s fourth term charges: three
+    /// writers add at the root and cannot name a folder (`deck_missing_to_wishlist`,
+    /// `deck_theory_missing_to_wishlist` and `wishlist_import_commit`), so a deck sweep over
+    /// a card the reader already filed in `Ordered` makes a *second* root row — which is the
+    /// double-order the folders exist to prevent. A row that says "also on your list" turns
+    /// that from a trap into a note.
+    ///
+    /// Counted in **SQL, over the whole table**, rather than in TypeScript over the page:
+    /// the list is paged and a page cannot see the wishes it did not fetch, so the same
+    /// count done in the frontend would answer `0` for exactly the pair that is split across
+    /// two pages. A wishlist is tens of rows, so the correlated count is cheap.
+    ///
+    /// `0` on an orphan with no oracle id, and that is a fence rather than a coincidence —
+    /// see the subquery's own comment in [`list_wishes`].
+    pub elsewhere: i64,
 }
 
 #[derive(Debug, Serialize)]
@@ -149,7 +206,13 @@ const MAX_LIMIT: u32 = 500;
 /// `sum(quantity)`, so a collection row emptied to zero (which the collection keeps — see
 /// [`crate::collection::set_quantity`]) contributes nothing: this figure is copies held,
 /// not entries recorded, and a wish is satisfied by copies.
-const OWNED_SQL: &str = "coalesce((
+///
+/// `pub(crate)` for one reader outside this module: `wishlist_folders::folder_summary` sums
+/// `max(0, quantity - owned)` per folder, and a folder's subtotal and the page header's total
+/// have to be one piece of arithmetic. Two spellings of "how many copies are still missing"
+/// would disagree the first time either changed — and the alias `w` this expression assumes
+/// is part of the contract, so anything reading it aliases `wishlist_entries` the same way.
+pub(crate) const OWNED_SQL: &str = "coalesce((
         SELECT sum(ce.quantity) FROM collection_entries ce
          WHERE (w.card_id IS NOT NULL AND ce.card_id = w.card_id
                 AND (w.preferred_finish IS NULL OR ce.finish = w.preferred_finish))
@@ -299,11 +362,16 @@ pub fn add_wish(conn: &Connection, input: &WishInput) -> Result<EntryChange, Str
         None => oracle_name(conn, oracle_id.as_deref())?,
     };
 
+    // `folder_id` is written and never updated, and the `DO UPDATE` clause below is
+    // deliberately unchanged: the folder is the fourth term of [`WISHLIST_GRAIN`], so a
+    // conflict *already means* the same folder and there is nothing for a clause to decide.
+    // Adding one would be the bug the grain was widened to make impossible — an add filed
+    // somewhere else quietly moving the row the reader put where they wanted it.
     let sql = format!(
         "INSERT INTO wishlist_entries
             (oracle_id, card_id, set_code, collector_number, lang, name, quantity,
-             preferred_finish, notes, created_at, updated_at)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9, unixepoch(), unixepoch())
+             preferred_finish, notes, folder_id, created_at, updated_at)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10, unixepoch(), unixepoch())
          ON CONFLICT({WISHLIST_GRAIN}) DO UPDATE SET
             quantity = wishlist_entries.quantity + excluded.quantity,
             notes = coalesce(wishlist_entries.notes, excluded.notes),
@@ -323,6 +391,7 @@ pub fn add_wish(conn: &Connection, input: &WishInput) -> Result<EntryChange, Str
                 quantity,
                 input.preferred_finish,
                 input.notes,
+                input.folder_id,
             ],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
@@ -395,6 +464,12 @@ fn commit_import(
             quantity: item.quantity,
             preferred_finish: item.preferred_finish.clone(),
             notes: item.notes.clone(),
+            // One of the three writers that add **at the root and cannot name a folder** —
+            // an imported file says nothing about this reader's filing cabinet, so there is
+            // nothing to say here but `None`. The consequence is written down rather than
+            // discovered: a line for a card already filed in a folder lands as a *second*
+            // root row, which [`WishRow::elsewhere`] is what tells the reader about.
+            folder_id: None,
         };
         if mode == "add" {
             add_wish(&tx, &input)?;
@@ -472,6 +547,191 @@ pub fn remove_wish(conn: &Connection, id: i64) -> Result<EntryChange, String> {
     })
 }
 
+/// Change which printing a wish is for — or take it back to **any printing**.
+///
+/// The one write that reaches `wishlist_entries.card_id` after the row exists. That column
+/// has meant "any printing when NULL, that one when set" since spec §6 and schema v1, and
+/// until now the only way to change a reader's mind about it was to delete the wish and make
+/// a new one — which throws away the quantity, the notes and the day they wanted the card.
+///
+/// `Some(id)` pins: the wish's `card_id` becomes that printing and the denormalised
+/// `set_code`/`collector_number`/`lang` are refreshed from `cards`, because those three
+/// columns describe *a printing* and are the ones the list prints. An id `cards` does not
+/// have is refused in [`add_wish`]'s words — the same sentence for the same fact, rather than
+/// a second wording of it to keep in step. `None` is the way back: all four go NULL together,
+/// which is the only shape "any printing" has.
+///
+/// **The name and the oracle id are the wish's own, and only an *absent* oracle id is filled
+/// in.** `cards.name` is the oracle name on every printing, so a pin between printings of one
+/// card has nothing to change; a wish that never had an oracle id (a pinned wish for a
+/// printing whose `oracle_id` was NULL) adopts the new printing's, which is [`add_wish`]'s
+/// `sent_oracle_id.or_else(printing)` precedence and is what lets that wish ever be unpinned.
+/// Whether the two ids are printings of the *same card* is deliberately not policed here,
+/// where `deck::swap_printing` does police it: that command carries a quantity onto another
+/// row and would move copies onto a card nobody asked for, while this one rewrites four
+/// columns of one row the reader is looking at, and the pane offers them only that card's own
+/// printings. The worst a mispaired call does is describe a wish as the wrong cardboard,
+/// visibly, and repointing it again is the cure.
+///
+/// A wish whose `oracle_id` is NULL cannot be unpinned at all, and that is the table's
+/// `CHECK (oracle_id IS NOT NULL OR card_id IS NOT NULL)` **said in the app's voice before
+/// the database says it in its own**: the printing is genuinely all that wish has, and
+/// clearing it would leave a row for nothing.
+///
+/// # The merge, and why it is not a refusal
+///
+/// The rule `wishlist_folders::set_wish_folder` follows too, written once here: **a write
+/// that lands on a taken grain merges, it does not fail.** Un-pinning a wish for the Alpha
+/// Bolt while an any-printing Bolt wish already sits in the same folder violates
+/// `idx_wishlist_grain` — but what the reader just said is that those are one wish, and a
+/// `UNIQUE constraint failed` reaching them would be the app telling them off for agreeing
+/// with it. So the two quantities sum into the row that was already there, the source row is
+/// deleted, and the answer names the **destination**: three Alpha Bolts un-pinned onto two
+/// open Bolt wishes is one wish for five copies. Notes are kept the way [`add_wish`]'s own
+/// `ON CONFLICT` keeps them — the survivor's, falling back to the folded row's — and the
+/// survivor's `needs_review` is left alone, `reconcile`'s fold rule: that sentence is about
+/// the row that is staying, and this press was not about it.
+///
+/// `removed` stays `false` on that path even though a row was deleted. The field means "the
+/// wish is gone", which is what [`remove_wish`] and a zero quantity mean, and here the wish
+/// is emphatically still on the list — the caller re-reads and selects the id it was handed.
+///
+/// # The rest
+///
+/// `needs_review` is **cleared** on the ordinary path, because choosing a printing *is* the
+/// review. The only sentences that column carries are the reconciler's, and both are about an
+/// id — "Scryfall merged this printing into …", "Scryfall removed this printing …" — that the
+/// row no longer holds once this write lands. `deck::swap_printing` does not carry the flag
+/// across for the same reason.
+///
+/// One transaction, for the reason every fold in this crate is one: mid-merge the copies are
+/// in both rows or in neither.
+pub fn set_wish_printing(
+    conn: &Connection,
+    id: i64,
+    card_id: Option<String>,
+) -> Result<EntryChange, String> {
+    // [`add_wish`]'s rule about what a form's cleared field means, and it decides the whole
+    // shape of the write here: `Some("")` is a caller sending an empty text input, not a
+    // printing, and treating it as one would pin the wish to an id no card has.
+    let card_id = crate::filters::nonblank(&card_id).map(str::to_owned);
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    // The three grain terms this write does *not* touch, plus the quantity the merge moves.
+    // Read before anything is decided, because "is that wish still there?" is answered by the
+    // same statement — an `UPDATE` that changed no rows cannot tell a missing row apart from
+    // a grain collision, and the two want opposite answers.
+    let (oracle_id, preferred_finish, folder_id, quantity): (
+        Option<String>,
+        Option<String>,
+        Option<i64>,
+        i64,
+    ) = tx
+        .query_row(
+            "SELECT oracle_id, preferred_finish, folder_id, quantity
+               FROM wishlist_entries WHERE id = ?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "That wishlist entry is not there any more.".to_owned())?;
+
+    let printing: Option<(Option<String>, String, String, String)> = match &card_id {
+        Some(cid) => tx
+            .query_row(
+                "SELECT oracle_id, set_code, collector_number, lang FROM cards WHERE id = ?1",
+                params![cid],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?,
+        None => None,
+    };
+    if card_id.is_some() && printing.is_none() {
+        return Err("no card with that id is in the card database".into());
+    }
+    if card_id.is_none() && oracle_id.is_none() {
+        return Err(
+            "This wish is for that one printing and names no card, so there is no \
+                    card to want any printing of. Remove it and wish for the card instead."
+                .into(),
+        );
+    }
+    // [`add_wish`]'s fallback, verbatim: an oracle id the wish already has is not up for
+    // revision, and the printing's own can be blank, which would fold on the grain like any
+    // other empty string.
+    let oracle_id = oracle_id.or_else(|| {
+        printing
+            .as_ref()
+            .and_then(|p| p.0.as_deref())
+            .map(str::trim)
+            .filter(|o| !o.is_empty())
+            .map(str::to_owned)
+    });
+
+    // The grain the write is *about to land on*, spelled out rather than interpolated from
+    // [`WISHLIST_GRAIN`] for the reason `reconcile::collision_target` gives: that constant is
+    // a list of expressions over **one row**, and this compares the same list against four
+    // bound values. Every term is here — a fold that matched on three of the four would merge
+    // a wish into a row in another folder, which is exactly the bug the fourth term exists to
+    // make impossible.
+    let target: Option<(i64, i64)> = tx
+        .query_row(
+            "SELECT id, quantity FROM wishlist_entries
+              WHERE id <> ?1
+                AND coalesce(oracle_id,'') = coalesce(?2,'')
+                AND coalesce(card_id,'') = coalesce(?3,'')
+                AND coalesce(preferred_finish,'') = coalesce(?4,'')
+                AND coalesce(folder_id,0) = coalesce(?5,0)",
+            params![id, oracle_id, card_id, preferred_finish, folder_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+
+    if let Some((target, held)) = target {
+        tx.execute(
+            "UPDATE wishlist_entries SET
+                quantity = quantity + ?2,
+                notes = coalesce(notes, (SELECT notes FROM wishlist_entries WHERE id = ?3)),
+                updated_at = unixepoch()
+              WHERE id = ?1",
+            params![target, quantity, id],
+        )
+        .map_err(|e| e.to_string())?;
+        tx.execute("DELETE FROM wishlist_entries WHERE id = ?1", params![id])
+            .map_err(|e| e.to_string())?;
+        tx.commit().map_err(|e| e.to_string())?;
+        return Ok(EntryChange {
+            id: target,
+            quantity: held + quantity,
+            removed: false,
+        });
+    }
+
+    // All four printing columns move together, and NULL is a value here rather than an
+    // omission: `coalesce(?n, column)` — the convention `DeckPatch` uses for "leave it" —
+    // would make un-pinning unexpressible, which is half of what this command is for.
+    let (set_code, collector_number, lang) = match &printing {
+        Some(p) => (Some(p.1.clone()), Some(p.2.clone()), Some(p.3.clone())),
+        None => (None, None, None),
+    };
+    tx.execute(
+        "UPDATE wishlist_entries SET
+            card_id = ?2, oracle_id = ?3, set_code = ?4, collector_number = ?5, lang = ?6,
+            needs_review = NULL, updated_at = unixepoch()
+          WHERE id = ?1",
+        params![id, card_id, oracle_id, set_code, collector_number, lang],
+    )
+    .map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(EntryChange {
+        id,
+        quantity,
+        removed: false,
+    })
+}
+
 pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage, String> {
     let limit = if q.limit == 0 {
         DEFAULT_LIMIT
@@ -525,6 +785,18 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
         Some(false) => p.wheres.push("w.needs_review IS NULL".to_owned()),
         None => {}
     }
+    // Where the reader is standing. Flattened, they are standing everywhere and no term is
+    // pushed at all — which is not the same as `folder_id IS NULL`, and is the whole reason
+    // [`WishlistQuery::flatten`] exists as a second field.
+    //
+    // **`IS`, never `=`.** The root is `folder_id IS NULL` and `= NULL` is not false but
+    // *unknown*, so an `=` here would answer the empty list for the one folder most wishes
+    // are in — a list that shows nothing, with no error and nothing in `error_log`. SQLite's
+    // `IS` compares NULLs as equal and is the same device [`WISHLIST_GRAIN`]'s `coalesce`es
+    // are, one operator instead of one wrapper per side.
+    if !q.flatten {
+        p.push("w.folder_id IS ?".to_owned(), Box::new(q.folder_id));
+    }
     let where_sql = p.where_sql();
     let mut params = p.params;
 
@@ -551,8 +823,25 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
                 -- Appended rather than placed beside `c.mana_cost` where it belongs in the
                 -- struct: every `r.get(n)` below is a positional index, so inserting a column
                 -- mid-list renumbers eight of them by hand. Last costs one index and nothing
-                -- else. `c.id` arrived the same way and for the same reason.
-                c.type_line, c.id
+                -- else. `c.id` arrived the same way and for the same reason, and so do the
+                -- two below it.
+                c.type_line, c.id,
+                -- The other wishes for this same oracle card. Over the whole table on
+                -- purpose: the answer the row needs is about wishes this page did not fetch
+                -- and this folder does not hold.
+                --
+                -- `o.oracle_id IS NOT NULL` is load-bearing and is the fence rather than the
+                -- arithmetic. Two orphans with no oracle id must not count each other, and
+                -- `NULL = NULL` is *unknown* rather than true, so today the comparison
+                -- already refuses them — but the tempting rewrite of this line is a pair of
+                -- `coalesce(…, '')`s to match [`WISHLIST_GRAIN`]'s first term, and that
+                -- version would put every orphan on `''` and have them all count each other.
+                -- `elsewhere_counts_the_other_wishes_for_the_same_oracle_card` is what fails
+                -- if anyone writes it.
+                (SELECT count(*) FROM wishlist_entries o
+                  WHERE o.id <> w.id AND o.oracle_id IS NOT NULL
+                    AND o.oracle_id = w.oracle_id) AS elsewhere,
+                w.folder_id
          FROM {from} WHERE {where_sql} ORDER BY {order} LIMIT ? OFFSET ?",
         price = crate::sorting::price_expr(q.marketplace, WISH_FINISH)
     );
@@ -583,6 +872,8 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
                     notes: r.get(13)?,
                     needs_review: r.get(14)?,
                     updated_at: r.get(15)?,
+                    folder_id: r.get(19)?,
+                    elsewhere: r.get(18)?,
                 })
             },
         )
@@ -627,6 +918,22 @@ pub async fn wishlist_remove(
     tauri::async_runtime::spawn_blocking(move || with_write(&state, |c| remove_wish(c, id)))
         .await
         .map_err(|e| format!("the wishlist could not be written: {e}"))?
+}
+
+/// "Use this printing", and "Any printing" — see [`set_wish_printing`] for the merge, which
+/// is why this answers an [`EntryChange`] whose `id` is not always the `id` it was given.
+#[tauri::command]
+pub async fn wishlist_set_printing(
+    state: tauri::State<'_, Arc<AppState>>,
+    id: i64,
+    card_id: Option<String>,
+) -> Result<EntryChange, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        with_write(&state, |c| set_wish_printing(c, id, card_id))
+    })
+    .await
+    .map_err(|e| format!("the wishlist could not be written: {e}"))?
 }
 
 /// One transaction for a whole imported file — see [`commit_import`] for the `set` arm's route
@@ -696,6 +1003,46 @@ mod tests {
         )
         .unwrap();
         conn
+    }
+
+    /// A wishlist folder, written straight into the table: the commands that make one are
+    /// `wishlist_folders`', and this module's tests need nothing from them but somewhere to
+    /// file a wish. `id` is given rather than returned so the fixtures below can name the
+    /// folders they build in the order they read.
+    fn folder(conn: &Connection, id: i64, parent: Option<i64>, name: &str) {
+        conn.execute(
+            "INSERT INTO wishlist_folders
+                (id, parent_id, name, sort_order, created_at, updated_at)
+             VALUES (?1, ?2, ?3, 0, unixepoch(), unixepoch())",
+            params![id, parent, name],
+        )
+        .unwrap();
+    }
+
+    /// One wish for one card in three places — the root, `Ordered`, and `Ordered/Someday`.
+    ///
+    /// A shape only schema v23 allows: before the folder joined [`WISHLIST_GRAIN`] these
+    /// three adds were one row with a quantity of three. It is what all three folder views
+    /// are asked about below, and the ids come back because the rows are otherwise identical.
+    fn filed_three_ways() -> (Connection, i64, i64, i64) {
+        let conn = seeded();
+        folder(&conn, 1, None, "Ordered");
+        folder(&conn, 2, Some(1), "Someday");
+        let at = |folder_id: Option<i64>| {
+            add_wish(
+                &conn,
+                &WishInput {
+                    oracle_id: Some("o1".into()),
+                    quantity: 1,
+                    folder_id,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .id
+        };
+        let (root, ordered, someday) = (at(None), at(Some(1)), at(Some(2)));
+        (conn, root, ordered, someday)
     }
 
     /// One any-printing line of a bulk import, in the shape [`commit_import`]'s tests use it.
@@ -1312,6 +1659,8 @@ mod tests {
             notes: None,
             needs_review: None,
             updated_at: 1_800_000_000,
+            folder_id: Some(7),
+            elsewhere: 1,
         })
         .unwrap();
         assert_eq!(
@@ -1322,7 +1671,8 @@ mod tests {
                 "manaCost": "{R}", "typeLine": "Instant", "artCardId": "bolt-2ed",
                 "quantity": 4, "preferredFinish": "foil",
                 "unitPrice": 40.0, "ownedQuantity": 2, "notes": null,
-                "needsReview": null, "updatedAt": 1800000000
+                "needsReview": null, "updatedAt": 1800000000,
+                "folderId": 7, "elsewhere": 1
             })
         );
     }
@@ -1348,6 +1698,17 @@ mod tests {
         assert_eq!(q.fulfilled, Some(false));
         assert_eq!(q.needs_review, Some(true), "camelCase on the way in, too");
         assert_eq!(q.limit, 0, "omitted limit means unset, not a parse error");
+        assert_eq!(q.folder_id, None, "omitted is the root");
+        assert!(
+            !q.flatten,
+            "and omitted `flatten` reads the root rather than everything — which is what \
+             every caller written before folders existed already asks for"
+        );
+
+        let filed: WishlistQuery =
+            serde_json::from_str(r#"{"folderId":4,"flatten":true}"#).unwrap();
+        assert_eq!(filed.folder_id, Some(4));
+        assert!(filed.flatten);
     }
 
     /// A wish outlives the printing it was made from — that is what the denormalised
@@ -2117,5 +2478,475 @@ mod tests {
         assert_eq!(out.removed, 1, "the any-printing wish was zeroed away");
         assert_eq!(out.updated, 0);
         assert_eq!(wish_count(&conn), 1);
+    }
+
+    /// **The fourth term of [`WISHLIST_GRAIN`], reached through the command rather than
+    /// through the index.** `schema` proves the index separates two folders; this proves the
+    /// thing that matters to a reader — pressing "Add to Ordered" on a card already on the
+    /// list makes a *second* wish and leaves the first exactly where they filed it.
+    ///
+    /// The root row's quantity is re-read rather than taken from the first add's answer,
+    /// because "it folded" and "it did not fold" differ in nothing else: a grain that had
+    /// lost this term would return the same two `EntryChange`s with the same ids and quietly
+    /// have put four copies on one row.
+    #[test]
+    fn add_wish_with_a_folder_makes_a_second_wish_beside_a_root_one() {
+        let conn = seeded();
+        folder(&conn, 1, None, "Ordered");
+        let at_root = add_wish(
+            &conn,
+            &WishInput {
+                oracle_id: Some("o1".into()),
+                quantity: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let filed = add_wish(
+            &conn,
+            &WishInput {
+                oracle_id: Some("o1".into()),
+                quantity: 3,
+                folder_id: Some(1),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_ne!(at_root.id, filed.id, "two places, two wishes");
+        assert_eq!(wish_count(&conn), 2);
+        let (quantity, folder_id): (i64, Option<i64>) = conn
+            .query_row(
+                "SELECT quantity, folder_id FROM wishlist_entries WHERE id = ?1",
+                params![at_root.id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            quantity, 1,
+            "the wish the reader already had is not added to"
+        );
+        assert_eq!(folder_id, None, "nor moved out of the root");
+    }
+
+    /// And the fold still bites *inside* a folder, which is the half a grain that had simply
+    /// gone loose would fail. Two adds into `Ordered` are one wish for four copies —
+    /// `wishing_twice_for_the_same_thing_raises_the_quantity`, one folder over.
+    #[test]
+    fn add_wish_twice_into_one_folder_folds_onto_the_same_row() {
+        let conn = seeded();
+        folder(&conn, 1, None, "Ordered");
+        let into_ordered = |quantity: i64| {
+            add_wish(
+                &conn,
+                &WishInput {
+                    oracle_id: Some("o1".into()),
+                    quantity,
+                    folder_id: Some(1),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        };
+        let first = into_ordered(1);
+        let second = into_ordered(3);
+
+        assert_eq!((first.id, second.quantity), (second.id, 4));
+        assert_eq!(wish_count(&conn), 1, "one wish, filed once");
+    }
+
+    /// The root is a **place**, not the whole list. `folder_id: None, flatten: false` — which
+    /// is [`WishlistQuery::default`], so this is also what every caller written before folders
+    /// existed now asks for, and the answer is the list they have always been shown.
+    #[test]
+    fn list_wishes_at_the_root_leaves_out_what_is_filed() {
+        let (conn, root, _, _) = filed_three_ways();
+        let page = list_wishes(&conn, &WishlistQuery::default()).unwrap();
+        assert_eq!(page.total, 1);
+        assert_eq!(page.items[0].id, root);
+        assert_eq!(page.items[0].folder_id, None);
+    }
+
+    /// Direct members only. The wish in `Ordered/Someday` is in the tree under `Ordered` and
+    /// is deliberately not on `Ordered`'s page: the tree does the summing, for the reason
+    /// `wishlist_folder_summary` gives — SQL that walked the tree would be a second
+    /// implementation of arithmetic `folderTree.ts` already does for the deck gallery.
+    #[test]
+    fn list_wishes_in_a_folder_leaves_out_the_root_and_the_subfolders() {
+        let (conn, _, ordered, _) = filed_three_ways();
+        let page = list_wishes(
+            &conn,
+            &WishlistQuery {
+                folder_id: Some(1),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(page.total, 1);
+        assert_eq!(page.items[0].id, ordered);
+        assert_eq!(page.items[0].folder_id, Some(1));
+    }
+
+    /// **Flatten**, and the field is given a folder to ignore on purpose: `flatten` is not a
+    /// third value of `folder_id` but a question about whether that field is read at all, and
+    /// a test that flattened from the root could not tell the two apart.
+    #[test]
+    fn list_wishes_flattened_answers_every_wish_wherever_it_is() {
+        let (conn, root, ordered, someday) = filed_three_ways();
+        let page = list_wishes(
+            &conn,
+            &WishlistQuery {
+                folder_id: Some(2),
+                flatten: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(page.total, 3);
+        let mut found: Vec<i64> = page.items.iter().map(|r| r.id).collect();
+        found.sort_unstable();
+        let mut expected = vec![root, ordered, someday];
+        expected.sort_unstable();
+        assert_eq!(found, expected, "the folder given is not read at all");
+    }
+
+    /// The "also on your list" mark, which is what makes the grain's fourth term affordable:
+    /// three writers add at the root and cannot name a folder, so a card the reader filed in
+    /// `Ordered` can acquire a second root row without anyone deciding to make one.
+    ///
+    /// Counted across folders, because that is the pair worth knowing about — and `0` for the
+    /// two orphans, which is the fence rather than the arithmetic: they have no oracle id, and
+    /// a rewrite that coalesced the comparison to `''` would have them count each other and
+    /// tell the reader that a wish for the Alpha Bolt is "also on your list" as a wish for an
+    /// unrelated card.
+    #[test]
+    fn elsewhere_counts_the_other_wishes_for_the_same_oracle_card() {
+        let conn = seeded();
+        folder(&conn, 1, None, "Ordered");
+        let bolt = |folder_id: Option<i64>| {
+            add_wish(
+                &conn,
+                &WishInput {
+                    oracle_id: Some("o1".into()),
+                    quantity: 1,
+                    folder_id,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+            .id
+        };
+        let (at_root, filed) = (bolt(None), bolt(Some(1)));
+        let lone = add_wish(
+            &conn,
+            &WishInput {
+                oracle_id: Some("oracle-1".into()),
+                quantity: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .id;
+        // Two wishes with no oracle card at all — the shape `add_wish` cannot make, because a
+        // printing it can look up carries one. Only the reconciler's orphans and a database
+        // that predates a printing's oracle id ever look like this.
+        let orphan = |card_id: &str| -> i64 {
+            conn.query_row(
+                "INSERT INTO wishlist_entries (card_id, name, quantity, created_at, updated_at)
+                 VALUES (?1, 'Lightning Bolt', 1, unixepoch(), unixepoch()) RETURNING id",
+                params![card_id],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        let (first_orphan, second_orphan) = (orphan("bolt-lea"), orphan("bolt-2ed"));
+
+        let page = list_wishes(
+            &conn,
+            &WishlistQuery {
+                flatten: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let elsewhere = |id: i64| page.items.iter().find(|r| r.id == id).unwrap().elsewhere;
+        assert_eq!(elsewhere(at_root), 1, "the one in `Ordered`");
+        assert_eq!(elsewhere(filed), 1, "and the one at the root");
+        assert_eq!(elsewhere(lone), 0, "nobody else wants that card");
+        assert_eq!(elsewhere(first_orphan), 0);
+        assert_eq!(
+            elsewhere(second_orphan),
+            0,
+            "two wishes with no oracle card are not two wishes for the same one"
+        );
+    }
+
+    /// "Use this printing", from an any-printing wish. The three denormalised columns are the
+    /// point: they describe a *printing*, they are what the list prints, and a pin that left
+    /// them behind would draw a wish as `lea` while pointing at the 2ed card.
+    #[test]
+    fn set_wish_printing_pins_a_wish_and_refreshes_its_set_and_number() {
+        let conn = seeded();
+        let open = add_wish(
+            &conn,
+            &WishInput {
+                oracle_id: Some("o1".into()),
+                quantity: 2,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let after = set_wish_printing(&conn, open.id, Some("bolt-lea".into())).unwrap();
+
+        assert_eq!(
+            (after.id, after.quantity, after.removed),
+            (open.id, 2, false),
+            "same wish, same copies wanted"
+        );
+        let page = list_wishes(&conn, &WishlistQuery::default()).unwrap();
+        let row = &page.items[0];
+        assert_eq!(row.card_id.as_deref(), Some("bolt-lea"));
+        assert_eq!(row.set_code.as_deref(), Some("lea"));
+        assert_eq!(row.collector_number.as_deref(), Some("161"));
+        assert_eq!(row.lang.as_deref(), Some("en"));
+        assert_eq!(row.name, "Lightning Bolt", "the oracle name is unchanged");
+    }
+
+    /// And back. All four columns go NULL together, because that is the only shape "any
+    /// printing" has — a wish still carrying `lea` in the set column while `card_id` is NULL
+    /// would draw as pinned in a list that reads the denormalised columns.
+    #[test]
+    fn set_wish_printing_to_none_returns_a_wish_to_any_printing() {
+        let conn = seeded();
+        let pinned = add_wish(
+            &conn,
+            &WishInput {
+                card_id: Some("bolt-lea".into()),
+                quantity: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        set_wish_printing(&conn, pinned.id, None).unwrap();
+
+        let page = list_wishes(&conn, &WishlistQuery::default()).unwrap();
+        let row = &page.items[0];
+        assert_eq!(row.card_id, None);
+        assert_eq!(row.set_code, None);
+        assert_eq!(row.collector_number, None);
+        assert_eq!(row.lang, None);
+        assert_eq!(
+            row.oracle_id.as_deref(),
+            Some("o1"),
+            "the card the wish is for is what is left of it"
+        );
+    }
+
+    /// [`add_wish`]'s sentence, because it is [`add_wish`]'s fact — one wording for "that id
+    /// is not in `cards`" rather than two to keep in step. And nothing is written: a refusal
+    /// that had already cleared the row's set code would leave the wish describing a printing
+    /// it is not for.
+    #[test]
+    fn set_wish_printing_refuses_a_card_the_database_does_not_have() {
+        let conn = seeded();
+        let pinned = add_wish(
+            &conn,
+            &WishInput {
+                card_id: Some("bolt-lea".into()),
+                quantity: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let err = set_wish_printing(&conn, pinned.id, Some("bolt-unhinged".into())).unwrap_err();
+
+        assert!(err.contains("no card with that id"), "{err}");
+        let (card_id, set_code): (Option<String>, Option<String>) = conn
+            .query_row(
+                "SELECT card_id, set_code FROM wishlist_entries WHERE id = ?1",
+                params![pinned.id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(card_id.as_deref(), Some("bolt-lea"));
+        assert_eq!(set_code.as_deref(), Some("lea"));
+    }
+
+    /// The table's `CHECK (oracle_id IS NOT NULL OR card_id IS NOT NULL)`, **said in the
+    /// app's voice before the database says it in its own**: a wish that names no oracle card
+    /// has its printing and nothing else, so there is no card left to want any printing of.
+    /// `an_unknown_preferred_finish_is_refused_with_a_sentence`'s shape, and its second
+    /// assertion — a reader must never be shown the constraint's own wording.
+    #[test]
+    fn set_wish_printing_refuses_unpinning_a_wish_that_has_no_oracle_card() {
+        let conn = seeded();
+        let id: i64 = conn
+            .query_row(
+                "INSERT INTO wishlist_entries (card_id, name, quantity, created_at, updated_at)
+                 VALUES ('bolt-lea', 'Lightning Bolt', 1, unixepoch(), unixepoch())
+                 RETURNING id",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+
+        let err = set_wish_printing(&conn, id, None).unwrap_err();
+
+        // Spanning the `\` continuation in the literal on purpose: `cargo fmt` turns one of
+        // those into a run of literal spaces if it ever re-indents the line, and every other
+        // check in this crate stays green while a reader is shown "no       card".
+        assert!(
+            err.contains("there is no card to want any printing of"),
+            "{err}"
+        );
+        assert!(!err.contains("CHECK"), "{err}");
+        let card_id: Option<String> = conn
+            .query_row(
+                "SELECT card_id FROM wishlist_entries WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            card_id.as_deref(),
+            Some("bolt-lea"),
+            "and nothing was cleared"
+        );
+    }
+
+    /// The merge, and the rule `wishlist_folders::set_wish_folder` shares: a write that lands
+    /// on a taken grain **merges rather than fails**. Un-pinning the Alpha Bolt while an
+    /// any-printing Bolt wish sits in the same folder is the reader saying those are one wish,
+    /// and `UNIQUE constraint failed` would be the app telling them off for agreeing with it.
+    ///
+    /// The note comes across because the survivor has none — [`add_wish`]'s `ON CONFLICT`
+    /// rule, and the reconciler's fold — and the answer names the **destination**, which is
+    /// the id the caller has to select afterwards.
+    #[test]
+    fn set_wish_printing_merges_onto_a_wish_the_grain_already_holds() {
+        let conn = seeded();
+        let open = add_wish(
+            &conn,
+            &WishInput {
+                oracle_id: Some("o1".into()),
+                quantity: 2,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let alpha = add_wish(
+            &conn,
+            &WishInput {
+                card_id: Some("bolt-lea".into()),
+                quantity: 3,
+                notes: Some("from the trade binder".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let after = set_wish_printing(&conn, alpha.id, None).unwrap();
+
+        assert_eq!(after.id, open.id, "the answer names the row that survived");
+        assert_eq!(after.quantity, 5, "three copies wanted plus two, not two");
+        assert!(
+            !after.removed,
+            "the wish is still on the list — `removed` means the wish is gone, not the row"
+        );
+        assert_eq!(wish_count(&conn), 1);
+        let notes: Option<String> = conn
+            .query_row(
+                "SELECT notes FROM wishlist_entries WHERE id = ?1",
+                params![open.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(notes.as_deref(), Some("from the trade binder"));
+    }
+
+    /// The merge is on **all four** terms of [`WISHLIST_GRAIN`], the folder included. An
+    /// un-pin in `Ordered` does not collide with the open wish at the root, so nothing merges
+    /// — and it must not, because merging there would move a filed wish out of the folder the
+    /// reader put it in and sum it into a row they were not looking at. The three-term version
+    /// of this comparison is the bug `reconcile::fold_wish_into_existing` carried.
+    #[test]
+    fn set_wish_printing_does_not_merge_across_folders() {
+        let conn = seeded();
+        folder(&conn, 1, None, "Ordered");
+        let at_root = add_wish(
+            &conn,
+            &WishInput {
+                oracle_id: Some("o1".into()),
+                quantity: 2,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        let filed = add_wish(
+            &conn,
+            &WishInput {
+                card_id: Some("bolt-lea".into()),
+                quantity: 3,
+                folder_id: Some(1),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let after = set_wish_printing(&conn, filed.id, None).unwrap();
+
+        assert_eq!(after.id, filed.id, "the wish stays its own row");
+        assert_eq!(after.quantity, 3);
+        assert_eq!(wish_count(&conn), 2);
+        let (quantity, folder_id): (i64, Option<i64>) = conn
+            .query_row(
+                "SELECT quantity, folder_id FROM wishlist_entries WHERE id = ?1",
+                params![at_root.id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(quantity, 2, "the root wish is untouched");
+        assert_eq!(folder_id, None);
+    }
+
+    /// Choosing a printing **is** the review. The only sentences that column carries are the
+    /// reconciler's, and both are about an id the row no longer holds once this write lands —
+    /// leaving one standing would park a repointed wish behind a complaint about a printing
+    /// it is not for. `deck::swap_printing` does not carry the flag across either.
+    #[test]
+    fn set_wish_printing_clears_needs_review() {
+        let conn = seeded();
+        let pinned = add_wish(
+            &conn,
+            &WishInput {
+                card_id: Some("bolt-lea".into()),
+                quantity: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE wishlist_entries SET needs_review = ?2 WHERE id = ?1",
+            params![
+                pinned.id,
+                "Scryfall removed this printing from its database on 2026-07-01."
+            ],
+        )
+        .unwrap();
+
+        set_wish_printing(&conn, pinned.id, Some("bolt-2ed".into())).unwrap();
+
+        let review: Option<String> = conn
+            .query_row(
+                "SELECT needs_review FROM wishlist_entries WHERE id = ?1",
+                params![pinned.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(review, None);
     }
 }

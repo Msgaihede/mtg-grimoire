@@ -494,11 +494,21 @@ fn fold_wish_into_existing(
             // same rule [`collision_target`] follows for `lang`. `?3` is the oracle id the
             // update would have set, falling back to the source's own when there is none to
             // set, which is exactly what its `coalesce(?7, oracle_id)` does.
+            //
+            // **Every term, and the folder is the one that is easy to leave out.** This
+            // query has to match the grain the `UPDATE OR IGNORE` above it collided on, or
+            // the two disagree about what a duplicate is: since schema v23 that statement
+            // fails only on a *same-folder* clash, while a three-term target query happily
+            // answers a wish filed somewhere else — so the fold would sum the reader's
+            // filed wish into a row at the root, delete it, and leave the row that was
+            // actually in the way standing. A filing decision undone by an upstream tidy-up,
+            // with no error and nothing in `error_log`.
             "SELECT t.id FROM wishlist_entries t, wishlist_entries s
               WHERE s.id = ?1 AND t.id <> s.id
                 AND coalesce(t.oracle_id,'') = coalesce(?3, coalesce(s.oracle_id,''))
                 AND coalesce(t.card_id,'') = ?2
-                AND coalesce(t.preferred_finish,'') = coalesce(s.preferred_finish,'')",
+                AND coalesce(t.preferred_finish,'') = coalesce(s.preferred_finish,'')
+                AND coalesce(t.folder_id, 0) = coalesce(s.folder_id, 0)",
             params![source, new_id, new_oracle_id],
             |r| r.get(0),
         )
@@ -1055,6 +1065,72 @@ mod tests {
             )
             .unwrap();
         assert_eq!(rows, 0);
+    }
+
+    /// **The fold's target has to match the grain the `UPDATE OR IGNORE` above it collides
+    /// on, and since schema v23 that grain is four terms.** A three-term target query can
+    /// pick a wish in *another folder* — so a Scryfall id migration would sum the reader's
+    /// filed wish into a row at the root, delete it, and leave the row it actually collided
+    /// with untouched. A filing decision undone by an upstream tidy-up, with nothing red
+    /// anywhere.
+    ///
+    /// The fixture is the smallest one that tells the two queries apart: the wish at the root
+    /// is written **first**, so both a rowid scan and a seek through `idx_wishlist_grain` —
+    /// whose fourth column is `coalesce(folder_id, 0)`, and `0` sorts before `1` — reach it
+    /// before the real collision in `Ordered`. With the folder term absent it is what the
+    /// fold finds.
+    #[test]
+    fn a_repointed_wish_folds_only_onto_a_wish_in_its_own_folder() {
+        let mut conn = seeded();
+        conn.execute(
+            "INSERT INTO wishlist_folders
+                (id, parent_id, name, sort_order, created_at, updated_at)
+             VALUES (1, NULL, 'Ordered', 0, unixepoch(), unixepoch())",
+            [],
+        )
+        .unwrap();
+        let wish = |card_id: &str, folder: Option<i64>, quantity: i64| -> i64 {
+            conn.query_row(
+                "INSERT INTO wishlist_entries
+                    (oracle_id,card_id,name,quantity,folder_id,created_at,updated_at)
+                 VALUES ('o1',?1,'Lightning Bolt',?3,?2,unixepoch(),unixepoch())
+                 RETURNING id",
+                rusqlite::params![card_id, folder, quantity],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        let elsewhere = wish("new-id", None, 1);
+        let target = wish("new-id", Some(1), 2);
+        let source = wish("old-id", Some(1), 3);
+
+        let stats = apply(
+            &mut conn,
+            &[migration("m1", "merge", "old-id", Some("new-id"))],
+        )
+        .unwrap();
+
+        assert_eq!((stats.repointed, stats.folded, stats.flagged), (0, 1, 0));
+        let quantity_of = |id: i64| -> i64 {
+            conn.query_row(
+                "SELECT coalesce(sum(quantity), 0) FROM wishlist_entries WHERE id = ?1",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            quantity_of(target),
+            5,
+            "the copies fold into the wish in the same folder, which is the row the \
+             repoint actually collided with"
+        );
+        assert_eq!(
+            quantity_of(elsewhere),
+            1,
+            "and not into the wish at the root, which was never in the way"
+        );
+        assert_eq!(quantity_of(source), 0, "the folded row is gone");
     }
 
     /// The repoint rewrites `lang` from the new printing, so the row it collides with is
