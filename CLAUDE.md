@@ -100,6 +100,7 @@ number to compare against.
 | [decks-storage.md](docs/reference/decks-storage.md) | Deck tables, the card commands, the allocator, the audit log, the decklist import |
 | [import-export.md](docs/reference/import-export.md) | The seven formats, the field registry, the fold rule, the four import destinations |
 | [deck-driven-collection.md](docs/reference/deck-driven-collection.md) | When the decks **are** the collection — the derived subquery, its two shapes, the seven readers, the five refusals |
+| [wishlist-folders.md](docs/reference/wishlist-folders.md) | The two folder tables, the four-term grain, the merge rule, the root-add duplicate and the `elsewhere` mark |
 | [decks-live-findings.md](docs/reference/decks-live-findings.md) | What driving the shipped window found — **including the bugs still open** |
 | [tags-live-findings.md](docs/reference/tags-live-findings.md) | The Tags page in the shipped window — the art ingest timed, both performance gates settled, and the bugs still open |
 | [frontend-design.md](docs/reference/frontend-design.md) | The ribbon, card images, foil, layers, tables |

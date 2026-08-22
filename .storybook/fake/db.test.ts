@@ -43,6 +43,7 @@ import type {
   TransferImportMode,
   WishlistImportItem,
   WishlistPage,
+  WishlistQuery,
   WishlistSortKey,
 } from "@/lib/ipc";
 import type { Finish } from "@/lib/finish";
@@ -111,6 +112,9 @@ function wish(over: Partial<FakeWish> = {}): FakeWish {
     lang: card?.lang ?? null,
     quantity: 1,
     preferredFinish: null,
+    // The root, and every test that cares says so itself. `null` is a real destination here
+    // rather than an absence: it is where an unfiled wish is, and the grain's fourth term.
+    folderId: null,
     notes: null,
     needsReview: null,
     updatedAt: WHEN,
@@ -2256,6 +2260,449 @@ describe("the wishlist write", () => {
   });
 });
 
+/**
+ * The filing cabinet, and it is the **refusals** that earn this block rather than the writes.
+ *
+ * A fake that accepted a cycle would let a story draw a tree the app refuses to make, and the
+ * story would then document a lie — which is worse than no story, because it is a claim about
+ * the app made in the app's own drawing. Same for a merge that failed instead: the reader would
+ * meet a `UNIQUE constraint failed` in the workbench and never in the window.
+ */
+describe("the wishlist's folders", () => {
+  /** A wishlist with `Ordered` and `Backordered` inside it, and nothing filed yet. */
+  function filing(over: Partial<FakeDb> = {}): FakeDb {
+    return makeDb({
+      wishlistFolders: [
+        { id: 1, parentId: null, name: "Ordered", sortOrder: 0 },
+        { id: 2, parentId: 1, name: "Backordered", sortOrder: 0 },
+      ],
+      ...over,
+    });
+  }
+
+  it("files a new folder among its siblings and refuses a blank name", () => {
+    const db = filing();
+    const w = writeHandlers(db);
+    const inner = w.wishlist_folder_create({ parentId: 1, name: "  Paid for  " });
+    // Trimmed, and `max + 1` **among siblings** — so the second child of `Ordered` is 1 while
+    // the root's own numbering is untouched.
+    expect(inner).toMatchObject({ parentId: 1, name: "Paid for", sortOrder: 1 });
+    expect(w.wishlist_folder_create({ parentId: null, name: "Someday" }).sortOrder).toBe(1);
+
+    expect(() => w.wishlist_folder_create({ parentId: null, name: "   " })).toThrow(
+      /A folder needs a name\./,
+    );
+    expect(() => w.wishlist_folder_rename({ id: 1, name: " " })).toThrow(/A folder needs a name\./);
+    expect(db.wishlistFolders.find((f) => f.id === 1)!.name).toBe("Ordered");
+  });
+
+  /**
+   * What `wishlist_folder_list` **answers**, which nothing else here asks it.
+   *
+   * The create test above pins what goes *into* `sortOrder`; this pins what comes back out of
+   * it, and the two are different claims. `ORDER BY sort_order, id` is the reader's own
+   * arrangement — the folder tree is one of `sortOptions`' two exemptions, the "the reader
+   * arranged it themselves" one — so a store that answered in insertion order would draw every
+   * wall of folder cards in the order they were made and look entirely plausible doing it.
+   *
+   * The fixture is built so that all three ways of getting this wrong show:
+   * `sortOrder` ignored (insertion order), the `id` tie-break dropped (a stable sort then keeps
+   * insertion order among the two zeroes), and the comparison reversed. It is also **out of id
+   * order on purpose** — birth order and filing order are two different things, and a reader who
+   * has dragged their folders about is exactly how the two come apart.
+   */
+  it("answers every folder flat, in `sortOrder, id` rather than in the order they were made", () => {
+    const db = makeDb({
+      wishlistFolders: [
+        { id: 3, parentId: null, name: "Someday", sortOrder: 0 },
+        { id: 1, parentId: null, name: "Ordered", sortOrder: 0 },
+        { id: 2, parentId: 1, name: "Backordered", sortOrder: 1 },
+      ],
+    });
+    // `Backordered` is in the answer despite being nobody's sibling on screen: the list is flat
+    // and unscoped, and building the tree from `parentId` is `folderTree.ts`'s job.
+    expect(readHandlers(db).wishlist_folder_list()).toEqual([
+      { id: 1, parentId: null, name: "Ordered", sortOrder: 0 },
+      { id: 3, parentId: null, name: "Someday", sortOrder: 0 },
+      { id: 2, parentId: 1, name: "Backordered", sortOrder: 1 },
+    ]);
+  });
+
+  it("refuses a cycle, a move into itself, and a loop it did not write", () => {
+    const db = filing();
+    const w = writeHandlers(db);
+    // `Ordered` under its own child.
+    expect(() => w.wishlist_folder_move({ id: 1, parentId: 2 })).toThrow(/inside itself/);
+    expect(() => w.wishlist_folder_move({ id: 1, parentId: 1 })).toThrow(/inside itself/);
+    expect(db.wishlistFolders.find((f) => f.id === 1)!.parentId).toBeNull();
+
+    // A loop written straight into the store, between two folders neither of which is the one
+    // being moved — so the `cursor === id` arm never fires and only the hop budget ends the
+    // climb. A fake with no budget hangs the tab here rather than failing.
+    db.wishlistFolders[0].parentId = 2;
+    const moving = w.wishlist_folder_create({ parentId: null, name: "Someday" });
+    expect(() => w.wishlist_folder_move({ id: moving.id, parentId: 1 })).toThrow(/inside itself/);
+    expect(db.wishlistFolders.find((f) => f.id === moving.id)!.parentId).toBeNull();
+  });
+
+  /**
+   * The destination, which the cycle walk above cannot check for it and does not.
+   *
+   * `wishlist_folder_create` refuses a parent that is gone, because `wishlist_folders.parent_id`
+   * is a real foreign key and SQLite refuses one in the app. `wishlist_folder_move` writes the
+   * **same column** and so has to refuse the same thing, or the pair disagree — the fake would
+   * write a sub-tree hanging off nothing, and a story would then draw a folder that cannot
+   * exist.
+   *
+   * The walk is no substitute: `wishFolderById(db, cursor)?.parentId ?? null` reads an id no
+   * folder has as "already at the root" and ends the climb on the first hop, so an unchecked
+   * move sails straight through it.
+   *
+   * **This test was ahead of the crate and the crate was brought to it** (2026-08-22). Rust's
+   * `move_folder` had the identical hole — `optional()?.flatten()` reads a missing id as the
+   * root, exactly as the walk here does — so the `UPDATE` ran and answered
+   * `FOREIGN KEY constraint failed`, a sentence about a constraint rather than about the folder,
+   * and only while `PRAGMA foreign_keys` was on. It looks the id up and answers `FOLDER_GONE`
+   * now, which is what this had been asserting all along.
+   */
+  it("refuses a parent that is gone, the fence `wishlist_folder_create` already has", () => {
+    const db = filing();
+    const w = writeHandlers(db);
+    expect(() => w.wishlist_folder_move({ id: 2, parentId: 404 })).toThrow(/not there any more/);
+    // Nothing moved: a refusal that had already written the column would be worse than none.
+    expect(db.wishlistFolders.find((f) => f.id === 2)!.parentId).toBe(1);
+    // `null` is the root and is always a destination — the one parent there is no row to find.
+    w.wishlist_folder_move({ id: 2, parentId: null });
+    expect(db.wishlistFolders.find((f) => f.id === 2)!.parentId).toBeNull();
+  });
+
+  /**
+   * **The second wish is pinned to `BOLT_2X2` rather than made from its oracle id**, and the
+   * change is not cosmetic: `BOLT_2X2` is *a different printing of the same card*, so
+   * `BOLT_2X2.oracleId === BOLT.oracleId` and two any-printing wishes for it are one
+   * {@link wishGrain}. This fixture was therefore an unlabelled instance of the collision the
+   * two tests below are about — the old bare-loop un-filing wrote both rows at the root and
+   * this passed, while the app answered `UNIQUE constraint failed` and deleted nothing.
+   * Pinning the printing puts the two wishes on genuinely different grains, which is what this
+   * test meant by "both wishes are still on the list".
+   */
+  it("takes the sub-folders and leaves the wishes standing at the root", () => {
+    const db = filing({
+      wishlistEntries: [
+        wish({ id: 1, oracleId: BOLT.oracleId, folderId: 1 }),
+        wish({ id: 2, cardId: BOLT_2X2.id, folderId: 2 }),
+      ],
+    });
+    writeHandlers(db).wishlist_folder_delete({ id: 1 });
+    expect(db.wishlistFolders).toHaveLength(0);
+    // The two cascades pointing opposite ways: the cabinet and its drawer are gone, and both
+    // wishes are still on the list.
+    expect(db.wishlistEntries.map((x) => x.folderId)).toEqual([null, null]);
+    // An id that resolves to nothing is a success: the caller wanted it gone and it is.
+    expect(() => writeHandlers(db).wishlist_folder_delete({ id: 404 })).not.toThrow();
+  });
+
+  /**
+   * The delete **merges**, and the two shapes that make it have to.
+   *
+   * Un-filing a sub-tree rewrites the fourth term of {@link wishGrain} on every wish in it, so a
+   * press that files two wishes at the root for the same card lands twice on one grain. Both
+   * shapes are reachable in the shipped app:
+   *
+   * - a **root** wish plus the same card filed in the folder, which the design accepts on
+   *   purpose — the three writers that add at the root cannot name a folder, so a card the
+   *   reader has filed acquires a second root row;
+   * - two wishes in **sibling sub-folders**, colliding with each other with no root row in play.
+   *
+   * A bare loop over the rows produced both here while the app answered `UNIQUE constraint
+   * failed: index 'idx_wishlist_grain'` and deleted nothing at all — the fake kinder than the
+   * app, which is the drift that lets a story document a state the reader cannot reach. Both
+   * assertions fail on that loop, the first on the quantity and the second on the length.
+   */
+  it("merges a wish it un-files onto the root row already holding that card", () => {
+    const db = filing({
+      wishlistEntries: [
+        wish({ id: 1, oracleId: BOLT.oracleId, quantity: 1, folderId: null }),
+        wish({ id: 2, oracleId: BOLT.oracleId, quantity: 2, folderId: 1, notes: "ordered" }),
+      ],
+    });
+    writeHandlers(db).wishlist_folder_delete({ id: 1 });
+    expect(db.wishlistFolders).toHaveLength(0);
+    // One wish at the root for all three copies, wearing the filed row's note — the survivor
+    // had none, and `mergeWishOnto` falls back to the row it folds in.
+    expect(db.wishlistEntries).toEqual([
+      expect.objectContaining({ id: 1, folderId: null, quantity: 3, notes: "ordered" }),
+    ]);
+  });
+
+  it("merges two sub-folder wishes that collide with each other at the root", () => {
+    const db = makeDb({
+      wishlistFolders: [
+        { id: 1, parentId: null, name: "Top", sortOrder: 0 },
+        { id: 2, parentId: 1, name: "A", sortOrder: 0 },
+        { id: 3, parentId: 1, name: "B", sortOrder: 1 },
+      ],
+      wishlistEntries: [
+        wish({ id: 1, oracleId: BOLT.oracleId, quantity: 2, folderId: 2 }),
+        wish({ id: 2, oracleId: BOLT.oracleId, quantity: 5, folderId: 3 }),
+        // A card only one of them holds, so the merge is shown to be about the grain rather
+        // than about "everything in a deleted folder becomes one row".
+        wish({ id: 3, cardId: BOLT_2X2.id, quantity: 1, folderId: 3 }),
+      ],
+    });
+    writeHandlers(db).wishlist_folder_delete({ id: 1 });
+    expect(db.wishlistFolders).toHaveLength(0);
+    // Lowest id first, so the row that survives is a fact about the store and not about
+    // iteration order — the crate collects its sub-tree with `ORDER BY w.id` for the same reason.
+    expect(db.wishlistEntries).toEqual([
+      expect.objectContaining({ id: 1, folderId: null, quantity: 7 }),
+      expect.objectContaining({ id: 3, folderId: null, quantity: 1 }),
+    ]);
+  });
+
+  it("merges when the destination already holds the same card, and names the survivor", () => {
+    const db = filing({
+      wishlistEntries: [
+        wish({ id: 10, oracleId: BOLT.oracleId, quantity: 2, folderId: null, notes: "root" }),
+        wish({ id: 11, oracleId: BOLT.oracleId, quantity: 5, folderId: 1 }),
+      ],
+    });
+    const change = writeHandlers(db).wishlist_set_folder({ id: 10, folderId: 1 });
+    // The destination's id and the summed quantity, and `removed: false` over a row that really
+    // was deleted — the field means "the wish is gone", and it is emphatically still on the list.
+    expect(change).toEqual({ id: 11, quantity: 7, removed: false });
+    expect(db.wishlistEntries).toHaveLength(1);
+    expect(db.wishlistEntries[0].notes).toBe("root");
+  });
+
+  /**
+   * Which note survives the merge, pinned **by direction** rather than by accident.
+   *
+   * The test above has a note on the source and none on the destination, so it holds for
+   * `target.notes ?? source.notes` and for the inverted `source.notes ?? target.notes` alike —
+   * both answer `"root"`, and a refactor that swapped them would stay green. What that swap
+   * costs the reader is their own annotation: the destination is the row they filed and wrote on,
+   * and the source is a duplicate a deck sweep made at the root, so the inverted rule silently
+   * replaces "already paid for" with a sentence about a row that no longer exists.
+   *
+   * Both halves are here because the coalesce is two claims: the survivor's note **wins**, and
+   * it **falls back** when there is nothing to win with. A rule that only ever kept the target's
+   * would drop the note off a wish the reader had just written one on.
+   */
+  it("keeps the destination's own note, and falls back to the source's only when it has none", () => {
+    const annotated = () =>
+      filing({
+        wishlistEntries: [
+          wish({ id: 10, oracleId: BOLT.oracleId, quantity: 1, notes: "cheapest on the feed" }),
+          wish({ id: 11, oracleId: BOLT.oracleId, quantity: 1, folderId: 1, notes: "paid for" }),
+        ],
+      });
+    const kept = annotated();
+    writeHandlers(kept).wishlist_set_folder({ id: 10, folderId: 1 });
+    expect(kept.wishlistEntries.map((w) => w.notes)).toEqual(["paid for"]);
+
+    // The same merge with the destination's note taken away: the fold is a fallback as well as
+    // a preference, so the note that does exist is the one that survives.
+    const inherited = annotated();
+    inherited.wishlistEntries[1].notes = null;
+    writeHandlers(inherited).wishlist_set_folder({ id: 10, folderId: 1 });
+    expect(inherited.wishlistEntries.map((w) => w.notes)).toEqual(["cheapest on the feed"]);
+  });
+
+  it("moves a wish to a named folder and back to the root, and refuses a folder that is gone", () => {
+    const db = filing({ wishlistEntries: [wish({ id: 1, oracleId: BOLT.oracleId, quantity: 2 })] });
+    const w = writeHandlers(db);
+    expect(w.wishlist_set_folder({ id: 1, folderId: 2 })).toEqual({
+      id: 1,
+      quantity: 2,
+      removed: false,
+    });
+    // `null` is the root, a real destination rather than an omission.
+    w.wishlist_set_folder({ id: 1, folderId: null });
+    expect(db.wishlistEntries[0].folderId).toBeNull();
+    expect(() => w.wishlist_set_folder({ id: 1, folderId: 404 })).toThrow(/not there any more/);
+    expect(() => w.wishlist_set_folder({ id: 404, folderId: 1 })).toThrow(/wishlist entry/);
+  });
+
+  it("re-pins a wish to a printing, un-pins it, and merges onto a grain already taken", () => {
+    const db = makeDb({
+      wishlistEntries: [
+        wish({ id: 1, cardId: null, oracleId: BOLT.oracleId, quantity: 1, needsReview: "gone" }),
+      ],
+    });
+    const w = writeHandlers(db);
+    w.wishlist_set_printing({ id: 1, cardId: BOLT_2X2.id });
+    // All four printing columns travel together, and choosing a printing **is** the review.
+    expect(db.wishlistEntries[0]).toMatchObject({
+      cardId: BOLT_2X2.id,
+      setCode: BOLT_2X2.setCode,
+      collectorNumber: BOLT_2X2.collectorNumber,
+      needsReview: null,
+    });
+    // Un-pinning nulls all three again — `null` is a destination, not "leave it".
+    w.wishlist_set_printing({ id: 1, cardId: null });
+    expect(db.wishlistEntries[0]).toMatchObject({ cardId: null, setCode: null, lang: null });
+
+    // A second wish pinned onto the first's grain merges rather than raising the unique index.
+    const second = w.wishlist_add({ wish: { cardId: BOLT.id, quantity: 3 } });
+    expect(w.wishlist_set_printing({ id: second.id, cardId: null })).toEqual({
+      id: 1,
+      quantity: 4,
+      removed: false,
+    });
+    expect(db.wishlistEntries).toHaveLength(1);
+  });
+
+  it("is the same card twice when the only difference is the folder", () => {
+    const db = filing();
+    const w = writeHandlers(db);
+    const root = w.wishlist_add({ wish: { oracleId: BOLT.oracleId!, quantity: 1 } });
+    const filed = w.wishlist_add({ wish: { oracleId: BOLT.oracleId!, quantity: 1, folderId: 1 } });
+    // The grain's fourth term: an add that names a folder is an add, never the reader's existing
+    // row quietly moved out of the root.
+    expect(filed.id).not.toBe(root.id);
+    expect(db.wishlistEntries).toHaveLength(2);
+    // And each row says the other is out there — the whole reason `elsewhere` exists.
+    const rows = readHandlers(db).wishlist_list({
+      query: { limit: 10, offset: 0, flatten: true },
+    }).items;
+    expect(rows.map((r) => r.elsewhere)).toEqual([1, 1]);
+  });
+
+  /**
+   * `elsewhere`'s orphan fence — the one line of it that is a **fence** rather than arithmetic.
+   *
+   * `elsewhereWishes` returns `0` outright for a wish with no oracle id, and `db.ts` copies the
+   * crate's warning about it verbatim: the tempting tidy is `(o.oracleId ?? "") === (w.oracleId
+   * ?? "")`, to match the grain's own first term, and that would put every orphan on `""` and
+   * have them all count each other. `wishlist.rs` spells it `o.oracle_id IS NOT NULL` for
+   * exactly that reason.
+   *
+   * An orphan is a wish whose printing has left the corpus and which never carried an oracle id
+   * — two of them are two unrelated cards, and "also on your list" over a pair of them is the
+   * mark saying something false about the one thing it exists to say something true about.
+   *
+   * **Both directions are pinned in one read**, because a fence is only worth having while the
+   * arithmetic behind it still works: two orphans answer `0`, and the two Bolts beside them —
+   * one oracle card, two printings — still answer `1` each.
+   */
+  it("counts nothing for an orphan with no oracle id, and still counts for the cards that have one", () => {
+    const db = makeDb({
+      wishlistEntries: [
+        // No oracle id at all: the table's `CHECK (oracle_id IS NOT NULL OR card_id IS NOT NULL)`
+        // is satisfied by the printing alone, and the printing is one the corpus does not hold.
+        wish({ id: 1, cardId: "a-printing-scryfall-dropped", oracleId: null, name: "Gone One" }),
+        wish({ id: 2, cardId: "another-printing-it-dropped", oracleId: null, name: "Gone Two" }),
+        // One card, two printings, and therefore two chances to buy it twice.
+        wish({ id: 3, cardId: BOLT.id }),
+        wish({ id: 4, cardId: BOLT_2X2.id }),
+      ],
+    });
+    const rows = readHandlers(db).wishlist_list({ query: { limit: 10, offset: 0 } }).items;
+    expect(Object.fromEntries(rows.map((r) => [r.id, r.elsewhere]))).toEqual({
+      1: 0,
+      2: 0,
+      3: 1,
+      4: 1,
+    });
+  });
+
+  it("reads the root by default, one folder when asked, and everything when flattened", () => {
+    const db = filing({
+      wishlistEntries: [
+        wish({ id: 1, oracleId: BOLT.oracleId, folderId: null }),
+        wish({ id: 2, oracleId: BOLT_2X2.oracleId, folderId: 1 }),
+        wish({ id: 3, oracleId: FOIL_ONLY.oracleId, folderId: 2 }),
+      ],
+    });
+    const list = (query: Partial<WishlistQuery>) =>
+      readHandlers(db)
+        .wishlist_list({ query: { limit: 10, offset: 0, ...query } })
+        .items.map((r) => r.id);
+    // **An absent `folderId` is the root**, not "everything" — the trap this fake must not be
+    // kinder about than the backend.
+    expect(list({})).toEqual([1]);
+    expect(list({ folderId: null })).toEqual([1]);
+    // Direct only: `Ordered` does not answer for what is inside `Backordered`.
+    expect(list({ folderId: 1 })).toEqual([2]);
+    expect(list({ flatten: true }).sort()).toEqual([1, 2, 3]);
+    // `flatten` ignores `folderId` entirely rather than combining with it.
+    expect(list({ folderId: 2, flatten: true }).sort()).toEqual([1, 2, 3]);
+  });
+
+  it("summarises each folder directly, leaves the root out, and skips an empty one", () => {
+    const db = filing({
+      wishlistFolders: [
+        { id: 1, parentId: null, name: "Ordered", sortOrder: 0 },
+        { id: 2, parentId: 1, name: "Backordered", sortOrder: 0 },
+        { id: 3, parentId: null, name: "Someday", sortOrder: 1 },
+      ],
+      wishlistEntries: [
+        wish({ id: 1, cardId: BOLT.id, quantity: 2, folderId: 1 }),
+        wish({ id: 2, cardId: BOLT_2X2.id, quantity: 1, folderId: 2 }),
+        wish({ id: 3, cardId: BOLT.id, quantity: 9, folderId: null }),
+      ],
+      collectionEntries: [entry({ id: 1, cardId: BOLT.id, quantity: 1 })],
+    });
+    const rows = readHandlers(db).wishlist_folder_summary({});
+    // Two rows: the root is not a folder and draws no tile, and an empty folder has no row at
+    // all — which is why a page has to build its tree from `wishlist_folder_list`.
+    expect(rows.map((r) => r.folderId)).toEqual([1, 2]);
+    expect(rows[0]).toMatchObject({ wishes: 1, missing: 1 });
+    expect(rows[1]).toMatchObject({ wishes: 1, missing: 1 });
+  });
+
+  /**
+   * The other two figures on a folder card, which the summary test above leaves unasserted.
+   *
+   * `cost` is **what is still to buy**, never what is wanted: a folder charging the reader for
+   * copies already in the binder is a subtotal they cannot act on, and it is the same
+   * subtraction {@link toWishRow} makes so the card and the page header cannot disagree.
+   *
+   * `unpriced` is the non-obvious one and the reason this test exists. It counts a row only when
+   * that row has copies **still to buy** *and* no price — `unit === null && missing > 0`. Drop
+   * the second half and every folder holding a finished wish for an unpriceable printing grows a
+   * "could not price" note about a card the reader already owns, which reads as a hole in the
+   * marketplace's data rather than as the nothing it is.
+   *
+   * The fixture is two folders and three wishes, chosen so each clause fails loudly on its own:
+   *
+   * - `Ordered` wants two Alpha Bolts (`lea 161`, `usd` 620.00, nonfoil only) and two Invocation
+   *   Consecrated Sphinxes (`mp2 8`, foil-only — `usd` is null, `usd_foil` 164.95), one of which
+   *   is in the binder. The Sphinx wish names no finish, so it is priced at `nonfoil` and cannot
+   *   be priced at all: three copies still to find, `$1240.00` of Bolts, and **one** unpriced.
+   * - `Backordered` wants one of the same Sphinx, and the binder's copy covers it. Nothing to
+   *   buy, so nothing to price and **nothing** unpriced.
+   *
+   * That one copy answering both folders is the model rather than a fixture bug:
+   * {@link ownedAgainstWish} asks what the binder holds *against this wish* and is deliberately
+   * not an allocator, the way the deck side's is. Two wishes for one card are two intentions,
+   * and the wishlist has nowhere to say which of them a copy on the shelf belongs to.
+   */
+  it("prices only the missing copies, and calls a row unpriced only while it has some", () => {
+    const db = filing({
+      wishlistEntries: [
+        wish({ id: 1, cardId: BOLT.id, quantity: 2, folderId: 1 }),
+        wish({ id: 2, cardId: FOIL_ONLY.id, quantity: 2, folderId: 1 }),
+        wish({ id: 3, cardId: FOIL_ONLY.id, quantity: 1, folderId: 2 }),
+      ],
+      collectionEntries: [entry({ id: 1, cardId: FOIL_ONLY.id, finish: "foil", quantity: 1 })],
+    });
+    expect(readHandlers(db).wishlist_folder_summary({})).toEqual([
+      { folderId: 1, wishes: 2, missing: 3, cost: 620 * 2, unpriced: 1 },
+      { folderId: 2, wishes: 1, missing: 0, cost: 0, unpriced: 0 },
+    ]);
+  });
+
+  it("throws the filing cabinet away with the wishes it filed", () => {
+    const db = filing({ wishlistEntries: [wish({ id: 1, oracleId: BOLT.oracleId, folderId: 1 })] });
+    // `wishlist_entries.folder_id` is `ON DELETE SET NULL`, so emptying the entries alone would
+    // leave every folder standing and every folder card drawing zeroes.
+    expect(writeHandlers(db).wishlist_clear()).toBe(1);
+    expect(db.wishlistFolders).toHaveLength(0);
+  });
+});
+
 describe("collection_import_commit", () => {
   it("accumulates a repeated grain and counts added versus updated", () => {
     const db = makeDb();
@@ -3590,8 +4037,23 @@ describe("the busy fault", () => {
     // answers through every second of a sync. The same branch put a **second** refusal on the
     // five collection writes, and it deliberately does not show up in this count: a refusal is
     // not a handler, and this loop asks each one for `busy` on a world whose setting is off.
+    //
+    // Schema v23's wishlist folders then added **six**, 54 → 60, the largest single move since
+    // Settings' four clears: `wishlist_folder_create`, `_rename`, `_move` and `_delete`,
+    // `wishlist_set_folder`, and `wishlist_set_printing` — that last one is `wishlist.rs`'
+    // rather than `wishlist_folders.rs`' and had simply never been registered anywhere, so it
+    // arrived in this loop at the same time as the five it is not related to. All six take
+    // `sync::with_write` and are refusable for the usual reason; the branch's two reads
+    // (`wishlist_folder_list` and `wishlist_folder_summary`) go through `db_read` and are not
+    // in this table at all.
+    //
+    // **That figure is 54 + 6, and this rung has now been reconciled at a merge three times.**
+    // The wishlist branch wrote 52 → 58 against a tree holding `set_nav_collapsed` alone, then
+    // 53 → 59 once `set_deck_search_open` landed, and now 54 → 60 beside the deck-driven write.
+    // Each was right about the tree it was in and none predicted the merge — which is the whole
+    // of why this file's own rule says never to add one branch's delta to another's total.
     const names = Object.keys(w).filter((n) => !unlocked.includes(n));
-    expect(names).toHaveLength(54);
+    expect(names).toHaveLength(60);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,

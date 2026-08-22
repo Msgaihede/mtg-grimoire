@@ -372,6 +372,10 @@ const BOLT_WISH: WishRow = {
   id: 11,
   oracleId: "o1",
   cardId: "c1",
+  // The root, and nothing else on this page cares which: `App`'s suite is about the shell around
+  // the wishlist rather than about the cabinet inside it.
+  folderId: null,
+  elsewhere: 0,
   name: "Lightning Bolt",
   setCode: "lea",
   collectorNumber: "161",

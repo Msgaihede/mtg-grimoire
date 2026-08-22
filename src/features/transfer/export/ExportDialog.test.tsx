@@ -508,6 +508,10 @@ describe("the scope line", () => {
     over: Partial<NonNullable<ExportDialogProps["scope"]>> = {},
   ): NonNullable<ExportDialogProps["scope"]> => ({
     label: "250 cards matching your filters",
+    // The caller's words, not the dialog's — since the wishlist's folders, the escape hatch has
+    // a second sentence to be able to say, so `scope.ts` composes both and this draws whichever
+    // it is handed.
+    everythingLabel: "Export everything, ignoring the filters",
     loading: false,
     everything: false,
     onEverything: vi.fn(),

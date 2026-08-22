@@ -35,10 +35,11 @@ const meta = {
   render: (args) => <Page key={args.view} {...args} />,
   decorators: [
     // The page is `h-full`, so it needs a parent with a height or the virtualiser is handed a
-    // 0px window. 1032px is exactly the content column at the 1280×800 window
-    // `tauri.conf.json:16-17` opens: 1280 less the sidebar's `w-52` (208px) and less `main`'s
-    // `p-5` on both sides (40px), from `AppShell.tsx:92` and `AppShell.tsx:144`. The height is
-    // chosen rather than derived — the ribbon above it is not a fixed number of pixels.
+    // 0px window. 1032px is the content column at a **1280-wide** window: 1280 less the
+    // sidebar's `w-52` (208px) and less `main`'s `p-5` on both sides (40px). Not the window
+    // `tauri.conf.json` opens — that one is wider, and a story drawn at it would never show
+    // the wall at the width the app's 1024px floor says it has to survive. The height is
+    // chosen rather than derived: the ribbon above it is not a fixed number of pixels.
     (Story) => (
       <div className="h-[640px] w-[1032px]">
         <Story />
@@ -66,24 +67,28 @@ const meta = {
           "have yet and may never have held, so the picture is how you recognise the thing you " +
           "are about to buy; the table is a press away for the trip where the question is what " +
           "it all costs.\n\n" +
-          "Driven end to end by `.storybook/fake/`. The **five seeded wishes are five different " +
-          "answers to “is this filled?”**, and every one of them is arithmetic the fake really " +
-          "does rather than a number written into a fixture — `wishlist::OWNED_SQL` is mirrored " +
-          "at `db.ts:774-783`. Measured 2026-08-10 over " +
+          "Driven end to end by `.storybook/fake/`. `starterWishes` seeds **eight wishes: five " +
+          "loose at the root and three filed into the three folders of `starterWishFolders`** " +
+          "— so what every story here opens on is the root, and the filed three are behind a " +
+          "folder card ({@link Folders}) or one press of Flatten away ({@link Flattened}).\n\n" +
+          "**The five at the root are five different answers to “is this filled?”**, and every " +
+          "one of them is arithmetic the fake really does rather than a number written into a " +
+          "fixture — `wishlist::OWNED_SQL` is mirrored by `db.ts`'s `ownedAgainstWish`. Measured " +
+          "2026-08-10 over " +
           '`readHandlers(seed("starter")).wishlist_list`: Counterspell 2 of 4, Jace 0 of 1, ' +
           "the **foil** Ragavan 0 of 1 with a nonfoil in the binder, Rhystic Study 0 of 1, and " +
           "the any-printing Sol Ring **2 of 1** — fulfilled twice over, because a wish naming no " +
           "printing is filled by every printing of the card.\n\n" +
           "**Zero deletes here, and the collection's zero does not.** `wishlist_set_quantity(0)` " +
-          "removes the row (`db.ts:1968-1977`, mirroring the table's `CHECK (quantity > 0)`) " +
+          "removes the row (the fake's handler mirrors the table's `CHECK (quantity > 0)`) " +
           "because a wish for none of something is not a wish. **But the stepper cannot reach " +
-          "zero**: it is `min={1}` (`WishlistTable.tsx:146`), because a stepper that deleted a row " +
-          "when held down would be a one-way door with no undo. Removal is its own control, and " +
+          "zero**: it is `min={1}`, because a stepper that deleted a row when held down would " +
+          "be a one-way door with no undo. Removal is its own control, and " +
           "{@link Removed} is the story of it — there is no story of a wish stepped to zero, " +
           "because the UI does not offer one.\n\n" +
           "**There is no `Large` story, and that is a fact about the seeds rather than about " +
           'this page.** `seed: "large"` builds 5 243 cards and 600 collection entries and ' +
-          "**no wishes at all** — `seeds.ts:734-736` says so in as many words, and " +
+          "**no wishes at all** — `largeSeed` says so in as many words, and " +
           "`wishlist_list` answers `total: 0` under it (measured 2026-08-10). A story named " +
           "`Large` would render the zero state {@link Empty} already covers, under a name " +
           "promising depth. Closing it means seeding wishes into `largeSeed`, which is a change " +
@@ -166,6 +171,84 @@ export const Table: Story = {
 };
 
 /**
+ * The cabinet, and the one arithmetic a folder card cannot get from the read it is drawn from.
+ *
+ * `wishlist_folder_summary` answers **direct** counts — this folder’s own wishes, never its
+ * sub-folders’ — so the page sums a node’s children on the way up, the same arithmetic
+ * `buildFolderTree` already does for a deck folder’s `count`. `Ordered` is the seed that makes
+ * that visible: two wishes of its own and a sub-folder holding a third, so a card reading its
+ * summary row raw would say **2** over a drawer holding three.
+ *
+ * `Someday` is the other half of it. An empty folder has no summary row **at all**, because that
+ * read groups the wishes — so a card fed a raw `Map.get` renders nothing at all here, and the
+ * default that turns a missing key into zeros is what draws “0 wishes”.
+ *
+ * Drilling in replaces the level rather than filtering it: `wishlist_list` takes the folder, so
+ * the root’s five wishes go, `Ordered`’s two arrive, and the header above counts what is on
+ * screen rather than the whole list.
+ */
+export const Folders: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    // Three seeded folders, two of them at the root — and the recursive total on the one that
+    // holds a sub-folder.
+    const ordered = await canvas.findByRole("button", { name: /^Ordered folder, 3 wishes/ });
+    await expect(
+      canvas.getByRole("button", { name: "Someday folder, 0 wishes" }),
+    ).toBeInTheDocument();
+
+    await userEvent.click(ordered);
+
+    // The breadcrumb names where the reader is standing, and the last segment is not a link.
+    const trail = await canvas.findByRole("navigation", { name: "Wishlist folders" });
+    await expect(within(trail).getByText("Ordered")).toHaveAttribute("aria-current", "page");
+    await expect(
+      await canvas.findByRole("button", { name: /^Backordered folder, 1 wish/ }),
+    ).toBeInTheDocument();
+
+    // The level, not a filter over the whole list: the root’s wishes are not here.
+    await waitFor(async () => {
+      await expect(canvas.queryByText("Ragavan, Nimble Pilferer")).toBeNull();
+    });
+  },
+};
+
+/**
+ * Flatten — every wish at once, wherever it is filed.
+ *
+ * The switch is not a filter and `resetAll` never touches it: it says how much of the tree is on
+ * screen. While it is on there is no folder card, no drill-down and no “+ New folder” (there is
+ * no current folder to create one inside) — and **every wish is captioned with the folder it is
+ * in**, because without that the flattened list is just the old list with more rows in it.
+ *
+ * Eight rows plus the header, which is the whole of `starterWishes`: the five at the root and the
+ * three the folder cards were standing in front of.
+ */
+export const Flattened: Story = {
+  args: { view: "table" },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await canvas.findByText("Counterspell");
+    await expect(canvas.getByRole("button", { name: /^Ordered folder/ })).toBeInTheDocument();
+
+    await userEvent.click(canvas.getByRole("button", { name: "Flatten" }));
+
+    await waitFor(async () => {
+      await expect(canvas.getByRole("table", { name: "Your wishlist" })).toHaveAttribute(
+        "aria-rowcount",
+        "9",
+      );
+    });
+    await expect(canvas.queryByRole("button", { name: /^Ordered folder/ })).toBeNull();
+    await expect(canvas.queryByRole("button", { name: "+ New folder" })).toBeNull();
+
+    // Where each one is filed, in the caption beside its printing — `Wishlist` for the root.
+    await expect(canvas.getAllByText("Filed in").length).toBeGreaterThan(0);
+  },
+};
+
+/**
  * The two writes a wish needs, from a tile.
  *
  * The table edits in place because a shopping list is where the number of copies is
@@ -226,10 +309,10 @@ export const FlaggedOnTheWall: Story = {
 /**
  * A foil wish reading nothing owned, with a nonfoil of the same printing in the binder.
  *
- * This is why finish is part of what makes two wishes two wishes. `ownedAgainstWish` narrows by
- * the wish's `preferredFinish` when it names one (`db.ts:774-783`), so the seeded nonfoil
- * Damaged Ragavan (`.storybook/fake/seeds.ts:239-241`) fills none of the seeded foil wish
- * (`seeds.ts:279`) — 0 of 1, beside a collection that holds one.
+ * This is why finish is part of what makes two wishes two wishes. `db.ts`'s `ownedAgainstWish`
+ * narrows by the wish's `preferredFinish` when it names one, so the nonfoil Damaged Ragavan
+ * `starterEntries` seeds fills none of the foil wish `starterWishes` seeds — 0 of 1, beside a
+ * collection that holds one.
  *
  * Condition is deliberately *not* a term in that count: a wishlist has nowhere to say "and in
  * NM", so a Damaged copy would fill a finish-blind wish completely.
@@ -331,7 +414,7 @@ export const Empty: Story = {
  * a list told every row is the same height would overlap the one below it by exactly that band.
  *
  * The seeded sentence is `reconcile::flag_deleted`'s, copied verbatim with its date into
- * `.storybook/fake/seeds.ts:476`. It is the flagged row's *whole* explanation, and the second
+ * `.storybook/fake/seeds.ts`’s own seed function. It is the flagged row's *whole* explanation, and the second
  * half of it is what to do about it — which is why the band carries the sentence as a `title` as
  * well, and why a screen reader gets all of it either way.
  *
@@ -361,7 +444,7 @@ export const NeedsReview: Story = {
 /**
  * A write the database refused.
  *
- * `db.ts:1479`'s `BUSY` is `collection::BUSY` verbatim, raised by `refuseIfBusy` at the top of
+ * `db.ts`'s `BUSY` is `collection::BUSY` verbatim, raised by `refuseIfBusy` at the top of
  * every write handler and by no read handler — which is why the list underneath is untouched.
  * The alert is a `role="alert"` of its own rather than a line folded into the status above it:
  * that one describes the list, and this one describes something the reader just did to it.
@@ -395,8 +478,8 @@ export const Busy: Story = {
 /**
  * Crossing a line off the list.
  *
- * **Removal is offered on every row here, where the collection offers it only on an emptied one**
- * (`WishlistTable.tsx:203-206`). The two lists mean opposite things by deletion: losing a
+ * **Removal is offered on every row here, where the collection offers it only on an emptied
+ * one.** The two lists mean opposite things by deletion: losing a
  * collection entry loses the record of something owned — its condition, its price, the story of
  * where it came from — while crossing a line off a shopping list is what a shopping list is for.
  *

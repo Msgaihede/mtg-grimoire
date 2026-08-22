@@ -1468,6 +1468,9 @@ describe("the card menu", () => {
       // A collection row is not a row of an open deck, so there is no slot for a press in the
       // modal to swap — it opens the card pane on the printing instead.
       deck: null,
+      // No wish either: `wishlist_set_printing`'s target is set only by the wishlist's own
+      // rows, and `toEqual` reads an absent key and a `null` one as two different answers.
+      wish: null,
     });
     // **And the reader is still on their collection.** This press used to write `activeView`,
     // `selectedCardId`, `paneDeckContext` and `openDeckId` in the same `set`, so asking which

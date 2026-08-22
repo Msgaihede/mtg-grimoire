@@ -1,0 +1,392 @@
+import { useEffect, useRef, type ComponentProps } from "react";
+import type { Meta, StoryObj } from "@storybook/react-vite";
+import { expect, fn, userEvent, waitFor, within } from "storybook/test";
+import { useContextMenu } from "@/components/menu/useContextMenu";
+import type { MenuItem } from "@/components/menu/types";
+import { DROP_MARK_ROOM, DROP_OVER, DROP_RING } from "@/lib/dropMarks";
+import type { FolderNode } from "@/lib/folderTree";
+import type { WishlistFolder } from "@/lib/ipc";
+import { cn } from "@/lib/utils";
+import { WishFolderCard } from "./WishFolderCard";
+import { wishDraggable, type WishDrag } from "./wishDrag";
+
+/**
+ * How long a `waitFor` will wait for a state a drag has to travel to reach.
+ *
+ * The library schedules its `onDragStart` on `requestAnimationFrame` and every ring here is a
+ * `useState` behind that, so one frame is necessary and never sufficient — seconds rather than
+ * milliseconds because these plays run under a hundred-odd parallel jsdom files.
+ * `ContextMenu.stories.tsx` measured the same thing first and carries the long form.
+ * **Not exported**: CSF indexes every named export of a story file as a story.
+ */
+const DRAG_WAIT = 5_000;
+
+function folder(over: Partial<WishlistFolder> & { id: number; name: string }): WishlistFolder {
+  return { parentId: null, sortOrder: over.id, ...over };
+}
+
+/** The drawer every story below draws, and the one a wish is dropped into. */
+const EXPENSIVE = folder({ id: 3, name: "Expensive" });
+
+function node(
+  f: WishlistFolder,
+  over: Partial<FolderNode<WishlistFolder>> = {},
+): FolderNode<WishlistFolder> {
+  return { folder: f, depth: 0, count: 0, children: [], ...over };
+}
+
+/**
+ * The card as the page draws it: inside the `<ul>` the wall is, inside the scroller that wall
+ * lives in, with the page's own menu wired to all three of its handles.
+ *
+ * **The `<ul>` is not decoration.** `WishFolderCard` renders an `<li>` — `FolderCard`'s shape,
+ * and a row of drawers genuinely is a list — so a story that dropped one straight onto the canvas
+ * would put a list item outside a list and document markup the page does not build.
+ *
+ * **`DROP_MARK_ROOM` is on the scroller for the reason it exists**, even though nothing in jsdom
+ * can go red for it: `overflow` clips at the padding box and a `DROP_RING` is a box shadow painted
+ * *outside* the border box, so a card flush against the content edge loses the outer 2px of its
+ * ring for the whole length of a drag. The wall in the workbench has to be the wall on the page,
+ * or {@link DropTarget} would draw a ring the app clips.
+ *
+ * The menu is the real `useContextMenu`, off the provider `.storybook/preview.tsx` mounts for
+ * every story — so the `⋯`, a right-click and Shift+F10 all open the page's three rows here, and
+ * `menuClick` is exercised rather than described. Its presses report through {@link Wall.act}
+ * instead of reaching a mutation this workbench does not hold.
+ */
+function Wall({
+  act,
+  ...card
+}: Omit<ComponentProps<typeof WishFolderCard>, "rowMenu"> & { act: (what: string) => void }) {
+  const { menu, menuKey, menuClick } = useContextMenu();
+  const build = (): MenuItem[] => [
+    { kind: "action", id: "rename", label: "Rename…", onSelect: () => act("rename") },
+    { kind: "action", id: "move", label: "Move to folder…", onSelect: () => act("move") },
+    { kind: "separator", id: "before-delete" },
+    { kind: "action", id: "delete", label: "Delete…", onSelect: () => act("delete") },
+  ];
+  return (
+    <div className={cn("relative max-h-44 overflow-y-auto", DROP_MARK_ROOM)}>
+      <ul
+        aria-label="Folders"
+        className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-2"
+      >
+        <WishFolderCard
+          {...card}
+          rowMenu={{
+            onContextMenu: menu(build),
+            onKeyDown: menuKey(build),
+            onClick: menuClick(build),
+          }}
+        />
+      </ul>
+    </div>
+  );
+}
+
+const meta = {
+  title: "Wishlist/Folder card",
+  component: Wall,
+  tags: ["autodocs"],
+  args: {
+    node: node(EXPENSIVE),
+    summary: { wishes: 6, missing: 6, cost: 312, unpriced: 0 },
+    currency: "usd",
+    onOpen: fn(),
+    onDropWish: fn(),
+    // The page's own answer, verbatim — spec §9: a folder takes any wish that is not already
+    // filed in it. Stated once here rather than per story, because it is the rule rather than a
+    // property of one tile; only {@link DropTarget} ever puts a wish in the air to ask it.
+    canDrop: (drag: WishDrag): boolean => drag.folderId !== EXPENSIVE.id,
+    act: fn(),
+  },
+  decorators: [
+    // The band the page gives its drawers — wide enough for the `auto-fill` track to be a row
+    // rather than a column, which is the arrangement the truncation rules below are about.
+    (Story) => (
+      <div className="w-[32rem]">
+        <Story />
+      </div>
+    ),
+  ],
+  parameters: {
+    docs: {
+      description: {
+        component:
+          "A drawer in the wishlist's filing cabinet, drawn above the wishes in both views. " +
+          "**Dashed**, which on this screen is a rule rather than a decoration: dashed means " +
+          "provisional, and a folder is a container rather than a thing you can *buy*. The " +
+          "wishes inside it are the things with prices; the drawer they are in is not one of " +
+          "them, and nothing else on the wishlist is dashed.\n\n" +
+          "**No strip of member art, which is the one place it departs from the deck gallery's " +
+          "`FolderCard` it was ported from.** A deck gallery is browsed by recognising a deck " +
+          "and a deck's face is its art. A shopping list is not read that way — it is read for " +
+          "its money — so the whole face here is `6 wishes · $312.00`, the only question anyone " +
+          "asks of a wishlist drawer. That also makes the tile cheap in a way the deck card is " +
+          "not: no image query, no `useImageRetry`, and no illustrator credit, because " +
+          "Scryfall's image policy attaches to pictures and there are none here.\n\n" +
+          "**The number it prints is the recursive total, never `wishlist_folder_summary`'s " +
+          "row.** That row is *direct* — this folder's own wishes and not its sub-folders' — so " +
+          "a drawer holding two full sub-folders and nothing of its own would draw `0 wishes` " +
+          "over twelve. The page adds the children in with `buildFolderTree`'s own arithmetic " +
+          "and hands the total here, which is why the summary answering **no row at all** for " +
+          "an empty folder costs the card nothing ({@link Empty}).",
+      },
+    },
+  },
+} satisfies Meta<typeof Wall>;
+
+export default meta;
+type Story = StoryObj<typeof meta>;
+
+/**
+ * Six wishes and what they cost — the face a folder card exists to show.
+ *
+ * The press is on the `<button>` filling the tile rather than on the `<li>` around it, and its
+ * `aria-label` says in words what the second line says in figures: a screen reader gets
+ * `Expensive folder, 6 wishes, $312.00`, with the app's `·` swapped for commas because a middot
+ * read aloud is punctuation nobody asked for. The two spellings are built together in one
+ * function, so they cannot come to disagree about what the card says.
+ */
+export const Default: Story = {
+  play: async ({ args, canvasElement }) => {
+    const canvas = within(canvasElement);
+    const tile = canvas.getByRole("button", { name: /^Expensive folder/ });
+    await expect(tile).toHaveTextContent("6 wishes · $312.00");
+    await expect(tile).toHaveAccessibleName("Expensive folder, 6 wishes, $312.00");
+
+    await userEvent.click(tile);
+    await expect(args.onOpen).toHaveBeenCalledTimes(1);
+  },
+};
+
+/**
+ * A folder with nothing in it, which is the state the summary has no row for at all.
+ *
+ * `wishlist_folder_summary` answers one row per folder that holds at least one wish **directly**
+ * — the crate's `GROUP BY` over `WHERE folder_id IS NOT NULL` — so a folder the reader made a
+ * minute ago is simply absent from it. The page falls back to a zeroed total and the card has to
+ * draw that without complaint: an empty drawer is not an error, it is where the next wish goes.
+ *
+ * **It shows its count and no money at all.** `$0.00` on a folder with nothing left to buy is a
+ * price nobody quoted, which is `formatPrice`'s own rule, and the unpriced note goes with it —
+ * that note exists to qualify a subtotal and there is no subtotal here to qualify.
+ */
+export const Empty: Story = {
+  args: {
+    node: node(folder({ id: 8, name: "Someday" })),
+    summary: { wishes: 0, missing: 0, cost: 0, unpriced: 0 },
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const tile = canvas.getByRole("button", { name: /^Someday folder/ });
+    await expect(tile).toHaveTextContent("0 wishes");
+    // No money, no em dash and no `· 0 unpriced`: three ways of saying nothing where the card
+    // says nothing at all.
+    await expect(tile).not.toHaveTextContent("·");
+  },
+};
+
+/**
+ * The moment before the figures land — **which is not the same picture as {@link Empty}**.
+ *
+ * The page draws its cabinet as soon as the folder *list* answers, and that list is one flat
+ * `SELECT`; the numbers on this face come from `wishlist_folder_summary`, a `GROUP BY` carrying
+ * the owned-copies subquery and a marketplace price expression, and it answers later. Across that
+ * window a missing row and an unanswered read are one `Map.get` miss apart and mean opposite
+ * things — so a drawer holding six wishes worth $312 drew `0 wishes` and then jumped. That is a
+ * wrong number rather than a spinner, and the reader who glanced at the wall in that moment was
+ * told the drawer was empty.
+ *
+ * `null` is the page's way of saying "not counted yet" and the card draws the em dash every other
+ * unanswered figure in this app draws (`Figure`'s own `query.isPending ? "—"`), with the spoken
+ * half in words because a dash read aloud is punctuation. It is also what a **marketplace switch**
+ * looks like: that read is keyed on the marketplace, so the first frame in the new currency has
+ * no subtotals of its own and must not borrow the old one's.
+ */
+export const Counting: Story = {
+  args: { summary: null },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const tile = canvas.getByRole("button", { name: /^Expensive folder/ });
+    await expect(tile).toHaveTextContent("—");
+    await expect(tile).not.toHaveTextContent("0 wishes");
+    await expect(tile).toHaveAccessibleName("Expensive folder, still counting");
+  },
+};
+
+/**
+ * Copies this marketplace could not price, counted beside the subtotal they are missing from.
+ *
+ * The note is written in the same `· 2 unpriced` shape the page header builds, so a folder's
+ * qualification of its subtotal and the page's qualification of the whole list read as one
+ * sentence rather than as two conventions. It counts a wish only where that wish has copies
+ * **still to buy** — a row the binder already covers costs nothing whether the feed can quote it
+ * or not, and counting it would put a "could not price" note on a folder with nothing left to buy.
+ *
+ * A `null` price is the answer and never a reason to reach for another marketplace's: no two
+ * feeds have the same holes, so the two figures here are both this marketplace's or neither is.
+ */
+export const Unpriced: Story = {
+  args: { summary: { wishes: 4, missing: 5, cost: 88, unpriced: 2 } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.getByRole("button", { name: /^Expensive folder/ })).toHaveTextContent(
+      "4 wishes · $88.00 · 2 unpriced",
+    );
+  },
+};
+
+/* ---------------------------------------------------------------- a real drag ------- */
+
+/**
+ * The platform's drag clipboard, in the only shape this app's drags need.
+ *
+ * **`src/test-drag.ts` is the same thing and cannot be imported here** — it registers an
+ * `afterEach` from `vitest` at import time and pulls in `@testing-library/react`, so importing it
+ * would put a test runner into the Storybook browser bundle. `AppShell.stories.tsx` and
+ * `QuickZones.stories.tsx` each carry the same copy for the same reason, and the second of those
+ * has the long version of why a synthetic `MouseEvent` with a `dataTransfer` bolted on *is* the
+ * platform's drag event.
+ */
+class StoryDataTransfer {
+  private store = new Map<string, string>();
+  effectAllowed = "uninitialized";
+  dropEffect = "none";
+  get types(): string[] {
+    return [...this.store.keys()];
+  }
+  setData(format: string, data: string): void {
+    this.store.set(format, data);
+  }
+  getData(format: string): string {
+    return this.store.get(format) ?? "";
+  }
+  clearData(): void {
+    this.store.clear();
+  }
+  setDragImage(): void {}
+  items = { add: () => {} };
+}
+
+function send(target: Element, type: string, dataTransfer: StoryDataTransfer): void {
+  const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX: 8, clientY: 8 });
+  Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
+  target.dispatchEvent(event);
+}
+
+/** One frame, so the library's `requestAnimationFrame`-scheduled `onDragStart` has landed.
+ *  Necessary and not sufficient — every assertion about a drag's result goes through
+ *  `waitFor`. */
+const frame = () =>
+  new Promise<void>((resolve) => {
+    requestAnimationFrame(() => resolve());
+  });
+
+/** Pick a wish up. **Every drag started here must be finished** — the library keeps one global
+ *  "a drag is active" flag, and a story that walked away holding one leaves the next story unable
+ *  to pick anything up. Hence the `finally` in the play below. */
+async function pickUp(source: Element) {
+  const data = new StoryDataTransfer();
+  send(source, "mousedown", data);
+  send(source, "dragstart", data);
+  await frame();
+  return {
+    over: async (target: Element) => {
+      send(target, "dragenter", data);
+      send(target, "dragover", data);
+      await frame();
+    },
+    cancel: async () => {
+      send(source, "dragend", data);
+      await frame();
+    },
+  };
+}
+
+/**
+ * An **any-printing** wish, which is the one a card drag cannot pick up.
+ *
+ * `WishlistGrid` registers no card drag at all on a wish with no `card_id` — there is no printing
+ * to carry, and `dnd.ts` refuses an empty id because it "addresses every row and no row". Filing
+ * one is exactly as much a thing a reader wants to do, so its payload carries the `wishSource`
+ * mark **alone**, and a folder is the only target in the app that answers it.
+ */
+const LOOSE_WISH: WishDrag = { wishId: 7, name: "Sol Ring", folderId: null };
+
+/** Something to pick up: `wishDraggable` rather than the library's `draggable`, so the payload
+ *  travels exactly as a wish tile's does. `card: () => null` is what leaves `dnd.ts`'s mark off. */
+function Source({ wish }: { wish: WishDrag }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    return wishDraggable({ element, wish: () => wish, card: () => null });
+  }, [wish]);
+  return (
+    <div
+      ref={ref}
+      className="inline-block w-max cursor-grab rounded-md border border-border bg-surface px-3 py-2 text-sm"
+    >
+      {wish.name}
+    </div>
+  );
+}
+
+/**
+ * The two rings, and the folder that draws neither.
+ *
+ * **`DROP_RING` is raised on every folder that would take the wish, not only the one under the
+ * pointer**, from the moment it leaves the tile — that is what tells a reader where a drag can
+ * end before they have aimed anywhere. `DROP_OVER` is the second, narrower fact only the target
+ * the pointer is actually over can answer, and it comes with `border-accent` so the dashed edge
+ * itself says which drawer is about to take it.
+ *
+ * **The folder a wish is already filed in refuses it and draws no ring at all** — spec §9, and
+ * the same rule as a deck card dropped back into its own column: a ring that led to a write which
+ * moved nothing and bumped `updated_at` would be worse than no ring. `WishDrag.folderId` is the
+ * whole of what lets a target answer that before the drop, which is why the payload carries it.
+ *
+ * The drag runs over the library's own code path. What it cannot reach is what `test-drag.ts`
+ * records and what {@link Wall}'s scroller is about: the platform's drag preview, the pointer
+ * hit-testing that decides which card a `dragover` lands on, and the clip that `DROP_MARK_ROOM`
+ * buys room against — all three measure rectangles, and jsdom has no layout engine. Those stay
+ * the live pass's to prove.
+ */
+export const DropTarget: Story = {
+  render: (args) => (
+    <div className="flex w-[32rem] flex-col gap-4">
+      <Wall {...args} />
+      <Source wish={LOOSE_WISH} />
+    </div>
+  ),
+  play: async ({ args, canvasElement }) => {
+    const canvas = within(canvasElement);
+    const tile = canvas.getByRole("button", { name: /^Expensive folder/ });
+    // The ring lives on the `<li>`, which is where the page's scroller has to leave room for it.
+    const item = tile.closest("li")!;
+    const marked = (element: Element, mark: string) =>
+      // `classList.contains` per class, never `className.includes`: several classes around these
+      // are `hover:` variants, and a substring test against the whole attribute passes before any
+      // state has changed — a vacuous assertion that reads exactly like a real one.
+      mark.split(" ").every((one) => element.classList.contains(one));
+
+    await expect(marked(item, DROP_RING)).toBe(false);
+
+    const held = await pickUp(canvas.getByText("Sol Ring"));
+    try {
+      await waitFor(() => expect(marked(item, DROP_RING)).toBe(true), { timeout: DRAG_WAIT });
+      await expect(marked(tile, DROP_OVER)).toBe(false);
+
+      await held.over(item);
+      await waitFor(() => expect(marked(tile, DROP_OVER)).toBe(true), { timeout: DRAG_WAIT });
+      await expect(tile).toHaveClass("border-accent");
+    } finally {
+      await held.cancel();
+    }
+    // Cancelled, not dropped — the platform ends both the same way, so the ring stands down
+    // without the hook ever hearing a keypress, and nothing was filed.
+    await waitFor(() => expect(marked(item, DROP_RING)).toBe(false), { timeout: DRAG_WAIT });
+    await expect(args.onDropWish).not.toHaveBeenCalled();
+  },
+};

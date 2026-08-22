@@ -981,6 +981,11 @@ export interface WishInput {
    *  by it. Absent means no preference. */
   preferredFinish?: Finish;
   notes?: string;
+  /** Where a menu add files it. Absent is the root wishlist — nothing has to be filed for the
+   *  list to work, and this is the field that keeps that true for a fresh install. It is part
+   *  of the row's storage grain, the same way {@link WishInput.preferredFinish} is: adding the
+   *  same card to two different folders is two wishes, never one row that moves. */
+  folderId?: number | null;
 }
 
 /** One line of a bulk import, after this side has decided everything a *wishlist* decision is. */
@@ -1006,6 +1011,25 @@ export interface WishlistQuery extends CardFilters {
    *  reconciler walks this table too, so this is {@link CollectionQuery.needsReview}'s
    *  question asked of the other list. */
   needsReview?: boolean;
+  /**
+   * Which folder the list is being read at. `null` is the root wishlist — a real destination,
+   * the same folder every unfiled wish lands in, and not to be confused with "no folder
+   * filter" (that is {@link WishlistQuery.flatten}).
+   *
+   * This is navigation, not a filter: it is where the reader is standing rather than something
+   * they narrowed, so it plays no part in an active-filter count and a Reset leaves it alone.
+   */
+  folderId?: number | null;
+  /**
+   * `true` ignores {@link WishlistQuery.folderId} entirely and returns every wish regardless
+   * of filing. Default `false`.
+   *
+   * It exists because a nullable `folderId` cannot carry three states on its own: `null` is
+   * already spoken for as "the root wishlist", so there would be no value left to mean "no
+   * folder filter at all, show everything" — this flag is that third state, kept separate
+   * rather than smuggled into `folderId` as some other sentinel.
+   */
+  flatten?: boolean;
   /** How to order the list, first column deciding. Empty or absent is name order. */
   sort?: SortSpec<WishlistSortKey>;
   /** Which marketplace every price is quoted from, and therefore what the `cost` and `price`
@@ -1021,6 +1045,16 @@ export interface WishRow {
   oracleId: string | null;
   /** `null` = any printing. */
   cardId: string | null;
+  /**
+   * The {@link WishlistFolder} this wish is filed in, or `null` for the root wishlist —
+   * `wishlist_entries.folder_id`, answered on every row rather than made optional, because a
+   * wish is always filed *somewhere* and the backend always knows where.
+   *
+   * A card added twice to two different folders is two rows here with two different values of
+   * this field, never one row that moved — {@link WishInput.folderId}'s grain rule, seen from
+   * the read side.
+   */
+  folderId: number | null;
   /** Never null: a wish carries its own name, because it outlives the printing it was made
    *  from and may never have had one. */
   name: string;
@@ -1070,6 +1104,21 @@ export interface WishRow {
    * wishes.
    */
   ownedQuantity: number;
+  /**
+   * How many *other* wishes exist for the same oracle card — a correlated count, `0` on an
+   * orphan with no oracle id, answered on every row rather than made optional because it is
+   * cheap over a list that runs to tens of rows and is computed in SQL rather than in
+   * TypeScript for the reason {@link WishlistPage} is paged: a page cannot see the wishes it
+   * did not fetch, so a client-side count would only ever be honest about the page itself.
+   *
+   * This is the field that catches what filing makes possible: with `folderId` part of the
+   * storage grain, a card the reader has already filed in `Ordered` and a deck sweep re-adds
+   * gets a **second row at the root**, not a bump to the existing one. A non-zero `elsewhere`
+   * is what tells the reader that second row exists before they buy the same card twice — it
+   * counts the same oracle card, not the same printing, because two wishes for two different
+   * printings of one card are still two chances to order it twice over.
+   */
+  elsewhere: number;
   notes: string | null;
   needsReview: string | null;
   /** Unix seconds. */
@@ -1319,6 +1368,62 @@ export interface DeckFolder {
   parentId: number | null;
   name: string;
   sortOrder: number;
+}
+
+/**
+ * One folder of the wishlist's own filing tree — `deck_folders`' shape ported onto
+ * `wishlist_folders`, because the tree arithmetic, the cycle refusal and the two cascade rules
+ * were already written and tested there and a wishlist folder needs exactly the same three.
+ *
+ * **Flat rows; the tree is the reader's to build from `parentId`**, {@link DeckFolder}'s rule
+ * verbatim — `wishlist_folder_list` takes no argument because a folder belongs to no wish, the
+ * way a directory belongs to no file.
+ *
+ * The two cascades point the same opposite ways {@link DeckFolder}'s do, and the wishlist's
+ * are the ones a delete confirmation has to quote: `wishlist_folders.parent_id` is
+ * `ON DELETE CASCADE` **on itself**, so deleting a folder takes its sub-folders with it.
+ * `wishlist_entries.folder_id` is `ON DELETE SET NULL`, so the wishes inside surface at the
+ * root — filed nowhere, otherwise untouched, and in particular **not deleted**. A folder is a
+ * filing decision the reader made about a wish, never a second list the wish could be lost
+ * inside.
+ */
+export interface WishlistFolder {
+  id: number;
+  /** The folder this one sits inside, or `null` for the root of the tree. */
+  parentId: number | null;
+  name: string;
+  sortOrder: number;
+}
+
+/**
+ * The counts and subtotal a folder card is drawn from — `wishlist_folder_summary`'s row, one
+ * per folder that exists.
+ *
+ * **Every number here is direct, never recursive: what this folder holds itself, not what it
+ * and everything nested inside it hold together.** `wishlist_folder_list` builds the tree from
+ * flat rows and sums a node's children on the way up — {@link DeckFolder}'s `FolderNode.count`
+ * does the same arithmetic for decks — so a summary that already recursed would be a second,
+ * disagreeing implementation of that sum. Read one of these alone and a folder holding two
+ * sub-folders of six wishes each and none of its own reads as **empty**; that is correct for
+ * this row and wrong for a folder card, which has to add its children in before it draws.
+ */
+export interface WishlistFolderSummary {
+  folderId: number;
+  /** Wishes filed **directly** in this folder — not its sub-folders' wishes. */
+  wishes: number;
+  /** Copies still to find here — `max(0, quantity - owned)` summed over the wishes filed
+   *  directly in this folder, {@link WishRow.ownedQuantity}'s subtraction done once per row
+   *  and added up. */
+  missing: number;
+  /** What those missing copies cost at the summary's own marketplace — the same
+   *  `price_expr` the page header prices its own total from, so a folder's figure and the
+   *  root's can never disagree about what one copy costs. Unpriced rows are left out of the
+   *  sum entirely, never quoted at another marketplace's rate. */
+  cost: number;
+  /** How many of this folder's own wishes the marketplace could not price — the folder card's
+   *  own version of the page header's unpriced note, so a dashed card whose total looks low
+   *  can say why. */
+  unpriced: number;
 }
 
 /**
@@ -3153,6 +3258,75 @@ export const ipc = {
    */
   wishlistImportCommit: (items: WishlistImportItem[], mode: TransferImportMode) =>
     invoke<ImportCommitOutcome>("wishlist_import_commit", { items, mode }),
+  /** Every folder there is, flat — {@link ipc.deckFolderList}'s rule verbatim, ported: the
+   *  tree is the reader's to build from `parentId`, and no wish id scopes it because a folder
+   *  belongs to no wish. */
+  wishlistFolderList: () => invoke<WishlistFolder[]>("wishlist_folder_list"),
+  /** A new folder, at the root with `parentId: null` or inside another one. */
+  wishlistFolderCreate: (parentId: number | null, name: string) =>
+    invoke<WishlistFolder>("wishlist_folder_create", { parentId, name }),
+  wishlistFolderRename: (id: number, name: string) =>
+    invoke<WishlistFolder>("wishlist_folder_rename", { id, name }),
+  /**
+   * Re-parent a folder — `parentId: null` moves it back to the root.
+   *
+   * Refuses a move into itself or into one of its own descendants, {@link ipc.deckFolderMove}'s
+   * guard verbatim and for the same reason: `wishlist_folders.parent_id` is `ON DELETE CASCADE`
+   * **on itself**, so a cycle is a graph SQLite's recursive cascade would walk forever the day
+   * the folder is deleted.
+   */
+  wishlistFolderMove: (id: number, parentId: number | null) =>
+    invoke<WishlistFolder>("wishlist_folder_move", { id, parentId }),
+  /**
+   * Delete a folder. **Its wishes are not deleted** — `wishlist_entries.folder_id` is
+   * `ON DELETE SET NULL`, so they surface at the root, filed nowhere and otherwise exactly as
+   * they were. Sub-folders *do* go with it. An id that resolves to nothing is a success.
+   */
+  wishlistFolderDelete: (id: number) => invoke<void>("wishlist_folder_delete", { id }),
+  /**
+   * Move a wish to a folder — `folderId: null` is the root wishlist, a real destination and
+   * not an omission.
+   *
+   * **Merges rather than fails on a collision.** Moving a wish into a folder that already
+   * holds a wish for the same `(oracleId, cardId, preferredFinish)` would otherwise violate the
+   * storage grain {@link WishInput.folderId} put `folderId` into; instead the two quantities
+   * are summed into the destination row, the source row is deleted, and this answers the
+   * **destination's** id and quantity. The alternative — a `UNIQUE constraint failed` reaching
+   * the reader — would be the app telling them off for filing a card twice.
+   */
+  wishlistSetFolder: (id: number, folderId: number | null) =>
+    invoke<EntryChange>("wishlist_set_folder", { id, folderId }),
+  /**
+   * The counts and subtotal every folder card on the wishlist page is drawn from, one
+   * {@link WishlistFolderSummary} per folder — **direct per folder, never recursive**; see that
+   * interface before drawing anything from this, because a caller that assumes recursion draws
+   * a folder card reading `0` over a sub-folder holding twelve.
+   *
+   * Priced at the named marketplace, off the same `price_expr` the page header's own total
+   * comes from, so a folder's figure and the whole list's can never disagree about what one
+   * copy costs.
+   */
+  wishlistFolderSummary: (marketplace: MarketplaceId) =>
+    invoke<WishlistFolderSummary[]>("wishlist_folder_summary", { marketplace }),
+  /**
+   * Change which printing a wish is for — the write `wishlist_entries.card_id` has never had
+   * before, on a column that has always meant "any printing" when `null`.
+   *
+   * `cardId` pins the wish to that printing and refreshes its denormalised set, collector
+   * number and language from the card database; an id the card database does not have is
+   * refused, {@link ipc.wishlistAdd}'s words. `cardId: null` is the way back to **any
+   * printing** — set, collector number and language all clear with it — and is refused when the
+   * wish has no `oracleId` either, because a wish naming neither would be a shopping list item
+   * that cannot say what it is shopping for.
+   *
+   * **Merges rather than fails on a collision**, {@link ipc.wishlistSetFolder}'s rule verbatim:
+   * repointing a wish onto a printing (or onto "any printing") that collides with a wish
+   * already sitting in the same folder sums the two into one row rather than raising a unique
+   * constraint. Clears `needsReview`, because choosing the printing by hand *is* the review a
+   * flagged wish was waiting for.
+   */
+  wishlistSetPrinting: (id: number, cardId: string | null) =>
+    invoke<EntryChange>("wishlist_set_printing", { id, cardId }),
   /** The gallery: every deck, archived last, most recently touched first. */
   deckList: () => invoke<DeckRow[]>("deck_list"),
   /**

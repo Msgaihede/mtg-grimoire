@@ -12,15 +12,18 @@ import { RarityGem } from "@/components/RarityGem";
 import { VirtualTable, type TableColumn } from "@/components/table/VirtualTable";
 import { useTooltip, type TooltipBinder } from "@/components/tooltip/useTooltip";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
-import { cardDraggable } from "@/features/decks/dnd";
 import { FOCUS } from "@/lib/focus";
-import type { WishlistSortKey, WishRow } from "@/lib/ipc";
+import type { FolderNode } from "@/lib/folderTree";
+import type { WishlistFolder, WishlistSortKey, WishRow } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
 import type { SortSpec } from "@/lib/sort";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
+import { EditWishButton } from "./EditWish";
 import { missingOf, printingOf, wishLabel } from "./wish";
+import { wishDraggable } from "./wishDrag";
+import { ElsewhereMark, WishFolderCaption } from "./wishMarks";
 
 /** The band a flagged row grows by, to say what the reconciler found. */
 const REVIEW_HEIGHT = 20;
@@ -45,13 +48,36 @@ const REVIEW_HEIGHT = 20;
  * the same reason `useWishlist` has never offered a set order either.
  *
  * The keys are the backend's, verbatim: `WISHLIST_SORTS` in `src-tauri/src/wishlist.rs`.
+ *
+ * One options object rather than a row of positional arguments: the list grew five members for
+ * spec §4 and §5, and a call site of nine bare values is a call site where two of them get
+ * swapped.
  */
-function columnsFor(
-  onSetQuantity: (row: WishRow, quantity: number) => void,
-  onRemove: (row: WishRow) => void,
-  marketplace: Marketplace,
-  tip: TooltipBinder,
-): TableColumn<WishRow>[] {
+function columnsFor({
+  folders,
+  nodes,
+  onSetQuantity,
+  onRemove,
+  onSetFolder,
+  onChangePrinting,
+  onAnyPrinting,
+  folderNameOf,
+  flattened,
+  marketplace,
+  tip,
+}: {
+  folders: readonly WishlistFolder[];
+  nodes: readonly FolderNode<WishlistFolder>[];
+  onSetQuantity: (row: WishRow, quantity: number) => void;
+  onRemove: (row: WishRow) => void;
+  onSetFolder: (row: WishRow, folderId: number | null) => void;
+  onChangePrinting: (row: WishRow) => void;
+  onAnyPrinting: (row: WishRow) => void;
+  folderNameOf: (folderId: number | null) => string | null;
+  flattened: boolean;
+  marketplace: Marketplace;
+  tip: TooltipBinder;
+}): TableColumn<WishRow>[] {
   const asOf = pricesAsOf(marketplace);
   const currency = marketplace.currency;
   return [
@@ -105,12 +131,54 @@ function columnsFor(
       // The distinction spec §6 draws in one word, said in three. Mono because a collector
       // number is data — the same rule as the grid caption and the pane.
       cellClassName: "flex items-center gap-1.5 font-mono text-xs text-dim",
+      // **The cell holds a control now, so the row's own press must not also fire.**
+      // `interactive` stamps `data-no-drag` and swallows the click and the two activation keys —
+      // without it a press on the pencil would open the card pane as well, and five pixels of
+      // travel would drag the row off into a deck. It costs this cell as a grab handle and as a
+      // place to click the card open, which is the cheapest price available: the name, Owned and
+      // Cost columns are all three still both.
+      interactive: true,
       cell: (row) => (
         <>
           <RarityGem rarity={row.rarity} />
-          <span className="truncate" {...tip(printingOf(row), { whenClipped: true })}>
+          <span className="min-w-0 truncate" {...tip(printingOf(row), { whenClipped: true })}>
             {printingOf(row)}
           </span>
+          {/* Spec §4's two marks and spec §5's editor, in the order and the place the wall's
+              caption strip draws them — this cell *is* that strip, and the whole reason the two
+              are one arrangement is that a reader who has learned one view has learned the other.
+              `wishMarks.tsx` is the one definition of the marks. */}
+          <ElsewhereMark count={row.elsewhere} />
+          {flattened && <WishFolderCaption name={folderNameOf(row.folderId)} />}
+          {/* **Spec §5: this is how the list reaches the two new writes, and it is the wall's own
+              control rather than a second design for one job.** It goes in *this* column and not
+              beside the remove button, and the reason is anchoring: `EditWishButton` opens its
+              panel at `align="start"` — pinned left, growing right — which is right on a 170px
+              tile and would put 288px of panel off the right edge of the window from a cell at the
+              end of the row, where nothing clips it and the whole app scrolls sideways instead
+              (the anchored-popup rule in `src/CLAUDE.md`). Beside the printing it grows into the
+              table.
+
+              Keyed by the wish for the wall's reason: this list is virtualised, so scrolling
+              re-binds a row to a different wish, and a panel carried across that would be pointed
+              at a card the reader never opened it on. */}
+          <EditWishButton
+            key={row.id}
+            row={row}
+            folders={folders}
+            nodes={nodes}
+            onSetQuantity={onSetQuantity}
+            onRemove={onRemove}
+            onSetFolder={onSetFolder}
+            onChangePrinting={onChangePrinting}
+            onAnyPrinting={onAnyPrinting}
+            // The wall's recipe, minus its `static`: that class exists to hang the panel off the
+            // tile's caption rather than off a 20px control, and here the cell is already the
+            // anchor. Invisible until the row is hovered or holds the caret — a list of four
+            // hundred wishes is not a list of pencils — and always in the tab order, because
+            // "visible on hover" is not a state a keyboard has.
+            className={REVEAL_ON_HOVER}
+          />
         </>
       ),
     },
@@ -234,24 +302,38 @@ function columnsFor(
 }
 
 /**
- * A row that is also the printing it wants — spec §1's third drag source.
+ * A row that is also the wish it lists, and — where there is a printing to carry — the card
+ * that printing is. Spec §1's third drag source, widened by spec §9.
  *
- * **Pinned wishes only**, which is the same rule that decides whether a row opens the card: a
- * wish with no `card_id` is for the *card*, and there is no printing to carry. A drag started
- * from one would arrive somewhere carrying an empty id, which addresses every row and no row
- * (`dnd.ts`) — so it never starts, and the row is a row.
+ * **Every row is draggable now, and only the card half is conditional.** This used to register
+ * nothing at all on a wish with no `card_id`, on the reasoning that such a wish is for the
+ * *card*, so there is no printing to hand a deck column and a drag from one would arrive
+ * carrying an empty id — which addresses every row and no row (`dnd.ts`). All of that is still
+ * true and is still why `card()` answers `null` there. What it is no longer a reason for is the
+ * row being inert: "file this one away" is a wish operation that has nothing to do with owning a
+ * printing, so such a row carries `wishDragData`'s mark alone, `readDragData` answers `null` for
+ * it and the deck's targets stay dark, and a folder card reads its own key and takes it.
+ *
+ * `wishDraggable` rather than `cardDraggable`, because the payload is two marks in one flat
+ * record on a pinned wish — see `wishDrag.ts`, which is where that composition and its reason
+ * live. The wall's tile reaches the identical record through `CardGrid`'s `dragRecord`, so a
+ * reader dragging out of the list and out of the wall is doing the same thing.
  *
  * A component rather than a callback ref in the map, because the registration has to hold
  * still: React detaches and re-runs a ref whose identity changed, and this list re-renders on
  * every scrolled row — a source that unregisters mid-drag is a drop that never arrives.
  */
 function DraggableRow({
+  wishId,
+  folderId,
   cardId,
   name,
   typeLine,
   children,
   ...rest
 }: {
+  wishId: number;
+  folderId: number | null;
   cardId: string | null;
   name: string;
   typeLine: string | null;
@@ -259,12 +341,18 @@ function DraggableRow({
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const element = ref.current;
-    if (!element || !cardId) return;
-    // The type line files the card if it is carried somewhere with no column to point at — the
-    // sidebar's Decks entry. It is the one thing `WishRow` carries that this list never draws,
-    // and it is carried for exactly this (`ipc.ts`).
-    return cardDraggable({ element, payload: () => ({ kind: "card", cardId, name, typeLine }) });
-  }, [cardId, name, typeLine]);
+    if (!element) return;
+    return wishDraggable({
+      element,
+      // `folderId` travels so a folder can refuse the wish already filed in it — the answer has
+      // to be in the payload, because the target is asked before the drop.
+      wish: () => ({ wishId, name, folderId }),
+      // The type line files the card if it is carried somewhere with no column to point at — the
+      // sidebar's Decks entry. It is the one thing `WishRow` carries that this list never draws,
+      // and it is carried for exactly this (`ipc.ts`).
+      card: () => (cardId === null ? null : { kind: "card", cardId, name, typeLine }),
+    });
+  }, [wishId, folderId, cardId, name, typeLine]);
   return (
     <div ref={ref} {...rest}>
       {children}
@@ -284,9 +372,16 @@ export function WishlistTable({
   listKey,
   sort,
   onSort,
+  folders,
+  nodes,
+  folderNameOf,
+  flattened,
   onNeedNextPage,
   onSetQuantity,
   onRemove,
+  onSetFolder,
+  onChangePrinting,
+  onAnyPrinting,
   rowMenu,
   rowMenuKey,
   marketplace,
@@ -300,9 +395,39 @@ export function WishlistTable({
   sort: SortSpec<WishlistSortKey>;
   /** One press on a column header. `additive` is Shift being held. */
   onSort: (key: string, additive: boolean) => void;
+  /** The flat folder rows and the tree built from them, both straight through to
+   *  {@link EditWishButton} — see its own doc for why it wants two shapes of one read. */
+  folders: readonly WishlistFolder[];
+  nodes: readonly FolderNode<WishlistFolder>[];
+  /**
+   * What to call the folder a wish is filed in — `Wishlist` for the root, and `null` for a folder
+   * this page cannot name, which draws nothing rather than a blank chip.
+   *
+   * The page's job rather than this component's: the page holds both the wishes and the folder
+   * list, and joining them per row here would be a lookup table rebuilt on every scrolled row.
+   */
+  folderNameOf: (folderId: number | null) => string | null;
+  /** Whether the list is showing every wish regardless of filing — spec §4's Flatten, and the
+   *  only state the folder caption is drawn in. The wall gates it on the same flag, so the two
+   *  drawings of one list cannot say different things about where a wish lives. */
+  flattened: boolean;
   onNeedNextPage: () => void;
   onSetQuantity: (row: WishRow, quantity: number) => void;
   onRemove: (row: WishRow) => void;
+  /**
+   * The three writes the panel behind a row's pencil reaches, passed straight through — the same
+   * three the wall passes, because it is the same panel.
+   *
+   * **The list draws `EditWishButton` itself rather than asking the page to open something**, and
+   * that is settled rather than incidental: `AnchoredPopup` owns its own open state, so a cell
+   * press cannot drive a panel the page holds and the page cannot open one this cell holds. The
+   * alternative — a callback up to a `Dialog` on the page — would give the list a different
+   * editing surface from the wall, which is two designs for one job and the thing spec §5 exists
+   * to avoid.
+   */
+  onSetFolder: (row: WishRow, folderId: number | null) => void;
+  onChangePrinting: (row: WishRow) => void;
+  onAnyPrinting: (row: WishRow) => void;
   /**
    * What a row offers on a right-click — a ready-made `onContextMenu` handler, or `undefined`
    * for a row that has no menu. Per row rather than for the list, because on this list it is
@@ -327,7 +452,19 @@ export function WishlistTable({
   return (
     <VirtualTable
       rows={rows}
-      columns={columnsFor(onSetQuantity, onRemove, marketplace, tip)}
+      columns={columnsFor({
+        folders,
+        nodes,
+        onSetQuantity,
+        onRemove,
+        onSetFolder,
+        onChangePrinting,
+        onAnyPrinting,
+        folderNameOf,
+        flattened,
+        marketplace,
+        tip,
+      })}
       label="Your wishlist"
       // A wishlist total is counted in full, so there is no unknown-count case here.
       total={total}
@@ -346,12 +483,18 @@ export function WishlistTable({
       // and a row that looked clickable and did nothing would be worse than one that does
       // not. `onActivate` is deliberately *not* passed to `VirtualTable`: it is all-or-
       // nothing there, and here it is per row. The row's own props are overridden below
-      // instead, which is also where the drag source is attached (pinned wishes only, for
-      // the same reason).
+      // instead.
+      //
+      // **The drag is no longer part of that split.** Both branches are a `DraggableRow` since
+      // spec §9: every wish can be filed into a folder, and only the *card* half of what a row
+      // carries is conditional — see {@link DraggableRow}. What still branches is opening the
+      // pane, the caret and the menu, all three of which genuinely need a printing.
       renderRow={(props, row) =>
         row.cardId ? (
           <DraggableRow
             {...props}
+            wishId={row.id}
+            folderId={row.folderId}
             cardId={row.cardId}
             name={row.name}
             typeLine={row.typeLine}
@@ -377,7 +520,14 @@ export function WishlistTable({
             className={cn(props.className, "cursor-pointer")}
           />
         ) : (
-          <div {...props} />
+          <DraggableRow
+            {...props}
+            wishId={row.id}
+            folderId={row.folderId}
+            cardId={null}
+            name={row.name}
+            typeLine={row.typeLine}
+          />
         )
       }
     />

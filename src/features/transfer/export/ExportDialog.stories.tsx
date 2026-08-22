@@ -229,6 +229,9 @@ function wishRow(card: ReturnType<typeof printing>, over: Partial<WishRow> = {})
     legalities: card.legalities,
     oracleId: card.oracleId,
     cardId: card.id,
+    // The root of the wishlist. Nothing an export draws reads it — a decklist has no notion of
+    // where a wish was filed — but `WishRow` answers it on every row, so a fixture has to say.
+    folderId: null,
     name: card.name,
     setCode: card.setCode,
     collectorNumber: card.collectorNumber,
@@ -241,6 +244,9 @@ function wishRow(card: ReturnType<typeof printing>, over: Partial<WishRow> = {})
     preferredFinish: null,
     unitPrice: 4.5,
     ownedQuantity: 0,
+    // No other wish for this oracle card. Same reason as `folderId` above: unread here, and
+    // required by the type.
+    elsewhere: 0,
     notes: null,
     needsReview: null,
     updatedAt: 1_786_266_000,

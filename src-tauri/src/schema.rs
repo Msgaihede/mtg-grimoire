@@ -25,16 +25,29 @@
 //!
 //! CASCADE is the common case — `deck_cards.deck_id`, `deck_cards.category_id`,
 //! `deck_allocations.deck_id`, `deck_allocations.collection_entry_id`,
-//! `deck_categories.deck_id`, `deck_audit.deck_id` and
-//! `deck_folders.parent_id` all take it, because a deleted deck's cards and reservations, a
-//! deleted category's cards, and a deleted folder's sub-folders have nowhere else to be. It
-//! is right, too, at the app's one *non-user* delete: [`crate::reconcile`]'s fold repoints
+//! `deck_categories.deck_id`, `deck_audit.deck_id`, `deck_undo.audit_id`,
+//! `deck_undo.deck_id`, `deck_folders.parent_id` and `wishlist_folders.parent_id` all take
+//! it, because a deleted deck's cards and reservations, a deleted category's cards, a
+//! reversal for a history row that is gone, and a deleted folder's sub-folders have nowhere
+//! else to be. It is right, too, at the app's one *non-user* delete:
+//! [`crate::reconcile`]'s fold repoints
 //! allocations onto the surviving entry *before* the delete runs, so the cascade fires over
 //! nothing, and `collection::remove_entry` relies on the same action to free reservations on
-//! copies that no longer exist. SET NULL is the other two — `decks.folder_id` (a folder is a
-//! filing decision, and the decks inside it are the user's work, not the folder's to take
-//! down with it) and `deck_cards.tag_id` (deleting a tag must never delete a card) — named
-//! here so this list can be checked against the DDL rather than trusted on its own.
+//! copies that no longer exist. SET NULL is the other three — `decks.folder_id` (a folder is
+//! a filing decision, and the decks inside it are the user's work, not the folder's to take
+//! down with it), `deck_cards.tag_id` (deleting a tag must never delete a card) and
+//! `wishlist_entries.folder_id` (`decks.folder_id`'s argument one list over: a wish is the
+//! reader's shopping list, so deleting the cabinet surfaces it at the root rather than
+//! throwing it away) — named here so this list can be checked against the DDL rather than
+//! trusted on its own.
+//!
+//! **The wishlist's pair (schema v23) is the deck gallery's pair verbatim**, and the symmetry
+//! is the decision rather than a coincidence: `wishlist_folders.parent_id` is
+//! `deck_folders.parent_id` and `wishlist_entries.folder_id` is `decks.folder_id`, because
+//! "folders nest, and the things filed in them outlive the filing" is a rule this schema has
+//! now made twice. Both halves of a new filing cabinet belong on both lists above, one on
+//! each — a rung that adds one and forgets the other is what these two paragraphs exist to
+//! catch, since a prose-only edit routes to neither CI job and nothing here can go red.
 //!
 //! **`deck_tags` left the CASCADE list at v21** and has no key of its own at all: a tag belongs
 //! to no deck, so deleting the deck a label was first typed in must not take it off the others
@@ -223,7 +236,7 @@ fn json_raw(col: &str) -> String {
 /// wrote *head* would commit "fully migrated" before the steps after it had run — and
 /// would keep the version assertion passing while doing it. This constant is the thing
 /// tests compare against, not the thing steps write.
-pub const SCHEMA_VERSION: i64 = 22;
+pub const SCHEMA_VERSION: i64 = 23;
 
 /// What makes two collection rows the *same* row, as one SQL fragment.
 ///
@@ -249,11 +262,27 @@ pub const SCHEMA_VERSION: i64 = 22;
 pub const COLLECTION_GRAIN: &str = "card_id, finish, condition, lang, altered, signed, proxy, \
      misprint, coalesce(serial_number, ''), coalesce(grading, '')";
 
-/// The wishlist's grain: an oracle card, optionally pinned to one printing and one finish.
-/// `card_id IS NULL` means "any printing" (spec §6), which is a different wish from a
-/// specific one rather than a looser version of it.
-pub const WISHLIST_GRAIN: &str =
-    "coalesce(oracle_id, ''), coalesce(card_id, ''), coalesce(preferred_finish, '')";
+/// The wishlist's grain: an oracle card, optionally pinned to one printing and one finish,
+/// **in one folder**. `card_id IS NULL` means "any printing" (spec §6), which is a different
+/// wish from a specific one rather than a looser version of it.
+///
+/// # The fourth term is what makes "Add to" an *add*
+///
+/// `folder_id` joined the grain at schema v23. Without it, adding a card the reader already
+/// wishes for into a folder would land on the row they already had and simply raise its
+/// quantity — the wish would appear to *move*, from wherever it was filed into the folder
+/// they were pointing at, and a filing decision they made last week would be undone by an
+/// add they made today. With it, the same card in two places is two wishes, and moving one
+/// between folders is a separate and explicit act (`wishlist_set_folder`) rather than a side
+/// effect of shopping.
+///
+/// `coalesce(folder_id, 0)` is safe — it can never collide with a real folder — because
+/// `wishlist_folders.id` is `INTEGER PRIMARY KEY`, which SQLite never assigns 0. It is a
+/// `coalesce` for [`COLLECTION_GRAIN`]'s reason: NULL is the root, the root is where most
+/// wishes live, and NULLs in a UNIQUE index are *distinct*, so an un-coalesced term would
+/// stop enforcing anything for exactly the rows that need it most.
+pub const WISHLIST_GRAIN: &str = "coalesce(oracle_id, ''), coalesce(card_id, ''), \
+     coalesce(preferred_finish, ''), coalesce(folder_id, 0)";
 
 /// The five rules roles a deck category can carry, spec §6 verbatim — the same five words
 /// `deck_cards.zone` held before schema v8 replaced the zone with a category the user owns.
@@ -2132,6 +2161,109 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         //
         // Literal `22`, for the reason every step before it writes its own.
         tx.execute_batch("PRAGMA user_version = 22;")?;
+        tx.commit()?;
+    }
+    if v < 23 {
+        let tx = conn.unchecked_transaction()?;
+        // **The wishlist gets the deck gallery's filing cabinet.** Issue #165: a reader wants
+        // to set cards aside without taking them off the list — expensive ones to buy later,
+        // ones already ordered but not yet in hand, ones they are unsure about — and the
+        // answer is folders over the shopping list rather than a status column, because a
+        // status is a word the app would have to choose and a folder is a name the reader
+        // chooses.
+        //
+        // It nests for [`deck_folders`]' reason and not for its own: the tree arithmetic, the
+        // cycle refusal and the two cascade rules are already written and already tested one
+        // table over, so nesting costs less here than writing a flat version would.
+        //
+        // **The two `ON DELETE` actions say what a folder is.** `parent_id` is CASCADE — a
+        // folder inside a deleted folder has nowhere else to be, and it cascades onto its own
+        // table so the whole sub-tree goes in one press. `wishlist_entries.folder_id` is SET
+        // NULL — a folder is a *filing decision* and a wish is the reader's shopping list, so
+        // deleting the cabinet must not throw away what was in it. The wishes surface at the
+        // root, which is where they were before anybody filed them. That is `decks.folder_id`
+        // exactly, and it is the second of the only two SET NULLs the deck side has.
+        //
+        // **`idx_wishlist_grain` is rebuilt rather than added to, because SQLite has no
+        // `ALTER INDEX`.** An index is its definition; widening one is `DROP` then `CREATE`,
+        // and the `DROP` has to come first or the `CREATE` is a silent no-op on exactly the
+        // machines that already have the narrow index — the rule [`CARDS_INDEXES`]' own note
+        // states. The `IF EXISTS` is for the one database that has neither: a v4-era install
+        // built the index with `IF NOT EXISTS`, so it is there on every real machine, but a
+        // rewind fixture may have taken it away and a step that died on its absence would be
+        // a step no fixture could re-enter.
+        //
+        // The DDL below is **spelled out literally and never interpolated from
+        // [`WISHLIST_GRAIN`]**, for the reason [`CARDS_COLUMNS`] is frozen and the v4 and v8
+        // steps repeat: a migration step is history. A step that read the constant would
+        // silently rewrite what a *fresh* install creates the next time the grain moves, while
+        // every already-upgraded database kept the old shape — and the two would then disagree
+        // about what makes two wishes the same wish, with no error anywhere.
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS wishlist_folders (
+                id INTEGER PRIMARY KEY,
+                -- User↔user, CASCADE: deleting a folder deletes the folders inside it. The
+                -- WISHES inside it are NOT deleted — see `wishlist_entries.folder_id` below,
+                -- which is SET NULL. A folder is a filing decision; a wish is the reader's
+                -- shopping list.
+                parent_id INTEGER REFERENCES wishlist_folders(id) ON DELETE CASCADE,
+                name TEXT NOT NULL,
+                sort_order INTEGER NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS idx_wishlist_folders_parent
+                ON wishlist_folders (parent_id);",
+        )?;
+        // **The column is probed for rather than guarded, because `ADD COLUMN` has no
+        // `IF NOT EXISTS`.** SQLite offers that clause on `CREATE TABLE` and `CREATE INDEX`
+        // and on neither half of `ALTER TABLE`, so the only way to make this statement
+        // re-enterable is to ask the catalog first — `pragma_table_info` answers one row per
+        // column and none for a column that is not there.
+        //
+        // It has to be re-enterable because [`UNDO_V23`] leaves `folder_id` standing, and that
+        // is a **choice** rather than something SQLite forbids: it is true that `DROP COLUMN`
+        // refuses a column any index names, and two name this one, but dropping
+        // `idx_wishlist_grain` and `idx_wishlist_folder` first makes the `DROP COLUMN` succeed
+        // (measured 2026-08-22). What the rewind will not do is the statement after that —
+        // putting the three-term index back means building a *narrow* unique index over rows
+        // written on the wide grain, which is a constraint failure on exactly the fixture that
+        // has something interesting in the table. So every rewound fixture beneath head
+        // re-enters this step carrying the column, and a blind `ALTER` would answer `duplicate
+        // column name` — a failure no real upgrade can produce, which is the definition of a
+        // fixture lying about what it is testing.
+        // [`migrating_a_v22_wishlist_files_every_existing_wish_at_the_root`] pays the full
+        // rewind by hand instead, because the probe skipping the `ALTER` is not the upgrade.
+        let has_folder: bool = tx.query_row(
+            "SELECT count(*) FROM pragma_table_info('wishlist_entries') WHERE name = 'folder_id'",
+            [],
+            |r| r.get::<_, i64>(0),
+        )? > 0;
+        if !has_folder {
+            tx.execute_batch(
+                "ALTER TABLE wishlist_entries ADD COLUMN folder_id INTEGER
+                    REFERENCES wishlist_folders(id) ON DELETE SET NULL;",
+            )?;
+        }
+        tx.execute_batch(
+            "DROP INDEX IF EXISTS idx_wishlist_grain;
+             CREATE UNIQUE INDEX idx_wishlist_grain
+                ON wishlist_entries (coalesce(oracle_id, ''), coalesce(card_id, ''),
+                                     coalesce(preferred_finish, ''), coalesce(folder_id, 0));
+             CREATE INDEX IF NOT EXISTS idx_wishlist_folder ON wishlist_entries (folder_id);",
+        )?;
+        // **No backfill, and the absence is the design.** `folder_id` arrives NULL on every
+        // existing row, NULL is the root, and the root is the list the reader already sees,
+        // so an upgrade is invisible until they make their first folder. This is the one
+        // shape of `ALTER TABLE … ADD COLUMN` that owes no fence and no backfill under the
+        // rule v22 was paid for: the unset value is not a lie a `DEFAULT` is telling, it is
+        // the answer.
+        //
+        // Nothing here is FTS-indexed and no `cards` rowid moves, so no rebuild is owed — the
+        // reasoning `the_v2_backfill_leaves_the_search_index_answering` pins.
+        //
+        // Literal `23`, for the reason every step before it writes its own.
+        tx.execute_batch("PRAGMA user_version = 23;")?;
         tx.commit()?;
     }
 
@@ -4593,6 +4725,39 @@ pub(crate) mod tests {
                 sort_order INTEGER NOT NULL
              );
 
+             -- v4's own table, here for exactly the reason `format_specs` above is, and it
+             -- cost the same lesson: a real v6 database went through v4 and has a wishlist,
+             -- `migrate` reads `user_version` once and skips every step below v7, and **a
+             -- step above this rung now writes to it** — v23 adds `folder_id` and rebuilds
+             -- the grain index. Without this the fixture is a pre-v4 database wearing a v6
+             -- label, and it reaches head with `no such table: wishlist_entries`, which no
+             -- real upgrade can produce. The DDL and the three indexes are literals because
+             -- this fixture describes history: the grain here is v4's three terms, and the
+             -- fourth is v23's to add.
+             CREATE TABLE wishlist_entries (
+                id INTEGER PRIMARY KEY,
+                oracle_id TEXT,
+                card_id TEXT,
+                set_code TEXT,
+                collector_number TEXT,
+                lang TEXT,
+                name TEXT NOT NULL,
+                quantity INTEGER NOT NULL DEFAULT 1 CHECK (quantity > 0),
+                preferred_finish TEXT
+                    CHECK (preferred_finish IS NULL
+                           OR preferred_finish IN ('nonfoil','foil','etched')),
+                notes TEXT,
+                needs_review TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL,
+                CHECK (oracle_id IS NOT NULL OR card_id IS NOT NULL)
+             );
+             CREATE UNIQUE INDEX idx_wishlist_grain
+                ON wishlist_entries (coalesce(oracle_id, ''), coalesce(card_id, ''),
+                                     coalesce(preferred_finish, ''));
+             CREATE INDEX idx_wishlist_card ON wishlist_entries (card_id);
+             CREATE INDEX idx_wishlist_oracle ON wishlist_entries (oracle_id);
+
              PRAGMA user_version = 6;",
         )
         .unwrap();
@@ -5370,6 +5535,37 @@ pub(crate) mod tests {
          );
          CREATE UNIQUE INDEX idx_deck_tags_grain ON deck_tags (deck_id, name);";
 
+    /// And v23's wishlist folders. **There is no `UNDO_V22`** — see [`v21_database`] for why
+    /// that rung is the one on this ladder that owes no rewind — so this one lands beside
+    /// [`UNDO_V21`] and every chain below spells the two of them together.
+    ///
+    /// Owed for [`UNDO_V14`]'s **quieter** reason rather than [`UNDO_V13`]'s. Every statement
+    /// v23 writes is idempotent by construction — `CREATE TABLE IF NOT EXISTS`, a
+    /// `DROP INDEX IF EXISTS` before its `CREATE`, and an `ALTER TABLE … ADD COLUMN` the step
+    /// probes `pragma_table_info` for rather than issuing blind — so a fixture that forgot
+    /// this one would migrate perfectly happily and simply not be the version it claims: a
+    /// "v11 database" carrying a table and a column that did not exist until v23.
+    ///
+    /// **It is deliberately not a full rewind, and "deliberately" is the word that matters
+    /// here.** `wishlist_entries.folder_id` stays, and not because SQLite will not take it
+    /// back: it does refuse `DROP COLUMN` on a column an index names, and two name this one,
+    /// but dropping `idx_wishlist_grain` and `idx_wishlist_folder` first makes the
+    /// `DROP COLUMN` succeed — measured 2026-08-22, and
+    /// [`migrating_a_v22_wishlist_files_every_existing_wish_at_the_root`] now runs exactly that
+    /// sequence. The reason is the statement after it: putting the three-term index back means
+    /// rebuilding a *unique* index over a narrower grain than the rows beneath it were written
+    /// on, which the moment two of them differ only by folder is a constraint failure inside
+    /// somebody else's fixture. A rewind is a helper for the fixtures below it and may not
+    /// carry that. So they carry the column instead, and the v23 step's probe finds it and
+    /// skips the `ALTER`.
+    ///
+    /// `idx_wishlist_grain` needs no line of its own: v23's own `DROP INDEX IF EXISTS` is what
+    /// widens it, and it runs again over whatever the rewind left. `idx_wishlist_folder` does,
+    /// for [`UNDO_V20`]'s rule about which index needs one — `wishlist_entries` survives this
+    /// rewind, so an index over it that nothing drops would outlive the version that made it.
+    const UNDO_V23: &str = "DROP TABLE IF EXISTS wishlist_folders;
+         DROP INDEX IF EXISTS idx_wishlist_folder;";
+
     /// A database that stopped at version 9 — the version below the step that *widens*
     /// `idx_cards_collapse`, which is the property this fixture exists for.
     ///
@@ -5416,7 +5612,7 @@ pub(crate) mod tests {
              ALTER TABLE cards DROP COLUMN legal_mask;
              CREATE INDEX idx_cards_collapse
                  ON cards(oracle_id, is_paper, released_at, id, name, price_usd);
-             {UNDO_V21} {UNDO_V20}
+             {UNDO_V23} {UNDO_V21} {UNDO_V20}
              {UNDO_V12}
              {UNDO_V13}
              {UNDO_V14}
@@ -5617,7 +5813,7 @@ pub(crate) mod tests {
         conn.execute_batch(&format!(
             "DROP TABLE marketplace_prices;
              DROP TABLE marketplace_feed_meta;
-             {UNDO_V21} {UNDO_V20}
+             {UNDO_V23} {UNDO_V21} {UNDO_V20}
              {UNDO_V12}
              {UNDO_V13}
              {UNDO_V14}
@@ -5645,7 +5841,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V21} {UNDO_V20} {UNDO_V12} {UNDO_V13} {UNDO_V14} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} \
+            "{UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V12} {UNDO_V13} {UNDO_V14} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} \
              {UNDO_V19} PRAGMA user_version = 11;"
         ))
         .unwrap();
@@ -5719,7 +5915,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V21} {UNDO_V20} {UNDO_V13} {UNDO_V14} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} \
+            "{UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V13} {UNDO_V14} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} \
              {UNDO_V19} PRAGMA user_version = 12;"
         ))
         .unwrap();
@@ -6033,7 +6229,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V21} {UNDO_V20} {UNDO_V14} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 13;"
+            "{UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V14} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 13;"
         ))
         .unwrap();
         conn
@@ -6331,7 +6527,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V21} {UNDO_V20} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 14;"
+            "{UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 14;"
         ))
         .unwrap();
         conn
@@ -6506,7 +6702,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V21} {UNDO_V20} {UNDO_V16} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 15;"
+            "{UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V16} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 15;"
         ))
         .unwrap();
         conn
@@ -6529,7 +6725,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 16;"
+            "{UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 16;"
         ))
         .unwrap();
         conn
@@ -6633,8 +6829,10 @@ pub(crate) mod tests {
     fn v19_database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
-        conn.execute_batch(&format!("{UNDO_V21} {UNDO_V20} PRAGMA user_version = 19;"))
-            .unwrap();
+        conn.execute_batch(&format!(
+            "{UNDO_V23} {UNDO_V21} {UNDO_V20} PRAGMA user_version = 19;"
+        ))
+        .unwrap();
         conn
     }
 
@@ -6648,7 +6846,7 @@ pub(crate) mod tests {
     fn v20_database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
-        conn.execute_batch(&format!("{UNDO_V21} PRAGMA user_version = 20;"))
+        conn.execute_batch(&format!("{UNDO_V23} {UNDO_V21} PRAGMA user_version = 20;"))
             .unwrap();
         conn
     }
@@ -7174,24 +7372,28 @@ pub(crate) mod tests {
     // ---- v22: the normalised slug, recomputed rather than waited for ------------------
     /// A database at version 21: everything v21 left behind, and none of v22.
     ///
-    /// **The first fixture on this ladder with no rewind to perform, and there is no
-    /// `UNDO_V22` for the same reason.** Every undo above exists because its rung wrote
-    /// *shape* — a column a fixture would hit `duplicate column name` on, a table whose
+    /// **The rung above it is the one on this ladder with no rewind to perform, and there is
+    /// no `UNDO_V22` for the same reason.** Every undo exists because its rung wrote *shape*
+    /// — a column a fixture would hit `duplicate column name` on, a table whose
     /// `IF NOT EXISTS` would leave a fixture claiming a version it is not. v22 writes none: it
     /// repairs the contents of one column, so a v21 database and a v22 one are the same
     /// schema and differ only in what `oracle_tags.slug_norm` holds. Renumbering is therefore
-    /// the honest whole of the rewind, and what a test seeds afterwards is the rung's real
-    /// input.
+    /// the honest whole of *that* step's rewind — which is what [`v22_database`] is — and what
+    /// a test seeds afterwards is the rung's real input.
+    ///
+    /// [`UNDO_V23`] is here because v23 sits above both of them and does write shape. It was
+    /// the arrival of that rung which turned this from a fixture with no rewind at all into
+    /// one with a rewind that skips exactly one number.
     ///
     /// This is also why it is not on
-    /// [`every_version_ends_with_the_same_schema_as_a_fresh_install`]'s list: that test asks
-    /// whether every route arrives at one *schema*, and this route cannot answer anything
-    /// else. [`the_head_minus_one_fixture_really_sits_one_step_below_head`] is where it earns
-    /// its keep.
+    /// [`every_version_ends_with_the_same_schema_as_a_fresh_install`]'s list: that test
+    /// compares `cards`, `decks` and `deck_categories`, and neither the rung this fixture sits
+    /// under nor the one above it touches any of the three.
     fn v21_database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
-        conn.execute_batch("PRAGMA user_version = 21;").unwrap();
+        conn.execute_batch(&format!("{UNDO_V23} PRAGMA user_version = 21;"))
+            .unwrap();
         conn
     }
 
@@ -7358,6 +7560,257 @@ pub(crate) mod tests {
         );
     }
 
+    // ---- v23: the wishlist's folders --------------------------------------------------
+
+    /// A database at version 22: everything v22 left behind, and none of v23.
+    ///
+    /// **It is [`v21_database`] wearing the next number, and that is the honest construction
+    /// rather than a shortcut** — the argument that fixture's own doc makes. v22 writes no
+    /// shape at all; it recomputes `oracle_tags.slug_norm`, and an in-memory database that has
+    /// never ingested a taxonomy has no row for it to recompute. So the two versions are the
+    /// same database here, and renumbering is the whole of the difference. The v23 rewind
+    /// [`v21_database`] already applies is what makes both of them lack this rung.
+    fn v22_database() -> Connection {
+        let conn = v21_database();
+        conn.execute_batch("PRAGMA user_version = 22;").unwrap();
+        conn
+    }
+
+    /// [`v22_database`] must really sit one step below head, or the tests below it are a fresh
+    /// install compared against itself. The next step added to the ladder renumbers this
+    /// fixture, and `SCHEMA_VERSION - 1` is the line that says so.
+    ///
+    /// **The fixture named here has changed nine times** — v14's, then v15's, v16's, v17's,
+    /// v18's, v19's, v20's, v21's, now v22's — and each move was this assertion going red, which
+    /// is the whole reason it is written against `SCHEMA_VERSION - 1` rather than a number.
+    ///
+    /// **The second half is back to the question it asked before v22.** That rung wrote no
+    /// shape, so for one release this test could only prove that a backfill ran; v23 writes a
+    /// table and a column again, so what head-minus-one has to lack is a *thing* — and
+    /// `wishlist_folders` is it. The column cannot be asked about here for [`UNDO_V23`]'s
+    /// reason: SQLite will not drop it, so the fixture carries it either way.
+    #[test]
+    fn the_head_minus_one_fixture_really_sits_one_step_below_head() {
+        let conn = v22_database();
+
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION - 1, "one step below head");
+        let folders: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE name = 'wishlist_folders'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(folders, 0, "the v23 table must not be there yet");
+
+        migrate(&conn).unwrap();
+
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        let folders: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE name = 'wishlist_folders'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(folders, 1, "and the v23 step must not have been skipped");
+    }
+
+    /// The rung's own shape, in one pass: the table exists, it nests, and a wish written the
+    /// way every writer in the crate writes one lands at the **root**.
+    ///
+    /// `folder_id` is nullable with no default on purpose — the root is the absence of a
+    /// filing decision rather than a folder called "root", so nothing has to be created before
+    /// the list works and a reader who never makes a folder sees the list they see today.
+    #[test]
+    fn migrate_creates_the_wishlist_folders_and_files_wishes_at_the_root() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        // The table exists and nests.
+        conn.execute_batch(
+            "INSERT INTO wishlist_folders (id, parent_id, name, sort_order, created_at, updated_at)
+             VALUES (1, NULL, 'Expensive', 0, 0, 0), (2, 1, 'Someday', 0, 0, 0);",
+        )
+        .unwrap();
+        // A wish lands at the root with no folder named.
+        conn.execute(
+            "INSERT INTO wishlist_entries (oracle_id, name, quantity, created_at, updated_at)
+             VALUES ('o1', 'Bolt', 1, 0, 0)",
+            [],
+        )
+        .unwrap();
+        let filed: Option<i64> = conn
+            .query_row("SELECT folder_id FROM wishlist_entries", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(filed, None, "a wish with no folder named is at the root");
+    }
+
+    /// **The fourth term of [`WISHLIST_GRAIN`], which is the load-bearing decision of this
+    /// rung.** The same oracle card, in two places, is two wishes — which is what makes
+    /// "Add to <folder>" always *add* rather than silently move the row the reader already had.
+    ///
+    /// Both halves are asserted, because only the pair says what the grain is: widening it has
+    /// to separate the folders **and** keep biting inside one. A grain that had simply lost
+    /// its teeth would pass the first assertion on its own.
+    #[test]
+    fn the_wishlist_grain_separates_two_folders() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO wishlist_folders (id, parent_id, name, sort_order, created_at, updated_at)
+             VALUES (1, NULL, 'Ordered', 0, 0, 0);",
+        )
+        .unwrap();
+        // The same oracle card, same (absent) printing, same (absent) finish -- twice, in two
+        // places. This is what makes "Add to" always add a new wish.
+        for folder in [None, Some(1i64)] {
+            conn.execute(
+                "INSERT INTO wishlist_entries
+                    (oracle_id, name, quantity, folder_id, created_at, updated_at)
+                 VALUES ('o1', 'Bolt', 1, ?1, 0, 0)",
+                rusqlite::params![folder],
+            )
+            .unwrap();
+        }
+        let rows: i64 = conn
+            .query_row("SELECT count(*) FROM wishlist_entries", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rows, 2);
+        // And the grain still bites *within* one folder.
+        let again = conn.execute(
+            "INSERT INTO wishlist_entries
+                (oracle_id, name, quantity, folder_id, created_at, updated_at)
+             VALUES ('o1', 'Bolt', 1, 1, 0, 0)",
+            [],
+        );
+        assert!(
+            again.is_err(),
+            "two identical wishes in one folder are one wish"
+        );
+    }
+
+    /// The two `ON DELETE` actions, driven rather than read off the DDL: `parent_id` CASCADEs
+    /// and `folder_id` SET NULLs, in the one press where both fire at once.
+    ///
+    /// `PRAGMA foreign_keys = ON` is set explicitly because SQLite defaults it **off** and the
+    /// actions are inert without it — this test would pass vacuously, asserting nothing about
+    /// either. [`crate::db::open`] always sets it, so the pragma here is the real launch's
+    /// behaviour rather than a test convenience.
+    #[test]
+    fn deleting_a_wishlist_folder_keeps_its_wishes_and_cascades_its_subfolders() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        conn.execute_batch(
+            "PRAGMA foreign_keys = ON;
+             INSERT INTO wishlist_folders (id, parent_id, name, sort_order, created_at, updated_at)
+             VALUES (1, NULL, 'Expensive', 0, 0, 0), (2, 1, 'Someday', 0, 0, 0);
+             INSERT INTO wishlist_entries
+                (oracle_id, name, quantity, folder_id, created_at, updated_at)
+             VALUES ('o1', 'Bolt', 1, 2, 0, 0);",
+        )
+        .unwrap();
+        conn.execute("DELETE FROM wishlist_folders WHERE id = 1", [])
+            .unwrap();
+        let folders: i64 = conn
+            .query_row("SELECT count(*) FROM wishlist_folders", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(folders, 0, "the sub-folder cascades with its parent");
+        let filed: Option<i64> = conn
+            .query_row("SELECT folder_id FROM wishlist_entries", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(filed, None, "the wish survives, un-filed");
+    }
+
+    /// The upgrade itself: a database that already has a shopping list gets folders without
+    /// losing a wish, and every wish it was carrying surfaces at the root.
+    ///
+    /// **The rewind here is a full one, spelled out on top of [`UNDO_V23`], and that is the
+    /// point of the test rather than housekeeping.** That constant stops short of the column
+    /// for the fixtures that share it (see its doc); leaning on it here would re-enter the v23
+    /// step with the *four-term* index already in place and the column already there, so the
+    /// probe would skip the `ALTER`, the `DROP INDEX`/`CREATE UNIQUE INDEX` pair would rebuild
+    /// an index identical to the one it replaced, and nothing in the suite would ever watch the
+    /// widening run over a genuinely three-term index with rows underneath it — which is the
+    /// only shape a real v22 database has.
+    ///
+    /// So both indexes that name `folder_id` go, then the column, then the three-term index
+    /// comes back: `DROP COLUMN`'s restriction is about indexes and nothing else here, and with
+    /// them gone SQLite takes it (measured 2026-08-22). What re-enters `migrate` is then a
+    /// database that has never heard of folders, holding a wish.
+    ///
+    /// The re-entry this used to be is not lost with it: **every fixture beneath head runs the
+    /// step over a column that is already there**, because they all spell [`UNDO_V23`] and then
+    /// walk to head, so a blind `ALTER TABLE … ADD COLUMN` would answer `duplicate column name`
+    /// in a dozen tests at once. The probe is the one half of this rung that cannot go
+    /// unwatched.
+    ///
+    /// **The upgrade is safe for a reason worth writing down, because a widening unique index
+    /// over existing rows is exactly the sort of step that fails in the field and nowhere
+    /// else**: `ADD COLUMN` supplies no default, so `folder_id` is NULL on every row and
+    /// `coalesce(folder_id, 0)` is the constant 0 across the whole table. The new key is the
+    /// old key plus a constant, which makes the widened index strictly more permissive than the
+    /// one it replaces — two rows that clash on four terms clashed on three, and the three-term
+    /// index would already have refused them.
+    #[test]
+    fn migrating_a_v22_wishlist_files_every_existing_wish_at_the_root() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO wishlist_entries (oracle_id, name, quantity, created_at, updated_at)
+             VALUES ('o1', 'Bolt', 3, 0, 0)",
+            [],
+        )
+        .unwrap();
+        // Rewind to 22, in full. `UNDO_V23` takes the folder table and `idx_wishlist_folder`;
+        // the grain index has to go before the column it names, and the three-term definition
+        // that replaces it is a literal for `v9_database`'s reason -- this is a description of
+        // history, and history does not change when `WISHLIST_GRAIN` does.
+        conn.execute_batch(&format!(
+            "{UNDO_V23}
+             DROP INDEX IF EXISTS idx_wishlist_grain;
+             ALTER TABLE wishlist_entries DROP COLUMN folder_id;
+             CREATE UNIQUE INDEX idx_wishlist_grain
+                ON wishlist_entries (coalesce(oracle_id, ''), coalesce(card_id, ''),
+                                     coalesce(preferred_finish, ''));
+             PRAGMA user_version = 22;"
+        ))
+        .unwrap();
+        assert_eq!(
+            has_column(&conn, "wishlist_entries", "folder_id"),
+            0,
+            "the fixture is a real v22 database, not head wearing a v22 label"
+        );
+
+        migrate(&conn).unwrap();
+
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        let (qty, filed): (i64, Option<i64>) = conn
+            .query_row(
+                "SELECT quantity, folder_id FROM wishlist_entries",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (qty, filed),
+            (3, None),
+            "the wish survives the rung, at the root"
+        );
+    }
+
     // ---- v19: a deck card names a finish ---------------------------------------------
 
     /// A database at version 18: everything v18 left behind, and none of v19.
@@ -7371,7 +7824,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V21} {UNDO_V20} {UNDO_V19} PRAGMA user_version = 18;"
+            "{UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V19} PRAGMA user_version = 18;"
         ))
         .unwrap();
         conn
@@ -7438,22 +7891,12 @@ pub(crate) mod tests {
         assert_eq!(version, SCHEMA_VERSION);
     }
 
-    /// [`v21_database`] must really sit one step below head, or the tests below it are a fresh
-    /// install compared against itself. The next step added to the ladder renumbers this
-    /// fixture, and `SCHEMA_VERSION - 1` is the line that says so.
-    ///
-    /// **The fixture named here has changed eight times** — v14's, then v15's, v16's, v17's,
-    /// v18's, v19's, v20's, now v21's — and each move was this assertion going red, which is the
-    /// whole reason it is written against `SCHEMA_VERSION - 1` rather than a number.
-    ///
-    /// **The second half asks a different question than it used to, because v22 is the first
-    /// rung that writes no shape.** Every version of this test until now proved the fixture
-    /// lacked head's *column*; there is no column to lack, so what it proves instead is that
-    /// the rung's input survives the renumbering and its output does not — a `slug_norm` this
-    /// fixture leaves blank and `migrate` fills. A fixture renumbered to 21 that had somehow
-    /// already been backfilled would pass the version line and prove nothing at all.
+    /// [`v21_database`] carried this assertion while v22 was head, and it keeps the half of it
+    /// that is about *that* rung: a database renumbered to 21 still gets the `slug_norm`
+    /// repair, so the fixture's input survives the renumbering and its output does not. A
+    /// fixture that had somehow already been backfilled would prove nothing at all.
     #[test]
-    fn the_head_minus_one_fixture_really_sits_one_step_below_head() {
+    fn the_v21_fixture_still_receives_the_v22_backfill() {
         let conn = v21_database();
         // v20's `DEFAULT ''`, which is what every carried-over row of a real upgrade holds.
         conn.execute_batch(
@@ -7465,7 +7908,7 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, SCHEMA_VERSION - 1, "one step below head");
+        assert_eq!(version, 21);
 
         migrate(&conn).unwrap();
 
@@ -7532,7 +7975,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V21} {UNDO_V20} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 17;"
+            "{UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 17;"
         ))
         .unwrap();
         conn
@@ -7766,14 +8209,14 @@ pub(crate) mod tests {
     /// the first found this assertion already reading a higher number and had to choose the next
     /// rung rather than discover the clash in the field.
     #[test]
-    fn the_schema_version_is_twenty_two() {
+    fn the_schema_version_is_twenty_three() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         let v: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 22);
+        assert_eq!(SCHEMA_VERSION, 23);
     }
 
     /// The v19 grain widens rather than the row changing meaning: a foil copy and a regular

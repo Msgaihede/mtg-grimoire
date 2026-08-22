@@ -35,8 +35,8 @@ describe("buildFolderTree", () => {
       [deck(1), deck(2), deck(2), deck(null)],
     );
 
-    expect(tree[0].deckCount).toBe(3);
-    expect(tree[0].children[0].deckCount).toBe(2);
+    expect(tree[0].count).toBe(3);
+    expect(tree[0].children[0].count).toBe(2);
   });
 
   /** Archived decks are behind their own disclosure with their own count. A row saying 5 over
@@ -44,7 +44,7 @@ describe("buildFolderTree", () => {
   it("leaves archived decks out of the counts", () => {
     const tree = buildFolderTree([folder(1, null, "Commander")], [deck(1), deck(1, true)]);
 
-    expect(tree[0].deckCount).toBe(1);
+    expect(tree[0].count).toBe(1);
   });
 
   it("orders siblings by sortOrder, then by name", () => {
@@ -65,7 +65,7 @@ describe("buildFolderTree", () => {
     const tree = buildFolderTree([folder(2, 99, "Legends")], [deck(2)]);
 
     expect(tree.map((n) => n.folder.name)).toEqual(["Legends"]);
-    expect(tree[0].deckCount).toBe(1);
+    expect(tree[0].count).toBe(1);
   });
 
   /**
@@ -85,7 +85,7 @@ describe("buildFolderTree", () => {
   it("counts nothing for a deck filed in a folder that is not there", () => {
     const tree = buildFolderTree([folder(1, null, "Commander")], [deck(99)]);
 
-    expect(tree[0].deckCount).toBe(0);
+    expect(tree[0].count).toBe(0);
   });
 });
 

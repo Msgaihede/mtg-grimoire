@@ -17,6 +17,7 @@
  */
 import { useCallback, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useWishlistFolderList } from "@/features/wishlist/useWishlistFolders";
 import type { Finish } from "@/lib/finish";
 import { ipc, ipcError } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
@@ -59,6 +60,26 @@ export function useCardMenuDeps(): CardMenuWiring {
   const openAllPrintings = useAppStore((s) => s.openAllPrintings);
   const { deckDriven } = useDeckDrivenCollection();
 
+  /**
+   * The wishlist's folders, so "Add to → Wishlist" can offer them.
+   *
+   * **One query per page mount, not one per right-click, and that is the whole reason the row
+   * is a plain `submenu`.** The deck picker is `lazy` because `useDecks()` and
+   * `useDeckFolders()` are two queries a right-click on a wall of forty tiles must not fire;
+   * this is one command the host already ran, cached under `["wishlist", "folders"]` and shared
+   * with whatever else on the page wants it — so there is nothing for a right-click to reach.
+   *
+   * **`useWishlistFolderList` and not `useWishlistFolders`, which is the difference between one
+   * command and two.** The full hook also runs `wishlist_folder_summary` — a `GROUP BY` over
+   * every wish, with the owned-copies subquery and a marketplace price expression in it — for
+   * the counts and subtotals a folder *card* draws. This object is built on five surfaces that
+   * draw no folder cards at all (the search views, the collection, the tags page, the deck
+   * editor, the card pane), so taking the whole hook would compute that on every one of their
+   * mounts and throw it away. The four folder writes are left behind for the same reason: a
+   * menu that could rename a folder would be a second surface deciding what a folder is.
+   */
+  const { folders: wishlistFolders } = useWishlistFolderList();
+
   /** The sentence a refused collection or wishlist add left behind. */
   const [refusal, setRefusal] = useState<string | null>(null);
 
@@ -99,13 +120,17 @@ export function useCardMenuDeps(): CardMenuWiring {
    * row draws `wishlisted`.
    */
   const wishlistAdd = useMutation({
-    mutationFn: (target: CardMenuTarget) =>
+    mutationFn: ({ target, folderId }: { target: CardMenuTarget; folderId: number | null }) =>
       ipc.wishlistAdd({
         cardId: target.cardId,
         quantity: 1,
         // The surface's own where it names one — a wish for the foil is a different wish, and
         // is not filled by the nonfoil. Absent is no preference, which is not nonfoil.
         preferredFinish: target.finish,
+        // Where the reader pointed, and `null` for the root — never omitted. The field is part
+        // of the row's storage grain, so a folder the caller failed to pass is not a wish filed
+        // in the wrong drawer but a *second* wish for the same card.
+        folderId,
       }),
     // Superseded on the next add, exactly as the collection's is, and clearing the same one.
     onMutate: () => setRefusal(null),
@@ -131,13 +156,21 @@ export function useCardMenuDeps(): CardMenuWiring {
     },
     [addCopy, deckDriven],
   );
-  const addToWishlist = useCallback((target: CardMenuTarget) => addWish(target), [addWish]);
+  const addToWishlist = useCallback(
+    (target: CardMenuTarget, folderId: number | null) => addWish({ target, folderId }),
+    [addWish],
+  );
 
   const deps = useMemo<CardMenuDeps>(
     () => ({
       marketplace,
       addToCollection,
       addToWishlist,
+      // Straight through, and the array's *identity* is what matters here: `useWishlistFolders`
+      // answers one stable empty array while nothing is filed and React Query's own cached array
+      // once something is, so this memo holds still across a render of a wall of forty tiles for
+      // the same reason the two callbacks above do.
+      wishlistFolders,
       // **No `printingsDeck` and no `printingsOracleId`, and both absences are the point.** This
       // is the object every *plain* card surface takes — the search walls, the collection, the
       // wishlist, the card pane — and not one of them is a row of an open deck or a list of one
@@ -156,7 +189,7 @@ export function useCardMenuDeps(): CardMenuWiring {
       // is the one place this greys the row; a deck add and a wish are unaffected.
       deckDriven,
     }),
-    [marketplace, addToCollection, addToWishlist, openAllPrintings, deckDriven],
+    [marketplace, addToCollection, addToWishlist, wishlistFolders, openAllPrintings, deckDriven],
   );
 
   return { deps, error: refusal };

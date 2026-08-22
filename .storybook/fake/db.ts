@@ -184,6 +184,8 @@ import type {
   UpdateStatus,
   WishInput,
   WishRow,
+  WishlistFolder,
+  WishlistFolderSummary,
   WishlistImportItem,
   WishlistQuery,
   WishlistSortKey,
@@ -263,9 +265,48 @@ export interface FakeWish {
   lang: string | null;
   quantity: number;
   preferredFinish: "nonfoil" | "foil" | "etched" | null;
+  /**
+   * Which {@link FakeWishlistFolder} the wish is filed in, `null` for the **root of the list**
+   * (schema v23). The root is a real place rather than an absence — it is where every wish
+   * starts and the only place an unfiled one can be — so nothing here may read `null` as
+   * "unknown".
+   *
+   * `ON DELETE SET NULL`: deleting a folder surfaces its wishes at the root rather than taking
+   * them with it, the opposite direction from `parentId`'s cascade one field over.
+   *
+   * **It is the fourth term of {@link wishGrain}**, which is what makes filing a decision and
+   * not a move: the same card at the root and in `Ordered` is two wishes, so an add can never
+   * silently bump the row the reader put somewhere on purpose.
+   */
+  folderId: number | null;
   notes: string | null;
   needsReview: string | null;
   updatedAt: number;
+}
+
+/**
+ * One row of `wishlist_folders` (schema v23): the shopping list's own filing cabinet, flat.
+ *
+ * {@link FakeDeckFolder}'s four columns and nothing else, because the crate ported the gallery's
+ * folder half rather than inventing a second shape — the tree arithmetic, the cycle refusal and
+ * the two cascade rules were already written and a wishlist folder needed exactly those three.
+ * So the same three rules hold: the tree is the reader's to build from {@link parentId},
+ * `wishlist_folder_list` takes no argument because a folder belongs to no wish, and **two
+ * sibling folders may share a name** — no grain constant, no unique index on
+ * `(parent_id, name)`.
+ *
+ * **The two cascades point opposite ways and both are load-bearing.** `parent_id` is
+ * `ON DELETE CASCADE` **on itself**, so deleting a cabinet takes its drawers in one press;
+ * `wishlist_entries.folder_id` is `ON DELETE SET NULL`, so the same press leaves the *wishes*
+ * standing at the root. A folder is where a wish was kept; the wish is the thing the reader
+ * wanted, and no filing decision may throw one away.
+ */
+export interface FakeWishlistFolder {
+  id: number;
+  /** The folder this one sits inside, `null` for the root. */
+  parentId: number | null;
+  name: string;
+  sortOrder: number;
 }
 
 /**
@@ -708,6 +749,9 @@ export interface FakeDb {
   cards: FakeCard[];
   collectionEntries: FakeEntry[];
   wishlistEntries: FakeWish[];
+  /** `wishlist_folders` — flat, and scoped to nothing: a folder belongs to no wish, it files
+   *  them. `src/lib/folderTree.ts` is what turns these rows into a tree. */
+  wishlistFolders: FakeWishlistFolder[];
   decks: FakeDeck[];
   deckFolders: FakeDeckFolder[];
   deckCategories: FakeDeckCategory[];
@@ -1130,6 +1174,7 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     cards: CARDS,
     collectionEntries: [],
     wishlistEntries: [],
+    wishlistFolders: [],
     decks: [],
     deckFolders: [],
     deckCategories: [],
@@ -3197,6 +3242,25 @@ function ownedAgainstWish(db: FakeDb, w: FakeWish): number {
     .reduce((n, e) => n + e.quantity, 0);
 }
 
+/**
+ * `WishRow.elsewhere` — the **other** wishes for the same oracle card, over the whole table.
+ *
+ * Deliberately narrowed to neither the folder nor the page, because the answer this field is
+ * for is about a wish the reader is *not* looking at. With `folderId` part of
+ * {@link wishGrain}, a card already filed in `Ordered` and re-added by a deck sweep becomes a
+ * **second row at the root** rather than a bump to the first, and a non-zero count here is what
+ * tells the reader that before they buy the card twice.
+ *
+ * **An orphan with no oracle id counts nothing**, and that is a fence rather than the
+ * arithmetic: `wishlist.rs` spells it `o.oracle_id IS NOT NULL` for exactly the rewrite that is
+ * tempting here — a `?? ""` on both sides, to match the grain's first term — which would put
+ * every orphan on `""` and have them all count each other.
+ */
+function elsewhereWishes(db: FakeDb, w: FakeWish): number {
+  if (w.oracleId === null) return 0;
+  return db.wishlistEntries.filter((o) => o.id !== w.id && o.oracleId === w.oracleId).length;
+}
+
 function toWishRow(db: FakeDb, w: FakeWish, mp: MarketplaceId): WishRow {
   const card = wishCard(db, w);
   // The cheapest way to satisfy the wish: the preferred finish's price, else nonfoil's.
@@ -3205,6 +3269,7 @@ function toWishRow(db: FakeDb, w: FakeWish, mp: MarketplaceId): WishRow {
     id: w.id,
     oracleId: w.oracleId,
     cardId: w.cardId,
+    folderId: w.folderId,
     name: w.name,
     setCode: w.setCode,
     collectorNumber: w.collectorNumber,
@@ -3224,6 +3289,7 @@ function toWishRow(db: FakeDb, w: FakeWish, mp: MarketplaceId): WishRow {
     preferredFinish: w.preferredFinish,
     unitPrice: finishPriceAt(db, card, finish, mp),
     ownedQuantity: ownedAgainstWish(db, w),
+    elsewhere: elsewhereWishes(db, w),
     notes: w.notes,
     needsReview: w.needsReview,
     updatedAt: w.updatedAt,
@@ -3236,6 +3302,15 @@ function toWishRow(db: FakeDb, w: FakeWish, mp: MarketplaceId): WishRow {
 function wishlistScope(db: FakeDb, q: WishlistQuery): FakeWish[] {
   const text = nonblank(q.text);
   return db.wishlistEntries.filter((w) => {
+    // Where the reader is **standing**, which is navigation rather than something they
+    // narrowed — so it plays no part in an active-filter count and a Reset leaves it alone.
+    //
+    // Two traps, and the fake must fall for neither. **An absent `folderId` is the root**, not
+    // "everywhere": the root is a real place, the one most wishes are in, and a store that read
+    // the omission as "no filter" would draw a list the app never shows. And **`flatten` is a
+    // second field rather than a third value of the first**, because `null` is already spoken
+    // for as the root — flattened, the reader is standing everywhere and no term applies at all.
+    if (q.flatten !== true && w.folderId !== (q.folderId ?? null)) return false;
     const card = wishCard(db, w);
     if (!matchesCardFilters(db, card, { ...q, text: undefined, paperOnly: false }, w.setCode)) {
       return false;
@@ -3252,6 +3327,13 @@ function wishlistScope(db: FakeDb, q: WishlistQuery): FakeWish[] {
     if (q.needsReview === false && w.needsReview !== null) return false;
     return true;
   });
+}
+
+/** `wishlist_folders::folder_row`, copied out for {@link toDeckFolder}'s reason: the DTO has
+ *  the same four fields as the table today, and a **copy** is what stops a caller mutating the
+ *  store through a value it was handed back. */
+function toWishlistFolder(f: FakeWishlistFolder): WishlistFolder {
+  return { id: f.id, parentId: f.parentId, name: f.name, sortOrder: f.sortOrder };
 }
 
 /* ------------------------------------------------------------------ decks ------------- */
@@ -4908,6 +4990,59 @@ export function readHandlers(db: FakeDb) {
       };
     },
 
+    /** `wishlist_folders::list_folders` — every folder there is, flat, `ORDER BY sort_order,
+     *  id`. No scoping of any kind: a folder belongs to no wish, it files them, and building
+     *  the tree from `parentId` is `src/lib/folderTree.ts`'s job rather than this one's. */
+    wishlist_folder_list: (): WishlistFolder[] =>
+      [...db.wishlistFolders]
+        .sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id)
+        .map(toWishlistFolder),
+
+    /**
+     * `wishlist_folders::folder_summary` — the four numbers one folder card is drawn from.
+     *
+     * **Direct per folder, never recursive**, which is the load-bearing half rather than a
+     * shortcut: `folderTree.ts` already sums a node's children on the way up, so a summary that
+     * recursed too would be a second, disagreeing implementation of arithmetic that is written
+     * and tested. A folder holding two full sub-folders and nothing of its own therefore answers
+     * zero here, and the card adds its children in before it draws.
+     *
+     * **One row per folder that holds at least one wish directly** — the crate's `GROUP BY` over
+     * `WHERE folder_id IS NOT NULL` — so an empty folder is simply absent from this answer, and
+     * the root, which is not a folder, has no tile to draw. What is at the root is what the
+     * unfiltered list already shows.
+     *
+     * Every figure is the wishlist's own arithmetic rather than a second spelling of it:
+     * `missing` is {@link ownedAgainstWish} subtracted exactly as {@link toWishRow} subtracts
+     * it, and the unit price is {@link finishPriceAt} over the same finish, so a folder's
+     * subtotal and the page header's total can never disagree about what one copy costs.
+     * `unpriced` counts a row only when it has copies **still to buy** and no price: a wish the
+     * binder already satisfies costs nothing whether the marketplace can quote it or not, and
+     * counting it would put a "could not price" note on a folder with nothing left to buy.
+     */
+    wishlist_folder_summary: (args: { marketplace?: MarketplaceId }): WishlistFolderSummary[] => {
+      const mp = marketplaceOf(args.marketplace);
+      const byFolder = new Map<number, WishlistFolderSummary>();
+      for (const w of db.wishlistEntries) {
+        if (w.folderId === null) continue;
+        const row = byFolder.get(w.folderId) ?? {
+          folderId: w.folderId,
+          wishes: 0,
+          missing: 0,
+          cost: 0,
+          unpriced: 0,
+        };
+        const missing = Math.max(0, w.quantity - ownedAgainstWish(db, w));
+        const unit = finishPriceAt(db, wishCard(db, w), w.preferredFinish ?? "nonfoil", mp);
+        row.wishes += 1;
+        row.missing += missing;
+        row.cost += unit === null ? 0 : missing * unit;
+        row.unpriced += unit === null && missing > 0 ? 1 : 0;
+        byFolder.set(w.folderId, row);
+      }
+      return [...byFolder.values()].sort((a, b) => a.folderId - b.folderId);
+    },
+
     /** `deck::list_decks`: archived last, most recently touched first. */
     deck_list: (): DeckRow[] =>
       [...db.decks]
@@ -5720,6 +5855,17 @@ const CARD_NOT_IN_CATEGORY = "That card is not in this deck's category any more.
  *  SQLite's recursive cascade would walk forever the day one of them is deleted. */
 const FOLDER_GONE = "That folder is not there any more.";
 const FOLDER_CYCLE = "A folder cannot be moved inside itself.";
+/**
+ * `wishlist_folders::MAX_FOLDER_DEPTH` — how far {@link wishlist_folder_move}'s cycle walk will
+ * climb before it calls the chain a cycle.
+ *
+ * **The budget is not about depth.** The walk that *keeps* the tree acyclic cannot assume it
+ * already is: a cycle that arrived some other way — a seed written by hand — is between folders
+ * neither of which is the one being moved, so the `cursor === id` arm never fires and the climb
+ * never ends. In the crate that would hold the app-wide write lock for the life of the process;
+ * here it would hang the story's tab, which is the same bug drawn smaller.
+ */
+const MAX_FOLDER_DEPTH = 64;
 /** `deck_meta`'s read failures, which the {@link Fault} `deckMeta` produces. Four sentences
  *  because the module writes four, and a panel prints whichever one it got. */
 const CATEGORIES_UNREADABLE = "the deck's categories could not be read: database is locked";
@@ -6086,10 +6232,54 @@ function collectionGrain(e: FakeEntry): string {
   ]);
 }
 
-/** `schema::WISHLIST_GRAIN`: an oracle card, optionally pinned to one printing and one
- *  finish. */
+/**
+ * `schema::WISHLIST_GRAIN`: an oracle card, optionally pinned to one printing and one finish,
+ * **in one folder**.
+ *
+ * The fourth term arrived with schema v23 and is what makes filing a *decision* rather than a
+ * move: the same card at the root and in `Ordered` is two wishes, so an add can never silently
+ * bump the row the reader filed on purpose. `?? 0` is the crate's `coalesce(folder_id, 0)`, and
+ * it is safe only because `wishlist_folders.id` is a rowid SQLite assigns and never hands out
+ * as 0 — a folder numbered 0 would be indistinguishable from the root here.
+ */
 function wishGrain(w: FakeWish): string {
-  return JSON.stringify([w.oracleId ?? "", w.cardId ?? "", w.preferredFinish ?? ""]);
+  return JSON.stringify([
+    w.oracleId ?? "",
+    w.cardId ?? "",
+    w.preferredFinish ?? "",
+    w.folderId ?? 0,
+  ]);
+}
+
+/**
+ * The half {@link writeHandlers}' `wishlist_set_folder` and `wishlist_set_printing` share: a
+ * write that lands on a taken {@link wishGrain} **merges, it does not fail.**
+ *
+ * Both commands move one wish onto a grain another row may already hold — one changes the
+ * folder term, the other the printing pair — and `UNIQUE constraint failed` reaching the reader
+ * would be the app telling them off for wanting one card twice. So the two quantities sum into
+ * the row that was already there, the source row is deleted, and the answer names the
+ * **destination**, whose id is not the id the caller handed in.
+ *
+ * `null` when nothing was in the way, which is the caller's cue to write `moved` onto its own
+ * row instead. Notes are kept the way {@link addWish}'s fold keeps them — the survivor's,
+ * falling back to the row being folded in — and the survivor's `needsReview` is left alone,
+ * because that sentence is about the row that is staying and this press was not about it.
+ *
+ * **`removed` stays `false`** over a row that really was deleted: the field means "the wish is
+ * gone", which is what `wishlist_remove` and a zero quantity mean, and here the wish is
+ * emphatically still on the list — the caller re-reads and selects the id it was handed.
+ */
+function mergeWishOnto(db: FakeDb, source: FakeWish, moved: FakeWish): EntryChange | null {
+  const target = db.wishlistEntries.find(
+    (o) => o.id !== source.id && wishGrain(o) === wishGrain(moved),
+  );
+  if (!target) return null;
+  target.quantity += source.quantity;
+  target.notes = target.notes ?? source.notes;
+  target.updatedAt = stamp(db);
+  db.wishlistEntries = db.wishlistEntries.filter((w) => w.id !== source.id);
+  return { id: target.id, quantity: target.quantity, removed: false };
 }
 
 /**
@@ -6264,6 +6454,19 @@ function folderById(db: FakeDb, id: number): FakeDeckFolder | undefined {
  *  other rather than a hole. */
 function nextFolderOrder(db: FakeDb, parentId: number | null): number {
   return db.deckFolders
+    .filter((f) => f.parentId === parentId)
+    .reduce((n, f) => Math.max(n, f.sortOrder + 1), 0);
+}
+
+function wishFolderById(db: FakeDb, id: number): FakeWishlistFolder | undefined {
+  return db.wishlistFolders.find((f) => f.id === id);
+}
+
+/** {@link nextFolderOrder} over the other filing tree, and `max + 1` **among siblings** for the
+ *  same reason: the first child of a folder starts at 0 again rather than continuing the root's
+ *  numbering. */
+function nextWishFolderOrder(db: FakeDb, parentId: number | null): number {
+  return db.wishlistFolders
     .filter((f) => f.parentId === parentId)
     .reduce((n, f) => Math.max(n, f.sortOrder + 1), 0);
 }
@@ -6741,6 +6944,11 @@ function addWish(db: FakeDb, input: WishInput): EntryChange {
     lang: printing?.lang ?? null,
     quantity,
     preferredFinish: input.preferredFinish ?? null,
+    // Absent **is** the root, and the fold below reads it as {@link wishGrain}'s fourth term: an
+    // add that names another folder is a different wish, never the reader's existing row moved.
+    // There is deliberately no "and file it here" arm — that is `wishlist_set_folder`, said out
+    // loud.
+    folderId: input.folderId ?? null,
     notes: input.notes ?? null,
     needsReview: null,
     updatedAt: stamp(db),
@@ -7005,6 +7213,225 @@ export function writeHandlers(db: FakeDb) {
       }
       const added = db.wishlistEntries.length - before + removed;
       return { added, updated: args.items.length - added - removed, removed };
+    },
+
+    /**
+     * `wishlist::set_wish_printing` — which printing a wish is *for*, including the way back to
+     * **any printing** with `cardId: null`.
+     *
+     * `null` is a destination rather than an omission, which is why all four printing columns
+     * move together and none of them coalesces: `coalesce(?n, column)` — the "leave it" a deck
+     * patch uses — would make un-pinning unexpressible, and un-pinning is half of what this
+     * command is for.
+     *
+     * **It merges rather than failing** — see {@link mergeWishOnto}, whose rule this command
+     * and `wishlist_set_folder` share.
+     *
+     * `needsReview` is **cleared** on the ordinary path, because choosing a printing *is* the
+     * review: the only sentences that column ever carries are the reconciler's, and both are
+     * about an id — "Scryfall merged this printing into …" — the row no longer holds once this
+     * write lands.
+     */
+    wishlist_set_printing: (args: { id: number; cardId: string | null }): EntryChange => {
+      refuseIfBusy(db);
+      // {@link addWish}'s rule about what a form's cleared field means, and it decides the shape
+      // of the whole write: `""` is a caller sending an empty text input rather than a printing,
+      // and treating it as one would pin the wish to an id no card has.
+      const cardId = nonblank(args.cardId);
+      const wish = db.wishlistEntries.find((w) => w.id === args.id);
+      if (!wish) throw refuse(WISH_GONE);
+      const printing = cardId === null ? null : cardById(db, cardId);
+      if (cardId !== null && printing === null) {
+        throw refuse("no card with that id is in the card database");
+      }
+      if (cardId === null && wish.oracleId === null) {
+        throw refuse(
+          "This wish is for that one printing and names no card, so there is no card to want " +
+            "any printing of. Remove it and wish for the card instead.",
+        );
+      }
+      // {@link addWish}'s fallback, verbatim: an oracle id the wish already has is not up for
+      // revision, and the printing's own can be blank — which would fold on the grain like any
+      // other empty string.
+      const pinned: FakeWish = {
+        ...wish,
+        cardId,
+        oracleId: wish.oracleId ?? nonblank(printing?.oracleId),
+        // Only a *pinned* wish carries a printing's three columns; un-pinning nulls all three,
+        // because an any-printing wish is deliberately not for one.
+        setCode: printing?.setCode ?? null,
+        collectorNumber: printing?.collectorNumber ?? null,
+        lang: printing?.lang ?? null,
+      };
+      const merged = mergeWishOnto(db, wish, pinned);
+      if (merged) return merged;
+      Object.assign(wish, pinned, { needsReview: null, updatedAt: stamp(db) });
+      return { id: wish.id, quantity: wish.quantity, removed: false };
+    },
+
+    /**
+     * `wishlist_folders::set_wish_folder` — "Move to …", and "Move to the wishlist".
+     *
+     * `folderId: null` is the **root of the list**, a real destination rather than an omission:
+     * it is where every wish starts and the only place an unfiled one can be, so there is
+     * nothing else it could mean.
+     *
+     * **A command of its own, because filing is not adding.** `folderId` is the fourth term of
+     * {@link wishGrain}, which is what makes "Add to Ordered" an *add*: the same card at the root
+     * and in `Ordered` is two wishes, so an add can never quietly move the row the reader filed
+     * last week. The cost of that guarantee is exactly this command — moving between folders has
+     * to be something the reader says out loud. It merges the way {@link mergeWishOnto} does.
+     *
+     * The destination is checked **in words** rather than left to the foreign key, the crate's
+     * own fence one table over: a constraint failure names the table and not the mistake.
+     */
+    wishlist_set_folder: (args: { id: number; folderId: number | null }): EntryChange => {
+      refuseIfBusy(db);
+      if (args.folderId !== null && !wishFolderById(db, args.folderId)) throw refuse(FOLDER_GONE);
+      const wish = db.wishlistEntries.find((w) => w.id === args.id);
+      if (!wish) throw refuse(WISH_GONE);
+      const merged = mergeWishOnto(db, wish, { ...wish, folderId: args.folderId });
+      if (merged) return merged;
+      wish.folderId = args.folderId;
+      wish.updatedAt = stamp(db);
+      return { id: wish.id, quantity: wish.quantity, removed: false };
+    },
+
+    /**
+     * `wishlist_folders::create_folder` — at the root with `parentId: null`, or inside another.
+     *
+     * **No uniqueness rule on the name**, mirroring the DDL exactly as `deck_folder_create`
+     * does: `wishlist_folders` carries no grain constant and no unique index on
+     * `(parent_id, name)`, so two sibling folders may share one.
+     *
+     * **The id is never supplied**, and that is a fence rather than a habit: {@link wishGrain}'s
+     * `?? 0` for the root is safe only while no folder can *be* 0, which is guaranteed only for
+     * the rowids SQLite assigns itself.
+     */
+    wishlist_folder_create: (args: { parentId: number | null; name: string }): WishlistFolder => {
+      refuseIfBusy(db);
+      const name = validMetaName(args.name, "A folder");
+      // The crate leaves this to `parent_id REFERENCES wishlist_folders(id)` and never spells it
+      // out; this store has no foreign keys, so the refusal is written here — `deck_folder_create`'s
+      // shape one table over, so the workbench cannot build a tree the app would have refused.
+      if (args.parentId !== null && !wishFolderById(db, args.parentId)) throw refuse(FOLDER_GONE);
+      const folder: FakeWishlistFolder = {
+        id: nextId(db.wishlistFolders),
+        parentId: args.parentId,
+        name,
+        sortOrder: nextWishFolderOrder(db, args.parentId),
+      };
+      db.wishlistFolders.push(folder);
+      return toWishlistFolder(folder);
+    },
+
+    wishlist_folder_rename: (args: { id: number; name: string }): WishlistFolder => {
+      refuseIfBusy(db);
+      const name = validMetaName(args.name, "A folder");
+      const folder = wishFolderById(db, args.id);
+      if (!folder) throw refuse(FOLDER_GONE);
+      folder.name = name;
+      return toWishlistFolder(folder);
+    },
+
+    /**
+     * `wishlist_folders::move_folder` — re-parent a folder, or with `parentId: null` move it back
+     * to the root.
+     *
+     * **Refuses a cycle**, by walking `parentId` upward from the *proposed* parent: if that walk
+     * ever meets `id` — immediately, when `parentId` names `id` itself — it refuses rather than
+     * writing a loop. Not cosmetic: `parent_id` is `ON DELETE CASCADE` on itself, so a cycle is
+     * a graph SQLite's recursive cascade would walk forever the day one of them is deleted. And
+     * a fake that accepted one would let a story draw a tree the app refuses to make, which is
+     * a story documenting a lie.
+     *
+     * The walk is bounded by {@link MAX_FOLDER_DEPTH}, which is not about depth — see there.
+     *
+     * **The destination is checked, `wishlist_folder_create`'s fence two functions up.** The two
+     * write the same column and disagreeing about it is the fake drifting from the app in the
+     * one direction that matters: `wishlist_folders.parent_id REFERENCES wishlist_folders(id)`
+     * is a real foreign key, so the app refuses a parent that is gone while an unchecked store
+     * here would write an orphaned sub-tree and let a story draw a folder hanging off nothing.
+     * The cycle walk above cannot stand in for it — `wishFolderById(...)?.parentId ?? null` reads
+     * an id no folder has as "already at the root" and lets it straight through.
+     *
+     * **`deck_folder_move` has the identical hole and is deliberately left with it.** Fixing one
+     * side of a ported pair is a difference somebody will later read as intentional, so it is
+     * said out loud here rather than discovered: the decks' folder move is out of this branch's
+     * scope, and closing it is a change to the deck gallery's stories rather than to the
+     * wishlist's.
+     */
+    wishlist_folder_move: (args: { id: number; parentId: number | null }): WishlistFolder => {
+      refuseIfBusy(db);
+      if (args.parentId !== null && !wishFolderById(db, args.parentId)) throw refuse(FOLDER_GONE);
+      let cursor = args.parentId;
+      for (let hops = 0; cursor !== null; hops += 1) {
+        if (cursor === args.id) throw refuse(FOLDER_CYCLE);
+        // Out of budget: the only thing a chain that long can be is a loop.
+        if (hops >= MAX_FOLDER_DEPTH) throw refuse(FOLDER_CYCLE);
+        cursor = wishFolderById(db, cursor)?.parentId ?? null;
+      }
+      const folder = wishFolderById(db, args.id);
+      if (!folder) throw refuse(FOLDER_GONE);
+      folder.parentId = args.parentId;
+      return toWishlistFolder(folder);
+    },
+
+    /**
+     * `wishlist_folders::delete_folder`. **Its wishes are not deleted** —
+     * `wishlist_entries.folder_id` is `ON DELETE SET NULL`, so they surface at the root, filed
+     * nowhere and otherwise exactly as they were. **Sub-folders do go with it**, `parent_id`
+     * being `ON DELETE CASCADE` on itself. A confirmation that said "and everything in it" would
+     * be wrong about the half that matters: a folder is where a wish was kept, and the wish is
+     * the thing the reader wanted. An id that resolves to nothing is a success.
+     *
+     * **The un-filing goes through {@link mergeWishOnto} and that is not a nicety** — it is the
+     * whole reason the crate stopped leaving this press to the `SET NULL`. The folder is the
+     * fourth term of {@link wishGrain}, so re-filing a sub-tree at the root rewrites the grain
+     * of every wish in it, and two shapes then land on a grain that is already taken:
+     *
+     * - a filed wish and a **root** wish for the same card — the state the design accepts on
+     *   purpose, since `deck_missing_to_wishlist`, `deck_theory_missing_to_wishlist` and
+     *   `wishlist_import_commit` all add at the root and cannot name a folder;
+     * - two wishes in **different sub-folders** of the one being deleted, which collide with
+     *   each other the moment both reach the root and need no root row at all.
+     *
+     * A bare loop over the rows produced two rows on one grain here while the app answered
+     * `UNIQUE constraint failed: index 'idx_wishlist_grain'` and deleted nothing — the fake
+     * being *kinder* than the app, which is the direction of drift that lets a story document a
+     * state the reader can never reach. One wish at a time, lowest id first, is what answers the
+     * second shape as well as the first: the crate collects the sub-tree with `ORDER BY w.id` and
+     * the first wish to reach the root becomes the row the next one merges into.
+     */
+    wishlist_folder_delete: (args: { id: number }): void => {
+      refuseIfBusy(db);
+      const doomed = new Set<number>([args.id]);
+      // The cascade is recursive, so it is walked to a fixed point rather than one level deep.
+      for (let grew = true; grew;) {
+        grew = false;
+        for (const f of db.wishlistFolders) {
+          if (f.parentId !== null && doomed.has(f.parentId) && !doomed.has(f.id)) {
+            doomed.add(f.id);
+            grew = true;
+          }
+        }
+      }
+      // Ids rather than rows, taken before anything moves: a merge replaces `db.wishlistEntries`
+      // with a filtered copy, so a held reference is a row that is no longer in the store.
+      const filed = db.wishlistEntries
+        .filter((w) => w.folderId !== null && doomed.has(w.folderId))
+        .map((w) => w.id)
+        .sort((a, b) => a - b);
+      for (const id of filed) {
+        const wish = db.wishlistEntries.find((w) => w.id === id);
+        // Unreachable: a merge only ever deletes the row it was given, so no id here can go
+        // before its turn. Guarded because the alternative is a `TypeError` in a story.
+        if (!wish) continue;
+        if (mergeWishOnto(db, wish, { ...wish, folderId: null })) continue;
+        wish.folderId = null;
+        wish.updatedAt = stamp(db);
+      }
+      db.wishlistFolders = db.wishlistFolders.filter((f) => !doomed.has(f.id));
     },
 
     /**
@@ -8529,11 +8956,21 @@ export function writeHandlers(db: FakeDb) {
       return { entries, allocations };
     },
 
-    /** `reset::wishlist_clear`. Nothing references the wishlist, so nothing else moves. */
+    /**
+     * `reset::clear_wishlist`. Nothing outside the wishlist references it, so nothing else
+     * moves — but **the folders go with it**, which is `decks_clear`'s half a reader does not
+     * predict, one table over. `wishlist_entries.folder_id` is `ON DELETE SET NULL`, so emptying
+     * the entries would leave the whole filing cabinet standing and every folder card drawing
+     * zeroes. The crate clears `wishlist_folders` in a second statement for exactly that reason.
+     *
+     * The count answered is the **wishes**, not the folders: it is what the reader is being told
+     * they threw away.
+     */
     wishlist_clear: (): number => {
       refuseIfBusy(db);
       const gone = db.wishlistEntries.length;
       db.wishlistEntries = [];
+      db.wishlistFolders = [];
       return gone;
     },
 

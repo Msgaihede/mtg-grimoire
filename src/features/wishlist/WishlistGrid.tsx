@@ -1,16 +1,19 @@
 import { useMemo, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent } from "react";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
-import type { DragPayload } from "@/features/decks/dnd";
+import { dragData } from "@/features/decks/dnd";
 import { CardGrid, type GridCard } from "@/features/search/CardGrid";
 import { isFinish, type Finish } from "@/lib/finish";
-import type { WishRow } from "@/lib/ipc";
+import type { FolderNode } from "@/lib/folderTree";
+import type { WishlistFolder, WishRow } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { EditWishButton } from "./EditWish";
 import { missingOf, printingOf, wishLabel } from "./wish";
+import { wishDragData } from "./wishDrag";
+import { ElsewhereMark, WishFolderCaption } from "./wishMarks";
 
 /** One tile of the wall: a wish, and the printing there is a picture of. */
 interface WishTile extends GridCard {
@@ -45,15 +48,37 @@ function toTile(wish: WishRow): WishTile {
 }
 
 /**
- * The caption: which printing the wish is for, in the words its table uses.
+ * The caption: which printing the wish is for, in the words its table uses — plus the two marks
+ * spec §4 puts beside it.
  *
  * `printingOf` rather than the wall's own `SET · number`, and that is the reason `CardGrid` has
  * a caption slot at all — an unpinned wish is drawn as a printing it is not for, and a caption
  * reading "DSK · 123" under that picture would say the reader had asked for that piece of
  * cardboard. It also carries the preferred finish, which is the other half of what makes two
  * wishes for one card two wishes.
+ *
+ * **The two marks share this line rather than taking a corner or a second row**, and both halves
+ * of that are forced. Every corner of a tile already has an owner — bottom-left the progress
+ * fraction, top-left the review flag and the cost, top-right `FoilOverlay`'s chip — and the strip
+ * is a **budget**: `CardGrid` positions its virtual rows from `CAPTION_HEIGHT`, so a second line
+ * here is a wall whose rows overlap by the difference. So the printing truncates and the marks
+ * are `shrink-0` beside it, which is the honest trade at 170px: a folder the reader named and a
+ * duplicate warning are worth more than the last few characters of a set code.
+ *
+ * A closure over the page's two answers, so it is not module scope like the drag beside it —
+ * which costs nothing, because `caption` is read on **render** rather than registered
+ * (see `CardGrid`, where only `dragRecord`/`tileRef` and the three card-fact slots ask to be held
+ * still).
  */
-const tileCaption = (tile: WishTile) => printingOf(tile.wish);
+const captionFor =
+  (folderNameOf: (folderId: number | null) => string | null, flattened: boolean) =>
+  (tile: WishTile) => (
+    <span className="flex min-w-0 items-center gap-[calc(0.375rem*var(--mark-scale,1))]">
+      <span className="min-w-0 truncate">{printingOf(tile.wish)}</span>
+      <ElsewhereMark count={tile.wish.elsewhere} />
+      {flattened && <WishFolderCaption name={folderNameOf(tile.wish.folderId)} />}
+    </span>
+  );
 
 /**
  * The finish this wish is **for**, as the sheen and corner chip over the art.
@@ -72,22 +97,44 @@ const tileFinish = (tile: WishTile): Finish | null => {
 };
 
 /**
- * What a tile carries when it is dragged — spec §1's third drag source, on the layout that is
- * now the default one.
+ * What a tile carries when it is dragged — spec §1's third drag source, and since spec §9 a
+ * gesture that means **two things at once**.
  *
- * **Pinned wishes only**, the same rule the table's rows follow and the same rule that decides
- * whether the tile has a menu: a wish with no `card_id` is for the *card*, so there is no
- * printing to carry, and a drag started from one would arrive somewhere holding an empty id —
- * which addresses every row and no row (`dnd.ts`). `null` is `CardGrid` registering no drag on
- * that tile at all.
+ * **Every wish is draggable now, and the card half is still withheld from the unpinned ones.**
+ * That withholding is the paragraph this one replaces and its reason has not changed: a wish with
+ * no `card_id` is for the *card*, so there is no printing to carry, and a `{kind:"card"}` payload
+ * built from one would arrive at a deck column holding an empty id — which addresses every row
+ * and no row (`dnd.ts`). What changed is the conclusion drawn from it. "Set this one aside" is a
+ * wish operation with nothing to do with owning a printing, so such a wish carries
+ * {@link wishDragData}'s mark **alone**: `readDragData` answers `null` for it and the deck's drop
+ * targets light nothing up, which is exactly what they do today when the tile cannot be picked up
+ * at all — while a folder card reads its own key and takes it.
+ *
+ * A **pinned** wish carries both marks in one flat record, which is what `CardGrid`'s
+ * `dragRecord` exists to pass and why it is not `dragPayload`: the two keys are two readers'
+ * business, neither unwraps anything, and neither can see the other's.
  *
  * The type line files the card when it is let go somewhere with no column to point at — the
  * sidebar's Decks entry — and is the one thing `WishRow` carries that neither layout draws.
  */
-const tileDrag = (tile: WishTile): DragPayload | null =>
-  tile.wish.cardId === null
-    ? null
-    : { kind: "card", cardId: tile.wish.cardId, name: tile.wish.name, typeLine: tile.wish.typeLine };
+const tileDrag = (tile: WishTile): Record<string, unknown> => {
+  const wish = wishDragData({
+    wishId: tile.wish.id,
+    name: tile.wish.name,
+    folderId: tile.wish.folderId,
+  });
+  return tile.wish.cardId === null
+    ? wish
+    : {
+        ...dragData({
+          kind: "card",
+          cardId: tile.wish.cardId,
+          name: tile.wish.name,
+          typeLine: tile.wish.typeLine,
+        }),
+        ...wish,
+      };
+};
 
 /**
  * How much of this wish the collection already covers, over the art.
@@ -145,9 +192,16 @@ function WishProgress({ wish }: { wish: WishRow }) {
 export function WishlistGrid({
   rows,
   listKey,
+  folders,
+  nodes,
+  folderNameOf,
+  flattened,
   onNeedNextPage,
   onSetQuantity,
   onRemove,
+  onSetFolder,
+  onChangePrinting,
+  onAnyPrinting,
   rowMenu,
   rowMenuKey,
   marketplace,
@@ -155,9 +209,32 @@ export function WishlistGrid({
   rows: WishRow[];
   /** Identity of the current list, so a new one starts at the top. */
   listKey: string;
+  /** The flat folder rows and the tree built from them, both straight through to
+   *  {@link EditWishButton} — see its own doc for why it wants two shapes of one read. */
+  folders: readonly WishlistFolder[];
+  nodes: readonly FolderNode<WishlistFolder>[];
+  /**
+   * What to call the folder a wish is filed in — `Wishlist` for the root, and `null` for a folder
+   * this page cannot name.
+   *
+   * The page's job rather than this component's, because the page is the one holding both the
+   * wishes and the folder list; joining them per tile here would be a lookup table rebuilt on
+   * every render of every wall. `null` draws **nothing** rather than a blank chip: a folder
+   * another window deleted between the two reads is a caption with no honest text.
+   */
+  folderNameOf: (folderId: number | null) => string | null;
+  /** Whether the list is showing every wish regardless of filing — spec §4's Flatten. The
+   *  folder caption is drawn only here, because inside a folder it would be the same word under
+   *  every tile and the breadcrumb above already says it. */
+  flattened: boolean;
   onNeedNextPage: () => void;
   onSetQuantity: (row: WishRow, quantity: number) => void;
   onRemove: (row: WishRow) => void;
+  /** The three writes the panel behind a tile's pencil reaches, passed straight through. They
+   *  are the *only* controls an any-printing wish has — `EditWish.tsx` carries the reason. */
+  onSetFolder: (row: WishRow, folderId: number | null) => void;
+  onChangePrinting: (row: WishRow) => void;
+  onAnyPrinting: (row: WishRow) => void;
   /**
    * What a tile offers on a right-click, or `undefined` for a wish that offers none. Per wish
    * rather than for the wall, and the same handler the table's rows are given: an any-printing
@@ -180,6 +257,11 @@ export function WishlistGrid({
   const tiles = useMemo(() => rows.map(toTile), [rows]);
   const asOf = pricesAsOf(marketplace);
   const currency = marketplace.currency;
+  // Built fresh on every render, deliberately: `caption` is one of the slots `CardGrid` *reads*
+  // rather than registers, so nothing is torn down when its identity changes — and memoising it
+  // against a `folderNameOf` the page will hand over as an inline arrow would promise a stability
+  // that does not exist.
+  const caption = captionFor(folderNameOf, flattened);
 
   return (
     <CardGrid
@@ -196,7 +278,7 @@ export function WishlistGrid({
       // rather than only an outline.
       arrowNav
       onNeedNextPage={onNeedNextPage}
-      caption={tileCaption}
+      caption={caption}
       finish={tileFinish}
       badge={(tile) => <WishProgress wish={tile.wish} />}
       // The top-left corner carries two facts, in one chip because a tile has four corners and
@@ -265,8 +347,13 @@ export function WishlistGrid({
         <EditWishButton
           key={tile.wish.id}
           row={tile.wish}
+          folders={folders}
+          nodes={nodes}
           onSetQuantity={onSetQuantity}
           onRemove={onRemove}
+          onSetFolder={onSetFolder}
+          onChangePrinting={onChangePrinting}
+          onAnyPrinting={onAnyPrinting}
           // The search wall's recipe verbatim: invisible until the tile is hovered or holds the
           // caret — a wall of art is not a wall of pencils — and always in the tab order,
           // because "visible on hover" is not a state a keyboard has. `static` is what makes the
@@ -277,7 +364,9 @@ export function WishlistGrid({
       )}
       cardMenu={rowMenu && ((tile) => rowMenu(tile.wish))}
       cardMenuKey={rowMenuKey && ((tile) => rowMenuKey(tile.wish))}
-      dragPayload={tileDrag}
+      // `dragRecord` rather than `dragPayload`, because a wish tile's drag is two marks in one
+      // record and that slot carries one — see {@link tileDrag} and `CardGrid`'s own note.
+      dragRecord={tileDrag}
     />
   );
 }

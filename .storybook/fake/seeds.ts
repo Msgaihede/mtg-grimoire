@@ -60,6 +60,7 @@ import type {
   FakeDeckTag,
   FakeEntry,
   FakeWish,
+  FakeWishlistFolder,
 } from "./db";
 import { DECK_CATEGORIES, printing } from "./fixtures";
 import type { CategoryKind, CategoryOrigin, DeckAuditKind, DeckVariant } from "@/lib/ipc";
@@ -129,7 +130,9 @@ function entry(
 }
 
 /** A wish **pinned to a printing**: it names a card id, so its own set/collector/lang are
- *  that printing's and it is filled only by copies of it. */
+ *  that printing's and it is filled only by copies of it. At the root unless `over` files it —
+ *  the root is where every wish starts, and `folderId` is part of the storage grain, so the same
+ *  printing filed in two places is two rows here rather than one that moved. */
 function pinnedWish(
   id: number,
   card: FakeCard,
@@ -146,6 +149,7 @@ function pinnedWish(
     lang: card.lang,
     quantity,
     preferredFinish: null,
+    folderId: null,
     notes: null,
     needsReview: null,
     updatedAt: CLOCK_BASE,
@@ -176,6 +180,7 @@ function anyPrintingWish(
     lang: null,
     quantity,
     preferredFinish: null,
+    folderId: null,
     notes: null,
     needsReview: null,
     updatedAt: CLOCK_BASE,
@@ -415,11 +420,53 @@ function starterEntries(): FakeEntry[] {
 }
 
 /**
- * Five wishes, each a different answer to "is this filled?".
+ * Three folders (schema v23), and each is a shape the wishlist page has to be able to draw.
  *
- * The counts a story can rely on, given {@link starterEntries}: the foil Ragavan reads **0 of
- * 1** while a nonfoil Ragavan sits in the collection, the any-printing Sol Ring reads **2 of
- * 1** (both printings count), and the Counterspell reads **2 of 4**.
+ * **`Ordered` holds wishes of its own *and* a sub-folder**, which is the only arrangement that
+ * makes a folder card's arithmetic visible: `wishlist_folder_summary` is direct per folder, so
+ * the tile has to add `Backordered`'s numbers in on the way up. A folder that held only wishes,
+ * or only sub-folders, would let a card that summed nothing look right.
+ *
+ * **`Backordered` is the nesting** — the breadcrumb's second rung, and somewhere for a drag to
+ * go that is not the root.
+ *
+ * **`Someday` is empty on purpose**, and it is the row that proves the most: an empty folder has
+ * no `wishlist_folder_summary` row *at all*, because that read groups the wishes. So a page that
+ * built its tree from the summary rather than from `wishlist_folder_list` would draw two folders
+ * here and never notice, and the empty-folder sentence would be unreachable.
+ *
+ * `sortOrder` is what `wishlist_folder_create` writes — `max + 1` **among siblings** — so the two
+ * at the root are 0 and 1 while the child starts at 0 again rather than continuing their run.
+ */
+function starterWishFolders(): FakeWishlistFolder[] {
+  return [
+    { id: 1, parentId: null, name: "Ordered", sortOrder: 0 },
+    { id: 2, parentId: 1, name: "Backordered", sortOrder: 0 },
+    { id: 3, parentId: null, name: "Someday", sortOrder: 1 },
+  ];
+}
+
+/**
+ * Eight wishes: **five loose at the root** and three filed into {@link starterWishFolders}.
+ *
+ * The five at the root are each a different answer to "is this filled?". The counts a story can
+ * rely on, given {@link starterEntries}: the foil Ragavan reads **0 of 1** while a nonfoil
+ * Ragavan sits in the collection, the any-printing Sol Ring reads **2 of 1** (both printings
+ * count), and the Counterspell reads **2 of 4**. One of them names no printing at all, and that
+ * matters beyond pricing now: an any-printing wish is the row a *card* drag cannot pick up,
+ * because there is no printing to drag — so it is the row that only the wish drag can move, and
+ * a seed without one would leave that path undrawn.
+ *
+ * **Every filed wish is a second row for a card the root already wants, and that is the point
+ * rather than a shortage of cards.** With `folderId` in the storage grain, a card the reader
+ * filed in `Ordered` and a deck sweep then re-added arrives as a *new row at the root* — so the
+ * duplicate pair is the state folders create, and `WishRow.elsewhere` is the field that reports
+ * it. Three of the five root wishes therefore read `elsewhere: 1`, and Ragavan and Jace read
+ * `0`, so a story has both cases without touching the store.
+ *
+ * It has a second, quieter benefit: no card in the corpus gains a wish it did not already have,
+ * so `CardSummary.wishlisted` — the heart on a search tile — is exactly what it was before the
+ * folders arrived.
  */
 function starterWishes(): FakeWish[] {
   const next = ids();
@@ -438,6 +485,25 @@ function starterWishes(): FakeWish[] {
     pinnedWish(next(), printing("mh2", "267"), 4),
     pinnedWish(next(), printing("wwk", "31"), 1, {
       notes: "Under $25 or not at all. The Worldwake art is the one.",
+    }),
+    // Filed in `Ordered`, and a second row for the Rhystic Study already at the root: this is
+    // the pair `elsewhere` exists to report. Unowned, so the folder card has a real `missing`
+    // and a real subtotal rather than a row the binder already covers.
+    pinnedWish(next(), printing("pcy", "45"), 1, {
+      folderId: 1,
+      notes: "Ordered from Card Kingdom on the 14th.",
+    }),
+    // The same oracle card as the any-printing Sol Ring at the root, **pinned** — so the two
+    // rows differ on the grain's second term as well as its fourth, and `elsewhere` counts the
+    // oracle card rather than the printing. One `c21 263` is in the binder, so this reads 1 of 2.
+    pinnedWish(next(), printing("c21", "263"), 2, { folderId: 1 }),
+    // The nested folder's only wish, and the narrowest case there is: same printing, same
+    // (absent) finish, same everything as the Counterspell at the root — **only the folder is
+    // different**, which is exactly what the grain's fourth term makes two wishes rather than
+    // one row of seven copies.
+    pinnedWish(next(), printing("mh2", "267"), 3, {
+      folderId: 2,
+      notes: "The reprint is announced; this is the pile that waits for it.",
     }),
   ];
 }
@@ -1044,6 +1110,7 @@ function starterSeed(): FakeDb {
     ...starterTaxonomy(CARDS),
     collectionEntries: starterEntries(),
     wishlistEntries: starterWishes(),
+    wishlistFolders: starterWishFolders(),
     decks,
     deckFolders: starterFolders(),
     deckCategories,

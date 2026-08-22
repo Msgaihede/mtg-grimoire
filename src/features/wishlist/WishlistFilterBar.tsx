@@ -6,6 +6,7 @@ import {
   ResetAll,
   ToggleChip,
 } from "@/components/FilterChips";
+import { FOCUS } from "@/lib/focus";
 import { sortOptions } from "@/lib/options";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
@@ -19,8 +20,27 @@ import { WISHLIST_SORTS, type Wishlist, type WishlistSort } from "./useWishlist"
  * purpose: they filter a list of thousands, and this one is a list of tens read by name. What
  * is left is the box you type a name into, the one question a shopping list is for, and how
  * to order it.
+ *
+ * `folderId` and `flatten` are not filters and draw nothing here beyond the Flatten chip
+ * itself — the folder cards and the breadcrumb this bar shares its row with are the page's, not
+ * this component's, `useWishlist.ts`'s doc comment says why.
  */
-export function WishlistFilterBar({ wishlist }: { wishlist: Wishlist }) {
+export function WishlistFilterBar({
+  wishlist,
+  onNewFolder,
+}: {
+  wishlist: Wishlist;
+  /**
+   * Opens the "new folder" field beside the folder cards. Not owned here: this bar only offers
+   * the button, the write lives on the page.
+   *
+   * **It is handed the button**, `FolderTree.onOpenNew`'s arrangement and for its reason: the
+   * field the page opens is drawn somewhere else on the page, so the page has nothing else to
+   * hand the caret back to when Escape closes it — and an element that unmounts with the caret
+   * on it drops focus to `<body>`, after which the next Tab restarts from the top of the app.
+   */
+  onNewFolder: (opener: HTMLButtonElement) => void;
+}) {
   const view = useAppStore((s) => s.wishlistView);
   const setWishlistView = useAppStore((s) => s.setWishlistView);
   // Drawn only where it has something to filter. A wishlist is flagged by the reconciler and
@@ -62,6 +82,25 @@ export function WishlistFilterBar({ wishlist }: { wishlist: Wishlist }) {
         pressed={wishlist.fulfilled !== undefined}
         onClick={wishlist.toggleFulfilled}
       />
+
+      {/* On, it ignores the filing entirely: no folder cards, no drill-down, and every wish in
+          the list at once, each captioned with the folder it is filed in instead — the only
+          way a reader sees a card's folder without opening it. One press either way, since
+          there is no third state to walk. */}
+      <ToggleChip label="Flatten" pressed={wishlist.flatten} onClick={wishlist.toggleFlatten} />
+
+      {/* Hidden while flattened: a flattened list has no current folder to create one inside.
+          Styled like the page's own Import/Export buttons rather than as a chip, because this
+          opens a field on the page instead of toggling a state that lives here. */}
+      {!wishlist.flatten && (
+        <button
+          type="button"
+          onClick={(e) => onNewFolder(e.currentTarget)}
+          className={cn("h-8 rounded-md border border-border px-3 text-sm hover:bg-surface", FOCUS)}
+        >
+          + New folder
+        </button>
+      )}
 
       {/* The other half of what the flagged band under a row says: the band tells you a wish
           needs looking at, and this is how you ask for only those. Same three states and the

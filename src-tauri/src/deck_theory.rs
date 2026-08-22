@@ -1629,10 +1629,14 @@ mod tests {
         );
     }
 
-    /// Every wish there is as `(oracle card, pinned printing, pinned finish, copies)` —
-    /// [`WISHLIST_GRAIN`](crate::schema::WISHLIST_GRAIN)'s three columns and the count. The
-    /// first two are read as `String` on purpose: this command writes both on every wish now,
-    /// so a NULL there is a failure and reads as one.
+    /// Every wish there is as `(oracle card, pinned printing, pinned finish, copies)` — three
+    /// of [`WISHLIST_GRAIN`](crate::schema::WISHLIST_GRAIN)'s **four** columns and the count.
+    /// The fourth is `folder_id`, added at schema v23, and it is left out because this command
+    /// cannot name a folder: `missing_to_wishlist` adds at the root, which spec §1 accepts, so
+    /// the term is NULL on every row this helper will ever read and asserting it would be
+    /// asserting the same constant over and over. The first two are read as `String` on
+    /// purpose: this command writes both on every wish now, so a NULL there is a failure and
+    /// reads as one.
     fn pinned_wishes(conn: &Connection) -> Vec<(String, String, Option<String>, i64)> {
         conn.prepare(
             "SELECT oracle_id, card_id, preferred_finish, quantity

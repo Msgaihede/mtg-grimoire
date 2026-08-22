@@ -142,6 +142,18 @@ export interface ExportDialogProps {
     /** "1,204 cards matching your filters" — already pluralised by the caller
      *  (`scope.ts`'s `scopeLabel`). */
     label: string;
+    /**
+     * The escape-hatch checkbox's words — "Export everything, ignoring the filters", and on a
+     * surface where filing narrows the sweep too, "…the filters and folders".
+     *
+     * **An argument rather than a constant in here, and required rather than defaulted.** It is
+     * the same statement `label` makes, from the other side, so the two belong to one author:
+     * the dialog spelling one of them itself is exactly how the wishlist came to offer "ignoring
+     * the filters" over a sweep that was also ignoring twenty drawers. A default would let the
+     * next surface inherit the collection's sentence without noticing it had one.
+     * `scope.ts`'s `everythingLabel` composes it.
+     */
+    everythingLabel: string;
     /** Still sweeping. The buttons are disabled while this is true, the same guard `saving`
      *  already uses — a reader must not save or copy a file the sweep has not finished
      *  filling in. */
@@ -342,7 +354,7 @@ function Body({
               onChange={(e) => scope.onEverything(e.target.checked)}
               className={cn("size-4 accent-accent", FOCUS)}
             />
-            Export everything, ignoring the filters
+            {scope.everythingLabel}
           </label>
         </div>
       )}

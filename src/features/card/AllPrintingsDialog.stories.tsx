@@ -286,7 +286,16 @@ function Printings({
     // is only which surface could answer it.
     useAppStore
       .getState()
-      .openAllPrintings({ cardId: heldCardId ?? fromCardId ?? "", oracleId, name, deck: opened });
+      .openAllPrintings({
+        cardId: heldCardId ?? fromCardId ?? "",
+        oracleId,
+        name,
+        deck: opened,
+        // No story repoints a wish — this workbench draws the deck arm and the plain one — and
+        // the field is required precisely so that saying so is a decision rather than an
+        // omission. A wishlist story adds its own `wish` here.
+        wish: null,
+      });
     return opened;
   });
 

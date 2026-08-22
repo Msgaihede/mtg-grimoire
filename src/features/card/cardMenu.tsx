@@ -38,14 +38,25 @@ import {
 } from "lucide-react";
 import { MenuRows } from "@/components/menu/ContextMenu";
 import type { MenuAction, MenuItem } from "@/components/menu/types";
-import { buildFolderTree, type FolderNode } from "@/features/decks/folders";
+// From `@/lib/folderTree` rather than through `@/features/decks/folders`, which re-exports it:
+// this file builds two trees now, and the wishlist's cabinet has nothing to do with the deck
+// gallery's. The arithmetic is one implementation because `DeckFolder` and `WishlistFolder`
+// answer the same flat shape, and the module it lives in is the one that says so.
+import { buildFolderTree, type FolderNode } from "@/lib/folderTree";
 import { DEFAULT_VARIANT, useDeck } from "@/features/decks/useDeck";
 import { useDeckFolders } from "@/features/decks/useDeckFolders";
 import { useDecks } from "@/features/decks/useDecks";
 import { copyText } from "@/lib/clipboard";
 import { marketplaceSearchUrl, openExternal, scryfallCardUrl } from "@/lib/externalLinks";
 import { FINISH_LABEL, parseFinishes, type Finish } from "@/lib/finish";
-import { ipc, ipcError, type DeckFolder, type DeckRow, type DeckVariant } from "@/lib/ipc";
+import {
+  ipc,
+  ipcError,
+  type DeckFolder,
+  type DeckRow,
+  type DeckVariant,
+  type WishlistFolder,
+} from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
 import type { PaneDeckContext, PrintingsRequest } from "@/lib/store";
 import { DECK_DRIVEN_REASON } from "@/lib/useDeckDrivenCollection";
@@ -94,7 +105,29 @@ export interface CardMenuTarget {
 export interface CardMenuDeps {
   marketplace: Marketplace;
   addToCollection: (target: CardMenuTarget, finish: Finish) => void;
-  addToWishlist: (target: CardMenuTarget) => void;
+  /**
+   * A wish for this printing, filed where the reader pointed — `null` is the root wishlist.
+   *
+   * **The destination is an argument rather than a default**, because the menu is the one
+   * surface that offers every folder at once and the row that was pressed is the only thing
+   * that knows which. `WishInput.folderId` treats the folder as part of the row's storage
+   * grain, the way `preferredFinish` already is: the same card wished into two folders is two
+   * wishes, so passing the wrong one here writes a second row rather than moving anything.
+   */
+  addToWishlist: (target: CardMenuTarget, folderId: number | null) => void;
+  /**
+   * The wishlist's filing cabinet, flat, as the host page already holds it.
+   *
+   * **A value and not a query, which is what keeps the wishlist row a `submenu`.** Every host
+   * subscribes once through `useCardMenuDeps` → `useWishlistFolders`, so the rows are in hand
+   * before a reader right-clicks anything; see the row itself in `buildCardMenu` for why that
+   * is the whole difference between this and the deck picker.
+   *
+   * Empty is the ordinary answer — a wishlist that files nothing, and a hook whose first read
+   * has not landed, are the same array here. Neither is an error, and the row a reader gets is
+   * the one they have always had.
+   */
+  wishlistFolders: readonly WishlistFolder[];
   /**
    * Open the printings modal for a card.
    *
@@ -223,13 +256,7 @@ export function buildCardMenu(target: CardMenuTarget, deps: CardMenuDeps): MenuI
       Icon: Plus,
       items: [
         collectionItem(target, deps.addToCollection, deps.deckDriven ?? false),
-        {
-          kind: "action",
-          id: "add-wishlist",
-          label: "Wishlist",
-          Icon: Heart,
-          onSelect: () => deps.addToWishlist(target),
-        },
+        wishlistItem(target, deps),
         // `lazy` and not `submenu`: the folder tree and the deck list are two queries, and a
         // right-click on a card in a wall of forty must not fire either of them.
         { kind: "lazy", id: "add-deck", label: "Deck", Icon: Layers, Content: DeckPicker },
@@ -308,6 +335,11 @@ function printingsItem(target: CardMenuTarget, deps: CardMenuDeps): MenuAction {
         oracleId,
         name: target.name,
         deck: deps.printingsDeck ?? null,
+        // A menu row never repoints a wish: the wishlist's own controls are where a wish names
+        // itself, and a right-click on a card is a question about the cardboard. Spelled out
+        // because the field is required — see `PrintingsRequest`, where the `null` every
+        // construction site has to write is the whole guarantee.
+        wish: null,
       }),
   };
 }
@@ -382,6 +414,38 @@ function collectionItem(
 
 function collectionRow(onSelect: () => void): MenuAction {
   return { kind: "action", id: "add-collection", label: "Collection", Icon: LibraryBig, onSelect };
+}
+
+/**
+ * "Add to → Wishlist", and the one thing that decides whether it is a press or a question.
+ *
+ * **With no folders it is a single `action`, exactly as it was before folders existed.** That
+ * is the case for every reader who has never made one — a wishlist that files nothing is the
+ * ordinary wishlist — and turning their one press into a submenu with one row in it would be a
+ * cost paid by everybody to describe a cabinet that is empty. `null` is the root, spelled out
+ * rather than defaulted, because a destination the caller did not choose is the bug
+ * {@link CardMenuDeps.addToWishlist} exists to make unwritable.
+ *
+ * **With folders it is a `submenu` and deliberately not a `lazy` row, which is the opposite of
+ * the deck picker directly below it.** `lazy` exists because `useDecks()` and `useDeckFolders()`
+ * are two queries a right-click on a wall of forty tiles must not fire; that is a rule about
+ * *reaching the backend on open*, and a folder list the host page is already subscribed to is
+ * not reaching anything. `useCardMenuDeps` holds one `useWishlistFolders()` per page mount, so
+ * the rows are in hand before the menu is built and the whole `lazy` machinery — a component, a
+ * mount, a note while it loads — would buy a fetch that has already happened.
+ */
+function wishlistItem(target: CardMenuTarget, deps: CardMenuDeps): MenuItem {
+  const row = { id: "add-wishlist", label: "Wishlist", Icon: Heart } as const;
+  if (deps.wishlistFolders.length === 0) {
+    return { kind: "action", ...row, onSelect: () => deps.addToWishlist(target, null) };
+  }
+  return {
+    kind: "submenu",
+    ...row,
+    items: buildWishlistTargetItems(deps.wishlistFolders, (folderId) =>
+      deps.addToWishlist(target, folderId),
+    ),
+  };
 }
 
 /** The finishes this printing can be recorded in — never empty, because an add has to name one. */
@@ -719,6 +783,90 @@ function deckLevel(
     (deck) => deck.name,
   ).map((deck) => deckItem(deck, choose));
   return [...drawers, ...here];
+}
+
+/**
+ * The wishlist as a menu: the root list, a rule, and the folders filed under it.
+ *
+ * Pure and separately exported for `buildDeckTargetItems`' reason — this is the half worth
+ * pinning, and the row that calls it is three lines of branch.
+ *
+ * **The root goes first and is never omitted.** `NULL` is where every wish lands unless somebody
+ * says otherwise, so it is the answer a reader wants most often and the one that must not move
+ * when they make their fourth folder. The separator under it says the same thing the indent
+ * would if this were a page: everything below is filing.
+ *
+ * Folders keep `buildFolderTree`'s order — `sortOrder`, then name, then id — and go through no
+ * `sortOptions`, which is `buildDeckTargetItems`' argument reached from the wishlist's end: a
+ * folder tree is an arrangement the reader made, one of the two kinds of list `src/lib/options.ts`
+ * exempts, and listing their drawers one way on the wishlist page and another in this picker
+ * reads as a bug because it is one.
+ *
+ * **Members are deliberately not passed** — `buildFolderTree(folders, [])`. The node counts come
+ * back zero and nothing here reads one: a folder is a *destination*, and how many wishes are
+ * already in it has no bearing on whether a reader may file the fortieth there.
+ */
+export function buildWishlistTargetItems(
+  folders: readonly WishlistFolder[],
+  choose: (folderId: number | null) => void,
+): MenuItem[] {
+  return [
+    {
+      kind: "action",
+      id: "wishlist-root",
+      label: "Wishlist",
+      // `Heart`, not `Folder`: the root is the list itself rather than a drawer in it, and it
+      // wears the same glyph as the row this submenu hangs off.
+      Icon: Heart,
+      onSelect: () => choose(null),
+    },
+    { kind: "separator", id: "wishlist-sep-root" },
+    ...wishlistLevel(buildFolderTree(folders, []), choose),
+  ];
+}
+
+function wishlistLevel(
+  nodes: readonly FolderNode<WishlistFolder>[],
+  choose: (folderId: number | null) => void,
+): MenuItem[] {
+  return nodes.map((node): MenuItem => {
+    const { id, name } = node.folder;
+    const here = {
+      kind: "action",
+      id: `wishlist-folder-${id}`,
+      label: name,
+      Icon: Folder,
+      onSelect: () => choose(id),
+    } as const;
+    /**
+     * **An empty folder is still offered, and this is where `deckLevel` does the opposite.**
+     * There a folder is a *container of destinations* — a drawer holding no deck and no drawer
+     * with a deck in it opens onto an empty panel, so it is dropped. Here the folder **is** the
+     * destination: filing the first wish into a folder the reader made an hour ago is exactly
+     * what an empty one is for, and dropping it would leave that folder reachable only from the
+     * wishlist page.
+     */
+    if (node.children.length === 0) return here;
+    /**
+     * A folder with children draws **its own row first**, then a rule, then them — the second
+     * divergence. `deckLevel`'s submenu holds decks and sub-folders, two different kinds of
+     * thing, and the folder itself is not one of them. Here the parent and its children are all
+     * destinations of the same kind, so a submenu that offered only the children would make
+     * "Expensive" the one folder in the cabinet a card cannot be filed into: the reader would
+     * open it looking for the drawer and find only what is inside it.
+     */
+    return {
+      kind: "submenu",
+      id: `wishlist-folder-${id}`,
+      label: name,
+      Icon: Folder,
+      items: [
+        { ...here, id: `wishlist-folder-${id}-here` },
+        { kind: "separator", id: `wishlist-folder-${id}-sep` },
+        ...wishlistLevel(node.children, choose),
+      ],
+    };
+  });
 }
 
 /**

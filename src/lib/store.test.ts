@@ -309,15 +309,20 @@ describe("the card a reader asked to see every printing of", () => {
   });
 
   it("records the request, the printing it was asked from and the deck slot", () => {
-    useAppStore
-      .getState()
-      .openAllPrintings({ cardId: "card-1", oracleId: "o1", name: "Sol Ring", deck: SLOT });
+    useAppStore.getState().openAllPrintings({
+      cardId: "card-1",
+      oracleId: "o1",
+      name: "Sol Ring",
+      deck: SLOT,
+      wish: null,
+    });
 
     expect(useAppStore.getState().printingsRequest).toEqual({
       cardId: "card-1",
       oracleId: "o1",
       name: "Sol Ring",
       deck: SLOT,
+      wish: null,
     });
   });
 
@@ -327,11 +332,62 @@ describe("the card a reader asked to see every printing of", () => {
    * rewriting a deck row nobody named.
    */
   it("keeps a null slot from a surface that is not a deck row", () => {
-    useAppStore
-      .getState()
-      .openAllPrintings({ cardId: "card-1", oracleId: "o1", name: "Sol Ring", deck: null });
+    useAppStore.getState().openAllPrintings({
+      cardId: "card-1",
+      oracleId: "o1",
+      name: "Sol Ring",
+      deck: null,
+      wish: null,
+    });
 
     expect(useAppStore.getState().printingsRequest?.deck).toBeNull();
+  });
+
+  /**
+   * The other target a press can have, and the whole of what the wishlist adds to this channel:
+   * the row a press **repoints** onto the printing pressed, where `deck` names the row a press
+   * rewrites. A wish is addressed by its own id — `wishlist_set_printing` takes the row and not
+   * the grain — so there is nothing else to carry.
+   */
+  it("records the wishlist row a press repoints", () => {
+    useAppStore.getState().openAllPrintings({
+      cardId: "card-1",
+      oracleId: "o1",
+      name: "Sol Ring",
+      deck: null,
+      wish: { id: 7 },
+    });
+
+    expect(useAppStore.getState().printingsRequest?.wish).toEqual({ id: 7 });
+  });
+
+  /**
+   * **The field is required, so a surface with no wish has to say so** — and this is the half
+   * that keeps the modal honest, because it is what a *walk step* writes.
+   *
+   * `CardWalkStop` deliberately carries no wish, so stepping re-opens this channel with `null`
+   * and the repoint target clears: the reader asked about wish A, and arrowing to card B must not
+   * rewrite A onto a printing it was never for. Made optional the field would read identically at
+   * every site and mean the opposite by omission.
+   */
+  it("keeps a null wish from a surface with none to repoint", () => {
+    useAppStore.getState().openAllPrintings({
+      cardId: "card-1",
+      oracleId: "o1",
+      name: "Sol Ring",
+      deck: SLOT,
+      wish: { id: 7 },
+    });
+
+    useAppStore.getState().openAllPrintings({
+      cardId: "forest-1",
+      oracleId: "o-forest",
+      name: "Forest",
+      deck: null,
+      wish: null,
+    });
+
+    expect(useAppStore.getState().printingsRequest?.wish).toBeNull();
   });
 
   /**
@@ -340,9 +396,13 @@ describe("the card a reader asked to see every printing of", () => {
    * finds its place on a walk whose stops are not deck rows.
    */
   it("keeps the printing the question was asked from, deck or no deck", () => {
-    useAppStore
-      .getState()
-      .openAllPrintings({ cardId: "card-9", oracleId: "o1", name: "Sol Ring", deck: null });
+    useAppStore.getState().openAllPrintings({
+      cardId: "card-9",
+      oracleId: "o1",
+      name: "Sol Ring",
+      deck: null,
+      wish: null,
+    });
 
     expect(useAppStore.getState().printingsRequest?.cardId).toBe("card-9");
   });
@@ -355,9 +415,13 @@ describe("the card a reader asked to see every printing of", () => {
   it("moves nothing else", () => {
     useAppStore.setState({ activeView: "decks", openDeckId: 4, selectedCardId: "card-1" });
 
-    useAppStore
-      .getState()
-      .openAllPrintings({ cardId: "card-1", oracleId: "o1", name: "Sol Ring", deck: null });
+    useAppStore.getState().openAllPrintings({
+      cardId: "card-1",
+      oracleId: "o1",
+      name: "Sol Ring",
+      deck: null,
+      wish: null,
+    });
 
     const s = useAppStore.getState();
     expect(s.activeView).toBe("decks");
@@ -366,9 +430,13 @@ describe("the card a reader asked to see every printing of", () => {
   });
 
   it("closes to null", () => {
-    useAppStore
-      .getState()
-      .openAllPrintings({ cardId: "card-1", oracleId: "o1", name: "Sol Ring", deck: null });
+    useAppStore.getState().openAllPrintings({
+      cardId: "card-1",
+      oracleId: "o1",
+      name: "Sol Ring",
+      deck: null,
+      wish: null,
+    });
 
     useAppStore.getState().closeAllPrintings();
 

@@ -248,7 +248,7 @@ export function FolderTree({
               key={node.folder.id}
               folderId={node.folder.id}
               label={node.folder.name}
-              count={node.deckCount}
+              count={node.count}
               depth={node.depth + 1}
               selected={selectedId === node.folder.id}
               Glyph={selectedId === node.folder.id ? FolderOpen : Folder}

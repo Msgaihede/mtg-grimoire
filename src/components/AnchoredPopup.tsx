@@ -31,6 +31,11 @@ import { cn } from "@/lib/utils";
  * `relatedTarget` being the trigger — a second press, or Escape's hand-back — closing there
  * would race the toggle and leave the panel open forever.
  *
+ * **The caret moves into the panel while the panel is still growing, and that is the one thing
+ * in here that is a *scrolling* decision rather than a focus one.** See {@link Panel} — the
+ * caret goes in at once and the scroll waits for the tween to finish, because a scroll computed
+ * against a box that is still 4% short cannot be corrected by asking for more of it.
+ *
  * **The panel outlives `open` by the length of its fade**, which is what the last two guards are
  * about: `aria-hidden` and `pointer-events-none` from the render that starts the exit, so what
  * is on its way out is a picture rather than a second copy of the caller's form in the
@@ -164,13 +169,62 @@ function Panel({
   // The caret moves into the layer, as it does for the card pane and the set picker: the panel's
   // own controls are then the next thing Tab reaches, focus leaving it is what closes it, and
   // Escape has something to hand back.
+  //
+  // **`preventScroll`, and the scroll is done separately once the panel has finished growing.**
+  // Focusing an element scrolls it into view, and this effect runs on the render that mounts it —
+  // while `popup` still has it at `initial: { scale: 0.96 }` with a top origin, so the browser
+  // computes that scroll against a box 4% shorter than the one that ends up on screen, and every
+  // pixel of the difference is at the **bottom**. Nothing scrolls again once the tween ends, so
+  // the scroller clips exactly that much, permanently.
+  //
+  // The caret still moves on the very first render, which is what the keyboard hand-off needs:
+  // a reader who presses Enter and then Tab immediately must find the panel's own controls next,
+  // and a focus deferred to the end of a 180ms tween would send that Tab into the list behind.
+  // `CardGrid`'s walk splits the same press the same way and for the same kind of reason.
   useEffect(() => {
-    panelRef.current?.focus();
+    panelRef.current?.focus({ preventScroll: true });
   }, []);
+
+  /**
+   * The scroll the focus above did not do — run once the entry tween has put the panel at
+   * `scale: 1`, which is the first moment the box being scrolled to is the box on screen.
+   *
+   * **This replaced a `scroll-mb-4` on the panel, and the replacement is not a refinement of it:
+   * no scroll margin can work here.** A margin only ever asks the browser to scroll *further*,
+   * and the browser clamps at the scroller's maximum — which the scaled panel is itself what
+   * caps. Measured in the shipped window on 2026-08-22: applying `scale(0.96)` with a top origin
+   * to the open panel drops the scroller's `scrollTop` maximum from **257 to 246**, and 246 is
+   * exactly where the focus scroll landed; raising the margin from 16px to **400px** moved that
+   * landing not at all — byte-identical, 246, and the same 10.5px of panel lost. The panel is not
+   * too tall for the scrollport either (431px to spare at 1920×1080, 37px at 1280×800): the
+   * scroll simply stopped 11px short of a maximum that was wrong while it ran.
+   *
+   * **`onAnimationComplete` and not a timer**, because the number to wait for is the tween's and
+   * belongs to the preset rather than to this file. It fires for the *exit* as well, hence the
+   * `present` guard — a panel on its way out has already handed the caret back, and scrolling to
+   * it would drag the list under whatever the reader moved on to.
+   *
+   * **Reduced motion is covered by the callback rather than around it.** Nothing in `popup`
+   * branches on the preference; the one `MotionConfig` in `App.tsx` does, and it reduces the
+   * transform keys by applying them instantly while `opacity` still tweens — so the panel is at
+   * full scale sooner and this still runs when the animation as a whole finishes. The callback is
+   * what fires on **every** path, including the one where there was nothing to animate, which is
+   * why the scroll hangs off it rather than off a `useReducedMotion()` branch that would have to
+   * predict which of the two paths it is on.
+   *
+   * The optional call is jsdom's — it implements neither scrolling nor layout — and it is also
+   * why **nothing in the suite can go red for the geometry**. The suite can pin that the scroll
+   * happens after the tween and not during it; only a live pass can say where the panel lands.
+   */
+  const settle = useCallback(() => {
+    if (!present) return;
+    panelRef.current?.scrollIntoView?.({ block: "nearest" });
+  }, [present]);
 
   return (
     <motion.div
       {...popup}
+      onAnimationComplete={settle}
       ref={panelRef}
       tabIndex={-1}
       role="dialog"
@@ -182,6 +236,14 @@ function Panel({
       aria-hidden={present ? undefined : true}
       className={cn(
         "absolute top-7 rounded-lg border border-border bg-surface p-3 text-left shadow-lg",
+        // **No scroll margin here, and its absence is a finding rather than an omission.** A
+        // `scroll-mb-4` stood on this panel from 2026-08-22 until later the same day, on the
+        // reading that the clipped 4% was an overhang to leave room for — `DROP_MARK_ROOM`'s
+        // twin. The diagnosis was right to the pixel and the cure was inert: a scroll margin asks
+        // the browser to scroll *further*, and what was wrong was the **maximum** it clamps to,
+        // which the scaled panel sets. Overriding the margin to 400px changed the landing
+        // `scrollTop` by nothing at all. The scroll is deferred instead — see {@link settle}.
+        //
         // Only ever effective against this panel's *siblings*: on a table row or a grid row the
         // anchor is inside a transformed element, which caps everything in it at that row's own
         // layer. See `LAYER`.
