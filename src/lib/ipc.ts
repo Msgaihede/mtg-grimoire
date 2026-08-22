@@ -2885,6 +2885,24 @@ export interface TagRef {
 }
 
 /**
+ * One tag a reader named in a card search box — `tags::query::TagLookup`, the ask half of
+ * {@link ipc.tagResolve}.
+ *
+ * `tagQuery.ts`'s token minus what is the *box's* business: where the term sat in the string,
+ * and whether it was negated. Resolution answers "is there such a tag"; which of
+ * {@link TagTerms}' two lists the slug lands in is decided in TypeScript, because that is a
+ * conclusion rather than a fact.
+ */
+export interface TagLookup {
+  /** **Never `"both"`**, unlike {@link ipc.tagSearch}'s: a typed `o:` names one taxonomy, and
+   *  answering across both would let `o:dog` filter by the picture. */
+  namespace: TagNamespace;
+  /** What the reader typed after the keyword. Normalised by Rust, never here — two copies of
+   *  that rule would leave both halves self-consistent and the search matching nothing. */
+  value: string;
+}
+
+/**
  * One tag, as the Tags page draws it — `tags::query::TagHit`.
  *
  * Answered by both {@link ipc.tagSearch} and {@link ipc.tagChildren}, and a muted tag is absent
@@ -4030,6 +4048,31 @@ export const ipc = {
    */
   tagChildren: (namespace: TagNamespace | "both", slug: string | null) =>
     invoke<TagHit[]>("tag_children", { namespace, slug }),
+  /**
+   * Turn tag names typed into a card search box into the slugs {@link SearchRequest.artTags} and
+   * {@link SearchRequest.oracleTags} match on — `tagQuery.ts`'s tokens, resolved.
+   *
+   * **One answer per ask, in the order asked, `null` where there is no such tag.** The misses
+   * ride along rather than being filtered out, because the box has to be able to name the token
+   * it could not find and a shortened list cannot say which one is missing.
+   *
+   * **Exact, where {@link ipc.tagSearch} is a substring, and the difference is the job.** That
+   * one is a type-ahead and should find `removal` from `remov`; this one builds a *filter*, and
+   * a substring here would resolve one token to many tags that would have to be ORed — while
+   * every tag filter in this app intersects, so `a:dragon` would silently also answer
+   * `dragonborn`. Separators and case are still noise (`otag:"spot removal"`,
+   * `otag:spot-removal` and `otag:SPOT-REMOVAL` are one tag, verified live 2026-08-20), because
+   * Rust matches through `slug_norm`.
+   *
+   * **A muted tag still resolves.** Muting hides a tag from the search box and the rail; it is
+   * documented never to hide a *card*, and nothing in the card filters consults that table. A
+   * reader who spells a tag out has named it rather than browsed onto it.
+   *
+   * A blank or all-punctuation value answers `null` and never a tag — see the Rust for why that
+   * is a guard rather than an accident.
+   */
+  tagResolve: (asks: readonly TagLookup[]) =>
+    invoke<(TagRef | null)[]>("tag_resolve", { asks }),
   /**
    * Stop offering a tag anywhere — Scryfall asks downstream apps for this in as many words,
    * because Tagger is crowdsourced and they cannot guarantee the data is free from abuse.

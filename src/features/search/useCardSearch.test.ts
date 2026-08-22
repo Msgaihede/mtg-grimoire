@@ -6,9 +6,10 @@ import type { FacetResponse, SearchRequest, SearchSortKey } from "@/lib/ipc";
 
 const searchCards = vi.hoisted(() => vi.fn());
 const facetCards = vi.hoisted(() => vi.fn());
+const tagResolve = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { searchCards, facetCards },
+  ipc: { searchCards, facetCards, tagResolve },
 }));
 
 import { COLD_POLL_MS } from "./useCardFacets";
@@ -16,6 +17,7 @@ import {
   activeFilterCount,
   ANY_CARD,
   cycleTriState,
+  DEBOUNCE_MS,
   formatParams,
   FORMATS,
   SEARCH_SORT_OPTIONS,
@@ -1096,5 +1098,230 @@ describe("the printings mode a caller can open on", () => {
     act(() => result.current.toggleAllPrintings());
 
     await waitFor(() => expect(lastSearchRequest().collapse).toBe(true));
+  });
+});
+
+
+/**
+ * Scryfall's tagger syntax, read out of the card search box — the whole of what
+ * `useCardSearch` does with `tagQuery.ts`'s tokens.
+ *
+ * The parser has its own suite; these are the four places the *wiring* can be wrong in a way
+ * nothing on screen would name: the free text sent to FTS, the terms sent beside it, the
+ * request that must not be made before the names resolve, and the wall that must not survive a
+ * name that resolves to nothing.
+ */
+describe("useCardSearch, reading tagger syntax out of the box", () => {
+  beforeEach(() => {
+    qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    searchCards.mockReset().mockResolvedValue({ items: [], total: 0, totalIsCapped: false });
+    facetCards.mockReset().mockResolvedValue(READY);
+    tagResolve.mockReset();
+  });
+
+  /** `tag_resolve`'s answer for a query whose every name is real, keyed on the value asked. */
+  const resolveAs = (byValue: Record<string, { slug: string; namespace: "art" | "oracle" }>) =>
+    tagResolve.mockImplementation((asks: { namespace: string; value: string }[]) =>
+      Promise.resolve(
+        asks.map((a) => {
+          const hit = byValue[a.value];
+          return hit && hit.namespace === a.namespace
+            ? { slug: hit.slug, label: hit.slug, namespace: hit.namespace }
+            : null;
+        }),
+      ),
+    );
+
+  /**
+   * The decisive one. `bolt a:dragon` is two questions and only one of them is FTS's — sending
+   * the raw box would have the index hunting for a card whose text contains `a:dragon`, which
+   * is no card, so the wall would be empty and the tag filter would never have been applied.
+   */
+  it("sends the free text to FTS and the tag as a term", async () => {
+    resolveAs({ dragon: { slug: "dragon", namespace: "art" } });
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    act(() => result.current.setText("bolt a:dragon"));
+
+    await waitFor(() => expect(lastSearchRequest().artTags).toEqual({
+      include: ["dragon"],
+      exclude: [],
+    }));
+    expect(lastSearchRequest().text).toBe("bolt");
+    // The counts greying the chips and the wall those chips filter have to describe one corpus.
+    expect(lastFacetRequest().text).toBe("bolt");
+    expect(lastFacetRequest().artTags).toEqual({ include: ["dragon"], exclude: [] });
+  });
+
+  /** Both taxonomies, and `-` reaching the other list — the whole grammar in one query. */
+  it("puts each taxonomy in its own field and a dash in the exclude list", async () => {
+    resolveAs({
+      ramp: { slug: "ramp", namespace: "oracle" },
+      dragon: { slug: "dragon", namespace: "art" },
+    });
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    act(() => result.current.setText("o:ramp -a:dragon"));
+
+    await waitFor(() => expect(lastSearchRequest().oracleTags).toEqual({
+      include: ["ramp"],
+      exclude: [],
+    }));
+    expect(lastSearchRequest().artTags).toEqual({ include: [], exclude: ["dragon"] });
+  });
+
+  /**
+   * **The race this feature could lose silently.** A search fired before its names have
+   * resolved goes out with no tag filter at all and caches the whole corpus under the key that
+   * afterwards means "filtered" — the wall wrong, served instantly from cache, with nothing on
+   * screen to notice. So the assertion is not "the right request eventually" but "no wrong
+   * request ever": every call carrying this query's text also carries its tags.
+   */
+  it("makes no request at all until the typed names have resolved", async () => {
+    let answer: (v: unknown) => void = () => {};
+    tagResolve.mockReturnValue(new Promise((res) => (answer = res)));
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+    const before = searchCards.mock.calls.length;
+
+    act(() => result.current.setText("a:dragon"));
+    // Long enough for the debounce to have fired and a request to have been made if one were
+    // going to be: the point is that the resolve is still outstanding.
+    await new Promise((r) => setTimeout(r, DEBOUNCE_MS * 2));
+    expect(searchCards.mock.calls.length).toBe(before);
+
+    act(() => answer([{ slug: "dragon", label: "Dragon", namespace: "art" }]));
+
+    await waitFor(() => expect(lastSearchRequest().artTags).toBeDefined());
+  });
+
+  /**
+   * A name that resolves to nothing empties the wall on purpose. Answering it as though the
+   * term were not there would show the reader the unfiltered corpus in reply to a narrowing
+   * they asked for, which is the one direction a search must never fail in — and
+   * `keepPreviousData` means the rows left alone would be the *previous* search's, which reads
+   * as "these are your results".
+   */
+  it("empties the wall and names the token when a tag does not exist", async () => {
+    searchCards.mockResolvedValue({
+      items: [{ id: "c1" }],
+      total: 1,
+      totalIsCapped: false,
+    });
+    resolveAs({});
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(result.current.rows.length).toBe(1));
+
+    act(() => result.current.setText("o:remov"));
+
+    await waitFor(() => expect(result.current.tagNotFound.length).toBe(1));
+    expect(result.current.tagNotFound[0].value).toBe("remov");
+    expect(result.current.rows).toEqual([]);
+    expect(result.current.total).toBe(0);
+    expect(result.current.tagChips).toEqual([]);
+  });
+
+  /**
+   * The Tags page hands its rail's chips down while the reader can still type into the box, so
+   * both halves have to arrive. Either one silently dropping the other's tags would answer a
+   * question nobody asked, and the wall would look like a working filter.
+   */
+  it("ands the caller's chips with the tags typed into the box", async () => {
+    resolveAs({ ramp: { slug: "ramp", namespace: "oracle" } });
+    const tagTerms = { artTags: { include: ["dog"], exclude: [] } };
+    const { result } = renderHook(() => useCardSearch({ tagTerms }), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    act(() => result.current.setText("o:ramp"));
+
+    await waitFor(() => expect(lastSearchRequest().oracleTags).toBeDefined());
+    expect(lastSearchRequest().artTags).toEqual({ include: ["dog"], exclude: [] });
+    expect(lastSearchRequest().oracleTags).toEqual({ include: ["ramp"], exclude: [] });
+  });
+
+  /**
+   * A box with no tagger syntax in it must send exactly the payload it always did — an
+   * `artTags: { include: [], exclude: [] }` riding on every search would be a payload that lies
+   * about intent, and `filters::picked_tags` treats it as no filter while the *query key* it
+   * feeds treats it as a second search.
+   */
+  it("sends no tag fields at all for a plain search", async () => {
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    act(() => result.current.setText("bolt"));
+
+    await waitFor(() => expect(lastSearchRequest().text).toBe("bolt"));
+    expect(lastSearchRequest().artTags).toBeUndefined();
+    expect(lastSearchRequest().oracleTags).toBeUndefined();
+    expect(tagResolve).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The box is the one source of truth for the query, so a chip's ✕ edits the text the reader
+   * can see rather than a hidden list beside it. It also flushes the debounce: a press is the
+   * reader's final answer, and a chip that sat on screen for another 300 ms would read as a
+   * press that was dropped.
+   */
+  it("removes a chip by splicing the term out of the box", async () => {
+    resolveAs({ dragon: { slug: "dragon", namespace: "art" } });
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    act(() => result.current.setText("bolt a:dragon"));
+    await waitFor(() => expect(result.current.tagChips.length).toBe(1));
+
+    act(() => result.current.removeTagChip("dragon", "art"));
+
+    expect(result.current.text).toBe("bolt");
+    await waitFor(() => expect(lastSearchRequest().artTags).toBeUndefined());
+  });
+
+  /** The include/exclude press rewrites the term where it stands, rather than moving it to the
+   *  end of the reader's own sentence. */
+  it("flips a chip by writing the dash into the box", async () => {
+    resolveAs({
+      dog: { slug: "dog", namespace: "art" },
+      ramp: { slug: "ramp", namespace: "oracle" },
+    });
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    act(() => result.current.setText("a:dog o:ramp"));
+    await waitFor(() => expect(result.current.tagChips.length).toBe(2));
+
+    act(() => result.current.toggleTagChipMode("dog", "art"));
+
+    expect(result.current.text).toBe("-a:dog o:ramp");
+  });
+
+  /** Naming a tag the box does not hold leaves the query alone rather than rewriting it into
+   *  something the reader never typed. */
+  it("leaves the box alone when asked about a tag that is not in it", async () => {
+    resolveAs({ dog: { slug: "dog", namespace: "art" } });
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(searchCards).toHaveBeenCalled());
+
+    act(() => result.current.setText("a:dog"));
+    await waitFor(() => expect(result.current.tagChips.length).toBe(1));
+
+    act(() => result.current.removeTagChip("cat", "art"));
+    act(() => result.current.toggleTagChipMode("cat", "art"));
+
+    expect(result.current.text).toBe("a:dog");
+  });
+
+  /** A tag typed into the box *is* the reader asking something, so an empty answer to it is a
+   *  search that missed rather than a database that has not synced. */
+  it("does not read as unfiltered when the only thing typed is a tag", async () => {
+    resolveAs({ dragon: { slug: "dragon", namespace: "art" } });
+    const { result } = renderHook(() => useCardSearch(), { wrapper });
+    await waitFor(() => expect(result.current.unfiltered).toBe(true));
+
+    act(() => result.current.setText("a:dragon"));
+
+    await waitFor(() => expect(result.current.unfiltered).toBe(false));
   });
 });

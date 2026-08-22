@@ -5166,6 +5166,52 @@ export function readHandlers(db: FakeDb) {
     },
 
     /**
+     * `tags::query::tag_resolve` — the tag names typed into a card search box, as slugs.
+     *
+     * **One answer per ask, in the order asked, `null` where there is no such tag.** The misses
+     * ride along rather than being filtered out: the box has to be able to name the token it
+     * could not find, and a shortened list cannot say which one is missing.
+     *
+     * **Exact, where {@link readHandlers.tag_search} is a substring**, and the difference is the
+     * job. That one is a type-ahead and should reach `removal` from `remov`; this one builds a
+     * *filter*, and a substring here would resolve one token to many tags that would have to be
+     * ORed — while every tag filter in this app intersects, so `a:dragon` would silently also
+     * answer `dragonborn`. Both compare against `slugNorm` through {@link normalizeTag}, so
+     * separators and case are noise either way.
+     *
+     * **A muted tag still resolves, and this is the one tag read here that ignores
+     * {@link tagVisible}.** Muting hides a *tag* — from the box, from the rail, from a parent's
+     * `childCount` — and is documented never to hide a *card*; nothing in
+     * {@link matchesCardFilters} consults the mute table. A reader who spells a tag out has
+     * named it rather than browsed onto it.
+     *
+     * **A blank needle answers `null` rather than the first tag with a blank `slugNorm`.** In
+     * the app that column is `NOT NULL DEFAULT ''` between schema v20 and v22, so a whole
+     * taxonomy can be sitting at `''` and a half-typed `o:` would resolve onto an arbitrary one
+     * of them. The fixture cannot hold that state, which is exactly why the guard is copied
+     * here rather than left to the Rust: a fake that answered a tag where the app answers
+     * nothing is a story that proves the wrong thing.
+     */
+    tag_resolve: (args: {
+      asks: { namespace: string; value: string }[];
+    }): (TagRef | null)[] =>
+      args.asks.map((ask) => {
+        const [ds] = tagDatasets(db, ask.namespace);
+        if (ds.namespace !== ask.namespace) throw refuse(`unknown tag namespace: ${ask.namespace}`);
+        const needle = normalizeTag(ask.value);
+        if (needle === "") return null;
+        const hit = ds.tags
+          .filter((row) => row.slugNorm === needle)
+          // The reader's own spelling wins a collision, then the lower slug — so one query
+          // cannot answer two different tags on two runs. Only fires where two tags normalise
+          // onto one needle (`spot-removal` and `spot_removal` would).
+          .sort((a, b) =>
+            Number(b.slug === ask.value) - Number(a.slug === ask.value) || a.slug.localeCompare(b.slug),
+          )[0];
+        return hit ? { slug: hit.slug, label: hit.label, namespace: ds.namespace } : null;
+      }),
+
+    /**
      * `tags::query::tag_children` — one level of the tree: the children of `slug`, or the
      * **roots** when it is absent.
      *
