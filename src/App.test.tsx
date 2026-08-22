@@ -31,6 +31,11 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     // empty row is a database nobody has zoomed, so every wall opens at its default.
     cardZoom: vi.fn().mockResolvedValue({}),
     setCardZoom: vi.fn().mockResolvedValue(undefined),
+    // And the sidebar's own width, read once on the way up for the same reason. `false` is a
+    // database nobody has collapsed the rail in, so every test here gets the six named entries
+    // it has always queried by name.
+    navCollapsed: vi.fn().mockResolvedValue(false),
+    setNavCollapsed: vi.fn().mockResolvedValue(undefined),
     onSyncProgress: vi.fn().mockResolvedValue(() => {}),
     // The shell listens for the reconcile event too, and a `.catch` cannot catch the
     // synchronous `TypeError` of calling `undefined`.
