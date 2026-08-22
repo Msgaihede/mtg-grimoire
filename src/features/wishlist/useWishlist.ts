@@ -96,6 +96,15 @@ export function useWishlist() {
   // Empty is name order — the view's own default, which is what a cleared sort falls back
   // to. Not a filter, so `resetAll` leaves it alone.
   const [sort, setSort] = useState<SortSpec<WishlistSortKey>>([]);
+  // Where the reader is standing — `null` is the root wishlist, a real destination and not
+  // "nothing chosen yet". Deliberately outside `WishlistFilterState`: it is navigation, not
+  // something the reader narrowed, so `activeFilterCount` never sees it and `resetAll` leaves
+  // it alone, the same reason `sort` does.
+  const [folderId, setFolderId] = useState<number | null>(null);
+  // `true` ignores `folderId` and answers every wish wherever it is filed. Also navigation
+  // rather than a filter, for the same reason `folderId` is — Flatten is "how much of the
+  // tree am I looking at", not "which wishes qualify".
+  const [flatten, setFlatten] = useState(false);
   const [debouncedText, setDebouncedText] = useState("");
 
   useEffect(() => {
@@ -121,6 +130,15 @@ export function useWishlist() {
     // refinement that can be left off, and the backend's default happens to be one of the
     // five rather than "no opinion".
     marketplace: marketplace.id,
+    // Sent only when the reader is actually inside a folder. The root is `#[serde(default)]`
+    // on the other end, so an omitted field already reads as "the root" — sending `null`
+    // there would say the same thing over the wire, but this keeps the same rule `text`
+    // follows: a value the backend would infer anyway is dropped rather than spelled out.
+    folderId: folderId ?? undefined,
+    // Sent only when `true`. The backend's default is `false`, and sending it on every
+    // request would make the payload lie about intent — the rule the file already applies to
+    // `text`, `fulfilled` and `needsReview`.
+    flatten: flatten || undefined,
   };
 
   // `["wishlist", …]`, so the one `invalidateQueries({ queryKey: ["wishlist"] })` that every
@@ -137,6 +155,11 @@ export function useWishlist() {
     // On every order, not only a money one: two marketplaces are two answers to the same
     // wishlist, and neither may be served from the other's cached page.
     marketplace.id,
+    // Two folders are two lists, and flattened is a third: each keeps its own cached pages
+    // and its own scroll position (`queryKeyString` below is what resets it), rather than one
+    // list quietly showing another folder's page while the new one is still in flight.
+    folderId === null ? "root" : String(folderId),
+    flatten ? "flat" : "",
   ];
 
   const query = useInfiniteQuery({
@@ -200,12 +223,33 @@ export function useWishlist() {
         : "") as WishlistSortKey | "",
     activeCount: activeFilterCount({ text, fulfilled, needsReview }),
     /** Clear every filter at once. The sort is not a filter and stays: it is how the reader
-     *  reads, not what they are looking at. */
+     *  reads, not what they are looking at. `folderId` and `flatten` stay for the same
+     *  reason: where the reader is standing, and whether they are ignoring the filing, are
+     *  navigation rather than something they narrowed, so clearing a search must not also
+     *  march them back to the root or drop them out of Flatten. */
     resetAll: () => {
       setText("");
       setFulfilled(undefined);
       setNeedsReview(undefined);
     },
+    /** Which folder the reader is standing in. `null` is the root wishlist — a real
+     *  destination, the same folder every unfiled wish lands in — and not "no folder chosen".
+     *  Navigation, not a filter: excluded from {@link WishlistFilterState} on purpose, so it
+     *  is invisible to {@link activeFilterCount} and untouched by `resetAll` above. */
+    folderId,
+    /** Open a folder, or `null` for the root. This hook only tracks where the reader now
+     *  stands — it does not own the write that files a wish there, or the one that creates a
+     *  folder; both live on the page, beside the folder cards. */
+    openFolder: (id: number | null) => setFolderId(id),
+    /**
+     * `true` ignores `folderId` and shows every wish regardless of filing — no folder cards,
+     * no drill-down, and every wish captioned with where it is filed instead. Also
+     * navigation, for the reason `folderId` is: it says how much of the tree is on screen,
+     * not which wishes qualify.
+     */
+    flatten,
+    /** Off shows the current folder; on shows the whole wishlist. */
+    toggleFlatten: () => setFlatten((current) => !current),
     /**
      * The marketplace every price on this view is quoted from — its label for the as-of
      * sentence and its currency for the formatter. The figures were decided by the query this
