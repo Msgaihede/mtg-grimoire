@@ -910,6 +910,9 @@ mod tests {
         assert!((inner.cost - 1.0).abs() < 1e-9, "4 x $0.25");
     }
 
+    /// Two things, because one fixture answers both: what an unpriced wish does to the cost
+    /// and to the header's note, and — through the fourth wish — that `missing` is clamped
+    /// **per row** rather than after the sum.
     #[test]
     fn folder_summary_leaves_an_unpriced_wish_out_of_the_cost_and_counts_it() {
         let conn = conn();
@@ -932,18 +935,74 @@ mod tests {
         // something the header's "could not price" note is about.
         wish(&conn, "o3", 1, Some(ordered.id));
         own(&conn, "plain", 1);
+        // **Over-covered**, and it is the row that tells `sum(max(0, q - owned))` apart from
+        // `max(0, sum(q - owned))`. Every other wish in this suite is either short or exactly
+        // covered, and on those two formulas agree row for row — so without this one the
+        // clamp's *position* is unpinned. Here the reader wants one copy and the binder holds
+        // four. Clamped per row it contributes 0 and the folder still needs 5; summed first,
+        // its -3 pays for three of the Bolts and the tile reads 2 — a folder claiming there is
+        // almost nothing left to buy while three copies are still to find, and a figure that
+        // contradicts the page header, which clamps per row. That divergence is exactly what
+        // the "one piece of arithmetic" rule exists to prevent.
+        priced_card(&conn, "bear-lea", "o4", "0.25");
+        wish(&conn, "o4", 1, Some(ordered.id));
+        own(&conn, "bear-lea", 4);
 
         let rows = folder_summary(&conn, ANY_MARKET).unwrap();
 
         assert_eq!(rows.len(), 1);
         let row = &rows[0];
-        assert_eq!(row.wishes, 3);
-        assert_eq!(row.missing, 5, "2 + 3 + 0");
+        assert_eq!(row.wishes, 4);
+        assert_eq!(
+            row.missing, 5,
+            "2 + 3 + 0 + 0 -- clamped per row, never summed first"
+        );
         assert!(
             (row.cost - 10.0).abs() < 1e-9,
-            "only the priced wish is in the cost, got {}",
+            "only the priced wish with copies still to find is in the cost, got {}",
             row.cost
         );
-        assert_eq!(row.unpriced, 1, "the ghost, and not the satisfied wish");
+        assert_eq!(
+            row.unpriced, 1,
+            "the ghost, and neither of the two wishes the binder already covers"
+        );
+    }
+
+    /// Every marketplace's price SQL prepares, over a folder that has a row to answer with.
+    ///
+    /// [`folder_summary`] builds its SQL with `format!`, and [`crate::sorting::price_expr`]
+    /// emits a **structurally different** expression per marketplace: a `json_extract` for
+    /// TCGplayer, a nested `CASE` for Cardmarket (which has no `eur_etched` key to quote), and
+    /// a correlated subquery over `marketplace_prices` referencing `c.id` and the finish for
+    /// the two feed-backed ones. A wrong alias in any of those is a run-time `prepare` failure
+    /// rather than a compile error, which is why [`crate::wishlist`] guards its own price SQL
+    /// the same way — `every_sort_key_prepares_at_every_marketplace`, one module over.
+    ///
+    /// **Enumerated through [`crate::marketplace::MARKETPLACE_IDS`] rather than hand-listed**,
+    /// so a marketplace this test has never seen cannot be added. A `Marketplace` variant that
+    /// no id in that list maps to is a variant `Marketplace::from_id` can never produce and no
+    /// command can ever be asked for, so the picker's list is the complete one. `cardtrader`
+    /// riding along as a second TCGplayer is what using it costs, and it is worth the price:
+    /// the sibling modules each keep a hand-written `[Marketplace; 4]`, which is a list
+    /// somebody has to remember to extend.
+    #[test]
+    fn folder_summary_prepares_at_every_marketplace() {
+        let conn = conn();
+        priced_card(&conn, "bolt-lea", "o1", "5.00");
+        let ordered = create_folder(&conn, None, "Ordered").unwrap();
+        wish(&conn, "o1", 3, Some(ordered.id));
+
+        for id in crate::marketplace::MARKETPLACE_IDS {
+            let rows = folder_summary(&conn, Marketplace::from_id(id))
+                .unwrap_or_else(|e| panic!("{id} could not be summed: {e}"));
+            // Not merely `is_ok`: an empty answer passes that and proves nothing about the SQL
+            // having run over a row. `wishes` and `missing` carry no price, so they are the
+            // same two figures whichever marketplace was asked.
+            assert_eq!(
+                (rows.len(), rows[0].wishes, rows[0].missing),
+                (1, 1, 3),
+                "at {id}"
+            );
+        }
     }
 }
