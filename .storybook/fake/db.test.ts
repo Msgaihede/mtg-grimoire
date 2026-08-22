@@ -3298,14 +3298,17 @@ describe("the busy fault", () => {
     // 49 → 50 and was right about the tree it was in; the merged table holds both, so it is 51.
     // Re-measure after the next merge rather than adding one to whichever figure you find here.
     //
-    // The collapsible sidebar then added `set_nav_collapsed`, 51 → 52 — the fifth `app_meta`
-    // setting and the same split as the four before it: the write takes the write connection
-    // and is refusable, while the read (`nav_collapsed`, on `db_read`) answers through every
-    // second of a sync. It is the first write here with **no validation of its own**, which is
-    // exactly why this loop matters more for it than for its neighbours: a handler that forgot
-    // `refuseIfBusy` would have an empty body, and nothing else in the file would notice.
+    // **And a third time, on the same merge.** The collapsible sidebar added `set_nav_collapsed`
+    // and the remembered search column added `set_deck_search_open`; each branch wrote 51 → 52
+    // and was right about the tree it was in, so the merged table holds both and it is 53. Both
+    // are the same split as every preference before them — the write takes the write connection
+    // and is refusable, while the read (`nav_collapsed` and `deck_search_open`, on `db_read`)
+    // answers through every second of a sync. And both are writes with **no validation of their
+    // own**, a `boolean` having arrived narrowed, which is exactly why this loop matters more
+    // for them than for their neighbours: a handler that forgot `refuseIfBusy` would have a
+    // one-line body, and nothing else in the file would notice.
     const names = Object.keys(w).filter((n) => !unlocked.includes(n));
-    expect(names).toHaveLength(52);
+    expect(names).toHaveLength(53);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,

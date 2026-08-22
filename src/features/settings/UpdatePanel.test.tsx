@@ -195,6 +195,45 @@ describe("UpdatePanel", () => {
   });
 
   /**
+   * The mark is drawn beside the version, and the half worth pinning is that it is **not** in
+   * the accessibility tree.
+   *
+   * `GrimoireMark` names itself only on a surface that draws it *instead of* the product name,
+   * and this panel sets that name in type in the same sentence as the version — so the claim
+   * here is a pair: the picture is drawn, and a screen reader is told `MTG Grimoire` once
+   * rather than twice. Reversing either half is a change to the panel's argument and should
+   * fail here.
+   *
+   * **Found by the gradient it ships, because the obvious query is the one that does not
+   * work.** `svg[viewBox='0 0 64 64']` is the only thing in the markup that says *which*
+   * picture was drawn — every other SVG on this panel is a lucide icon on a 24 unit grid — and
+   * under jsdom it matches **nothing**, in either casing: nwsapi lowercases an attribute name
+   * in a selector whatever namespace the element is in, and the parsed attribute is `viewBox`.
+   * It fails as an empty query rather than as an error, which reads exactly like a mark that
+   * was never drawn (probed here on 2026-08-22; a real browser matches it, so the same line in
+   * a Storybook play would have passed and the two would have disagreed about the same panel).
+   *
+   * A **type** selector stays case-aware for a foreign element, so `linearGradient` is both the
+   * query that works and the more interesting claim: that `<defs>` gradient is shipped by the
+   * full variant alone, so finding one is the proof that 36 cleared the component's 24px detail
+   * floor. A well-meant shrink into the chrome's size range would otherwise leave the width
+   * merely looking different while quietly drawing the simplified mark instead.
+   */
+  it("draws the full mark beside the version and keeps it out of the name", () => {
+    const { container } = render(panel());
+
+    const gradient = container.querySelector("linearGradient");
+    expect(gradient).toBeInTheDocument();
+    const mark = gradient?.closest("svg");
+    expect(mark).toHaveAttribute("width", "36");
+    expect(mark).toHaveAttribute("aria-hidden", "true");
+
+    // The words are what carry the name, which is the whole permission for hiding the mark.
+    expect(screen.getByText(/MTG Grimoire/)).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: /MTG Grimoire/i })).not.toBeInTheDocument();
+  });
+
+  /**
    * **This assertion is the inverse of the one it replaced**, and the reversal is the whole
    * change: the panel used to show a release body in a `<pre>` and pin the absence of any
    * rendering, on the argument that half-rendered markdown reads worse than none. There is a

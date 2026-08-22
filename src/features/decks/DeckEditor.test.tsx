@@ -32,6 +32,7 @@ import {
 } from "./cardControl";
 import { THEORY_MATCH_ATTR } from "./CardMarks";
 import { deckCardSlot, DECK_CARD_ATTR } from "./dnd";
+import { PANE_OVER_ATTR } from "./DeckEditor";
 import { theorySlot } from "./theoryMatch";
 import { QUICK_ZONE_ATTR } from "./QuickZones";
 import { card, resetRowIds, spec } from "./validation/fixtures";
@@ -53,6 +54,13 @@ const formatSpecs = vi.hoisted(() => vi.fn());
 // toolbar's quick add resolves a typed name through the same command.
 const searchCards = vi.hoisted(() => vi.fn());
 const listSets = vi.hoisted(() => vi.fn());
+// Which way the reader last left that panel, and the write a press on its disclosure makes.
+// Both are needed rather than one: the read is a query and would merely fail, but the write is
+// called straight out of a click handler, where `undefined` is a synchronous TypeError nothing
+// catches. `true` is the shipped default (issue #183), so the column is drawn open here exactly
+// as it is on a fresh install — which is what `openSearchPanel` below is idempotent about.
+const deckSearchOpen = vi.hoisted(() => vi.fn());
+const setDeckSearchOpen = vi.hoisted(() => vi.fn());
 // The five consulted overlays' own reads — categories, tags, history, the theory difference and
 // deck settings. Each is unmounted while closed, so these answer only for the tests that open
 // one — but the whole `ipc` object is replaced here, so a command left out is a `TypeError`
@@ -122,6 +130,8 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckSetViewState,
     formatSpecs,
     searchCards,
+    deckSearchOpen,
+    setDeckSearchOpen,
     // The docked search panel's filter row asks for facet counts beside the page. Answered
     // **cold** — `ready: false`, every map empty — so nothing greys and every control keeps
     // its name.
@@ -540,6 +550,9 @@ beforeEach(() => {
     openDeckId: 4,
     selectedCardId: null,
     paneDeckContext: null,
+    // Which side of the desk the pane would be drawn over. Reset with the rest so a test that
+    // opens a card is reading its own editor's answer rather than the previous one's.
+    paneFromDeckSearch: false,
     printingsRequest: null,
     // The order the printings modal steps through, published by this editor. Reset with the rest
     // so a test reading it is reading its own editor's answer and not the previous one's.
@@ -563,6 +576,8 @@ beforeEach(() => {
   // second button by that name, and every test here addresses cards by name.
   searchCards.mockReset().mockResolvedValue({ items: [], total: 0, totalIsCapped: false });
   listSets.mockReset().mockResolvedValue([]);
+  deckSearchOpen.mockReset().mockResolvedValue(true);
+  setDeckSearchOpen.mockReset().mockResolvedValue(undefined);
   deckCategoryList.mockReset().mockResolvedValue(CATEGORIES);
   deckTagList.mockReset().mockResolvedValue([]);
   deckTagAll.mockReset().mockResolvedValue([]);
@@ -1606,6 +1621,77 @@ describe("DeckEditor", () => {
 
     expect(useAppStore.getState().paneDeckContext).toBeNull();
     expect(document.querySelectorAll(`[${SELECTED_ATTR}]`)).toHaveLength(0);
+  });
+
+  /**
+   * **The pane is the editor's own, and which column it covers is decided by where the reader
+   * was looking** (issue #183).
+   *
+   * The attribute rather than the geometry, for the reason its own doc gives: what the two
+   * positions differ by is a `right` offset and a width, and jsdom lays nothing out, so both
+   * read `0` here. What a suite can hold is the decision — and the decision is the whole of the
+   * bug this replaced, where the pane docked at the shell's edge and took 384px out of the desk
+   * on every click.
+   *
+   * Both directions in one test, because the interesting claim is that it *moves*: a pane pinned
+   * to one side would pass either half on its own.
+   */
+  it("draws the card pane over the column the reader was not looking at", async () => {
+    searchCards.mockResolvedValue({
+      items: [found("Goblin Guide")],
+      total: 1,
+      totalIsCapped: false,
+    });
+
+    await open();
+
+    // Nothing open: the editor draws the frame either way — it is `h-0` and transparent — and
+    // there is no pane in it.
+    expect(screen.queryByRole("complementary", { name: "Card details" })).toBeNull();
+
+    // A card out of the deck covers the search column, so the deck it came from stays whole.
+    await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+    await screen.findByRole("complementary", { name: "Card details" });
+    expect(document.querySelector(`[${PANE_OVER_ATTR}]`)).toHaveAttribute(
+      PANE_OVER_ATTR,
+      "search",
+    );
+
+    // A card out of the search column covers the deck instead — a search whose answer covered
+    // the search is the failure the two positions exist to avoid.
+    await openSearchPanel();
+    await userEvent.click(await screen.findByRole("button", { name: /^Goblin Guide/ }));
+    await waitFor(() =>
+      expect(document.querySelector(`[${PANE_OVER_ATTR}]`)).toHaveAttribute(
+        PANE_OVER_ATTR,
+        "deck",
+      ),
+    );
+  });
+
+  /**
+   * **And it survives the deck going away under it**, which is the state the pane matters most
+   * in: a swap refused with GONE draws its sentence *in the pane*, over an editor that has
+   * stopped painting the deck (`App.test.tsx` holds that whole path). This is the structural
+   * half of it — the frame is a sibling of the desk row rather than a child, so unmounting the
+   * row leaves the card standing.
+   */
+  it("keeps the card pane up when the deck read says the deck is gone", async () => {
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+    await screen.findByRole("complementary", { name: "Card details" });
+
+    // The deck goes, and the editor's own re-read is what tells it. Any deck write would do it;
+    // the format select is the cheapest one to press.
+    deckGet.mockResolvedValue(null);
+    await userEvent.selectOptions(screen.getByLabelText("Deck format"), "modern");
+
+    expect(
+      await screen.findByText(/this deck is not there any more\. it may have been deleted/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByRole("complementary", { name: "Card details" }),
+    ).toBeInTheDocument();
   });
 
   it("opens a panel tile as a card and not as a row of this deck", async () => {

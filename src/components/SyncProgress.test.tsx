@@ -54,6 +54,56 @@ describe("the first-run variant", () => {
   });
 
   /**
+   * The app's mark, drawn once, at the one size that draws all of it.
+   *
+   * `GrimoireMark` picks its variant off the pixel size it is given — under 24px it drops
+   * the casting circle, the runes and the diamond's gradient, because at that size they
+   * fill in — so a size change here would silently ship the *simplified* mark on the one
+   * screen with room for the whole thing, and nothing about the markup would look wrong.
+   * The `<defs>` gradient is the tell that separates the two variants, so that is what is
+   * asserted rather than the number: the small one fills the diamond flat and ships no
+   * `<defs>` at all, because at title-bar size that diamond is about four pixels across —
+   * no room for three stops, and a gradient there would cost a per-instance id for nothing.
+   *
+   * `querySelector` rather than a role query is the point of the second half — the mark is
+   * `aria-hidden`, so there is nothing in the accessibility tree to query *for*, and that
+   * is the assertion. It carries no `label`: the wordmark under it is already hidden, and
+   * the dialog is named by `#first-run-title`, so a named mark would be this app's name
+   * announced twice in a row.
+   */
+  it("draws the full mark above the wordmark and keeps it out of the accessibility tree", () => {
+    const { container } = show({ cardCount: 0, busy: true });
+
+    const mark = container.querySelector("svg");
+    expect(mark).toBeInTheDocument();
+    expect(mark?.querySelector("linearGradient")).toBeInTheDocument();
+    expect(mark).toHaveAttribute("aria-hidden", "true");
+    // One box, and that is the pairing: the page's `gap-6` is the distance between the
+    // things on this screen, and it is too much between an emblem and its own caption — so
+    // the two are nested in a column of their own. Pulling them apart restores the gap.
+    expect(mark?.parentElement).toContainElement(screen.getByText("MTG Grimoire"));
+    // The claim stated the way the platform states it: one name for this screen, and it is
+    // the heading's. A `label` on the mark would add a second graphic beside it saying the
+    // same words.
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    expect(screen.getByRole("dialog")).toHaveAccessibleName("Setting up your card database");
+  });
+
+  /**
+   * And it is part of the takeover rather than part of the app: every sync after the first
+   * is the ribbon's mana line, and a mark left behind by a branch that only checked the
+   * dialog would be a 64px emblem floating over a working collection.
+   */
+  it("draws no mark once there is a database behind it", () => {
+    const { container } = show({
+      progress: event({ phase: "ingesting", done: 58_500, total: 117_000 }),
+      busy: true,
+    });
+
+    expect(container.querySelector("svg")).not.toBeInTheDocument();
+  });
+
+  /**
    * `sync_run` refuses a second concurrent run, so a button offering one while the first
    * is downloading is a control that cannot do anything. It comes back the moment nothing
    * is running, which is the only state it is any use in.

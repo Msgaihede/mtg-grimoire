@@ -135,8 +135,17 @@ const meta = {
           "press.\n\n" +
           "The panel is deliberately quiet. The visual direction spends its boldness budget " +
           "on the mana line, so this is `bg-surface` and border grey like every other panel " +
-          "— the only gold on it is the primary button and the focus ring, which is what " +
-          "gold already means everywhere else in this window.\n\n" +
+          "— the gold on it is the primary button, the focus ring and the mark beside the " +
+          "version, which is what gold already means everywhere else in this window plus one " +
+          "thing that is not an affordance at all.\n\n" +
+          "**The mark is drawn in every state below, because it is a fact about the panel " +
+          "rather than about the update.** It is 36px — the height of the two lines it " +
+          "stands beside, `text-sm` over `text-xs` — and that is comfortably over the 24px " +
+          "`GrimoireMark` needs before it draws the full artwork rather than the simplified " +
+          "one, so the casting circle, the runes and the clasp rivets are all here. A settings " +
+          "page is where that detail is affordable. It is `aria-hidden`: the sentence beside " +
+          "it already sets *MTG Grimoire* in type, and a named mark would announce the " +
+          "product name twice in a row.\n\n" +
           "**Two states below are not failures and read like them.** `unavailable` is the " +
           "honest answer for an MSI install or a Linux build, where a release exists and " +
           "nothing in this window can install it; and “Checking for updates…” is what an " +
@@ -167,6 +176,29 @@ type Story = StoryObj<typeof meta>;
  */
 export const UpToDate: Story = {
   args: { update: update({ status: nothingNew() }) },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.getByText(/latest version/)).toBeInTheDocument();
+
+    // **The mark is asserted in this play and in no other, and that is a decision rather than
+    // an omission.** It is drawn unconditionally, so every story on this page shows it; a copy
+    // of this check in each would be one claim written N times, and N places to edit the day
+    // the mark moves. This is the story to hold it because this is the state the panel is in
+    // almost every time it is opened — a mark, a version, and nothing to do.
+    //
+    // Found by the gradient rather than by the `viewBox` that names the artwork, and the query
+    // is `UpdatePanel.test.tsx`'s in one shape on purpose: jsdom's selector engine lowercases an
+    // attribute name whatever namespace the element is in, so `svg[viewBox='0 0 64 64']` matches
+    // here and matches nothing there — two queries for one mark is how the two ends of a claim
+    // drift. The gradient is the better subject anyway. It is in the `<defs>` of the full
+    // variant alone, so finding one is the proof that 36 cleared the component's 24px detail
+    // floor and this is the casting circle rather than the simplified mark.
+    const mark = canvasElement.querySelector("linearGradient")?.closest("svg");
+    await expect(mark).toHaveAttribute("width", "36");
+    // Hidden, because the words beside it are what carry the name.
+    await expect(mark).toHaveAttribute("aria-hidden", "true");
+    await expect(canvas.getByText(/MTG Grimoire/)).toBeInTheDocument();
+  },
 };
 
 /**

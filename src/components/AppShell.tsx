@@ -36,6 +36,7 @@ import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { LAYER } from "@/lib/layers";
 import { statusLine as statusLineMotion } from "@/lib/motion";
 import { useAppStore, type ViewId } from "@/lib/store";
+import { usePrefetchDeckSearchOpen } from "@/features/decks/useDeckSearchOpen";
 import { useCardZoomPersistence } from "@/lib/useCardZoomPersistence";
 import { useDelayedFlag } from "@/lib/useDelayedFlag";
 import { useMarketplace, useMarketplaceProgress } from "@/lib/useMarketplace";
@@ -135,6 +136,13 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   // the component that is always mounted, so a size is written whichever view the reader zoomed.
   // It renders nothing: the sizes go into the zustand store, where every wall already reads them.
   useCardZoomPersistence();
+  // The deck editor's search column, read here rather than where it is drawn — and that is a
+  // measurement rather than a preference for tidiness. Asked by the panel, the read queues behind
+  // `deck_get` on the read connection and lands ~700ms after the column has already been drawn
+  // the other way round, so a reader who had shut it watched it thrown open and yanked closed on
+  // every deck they opened. Asked here it resolves while they are still on the Search view. It
+  // renders nothing: the answer goes into the query cache, where `useDeckSearchOpen` reads it.
+  usePrefetchDeckSearchOpen();
   // The one `oracle-tags:progress` subscription, for the same reason again. Unlike the two
   // above it hands back what it heard: the taxonomy has no `useMarketplace`-shaped module of
   // its own to read the event out of a cache entry, and the ribbon is its only consumer today.
