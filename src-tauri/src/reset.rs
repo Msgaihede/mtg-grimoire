@@ -166,11 +166,31 @@ pub fn clear_collection(conn: &Connection) -> Result<CollectionCleared, String> 
     })
 }
 
-/// Empty the wishlist. Nothing references it, so nothing else moves.
+/// Empty the wishlist, and the folders that filed it.
+///
+/// **Two statements, because the schema will not do it in one** — [`clear_decks`]'s situation
+/// one table over, and for the same reason. `wishlist_entries.folder_id` is
+/// `ON DELETE SET NULL` (schema v23), so deleting a wish leaves its folder standing and a wipe
+/// that stopped at the entries would hand the reader an empty filing cabinet they now have to
+/// take apart one drawer at a time. The order is entries first: `wishlist_folders.parent_id`
+/// CASCADEs onto itself, and clearing the folders first would be a second cascade running
+/// under the statement that matters.
+///
+/// **The number answered stays the count of *wishes*** and never counts a folder, because that
+/// is what the Settings sentence promises: "N wishes removed" is about the shopping list, and a
+/// folder is where a wish was kept rather than a thing the reader wished for.
+///
+/// The old note here read "Nothing references it, so nothing else moves", which stopped being
+/// true the day the folders landed.
 pub fn clear_wishlist(conn: &Connection) -> Result<i64, String> {
-    conn.execute("DELETE FROM wishlist_entries", [])
-        .map(|n| n as i64)
-        .map_err(|e| e.to_string())
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let entries = tx
+        .execute("DELETE FROM wishlist_entries", [])
+        .map_err(|e| e.to_string())?;
+    tx.execute("DELETE FROM wishlist_folders", [])
+        .map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(entries as i64)
 }
 
 /// Empty the decks, the folders that filed them, and the cover pictures beside the database.
@@ -437,6 +457,28 @@ mod tests {
         assert_eq!(count(&conn, "wishlist_entries"), 0);
         assert_eq!(count(&conn, "collection_entries"), 1);
         assert_eq!(count(&conn, "decks"), 1);
+    }
+
+    /// The sibling the folders needed. Emptying the wishlist takes the filing cabinet it was
+    /// filed in, and stops there.
+    ///
+    /// `deck_folders` is the row that makes the second assertion mean something: the two
+    /// tables are the same shape under two names, so a `DELETE` written against the wrong
+    /// one — or a wipe that decided "folders" meant all of them — passes every assertion
+    /// about `wishlist_folders` alone.
+    #[test]
+    fn clearing_the_wishlist_takes_its_folders_and_leaves_the_decks_alone() {
+        let conn = db();
+        conn.execute_batch(
+            "INSERT INTO wishlist_folders (id, parent_id, name, sort_order, created_at, updated_at)
+             VALUES (1, NULL, 'Ordered', 0, 0, 0);
+             INSERT INTO deck_folders (id, parent_id, name, sort_order, created_at, updated_at)
+             VALUES (1, NULL, 'Standard', 0, 0, 0);",
+        )
+        .unwrap();
+        clear_wishlist(&conn).unwrap();
+        assert_eq!(count(&conn, "wishlist_folders"), 0);
+        assert_eq!(count(&conn, "deck_folders"), 1);
     }
 
     /// Every table that hangs off `decks`, in one assertion each, because the cascade is the

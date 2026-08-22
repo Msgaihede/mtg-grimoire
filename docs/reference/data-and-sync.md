@@ -371,9 +371,29 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `DROP` it first, or the
   widening is a silent no-op on exactly the machines that need it. (v6 added `app_meta`; the
   paragraph below describes v5.)
-- **Schema is v22**, and `schema::SCHEMA_VERSION` is the answer — this line read **v18** for two
+- **Schema is v23**, and `schema::SCHEMA_VERSION` is the answer — this line read **v18** for two
   whole rungs, because a prose-only edit routes to neither CI job and nothing goes red when a
   ladder entry rots.
+  **v23 gives the wishlist the deck gallery's filing cabinet** — `wishlist_folders` (nesting on
+  `parent_id … ON DELETE CASCADE`), `wishlist_entries.folder_id`
+  (`… ON DELETE SET NULL`), `idx_wishlist_folder`, and a **rebuilt** `idx_wishlist_grain`
+  carrying `coalesce(folder_id, 0)` as its fourth term.
+  [Issue #165](https://github.com/Msgaihede/mtg-grimoire/issues/165); the design is
+  [the wishlist-folders spec](../superpowers/specs/2026-08-22-wishlist-folders-design.md).
+  The two `ON DELETE` actions are `deck_folders`' verbatim and say what a folder is: a folder
+  inside a deleted folder has nowhere else to be, and a wish is the reader's shopping list
+  rather than a thing they filed away. NULL is the root, so **there is no backfill and the
+  upgrade is invisible** until the reader makes their first folder — the one shape of
+  `ADD COLUMN` that owes neither a fence nor a backfill under the rule v22 was paid for, because
+  the unset value is the answer rather than a lie a `DEFAULT` is telling.
+  The index is **rebuilt rather than widened** because SQLite has no `ALTER INDEX`, and the
+  `DROP` has to come first or the widening is a silent no-op on exactly the machines that
+  already have the narrow one. **The `ADD COLUMN` is probed for rather than guarded**:
+  `IF NOT EXISTS` exists on `CREATE TABLE` and `CREATE INDEX` and on neither half of
+  `ALTER TABLE`, so the step asks `pragma_table_info('wishlist_entries')` first — which it must,
+  because `UNDO_V23` cannot take the column back off (SQLite refuses `DROP COLUMN` on a column
+  an index names, and this one is the grain's fourth term), so every rewound fixture re-enters
+  the step already carrying it.
   **v22 writes no shape at all — it repairs one column's contents**, and it is the first rung
   here that does. v20 added `oracle_tags.slug_norm` with `ALTER TABLE … ADD COLUMN`, which
   cannot add a `NOT NULL` column without a default, so every row an existing database carried
@@ -627,8 +647,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   the title on rather than renumbering the holder: v12 handed it to a new **`v11_database`**, v13
   to a new **`v12_database`**, v14 to **`v13_database`**, v15 to **`v14_database`**, v16 to
   **`v15_database`**, v17 to **`v16_database`**, v18 to **`v17_database`**, v19 to
-  **`v18_database`**, v20 to **`v19_database`**, v21 to **`v20_database`** and v22 to
-  **`v21_database`**. The fixtures it
+  **`v18_database`**, v20 to **`v19_database`**, v21 to **`v20_database`**, v22 to
+  **`v21_database`** and v23 to **`v22_database`**. The fixtures it
   passes stay exactly where they are, each pinned to
   a literal because each proves something only a database genuinely _at_ that version can —
   `v11_database` to 11, so the step that adds the view-state columns has a database it can
@@ -656,6 +676,11 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   table now (v5's DDL as a literal, seeded through `FORMAT_SPECS_SEED_V5`), which is the same
   argument its own comment already made about the five `cards` columns it replays: a fixture that
   stopped at an earlier shape is a pre-v5 database wearing a v6 label.
+  **v23 is the second time it bit, which is what makes it a rule rather than an anecdote**: that
+  step alters `wishlist_entries`, which v4 creates and the same fixture had also never bothered
+  with, and it fails there and nowhere else with `no such table: wishlist_entries`. The fixture
+  now carries v4's table and its three indexes as literals — the grain among them at **v4's three
+  terms**, because a fixture describes history and the fourth is v23's to add.
   `CREATE TABLE IF NOT EXISTS` survives a replay; **`ALTER TABLE … ADD COLUMN` does not** — SQLite
   answers `duplicate column name`. That is why **every non-idempotent rung has to come back out of
   every rewind fixture below it** — v20's two `oracle_tags` columns, v19's `deck_cards.finish`
@@ -666,21 +691,32 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `v9_database` at all.
   **The per-rung fixture counts that used to be written out here are gone on purpose.** They read
   "all six below it" and "the five below that" against a fixture set that has grown twice since,
-  and a count is a fact about a *tree*: `grep -c "{UNDO_V21}" src-tauri/src/schema.rs` is the
+  and a count is a fact about a *tree*: `grep -c "{UNDO_V23}" src-tauri/src/schema.rs` is the
   census of how many fixtures the newest rung reaches, and it answers for the tree you are
   actually in. **v21 is a rebuild rather than an `ADD COLUMN`, and it still needs a line in every
   fixture**: `UNDO_V21` drops `deck_tags` and recreates the per-deck shape v8 built, because
   `ALTER TABLE … DROP COLUMN` refuses a column an index names and the shape changed both ways.
-  **v22 is the first rung with no `UNDO_V22` at all, and that is a fact about the rung rather
+  **v22 is the only rung with no `UNDO_V22` at all, and that is a fact about the rung rather
   than an omission**: it writes no table, no column and no index — it repairs the contents of
   `oracle_tags.slug_norm` — so a v21 database and a v22 one are the same schema and a
-  `PRAGMA user_version = 21` is the honest whole of the rewind. `v21_database` is built that way,
-  and it is deliberately **not** on
-  `every_version_ends_with_the_same_schema_as_a_fresh_install`'s list: that test asks whether
-  every route arrives at one _schema_, and this route cannot answer anything else. What it seeds
-  instead is the rung's real input — a blank `slug_norm` — which is the second half of
-  `the_head_minus_one_fixture_really_sits_one_step_below_head` now that there is no column for it
-  to find missing. **One named `UNDO_V…` constant per rung that writes shape** is the shape that
+  `PRAGMA user_version = 21` is the honest whole of *that* step's rewind. `v21_database` is built
+  that way and `v22_database` is that fixture wearing the next number, which is the same
+  statement read forwards. Neither is on
+  `every_version_ends_with_the_same_schema_as_a_fresh_install`'s list, because that test compares
+  `cards`, `decks` and `deck_categories` and neither rung touches any of the three. What
+  `v21_database` seeds instead is the v22 rung's real input — a blank `slug_norm` — and that is
+  now `the_v21_fixture_still_receives_the_v22_backfill`'s to assert:
+  `the_head_minus_one_fixture_really_sits_one_step_below_head` moved up to `v22_database` with
+  the title, and its second half is back to asking what head-minus-one **lacks**, which v23 gave
+  it something to be again (`wishlist_folders`).
+  **`UNDO_V23` is deliberately a partial rewind**, and the half it cannot do is the half worth
+  knowing: it drops `wishlist_folders` and `idx_wishlist_folder` and leaves
+  `wishlist_entries.folder_id` standing, because SQLite refuses `DROP COLUMN` on a column an
+  index names and that column is the grain's fourth term. Putting the three-term index back so
+  the column could go would rebuild an index *narrower* than the rows beneath it were written
+  on. So every fixture below head re-enters the v23 step carrying the column, which is what the
+  step's `pragma_table_info` probe is for and what
+  `migrating_a_v22_wishlist_files_every_existing_wish_at_the_root` drives on purpose. **One named `UNDO_V…` constant per rung that writes shape** is the shape that
   keeps this
   cheap: v13 and v14 have each been renumbered since they were written, and the rename was the
   whole of what it cost. (`v10_database` drops them for a different reason: a fixture claiming to

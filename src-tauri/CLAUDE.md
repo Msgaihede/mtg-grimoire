@@ -66,11 +66,12 @@ both plus the frontend.
   never runs it again. **It happened three times, not twice**: the oracle-tag step was a third
   branch numbering itself 12 against that same head of 11, and it is **v14**. Three collisions on
   one rung in one day is the ladder's own argument — take the next free number when you land, and
-  never reuse one. Schema is at **v22** — `schema::SCHEMA_VERSION` is the answer, and
+  never reuse one. Schema is at **v23** — `schema::SCHEMA_VERSION` is the answer, and
   [the ladder's history](../docs/reference/data-and-sync.md) is the story. (This line read
   **v18** for two whole rungs and then **v20** for two more, because a prose-only edit routes to
   neither CI job: v19 added `deck_cards.finish`, v20 the art-tag tables, v21 the app-wide tag
-  list and v22 the `slug_norm` repair, and nothing went red for any of them.)
+  list, v22 the `slug_norm` repair and v23 the wishlist's folders, and nothing went red for any
+  of them.)
 - **A step that writes to a table an older *forward-built* fixture never created fails on that
   fixture alone**, and v18 is the first one to do it. `schema.rs`'s `v1_database` and
   `v6_deck_database` are hand-written old schemas rather than rewinds, so they carry only what
@@ -275,6 +276,23 @@ shared_cell` walks both into two databases and compares them column by column.
 - **Wishlist fulfillment is finish-aware.** A foil wish is not filled by a nonfoil copy; a
   wish naming no finish is filled by any. `wishlist::OWNED_SQL` sums `quantity`, so a
   collection row stepped to zero contributes nothing.
+- **The wishlist's grain is four terms and the fourth is the folder** —
+  `schema::WISHLIST_GRAIN`, `coalesce(oracle_id,''), coalesce(card_id,''),
+  coalesce(preferred_finish,''), coalesce(folder_id, 0)` since schema v23. That last term is
+  what makes "Add to <folder>" an **add**: the same card filed in two places is two wishes, so
+  an add cannot silently move a row the reader filed last week, and moving one between folders
+  is its own explicit act. `coalesce(folder_id, 0)` can never collide with a real folder because
+  `wishlist_folders.id` is `INTEGER PRIMARY KEY`, which SQLite never assigns 0. **The price is
+  written down rather than discovered**: the three writers that add at the root and cannot name
+  a folder (`deck_missing_to_wishlist`, `deck_theory_missing_to_wishlist`,
+  `wishlist_import_commit`) make a *second* root row for a card already filed elsewhere.
+- **`wishlist_folders` is `deck_folders` ported, cascade rules included** (schema v23):
+  `parent_id` CASCADEs onto its own table so a sub-tree goes in one press, and
+  `wishlist_entries.folder_id` is `ON DELETE SET NULL` so deleting the cabinet surfaces the
+  wishes at the root instead of throwing them away. NULL **is** the root — nothing has to be
+  created for the list to work, and a reader who never makes a folder sees the list they saw
+  before the upgrade. `reset::clear_wishlist` sweeps the folders by hand for `clear_decks`'
+  reason, and still answers the count of *wishes*.
 - `needs_review` is a **sentence, not a flag** — the reconciler writes what happened, and
   the first message wins (a later sweep does not overwrite one). Non-NULL means "listed,
   counted, and asking to be looked at", never "hidden".
