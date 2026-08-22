@@ -1,10 +1,9 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import {
-  draggable,
   dropTargetForElements,
   monitorForElements,
 } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
-import { dragData, NOT_A_DRAG, type DragPayload } from "@/features/decks/dnd";
+import { composedDraggable, dragData, type DragPayload } from "@/features/decks/dnd";
 
 /**
  * The gesture that files a wish into one of the wishlist's own folders — the payload, the tile
@@ -81,17 +80,23 @@ export function readWishDrag(data: Record<string, unknown>): WishDrag | null {
 }
 
 /**
- * A wish tile that can be picked up — as a wish always, and as a card too where there is a
+ * A wish tile or row that can be picked up — as a wish always, and as a card too where there is a
  * printing to carry.
  *
- * `deckDraggable`'s arrangement verbatim (the capture-phase `mousedown` guard, {@link NOT_A_DRAG}
- * and the reason: Chromium starts a drag from the nearest draggable *ancestor* of whatever was
- * pressed, and a wish tile carries controls of its own — the pencil `EditWish` opens, the
- * quantity stepper — so without this a press on either plus five pixels of travel drags the
- * whole tile). What is new here is `getInitialData`: it merges `card()`'s payload through
- * `dnd.ts`'s own `dragData` with {@link wishDragData}'s, and only when `card()` answers
- * something — an any-printing wish's payload is `wishDragData` alone, which is the asymmetry the
- * module comment above is about.
+ * **`dnd.ts`'s `composedDraggable`, with this module's composition passed in as its `data`.** It
+ * had its own copy of the capture-phase `mousedown` guard until the seam existed; a second copy
+ * of that guard is a second place for the bug it exists to prevent to come back, so the guard is
+ * `dnd.ts`'s alone now and this file contributes only the payload. The guard still matters here
+ * for the reason it was copied for: Chromium starts a drag from the nearest draggable *ancestor*
+ * of whatever was pressed, and a wish tile carries controls of its own — the pencil `EditWish`
+ * opens, the quantity stepper — so without it a press on either plus five pixels of travel drags
+ * the whole tile.
+ *
+ * What is this module's is the record: `card()`'s payload through `dnd.ts`'s own `dragData`
+ * merged under {@link wishDragData}'s, and only when `card()` answers something — an
+ * any-printing wish's payload is `wishDragData` alone, which is the asymmetry the module comment
+ * above is about. `CardGrid`'s `dragRecord` slot exists to carry the identical record for the
+ * wall's tiles, which register through the wall rather than through here.
  */
 export function wishDraggable({
   element,
@@ -106,26 +111,15 @@ export function wishDraggable({
    *  to carry, which is what leaves the mark off the payload rather than sending an empty one. */
   card: () => DragPayload | null;
 }): () => void {
-  let onControl = false;
-  const press = (event: Event) => {
-    const target = event.target;
-    onControl = target instanceof Element && target.closest(NOT_A_DRAG) !== null;
-  };
-  element.addEventListener("mousedown", press, true);
-  const stop = draggable({
+  return composedDraggable({
     element,
-    canDrag: () => !onControl,
-    getInitialData: () => {
+    data: () => {
       const cardPayload = card();
       return cardPayload === null
         ? wishDragData(wish())
         : { ...dragData(cardPayload), ...wishDragData(wish()) };
     },
   });
-  return () => {
-    element.removeEventListener("mousedown", press, true);
-    stop();
-  };
 }
 
 /**

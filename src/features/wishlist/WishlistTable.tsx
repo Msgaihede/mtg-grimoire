@@ -13,12 +13,14 @@ import { VirtualTable, type TableColumn } from "@/components/table/VirtualTable"
 import { useTooltip, type TooltipBinder } from "@/components/tooltip/useTooltip";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { FOCUS } from "@/lib/focus";
-import type { WishlistSortKey, WishRow } from "@/lib/ipc";
+import type { FolderNode } from "@/lib/folderTree";
+import type { WishlistFolder, WishlistSortKey, WishRow } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
 import type { SortSpec } from "@/lib/sort";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
+import { EditWishButton } from "./EditWish";
 import { missingOf, printingOf, wishLabel } from "./wish";
 import { wishDraggable } from "./wishDrag";
 import { ElsewhereMark, WishFolderCaption } from "./wishMarks";
@@ -47,21 +49,30 @@ const REVIEW_HEIGHT = 20;
  *
  * The keys are the backend's, verbatim: `WISHLIST_SORTS` in `src-tauri/src/wishlist.rs`.
  *
- * One options object rather than seven positional arguments: the list grew three members for
- * spec §4 and a call site of seven bare values is a call site where two of them get swapped.
+ * One options object rather than a row of positional arguments: the list grew five members for
+ * spec §4 and §5, and a call site of nine bare values is a call site where two of them get
+ * swapped.
  */
 function columnsFor({
+  folders,
+  nodes,
   onSetQuantity,
   onRemove,
-  onOpenEdit,
+  onSetFolder,
+  onChangePrinting,
+  onAnyPrinting,
   folderNameOf,
   flattened,
   marketplace,
   tip,
 }: {
+  folders: readonly WishlistFolder[];
+  nodes: readonly FolderNode<WishlistFolder>[];
   onSetQuantity: (row: WishRow, quantity: number) => void;
   onRemove: (row: WishRow) => void;
-  onOpenEdit?: (row: WishRow) => void;
+  onSetFolder: (row: WishRow, folderId: number | null) => void;
+  onChangePrinting: (row: WishRow) => void;
+  onAnyPrinting: (row: WishRow) => void;
   folderNameOf: (folderId: number | null) => string | null;
   flattened: boolean;
   marketplace: Marketplace;
@@ -120,49 +131,54 @@ function columnsFor({
       // The distinction spec §6 draws in one word, said in three. Mono because a collector
       // number is data — the same rule as the grid caption and the pane.
       cellClassName: "flex items-center gap-1.5 font-mono text-xs text-dim",
-      // **The cell holds a control, so the row's own press must not also fire.** `interactive`
-      // stamps `data-no-drag` and swallows the click and the two activation keys — without it a
-      // press on the printing would open the card pane as well, and five pixels of travel would
-      // drag the row. It costs the cell as a grab handle, which is the cheapest of the three
-      // (the name, Owned and Cost columns are still one), and it is asked for only where there
-      // is a handler: with no `onOpenEdit` this cell is the text it has always been.
-      interactive: onOpenEdit !== undefined,
+      // **The cell holds a control now, so the row's own press must not also fire.**
+      // `interactive` stamps `data-no-drag` and swallows the click and the two activation keys —
+      // without it a press on the pencil would open the card pane as well, and five pixels of
+      // travel would drag the row off into a deck. It costs this cell as a grab handle and as a
+      // place to click the card open, which is the cheapest price available: the name, Owned and
+      // Cost columns are all three still both.
+      interactive: true,
       cell: (row) => (
         <>
           <RarityGem rarity={row.rarity} />
-          {onOpenEdit ? (
-            // **Spec §5: this press is how the table reaches the two new writes.** A wish's
-            // printing and its folder are both edited in one panel, and the table has six columns
-            // already — so rather than grow a column for each, the thing being changed is the
-            // control that changes it. It is the *page's* panel and not a popup of this cell's:
-            // a virtualised row is `position: absolute` and transformed, which caps a nested
-            // `z-index` and makes the row the containing block for anything `fixed` inside it.
-            //
-            // The name is the wish rather than the verb, `wishLabel`'s reason: four hundred rows
-            // are four hundred different wishes and "Edit" is the same word on all of them, and
-            // two wishes for one card differ only by printing and finish.
-            <button
-              type="button"
-              onClick={() => onOpenEdit(row)}
-              aria-label={`Edit ${wishLabel(row)} on your wishlist`}
-              {...tip(printingOf(row), { whenClipped: true })}
-              className={cn(
-                "min-w-0 truncate rounded-sm text-left",
-                "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
-                FOCUS,
-              )}
-            >
-              {printingOf(row)}
-            </button>
-          ) : (
-            <span className="truncate" {...tip(printingOf(row), { whenClipped: true })}>
-              {printingOf(row)}
-            </span>
-          )}
-          {/* Spec §4's two marks, beside the printing in both views — the wall says them in its
-              caption strip, which is this cell's twin. `wishMarks.tsx` is the one definition. */}
+          <span className="min-w-0 truncate" {...tip(printingOf(row), { whenClipped: true })}>
+            {printingOf(row)}
+          </span>
+          {/* Spec §4's two marks and spec §5's editor, in the order and the place the wall's
+              caption strip draws them — this cell *is* that strip, and the whole reason the two
+              are one arrangement is that a reader who has learned one view has learned the other.
+              `wishMarks.tsx` is the one definition of the marks. */}
           <ElsewhereMark count={row.elsewhere} />
           {flattened && <WishFolderCaption name={folderNameOf(row.folderId)} />}
+          {/* **Spec §5: this is how the list reaches the two new writes, and it is the wall's own
+              control rather than a second design for one job.** It goes in *this* column and not
+              beside the remove button, and the reason is anchoring: `EditWishButton` opens its
+              panel at `align="start"` — pinned left, growing right — which is right on a 170px
+              tile and would put 288px of panel off the right edge of the window from a cell at the
+              end of the row, where nothing clips it and the whole app scrolls sideways instead
+              (the anchored-popup rule in `src/CLAUDE.md`). Beside the printing it grows into the
+              table.
+
+              Keyed by the wish for the wall's reason: this list is virtualised, so scrolling
+              re-binds a row to a different wish, and a panel carried across that would be pointed
+              at a card the reader never opened it on. */}
+          <EditWishButton
+            key={row.id}
+            row={row}
+            folders={folders}
+            nodes={nodes}
+            onSetQuantity={onSetQuantity}
+            onRemove={onRemove}
+            onSetFolder={onSetFolder}
+            onChangePrinting={onChangePrinting}
+            onAnyPrinting={onAnyPrinting}
+            // The wall's recipe, minus its `static`: that class exists to hang the panel off the
+            // tile's caption rather than off a 20px control, and here the cell is already the
+            // anchor. Invisible until the row is hovered or holds the caret — a list of four
+            // hundred wishes is not a list of pencils — and always in the tab order, because
+            // "visible on hover" is not a state a keyboard has.
+            className={REVEAL_ON_HOVER}
+          />
         </>
       ),
     },
@@ -356,12 +372,16 @@ export function WishlistTable({
   listKey,
   sort,
   onSort,
+  folders,
+  nodes,
   folderNameOf,
   flattened,
   onNeedNextPage,
   onSetQuantity,
   onRemove,
-  onOpenEdit,
+  onSetFolder,
+  onChangePrinting,
+  onAnyPrinting,
   rowMenu,
   rowMenuKey,
   marketplace,
@@ -375,6 +395,10 @@ export function WishlistTable({
   sort: SortSpec<WishlistSortKey>;
   /** One press on a column header. `additive` is Shift being held. */
   onSort: (key: string, additive: boolean) => void;
+  /** The flat folder rows and the tree built from them, both straight through to
+   *  {@link EditWishButton} — see its own doc for why it wants two shapes of one read. */
+  folders: readonly WishlistFolder[];
+  nodes: readonly FolderNode<WishlistFolder>[];
   /**
    * What to call the folder a wish is filed in — `Wishlist` for the root, and `null` for a folder
    * this page cannot name, which draws nothing rather than a blank chip.
@@ -391,18 +415,19 @@ export function WishlistTable({
   onSetQuantity: (row: WishRow, quantity: number) => void;
   onRemove: (row: WishRow) => void;
   /**
-   * The Printing cell's press — spec §5's route from this list to the two writes the wall reaches
-   * through the pencil on its tiles.
+   * The three writes the panel behind a row's pencil reaches, passed straight through — the same
+   * three the wall passes, because it is the same panel.
    *
-   * **The panel is the page's, not this component's**, which is what makes this a callback rather
-   * than a popup rendered here: a virtualised row is `position: absolute` *and* transformed, so it
-   * caps a nested `z-index` and is the containing block for anything `fixed` inside it — the same
-   * pair of facts that mounts the context menu and the tooltip at the app root.
-   *
-   * Optional, and absent draws the printing as the plain text it has always been: a list given no
-   * handler must not grow a button that does nothing.
+   * **The list draws `EditWishButton` itself rather than asking the page to open something**, and
+   * that is settled rather than incidental: `AnchoredPopup` owns its own open state, so a cell
+   * press cannot drive a panel the page holds and the page cannot open one this cell holds. The
+   * alternative — a callback up to a `Dialog` on the page — would give the list a different
+   * editing surface from the wall, which is two designs for one job and the thing spec §5 exists
+   * to avoid.
    */
-  onOpenEdit?: (row: WishRow) => void;
+  onSetFolder: (row: WishRow, folderId: number | null) => void;
+  onChangePrinting: (row: WishRow) => void;
+  onAnyPrinting: (row: WishRow) => void;
   /**
    * What a row offers on a right-click — a ready-made `onContextMenu` handler, or `undefined`
    * for a row that has no menu. Per row rather than for the list, because on this list it is
@@ -428,9 +453,13 @@ export function WishlistTable({
     <VirtualTable
       rows={rows}
       columns={columnsFor({
+        folders,
+        nodes,
         onSetQuantity,
         onRemove,
-        onOpenEdit,
+        onSetFolder,
+        onChangePrinting,
+        onAnyPrinting,
         folderNameOf,
         flattened,
         marketplace,

@@ -110,10 +110,7 @@ function wall(rows: WishRow[], over: { flattened?: boolean } = {}) {
   );
 }
 
-function list(
-  rows: WishRow[],
-  over: { flattened?: boolean; onOpenEdit?: (row: WishRow) => void } = {},
-) {
+function list(rows: WishRow[], over: { flattened?: boolean } = {}) {
   return render(
     <WishlistTable
       rows={rows}
@@ -121,12 +118,16 @@ function list(
       listKey="k"
       sort={[{ key: "name", dir: "asc" }]}
       onSort={noop}
+      folders={[EXPENSIVE]}
+      nodes={NODES}
       folderNameOf={folderNameOf}
       flattened={over.flattened ?? false}
       onNeedNextPage={noop}
       onSetQuantity={noop}
       onRemove={noop}
-      onOpenEdit={over.onOpenEdit}
+      onSetFolder={noop}
+      onChangePrinting={noop}
+      onAnyPrinting={noop}
       marketplace={MARKETPLACES.tcgplayer}
     />,
   );
@@ -302,40 +303,45 @@ describe("the elsewhere mark", () => {
   });
 });
 
-describe("the table's Printing cell", () => {
+describe("the list's own editor", () => {
   /**
-   * Spec §5: this press is how the list reaches the two writes the wall reaches through the pencil
-   * on its tiles, without growing a column for each.
+   * Spec §5: the list reaches the two new writes through the *wall's* control rather than a
+   * design of its own, and it names the wish rather than the verb — four hundred rows are four
+   * hundred different wishes and "Edit" is the same word on all of them.
+   *
+   * **That it is one control in both views is the whole claim.** The two writes an any-printing
+   * wish can only reach through this panel must not be one view's privilege.
    */
-  it("opens the wish's editor, and names the wish rather than the verb", async () => {
-    const onOpenEdit = vi.fn();
-    list([BOLT], { onOpenEdit });
+  it("is the wall's pencil, drawn in both views and named for the wish", () => {
+    const name = "Edit Lightning Bolt (LEA 161, Foil) on your wishlist";
+    const { unmount } = wall([BOLT]);
+    expect(screen.getByRole("button", { name })).toBeInTheDocument();
+    unmount();
 
-    await userEvent.click(
-      screen.getByRole("button", { name: "Edit Lightning Bolt (LEA 161, Foil) on your wishlist" }),
-    );
-
-    expect(onOpenEdit).toHaveBeenCalledTimes(1);
-    expect(onOpenEdit.mock.calls[0][0]).toMatchObject({ id: 7 });
+    list([BOLT]);
+    expect(screen.getByRole("button", { name })).toBeInTheDocument();
   });
 
-  /** The press belongs to the cell, so the row's own activation must not also run — a reader who
-   *  meant to change a printing did not ask for the card pane. */
-  it("does not open the card as well", async () => {
-    list([BOLT], { onOpenEdit: vi.fn() });
+  /**
+   * It opens the panel in place rather than asking the page for a surface of its own —
+   * `AnchoredPopup` owns its open state, so a callback up to the page could only ever open a
+   * *different* surface, which is the two-designs-for-one-job this replaced.
+   */
+  it("opens the wish's panel from a row, without opening the card", async () => {
+    list([BOLT]);
 
-    await userEvent.click(
-      screen.getByRole("button", { name: /^Edit Lightning Bolt/ }),
-    );
+    await userEvent.click(screen.getByRole("button", { name: /^Edit Lightning Bolt/ }));
 
+    const panel = await screen.findByRole("dialog", { name: "Edit Lightning Bolt" });
+    expect(within(panel).getByRole("button", { name: /^Move to folder/ })).toBeInTheDocument();
+    // The press belongs to the cell: a reader reaching for the pencil did not ask for the card
+    // pane, and the column's `interactive` flag is what stops the row's own click.
     expect(useAppStore.getState().selectedCardId).toBeNull();
   });
 
-  /** A list given no handler must not grow a button that does nothing. */
-  it("is plain text where the page offers no editor", () => {
+  /** The printing is still a caption — this moved a control into the cell, not a column. */
+  it("leaves the printing itself as text", () => {
     const { container } = list([BOLT]);
-    expect(screen.queryByRole("button", { name: /on your wishlist$/ })).toBeNull();
-    // The printing is still drawn — this is a control coming off, not a column.
-    expect(within(container).getByText("LEA · 161 · Foil")).toBeInTheDocument();
+    expect(within(container).getByText("LEA · 161 · Foil").tagName).toBe("SPAN");
   });
 });
