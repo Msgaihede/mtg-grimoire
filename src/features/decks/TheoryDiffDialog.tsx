@@ -741,6 +741,15 @@ function ListControls({
             type="button"
             role="radio"
             aria-checked={view === rung}
+            // **Named outright, because the visible name does not survive being computed.**
+            // The label and the count are two elements separated by a `gap`, which is CSS and
+            // not a text node — so the accessible name concatenates to `Different printing2`,
+            // which a screen reader reads as one word ending in a digit. Measured in the
+            // shipped window on 2026-08-22; jsdom cannot referee it, which is why the tests
+            // beside this file matched the two halves with `\s*` and could not say which side
+            // it fell on. Spelling it here also lets the count be a *sentence* — "2 cards"
+            // rather than a bare number a reader has to guess the unit of.
+            aria-label={`${VIEW_LABEL[rung]}, ${counts[rung]} ${counts[rung] === 1 ? "card" : "cards"}`}
             onClick={() => onView(rung)}
             className={cn(
               "flex h-8 shrink-0 items-center gap-1.5 rounded-md border px-3 text-xs",
@@ -752,8 +761,10 @@ function ListControls({
             )}
           >
             {VIEW_LABEL[rung]}
-            {/* Plain text rather than `aria-hidden` with an `sr-only` twin: the count is part of
-                what tells the three rungs apart, and it is inside the control's own name. */}
+            {/* Drawn plainly rather than hidden behind an `sr-only` twin — the `aria-label`
+                above already owns what is announced, so this is free to be the count as the
+                eye wants it: monospaced and tabular, so three rungs of different widths keep
+                their digits in a column. */}
             <span className="font-mono tabular-nums">{counts[rung]}</span>
           </button>
         ))}

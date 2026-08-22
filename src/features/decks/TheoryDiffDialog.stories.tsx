@@ -112,12 +112,12 @@ export const Filtered: Story = {
       timeout: FRAME_WAIT,
     });
 
-    await expect(canvas.getByRole("radio", { name: /^All\s*5$/ })).toHaveAttribute(
+    await expect(canvas.getByRole("radio", { name: "All, 5 cards" })).toHaveAttribute(
       "aria-checked",
       "true",
     );
 
-    await userEvent.click(canvas.getByRole("radio", { name: /^Different printing\s*1$/ }));
+    await userEvent.click(canvas.getByRole("radio", { name: "Different printing, 1 card" }));
 
     // One row, at its full quantity, with the substitution said in words.
     const lines = canvas.getAllByRole("listitem");
@@ -133,7 +133,7 @@ export const Filtered: Story = {
 
     // And the other reading: everything the deck has not got in any printing, which is the
     // Sol Ring row's complement here.
-    await userEvent.click(canvas.getByRole("radio", { name: /^Missing\s*4$/ }));
+    await userEvent.click(canvas.getByRole("radio", { name: "Missing, 4 cards" }));
     await expect(canvas.getAllByRole("listitem")).toHaveLength(4);
     await expect(canvas.queryByText("Sol Ring")).not.toBeInTheDocument();
     await expect(canvas.getByText("Black Lotus")).toBeVisible();

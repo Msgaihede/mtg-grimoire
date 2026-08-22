@@ -128,8 +128,19 @@ beforeEach(() => {
 /** The one row every press below is aimed at. */
 const rowFor = async (name: string) => (await screen.findByText(name)).closest("li") as HTMLElement;
 
-/** The rung of the segmented control, addressed the way a reader picks one. */
-const rung = (name: RegExp) => screen.getByRole("radio", { name });
+/**
+ * The rung of the segmented control, addressed the way a reader picks one — **by the name the
+ * control computes, which is its own `aria-label`**.
+ *
+ * The visible label and its count are two elements separated by a `gap`, which is CSS and not a
+ * text node, so a name built from them reads `Different printing2` — one word ending in a digit.
+ * jsdom cannot referee that, and the matchers here hedged with `\s*` until driving the shipped
+ * window on 2026-08-22 settled it; the fix was to spell the name out on the control. Spelling it
+ * here too means this helper *fails* if that label is ever dropped, rather than falling back to a
+ * concatenation nobody can read aloud.
+ */
+const rung = (label: string, count: number) =>
+  screen.getByRole("radio", { name: `${label}, ${count} ${count === 1 ? "card" : "cards"}` });
 
 /** The band's select-all, whose readout **is** its accessible name. */
 const selectAll = () => screen.getByRole("checkbox", { name: /selected$/ });
@@ -397,17 +408,17 @@ describe("the theory difference dialog", () => {
     wrap(<TheoryDiffDialog {...props} />);
     await screen.findByText("Lightning Bolt");
 
-    expect(rung(/^All\s*3$/)).toHaveAttribute("aria-checked", "true");
+    expect(rung("All", 3)).toHaveAttribute("aria-checked", "true");
     expect(shownNames()).toEqual(["Lightning Bolt", "Sol Ring", "Jace, the Mind Sculptor"]);
 
-    await user.click(rung(/^Missing\s*2$/));
-    expect(rung(/^Missing\s*2$/)).toHaveAttribute("aria-checked", "true");
+    await user.click(rung("Missing", 2));
+    expect(rung("Missing", 2)).toHaveAttribute("aria-checked", "true");
     expect(shownNames()).toEqual(["Lightning Bolt", "Sol Ring"]);
 
-    await user.click(rung(/^Different printing\s*2$/));
+    await user.click(rung("Different printing", 2));
     expect(shownNames()).toEqual(["Sol Ring", "Jace, the Mind Sculptor"]);
 
-    await user.click(rung(/^All\s*3$/));
+    await user.click(rung("All", 3));
     expect(shownNames()).toHaveLength(3);
   });
 
@@ -450,12 +461,12 @@ describe("the theory difference dialog", () => {
     expect(copies()).toHaveTextContent("5");
     expect(copies()).toHaveTextContent("3 cards");
 
-    await user.click(rung(/^Missing\s*2$/));
+    await user.click(rung("Missing", 2));
     expect(copies()).toHaveTextContent("4");
     expect(copies()).toHaveTextContent("2 cards");
     expect(cost()).toHaveTextContent("$804.00");
 
-    await user.click(rung(/^Different printing\s*2$/));
+    await user.click(rung("Different printing", 2));
     expect(copies()).toHaveTextContent("3");
     expect(cost()).toHaveTextContent("$54.00");
   });
@@ -476,7 +487,7 @@ describe("the theory difference dialog", () => {
     await user.click(
       screen.getByRole("checkbox", { name: "Select 1 more Jace, the Mind Sculptor" }),
     );
-    await user.click(rung(/^Different printing\s*2$/));
+    await user.click(rung("Different printing", 2));
 
     // Two ticked in all, one of them drawn here — and the button says both numbers.
     const send = screen.getByRole("button", { name: "Send 1 of 2 selected to wishlist" });
@@ -498,7 +509,7 @@ describe("the theory difference dialog", () => {
     wrap(<TheoryDiffDialog {...props} />);
     await screen.findByText("Jace, the Mind Sculptor");
 
-    await user.click(rung(/^Missing\s*0$/));
+    await user.click(rung("Missing", 0));
 
     expect(screen.getByText(/Nothing here is missing/)).toBeVisible();
     expect(screen.queryByText(/The two lists agree/)).not.toBeInTheDocument();
