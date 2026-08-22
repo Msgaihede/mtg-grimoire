@@ -295,8 +295,16 @@ export function CollectionPage() {
   const deckDriven = collection.deckDriven;
 
   /**
-   * Both writes refuse while the collection is derived — the second half of the greying the
+   * Both writes refuse while **the row itself** is derived — the second half of the greying the
    * table does, and the half that is load-bearing.
+   *
+   * **`row.deckCount !== null`, never the `deckDriven` flag.** `filterKey` folds the mode into
+   * the list query's key and that query uses `keepPreviousData`, so the render right after a
+   * flip to **off** can still be handed the previous mode's rows — ids that are `deck_cards.id`
+   * — with `deckDriven` already reading `false` and the Rust fence that would otherwise refuse
+   * the write already down. A flag-driven guard is wide open in exactly that frame; the row's
+   * own `deckCount` is never wrong about what the row is, which is the same argument
+   * `CollectionTable.tsx`'s finish cell makes for reading the row over the mode.
    *
    * The controls say `aria-disabled`, which is a statement to assistive tech and stops no
    * click on its own; and the row's right-click menu, the keyboard, and anything else that
@@ -308,17 +316,17 @@ export function CollectionPage() {
    */
   const onSetQuantity = useCallback(
     (row: CollectionRow, quantity: number) => {
-      if (deckDriven) return;
+      if (row.deckCount !== null) return;
       setQuantity.mutate({ row, quantity });
     },
-    [deckDriven, setQuantity],
+    [setQuantity],
   );
   const onRemove = useCallback(
     (row: CollectionRow) => {
-      if (deckDriven) return;
+      if (row.deckCount !== null) return;
       remove.mutate(row);
     },
-    [deckDriven, remove],
+    [remove],
   );
   const onNeedNextPage = useCallback(() => {
     if (query.hasNextPage && !query.isFetchingNextPage && !query.isFetchNextPageError) {

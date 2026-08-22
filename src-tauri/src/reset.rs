@@ -279,10 +279,15 @@ pub async fn collection_clear(
 ) -> Result<CollectionCleared, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        // `with_write_owned` and not bare `with_write`, and it has to be: the facet index's
-        // `owned` bitset is built from `collection_entries`, so a wipe that skipped the
-        // amendment would leave the search sidebar offering an Owned facet over a collection
-        // that no longer exists.
+        // `with_write_owned` and not bare `with_write`. The facet index's `owned` bitset is
+        // built from whichever source `collection_source::owned_rowids` picks, so this wipe
+        // moves it in the **hand-kept** mode — where a skipped rebuild would leave the search
+        // sidebar offering an Owned facet over a collection that no longer exists — and cannot
+        // move a bit while the collection is derived from the decks, because it does not touch
+        // a `deck_cards` row. Left unconditional rather than given
+        // `with_write_owned_if_derived`'s question inverted: one ~1 MB index clone on a Danger
+        // Zone press the reader has already confirmed is not a cost worth a branch, and a
+        // branch here would be a second place the ownership rule is spelled out.
         crate::collection_source::with_write_owned(&state, clear_collection)
     })
     .await

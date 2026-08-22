@@ -62,6 +62,39 @@ pub fn store(conn: &Connection, enabled: bool) -> Result<(), String> {
         .map_err(|e| format!("could not save the collection setting: {e}"))
 }
 
+/// Flip the setting: the bit, **and the allocation ledger the mode it hands back to reads**.
+///
+/// [`store`] is the bit on its own and is the wrong thing for a command to call, because
+/// flipping this switch is not only a change of where the collection is read from — it is the
+/// end of a period in which nothing kept `deck_allocations` in step.
+/// [`crate::deck::allocate_deck`] returns early for the whole of that period (every card write
+/// calls it, and every one of those calls does nothing), so a deck the reader edited while the
+/// setting was on still has the claims it had when they turned it on: rows reserving copies for
+/// cards that deck no longer holds. Those claims cost **other** decks — availability is the
+/// entry's quantity minus the claims of other built decks — so a reader who switches back finds
+/// a deck short a copy it owns, a shopping list telling them to buy it, and no way to clear it
+/// but a card write to the deck that went stale.
+///
+/// So on the way **off**, every deck is reallocated. Nothing is done on the way **on**: the
+/// ledger is not read in that mode, and emptying it there would throw away a state the reader
+/// may be one press away from wanting back. The alternative design — clear the ledger as the
+/// setting goes on and let the first later write rebuild it — is simpler and does exactly that
+/// throwing away, which is why this is the arm that carries the work.
+///
+/// **One transaction, and the order inside it is load-bearing twice over.** The flag is written
+/// first because [`crate::deck::allocate_every_deck`] asks [`stored`] and would stand down if it
+/// still read on; and both writes commit together because a crash between them lands on the very
+/// state this repairs — a hand-kept collection reading a ledger from a mode that never used it.
+pub fn switch(conn: &Connection, enabled: bool) -> Result<(), String> {
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    store(&tx, enabled)?;
+    if !enabled {
+        crate::deck::allocate_every_deck(&tx)?;
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(())
+}
+
 /// Whether the collection is derived from the reader's decks.
 ///
 /// **Infallible by signature**, [`crate::nav::nav_collapsed`]'s contract for its reason: there
@@ -73,6 +106,10 @@ pub fn deck_driven_collection(state: tauri::State<'_, Arc<AppState>>) -> bool {
 }
 
 /// Remember the choice. Answers [`crate::db::BUSY`] if a sync holds the write connection.
+///
+/// **[`switch`] and not [`store`]**: on the way off it also rebuilds `deck_allocations`, in the
+/// same transaction as the flag. See that function for why the ledger cannot be trusted after a
+/// spell of the setting being on.
 ///
 /// **Through [`crate::collection_source::with_write_owned`], not bare `with_write`** — and
 /// that is the one line of this module that is not [`crate::nav`]'s. Flipping this bit
@@ -90,11 +127,21 @@ pub async fn set_deck_driven_collection(
     enabled: bool,
 ) -> Result<(), String> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        crate::collection_source::with_write_owned(&state, |conn| store(conn, enabled))
-    })
-    .await
-    .map_err(|e| format!("the collection setting could not be saved: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || write_setting(&state, enabled))
+        .await
+        .map_err(|e| format!("the collection setting could not be saved: {e}"))?
+}
+
+/// The command's whole body, lifted out so that a test can reach it.
+///
+/// **Not ceremony.** A `#[tauri::command]` takes a `tauri::State`, which a unit test has no way
+/// to build, so the one line saying *which* of [`store`] and [`switch`] the running app calls
+/// was the only line in this module nothing could execute. It was wrong once — the ledger
+/// rebuild below was written, tested and completely unreachable from the app, with every test
+/// in the crate green. `the_command_writes_the_flag_and_rebuilds_the_ledger` is what now stands
+/// in that gap.
+pub(crate) fn write_setting(state: &Arc<AppState>, enabled: bool) -> Result<(), String> {
+    crate::collection_source::with_write_owned(state, |conn| switch(conn, enabled))
 }
 
 #[cfg(test)]
@@ -144,5 +191,54 @@ mod tests {
             crate::update::set_app_meta(&conn, K_DECK_DRIVEN, junk).unwrap();
             assert!(!stored(&conn), "{junk:?} should read as off");
         }
+    }
+
+    /// **The wiring, which is the half of this module a `&Connection` test cannot see.**
+    /// `switch`'s own tests live in `deck.rs`, where the deck fixtures are, and they prove the
+    /// rebuild works; none of them can prove the *command* calls it. Left to `store`, every one
+    /// of those tests still passes and the reader's ledger is never repaired.
+    ///
+    /// A phantom claim is planted by hand — a deck that holds no cards at all, reserving four
+    /// copies — because that is what a spell of the setting being on leaves behind, and it is
+    /// what a rebuild has to sweep. The setting goes on (the claim must survive) and off again
+    /// (it must not).
+    #[test]
+    fn the_command_writes_the_flag_and_rebuilds_the_ledger() {
+        let state = crate::index::fixtures::state_with_seeded_cards("deck-driven-command");
+        crate::sync::with_write(&state, |conn| {
+            conn.execute_batch(
+                "INSERT INTO collection_entries
+                    (id,card_id,set_code,collector_number,lang,finish,condition,quantity,
+                     created_at,updated_at)
+                 VALUES (1,'1','lea','1','en','nonfoil','NM',4,0,0);
+
+                 INSERT INTO decks (id,name,created_at,updated_at) VALUES (1,'Burn',0,0);
+
+                 INSERT INTO deck_allocations
+                    (deck_id,collection_entry_id,quantity,created_at,updated_at)
+                 VALUES (1,1,4,0,0);",
+            )
+            .map_err(|e| e.to_string())
+        })
+        .unwrap();
+
+        let claims = || -> i64 {
+            crate::sync::lock_db_read(&state)
+                .query_row("SELECT count(*) FROM deck_allocations", [], |r| r.get(0))
+                .unwrap()
+        };
+        let flag = || stored(&crate::sync::lock_db_read(&state));
+
+        write_setting(&state, true).unwrap();
+        assert!(flag(), "the bit is still written");
+        assert_eq!(claims(), 1, "the way on touches no claim");
+
+        write_setting(&state, false).unwrap();
+        assert!(!flag());
+        assert_eq!(
+            claims(),
+            0,
+            "the command reaches `switch`, not `store`: a deck holding no cards claims none"
+        );
     }
 }

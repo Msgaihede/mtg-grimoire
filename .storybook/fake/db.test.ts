@@ -3185,6 +3185,32 @@ describe("the collection driven by the decks", () => {
     expect(rows.items[0].proxy).toBe(false);
   });
 
+  /**
+   * A condition term over a derived list, and the trap the fake used to fall into.
+   *
+   * `collection_source::rows` projects `NULL AS condition` for these rows, and the crate's
+   * `push_in_list` turns a non-empty, valid filter into `e.condition IN (…)` — which
+   * `NULL IN (…)` never satisfies, whatever is asked for. The fake used to filter the value it
+   * actually stores (`liveDeckCopies`' own `"NM"` filler, {@link toCollectionRow}'s doc), so a
+   * filter of exactly `["NM"]` matched **every** derived row instead of the crate's zero. Both
+   * `"NM"` and `"LP"` are asserted, because a fix that special-cased the filler string would
+   * pass the first and still fail the second.
+   */
+  it("empties a derived list under any condition filter, never matching the stored filler", () => {
+    const db = derived();
+    expect(page(db).total).toBe(1);
+
+    const nm = readHandlers(db).collection_list({
+      query: { conditions: ["NM"], limit: 100, offset: 0 },
+    });
+    expect(nm.total).toBe(0);
+
+    const lp = readHandlers(db).collection_list({
+      query: { conditions: ["LP"], limit: 100, offset: 0 },
+    });
+    expect(lp.total).toBe(0);
+  });
+
   it("counts an inactive pile and an archived deck, and never a plan", () => {
     const rows = page(
       derived({

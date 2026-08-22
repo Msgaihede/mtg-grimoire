@@ -33,6 +33,41 @@ export const DECK_DRIVEN_REASON = "Your collection is driven by your decks";
 type Write = { enabled: boolean; previous: boolean };
 
 /**
+ * The four roots a change to **what the reader owns** makes wrong.
+ *
+ * One list rather than seven copies of it, because seven copies is seven places for the next
+ * root to be forgotten in — and it was: this list stood on the flag's own mutation alone while
+ * every deck-write hook in the app fired `["decks"]` and nothing else, which is what
+ * {@link useDeckWriteRoots} exists to fix.
+ *
+ * * `["collection"]` — the list and the summary header above it.
+ * * `["cards", "search"]` — the wall's `ownedQuantity`, which is what an `OwnedBadge` draws.
+ * * `["decks"]` — every `DeckCard.ownedQuantity`, and the gallery tile's `cardCount`.
+ * * `["wishlist"]` — `WishRow.ownedQuantity`, the copies that already fill a wish.
+ *
+ * **Deliberately not `["card"]`, and not the wider `["cards"]`.** These are the four the flag's
+ * own write has always fired and the four `AddToCollection` and `useCardMenuDeps` fire; widening
+ * the list is a decision about the card pane's printing counts that belongs with whoever makes
+ * it for all of them at once, not a thing to slip in at a deck write.
+ */
+export const OWNERSHIP_ROOTS: readonly string[][] = [
+  ["collection"],
+  ["cards", "search"],
+  ["decks"],
+  ["wishlist"],
+];
+
+/**
+ * What a deck write moves while the collection is **hand-kept** — and it is not nothing.
+ *
+ * `allocate_deck` runs inside the write's own transaction, so `deck_allocations` moves and
+ * every other deck's `ownedQuantity` with it. This was the whole invalidation before the
+ * setting existed and it stays the floor: {@link useDeckWriteRoots} adds to it, never replaces
+ * it.
+ */
+const DECK_ROOTS: readonly string[][] = [["decks"]];
+
+/**
  * Whether the collection is the sum of the reader's live decks — remembered across restarts.
  *
  * TanStack Query rather than the zustand store, for `useNavCollapsed`'s reason: `store.ts`
@@ -64,21 +99,12 @@ export function useDeckDrivenCollection(): {
   error: string | null;
 } {
   const queryClient = useQueryClient();
-
-  const query = useQuery({
-    queryKey: DECK_DRIVEN_KEY,
-    queryFn: () => ipc.deckDrivenCollection(),
-    // Read once per app run. Nothing else writes this row, so there is nothing to go stale
-    // against — every change to it goes through the mutation below, which writes the answer
-    // straight into the cache.
-    staleTime: Infinity,
-    gcTime: Infinity,
-  });
+  const deckDriven = useDeckDrivenFlag();
 
   const write = useMutation({
     mutationFn: ({ enabled }: Write) => ipc.setDeckDrivenCollection(enabled),
     onSuccess: () => {
-      for (const queryKey of [["collection"], ["cards", "search"], ["decks"], ["wishlist"]]) {
+      for (const queryKey of OWNERSHIP_ROOTS) {
         void queryClient.invalidateQueries({ queryKey });
       }
     },
@@ -106,9 +132,7 @@ export function useDeckDrivenCollection(): {
   );
 
   return {
-    // `undefined` is the read that has not answered yet *and* the read that failed, and both
-    // mean the same thing here: draw the hand-kept collection.
-    deckDriven: query.data ?? false,
+    deckDriven,
     setDeckDriven,
     /**
      * Derived from the mutation rather than held in a `useState`, which is `useMarketplace`'s
@@ -118,4 +142,54 @@ export function useDeckDrivenCollection(): {
      */
     error: write.error ? ipcError(write.error) : null,
   };
+}
+
+/**
+ * The flag alone, without the write half.
+ *
+ * Split out of {@link useDeckDrivenCollection} rather than duplicated, so that the six deck-write
+ * hooks that only need to *read* the mode do not each mount a `useMutation` they will never fire.
+ * One query key, `staleTime: Infinity`: however many callers there are, the row is read once per
+ * app run and every observer shares the answer.
+ *
+ * **`undefined` is the read that has not answered yet _and_ the read that failed, and both mean
+ * the same thing here: the hand-kept collection.** For a caller invalidating after a write that
+ * is the conservative floor rather than a guess — it fires the roots that were always right, and
+ * a wrong `false` costs exactly the staleness {@link useDeckWriteRoots}'s callers exist to fix.
+ */
+export function useDeckDrivenFlag(): boolean {
+  const query = useQuery({
+    queryKey: DECK_DRIVEN_KEY,
+    queryFn: () => ipc.deckDrivenCollection(),
+    // Read once per app run. Nothing else writes this row, so there is nothing to go stale
+    // against — every change to it goes through the mutation above, which writes the answer
+    // straight into the cache.
+    staleTime: Infinity,
+    gcTime: Infinity,
+  });
+  return query.data ?? false;
+}
+
+/**
+ * The roots **a deck write** makes wrong, which is a different list in each mode.
+ *
+ * While the collection is derived, a deck write *is* a collection write — the Rust side routes
+ * fifteen commands through `with_write_owned_if_derived` for exactly this — so the reader's
+ * ownership has changed and all four of {@link OWNERSHIP_ROOTS} are describing a collection that
+ * has moved. While it is hand-kept, `deck_allocations` still moved and {@link DECK_ROOTS} is
+ * still owed.
+ *
+ * **Additive, and that is the part to get right.** `["decks"]` is in both lists: the gate *adds*
+ * three roots to the floor and never swaps the floor out for them. A conditional that replaced
+ * the deck root would break every deck surface in the ordinary mode in order to fix the other
+ * one.
+ *
+ * **Why a gate at all, when the refetch is against local SQLite.**
+ * `CollectionRow.deckCount` is `null` unless the collection is derived, and `CardSummary`'s owned
+ * count is allocation-blind — so in the hand-kept mode there is provably nothing on those three
+ * roots that a deck write can have changed, and firing them would be three refetches per press
+ * of the stepper that can only ever answer what is already on screen.
+ */
+export function useDeckWriteRoots(): readonly string[][] {
+  return useDeckDrivenFlag() ? OWNERSHIP_ROOTS : DECK_ROOTS;
 }
