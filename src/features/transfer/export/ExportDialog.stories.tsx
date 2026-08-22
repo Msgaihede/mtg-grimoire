@@ -79,6 +79,11 @@ if (BOLT.name !== "Lightning Bolt" || SOL_RING.name !== "Sol Ring" || FOREST.nam
  * Every row carries the same three category fields because a pile has one name, one kind and one
  * switch — so the grouped formats write it as a single section, `Deck` in Arena's and Moxfield's
  * fixed vocabulary and `Ramp` in Archidekt's, which is the reader's own word for it.
+ *
+ * **`legalities` comes off the corpus row like every other field here**, and it is what
+ * {@link OnlyCardsArenaHas} turns on: Lightning Bolt is `timeless: "legal"` and `historic:
+ * "banned"` — Arena has it — while Sol Ring is playable in no Arena format at all, so the pair
+ * is a filter with something to do rather than a checkbox over a list it cannot change.
  */
 const CARDS: TransferCard[] = [
   transferCard({
@@ -86,6 +91,7 @@ const CARDS: TransferCard[] = [
     quantity: 2,
     setCode: BOLT.setCode,
     collectorNumber: BOLT.collectorNumber,
+    legalities: BOLT.legalities,
     categoryName: "Ramp",
     categoryKind: "main",
     categoryActive: true,
@@ -95,6 +101,7 @@ const CARDS: TransferCard[] = [
     quantity: 1,
     setCode: SOL_RING.setCode,
     collectorNumber: SOL_RING.collectorNumber,
+    legalities: SOL_RING.legalities,
     categoryName: "Ramp",
     categoryKind: "main",
     categoryActive: true,
@@ -115,6 +122,7 @@ const DECK_CARDS: TransferCard[] = [
     quantity: 6,
     setCode: FOREST.setCode,
     collectorNumber: FOREST.collectorNumber,
+    legalities: FOREST.legalities,
     categoryName: "Cuts",
     categoryKind: "main",
     categoryActive: false,
@@ -135,6 +143,8 @@ function collectionEntry(
 ): CollectionRow {
   return {
     promoTypes: null,
+    // The corpus's own blob, so the Arena filter answers over real legalities.
+    legalities: card.legalities,
     id: 1,
     cardId: card.id,
     name: card.name,
@@ -213,6 +223,7 @@ const COLLECTION_CARDS: TransferCard[] = [
 function wishRow(card: ReturnType<typeof printing>, over: Partial<WishRow> = {}): WishRow {
   return {
     id: 1,
+    legalities: card.legalities,
     oracleId: card.oracleId,
     cardId: card.id,
     name: card.name,
@@ -555,6 +566,85 @@ export const SwitchedOffPile: Story = {
       "Cuts 6x Forest (unf) 239 [Cuts{noDeck}]",
     );
     await expect(canvas.queryByText(/not written in this format/)).toBeNull();
+  },
+};
+
+/**
+ * **Only cards MTG Arena has** — the Arena format's own filter, issue #192.
+ *
+ * A paper collection is mostly cards Arena has never printed, and an Arena decklist naming one is
+ * a line the game cannot resolve. The checkbox leaves them out. `export/arena.ts` is the whole of
+ * what "them" means and carries the measurements; the two things to see here are that it is
+ * offered by **one** format and that what it holds back is said out loud.
+ *
+ * **It is not a field, which is why it is not in the `Fields` row.** A field says what a line
+ * says about a card; this says which cards there are lines for. It sits under the format radios
+ * in a row of its own, shaped after the collection and wishlist scope checkbox one rung up.
+ *
+ * **Off when the dialog opens**, on every surface: this format has written every card handed to
+ * it since it shipped, and a filter that started on would quietly change what an existing
+ * reader's next export contains. The count line under it is how they find the box — and it is
+ * the twin of the switched-off-pile line above in every respect, `text-dim` rather than an
+ * alert because nothing has failed, and in **copies** because two copies of a card Arena lacks
+ * are two lines that will not be in the file.
+ *
+ * The fixture is the deck scope, so both omission lines are reachable: Sol Ring is playable in no
+ * Arena format, and the six Forests are in a pile the reader switched off.
+ */
+export const OnlyCardsArenaHas: Story = {
+  args: { subject: "Atraxa", cards: DECK_CARDS, suggestedFileName: "Atraxa" },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(
+      async () => await expect(canvas.getByRole("radio", { name: "Arena" })).toBeVisible(),
+      { timeout: FRAME_WAIT },
+    );
+
+    // One format offers it. Plain text is what the dialog opens on, and it has no such question.
+    await expect(canvas.queryByRole("checkbox", { name: "Only cards MTG Arena has" })).toBeNull();
+
+    await userEvent.click(canvas.getByRole("radio", { name: "Arena" }));
+    const box = canvas.getByRole("checkbox", { name: "Only cards MTG Arena has" });
+    await expect(box).toBeVisible();
+    await expect(box).not.toBeChecked();
+
+    // Untouched, the format writes what it always did — Sol Ring included.
+    await expand(canvasElement);
+    await expect(preview(canvasElement)).toHaveTextContent(
+      "Deck 2 Lightning Bolt (2X2) 117 1 Sol Ring (C21) 263",
+    );
+    await expect(canvas.queryByText(/not in MTG Arena/)).toBeNull();
+
+    await userEvent.click(box);
+    // Lightning Bolt stays: it is banned in Historic and legal in Timeless, and Arena plainly
+    // has the card — which is why the rule is "playable in *an* Arena format" rather than
+    // "legal in Arena".
+    await expect(preview(canvasElement)).toHaveTextContent("Deck 2 Lightning Bolt (2X2) 117");
+    await expect(preview(canvasElement).textContent).not.toMatch(/Sol Ring/);
+    await expect(canvas.getByText("1 card is not in MTG Arena and is not written.")).toBeVisible();
+
+    // The two lines count different things and never the same card twice: the six Forests are
+    // held back by their switched-off pile, the one Sol Ring by the filter.
+    await expect(
+      canvas.getByText("6 cards in switched-off piles are not written in this format."),
+    ).toBeVisible();
+
+    // Leaving the format takes the question with it, and nothing else's export is narrowed.
+    await userEvent.click(canvas.getByRole("radio", { name: "Moxfield" }));
+    await expect(canvas.queryByRole("checkbox", { name: "Only cards MTG Arena has" })).toBeNull();
+    await expect(preview(canvasElement)).toHaveTextContent("1 Sol Ring (C21) 263");
+
+    // And coming back finds it still ticked — unlike the field set, which is re-derived from
+    // each format's own defaults.
+    await userEvent.click(canvas.getByRole("radio", { name: "Arena" }));
+    const again = canvas.getByRole("checkbox", { name: "Only cards MTG Arena has" });
+    await expect(again).toBeChecked();
+
+    // Put it back, and it is the *store* being put back rather than this canvas: `exportPrefs`
+    // is `useAppStore`'s and outlives a story, so a play that left it ticked would decide what
+    // the next Arena story on this page exports.
+    await userEvent.click(again);
+    await expect(preview(canvasElement)).toHaveTextContent("1 Sol Ring (C21) 263");
   },
 };
 

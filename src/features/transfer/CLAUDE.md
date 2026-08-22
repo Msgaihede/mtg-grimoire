@@ -218,9 +218,10 @@ Pathway` is one card and there are seven such names in the reference list alone,
 ## Export
 
 `export/` is the mirror of `import/`, and the split is the repo's boundary: `format.ts` is
-`(cards, format, fields) => string` — no React, no hook, no IPC — `ExportDialog.tsx` is the
-surface (a format picker, a field-checkbox row, a live preview, Copy and Save as…), and Rust
-supplies only the file write. **Four controls open that dialog now** — the deck editor header's
+`(cards, format, fields) => string` — no React, no hook, no IPC, and `arena.ts` beside it holds
+to the same rule — `ExportDialog.tsx` is the surface (a format picker, a field-checkbox row, the
+Arena format's own filter, a live preview, Copy and Save as…), and Rust supplies only the file
+write. **Four controls open that dialog now** — the deck editor header's
 `Export deck` and a category heading's `Export cards…` (`DeckEditor.tsx:3443`, one mount both
 reach), and one apiece on `CollectionPage.tsx:585` and `WishlistPage.tsx:438` — and what differs
 between them is no longer only which cards the caller passes: `surface` and, on the collection
@@ -235,6 +236,36 @@ measured on: [import-export.md](../../../docs/reference/import-export.md).
   `ALWAYS` and never drawn as checkboxes, because a line with no count and no name is not a card.
   Switching format re-derives the checked set from that format's own defaults rather than
   carrying the old selection forward — a set chosen for CSV means nothing to Arena.
+- **The Arena format's own checkbox is a _row_ filter, not a field, and that is why it is not in
+  `fields.ts`** (issue #192, 2026-08-22). A field says what a line says about a card; **Only cards
+  MTG Arena has** says which cards there are lines for, so it sits under the format radios rather
+  than in the `Fields` row, is drawn for `arena` alone, and rides in `exportPrefs` beside the
+  format and the field set — **surviving a format switch where `fields` is re-derived**, because a
+  field set chosen for CSV means nothing to Arena while "leave out what Arena does not have" is
+  the same answer whatever the reader passed through. **Off on every surface on a first run**: the
+  format has written every card handed to it since it shipped, and a filter that started on would
+  quietly change what an existing reader's next export contains. It is applied in the **dialog**,
+  before `formatExport` — which keeps that function `(cards, format, fields) => string`, the
+  boundary this whole directory is built on, and keeps `omittedCount` honest, since it then
+  measures what the format leaves out of the list it was actually handed and a card that is both
+  outside Arena and in a switched-off pile is reported once rather than twice. The filter is
+  fenced on the **format** as well as the flag, or a reader who ticked it and moved to CSV would
+  find their CSV quietly short of rows.
+- **`export/arena.ts` reads legality because `games` answers a different question, and the key
+  list has one exclusion that cannot be derived.** Scryfall's `games` says `arena` about a
+  *printing*: the Alpha Lightning Bolt is `["paper"]` while the card is in Timeless, so a
+  `games`-based filter would empty a paper collection. `ARENA_LEGALITY_KEYS` is the `format_specs`
+  rows whose seeded `games` cell says `arena` — **minus `gladiator`**, which is a real Arena
+  format whose Scryfall legality is not computed from Arena's pool and marks paper-only cards like
+  Grand Coliseum and Exotic Orchard `legal`. Measured over the live 116,712-printing corpus on
+  2026-08-22: eight keys match 15,973 of the 16,219 cards with an Arena printing and keep **0**
+  without one, `gladiator` alone accounts for all **37** false keeps a nine-key list makes, and
+  `timeless` alone would drop **462** cards Arena has — every `A-` rebalanced Alchemy card among
+  them, since Timeless excludes rebalanced cards and Arena is the only place they exist. The blob
+  is read by key **name** and never by bit position: `legal_mask`'s offsets are stored data
+  `src-tauri/src/legalities.rs` freezes, and a copy of that order over here would be a second
+  place for it to drift. Every figure, and why `CollectionRow`/`WishRow` carry the 483-byte blob
+  rather than the 8-byte mask: [import-export.md](../../../docs/reference/import-export.md).
 - **`foldForFields` merges rows the chosen fields cannot tell apart, and `DISCRIMINATOR` is why a
   fold never crosses a section.** The collection keeps 2 NM and 1 LP Lightning Bolt as two rows
   on purpose; a plain-text export has no condition channel, so writing them as two identical

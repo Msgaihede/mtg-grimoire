@@ -37,6 +37,12 @@ export function transferCard(over: Partial<TransferCard> = {}): TransferCard {
     rarity: null,
     typeLine: null,
     unitPrice: null,
+    // The real Lightning Bolt's Arena answer, and the two halves are both deliberate: Arena has
+    // the card (`timeless` is playable, which is why the Alpha printing above still exports to
+    // Arena), and it is banned in Historic (`arena.ts` keeps a card banned in *one* Arena format
+    // and legal in another). A test about the Arena filter overrides this; nothing else has to
+    // know it is here.
+    legalities: '{"historic":"banned","timeless":"legal","standard":"not_legal"}',
     ...over,
   };
 }

@@ -40,6 +40,68 @@ headings are the reader's own words rather than a fixed vocabulary, and the only
 `{noDeck}` — the flag that is what makes an Archidekt export and a re-import agree about a
 maybeboard.
 
+## The Arena filter — what "in MTG Arena" is measured as
+
+Issue #192. The Arena format offers one checkbox no other format does — **Only cards MTG Arena
+has** — and `src/features/transfer/export/arena.ts` is the whole of what it means. It is a *row*
+filter rather than a field: it changes which cards there are lines for, never what a line says
+about one, which is why it is not in `fields.ts` and not in the dialog's `Fields` row. Off on
+every surface when the dialog first opens (`useAppStore`'s `exportPrefs.<surface>.arenaOnly`),
+because this format has written every card handed to it since it shipped.
+
+**The obvious fact is the wrong one.** Scryfall's `games` array literally lists `arena`, but it
+is a property of a **printing**: the Alpha printing of Lightning Bolt says `["paper"]` while the
+card is in Arena's Timeless pool, so a `games`-based filter would empty a paper collection. The
+test is legality instead — the oracle-level fact hiding inside a printing-level blob.
+
+All figures below were measured on **2026-08-22** against the live corpus in
+`D:/Code/mtg-grimoire/src-tauri/target/debug/data/mtg.db` (116,712 printings, 0 of them with a
+NULL `legalities`), read through `node:sqlite`, read-only, no app lock. SQLite's own C is what
+does the work, so no cargo profile enters into any of them.
+
+The reference set is **16,219 oracle cards with at least one printing whose `games` contains
+`arena`**. Candidate rules, against it:
+
+| Rule | Matches | Kept with no Arena printing | Dropped though Arena has them |
+| --- | --- | --- | --- |
+| `timeless` alone | 15,757 | 0 | 462 |
+| The nine `format_specs` arena rows | 16,010 | **37** | 246 |
+| **Those nine minus `gladiator`** | 15,973 | **0** | 246 |
+
+**`gladiator` is the exclusion the whole shape turns on, and it is the entry most likely to be
+helpfully restored.** Gladiator genuinely is an Arena format and `format_specs` seeds its `games`
+cell as `arena` — but Scryfall's `gladiator` legality is not computed from Arena's pool. It marks
+paper-only cards `legal`: Grand Coliseum (`c16`, `games: ["paper"]`), Exotic Orchard, Together
+Forever, Sodden Verdure. It alone accounts for **all 37** of the middle row's false keeps. The
+exclusion is about Scryfall's data rather than about the format, which is why it cannot be read
+off the seed and lives in `arena.ts` with `arena.test.ts` pinning it.
+
+**`timeless` alone is the other tempting shortcut**, and it costs the 216 `A-` rebalanced Alchemy
+cards — Timeless deliberately excludes rebalanced cards while Arena is the only place they exist
+— plus 36 tokens and 210 Arena-exclusives. So `ARENA_LEGALITY_KEYS` is **eight** names:
+`alchemy`, `brawl`, `competitivebrawl`, `future`, `historic`, `standard`, `standardbrawl`,
+`timeless`, and a card is in Arena when **any** of them is `legal` or `restricted`.
+`restricted` counts (a copy limit is not "Arena lacks the card"); `banned` does not, which is the
+issue's "not legal" arm — and a card banned in one Arena format and legal in another survives,
+which is exactly Lightning Bolt (`historic: banned`, `timeless: legal`).
+
+**The 246 it still drops** are tokens and Arena-exclusives that Scryfall records as playable in
+no format at all — Alchemy Horizons: Baldur's Gate's own cards, and every printing of a set that
+has not been released yet. Both are cards an Arena decklist should not name either.
+
+**Two facts make the printing-level blob safe to read as an oracle-level one**, and both were
+measured rather than assumed: **0** oracle cards have printings that disagree about any of the
+eight keys, and **0** cards match the eight-key rule without having an Arena printing.
+
+**Names, never bit positions.** `src-tauri/src/legalities.rs` packs these same keys into
+`cards.legal_mask` at frozen, append-only offsets that are *stored data*; a copy of that order in
+TypeScript would be a second place for it to drift, and a wrong bit reads as a plausible legality
+rather than as a crash. Scryfall's key names are public vocabulary and cannot drift. That is also
+why `CollectionRow` and `WishRow` gained the **blob** rather than the mask when this shipped —
+`DeckCard` already carried one — at a measured cost of **483 bytes** on average and **528** at
+most per row, against `promo_types`' 23 on the same corpus. `src/features/transfer/export/` is
+the only reader on any of the three.
+
 ## The field registry and the intersection rule
 
 `src/features/transfer/fields.ts` declares two independent things and the export dialog draws only
@@ -306,8 +368,9 @@ so this pass is its only verification.
 
 ## Where the code is
 
-`src/features/transfer/` (`TransferCard.ts`, `fields.ts`, `csv.ts`, `formats.ts`, `export/`,
-`import/`) is the whole of the TypeScript side; `src-tauri/src/import.rs` (renamed from
+`src/features/transfer/` (`TransferCard.ts`, `fields.ts`, `csv.ts`, `formats.ts`, `export/` —
+including `export/arena.ts`, the Arena filter's rule — and `import/`) is the whole of the
+TypeScript side; `src-tauri/src/import.rs` (renamed from
 `deck_import.rs`), `export.rs`, `collection.rs`'s `collection_import_commit` and `wishlist.rs`'s
 `wishlist_import_commit` are the Rust side. `src/components/Dialog.tsx` is the shared modal shell
 both `ExportDialog` and `ImportDialog` are built on. `src/features/decks/CLAUDE.md` still owns
