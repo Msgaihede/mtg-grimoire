@@ -81,6 +81,7 @@ import { useAppStore } from "@/lib/store";
 
 const BOLT: CollectionRow = {
   promoTypes: null,
+  legalities: null,
   id: 7,
   cardId: "c1",
   name: "Lightning Bolt",

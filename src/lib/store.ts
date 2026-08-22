@@ -79,6 +79,21 @@ export interface PaneDeckContext {
 /** How the search results are laid out. */
 export type SearchView = "table" | "grid";
 
+/**
+ * What one surface's export dialog opens holding — see {@link AppState.exportPrefs}, which is
+ * where the per-surface argument and `arenaOnly`'s exemption from the format switch are made.
+ *
+ * Named and exported rather than written inline, because the export dialog's `setPrefs` calls
+ * spread it: a fourth key added here must reach those call sites as a type error rather than as
+ * a setting they silently drop on the next press.
+ */
+export interface ExportPrefs {
+  format: ExportFormat;
+  fields: TransferFieldId[];
+  /** Leave out cards MTG Arena does not have. Read by the `arena` format alone. */
+  arenaOnly: boolean;
+}
+
 interface AppState {
   activeView: ViewId;
   setActiveView: (view: ViewId) => void;
@@ -358,17 +373,20 @@ interface AppState {
    *  the open deck or the view is this write's business. */
   setCardWalk: (walk: CardWalk) => void;
   /**
-   * The format and field set each surface was last exported with.
+   * The format, field set and Arena filter each surface was last exported with.
    *
    * **Per surface rather than globally**: a deck export wants Moxfield's printing line and a
    * collection export wants a CSV with a condition column, and one remembered setting would
    * make each of them wrong half the time.
+   *
+   * `arenaOnly` rides along rather than being local dialog state, so it is remembered the way
+   * the two beside it are — and it deliberately **survives a format switch**, unlike `fields`,
+   * which is re-derived from each format's defaults. A field set chosen for CSV means nothing
+   * to Arena; "leave out what Arena does not have" is the same answer whatever else the reader
+   * tries in between, and only the Arena format reads it at all.
    */
-  exportPrefs: Record<TransferSurface, { format: ExportFormat; fields: TransferFieldId[] }>;
-  setExportPrefs: (
-    surface: TransferSurface,
-    prefs: { format: ExportFormat; fields: TransferFieldId[] },
-  ) => void;
+  exportPrefs: Record<TransferSurface, ExportPrefs>;
+  setExportPrefs: (surface: TransferSurface, prefs: ExportPrefs) => void;
   /**
    * What a bulk import line that says nothing becomes — the collection's condition and finish,
    * and the wishlist's finish alone (it draws the same field and ignores `condition`, which is
@@ -604,10 +622,13 @@ export const useAppStore = create<AppState>((set) => ({
   setCardWalk: (walk) => set({ cardWalk: walk.stops.length === 0 ? NO_WALK : walk }),
   // A collection opens on CSV because that is the only format that can carry a condition, and a
   // collection without conditions is a card list rather than a record of what the reader owns.
+  // `arenaOnly` opens **off** everywhere: the Arena export has written every card handed to it
+  // since it shipped, and a filter that starts on would quietly change what an existing reader's
+  // next export contains. The dialog's own count line is how they find the box.
   exportPrefs: {
-    deck: { format: "plain", fields: defaultFields("plain", "deck") },
-    collection: { format: "csv", fields: defaultFields("csv", "collection") },
-    wishlist: { format: "plain", fields: defaultFields("plain", "wishlist") },
+    deck: { format: "plain", fields: defaultFields("plain", "deck"), arenaOnly: false },
+    collection: { format: "csv", fields: defaultFields("csv", "collection"), arenaOnly: false },
+    wishlist: { format: "plain", fields: defaultFields("plain", "wishlist"), arenaOnly: false },
   },
   setExportPrefs: (surface, prefs) =>
     set((s) => ({ exportPrefs: { ...s.exportPrefs, [surface]: prefs } })),
