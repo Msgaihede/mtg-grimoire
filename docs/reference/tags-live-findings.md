@@ -297,6 +297,31 @@ Recorded because two of them are things the pass itself got wrong, and one is a 
   drive from the tag list rather than from FTS. Usually right, and previously impossible. A
   text-only search moved 12 → 16 ms, within noise; **text plus tag at real breadth is unmeasured.**
 
+## What the field found that this pass could not (2026-08-22)
+
+**Every oracle tag search answered nothing, on every database that existed before the taxonomy
+shipped** — [issue #180](https://github.com/Msgaihede/mtg-grimoire/issues/180), reported from
+Discord. Fixed by the v22 rung; `docs/reference/data-and-sync.md` carries the full account.
+
+It is here because of *why* this pass missed it, which is the transferable part. The v20 step
+added `oracle_tags.slug_norm` with `DEFAULT ''` and left the ingest to fill it; `tags::query`
+matches every typed needle against exactly that column. So the failure needed a database that
+held oracle tags **before** v20 — and every measurement above was taken on a worktree that
+ingested both taxonomies fresh, where the column is written in full and the bug cannot exist.
+Two properties then kept it quiet:
+
+- **The rail went on working**, because `tag_children` and `filters::picked_tags` both read
+  `slug` and never `slug_norm`. A reader could see the oracle tags the box could not find, which
+  reads as a broken search box rather than as missing data.
+- **The art half was perfect beside it.** v20 creates `art_tags` empty, so its first launch
+  ingests everything. "Art search works, oracle search does not" is the report, and it points at
+  the query rather than at a migration.
+
+**The lesson is about which population a live pass covers.** A fresh worktree is a fresh install,
+and a fresh install is the one population that cannot show an upgrade defect. Any rung that
+`ALTER TABLE … ADD COLUMN`s a value only an ingest can supply owes a test over a rewind fixture,
+not over the tree you are driving.
+
 ## Still open
 
 1. **622 ms of blocked input** on entering the page, debug build (gate 1). Measure a release build
