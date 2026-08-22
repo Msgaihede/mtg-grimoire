@@ -89,6 +89,15 @@ const NO_CARDS: TransferCard[] = [];
  * reader who had picked Card Kingdom, Mana Pool or Cardmarket, with nothing in the dialog saying
  * so — `everythingFilters` below is the one place that split is made, so both surfaces read it the
  * same way.
+ *
+ * **Stripping is not always sufficient, and the wishlist's `folderId` is the exception.** Every
+ * other field this drops is a row-narrowing filter in the ordinary sense: absent, it asks nothing
+ * and the backend returns every row. `folderId` is not that shape — since `64453bd`, an absent
+ * `folderId` is itself a filter, "the root wishlist", because the backend cannot tell "no folder
+ * named" apart from "the root folder named" any other way. So stripping `folderId` here does not
+ * widen the question to everything; it silently narrows it to the root. The wishlist sweep below
+ * has to say "every folder" a second, different way — `flatten: true` — rather than trusting this
+ * function's usual "absent means unfiltered" reading of a dropped field.
  */
 function everythingFilters<F extends { marketplace?: MarketplaceId }>(
   filters: F,
@@ -152,7 +161,13 @@ export function useExportScope(
       const rows = await sweep(
         (limit, offset) =>
           ipc.wishlistList({
-            ...(everything ? everythingFilters(wishlistFilters) : wishlistFilters),
+            // `everythingFilters` strips `folderId` along with every other row-narrowing
+            // filter, but an absent `folderId` means "the root wishlist" rather than "no
+            // folder filter" (`WishlistQuery.folderId`'s doc comment). On this surface
+            // "everything" has to mean *every folder*, and the only field that says that is
+            // `flatten` — so it rides along explicitly rather than being left to fall out of
+            // the strip above, which would otherwise silently narrow "everything" to the root.
+            ...(everything ? { ...everythingFilters(wishlistFilters), flatten: true } : wishlistFilters),
             limit,
             offset,
           }),
