@@ -622,6 +622,11 @@ Full detail and every measurement: [docs/reference/motion.md](../docs/reference/
   `src/index.css` carries the same scale so CSS-only sites agree. There is no `duration-base`
   utility — `--duration-*` is not a Tailwind v4 namespace, so it is read as
   `duration-[var(--duration-fast)]`; `--ease-*` **is** one, so `ease-standard` is real.
+  **A fourth tier, `instant` (50ms), was added on 2026-08-22** for content appearing where the
+  reader is already looking — the sidebar's labels, which fade in only once the rail has finished
+  widening for them. It is deliberately below the glitch floor `fast` names, because it is not a
+  transition anybody watches, and it is not a licence to write short numbers: a surface that
+  *travels* belongs on one of the three above.
 - **Two public APIs are forbidden: `AnimatePresence mode="popLayout"` and `animateView()`.**
   Both append a `<style>` element to `document.head`, which `style-src 'self'` blocks — and
   **the failure is silent**: `style.sheet` comes back null, popLayout simply does nothing and

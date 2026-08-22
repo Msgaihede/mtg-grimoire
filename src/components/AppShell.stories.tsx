@@ -392,6 +392,15 @@ export const Decks: Story = { args: { view: "decks" } };
  *
  * The toggle at the foot is the way back, and it is `aria-expanded`/`aria-controls` rather than
  * a bare press: the rail is narrower, not hidden, and `expanded` is the honest word for that.
+ *
+ * **This is the story to press the toggle on rather than to read**, because the two things fixed
+ * on 2026-08-22 only exist between the states. Closing: the words go in the commit that starts
+ * the rail shrinking, and the icons hold still — they used to be centred in a box the tween was
+ * still moving, and leapt 24 → 93.5 before sliding back. Opening: the rail travels its 180ms
+ * alone and the words fade in over 50ms *after* it arrives, where they used to re-enter the flow
+ * at full width inside a 68px rail and hang up to 62px over the view beside it. The play below
+ * presses the toggle both ways but deliberately asserts nothing about the timing: a `play` runs
+ * against the clock the browser gives it, and a 180ms window is not something to race.
  */
 export const Collapsed: Story = {
   args: { view: "search", collapsed: true },
