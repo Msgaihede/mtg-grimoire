@@ -125,9 +125,18 @@ Every one of these has its measurement and its story in
   never crop off a printed credit.
 - **Z-indexes come from `LAYER` in `src/lib/layers.ts`** and nowhere else; `src/lib/layers.test.ts`
   sweeps `src/` to keep it that way. The ladder is
-  `raised 10 < header 20 < popup 30 < dragTray 40 < overlay 45 < gate 50`. Equal z-indexes are
-  resolved by document order, and a popup inside a virtualised row is capped by that row's layer
-  whatever it asks for.
+  `raised 10 < header 20 < popup 30 < dragTray 40 < overlay 45 < tooltip 46 < gate 50 <
+  caption 60`. Equal z-indexes are resolved by document order, and a popup inside a virtualised
+  row is capped by that row's layer whatever it asks for.
+  **`caption` is the top rung and the only one that is not about the app** (2026-08-22): with
+  `decorations: false` the title bar *is* the window frame, so a surface that covers it takes
+  the window away rather than hiding a control. It shipped covered by both full-window surfaces
+  — `SyncProgress`'s gate for the length of a first sync and `Dialog`'s scrim for every modal —
+  because a `fixed inset-0` element paints over a flex item at `z-auto` whatever the numbers
+  say, so the bar never entered the contest. **Bounding each overlay at the bar's height is the
+  fix that does not scale**: it copies `BAR_H` into every such file and cannot be spelled as a
+  Tailwind class built from a constant. A new full-window surface needs no thought about this;
+  a new rung above `caption` needs a very good reason.
 - **Escape closes one layer per press, and the protocol is a handshake, not a z-index.** An
   inner dismissible layer listens on `window` in the **capture** phase and calls
   `preventDefault()`; an outer one listens in the bubble phase and returns early on

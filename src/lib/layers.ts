@@ -131,6 +131,51 @@ export const LAYER = {
    * one for a number to order against.
    */
   tooltip: "z-46",
-  /** `SyncProgress`'s full-window takeover, over everything. */
+  /**
+   * `SyncProgress`'s full-window takeover, over everything the *app* draws.
+   *
+   * The qualifier is newer than the rung and it is load-bearing — see {@link LAYER.caption},
+   * which is the one thing above this.
+   */
   gate: "z-50",
+  /**
+   * The window's own caption bar, above every layer above.
+   *
+   * **This is the only rung that is not about the app at all.** Everything below it is content
+   * the app draws and may legitimately cover with something else it draws; `TitleBar` is the
+   * *window frame*, and `decorations: false` in `tauri.conf.json` is what makes it this app's
+   * job to render rather than Windows'. A frame the window's own content can paint over is a
+   * frame in name only: with the native caption gone, this row is the only way to move,
+   * minimize or close the app, so a surface covering it does not obscure a control — it takes
+   * the window away from the reader.
+   *
+   * **It shipped covered, and by two different surfaces.** Measured in the running window on
+   * 2026-08-22: on a first launch `SyncProgress`'s overlay is `fixed inset-0` at
+   * {@link LAYER.gate}, 1920×1080, and `document.elementFromPoint` over the Close button
+   * answered the *overlay* — no caption was drawn at all for the ~90s of the first sync, and
+   * Alt+F4 was the only way out. `Dialog`'s scrim is the same shape one rung down
+   * ({@link LAYER.overlay}), so every modal in the app did it too. The title bar is a **flex
+   * item at `z-auto`**, and a positioned element paints above non-positioned content in the
+   * same stacking context whatever the numbers say, so neither surface had to out-rank it —
+   * it was never in the running.
+   *
+   * **A rung rather than a bound on each overlay, and that is the whole argument for doing it
+   * here.** The alternative was to stop both surfaces at the caption's height — which
+   * duplicates `TitleBar`'s `BAR_H` into two more files, cannot be spelled as a Tailwind class
+   * built from a constant (the scanner reads whole class names; see the note at the top of this
+   * file), and fixes only the two surfaces that exist today. One rung says the thing that is
+   * actually true and keeps being true for the next full-window surface somebody adds.
+   *
+   * **Above {@link LAYER.tooltip} without taking a hint off the screen**, which is the one
+   * overlap worth checking rather than assuming: the caption's own buttons are the app's only
+   * anchors pinned to the window's top edge, and `placeTooltip` already has to flip those
+   * downward rather than open them off-window — so their panels are drawn *below* this row and
+   * never inside it.
+   *
+   * `TitleBar`'s root is a direct child of the shell's `flex-col`, so the class needs no
+   * `position` to work: a z-index other than `auto` on a flex item creates a stacking context
+   * whatever its position, which is the same sentence of the flexbox spec
+   * {@link LAYER.overlappingMark} rests on.
+   */
+  caption: "z-60",
 } as const;

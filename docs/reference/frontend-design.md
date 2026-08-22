@@ -992,8 +992,25 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   _below_ the header — a row has to scroll under one. Variant spellings
   (`has-[[aria-expanded=true]]:z-10`) are their own entries, written out: Tailwind scans
   source text for whole class names, so a class built by interpolation emits no rule at all.
-- **The ladder is `raised 10 < header 20 < popup 30 < dragTray 40 < overlay 45 < gate 50`**, and
-  `layers.test.ts` asserts every link of it. **`overlay` is one rung for every full-window
+- **The ladder is `raised 10 < header 20 < popup 30 < dragTray 40 < overlay 45 < tooltip 46 <
+  gate 50 < caption 60`**, and `layers.test.ts` asserts every link of it.
+  **`caption` was added on 2026-08-22 to fix a bug that had shipped, and the bug is the reason
+  to keep it.** `TitleBar` draws the window's frame because `tauri.conf.json` sets
+  `decorations: false`, and it is a **flex item at `z-auto`** — while both of the app's
+  full-window surfaces are `fixed inset-0`. A positioned element paints over non-positioned
+  content in the same stacking context however small its number, so the bar was not losing the
+  ordering contest, it was never in it. Driven in the shipped window that day: on a first
+  launch the overlay measured 1920×1080 at `gate`, `document.elementFromPoint` over the Close
+  button answered the **overlay**, and no caption was drawn for the whole ~90s sync — Alt+F4
+  was the only way to quit. `Dialog`'s scrim is the same shape at `overlay`, so all of the
+  editor's modals did it too. `AppShell`'s comment had asserted the opposite since the row
+  replaced Windows' caption, which is how it went unnoticed: the claim was written down, so
+  nobody checked it. **The fix is a rung and not a bound on each surface** — stopping the
+  overlays at the bar's height copies `BAR_H` into each file, cannot be written as a Tailwind
+  class built from a constant, and covers only the surfaces that exist today. Above `tooltip`
+  costs nothing, and that is the one overlap worth checking rather than assuming: the caption
+  buttons are the app's only anchors on the window's top edge, and `placeTooltip` already flips
+  those downward, so their panels are drawn below the row and never inside it. **`overlay` is one rung for every full-window
   surface, deliberately, where two looks more careful**: the deck editor's **six** — Import,
   Categories, Tags, History, Theory diff, Deck settings — are held in **one** piece of
   state (`DeckEditor`'s `Layer` union) because `useDismissOnEscape` orders exactly two rungs, and
