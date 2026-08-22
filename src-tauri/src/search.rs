@@ -84,14 +84,20 @@ pub struct SearchRequest {
     /// those it does not. Spec §7's owned/wishlist status filter, buildable at last now
     /// that the table exists.
     ///
-    /// **An entry, not a copy.** A row emptied to zero is a row the collection keeps (see
-    /// [`crate::collection::set_quantity`]), and this filter counts it as owned — the same
-    /// reading as `CollectionSummary::unique_cards`, "printings recorded, not printings
-    /// currently held". So a card whose only entry sits at zero passes `owned: true` while
-    /// its [`CardSummary::owned_quantity`] reads `0`, and does *not* appear under
-    /// `owned: false`. Deliberate, and the one place it could surprise a reader is a "what
-    /// am I missing" list, which is the wishlist's `fulfilled` filter — that one counts
-    /// copies, because a wish is filled by copies rather than by paperwork.
+    /// **An entry, not a copy** — while the collection is the reader's own table. A row emptied
+    /// to zero is a row the collection keeps (see [`crate::collection::set_quantity`]), and this
+    /// filter counts it as owned: the same reading as `CollectionSummary::unique_cards`,
+    /// "printings recorded, not printings currently held". So a card whose only entry sits at
+    /// zero passes `owned: true` while its [`CardSummary::owned_quantity`] reads `0`, and does
+    /// *not* appear under `owned: false`. Deliberate, and the one place it could surprise a
+    /// reader is a "what am I missing" list, which is the wishlist's `fulfilled` filter — that
+    /// one counts copies, because a wish is filled by copies rather than by paperwork.
+    ///
+    /// **The distinction has nothing to bite on in the derived arm**, and that is worth saying
+    /// rather than leaving to be rediscovered: `deck_cards` carries `CHECK (quantity > 0)`, so a
+    /// deck row at zero is not a row at all. While the collection is derived from the decks
+    /// (see [`crate::collection_source`]) "entry" and "copy" name the same set, and the
+    /// paragraph above describes a state the reader cannot be in.
     pub owned: Option<bool>,
     /// How to order the page: columns in priority order, the first deciding and the rest
     /// breaking its ties. Empty or absent is the default — relevance when `text` is set,

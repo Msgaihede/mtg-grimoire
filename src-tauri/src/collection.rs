@@ -1125,8 +1125,9 @@ pub fn list_entries(conn: &Connection, q: &CollectionQuery) -> Result<Collection
         )
         .map_err(|e| e.to_string())?;
 
-    // Column 32, appended for the reason `oracle_id` and `promo_types` were: every index
-    // above stays exactly what it was.
+    // Appended to the SELECT list rather than put at its logical place, for the reason
+    // `oracle_id` and `promo_types` were: every index above stays exactly what it was. The
+    // row mapper below is the one place that counts the columns, and it counts them once.
     //
     // `collection_entries` has no such column, and wrapping the table in a subquery to
     // manufacture one would put an aggregate-free view in front of the grain index for no
@@ -3255,6 +3256,98 @@ mod tests {
             sum.tradelist_cards, 0,
             "a deck card has no tradelist quantity"
         );
+    }
+
+    /// **Insurance for the next column somebody adds to the subquery — or forgets to.**
+    ///
+    /// Every derived-mode test above drives `CollectionQuery::default()`, which names no column
+    /// of `collection_source::rows`' SELECT list beyond the thirty-four the row mapper reads. A
+    /// sort key and a text filter each reach past that: `sorts_for` interpolates `e.finish`,
+    /// `e.condition`, `e.quantity` and `e.created_at` into the `ORDER BY`, the two money keys
+    /// interpolate the price expression, and a text filter binds a parameter through `c.rowid`
+    /// on the LEFT JOIN *ahead* of every predicate after it. A column the derived arm does not
+    /// emit is `no such column` at prepare time, and no test that only asks for the default
+    /// order could reach it.
+    ///
+    /// So this drives **every key the page can send**, and then the two things a sort cannot
+    /// prove on its own: that the order is real, and that a bound MATCH parameter and the
+    /// summary of the same rows both survive the swapped source.
+    #[test]
+    fn every_sort_key_and_a_text_filter_answer_from_the_derived_source() {
+        let conn = deck_driven_db();
+        conn.execute_batch(
+            "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
+                                rarity,finishes,prices,raw)
+             VALUES ('p2','o2','Arcane Signet','eld','331','en','normal','common',
+                     '[\"nonfoil\"]','{\"usd\":\"1.00\"}','{}');
+
+             INSERT INTO deck_cards (deck_id, category_id, variant, card_id, set_code,
+                                     collector_number, lang, name, quantity, finish,
+                                     created_at, updated_at)
+                  VALUES (1,10,'live','p2','eld','331','en','Arcane Signet',5,NULL,0,0);
+
+             INSERT INTO cards_fts(cards_fts) VALUES('rebuild');",
+        )
+        .unwrap();
+        crate::deck_driven::store(&conn, true).unwrap();
+
+        let ask = |sort: Option<Vec<crate::sorting::SortTerm>>, text: Option<&str>| {
+            let q = CollectionQuery {
+                cards: crate::filters::CardFilters {
+                    text: text.map(str::to_owned),
+                    ..Default::default()
+                },
+                sort,
+                limit: 50,
+                ..Default::default()
+            };
+            let page = list_entries(&conn, &q).unwrap();
+            let sum = summarise(&conn, &q).unwrap();
+            assert_eq!(sum.entries, page.total, "the header describes other rows");
+            page
+        };
+        let term = |key: &str, dir: &str| {
+            Some(vec![crate::sorting::SortTerm {
+                key: key.to_owned(),
+                dir: dir.to_owned(),
+            }])
+        };
+        let names = |page: &CollectionPage| -> Vec<String> {
+            page.items
+                .iter()
+                .map(|r| r.name.clone().unwrap_or_default())
+                .collect()
+        };
+
+        // Every key in `COLLECTION_SORTS` and both `COLLECTION_PRICE_SORTS`, each direction.
+        // A missing column fails `prepare`, so reaching the assertion at all is most of it.
+        for key in [
+            "name", "set", "finish", "quantity", "added", "value", "price",
+        ] {
+            for dir in ["asc", "desc"] {
+                let page = ask(term(key, dir), None);
+                assert_eq!(page.total, 2, "{key} {dir}");
+                assert_eq!(page.items.len(), 2, "{key} {dir}");
+            }
+        }
+
+        // And the order is the reader's, not the group's: 5 Signets against 2 Sol Rings.
+        assert_eq!(
+            names(&ask(term("quantity", "desc"), None)),
+            ["Arcane Signet", "Sol Ring"]
+        );
+        assert_eq!(
+            names(&ask(term("quantity", "asc"), None)),
+            ["Sol Ring", "Arcane Signet"]
+        );
+
+        // A text filter reaches `cards_fts` and its parameter binds ahead of the page's own
+        // limit and offset — bound one position out, this searches the index for a number.
+        let matched = ask(term("name", "asc"), Some("signet"));
+        assert_eq!(matched.total, 1);
+        assert_eq!(matched.items[0].quantity, 5);
+        assert_eq!(matched.items[0].deck_count, Some(1));
+        assert_eq!(ask(None, Some("counterspell")).total, 0);
     }
 
     /// The safety fence. The derived `id` is a `deck_cards.id` and can collide with a real

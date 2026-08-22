@@ -38,6 +38,12 @@ One row in `app_meta` (schema v6), **no migration** — `nav.rs`'s shape, copied
 - `store(&Connection, bool)` has **no refusals**. A `bool` off the IPC boundary has no junk
   state — `serde` has already rejected everything that is not `true` or `false` — so there is
   nothing for a validation arm to catch.
+- `switch(&Connection, bool)` is `store` **plus the allocation ledger**, in one transaction, and
+  is what the command calls. See
+  [the allocator section](#as-they-were-is-not-as-they-should-be--the-ledger-is-rebuilt-on-the-way-off):
+  the ledger goes stale for as long as the setting is on, and the way back off is where it is
+  settled. Reach for `store` only when you mean the bit and nothing else — which, outside its
+  own tests, is nowhere.
 - Two commands, registered in `lib.rs`'s `invoke_handler` beside `nav::nav_collapsed`:
   `deck_driven_collection` (a bare `bool`, infallible by signature) and
   `set_deck_driven_collection`. **No capabilities entry** — Tauri v2's ACL gates `core:` and
@@ -164,10 +170,18 @@ reading of "the same columns" is wrong here.
 The derived arm emits `deck_count`; `collection_entries` has no such column, and wrapping the
 table in a subquery just to add `NULL AS deck_count` would put an aggregate-free view in front of
 the grain index for no gain. So `collection::list_entries` **picks the expression per mode** —
-`e.deck_count` on, the literal `NULL` off — and appends it to its own SELECT list as column 32.
+`e.deck_count` on, the literal `NULL` off — and **appends** it to the end of its own SELECT list,
+so every index above it stays what it was. (The number of that column is deliberately not written
+down here: it moved once already when main's `legalities` landed in a merge, and the row mapper in
+`collection.rs` is the one place that has to count.)
 
 A caller who read "the same columns" and wrote `e.deck_count` straight would get `no such column`
-in the **hand-kept** mode only: the half of the switch a derived-mode test never reaches.
+in the **hand-kept** mode only: the half of the switch a derived-mode test never reaches. The
+derived half has its own version of that trap, and
+`every_sort_key_and_a_text_filter_answer_from_the_derived_source` is the guard: a sort key or a
+text filter names columns the row mapper never reads — `e.created_at`, `e.condition`, the price
+expression — so a column left out of the subquery is `no such column` on a page nobody tested
+sorting.
 
 ### Three table aliases are spoken for
 
@@ -239,8 +253,8 @@ module** when the source became switchable. Its three callers are now a collecti
 `reset::collection_clear`, and the setting itself, and what they have in common is this module
 rather than that one.
 
-**Thirteen deck commands** are routed through `with_write_owned_if_derived`, and they are the ones
-that can move `deck_cards.quantity`, `.variant` or `.card_id`:
+**Thirteen deck commands** are routed through `with_write_owned_if_derived` — the twelve that can
+move `deck_cards.quantity`, `.variant` or `.card_id`, plus `deck_missing_to_wishlist`:
 
 | File | Commands |
 | --- | --- |
@@ -248,12 +262,29 @@ that can move `deck_cards.quantity`, `.variant` or `.card_id`:
 | `deck_meta.rs` | `deck_category_delete` |
 | `deck_undo.rs` | `deck_undo_apply`, `deck_redo_apply` |
 
+**`deck_missing_to_wishlist` is on that list and writes no `deck_cards` row** — it writes
+`wishlist_entries` and rewrites the deck's `deck_allocations`, and neither is a change to what the
+reader owns in either mode. Routing it is harmless and one fewer exception to remember; the
+sentence above it, not the routing, was what was wrong.
+
 Two more writers outside that set take the same wrapper: **`import::deck_import_commit`**, the
 bulk decklist write, and **`reset::decks_clear`**. The last one is the fourth departure from the
 spec, which did not mention it: it was the only unrouted writer left after the crate was swept,
 and it is the *largest* ownership change a reader can make in one press — with the setting on,
-wiping the decks **is** wiping the collection. `grep -rn 'with_write_owned_if_derived' src-tauri/src`
-is the census of all fifteen call sites.
+wiping the decks **is** wiping the collection.
+
+**Fifteen call sites, and the obvious grep finds four of them.**
+`grep -rn 'with_write_owned_if_derived' src-tauri/src` misses eleven, because `deck.rs` and
+`deck_meta.rs` both `use … as owned_if_derived` and call it under the short name — the full name
+appears at those two files' `use` lines and nowhere else in either. What is left over is mostly
+the definition, doc references and prose. The census that works is:
+
+```
+grep -rn "owned_if_derived(&state" src-tauri/src
+```
+
+which finds every site whichever name it was called under, plus the two in `collection_source`'s
+own test for the wrapper.
 
 **`deck_meta::deck_category_set_active` deliberately stays on plain `sync::with_write`.** It moves
 no card: it flips `is_active`, and `LIVE` carries no `is_active` term, so a deck-driven collection
@@ -345,8 +376,9 @@ have no such ids, and the ledger would be circular anyway — every deck would c
 itself contributed. So while the switch is on:
 
 - **`deck::allocate_deck` returns `Ok(())` immediately**, and the early return sits **above its
-  own `DELETE`**. Existing rows are left exactly as they were rather than torn down: switching
-  the setting back off must find the ledger as it was, not emptied by a mode that never used it.
+  own `DELETE`**. Existing rows are left exactly as they were rather than torn down, so a reader
+  who presses the switch to look and presses it straight back finds their decks as they left
+  them, not emptied by a mode that never used them.
 - **`deck::attribute_owned` reports `owned_quantity = quantity` for every `live` row**, so no live
   deck card draws the short mark. That is not a fudge — under this setting it is true by
   construction, because the collection *is* the sum of those very rows. It takes the inactive
@@ -358,6 +390,48 @@ itself contributed. So while the switch is on:
 - **`deck::missing_to_wishlist` therefore finds nothing missing on a live list** and writes no
   wishes. The theory route (`deck_theory_missing_to_wishlist`) is unaffected and is the one that
   still means something.
+
+### "As they were" is not "as they should be" — the ledger is rebuilt on the way off
+
+**Left standing is not left correct, and that gap shipped as a bug.** Every card write calls
+`allocate_deck`, and every one of those calls returns early for the whole time the setting is on.
+So the claims a deck had when the reader switched over are the claims it still has when they
+switch back — describing a deck that may have been edited a hundred times in between. The failure
+is not in the deck that went stale; it is in **every other built deck**, because `allocate_deck`
+computes availability as the entry's quantity minus the claims of other built decks:
+
+> Four Sol Rings. Deck A is built and claims one; deck B is built and gets the other three. Turn
+> the setting on, take Sol Ring out of A, turn it back off. A's phantom claim still stands, so B
+> is short a copy it owns, the theory spare under-reports, and `missing_to_wishlist` on B writes a
+> wish for a card sitting in the reader's binder. Only a later card write **to A** clears it, and
+> nothing tells the reader one is owed.
+
+So **`deck_driven::switch` is what the command calls, not `deck_driven::store`**. On the way off it
+writes the flag and then calls `deck::allocate_every_deck`, which empties `deck_allocations` and
+deals every deck again, **deck id ascending**. A per-deck loop would not do: a deck reallocated
+before the deck whose rows went stale still subtracts those stale rows and comes out short, so the
+table is cleared once, up front. The order matters twice — the flag is written first because
+`allocate_every_deck` asks `deck_driven::stored` and would stand down if it still read on, and both
+writes are in **one transaction** because a crash between them lands on exactly the state being
+repaired.
+
+Nothing happens on the way **on**. The ledger is not read in that mode, and clearing it there —
+the other candidate fix — would throw away a state the reader may be one press from wanting back.
+
+**What it costs**: 102 ms and 106 ms for 50 decks × 100 cards against a 500-entry collection, and
+424 ms at 200 decks — in-memory SQLite, **debug** build, 2026-08-22, measured with a throwaway
+test that was deleted after. Linear in decks, and it is a one-press cost on a setting a reader
+flips rarely. A release build is the usual several times faster and was not measured.
+
+**A rebuild is not always claim-for-claim what the incremental history left.** Where copies are
+scarce, "oldest deck first" can hand the last playset to a different deck than the order of past
+edits did. That is the honest answer: it is what the same decks would be given if they were
+entered today, and it is the only self-consistent one available.
+
+The tests are `switching_the_setting_off_rebuilds_a_ledger_that_went_stale_while_derived` (the
+scenario above, end to end), `switching_the_setting_on_leaves_every_claim_standing` (the other
+arm), and `the_setting_and_its_rebuild_commit_or_fail_together` (an `ABORT` trigger on
+`deck_allocations`, fired after the DELETE and before the first INSERT).
 
 The remaining owned numbers need no special handling beyond the source swap: the search badge, the
 search facet, wishlist fulfilment and import match ranking all read the derived sum and stay

@@ -3467,8 +3467,14 @@ struct Candidate {
 /// live lists, so every live row is covered by its own copies and the ledger has nothing left
 /// to describe — `deck_allocations.collection_entry_id` is a foreign key into a table this mode
 /// does not read. Returning before the DELETE is deliberate: the reader's existing claims are
-/// left exactly as they were, so switching the setting back off finds the ledger intact instead
-/// of emptied by a mode that never used it.
+/// left exactly as they were, rather than emptied by a mode that never used them.
+///
+/// **Left as they were is not left correct, and the repair is somebody else's.** Every card
+/// write calls this, so for the whole of that period nothing keeps the ledger in step with the
+/// decks: a card taken out of a live list leaves a row still claiming copies for it, and those
+/// copies are then missing from every *other* built deck's availability. [`allocate_every_deck`]
+/// is what settles it, once, in the transaction [`crate::deck_driven::switch`] writes the flag
+/// back off in.
 pub fn allocate_deck(conn: &Connection, deck_id: i64) -> Result<(), String> {
     // Nothing to allocate, and nothing to tear down — see the doc comment above. The early
     // return is above the DELETE on purpose.
@@ -3570,6 +3576,51 @@ pub fn allocate_deck(conn: &Connection, deck_id: i64) -> Result<(), String> {
             params![deck_id, entry_id, quantity],
         )
         .map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Rebuild the **whole** ledger: every claim of every deck, from an empty table.
+///
+/// [`allocate_deck`] rebuilds one deck against the claims the others are currently holding,
+/// which is right after a single edit and wrong after a run of edits nobody allocated for.
+/// A deck-driven collection produces exactly that run: every card write returns early, so by
+/// the time the setting goes off the ledger can describe decks that have moved on. **A
+/// deck-by-deck pass cannot mend it**, and that is the reason this function exists rather
+/// than a loop at the call site — a deck reallocated *before* the deck whose rows went stale
+/// still subtracts those stale rows from its own availability, and comes out short. So the
+/// table is emptied once, up front, and every deck is then dealt from it.
+///
+/// **Deck id ascending, which is oldest first.** Copies are scarce and `is_built` reserves
+/// them, so something has to decide who gets the last playset; creation order is the one a
+/// reader can predict, and it is the order [`allocate_deck`] already walks candidate entries
+/// in. A rebuild is therefore not always claim-for-claim what an incremental history left —
+/// it is the answer the same decks would get if they were entered today, which is the only
+/// self-consistent one available.
+///
+/// **Opens no transaction of its own**, [`allocate_deck`]'s rule and for a sharper reason: the
+/// one caller is [`crate::deck_driven::switch`], and the flag write and this rebuild have to
+/// commit or fail together or a crash between them leaves the state this repairs.
+pub fn allocate_every_deck(conn: &Connection) -> Result<(), String> {
+    // [`allocate_deck`]'s fence, above the DELETE for the same reason: a ledger this mode does
+    // not use must not be emptied by a caller that got the order of the two writes wrong.
+    if crate::deck_driven::stored(conn) {
+        return Ok(());
+    }
+
+    conn.execute("DELETE FROM deck_allocations", [])
+        .map_err(|e| e.to_string())?;
+
+    let ids: Vec<i64> = conn
+        .prepare("SELECT id FROM decks ORDER BY id")
+        .map_err(|e| e.to_string())?
+        .query_map([], |r| r.get(0))
+        .map_err(|e| e.to_string())?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())?;
+
+    for id in ids {
+        allocate_deck(conn, id)?;
     }
     Ok(())
 }
@@ -7563,9 +7614,14 @@ mod tests {
         assert_eq!(inactive.owned_quantity, inactive.quantity);
     }
 
-    /// The ledger is left exactly as it was, so switching the setting back off finds it
-    /// intact rather than rebuilt from a mode it does not describe. The `DELETE` at the top
-    /// of [`allocate_deck`] is what the early return has to stand above.
+    /// The ledger is left exactly as it was for the duration of the mode — this call writes
+    /// nothing and, the part the early return's position buys, deletes nothing. The `DELETE`
+    /// at the top of [`allocate_deck`] is what that early return has to stand above.
+    ///
+    /// **Left as it was is not the same as left correct**, which is
+    /// `switching_the_setting_off_rebuilds_a_ledger_that_went_stale_while_derived`'s subject:
+    /// the rows kept here can describe decks that have since moved on, and
+    /// [`crate::deck_driven::switch`] is what settles them on the way back off.
     #[test]
     fn allocate_deck_writes_nothing_and_deletes_nothing_when_deck_driven() {
         let conn = seeded();
@@ -7583,6 +7639,134 @@ mod tests {
         crate::deck_driven::store(&conn, false).unwrap();
         allocate_deck(&conn, deck.id).unwrap();
         assert_eq!(allocation_rows(&conn), vec![]);
+    }
+
+    /// **The ledger goes stale while derived, and switching back off is what repairs it.**
+    ///
+    /// Four copies in the binder. Deck A is built and holds one of them; deck B is built and
+    /// wants all four, so B is legitimately short by one — that is the allocator working. Turn
+    /// the setting **on**, take Sol Ring out of A's live list (nothing reallocates, by design),
+    /// turn it back **off**. A holds none of the card now, so every copy must be B's.
+    ///
+    /// Without the rebuild in [`crate::deck_driven::switch`] this fails on the last two
+    /// assertions and **cannot be mended a call later**: `allocate_deck(B)` computes
+    /// availability as the entry's quantity minus the claims of other *built* decks, so it
+    /// recomputes the same three for as long as A's phantom row stands. Only a card write to A
+    /// clears it — and nothing tells the reader one is owed.
+    #[test]
+    fn switching_the_setting_off_rebuilds_a_ledger_that_went_stale_while_derived() {
+        let conn = seeded();
+        let entry = own(&conn, "bolt-lea", 4);
+        let build = |deck_id: i64| {
+            update_deck(
+                &conn,
+                deck_id,
+                &DeckPatch {
+                    is_built: Some(true),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        };
+
+        let a = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let a_main = main_of(&conn, a.id);
+        add(&conn, a.id, "bolt-lea", a_main, 1);
+        build(a.id);
+
+        let b = create_deck(&conn, &input("Burn II", "modern")).unwrap();
+        let b_main = main_of(&conn, b.id);
+        add(&conn, b.id, "bolt-lea", b_main, 4);
+        build(b.id);
+
+        assert_eq!(claims(&conn, a.id), vec![(entry, 1)]);
+        assert_eq!(
+            claims(&conn, b.id),
+            vec![(entry, 3)],
+            "one of the four is on A's table"
+        );
+
+        derive_from_decks(&conn);
+        set_card_quantity(&conn, a.id, "bolt-lea", a_main, LIVE, None, 0).unwrap();
+        assert_eq!(
+            claims(&conn, a.id),
+            vec![(entry, 1)],
+            "the allocator stood down, so the phantom claim is still there"
+        );
+
+        crate::deck_driven::switch(&conn, false).unwrap();
+
+        assert_eq!(
+            claims(&conn, a.id),
+            vec![],
+            "A holds none of the card and may claim none of it"
+        );
+        assert_eq!(
+            claims(&conn, b.id),
+            vec![(entry, 4)],
+            "B is not short a copy it owns"
+        );
+        assert_eq!(owned_of(&conn, b.id, "bolt-lea", b_main), 4);
+    }
+
+    /// The other half of that decision, and the reason the rebuild is on the **off** arm alone.
+    /// Turning the setting on touches no claim: the ledger is not read in that mode, and a
+    /// reader who presses the switch to look and presses it straight back gets their decks
+    /// exactly as they left them.
+    #[test]
+    fn switching_the_setting_on_leaves_every_claim_standing() {
+        let conn = seeded();
+        let entry = own(&conn, "bolt-lea", 4);
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        add(&conn, deck.id, "bolt-lea", main_of(&conn, deck.id), 4);
+        let before = allocation_rows(&conn);
+        assert_eq!(before, vec![(deck.id, entry, 4)]);
+
+        crate::deck_driven::switch(&conn, true).unwrap();
+        assert!(crate::deck_driven::stored(&conn));
+        assert_eq!(allocation_rows(&conn), before);
+    }
+
+    /// The flag and the ledger it governs are one fact, so they are one transaction —
+    /// `an_is_built_toggle_and_its_reallocation_commit_or_fail_together`'s argument, over the
+    /// write that has the sharper version of it. A commit that landed the flag and lost the
+    /// rebuild would leave a hand-kept collection reading a ledger from a mode that never used
+    /// it, which is the exact state the rebuild exists to clear.
+    ///
+    /// Failure is injected where it hurts: after the rebuild has emptied the table and before
+    /// it has written a single row back.
+    #[test]
+    fn the_setting_and_its_rebuild_commit_or_fail_together() {
+        let conn = seeded();
+        let entry = own(&conn, "bolt-lea", 4);
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        add(&conn, deck.id, "bolt-lea", main_of(&conn, deck.id), 4);
+        let before = allocation_rows(&conn);
+        assert_eq!(before, vec![(deck.id, entry, 4)]);
+        derive_from_decks(&conn);
+
+        conn.execute_batch(
+            "CREATE TRIGGER boom BEFORE INSERT ON deck_allocations
+             BEGIN SELECT RAISE(ABORT, 'boom'); END;",
+        )
+        .unwrap();
+
+        let err = crate::deck_driven::switch(&conn, false).unwrap_err();
+        assert!(err.contains("boom"), "{err}");
+        assert!(
+            crate::deck_driven::stored(&conn),
+            "the setting did not flip on a rebuild that could not finish"
+        );
+        assert_eq!(
+            allocation_rows(&conn),
+            before,
+            "and the rows the DELETE took are back — mid-rebuild is not a state anyone can read"
+        );
+
+        conn.execute_batch("DROP TRIGGER boom;").unwrap();
+        crate::deck_driven::switch(&conn, false).unwrap();
+        assert!(!crate::deck_driven::stored(&conn));
+        assert_eq!(allocation_rows(&conn), before);
     }
 
     /// The read clamps: the allocation says 4, the entry has since been stepped to 1 →
