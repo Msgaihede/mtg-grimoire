@@ -74,9 +74,9 @@ pub fn deck_driven_collection(state: tauri::State<'_, Arc<AppState>>) -> bool {
 
 /// Remember the choice. Answers [`crate::db::BUSY`] if a sync holds the write connection.
 ///
-/// **Through [`crate::collection::with_write_owned`], not bare `with_write`** — and that is
-/// the one line of this module that is not [`crate::nav`]'s. Flipping this bit changes which
-/// cards are owned without touching either table, so the facet index's `owned` dimension is
+/// **Through [`crate::collection_source::with_write_owned`], not bare `with_write`** — and
+/// that is the one line of this module that is not [`crate::nav`]'s. Flipping this bit
+/// changes which cards are owned without touching either table, so the `owned` dimension is
 /// stale the instant the write lands. It is the one index dimension that moves without a
 /// sync, and nothing on screen would say so.
 ///
@@ -91,7 +91,7 @@ pub async fn set_deck_driven_collection(
 ) -> Result<(), String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        crate::collection::with_write_owned(&state, |conn| store(conn, enabled))
+        crate::collection_source::with_write_owned(&state, |conn| store(conn, enabled))
     })
     .await
     .map_err(|e| format!("the collection setting could not be saved: {e}"))?

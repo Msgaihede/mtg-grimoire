@@ -1,6 +1,7 @@
 pub mod card;
 pub mod card_row;
 pub mod collection;
+pub mod collection_source;
 pub mod db;
 pub mod deck;
 pub mod deck_audit;

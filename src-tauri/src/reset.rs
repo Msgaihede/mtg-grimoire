@@ -279,11 +279,11 @@ pub async fn collection_clear(
 ) -> Result<CollectionCleared, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        // The one `with_write_owned` in the crate that is not in `collection.rs`, and it has
-        // to be: the facet index's `owned` bitset is built from `collection_entries`, so a
-        // wipe that skipped the amendment would leave the search sidebar offering an Owned
-        // facet over a collection that no longer exists.
-        crate::collection::with_write_owned(&state, clear_collection)
+        // `with_write_owned` and not bare `with_write`, and it has to be: the facet index's
+        // `owned` bitset is built from `collection_entries`, so a wipe that skipped the
+        // amendment would leave the search sidebar offering an Owned facet over a collection
+        // that no longer exists.
+        crate::collection_source::with_write_owned(&state, clear_collection)
     })
     .await
     .map_err(|e| format!("the collection could not be cleared: {e}"))?

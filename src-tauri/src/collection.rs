@@ -656,46 +656,17 @@ fn friendly(e: rusqlite::Error) -> String {
     text
 }
 
-/// [`crate::sync::with_write`], plus the facet index's `owned` dimension re-read afterwards.
-///
-/// Every command in this module that changes what the user owns goes through here, because
-/// `owned` is the one index dimension a user moves without a sync — and an index that
-/// disagrees with the collection greys out "Owned" for a card they have just added.
-///
-/// **After the write lock is gone, never inside it.** [`crate::sync::with_write`] returns before this runs,
-/// which is the house rule that a command must not do its remaining work while holding its own
-/// guard: 10–23 ms of re-read under the write connection is 10–23 ms of every other writer
-/// waiting, for work that reads through a connection of its own and needs no lock at all.
-///
-/// Only on success. A refusal — [`crate::db::BUSY`], [`GONE`], a rejected quantity — changed
-/// nothing, and re-reading after one would be a copy of the whole index to arrive at the same
-/// answer.
-///
-/// `pub(crate)` for one caller outside this file: [`crate::reset::collection_clear`], which is
-/// the largest change to `owned` the app can make and would otherwise have to copy these six
-/// lines. It lives over there for the reason `reset`'s own module note gives — a command that
-/// empties the collection does not belong beside the one documented as the only way a
-/// collection row is ever deleted.
-pub(crate) fn with_write_owned<T>(
-    state: &Arc<AppState>,
-    f: impl FnOnce(&Connection) -> Result<T, String>,
-) -> Result<T, String> {
-    let answer = crate::sync::with_write(state, f);
-    if answer.is_ok() {
-        crate::index::lifecycle::invalidate_owned(state);
-    }
-    answer
-}
-
 #[tauri::command]
 pub async fn collection_add(
     state: tauri::State<'_, Arc<AppState>>,
     entry: EntryInput,
 ) -> Result<EntryChange, String> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || with_write_owned(&state, |c| add_entry(c, &entry)))
-        .await
-        .map_err(|e| format!("the collection could not be written: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::collection_source::with_write_owned(&state, |c| add_entry(c, &entry))
+    })
+    .await
+    .map_err(|e| format!("the collection could not be written: {e}"))?
 }
 
 #[tauri::command]
@@ -706,7 +677,7 @@ pub async fn collection_set_quantity(
 ) -> Result<EntryChange, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        with_write_owned(&state, |c| set_quantity(c, id, quantity))
+        crate::collection_source::with_write_owned(&state, |c| set_quantity(c, id, quantity))
     })
     .await
     .map_err(|e| format!("the collection could not be written: {e}"))?
@@ -720,7 +691,7 @@ pub async fn collection_update(
 ) -> Result<EntryChange, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        with_write_owned(&state, |c| update_entry(c, id, &patch))
+        crate::collection_source::with_write_owned(&state, |c| update_entry(c, id, &patch))
     })
     .await
     .map_err(|e| format!("the collection could not be written: {e}"))?
@@ -732,9 +703,11 @@ pub async fn collection_remove(
     id: i64,
 ) -> Result<EntryChange, String> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || with_write_owned(&state, |c| remove_entry(c, id)))
-        .await
-        .map_err(|e| format!("the collection could not be written: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || {
+        crate::collection_source::with_write_owned(&state, |c| remove_entry(c, id))
+    })
+    .await
+    .map_err(|e| format!("the collection could not be written: {e}"))?
 }
 
 /// One transaction for a whole imported file — see [`commit_import`] for why added/updated are
@@ -747,7 +720,7 @@ pub async fn collection_import_commit(
 ) -> Result<ImportCommitOutcome, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        with_write_owned(&state, |c| commit_import(c, &items, &mode))
+        crate::collection_source::with_write_owned(&state, |c| commit_import(c, &items, &mode))
     })
     .await
     .map_err(|e| format!("the collection could not be written: {e}"))?
@@ -2069,7 +2042,8 @@ mod tests {
         assert_eq!(notes, "the good one");
     }
 
-    /// Every write in this module goes through [`with_write_owned`], and this is what that
+    /// Every write in this module goes through
+    /// [`crate::collection_source::with_write_owned`], and this is what that
     /// buys: the facet index's `owned` dimension is true again by the time the command
     /// answers, so the panel the user is looking at does not grey out "Owned" for a card they
     /// have just added.
@@ -2089,7 +2063,10 @@ mod tests {
         let before = crate::index::lifecycle::current(&state).unwrap();
         assert_eq!(before.owned.count(), 0);
 
-        with_write_owned(&state, |c| add_entry(c, &input("1", "nonfoil", 2))).unwrap();
+        crate::collection_source::with_write_owned(&state, |c| {
+            add_entry(c, &input("1", "nonfoil", 2))
+        })
+        .unwrap();
         let refreshed = crate::index::lifecycle::current(&state).unwrap();
         assert_eq!(
             refreshed.owned.count(),
@@ -2097,7 +2074,8 @@ mod tests {
             "the index has to know about the row the command just wrote"
         );
 
-        let refused = with_write_owned(&state, |c| set_quantity(c, 4_242, 3));
+        let refused =
+            crate::collection_source::with_write_owned(&state, |c| set_quantity(c, 4_242, 3));
         assert_eq!(refused.unwrap_err(), GONE);
         let after = crate::index::lifecycle::current(&state).unwrap();
         assert!(
