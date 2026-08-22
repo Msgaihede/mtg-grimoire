@@ -74,8 +74,10 @@ const meta = {
     docs: {
       description: {
         component:
-          "Settings, which is five real sections and an honest note about the rest.\n\n" +
-          "**Ordered by what a press costs.** Updates, prices and errors first; then the "  +
+          "Settings, which is six real sections and an honest note about the rest.\n\n" +
+          "**Ordered by what a press costs.** Updates, prices, the deck-driven switch and "  +
+          "errors first — that switch is up there because it changes where a list is *read "  +
+          "from* and deletes nothing, so it is free to try and free to put back; then the "  +
           "local cache, which throws away bytes the app fetches again; then the three "  +
           "clears that cannot be taken back, alone at the foot in a region of their own. "  +
           "That distance is the first fence and the typed word inside each dialog is the "  +
@@ -132,6 +134,11 @@ export const Default: Story = {
     // who has just hidden a tag that this is where it comes back, and until 2026-08-20 the page
     // it sent them to had no such list.
     await expect(canvas.getByRole("heading", { name: "Hidden tags", level: 2 })).toBeInTheDocument();
+    // Directly under Prices, by the same cost ordering: it changes where the collection is read
+    // from and deletes nothing, so it is a setting rather than a report or a deletion.
+    await expect(
+      canvas.getByRole("heading", { name: "Deck driven collection", level: 2 }),
+    ).toBeInTheDocument();
     // The two new ones, and their order on the page: the reversible sweep above the blurb,
     // the irreversible clears below it.
     await expect(canvas.getByRole("heading", { name: "Local cache", level: 2 })).toBeInTheDocument();
