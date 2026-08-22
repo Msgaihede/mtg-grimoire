@@ -11,7 +11,7 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { CardArt } from "@/components/CardArt";
 import { GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
 import { RarityGem } from "@/components/RarityGem";
-import { cardDraggable, type DragPayload } from "@/features/decks/dnd";
+import { cardDraggable, composedDraggable, type DragPayload } from "@/features/decks/dnd";
 import { cardScaleVars, CONTROL_SHRINK, scaled, type ZoomSection } from "@/lib/cardZoom";
 import { keepCaretForCard } from "@/lib/caretWalk";
 import { FINISH_LABEL, type Finish } from "@/lib/finish";
@@ -257,6 +257,7 @@ export function CardGrid<T extends GridCard>({
   cardMenuKey,
   tileRef,
   dragPayload,
+  dragRecord,
   arrowNav = false,
   baseTileWidth = TILE_BASE_WIDTH,
 }: {
@@ -455,6 +456,32 @@ export function CardGrid<T extends GridCard>({
    * same element" for every tile on the wall.
    */
   dragPayload?: (card: T) => DragPayload | null;
+  /**
+   * The same seam for a tile whose drag means **more than one thing** — the whole record the
+   * adapter is handed, rather than one {@link DragPayload}. `null` still means "this tile cannot
+   * be picked up"; **preferred over {@link dragPayload} where both are given**, which no caller
+   * should do.
+   *
+   * **The wishlist's wall is why this exists, and neither of the two obvious routes reached it.**
+   * A *pinned* wish is a card a deck column can take **and** a wish a folder can file, so its
+   * record is `dragData`'s keys and `wishDragData`'s keys in one flat object — and `dragPayload`
+   * cannot express a second mark, because it is typed to the deck drag's union and the tile then
+   * calls `cardDraggable`, which hard-wires `getInitialData: () => dragData(payload())`. An
+   * *any-printing* wish is worse still: it carries only the wish mark, so it has no `DragPayload`
+   * at all, and `null` there is read one line below as "register nothing" — which is precisely the
+   * tile that has to become draggable. Widening `DragPayload` would put a wishlist concept inside
+   * the deck drag's type; registering a second `draggable()` through {@link tileRef} would give a
+   * pinned wish two competing registrations on one element. So the composing is the caller's and
+   * this slot is what carries the result.
+   *
+   * **Named `dragRecord` and not `dragData`** because `dragData` is already the exported function
+   * in `features/decks/dnd.ts` that most callers of this prop will be calling *into* it, and one
+   * name for both would read as a mistake at every call site.
+   *
+   * Everything {@link dragPayload} says about holding the callback still, and about never pairing
+   * it with {@link tileRef}, is true of this one for the same reasons.
+   */
+  dragRecord?: (card: T) => Record<string, unknown> | null;
   /**
    * Whether the arrow keys walk the wall — left and right one tile, up and down one row — and
    * **move the selection with them**, so the card the detail pane is showing follows the caret.
@@ -846,6 +873,7 @@ export function CardGrid<T extends GridCard>({
                 cardMenuKey={cardMenuKey}
                 tileRef={tileRef}
                 dragPayload={dragPayload}
+                dragRecord={dragRecord}
               />
             ))}
           </div>
@@ -880,6 +908,7 @@ function Tile<T extends GridCard>({
   cardMenuKey,
   tileRef,
   dragPayload,
+  dragRecord,
 }: {
   card: T;
   /**
@@ -915,6 +944,7 @@ function Tile<T extends GridCard>({
   cardMenuKey?: (card: T) => ((e: ReactKeyboardEvent) => void) | undefined;
   tileRef?: (card: T, element: HTMLElement | null) => void | (() => void);
   dragPayload?: (card: T) => DragPayload | null;
+  dragRecord?: (card: T) => Record<string, unknown> | null;
 }) {
   const mark = badge?.(card);
   const corner = topLeft?.(card);
@@ -947,12 +977,25 @@ function Tile<T extends GridCard>({
   const attach = useCallback(
     (element: HTMLElement | null) => {
       const detach = tileRef?.(card, element);
-      if (!element || !dragPayload) return detach;
-      // `null` is a card that cannot be picked up — the wishlist's any-printing wish, which
-      // would otherwise start a drag carrying an empty id, and an empty id addresses every row
-      // and no row (`dnd.ts`). Decided here rather than inside the payload thunk because
-      // `cardDraggable` reads that at `dragstart`, by which point the drag has begun: a source
-      // that is registered is a source, so the answer has to come before the registration.
+      if (!element) return detach;
+      // `null` from either slot is a card that cannot be picked up. Decided **here** rather than
+      // inside the thunk because the thunk is read at `dragstart`, by which point the drag has
+      // begun: a source that is registered is a source, so the answer has to come before the
+      // registration. The one live case is an *orphan* — no printing, so a `{kind:"card"}` payload
+      // would carry an empty id, which addresses every row and no row (`dnd.ts`).
+      //
+      // `dragRecord` wins where both are passed, and no caller passes both: they are the same
+      // seam at two widths, and one element takes one `draggable()`.
+      if (dragRecord) {
+        const record = dragRecord(card);
+        if (record === null) return detach;
+        const stop = composedDraggable({ element, data: () => dragRecord(card) ?? record });
+        return () => {
+          stop();
+          detach?.();
+        };
+      }
+      if (!dragPayload) return detach;
       const carried = dragPayload(card);
       if (carried === null) return detach;
       const stop = cardDraggable({ element, payload: () => dragPayload(card) ?? carried });
@@ -961,7 +1004,7 @@ function Tile<T extends GridCard>({
         detach?.();
       };
     },
-    [tileRef, dragPayload, card],
+    [tileRef, dragPayload, dragRecord, card],
   );
 
   return (

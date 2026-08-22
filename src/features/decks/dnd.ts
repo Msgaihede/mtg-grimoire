@@ -223,10 +223,10 @@ export function deckCardSlot(categoryId: number, cardId: string, finish: DeckFin
 }
 
 /**
- * A card that can be picked up — and a press on one of its controls that is a press on the
- * control, not on the card.
+ * An element that can be picked up carrying **whatever keys its caller writes** — and a press on
+ * one of its own controls that is a press on the control, not on the element.
  *
- * **Why this exists at all.** A whole deck row is draggable, and a deck row is full of
+ * **Why the press guard exists at all.** A whole deck row is draggable, and a deck row is full of
  * controls: a stepper, a menu trigger, the menu itself. Chromium starts a drag from the
  * nearest draggable *ancestor* of whatever was pressed, and the drag library adds no
  * exclusion of its own — so without this, a press on the stepper's `−` plus five pixels of
@@ -238,18 +238,30 @@ export function deckCardSlot(categoryId: number, cardId: string, finish: DeckFin
  * `canDrag` is asked at `dragstart` and is handed the pointer's coordinates rather than what
  * it pressed, so the press is remembered here: `mousedown` always precedes `dragstart` (a
  * native drag is a mouse gesture — Chromium starts none from touch), and the listener is in
- * the **capture** phase on the card itself so a control that stops the press from propagating
+ * the **capture** phase on the element itself so a control that stops the press from propagating
  * cannot hide it from this.
+ *
+ * **It takes a bare record rather than a {@link DragPayload}, and that is the whole reason it is
+ * a function of its own rather than the body of {@link cardDraggable}.** A payload is one mark
+ * under one key, and the wishlist's tile is genuinely two things at once — a card a deck column
+ * can take *and* a wish a folder can file — so what it hands the adapter is `dragData`'s keys and
+ * `wishDragData`'s keys merged into one flat object, each reader answering only its own
+ * (`features/wishlist/wishDrag.ts` argues that at length). The two alternatives were both worse
+ * where it counts: widening `DragPayload` puts a wishlist concept inside the deck drag's type,
+ * and registering a *second* `draggable()` on the same element gives one tile two competing
+ * registrations, which the library resolves by keeping whichever went on last. So the composing
+ * happens in the caller and this function's only opinion is the press guard above — **written
+ * once, here**, because a second copy of it is a second place for the stepper bug to come back.
  */
-export function cardDraggable({
+export function composedDraggable({
   element,
-  payload,
+  data,
   notFrom = NOT_A_DRAG,
 }: {
   element: HTMLElement;
-  /** Read at `dragstart`, so a row that has been renumbered since it mounted still carries
-   *  what it is now. */
-  payload: () => DragPayload;
+  /** Read at `dragstart`, so a row that has been renumbered — or re-filed — since it mounted
+   *  still carries what it is now. */
+  data: () => Record<string, unknown>;
   /** Overridable for the one case where the default is wrong — nothing today. */
   notFrom?: string;
 }): () => void {
@@ -262,12 +274,37 @@ export function cardDraggable({
   const stop = draggable({
     element,
     canDrag: () => !onControl,
-    getInitialData: () => dragData(payload()),
+    getInitialData: () => data(),
   });
   return () => {
     element.removeEventListener("mousedown", press, true);
     stop();
   };
+}
+
+/**
+ * A **card** that can be picked up — {@link composedDraggable} with this module's own mark on
+ * what it carries, which is the only shape the deck's drop targets read.
+ *
+ * The press guard and the four copies of Abandon Attachments it was measured against live in
+ * {@link composedDraggable}; this is that function plus `dragData`, and every call site is
+ * unchanged by the split. Reach for the other one only where a payload is genuinely not all a
+ * drag means — today that is the wishlist's tile and nothing else.
+ */
+export function cardDraggable({
+  element,
+  payload,
+  notFrom,
+}: {
+  element: HTMLElement;
+  /** Read at `dragstart`, so a row that has been renumbered since it mounted still carries
+   *  what it is now. */
+  payload: () => DragPayload;
+  /** Overridable for the one case where the default is wrong — nothing today. Defaulted by
+   *  {@link composedDraggable}, so the selector is spelled in one place. */
+  notFrom?: string;
+}): () => void {
+  return composedDraggable({ element, data: () => dragData(payload()), notFrom });
 }
 
 /**
