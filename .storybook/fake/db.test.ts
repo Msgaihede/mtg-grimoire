@@ -3221,6 +3221,11 @@ describe("the busy fault", () => {
       // `deck_set_view_state`'s, and empty is a real value for it: every field is optional and
       // absent means "leave it".
       viewState: {},
+      // `set_nav_collapsed`'s. Never read on this path either — the lock comes first, as it
+      // does for every write here — and unlike `mode` and `zoom` there is no invalid value it
+      // *could* be given: a boolean has no junk state, so this write's only refusal is the one
+      // this loop is about.
+      collapsed: true,
     };
     // The five above excluded, this is every command that really takes the write lock —
     // re-counted 2026-08-12 **after a merge in which three branches had each added one**,
@@ -3292,8 +3297,15 @@ describe("the busy fault", () => {
     // the tag standing — while the remembered card zoom added `set_card_zoom`. Each branch wrote
     // 49 → 50 and was right about the tree it was in; the merged table holds both, so it is 51.
     // Re-measure after the next merge rather than adding one to whichever figure you find here.
+    //
+    // The collapsible sidebar then added `set_nav_collapsed`, 51 → 52 — the fifth `app_meta`
+    // setting and the same split as the four before it: the write takes the write connection
+    // and is refusable, while the read (`nav_collapsed`, on `db_read`) answers through every
+    // second of a sync. It is the first write here with **no validation of its own**, which is
+    // exactly why this loop matters more for it than for its neighbours: a handler that forgot
+    // `refuseIfBusy` would have an empty body, and nothing else in the file would notice.
     const names = Object.keys(w).filter((n) => !unlocked.includes(n));
-    expect(names).toHaveLength(51);
+    expect(names).toHaveLength(52);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -3431,6 +3443,69 @@ describe("the whole command table", () => {
     expect(() => w.set_card_zoom({ section: "", zoom: 1 })).toThrow(/cannot be blank/);
     // Refused, and the entry each would have overwritten is still the one that was chosen.
     expect(db.cardZoom.deck).toBe(0.7);
+  });
+
+  /**
+   * The fifth `app_meta` row, and the one where **two of the three questions above have no
+   * answer** — which is why it gets a test of its own rather than a line in one of theirs.
+   *
+   * There is no unknown-value case and no never-written case to ask about. The row holds a
+   * boolean, `nav_collapsed` is infallible at the far end, and every unreadable state the Rust
+   * can meet — no row, a junk row, a row a newer build wrote a word into — collapses to `false`
+   * before the value crosses the IPC boundary. So "never written" and "written to the default"
+   * are one state here on purpose, and a fake that invented a third would be storying the app
+   * against a backend it does not have.
+   *
+   * What is left is the round trip, and the round trip is the whole of what this pair is for: a
+   * press has to survive the next launch, in **both** directions. Collapsing is the easy half to
+   * get right and expanding again is the one a fake that only ever stored `true` would pass.
+   */
+  it("opens the shell expanded, and remembers a collapse in both directions", () => {
+    // Not `null`, and that is the assertion rather than an incidental `toBe`: a fresh database
+    // answers the same `false` an unreadable one does, which is the state every story that says
+    // nothing about the sidebar stands in.
+    expect(readHandlers(makeDb()).nav_collapsed()).toBe(false);
+    expect(readHandlers(makeDb({ navCollapsed: true })).nav_collapsed()).toBe(true);
+
+    const db = makeDb();
+    const w = writeHandlers(db);
+    w.set_nav_collapsed({ collapsed: true });
+    expect(db.navCollapsed).toBe(true);
+    expect(readHandlers(db).nav_collapsed()).toBe(true);
+
+    // The way back. The shell is read once at launch and owns its state afterwards, so this is
+    // the half a story cannot see going wrong until the *next* mount.
+    w.set_nav_collapsed({ collapsed: false });
+    expect(db.navCollapsed).toBe(false);
+    expect(readHandlers(db).nav_collapsed()).toBe(false);
+
+    // Five rows of one key/value table: pressing the sidebar toggle must not be a way to lose
+    // one of the four beside it.
+    w.set_printing_group_by({ mode: "set" });
+    w.set_nav_collapsed({ collapsed: true });
+    expect(readHandlers(db).printing_group_by()).toBe("set");
+  });
+
+  /**
+   * The same split every `app_meta` pair here draws, and the only refusal this one has.
+   *
+   * `set_marketplace`, `set_printing_group_by` and `set_card_zoom` each open with a validation
+   * *and* the busy check; this write has nothing to validate, because a `boolean` off the IPC
+   * boundary has no junk state for a check to catch. That leaves the sync as the whole of what
+   * it can refuse — and the read beside it refusing nothing at all, since it takes `db_read`
+   * and answers through every second of a sync.
+   *
+   * The busy sweep above already walks every write including this one; what it cannot say is
+   * that the *read* stayed live, which is the half of the split a reader mid-sync actually sees:
+   * the shell still draws in the shape they left it, and only the press is turned away.
+   */
+  it("refuses to collapse the sidebar mid-sync, and still says how it is drawn", () => {
+    const db = makeDb({ navCollapsed: true, fault: "busy" });
+    expect(() => writeHandlers(db).set_nav_collapsed({ collapsed: false })).toThrow(/busy/i);
+    // Refused, and the row it would have overwritten is untouched — so the shell a reader
+    // pressed at is still the shell the next read describes.
+    expect(db.navCollapsed).toBe(true);
+    expect(readHandlers(db).nav_collapsed()).toBe(true);
   });
 
   /**

@@ -25,6 +25,11 @@ const onOracleTagProgress = vi.hoisted(() => vi.fn());
 const deckAddCard = vi.hoisted(() => vi.fn());
 const wishlistAdd = vi.hoisted(() => vi.fn());
 const deckGet = vi.hoisted(() => vi.fn());
+/** The rail's own `app_meta` row: whether the sidebar opens as 68px of icons or 208px of
+ *  labels. Hoisted spies rather than a fixed answer, because the collapse block below drives
+ *  all three of its states — stored open, stored collapsed, and a read that fails. */
+const navCollapsed = vi.hoisted(() => vi.fn());
+const setNavCollapsed = vi.hoisted(() => vi.fn());
 // `TitleBar` is the one thing in this shell that does not go through `@/lib/ipc` — it reads the
 // window, through `@/lib/window`. The workbench's fakes rather than hand-rolled stubs, so this
 // file and Storybook agree about what a window does. Left off, the real `@tauri-apps/api`
@@ -62,6 +67,11 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     // every test in this file is standing in.
     cardZoom: vi.fn().mockResolvedValue({}),
     setCardZoom: vi.fn().mockResolvedValue(undefined),
+    // The shell reads the rail's width once as it launches and writes it back on every press.
+    // Answered `false` in the `beforeEach` below, which is a database nobody has collapsed the
+    // sidebar in — the state every test in this file but the collapse block stands in.
+    navCollapsed,
+    setNavCollapsed,
     searchCards: vi.fn(),
     // The filter row asks for facet counts beside the page. Answered **cold** — `ready:
     // false`, every map empty — so nothing greys and every control keeps its plain name.
@@ -86,6 +96,7 @@ import { REPORT_MS } from "./useSidebarDrops";
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { CardToDeckProvider, useAddCardToDeck } from "@/features/card/cardMenu";
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
+import { LAYER } from "@/lib/layers";
 import type { Update } from "@/lib/useUpdate";
 import { cardDraggable, type DragPayload } from "@/features/decks/dnd";
 import { queryClient } from "@/lib/query";
@@ -183,6 +194,8 @@ beforeEach(() => {
   deckAddCard.mockReset().mockResolvedValue({ id: 1, quantity: 1, removed: false });
   wishlistAdd.mockReset().mockResolvedValue({ id: 1, quantity: 1, removed: false });
   deckGet.mockReset().mockResolvedValue(null);
+  navCollapsed.mockReset().mockResolvedValue(false);
+  setNavCollapsed.mockReset().mockResolvedValue(undefined);
 });
 
 it("renders nav and refresh button", async () => {
@@ -464,6 +477,107 @@ it("switches the active view", async () => {
   expect(useAppStore.getState().activeView).toBe("decks");
   expect(screen.getByRole("button", { name: "Decks" })).toHaveAttribute("aria-current", "page");
   expect(screen.getByRole("button", { name: "Search" })).not.toHaveAttribute("aria-current");
+});
+
+/**
+ * The rail as two widths (issue #177).
+ *
+ * **Nothing in this block can see 68px.** jsdom has no layout engine, so the rail measures
+ * nothing in either state and the width transition never runs; what is pinned instead is the
+ * class that *is* the mechanism, which is what `Dialog.test.tsx` does for the two classes that
+ * clamp a modal and for the same reason. The number itself belongs to a live pass: 68 is a 44×44
+ * target inside the `<nav>`'s own `p-3`, and it hands `main` back 140px at the window where the
+ * deck editor has ten of them to spare.
+ *
+ * What jsdom *can* see is everything that matters about whether the app is still usable
+ * collapsed — the names, the presses, the writes and the live regions — and that is what the
+ * rest of this block is.
+ */
+describe("collapsing the sidebar", () => {
+  /** The rail itself. By role and name, because there is no other landmark in this shell. */
+  const rail = () => screen.getByRole("navigation", { name: "Views" });
+
+  it("takes the rail down to icons and back, storing each answer as it goes", async () => {
+    render(<AppShell update={noUpdate}>{null}</AppShell>);
+    const collapse = await screen.findByRole("button", { name: "Collapse sidebar" });
+    expect(rail()).toHaveClass("w-52");
+
+    await userEvent.click(collapse);
+
+    await waitFor(() => expect(rail()).toHaveClass("w-17"));
+    await waitFor(() => expect(setNavCollapsed).toHaveBeenCalledWith(true));
+
+    await userEvent.click(screen.getByRole("button", { name: "Expand sidebar" }));
+
+    await waitFor(() => expect(rail()).toHaveClass("w-52"));
+    await waitFor(() => expect(setNavCollapsed).toHaveBeenLastCalledWith(false));
+  });
+
+  it("opens collapsed when that is what the database has stored", async () => {
+    navCollapsed.mockResolvedValue(true);
+
+    render(<AppShell update={noUpdate}>{null}</AppShell>);
+
+    expect(await screen.findByRole("button", { name: "Expand sidebar" })).toBeInTheDocument();
+    expect(rail()).toHaveClass("w-17");
+    // Reading a stored width is not a choice the reader made, so nothing is written back.
+    expect(setNavCollapsed).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A read that fails is the one state where the shell has to *decide* rather than obey, and
+   * "expanded" is the decision: a database that cannot say must open the way this app has always
+   * opened — six named destinations — rather than putting them behind an icon the reader has to
+   * guess their way out of. It is also not news, so nothing says it: the sidebar has no sentence
+   * to spend on a preference.
+   */
+  it("opens expanded when the stored width cannot be read, and says nothing about it", async () => {
+    navCollapsed.mockRejectedValue("no such table: app_meta");
+
+    render(<AppShell update={noUpdate}>{null}</AppShell>);
+
+    await waitFor(() => expect(navCollapsed).toHaveBeenCalled());
+    expect(screen.getByRole("button", { name: "Collapse sidebar" })).toBeInTheDocument();
+    expect(rail()).toHaveClass("w-52");
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  /**
+   * The whole point of the collapsed label being `sr-only` rather than an `aria-label`: the
+   * accessible name is computed from content in both states, so it is the *same string* — and
+   * every `getByRole("button", { name: … })` in this repository goes on meaning what it meant.
+   * An `aria-label` would be a second place each word is written, and the first of the two to
+   * change would be the one nothing tested.
+   */
+  it("keeps the six destinations named, and pressable, while they are drawn as icons", async () => {
+    navCollapsed.mockResolvedValue(true);
+    render(<AppShell update={noUpdate}>{null}</AppShell>);
+    await screen.findByRole("button", { name: "Expand sidebar" });
+
+    for (const label of ["Search", "Tags", "Collection", "Wishlist", "Decks", "Settings"]) {
+      expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
+    }
+
+    await userEvent.click(screen.getByRole("button", { name: "Decks" }));
+
+    expect(useAppStore.getState().activeView).toBe("decks");
+    expect(screen.getByRole("button", { name: "Decks" })).toHaveAttribute("aria-current", "page");
+  });
+
+  /** `aria-expanded` on the control and `aria-controls` at the region: the pair is what says
+   *  *what* the press did, rather than only that something happened. */
+  it("says on the toggle whether the rail it controls is open", async () => {
+    render(<AppShell update={noUpdate}>{null}</AppShell>);
+    const collapse = await screen.findByRole("button", { name: "Collapse sidebar" });
+    expect(collapse).toHaveAttribute("aria-expanded", "true");
+    expect(collapse).toHaveAttribute("aria-controls", rail().id);
+
+    await userEvent.click(collapse);
+
+    const expand = screen.getByRole("button", { name: "Expand sidebar" });
+    expect(expand).toHaveAttribute("aria-expanded", "false");
+    expect(expand).toHaveAttribute("aria-controls", rail().id);
+  });
 });
 
 /**
@@ -754,6 +868,32 @@ describe("the sidebar's drop targets", () => {
 
     await waitFor(() => expect(wishlistAdd).toHaveBeenCalledTimes(2));
     expect(wishlistAdd).toHaveBeenNthCalledWith(2, { cardId: "c-bolt", quantity: 1 });
+  });
+
+  /**
+   * The same drop with the rail down to 68px, where the report line has no column to be a line
+   * in and is drawn as a panel floating beside the rail instead.
+   *
+   * **The region and its mounting rule do not move** — same `role="status"`, same element,
+   * mounted for the life of the entry and `sr-only` while empty — so the sentence arrives here
+   * exactly as it does above, which is the half a screen reader hears and the half this can
+   * check. The geometry is a live pass's; what is pinned instead is `pointer-events-none`,
+   * because that class is the whole of why a panel hanging over the view for four seconds
+   * cannot eat the drop it is reporting or the click after it.
+   *
+   * Finding the entry by its name while it is an icon is the second claim, and it comes free:
+   * `entry("Wishlist")` is the ordinary query every other test here uses.
+   */
+  it("says where a card went in a panel beside the rail when the rail is collapsed", async () => {
+    navCollapsed.mockResolvedValue(true);
+    const held = await pickUp();
+    await screen.findByRole("button", { name: "Expand sidebar" });
+
+    await held.over(entry("Wishlist"));
+    await held.drop();
+
+    await waitFor(() => expect(report("Wishlist")).toHaveTextContent("Added to wishlist."));
+    expect(report("Wishlist")).toHaveClass("pointer-events-none", LAYER.popup);
   });
 });
 

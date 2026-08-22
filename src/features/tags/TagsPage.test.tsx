@@ -68,6 +68,10 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     // empty row is a database nobody has zoomed, so every wall opens at its default.
     cardZoom: vi.fn().mockResolvedValue({}),
     setCardZoom: vi.fn().mockResolvedValue(undefined),
+    // And the rail's own width, read once on the way up. `false` is a database nobody has
+    // collapsed the sidebar in, which is the shell every test here means to render.
+    navCollapsed: vi.fn().mockResolvedValue(false),
+    setNavCollapsed: vi.fn().mockResolvedValue(undefined),
     // Answered **cold** — `ready: false`, every map empty — which leaves every filter control
     // live and every accessible name plain, so this file's queries say what they always said.
     // The greying itself is `FilterBar.test.tsx`'s and `facets.test.ts`'s subject.

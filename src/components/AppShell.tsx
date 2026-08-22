@@ -5,6 +5,8 @@ import {
   Heart,
   Layers,
   LibraryBig,
+  PanelLeftClose,
+  PanelLeftOpen,
   Search,
   Settings,
   Tags,
@@ -19,6 +21,7 @@ import {
 import { Ribbon } from "@/components/Ribbon";
 import { SyncProgress } from "@/components/SyncProgress";
 import { TitleBar } from "@/components/TitleBar";
+import { useTooltip } from "@/components/tooltip/useTooltip";
 import { useSidebarDrops, type SidebarDrop } from "@/components/useSidebarDrops";
 import { useCardToDeckRefusal } from "@/features/card/cardMenu";
 import { readDragData } from "@/features/decks/dnd";
@@ -30,11 +33,13 @@ import {
   updateActivity,
 } from "@/lib/activity";
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
+import { LAYER } from "@/lib/layers";
 import { statusLine as statusLineMotion } from "@/lib/motion";
 import { useAppStore, type ViewId } from "@/lib/store";
 import { useCardZoomPersistence } from "@/lib/useCardZoomPersistence";
 import { useDelayedFlag } from "@/lib/useDelayedFlag";
 import { useMarketplace, useMarketplaceProgress } from "@/lib/useMarketplace";
+import { useNavCollapsed } from "@/lib/useNavCollapsed";
 import { useOracleTagProgress } from "@/lib/useOracleTagProgress";
 import { statusLine, useSync } from "@/lib/useSync";
 import { useSyncInvalidation } from "@/lib/useSyncInvalidation";
@@ -53,6 +58,16 @@ const NAV: { id: ViewId; label: string; Icon: LucideIcon }[] = [
   { id: "decks", label: "Decks", Icon: Layers },
   { id: "settings", label: "Settings", Icon: Settings },
 ];
+
+/**
+ * The `<nav>`'s id, so the toggle at its foot can point `aria-controls` at the region it is
+ * opening and closing.
+ *
+ * A constant rather than the string written twice, because the failure is silent at both ends:
+ * an `aria-controls` naming an element that does not exist is not a validation error anywhere,
+ * and nothing in a jsdom test would notice the day one of the two spellings moved.
+ */
+const NAV_ID = "app-nav";
 
 /**
  * The window: sidebar, ribbon, and whatever view the store points at.
@@ -83,6 +98,19 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   // it the place a card can be dropped from any view — the Search wall and the deck editor
   // never coexist, so without this a card found in Search has nowhere to go.
   const drops = useSidebarDrops();
+  /**
+   * Whether the rail is 68px of icons or 208px of labels (issue #177).
+   *
+   * **Called once, here**, for the reason every other "exactly one of these in the app" mount in
+   * this component has: the shell is the only thing that draws the rail, and a second observer
+   * would be a second optimistic write racing the first. The hook keeps the answer in
+   * `app_meta`, so the choice outlives the process.
+   *
+   * **A read that fails answers `false`.** A database that cannot say must open the way the app
+   * has always opened — six named destinations — rather than hiding them behind a mystery the
+   * reader then has to guess their way out of.
+   */
+  const { collapsed, setCollapsed } = useNavCollapsed();
   /**
    * What a refused deck add from a card menu left to say, drawn in the sidebar below.
    *
@@ -167,9 +195,40 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
           size, which is precisely the failure `DECK_FLOOR`'s two drops (224 → 208 → 192) exist
           to prevent. Widening this column is therefore a change to `DeckEditor`'s arithmetic
           first and a change to the sidebar second. */}
+        {/* **Collapsed, that same arithmetic runs the other way, and that is the whole of issue
+          #177.** The paragraph above says a wider column is a change to `DeckEditor`'s sums; a
+          *narrower* one is the same change with the sign flipped, and it lands where the app is
+          tightest. 68px is a 44×44 target inside this element's own `p-3` — the row keeps its
+          height, its `size-5` icon and its gold hairline, and loses only the painted word — so
+          at 1280×800 with a card pane docked, where the desk row is 602px and `DECK_FLOOR` (192)
+          leaves **10px** of headroom, the rail hands `main` back **140px**.
+
+          **`relative` is load-bearing twice.** Tailwind's `.sr-only` is `position: absolute`,
+          and one with no positioned ancestor resolves to the *initial* containing block, is laid
+          out at its static position and is clipped by nothing — which stretches the **document**
+          (`src/CLAUDE.md`; the deck editor's 1704px phantom scrollbar is what that costs). A
+          collapsed rail turns six labels into exactly that shape, so the containing block has to
+          be here. It is also what the two floating notes below are positioned against, which is
+          what keeps their `left-full top-0` free of any offset arithmetic.
+
+          **The width is tweened at the `base` tier — 180ms — because the rail travels a real
+          distance** rather than changing colour; `--duration-base` is read as a bracketed
+          custom property because `--duration-*` is not a Tailwind namespace and there is no
+          `duration-base` utility (`src/index.css`). `DeckEditor` picks docked-panel-vs-rail out
+          of a `ResizeObserver`, so an animated width drives it through every intermediate width
+          on the way — and that is safe by construction rather than by luck: a collapse only ever
+          *widens* the desk, and an expand only narrows it back to the 208px value that is valid
+          today. No intermediate state is worse than the endpoint it is heading for, so the
+          docked panel cannot flicker in either direction. */}
         <nav
+          id={NAV_ID}
           aria-label="Views"
-          className="flex w-52 shrink-0 flex-col gap-1.5 border-r border-border bg-surface p-3"
+          className={cn(
+            "relative flex shrink-0 flex-col gap-1.5 border-r border-border bg-surface p-3",
+            "transition-[width] duration-[var(--duration-base)] ease-standard",
+            "motion-reduce:transition-none",
+            collapsed ? "w-17" : "w-52",
+          )}
         >
           {NAV.map(({ id, label, Icon }) => (
             <NavItem
@@ -177,6 +236,7 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
               label={label}
               Icon={Icon}
               active={id === activeView}
+              collapsed={collapsed}
               onSelect={() => setActiveView(id)}
               dragging={drops.dragging}
               drop={id === "decks" || id === "wishlist" ? drops[id] : null}
@@ -209,12 +269,23 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
             the role is for, and it is what the sync banner further down already relies on. It
             also keeps `getByRole("alert")` meaning one thing — an always-mounted second alert
             makes every such query in this app ambiguous whether or not it has any text in it.
-            The geometry is the report line's, which was measured for exactly this push. */}
+            The geometry is the report line's, which was measured for exactly this push.
+
+            **The wrapper is `relative` so the collapsed rail's floating form is positioned
+            against this sentence's own place in the column** rather than against the whole
+            `<nav>` — `left-full top-0` then needs no offset arithmetic and no re-measurement
+            when an entry above it moves. Collapsed, the wrapper is a zero-height flex item and
+            the panel hangs off it; expanded, it is the paragraph exactly where it has always
+            been. */}
           {cardToDeckRefusal !== null && (
-            <p role="alert" className="px-3 pt-1 text-xs leading-tight text-destructive">
-              {cardToDeckRefusal}
-            </p>
+            <div className="relative">
+              <NavNote role="alert" collapsed={collapsed} tone="text-destructive">
+                {cardToDeckRefusal}
+              </NavNote>
+            </div>
           )}
+
+          <NavToggle collapsed={collapsed} onToggle={() => setCollapsed(!collapsed)} />
         </nav>
 
         <div className="flex min-w-0 flex-1 flex-col">
@@ -304,11 +375,16 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
  * enlargement — the row grew, the column did not (see the `<nav>` above). The label is 16px
  * against the ribbon's 20px title, which keeps the two rungs of app › view distinguishable by
  * size rather than only by face.
+ *
+ * **Collapsed it is 44×44 and nothing else about it moves**: same height, same icon, same gold
+ * hairline, same drop target. The word is still in the DOM, still the button's accessible name,
+ * and merely not painted.
  */
 function NavItem({
   label,
   Icon,
   active,
+  collapsed,
   onSelect,
   dragging,
   drop,
@@ -316,6 +392,8 @@ function NavItem({
   label: string;
   Icon: LucideIcon;
   active: boolean;
+  /** The rail is down to icons, so this entry is a square target with its word in a tooltip. */
+  collapsed: boolean;
   onSelect: () => void;
   /** A card is in the air somewhere in the window — the only time this entry is anything but
    *  a link. */
@@ -324,6 +402,7 @@ function NavItem({
   drop: SidebarDrop | null;
 }) {
   const ref = useRef<HTMLButtonElement>(null);
+  const tip = useTooltip();
   /** The card is over *this* entry: which one of the ringed pair is about to take it. */
   const [over, setOver] = useState(false);
   // What the target answers, kept current without the registration depending on it. The shell
@@ -364,7 +443,11 @@ function NavItem({
   const inert = drop !== null && dragging && !drop.eligible;
 
   return (
-    <div>
+    // `relative` for the report line below: `.sr-only` is `position: absolute`, so the empty
+    // region needs a positioned ancestor or it resolves to the *initial* containing block and
+    // stretches the document, and the collapsed rail's floating panel is anchored here so
+    // `left-full top-0` lands beside this entry with no offset arithmetic.
+    <div className="relative">
       <button
         ref={ref}
         type="button"
@@ -387,8 +470,31 @@ function NavItem({
         // which is a product call and is written up in
         // `docs/superpowers/notes/plan-5-followups-note.md` rather than made here.
         title={inert ? (drop.inertReason ?? undefined) : undefined}
+        // **The word, for the eye, while the rail is 68px wide** — `useTooltip()` at side
+        // `"right"`, which is the app's one hint mechanism, and never a native `title`.
+        //
+        // **The `title` above is not a counter-example**: it survives precisely *because* it is
+        // not a tooltip. Chromium freezes `:hover` at a drag's origin for the whole drag, so
+        // that sentence is never shown to anybody and is read instead through the accname
+        // spec's description fallback — measured, and written up above. This one has the
+        // opposite job: it has to be **seen**, by a pointer resting on an icon with nothing
+        // beside it, which is the one thing a `title` mid-drag provably cannot do.
+        //
+        // `collapsed && label` rather than a conditional spread: `useTooltip` binds nothing for
+        // a falsy content, which is the documented shape and keeps one expression here.
+        //
+        // **`describes: false`, for the same reason `whenClipped` implies it.** The word is
+        // still in the DOM and is still this button's accessible name — only the paint is gone —
+        // so an `aria-describedby` at a panel holding that same word would have a screen reader
+        // say "Decks, Decks". The hint is for the eye, and only the eye has lost anything.
+        {...tip(collapsed && label, { side: "right", describes: false })}
         className={cn(
-          "relative flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-base",
+          "relative flex w-full items-center rounded-md px-3 py-2.5 text-left text-base",
+          // 44px in both states, and collapsed it has to be said out loud: the label is out of
+          // the flow, so the row would otherwise be its 20px icon plus padding — a target
+          // smaller than the one this entry was drawn at, on the state where the reader has
+          // *less* to aim at rather than more.
+          collapsed ? "h-11 justify-center" : "gap-3",
           "transition-colors duration-150 motion-reduce:transition-none",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
           // The gold indicator: a hairline against the item, not a filled pill. The
@@ -404,7 +510,13 @@ function NavItem({
         )}
       >
         <Icon className="size-5 shrink-0" aria-hidden="true" />
-        {label}
+        {/* **`sr-only` while collapsed, and deliberately not an `aria-label` on the button.**
+            The name is still computed from content, so it is the *same string* in both states —
+            which is what keeps every `getByRole("button", { name: "Decks" })` in this repository
+            meaning what it has always meant, and what makes it impossible for the two states to
+            drift into two different names. An `aria-label` would be a second place the word is
+            written, and the first of the two to change would be the one nothing tested. */}
+        <span className={collapsed ? "sr-only" : undefined}>{label}</span>
       </button>
       {drop && (
         // Mounted for the life of the sidebar and empty until there is something to say: a
@@ -418,13 +530,135 @@ function NavItem({
         // (`Added to Kess, Dissident Mage Storm.`) and a refusal — set in two lines and push it
         // **34px**, which is a card the reader just dropped saying where it went. Two lines is
         // still the ceiling this was drawn for; the push grew by the 2px of extra leading.
-        <p
-          role="status"
-          className={drop.report ? "px-3 pt-1 text-xs leading-tight text-dim" : "sr-only"}
-        >
+        //
+        // **Collapsed there is no column for any of that** — 68px is a 44px target and its
+        // padding — so `NavNote` floats the sentence beside the rail instead. The role and the
+        // mounting rule are untouched, which is the part that must not move.
+        <NavNote role="status" collapsed={collapsed} tone="text-dim">
           {drop.report}
-        </p>
+        </NavNote>
       )}
+    </div>
+  );
+}
+
+/**
+ * One of the sidebar's two live regions, drawn where the rail has room for it.
+ *
+ * Expanded, that is where both have always been: a line in the rail's own column, under the
+ * entry a card landed on or under all of them. Collapsed there is no column to be a line in, so
+ * the sentence floats beside the rail on a small bordered panel at `LAYER.popup` — z-indexes
+ * come from `src/lib/layers.ts` and `layers.test.ts` sweeps `src/` to keep it that way.
+ *
+ * **`pointer-events-none`, and it is not a tidiness class.** The drop report is up for four
+ * seconds *during and after a drag*, hanging over whatever view is beside the rail: a panel that
+ * could take a pointer would eat the next drop, or the click on the thing underneath it — and
+ * `pointer-events` inherits, so putting it here covers the sentence too.
+ *
+ * **One component rather than two copies of the box**, which is this repository's own lesson
+ * rather than a preference: two copies of one shape are N independent decisions that happen to
+ * agree today, and the three dialogs that each carried their own chrome drew one scrim at two
+ * darknesses and one panel at three heights before anybody noticed (`src/CLAUDE.md`).
+ *
+ * **What it deliberately does *not* own is mounting**, because the two regions differ there and
+ * must go on differing. The `status` is mounted for the life of the sidebar and `sr-only` while
+ * empty — a polite region that first appears with its sentence already inside it announces
+ * nothing — and the `alert` is mounted only when there is something to say, because announcing
+ * on insertion is exactly what that role is for. Both callers keep their own rule; this only
+ * decides what the box looks like.
+ */
+function NavNote({
+  role,
+  collapsed,
+  tone,
+  children,
+}: {
+  role: "status" | "alert";
+  collapsed: boolean;
+  /** The colour this sentence has always had — `text-dim` for a report, `text-destructive` for
+   *  a refusal. The box is the same in both cases; the words are not. */
+  tone: string;
+  children: string | null;
+}) {
+  return (
+    <p
+      role={role}
+      className={
+        children
+          ? cn(
+              "text-xs leading-tight",
+              tone,
+              collapsed
+                ? cn(
+                    "pointer-events-none absolute top-0 left-full ml-2 w-48",
+                    "rounded-md border border-border bg-surface px-3 py-2",
+                    LAYER.popup,
+                  )
+                : "px-3 pt-1",
+            )
+          : "sr-only"
+      }
+    >
+      {children}
+    </p>
+  );
+}
+
+/**
+ * The control that takes the rail down to icons and brings it back.
+ *
+ * At the foot of the sidebar, which is where issue #177 asked for it and where a reader looks
+ * for something that reshapes the frame rather than choosing what is in it: everything above
+ * this hairline is a destination, and this is not one.
+ *
+ * **Full width, drawn with negative margins against the `<nav>`'s own `p-3`**, so the rule above
+ * it reaches both edges of the rail. A hairline that stopped 12px short at each end would read
+ * as a border belonging to the button rather than as the line between the destinations and the
+ * control that reshapes them; the padding is then put back inside, so the icon still sits on the
+ * same 12px as every entry above it.
+ *
+ * **The accessible name contains the visible word, and that is WCAG 2.5.3 rather than a
+ * nicety.** Expanded, the button paints `Collapse` and is named `Collapse sidebar` — a reader
+ * driving the app by voice says the word they can see and hits this button. A name that did not
+ * contain its own visible label ("Hide navigation" over a button reading "Collapse") would leave
+ * that reader saying a word that matches nothing. Collapsed there is no visible word at all, so
+ * the name is the whole of it and `useTooltip()` is what the eye gets — never a native `title`.
+ */
+function NavToggle({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
+  const tip = useTooltip();
+  const name = collapsed ? "Expand sidebar" : "Collapse sidebar";
+  const Icon = collapsed ? PanelLeftOpen : PanelLeftClose;
+  return (
+    <div className="-mx-3 -mb-3 mt-auto border-t border-border p-3">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-label={name}
+        // `aria-expanded` on the control and `aria-controls` at the region it acts on: the pair
+        // is what says *what* the press does, rather than only that a press happened. The rail
+        // is still in the tree collapsed — it is narrower, not hidden — so `expanded` is the
+        // honest word for it and `hidden` would not be.
+        aria-expanded={!collapsed}
+        aria-controls={NAV_ID}
+        // Expanded the word is on the button, so there is nothing for a hint to add; collapsed
+        // it is the only thing the eye has. `useTooltip` binds nothing for a falsy content, and
+        // `describes: false` because this sentence *is* the accessible name above — describing
+        // a button with its own name is the name said twice.
+        {...tip(collapsed && name, { side: "right", describes: false })}
+        className={cn(
+          "flex w-full items-center rounded-md px-3 py-2.5 text-left text-base text-dim",
+          // The entries' own geometry, for the entries' own reason: 44px is what a reader is
+          // aiming at everywhere else in this column, and a control that reshapes the whole
+          // window is not the one to make smaller.
+          collapsed ? "h-11 justify-center" : "gap-3",
+          "transition-colors duration-150 motion-reduce:transition-none",
+          "hover:bg-bg/60 hover:text-text",
+          "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
+        )}
+      >
+        <Icon className="size-5 shrink-0" aria-hidden="true" />
+        {!collapsed && <span>Collapse</span>}
+      </button>
     </div>
   );
 }
