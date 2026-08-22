@@ -54,6 +54,51 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   anything width-dependent; the harness contract says to end a run by restoring the
   `innerWidth`/`innerHeight` you read before the first override — the window's own size, which
   since 2026-08-20 depends on the monitor — and this is the failure that rule is about.
+- **The rail collapses to 68px of icons, and that is the bullet above with its sign flipped**
+  (2026-08-22, issue #177). That one says a *wider* sidebar is a change to `DeckEditor`'s
+  arithmetic first; a narrower one is the same change, landing where the app is tightest. `w-17`
+  is 68px and holds a **43×44** target inside the `<nav>`'s own `p-3` — **not** the round 44×44
+  three comments claimed before this was measured: `box-sizing: border-box` puts the rail's own
+  `border-r` inside the 68, so the entry gets 68 − 12 − 12 − 1. Nothing else about an entry moves;
+  it keeps its 44px height, its `size-5` icon, its gold hairline and its drop target, and the
+  label goes to `sr-only` rather than to an `aria-label`, so the accessible name is computed from
+  content in both states and is the same string in both.
+  **Driven in the shipped window 2026-08-22** (`npm run tauri dev`, a **debug** build, against a
+  copy of the main checkout's corpus, mid-sync). At 1280×800: expanded `nav` **208**, an entry
+  **183×44**, the toggle **183×44**, `main` **1072** — the same 1072 the 2026-08-14 pass recorded,
+  which is what makes the two comparable; collapsed `nav` **68**, an entry and the toggle both
+  **43×44**, `main` **1212**. So the rail hands `main` back **140px**, and
+  `document.documentElement.scrollWidth` is **1280** in both states.
+  **The deck editor's docked panel survives the collapse, which was the thing to check.** The
+  width is tweened at `--duration-base` (180ms) and `DeckEditor` picks docked-panel-vs-rail out of
+  a `ResizeObserver`, so the tween drives that decision through every intermediate width — but a
+  collapse only ever *widens* the desk and an expand only narrows it back to the 208px value that
+  is already valid, so no intermediate state is worse than the endpoint it is heading for.
+  Measured at 1280×800 with the panel open: **`aria-expanded=true` and not disabled** on both
+  sides of the press, `main` 1072 → 1212. **Reading a width during the tween is its own trap** —
+  a measurement taken one command after the click read `nav` at **169.25px**, which is neither
+  state and reads exactly like a broken class.
+  **Both things that float beside the collapsed rail share one left edge, and it is 5px inside
+  the rail.** The entry's tooltip and `NavNote`'s drop report both measured `left: 63` against a
+  rail whose outer edge is 68, because both stand `TOOLTIP_GAP` (8px) off the **entry**, and the
+  entry sits 12px of padding and a hairline inside the rail. That is `placeTooltip`'s own rule
+  applied to the anchor it was given, and **the two agreeing is worth more than either clearing
+  the border**: a note at 63 beside a tooltip at 76 would be two panels from one icon at two
+  different edges. The note measured **192×33**, `position: absolute`, `z-index: 30`
+  (`LAYER.popup`), `pointer-events: none` — that last one is why a panel hanging over the view
+  for `REPORT_MS` cannot eat the drop it is reporting.
+  **Reduced motion, and the contract's own trap, live.** Under `prefers-reduced-motion: reduce`
+  the `<nav>` computes `transition-property: none` while `transition-duration` still reads
+  **0.18s**, because `motion-reduce:transition-none` clears the property and leaves the duration
+  alone. A check that read the duration would have reported a false failure on a rail that is
+  correctly still — the same measurement
+  [live-ui-verification.md](live-ui-verification.md) records on a sort header.
+  **The keyboard activates it exactly once per press**: `press Enter` took it collapsed → expanded
+  and `press Space` expanded → collapsed, one activation each, focus still on the toggle
+  afterwards. The count rather than the fact, which is the only honest way to check a key that
+  activates something. The choice is one `app_meta` row (`nav_collapsed`, `"1"`/`"0"`), and it was
+  observed written **through a running sync** — the optimistic write's BUSY case, costing nothing
+  the reader can see.
 - **The ribbon says what the app is doing, and it is a registry rather than a sync.** A long
   job registers an `Activity` (`src/lib/activity.ts`) — key, rank, label, `detail`, value —
   through `useRegisterActivity`, and the lowest rank wins the row (`RANK.sync` 0 beats

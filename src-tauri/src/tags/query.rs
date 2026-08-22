@@ -26,7 +26,23 @@
 //!   `slug_norm` with.** A second copy here that drifted would leave both halves
 //!   self-consistent and the search matching nothing, and no test in either half would fail.
 //!   That is why the import is from the engine and why this module never spells the rule out
-//!   again.
+//!   again. **There are three writers of that column, not two** — the ingest, and
+//!   `schema::backfill_oracle_slug_norm`, which repairs what v20's `ALTER TABLE … ADD COLUMN`
+//!   left as `''`. Anything that ever writes `slug_norm` calls that one function.
+//!
+//! # A blank `slug_norm` is a search that answers nothing, and it shipped once
+//!
+//! [Issue #180](https://github.com/Msgaihede/mtg-grimoire/issues/180). v20 added the column with
+//! `DEFAULT ''` — `ALTER TABLE` cannot add a `NOT NULL` column without one — and argued the
+//! value was never read, because a refresh drops and rebuilds the taxonomy wholesale. It is read
+//! *here*, by the only statement in this module's search path, and the next refresh is up to
+//! `super::oracle::REFRESH_INTERVAL_SECS` away. So every database that held oracle tags before
+//! that step answered `[]` to every oracle needle for up to a week, while the art taxonomy —
+//! created empty by the same step, so ingested in full at the first launch — worked beside it,
+//! and [`run_tag_children`] went on listing the very tags the box could not find, because it
+//! reads `slug`. The v22 rung is the repair. The general shape is worth carrying: **a column
+//! only an ingest writes is unset on every existing database until that ingest runs**, and a
+//! fresh worktree is the one place that can never show it.
 //!
 //! # Muting hides a tag; it never hides a card
 //!

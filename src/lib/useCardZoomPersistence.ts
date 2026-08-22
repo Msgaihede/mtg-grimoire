@@ -34,11 +34,11 @@ export const ZOOM_WRITE_DELAY_MS = 400;
  * seeded. It renders nothing and returns nothing; the sizes are in the store, where every wall
  * already reads them.
  *
- * ## Why this is not TanStack Query, where the app's other two settings are
+ * ## Why this is not TanStack Query, where the app's other three settings are
  *
- * `useMarketplace` and `usePrintingGroupBy` keep their `app_meta` row in the query cache and read
- * it back from there, which is right for them: the cache **is** where the value lives, and the
- * component that draws the control subscribes to it. The zoom is the other way round. `cardZoom`
+ * `useMarketplace`, `usePrintingGroupBy` and `useNavCollapsed` keep their `app_meta` row in the
+ * query cache and read it back from there, which is right for all three: the cache **is** where
+ * the value lives, and the component that draws the control subscribes to it. The zoom is the other way round. `cardZoom`
  * has to be in the zustand store — a wheel handler steps it imperatively fifty times a second and
  * five walls read it during layout — so a query here would not be the home of anything. It would
  * be a cache entry with exactly one consumer, which copies its answer into the real home and is

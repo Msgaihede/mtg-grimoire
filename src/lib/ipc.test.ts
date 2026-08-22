@@ -1006,8 +1006,10 @@ describe("ipc argument names match the Rust command signatures", () => {
   });
 
   /**
-   * The printings list's grouping — the **other** setting that carries no struct at all, and
-   * the pair a copy of the marketplace one gets wrong.
+   * The printings list's grouping — one of the settings that carry no struct at all, and the
+   * pair a copy of the marketplace one gets wrong. (There are four of them now; the header of
+   * `ipc.ts` is where the list lives, and this test is about one pair's argument names rather
+   * than about the count.)
    *
    * `set_marketplace` spells its single argument `id` and `set_printing_group_by` spells its
    * own `mode`; Tauri matches by name, so the wrapper copied from the neighbour two lines up

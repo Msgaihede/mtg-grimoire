@@ -794,19 +794,43 @@ export interface FakeDb {
    */
   cardZoom: Record<string, number>;
   /**
+   * `app_meta.nav_collapsed` — whether the reader has collapsed the global navigation sidebar
+   * down to its icons.
+   *
+   * **A plain `boolean`, and the first of the two rows here that are not nullable** — which is
+   * the whole of what is worth knowing about this field, because the shape is an argument
+   * rather than a shortcut. Its string-and-map neighbours are `string | null` (or `{}`) because
+   * each has two states a narrowed field could not reach: the row has never been written, and
+   * the row holds a word *this* build cannot place. This one has neither. `nav_collapsed` is
+   * infallible at the far end: a missing row, a junk row, a row a newer build wrote something
+   * else into — every one of them answers `false`, and the reader gets the expanded shell. So
+   * there is no "never set" for a story to stand in that is distinguishable from "set to the
+   * default", and a `boolean | null` here would be a third state the backend cannot produce,
+   * which is exactly the kind of fiction {@link FakeDb.marketplace}'s nullability exists to
+   * *avoid* rather than an instance of it.
+   *
+   * The consequence for the pair of handlers is the same one, said twice: the read cannot fall
+   * back because there is nothing to fall back from, and the write cannot refuse a value
+   * because a `boolean` off the IPC boundary has no junk state — see
+   * {@link readHandlers.nav_collapsed} and {@link writeHandlers.set_nav_collapsed}.
+   */
+  navCollapsed: boolean;
+  /**
    * `app_meta.deck_search_open` — whether the deck editor's card search column was last left
    * open.
    *
-   * The fifth row of the same key/value table, and the only one whose **stored** shape is a
-   * string while its **answered** shape is not: the backend writes `"1"`/`"0"` and reads
-   * anything else as the default, so both states a story wants are reachable — a fresh install
-   * that has never been asked (`null`), and a row a hand-edit or another build left something
-   * unplaceable in.
+   * The sixth row of the same key/value table and the **second** of the two booleans, landing
+   * the same day as {@link FakeDb.navCollapsed} above. Every word of that field's argument
+   * applies here unchanged — `deck_search_open` is infallible at the far end too, folding a
+   * missing row, a hand-edited one and an unreadable one alike into its default — so it is a
+   * plain `boolean` for the same reason and not by imitation.
    *
-   * A story that wants the editor to open on the rail sets this to `"0"`. Everything else,
-   * including `null`, opens the column — see {@link readHandlers.deck_search_open}.
+   * What differs is only which way the default points, and the two are worth reading together:
+   * a reader who has never touched either control gets the nav rail **expanded** and this column
+   * **open**. Both are "the app as it comes"; neither is a `false` that happens to be the
+   * language's default.
    */
-  deckSearchOpen: string | null;
+  deckSearchOpen: boolean;
   /**
    * `marketplace_prices` — the table that made a third and fourth marketplace possible.
    *
@@ -1120,9 +1144,16 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // says nothing about zoom is standing in. A story that wants a restored session passes the
     // sections it cares about and leaves the rest out — an absent key is a wall nobody has zoomed.
     cardZoom: {},
-    // The fifth row, unwritten: `deck_search_open` answers `true` for an editor nobody has told,
-    // which is the state every deck story that says nothing about the search column stands in.
-    deckSearchOpen: null,
+    // The fifth row, and the first whose default is a *value* rather than an absence: a shell
+    // nobody has collapsed. `false` is what the backend answers for the row never having been
+    // written and for its holding something unreadable alike, so there is no third state for
+    // `null` to stand in — see {@link FakeDb.navCollapsed}. Every story that says nothing about
+    // the sidebar is standing in the expanded shell.
+    navCollapsed: false,
+    // The sixth, on the same footing and pointing the other way: `deck_search_open` answers
+    // `true` for an editor nobody has told, so every deck story that says nothing about the
+    // search column is standing in the column the app ships open.
+    deckSearchOpen: true,
     // Empty here and filled by a seed, exactly as the card corpus is: a downloaded feed is a
     // table with rows in it, and "no rows" is the honest state of an install that has never
     // chosen Card Kingdom. `starterSeed` fills both from the corpus.
@@ -4964,22 +4995,42 @@ export function readHandlers(db: FakeDb) {
       ),
 
     /**
-     * `deck::deck_search_open` — whether the editor's search column was last left open.
+     * `nav::nav_collapsed` — whether the global navigation sidebar was left collapsed to icons.
      *
-     * The fifth `app_meta` setting, and **the one whose narrowing happens entirely on this side
-     * of the wire**: it answers a `boolean`, so the three states the others hand across as
-     * strings — never written, written by another build, hand-edited — have all collapsed by the
-     * time the frontend sees it. That is why the fake stores the *string* and converts here: a
-     * fake holding a boolean could not stand in the one case worth a story, which is a row this
-     * build cannot place.
+     * The fifth `app_meta` setting, and **the first with no fallback in it at all**, which is
+     * the whole of how it differs from the four above. Each of those narrows on the way out
+     * because the row can hold a word this build cannot place; this row holds a boolean, and the
+     * command is infallible at the far end — a missing row, a junk row, an unparseable one all
+     * answer `false`, so the shell that greets a reader whose `app_meta` is nonsense is the
+     * expanded one. That collapse happens in the Rust, before the value ever crosses the IPC
+     * boundary, which leaves this handler with nothing to decide: the stored boolean *is* the
+     * answer.
      *
-     * `"1"` and `"0"` and nothing else, `deck::stored_deck_search_open` verbatim. Anything else
-     * is `true` — including `"true"`, which is the spelling a hand-edit reaches for first and
-     * exactly the value that must not quietly work.
+     * Read at launch and only at launch — the shell asks once and then owns the state, so a
+     * story that presses the toggle is looking at its own React state rather than at a re-read.
+     * What this read is therefore *for* is the first frame: a story seeded collapsed has to
+     * open collapsed rather than opening wide and snapping shut, which is the bug a fake that
+     * always answered `false` here would hide.
      *
      * A read, so it answers through a sync like every other one here — the write below does not.
      */
-    deck_search_open: (): boolean => db.deckSearchOpen !== "0",
+    nav_collapsed: (): boolean => db.navCollapsed,
+
+    /**
+     * `deck::deck_search_open` — whether the editor's search column was last left open.
+     *
+     * The sixth `app_meta` setting and the **second** with nothing to decide, for every one of
+     * the reasons `nav_collapsed` above gives: the Rust folds a missing row, a hand-edited one
+     * and an unreadable one into its default before the value crosses the IPC boundary, so the
+     * stored boolean is the answer.
+     *
+     * Its first frame matters for the same reason and one of its own: this column is 384px of
+     * the desk, so a story seeded shut that opened wide and snapped closed would not merely
+     * flicker — it would re-pack the deck beside it on the way past.
+     *
+     * A read, so it answers through a sync like every other one here — the write below does not.
+     */
+    deck_search_open: (): boolean => db.deckSearchOpen,
 
     /**
      * `marketplace_feed::status` — one row per **feed-backed** marketplace, whether or not it
@@ -8087,21 +8138,53 @@ export function writeHandlers(db: FakeDb) {
     },
 
     /**
+     * `nav::set_nav_collapsed` — remember that the reader collapsed the sidebar, or opened it.
+     *
+     * **The only thing it can refuse is a running sync, and that absence is the point rather
+     * than a gap.** Its three neighbours above each open with a validation — a marketplace id
+     * that is not on the list, a grouping mode this build cannot draw, a zoom outside the
+     * bounds — because each of those arrives as a `String` or a bare number and the read side
+     * *shrugs at* what it cannot use, so an unchecked write would leave `app_meta` holding a
+     * row that silently means the default forever. `set_printing_group_by`'s note calls that
+     * refusal the half a fake is easiest to leave out, and it is right about all three.
+     *
+     * There is no fourth instance of it here, and a reader comparing the two handlers should
+     * not have to wonder whether one was forgotten: a `boolean` off the IPC boundary has **no
+     * junk state**. Tauri's deserializer refuses anything that is not `true` or `false` before
+     * this handler is reached at all, so both values are storable, both round-trip, and there
+     * is nothing left for a validation to catch. Adding one would be inventing a refusal the
+     * backend does not make — the same mistake in the other direction as leaving one out.
+     *
+     * It honours `busy` like every other ordinary write here, which is the split that puts it
+     * on this side of the file at all: `nav_collapsed` takes the read connection and answers
+     * through every second of a sync, while this one takes the **write** connection and so
+     * answers `crate::db::BUSY` — `set_printing_group_by`'s pair exactly. A reader pressing the
+     * toggle mid-sync gets a refusal, and the sidebar that snaps back is the app telling the
+     * truth about a preference that was not saved.
+     */
+    set_nav_collapsed: (args: { collapsed: boolean }): void => {
+      refuseIfBusy(db);
+      db.navCollapsed = args.collapsed;
+    },
+
+    /**
      * `deck::set_deck_search_open` — remember whether the search column is open.
      *
-     * **The one write in this family with nothing to refuse**, and the asymmetry is the type
-     * rather than a softer fake: its two neighbours take a string and so can be sent a value the
-     * read side would discard, while a `boolean` has arrived narrowed and there is no third thing
-     * a caller could send. So the note that belongs here is the *storage* one — `"1"`/`"0"`,
-     * because that is what the row holds and what {@link readHandlers.deck_search_open} reads
-     * back, and a fake that stored `String(open)` would make `"true"` work here and nowhere else.
+     * The **second** write here with nothing but `busy` to refuse, and the paragraph above is
+     * the whole argument: a `boolean` off the IPC boundary has no junk state for a validation
+     * to catch, so adding one would invent a refusal the backend does not make.
+     *
+     * The row it writes holds `"1"`/`"0"` rather than a JSON boolean — `deck::store_deck_search_open`
+     * — and that is invisible from here on purpose: the fake stores the answered `boolean`,
+     * because the string is a storage detail with no state a story could stand in. Which
+     * spellings the Rust reads back is `deck.rs`'s own test, where the row really is text.
      *
      * It honours `busy` like every other ordinary write here — `deck.rs` takes the write
      * connection through `sync::with_write`.
      */
     set_deck_search_open: (args: { open: boolean }): void => {
       refuseIfBusy(db);
-      db.deckSearchOpen = args.open ? "1" : "0";
+      db.deckSearchOpen = args.open;
     },
 
     /**

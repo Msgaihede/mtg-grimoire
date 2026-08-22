@@ -18,6 +18,7 @@ pub mod legalities;
 pub mod maintenance;
 pub mod marketplace;
 pub mod marketplace_feed;
+pub mod nav;
 pub mod paths;
 pub mod reconcile;
 pub mod reset;
@@ -377,6 +378,8 @@ pub fn run() {
             marketplace::set_marketplace,
             zoom::card_zoom,
             zoom::set_card_zoom,
+            nav::nav_collapsed,
+            nav::set_nav_collapsed,
             marketplace_feed::marketplace_feed_refresh,
             marketplace_feed::marketplace_feed_status,
             tags::oracle::oracle_tags_refresh,

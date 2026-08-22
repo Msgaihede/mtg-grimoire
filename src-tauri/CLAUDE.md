@@ -66,10 +66,11 @@ both plus the frontend.
   never runs it again. **It happened three times, not twice**: the oracle-tag step was a third
   branch numbering itself 12 against that same head of 11, and it is **v14**. Three collisions on
   one rung in one day is the ladder's own argument — take the next free number when you land, and
-  never reuse one. Schema is at **v20** — `schema::SCHEMA_VERSION` is the answer, and
+  never reuse one. Schema is at **v22** — `schema::SCHEMA_VERSION` is the answer, and
   [the ladder's history](../docs/reference/data-and-sync.md) is the story. (This line read
-  **v18** for two whole rungs, because a prose-only edit routes to neither CI job: v19 added
-  `deck_cards.finish` and v20 the art-tag tables, and nothing went red for either.)
+  **v18** for two whole rungs and then **v20** for two more, because a prose-only edit routes to
+  neither CI job: v19 added `deck_cards.finish`, v20 the art-tag tables, v21 the app-wide tag
+  list and v22 the `slug_norm` repair, and nothing went red for any of them.)
 - **A step that writes to a table an older *forward-built* fixture never created fails on that
   fixture alone**, and v18 is the first one to do it. `schema.rs`'s `v1_database` and
   `v6_deck_database` are hand-written old schemas rather than rewinds, so they carry only what
@@ -161,6 +162,19 @@ shared_cell` walks both into two databases and compares them column by column.
   empty strings that indexes one value and matches nothing. The two spellings are on purpose: the
   live table needs the default to make the `ALTER` legal at all, and the staging table must not
   have one.
+- **`slug_norm` had no such fence, and that shipped as
+  [issue #180](https://github.com/Msgaihede/mtg-grimoire/issues/180): oracle tag search answered
+  nothing at all on every database that predated v20.** `tags::query` matches a typed needle
+  against that column and nothing else, and v20 argued the blank was never read because a refresh
+  rebuilds the taxonomy wholesale — true only *eventually*, and
+  `tags::oracle::REFRESH_INTERVAL_SECS` is a week. The **v22** rung recomputes it through
+  `tags::normalize`, so the repair is offline and a machine that can never reach Scryfall gets its
+  search back too. `id` is Scryfall's uuid, nothing derives it, and it stays blank until a
+  refresh — which is what the fences above are for.
+  **The general rule this cost us: a column added by `ALTER TABLE` whose only writer is an ingest
+  is unset on every existing database until that ingest runs, so every reader of it needs either a
+  fence or a backfill in the same rung.** Ask which population a `DEFAULT` is lying to — a fresh
+  worktree is a fresh install and is the one population that cannot show it.
 - **`muted_tags` is a user table and sits outside both `*_TAG_TABLES` lists** (schema v20) — it is
   the reader's answer about which tags they never want offered, and those two lists are what a
   refresh drops and rebuilds wholesale. It carries the namespace rather than being two tables,

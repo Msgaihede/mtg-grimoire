@@ -28,24 +28,28 @@
  * `MutedTag`                                     — `src-tauri/src/tags/muted.rs`
  * `TagTerms`                                     — `src-tauri/src/filters.rs`
  *
- * **Four settings carry no struct at all.** Each is one `app_meta` row: two answered as a bare
+ * **Five settings carry no struct at all.** Each is one `app_meta` row: two answered as a bare
  * string — `getMarketplace`/`setMarketplace` (`src-tauri/src/marketplace.rs`) and
  * `printingGroupBy`/`setPrintingGroupBy` (`src-tauri/src/card.rs`) — one, `cardZoom`/
- * `setCardZoom` (`src-tauri/src/zoom.rs`), as a bare `Record<string, number>`, and one,
- * `deckSearchOpen`/`setDeckSearchOpen` (`src-tauri/src/deck.rs`), as a bare `boolean`. All four
- * are the
- * shape a stored preference has to have: the read falls back on its default for a row that is
- * missing *or* holds a value this build does not recognise, and only the *write* refuses. So each
- * is typed loosely here rather than as its union: the narrowing belongs to the module that owns
- * the vocabulary (`@/lib/marketplace`, `@/features/card/printings`, `@/lib/cardZoom`), and a row
- * a newer build wrote must reach this side as what it is.
+ * `setCardZoom` (`src-tauri/src/zoom.rs`), as a bare `Record<string, number>`, and two as a bare
+ * `boolean`: `navCollapsed`/`setNavCollapsed` (`src-tauri/src/nav.rs`) and
+ * `deckSearchOpen`/`setDeckSearchOpen` (`src-tauri/src/deck.rs`). All five are
+ * the shape a stored preference has to have: the read falls back on its default for a row that
+ * is missing *or* holds a value this build does not recognise, and only the *write* refuses.
  *
- * **The boolean is the one with no narrowing left to do on this side**, and it is the exception
- * that shows what the rule is about: `deck_search_open` stores `"1"`/`"0"` and every other value
- * a database could hold — a hand-edit, a spelling a future build invents — is already collapsed
- * into the default by the read, because a `bool` has no room to carry it across the wire.
+ * Three of them are therefore typed loosely here rather than as their unions: the narrowing
+ * belongs to the module that owns the vocabulary (`@/lib/marketplace`,
+ * `@/features/card/printings`, `@/lib/cardZoom`), and a row a newer build wrote must reach this
+ * side as what it is. **The two booleans are the ones with no narrowing to do**, and that is the
+ * same argument arriving at nothing rather than an exception to it: a boolean has no vocabulary
+ * for a later build to have widened, so there is no third state a row could come back in. Each
+ * far end folds a missing row, a junk row and an unreadable one alike into its own default —
+ * `false` for the nav rail, which is expanded, and `true` for the deck editor's search column,
+ * which is open — and `boolean` here is the whole of the type, with nothing left for this side to
+ * decide. Both store `"1"`/`"0"` and read anything else as that default, so a hand-edit or a
+ * spelling a future build invents is already collapsed before it reaches the wire.
  *
- * The zoom row is the one of the three whose *shape* is a map, and the difference is worth a
+ * The zoom row is the one of the five whose *shape* is a map, and the difference is worth a
  * sentence: it has no single default to fall back on, because there are seven walls and each one
  * has been zoomed or not. So the backend answers only what it has, and a section it says nothing
  * about keeps the default the store was built with.
@@ -3686,7 +3690,7 @@ export const ipc = {
   /**
    * How large each wall of cards was last left drawn, as section name → multiplier.
    *
-   * The third `app_meta` setting and the one that is not a bare string — see this file's header.
+   * The third `app_meta` setting and the only one whose shape is a map — see this file's header.
    * **A section is absent rather than defaulted**: the ladder's stops are this side's
    * (`@/lib/cardZoom`), so a missing entry means the reader has never zoomed that wall, and the
    * backend does not invent a number it does not own. A whole unreadable row answers `{}`.
@@ -3708,12 +3712,31 @@ export const ipc = {
   setCardZoom: (section: string, zoom: number) =>
     invoke<void>("set_card_zoom", { section, zoom }),
   /**
+   * Whether the reader has collapsed the global navigation rail, stored so it opens the way
+   * they left it.
+   *
+   * The **fourth** `app_meta` setting and the first that is a bare `boolean` — see this file's
+   * header. It is also one of the two that need no narrowing on this side: the other three carry
+   * a vocabulary a newer build could have widened, and `true`/`false` has none, so there is no
+   * third state to fall back from. **The far end is infallible**: a missing row, a row holding
+   * something that is not a boolean, and a row that cannot be read at all all answer `false` —
+   * the rail expanded, which is what a reader who has never touched the control sees.
+   */
+  navCollapsed: () => invoke<boolean>("nav_collapsed"),
+  /**
+   * Remember the rail's state. Answers `collection::BUSY` under a running sync, like every
+   * other write — and the caller deliberately does not undo the rail when it does, because the
+   * setting is worth less than the reader's hand: `@/lib/useNavCollapsed` has the argument.
+   */
+  setNavCollapsed: (collapsed: boolean) => invoke<void>("set_nav_collapsed", { collapsed }),
+  /**
    * Whether the deck editor's card search column was last left open.
    *
-   * The fourth `app_meta` setting and the only one that arrives narrowed — see this file's
-   * header. `true` for a database nobody has expressed a preference in, which is issue #183's
-   * reversal of the disclosure this column used to open shut, and `true` again for a row holding
-   * anything but the `"1"`/`"0"` the backend writes.
+   * The **fifth** `app_meta` setting and the second bare `boolean`, arriving on the same day as
+   * {@link navCollapsed} above and answering the same way — see this file's header. Its default
+   * is the other one's mirror image and both are the state the reader has never asked about:
+   * `true`, the column open, which is issue #183's reversal of a disclosure that used to open
+   * shut. `true` again for a row holding anything but the `"1"`/`"0"` the backend writes.
    */
   deckSearchOpen: () => invoke<boolean>("deck_search_open"),
   /**

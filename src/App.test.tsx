@@ -38,6 +38,11 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     // shipped default, so the column is drawn open exactly as a fresh install draws it.
     deckSearchOpen: vi.fn().mockResolvedValue(true),
     setDeckSearchOpen: vi.fn().mockResolvedValue(undefined),
+    // And the sidebar's own width, read once on the way up for the same reason. `false` is a
+    // database nobody has collapsed the rail in, so every test here gets the six named entries
+    // it has always queried by name.
+    navCollapsed: vi.fn().mockResolvedValue(false),
+    setNavCollapsed: vi.fn().mockResolvedValue(undefined),
     onSyncProgress: vi.fn().mockResolvedValue(() => {}),
     // The shell listens for the reconcile event too, and a `.catch` cannot catch the
     // synchronous `TypeError` of calling `undefined`.
