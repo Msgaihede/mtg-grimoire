@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { dropTargetForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
-import { AnimatePresence, motion } from "motion/react";
+import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   Heart,
   Layers,
@@ -34,13 +34,14 @@ import {
 } from "@/lib/activity";
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { LAYER } from "@/lib/layers";
-import { statusLine as statusLineMotion } from "@/lib/motion";
+import { DURATION, statusLine as statusLineMotion } from "@/lib/motion";
 import { useAppStore, type ViewId } from "@/lib/store";
 import { usePrefetchDeckSearchOpen } from "@/features/decks/useDeckSearchOpen";
 import { useCardZoomPersistence } from "@/lib/useCardZoomPersistence";
 import { useDelayedFlag } from "@/lib/useDelayedFlag";
 import { useMarketplace, useMarketplaceProgress } from "@/lib/useMarketplace";
 import { useNavCollapsed } from "@/lib/useNavCollapsed";
+import { useNavLabels } from "@/lib/useNavLabels";
 import { useOracleTagProgress } from "@/lib/useOracleTagProgress";
 import { statusLine, useSync } from "@/lib/useSync";
 import { useSyncInvalidation } from "@/lib/useSyncInvalidation";
@@ -112,6 +113,28 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
    * reader then has to guess their way out of.
    */
   const { collapsed, setCollapsed } = useNavCollapsed();
+  /**
+   * Whether the rail is wide enough to paint a word — **`collapsed`'s answer in one direction
+   * and one tween later in the other**, which is the whole of the two bugs reported 2026-08-22.
+   *
+   * The rail's width is a CSS transition and its labels are a React commit, so a single flag
+   * driving both meant the words arrived 180ms before the room for them: six labels re-entering
+   * the flow at full width inside a 68px rail, painted over the view beside it for the length of
+   * the tween, because `<nav>` cannot carry an `overflow-hidden` (the collapsed rail's floating
+   * notes hang off it at `left-full`). `useNavLabels` holds them back until the rail has arrived
+   * and the label sites then fade them in over `DURATION.instant`; going the other way it answers
+   * in the same commit as the press, so the words are gone before the rail starts to move.
+   *
+   * **`useReducedMotion()` here is the per-component branch `App.tsx` sanctions**, not a second
+   * app-wide switch: what it decides is not whether to animate but *how long the rail takes*,
+   * and under `motion-reduce:transition-none` the answer is that it does not take any time at
+   * all. A rail that snapped wide and then sat wordless for 180ms would be this bug again with
+   * the sign flipped.
+   */
+  const reduced = useReducedMotion();
+  const labels = useNavLabels(collapsed, reduced ? 0 : DURATION.base);
+  /** The rail is down to icons, or on its way back out of them. */
+  const narrow = !labels;
   /**
    * What a refused deck add from a card menu left to say, drawn in the sidebar below.
    *
@@ -242,7 +265,14 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
           on the way — and that is safe by construction rather than by luck: a collapse only ever
           *widens* the desk, and an expand only narrows it back to the 208px value that is valid
           today. No intermediate state is worse than the endpoint it is heading for, so the
-          docked panel cannot flicker in either direction. */}
+          docked panel cannot flicker in either direction.
+
+          **The words are not on that tween, and the two directions are not symmetric** — the
+          second half of the 2026-08-22 report, and `useNavLabels` above is where the timing
+          lives. Opening, they wait the tween out and fade in after it; closing, they are gone in
+          the commit that starts it. Everything below is therefore handed `narrow` rather than
+          `collapsed`: the width belongs to the rail's own state, and every question about
+          whether there is room for a word belongs to the other. */}
         <nav
           id={NAV_ID}
           aria-label="Views"
@@ -259,7 +289,7 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
               label={label}
               Icon={Icon}
               active={id === activeView}
-              collapsed={collapsed}
+              narrow={narrow}
               onSelect={() => setActiveView(id)}
               dragging={drops.dragging}
               drop={id === "decks" || id === "wishlist" ? drops[id] : null}
@@ -302,13 +332,17 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
             been. */}
           {cardToDeckRefusal !== null && (
             <div className="relative">
-              <NavNote role="alert" collapsed={collapsed} tone="text-destructive">
+              <NavNote role="alert" narrow={narrow} tone="text-destructive">
                 {cardToDeckRefusal}
               </NavNote>
             </div>
           )}
 
-          <NavToggle collapsed={collapsed} onToggle={() => setCollapsed(!collapsed)} />
+          <NavToggle
+            collapsed={collapsed}
+            narrow={narrow}
+            onToggle={() => setCollapsed(!collapsed)}
+          />
         </nav>
 
         <div className="flex min-w-0 flex-1 flex-col">
@@ -403,12 +437,29 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
  * hairline, same drop target. The word is still in the DOM, still the button's accessible name,
  * and merely not painted. The 43 is measured rather than intended — the rail's `border-r` is
  * inside its own 68px, and the `<nav>` comment above has the arithmetic.
+ *
+ * **"Nothing else moves" is now literally true of the icon, and it was not when that sentence
+ * was written.** The row used to centre its content while narrow — `justify-center` — which is
+ * the same place to half a pixel *at rest*: the icon's left edge is **24** from the rail's own
+ * edge expanded (12 of `<nav>` padding, 12 of the button's `px-3`) and **23.5** centred in the
+ * collapsed row. But the class flips on the **press** and the width takes 180ms to follow, so
+ * for those 180ms the icon was being centred in a box that was still 183px wide. Sampled every
+ * frame in the shipped window 2026-08-22, with the fix backed out through `element.style` so
+ * both readings come from one build: **24 → 93.5 on the first frame**, then 93.3, 92.6, 91.2,
+ * 88.8 … 24.5, 23.7, settling at 23.5 — a **69.5px** leap outward and a slow slide back, six
+ * icons thrown to the right and reeled in, which is what was reported. The same sweep with the
+ * fix in place reads **24 on all 40 frames**, and 24 on all 45 frames of the expand.
+ *
+ * Left-anchoring costs the half pixel and makes the offset a constant the tween cannot reach.
+ * Nothing about the *target* changed, which was the thing to check: measured collapsed in the
+ * same pass, this button and the toggle are still **43×44**, and `main` still gets its 140px
+ * back (1712 → 1852 at the app's 1920×1080).
  */
 function NavItem({
   label,
   Icon,
   active,
-  collapsed,
+  narrow,
   onSelect,
   dragging,
   drop,
@@ -416,8 +467,11 @@ function NavItem({
   label: string;
   Icon: LucideIcon;
   active: boolean;
-  /** The rail is down to icons, so this entry is a square target with its word in a tooltip. */
-  collapsed: boolean;
+  /**
+   * There is no room for a word: the rail is collapsed, or it is opening and has not arrived.
+   * So this entry is a square target with its word in a tooltip. See `Shell`'s `labels`.
+   */
+  narrow: boolean;
   onSelect: () => void;
   /** A card is in the air somewhere in the window — the only time this entry is anything but
    *  a link. */
@@ -504,21 +558,27 @@ function NavItem({
         // opposite job: it has to be **seen**, by a pointer resting on an icon with nothing
         // beside it, which is the one thing a `title` mid-drag provably cannot do.
         //
-        // `collapsed && label` rather than a conditional spread: `useTooltip` binds nothing for
+        // `narrow && label` rather than a conditional spread: `useTooltip` binds nothing for
         // a falsy content, which is the documented shape and keeps one expression here.
         //
         // **`describes: false`, for the same reason `whenClipped` implies it.** The word is
         // still in the DOM and is still this button's accessible name — only the paint is gone —
         // so an `aria-describedby` at a panel holding that same word would have a screen reader
         // say "Decks, Decks". The hint is for the eye, and only the eye has lost anything.
-        {...tip(collapsed && label, { side: "right", describes: false })}
+        {...tip(narrow && label, { side: "right", describes: false })}
         className={cn(
-          "relative flex w-full items-center rounded-md px-3 py-2.5 text-left text-base",
-          // 44px in both states, and collapsed it has to be said out loud: the label is out of
+          "relative flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-base",
+          // 44px in both states, and narrow it has to be said out loud: the label is out of
           // the flow, so the row would otherwise be its 20px icon plus padding — a target
           // smaller than the one this entry was drawn at, on the state where the reader has
           // *less* to aim at rather than more.
-          collapsed ? "h-11 justify-center" : "gap-3",
+          //
+          // **`gap-3` is unconditional above, and that is what makes the icon hold still.** An
+          // `.sr-only` label is `position: absolute`, so narrow there is exactly one in-flow
+          // child and a gap between one thing and nothing is nothing — while a `justify-center`
+          // in its place would centre that child in a box the width tween is still moving. The
+          // doc comment above has the 24 → 93.5 → 23.5 that cost, sampled per frame.
+          narrow && "h-11",
           "transition-colors duration-150 motion-reduce:transition-none",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
           // The gold indicator: a hairline against the item, not a filled pill. The
@@ -534,13 +594,38 @@ function NavItem({
         )}
       >
         <Icon className="size-5 shrink-0" aria-hidden="true" />
-        {/* **`sr-only` while collapsed, and deliberately not an `aria-label` on the button.**
+        {/* **`sr-only` while there is no room, and deliberately not an `aria-label` on the
+            button.**
             The name is still computed from content, so it is the *same string* in both states —
             which is what keeps every `getByRole("button", { name: "Decks" })` in this repository
             meaning what it has always meant, and what makes it impossible for the two states to
             drift into two different names. An `aria-label` would be a second place the word is
             written, and the first of the two to change would be the one nothing tested. */}
-        <span className={collapsed ? "sr-only" : undefined}>{label}</span>
+        {/* **And it fades in over `DURATION.instant`, arriving after the rail rather than with
+            it.** By the time this class swaps, the width tween is over — so the fade is not the
+            reader being told a word is coming, which 180ms of rail travelling has already said.
+            It is the hard edge taken off text switching on, and that is the whole argument for
+            50ms: at `fast` the softening becomes a second event after the first, and at 0 the
+            words snap. Going the other way there is no fade at all, because `narrow` answers in
+            the same commit as the press — the word is `sr-only` before the rail has moved a
+            pixel, and a word fading out over a closing rail is the overflow this arrangement
+            exists to prevent.
+
+            **A mount animation rather than an opacity transition**, because the two states
+            differ by more than opacity: `.sr-only` is out of the flow, and a transition across
+            that is a transition between two boxes rather than two paints — it would need a frame
+            with the word in the flow at zero opacity before it could run, which is a frame of
+            the rail laid out around a word nobody can see. `motion-reduce:animate-none` is the
+            opt-out, and under it the words simply appear. */}
+        <span
+          className={
+            narrow
+              ? "sr-only"
+              : "animate-in fade-in duration-[var(--duration-instant)] motion-reduce:animate-none"
+          }
+        >
+          {label}
+        </span>
       </button>
       {drop && (
         // Mounted for the life of the sidebar and empty until there is something to say: a
@@ -558,7 +643,7 @@ function NavItem({
         // **Collapsed there is no column for any of that** — 68px is a 44px target and its
         // padding — so `NavNote` floats the sentence beside the rail instead. The role and the
         // mounting rule are untouched, which is the part that must not move.
-        <NavNote role="status" collapsed={collapsed} tone="text-dim">
+        <NavNote role="status" narrow={narrow} tone="text-dim">
           {drop.report}
         </NavNote>
       )}
@@ -593,12 +678,17 @@ function NavItem({
  */
 function NavNote({
   role,
-  collapsed,
+  narrow,
   tone,
   children,
 }: {
   role: "status" | "alert";
-  collapsed: boolean;
+  /**
+   * There is no column to be a line in — the rail is collapsed, or it is opening and has not
+   * arrived. **The tween half matters here too**: laid out inline inside a rail that is still
+   * 68px, this paragraph is the sidebar's labels overflowing again, at four times the width.
+   */
+  narrow: boolean;
   /** The colour this sentence has always had — `text-dim` for a report, `text-destructive` for
    *  a refusal. The box is the same in both cases; the words are not. */
   tone: string;
@@ -612,7 +702,7 @@ function NavNote({
           ? cn(
               "text-xs leading-tight",
               tone,
-              collapsed
+              narrow
                 ? cn(
                     "pointer-events-none absolute top-0 left-full ml-2 w-48",
                     "rounded-md border border-border bg-surface px-3 py-2",
@@ -648,7 +738,22 @@ function NavNote({
  * that reader saying a word that matches nothing. Collapsed there is no visible word at all, so
  * the name is the whole of it and `useTooltip()` is what the eye gets — never a native `title`.
  */
-function NavToggle({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
+function NavToggle({
+  collapsed,
+  narrow,
+  onToggle,
+}: {
+  /**
+   * What the rail is *for*, which is what this control announces. `aria-expanded` and the icon
+   * flip on the press and never wait for a tween: the reader pressed it, and a control that
+   * reports the old state while the thing it controls is visibly moving is a control that
+   * did not take.
+   */
+  collapsed: boolean;
+  /** Whether there is room for the word beside the icon — `Shell`'s `labels`, inverted. */
+  narrow: boolean;
+  onToggle: () => void;
+}) {
   const tip = useTooltip();
   const name = collapsed ? "Expand sidebar" : "Collapse sidebar";
   const Icon = collapsed ? PanelLeftOpen : PanelLeftClose;
@@ -668,20 +773,29 @@ function NavToggle({ collapsed, onToggle }: { collapsed: boolean; onToggle: () =
         // it is the only thing the eye has. `useTooltip` binds nothing for a falsy content, and
         // `describes: false` because this sentence *is* the accessible name above — describing
         // a button with its own name is the name said twice.
-        {...tip(collapsed && name, { side: "right", describes: false })}
+        {...tip(narrow && name, { side: "right", describes: false })}
         className={cn(
-          "flex w-full items-center rounded-md px-3 py-2.5 text-left text-base text-dim",
+          "flex w-full items-center gap-3 rounded-md px-3 py-2.5 text-left text-base text-dim",
           // The entries' own geometry, for the entries' own reason: 44px is what a reader is
           // aiming at everywhere else in this column, and a control that reshapes the whole
-          // window is not the one to make smaller.
-          collapsed ? "h-11 justify-center" : "gap-3",
+          // window is not the one to make smaller. That includes holding its icon still through
+          // the tween — see `NavItem`, where the same two classes are the same fix.
+          narrow && "h-11",
           "transition-colors duration-150 motion-reduce:transition-none",
           "hover:bg-bg/60 hover:text-text",
           "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent",
         )}
       >
         <Icon className="size-5 shrink-0" aria-hidden="true" />
-        {!collapsed && <span>Collapse</span>}
+        {/* Mounted rather than `sr-only`, unlike an entry's label: the button is named by its
+            `aria-label` above, so this word is for the eye alone and there is nothing to keep in
+            the tree for a reader who is not using one. The fade is `NavItem`'s, for `NavItem`'s
+            reason — and it runs on mount here, which is the same moment. */}
+        {!narrow && (
+          <span className="animate-in fade-in duration-[var(--duration-instant)] motion-reduce:animate-none">
+            Collapse
+          </span>
+        )}
       </button>
     </div>
   );
