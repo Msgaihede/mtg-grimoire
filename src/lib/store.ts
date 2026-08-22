@@ -275,6 +275,23 @@ interface AppState {
    * own doc gives. Null is "there is no deck row to write to", and a press then opens the card
    * pane on that printing instead.
    *
+   * **`wish` is the same mechanism one field wider**: the wishlist row a press *repoints*, where
+   * `deck` names the deck row a press *rewrites*. A wish is addressed by its own `id` and nothing
+   * else — `wishlist_set_printing` takes the row, not the grain, so there is no `from` printing to
+   * carry and no five-part address to keep in step. The modal reads it **before** `deck` and
+   * before the fall-through, because a reader who asked about a wish is asking to change that
+   * wish; null is "no wish to repoint", the answer every one of the app's other surfaces gives.
+   * Two of the three are never non-null together today — a wishlist row is not a deck row — but
+   * the order is written down rather than left to that, because the day a surface can be both,
+   * "which write did my press make" must not be answered by whichever branch came first.
+   *
+   * **{@link CardWalkStop} deliberately does *not* carry this field**, and that is what the
+   * required `| null` buys. Stepping the walk re-opens the modal from a stop, so a stepped
+   * request has `wish: null` written at the call site — the reader asked about wish A, and
+   * arrowing to card B must not repoint A onto a card it was never for. Making the field optional
+   * would lose exactly that: the guarantee is that every construction of this type has to say
+   * `null` out loud, so a new one cannot inherit a target it never thought about.
+   *
    * **`cardId` is the printing the reader asked *from*, and it does two things a deck slot used
    * to do alone.** It is the wall's "you are here" mark — the tile the question was asked about,
    * which on a deck row is the printing that row plays and on every other surface is the row the
@@ -369,12 +386,26 @@ export interface PrintingsRequest {
   name: string;
   /** The deck row a press writes to, or `null` where there is none. */
   deck: PaneDeckContext | null;
+  /**
+   * The wishlist row a press *repoints* onto the printing pressed, or `null` where there is none.
+   *
+   * The id alone, because `wishlist_set_printing` is addressed by the row: a wish's printing is
+   * one column of one row, and there is no grain to name. **Required rather than optional**, and
+   * `CardWalkStop` deliberately does not carry it — see {@link AppState.printingsRequest}.
+   */
+  wish: { id: number } | null;
 }
 
 /**
- * One stop on {@link AppState.cardWalk}: **exactly the shape {@link AppState.openAllPrintings}
- * takes**, so a step is one call and nothing between the drawing surface and the modal has to
- * reassemble a request.
+ * One stop on {@link AppState.cardWalk}: **very nearly the shape
+ * {@link AppState.openAllPrintings} takes**, so a step is one call and nothing between the
+ * drawing surface and the modal has to reassemble a request.
+ *
+ * **"Very nearly" is one field, and the gap is the feature.** A stop carries no `wish`, so
+ * stepping spells `wish: null` at the call site and the modal's repoint target *clears*: the
+ * reader asked about wish A, and arrowing to card B must not rewrite A onto a printing it is not
+ * for. A deck slot travels because a stop on a deck walk *is* a deck row and the next row is the
+ * next row's; a wish is the one thing the reader named that the walk knows nothing about.
  *
  * `deck` carries the same meaning it does on {@link AppState.printingsRequest} — the row a press
  * inside the modal *writes to*, or `null` on a surface whose rows are not deck rows. It is what

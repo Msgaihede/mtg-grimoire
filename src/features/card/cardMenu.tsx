@@ -292,6 +292,11 @@ function printingsItem(target: CardMenuTarget, deps: CardMenuDeps): MenuAction {
         oracleId,
         name: target.name,
         deck: deps.printingsDeck ?? null,
+        // A menu row never repoints a wish: the wishlist's own controls are where a wish names
+        // itself, and a right-click on a card is a question about the cardboard. Spelled out
+        // because the field is required — see `PrintingsRequest`, where the `null` every
+        // construction site has to write is the whole guarantee.
+        wish: null,
       }),
   };
 }

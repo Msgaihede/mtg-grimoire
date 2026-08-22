@@ -33,9 +33,16 @@
  *
  * ## What a press means
  *
- * Two answers, decided by whether the surface that opened this named a deck slot
- * (`printingsRequest.deck`):
+ * Three answers, decided by what the surface that opened this named — a wishlist row
+ * (`printingsRequest.wish`), a deck slot (`printingsRequest.deck`), or neither. They are read in
+ * that order, and the fall-through is the last of them:
  *
+ * * **From a wishlist row** — the press *repoints the wish* onto that printing, through
+ *   `wishlistSetPrinting`, and the modal closes on success. The same gesture as the swap below and
+ *   for the same reason; the write is a different one only because a wish is addressed by its own
+ *   row rather than by a deck card's five-part grain. A repoint that collides with another wish in
+ *   the same folder **merges** rather than failing, which is the backend's rule and not something
+ *   this surface can see or has to.
  * * **From a deck row** — the press *is* the swap, through the same `useSwapFromPane` the card
  *   pane presses, and the modal closes on success. Click-commits rather than select-then-confirm
  *   for `PrintingRow`'s reason: the tile is the thing the reader is pointing at. The cost the
@@ -71,7 +78,7 @@
  * sixth, with the wall's ring, the card pane and this modal all naming one card.
  */
 import { useCallback, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useContextMenu } from "@/components/menu/useContextMenu";
 import { useTooltip } from "@/components/tooltip/useTooltip";
@@ -412,7 +419,23 @@ export function AllPrintingsDialog() {
        * `caretWalk.ts`.
        */
       keepCaretForCard(stop.cardId);
-      openAllPrintings(stop);
+      /**
+       * **`wish: null` is the step's own decision, not a shape mismatch to be papered over.**
+       *
+       * A `CardWalkStop` carries no wish and deliberately never will, so stepping *clears* the
+       * row a press would repoint: the reader asked about wish A, and arrowing to card B and
+       * pressing a printing of B must not rewrite A onto a card it was never for. A press after
+       * a step therefore falls through to the plain answer — the card pane on that printing.
+       *
+       * The field is required on `PrintingsRequest` precisely so this line has to say it. Made
+       * optional it would read identically and mean the opposite by omission, which is a
+       * silent write to somebody's wishlist.
+       *
+       * `deck` travels, and the asymmetry is right: a stop on a deck walk *is* a deck row, so the
+       * next row is the next row's slot. A wish is the one thing the reader named that the list
+       * behind the scrim knows nothing about.
+       */
+      openAllPrintings({ ...stop, wish: null });
       if (stop.deck === null) selectCard(stop.cardId);
       else openCardFromDeck(stop.deck);
     },
@@ -565,7 +588,8 @@ function Body({
   onDone,
 }: {
   request: PrintingsRequest;
-  /** Close the modal — pressed on a successful swap, and on a press that opens the card pane. */
+  /** Close the modal — pressed on a successful swap or repoint, and on a press that opens the
+   *  card pane. */
   onDone: () => void;
 }) {
   const [filter, setFilter] = useState<PrintingFilter>(EMPTY_PRINTING_FILTER);
@@ -583,6 +607,16 @@ function Body({
   const { marketplace } = useMarketplace();
   const viewCard = useAppStore((s) => s.setSelectedCardId);
   const tip = useTooltip();
+  const queryClient = useQueryClient();
+  /**
+   * The wishlist row a press repoints, or `null` on every surface that names none — which is
+   * all of them but the wishlist's own rows.
+   *
+   * Named once because it is both the discriminant of `onSelect`'s first branch and a dependency
+   * of it, and the branch and the dependency have to be the same expression or the callback
+   * decides with one value and is rebuilt on another.
+   */
+  const wish = request.wish;
 
   const query = useQuery({
     // The page size is part of the key, and deliberately: the card pane reads the same card's
@@ -628,8 +662,47 @@ function Body({
    * rewrites the wrong one and reports success.
    */
   const { swap, deckGone } = useSwapFromPane(request.deck, request.deck?.variant);
-  const swapping = swap.isPending;
+
+  /**
+   * The other write a press can be: the **wish** this modal was opened about, repointed onto the
+   * printing pressed.
+   *
+   * Defined here rather than borrowed, unlike the swap above, because there is nothing to borrow
+   * — a wish is addressed by its own row id, so this mutation is `wishlistSetPrinting` and two
+   * invalidations and has no editor's refusal rule to share. `["wishlist"]` for the list itself
+   * and `["cards", "search"]` because every search row draws `wishlisted`; the collection and the
+   * decks are untouched, since a wish is a copy the reader does not have and moves no figure in
+   * either. The same pair `useCardMenuDeps`' wishlist add settles, for the same two reasons.
+   *
+   * **The answer is deliberately not read.** `wishlist_set_printing` *merges* when the printing
+   * chosen collides with another wish already in the same folder, so the `EntryChange` can name a
+   * different row than the one asked about — the destination's. Nothing here patches a cache off
+   * it, and nothing here may: the modal closes on success either way, and the invalidation above
+   * is what makes the list right whichever row survived.
+   */
+  const repoint = useMutation({
+    // The wish's id rides in the variables rather than being closed over, so the mutation cannot
+    // be left holding the id of a wish the request has since moved off.
+    mutationFn: ({ id, cardId }: { id: number; cardId: string }) =>
+      ipc.wishlistSetPrinting(id, cardId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
+      void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
+      onDone();
+    },
+  });
+
+  /**
+   * **One flag for both writes**, because the wall is fenced by *a* write being in flight rather
+   * than by which one: the fence is drawn around the whole wall (see the wrapper at the foot of
+   * this file), and a second flag would be a second thing to remember to widen.
+   *
+   * It was `swapping` while a swap was the only write this surface could make. The name moved
+   * with the meaning rather than staying and quietly covering a repoint too.
+   */
+  const writing = swap.isPending || repoint.isPending;
   const startSwap = swap.mutate;
+  const startRepoint = repoint.mutate;
 
   const onSelect = useCallback(
     (cardId: string) => {
@@ -638,7 +711,24 @@ function Body({
       // says so and this refuses it — including from the keyboard, which `pointer-events` cannot
       // reach. Not a double-click guard alone: every tile sends the same `from` printing, and the
       // write in flight is in the middle of moving it.
-      if (swapping) return;
+      if (writing) return;
+      /**
+       * **A wish, and it is read before the deck slot and before the fall-through.**
+       *
+       * A reader who opened this from a wishlist row is asking to change *that wish's* printing,
+       * so that is what the press does; the modal closes on the mutation's own success rather
+       * than here, exactly as the swap below does, so a refusal leaves it open with the sentence
+       * beside the wall.
+       *
+       * The two targets cannot both be set from any surface the app draws today — a wishlist row
+       * is not a deck row — so the order costs nothing now and is written down anyway: the day
+       * one surface can name both, "which write did my press make" must be a decision somebody
+       * made rather than whichever branch happened to be first.
+       */
+      if (wish) {
+        startRepoint({ id: wish.id, cardId });
+        return;
+      }
       /**
        * No deck to write to — so the press is a *look*.
        *
@@ -675,7 +765,7 @@ function Body({
         { onSuccess: () => onDone() },
       );
     },
-    [swapping, request.deck, deckGone, startSwap, viewCard, onDone],
+    [writing, wish, startRepoint, request.deck, deckGone, startSwap, viewCard, onDone],
   );
 
   const { menu, menuKey } = useContextMenu();
@@ -796,6 +886,17 @@ function Body({
           Could not use that printing — {ipcError(swap.error)}
         </p>
       )}
+      {/* And a refused **repoint**, in the same place and for the same reason. Its own sentence
+          rather than the one above with a wider subject: the two writes are refused by different
+          things — a deck another view deleted, a wish another view removed — and "could not use
+          that printing" over a wishlist would name the half of the failure the reader can do
+          nothing about. Only one of the two can be on screen, since a request names at most one
+          target. */}
+      {repoint.isError && (
+        <p role="alert" className="shrink-0 text-xs text-destructive">
+          Could not repoint that wish — {ipcError(repoint.error)}
+        </p>
+      )}
       {/* And a refused **menu** write, which is a different thing: an add the reader made from a
           panel that had already closed by the time the backend answered. Every surface mounting
           `useCardMenuDeps` owes this, or a card silently fails to be filed. */}
@@ -816,15 +917,16 @@ function Body({
       )}
 
       {rows.length > 0 && (
-        // Inert while a swap is in flight, which is the pane's own rule: the handler refuses the
-        // press *and* the surface says so. `CardGrid` offers no per-tile disabled hook and this
-        // file must not invent one, so the fence is drawn around the whole wall — one write is
-        // moving the slot every tile on it would send.
+        // Inert while a write is in flight — a swap or a repoint, since the wall is fenced by
+        // there being one rather than by which — which is the pane's own rule: the handler
+        // refuses the press *and* the surface says so. `CardGrid` offers no per-tile disabled
+        // hook and this file must not invent one, so the fence is drawn around the whole wall:
+        // one write is moving the target every tile on it would send.
         <div
-          aria-busy={swapping || undefined}
+          aria-busy={writing || undefined}
           className={cn(
             "flex min-h-0 flex-1 flex-col",
-            swapping && "pointer-events-none opacity-60",
+            writing && "pointer-events-none opacity-60",
           )}
         >
           <CardGrid

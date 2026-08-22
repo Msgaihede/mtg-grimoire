@@ -117,6 +117,11 @@ const deckGet = vi.fn();
 const deckSwapPrinting = vi.fn();
 const collectionAdd = vi.fn();
 const wishlistAdd = vi.fn();
+/**
+ * The other write a press can be: the wish this modal was opened about, repointed onto the tile
+ * that was pressed. `deckSwapPrinting`'s twin one surface over — see the `wish` tests below.
+ */
+const wishlistSetPrinting = vi.fn();
 
 /**
  * Every command the modal's tree can reach, wrapped in an arrow apiece.
@@ -148,6 +153,7 @@ vi.mock("@/lib/ipc", async (original) => ({
     ) => deckSwapPrinting(deckId, from, to, categoryId, variant, finish),
     collectionAdd: (input: unknown) => collectionAdd(input),
     wishlistAdd: (input: unknown) => wishlistAdd(input),
+    wishlistSetPrinting: (id: number, cardId: string | null) => wishlistSetPrinting(id, cardId),
   },
 }));
 
@@ -190,6 +196,11 @@ beforeEach(() => {
   deckSwapPrinting.mockReset().mockResolvedValue({ folded: false, quantity: 1 });
   collectionAdd.mockReset();
   wishlistAdd.mockReset();
+  // The shape `wishlist_set_printing` answers: an `EntryChange`, whose `id` is the row that now
+  // holds the quantity — **not necessarily the row that was asked about**, since a repoint onto a
+  // printing another wish in the same folder already names merges the two. The modal closes
+  // either way and reads none of it; it is here so the mutation resolves rather than `undefined`.
+  wishlistSetPrinting.mockReset().mockResolvedValue({ id: 7, quantity: 1, removed: false });
   // The modal is driven by one store field and nothing else, so the store is the fixture.
   useAppStore.setState(useAppStore.getInitialState());
 });
@@ -225,10 +236,28 @@ function renderDialog(): ReactElement {
   return tree;
 }
 
-/** What a card surface's menu row does: one store write, and nothing else moves. */
-function open(request: PrintingsRequest): void {
-  act(() => useAppStore.getState().openAllPrintings(request));
+/**
+ * What a card surface's menu row does: one store write, and nothing else moves.
+ *
+ * `wish` is the one field a caller may leave out here, and only here: the *store's* field is
+ * required precisely so that every production construction site has to say `null` out loud, and
+ * this file has eighteen opens of which two are about a wish. Defaulted in the helper rather than
+ * written eighteen times, so the field appears in a test only where it is the subject of one.
+ */
+function open(request: Omit<PrintingsRequest, "wish"> & { wish?: PrintingsRequest["wish"] }) {
+  act(() => useAppStore.getState().openAllPrintings({ ...request, wish: request.wish ?? null }));
 }
+
+/**
+ * What a walk **stop** becomes when the modal steps onto it: the stop's own four fields, and
+ * `wish: null`.
+ *
+ * The `null` is the assertion rather than boilerplate. `CardWalkStop` deliberately carries no
+ * wish, so a step clears whatever wish the modal was opened about — the reader asked about wish
+ * A, and arrowing to card B must not repoint A. Every step assertion below reads through this,
+ * so the day the stop shape grows the field these all go red at once.
+ */
+const stepped = (stop: CardWalkStop): PrintingsRequest => ({ ...stop, wish: null });
 
 /**
  * An open deck editor, publishing {@link WALK}.
@@ -468,6 +497,78 @@ describe("AllPrintingsDialog", () => {
   });
 
   /**
+   * **The third thing a press can be: repointing a wish.**
+   *
+   * `request.wish` is `request.deck` one field over — the same mechanism, addressed at a
+   * wishlist row instead of a deck row — and it is read *first*, before the deck branch and
+   * before the fall-through that opens the card pane. A wish is what the reader was asking
+   * about, so it is what the press answers.
+   */
+  it("repoints the wish and closes when the modal was opened from a wishlist row", async () => {
+    cardPrintings.mockResolvedValue(page([p("a", "lea"), p("b", "leb")]));
+    const user = userEvent.setup();
+    renderDialog();
+    open({ cardId: "card-1", oracleId: "o1", name: "Sol Ring", deck: null, wish: { id: 7 } });
+
+    await user.click(await screen.findByRole("button", { name: /LEB/ }));
+
+    // The wish's id and the printing pressed, and nothing about the printing it was on: the
+    // backend addresses the row, not the grain, so there is no `from` to send.
+    await waitFor(() => expect(wishlistSetPrinting).toHaveBeenCalledWith(7, "b"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    // And no deck was touched on the way through — the wish branch is taken *instead of*, not
+    // as well as, and a request carrying both would otherwise write twice.
+    expect(deckSwapPrinting).not.toHaveBeenCalled();
+  });
+
+  /** The same sentence beside the wall a refused swap draws, in the same place, and still open. */
+  it("keeps the modal open and says why when a repoint is refused", async () => {
+    cardPrintings.mockResolvedValue(page([p("a", "lea"), p("b", "leb")]));
+    wishlistSetPrinting.mockRejectedValue(new Error("that wish is gone"));
+    const user = userEvent.setup();
+    renderDialog();
+    open({ cardId: "card-1", oracleId: "o1", name: "Sol Ring", deck: null, wish: { id: 7 } });
+
+    await user.click(await screen.findByRole("button", { name: /LEB/ }));
+
+    expect(await screen.findByText(/that wish is gone/)).toBeVisible();
+    expect(screen.getByRole("dialog")).toBeInTheDocument();
+    // Not the card pane either: a refusal is not a fall-through, or a reader would be moved off
+    // the wall by the press that failed.
+    expect(useAppStore.getState().selectedCardId).toBeNull();
+  });
+
+  /**
+   * **After a step, a press no longer repoints — and that is the design rather than a gap.**
+   *
+   * `CardWalkStop` deliberately does not carry `wish`, so `step` re-opens the modal with
+   * `wish: null` and the target clears. The reader asked about wish A; arrowing to card B and
+   * pressing a printing of B must not silently rewrite A onto a card it is not for. What the
+   * press falls through to is the plain no-target answer — the card pane on that printing.
+   */
+  it("no longer repoints the wish once the walk has stepped to another card", async () => {
+    cardPrintings.mockResolvedValue(page([p("a", "lea"), p("b", "leb")]));
+    const user = userEvent.setup();
+    renderDialog();
+    withListWalk();
+    open({ ...LIST_WALK[1], wish: { id: 7 } });
+    const dialog = await screen.findByRole("dialog", { name: /Sol Ring/ });
+
+    await waitFor(() => expect(dialog).toHaveFocus());
+    await user.keyboard("{ArrowRight}");
+    await screen.findByRole("dialog", { name: /Forest/ });
+    // The field really did clear, and this is the half the press test below cannot show on its
+    // own: a press that wrote nothing would also pass if the tile had simply not been found.
+    expect(useAppStore.getState().printingsRequest).toEqual(stepped(LIST_WALK[2]));
+
+    await user.click(await screen.findByRole("button", { name: /LEB/ }));
+
+    expect(wishlistSetPrinting).not.toHaveBeenCalled();
+    await waitFor(() => expect(useAppStore.getState().selectedCardId).toBe("b"));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  });
+
+  /**
    * Inside the list, the row would re-ask the question already on screen.
    *
    * The fence is an **oracle** comparison rather than a printing one, which is what this drives:
@@ -528,7 +629,7 @@ describe("AllPrintingsDialog", () => {
     await waitFor(() => expect(dialog).toHaveFocus());
     await user.keyboard("{ArrowRight}");
 
-    await waitFor(() => expect(useAppStore.getState().printingsRequest).toEqual(WALK[2]));
+    await waitFor(() => expect(useAppStore.getState().printingsRequest).toEqual(stepped(WALK[2])));
     expect(useAppStore.getState().paneDeckContext).toEqual(WALK[2].deck);
     expect(useAppStore.getState().selectedCardId).toBe(WALK[2].cardId);
     // The modal is a window onto the deck, so it stays open and re-captions itself.
@@ -548,7 +649,7 @@ describe("AllPrintingsDialog", () => {
       await screen.findByRole("button", { name: "Previous card in the deck, Lightning Bolt" }),
     );
 
-    await waitFor(() => expect(useAppStore.getState().printingsRequest).toEqual(WALK[0]));
+    await waitFor(() => expect(useAppStore.getState().printingsRequest).toEqual(stepped(WALK[0])));
     expect(useAppStore.getState().paneDeckContext).toEqual(WALK[0].deck);
     expect(useAppStore.getState().selectedCardId).toBe(WALK[0].cardId);
   });
@@ -643,7 +744,7 @@ describe("AllPrintingsDialog", () => {
     await user.keyboard("{ArrowUp}");
     await user.keyboard("{ArrowDown}");
 
-    expect(useAppStore.getState().printingsRequest).toEqual(WALK[1]);
+    expect(useAppStore.getState().printingsRequest).toEqual(stepped(WALK[1]));
     expect(useAppStore.getState().paneDeckContext).toBeNull();
   });
 
@@ -673,7 +774,7 @@ describe("AllPrintingsDialog", () => {
     await user.keyboard("{ArrowRight}");
     await user.keyboard("{ArrowLeft}");
 
-    expect(useAppStore.getState().printingsRequest).toEqual(WALK[1]);
+    expect(useAppStore.getState().printingsRequest).toEqual(stepped(WALK[1]));
   });
 
   /**
@@ -729,7 +830,9 @@ describe("AllPrintingsDialog", () => {
     await waitFor(() => expect(dialog).toHaveFocus());
     await user.keyboard("{ArrowRight}");
 
-    await waitFor(() => expect(useAppStore.getState().printingsRequest).toEqual(LIST_WALK[2]));
+    await waitFor(() =>
+      expect(useAppStore.getState().printingsRequest).toEqual(stepped(LIST_WALK[2])),
+    );
     // **The selection really follows** — this is the half a walk is for. Close the modal here and
     // the reader is standing on the card they walked to, not on the one they started from.
     expect(useAppStore.getState().selectedCardId).toBe("forest-1");
@@ -751,7 +854,9 @@ describe("AllPrintingsDialog", () => {
       }),
     );
 
-    await waitFor(() => expect(useAppStore.getState().printingsRequest).toEqual(LIST_WALK[0]));
+    await waitFor(() =>
+      expect(useAppStore.getState().printingsRequest).toEqual(stepped(LIST_WALK[0])),
+    );
     expect(useAppStore.getState().selectedCardId).toBe("bolt-1");
     expect(useAppStore.getState().paneDeckContext).toBeNull();
   });
