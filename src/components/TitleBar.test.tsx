@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { TitleBar } from "@/components/TitleBar";
+import { LAYER } from "@/lib/layers";
 import { SNAP_BUTTON_ID, SNAP_HOVER_EVENTS } from "@/lib/window";
 import { emitFake, resetListeners } from "../../.storybook/fake/event";
 import { resetWindow, setMaximized, windowCalls } from "../../.storybook/fake/window";
@@ -128,6 +129,29 @@ describe("TitleBar", () => {
     for (const name of ["Minimize", "Maximize", "Close"]) {
       expect(screen.getByRole("button", { name })).not.toHaveAttribute("data-tauri-drag-region");
     }
+  });
+
+  /**
+   * A drag region nothing can reach is not a drag region, which is why this sits beside the
+   * test above rather than among the layout assertions.
+   *
+   * `SyncProgress`'s overlay and `Dialog`'s scrim are both `fixed inset-0`, and a positioned
+   * element paints over non-positioned content in the same stacking context whatever the
+   * numbers say — so this row, a flex item at `z-auto`, was covered by both. It shipped that
+   * way: driven in the window on 2026-08-22, a first launch drew **no caption at all** for the
+   * length of the sync and `elementFromPoint` over Close answered the overlay, leaving Alt+F4
+   * as the only way out of the app.
+   *
+   * Asserted against the constant rather than the string, because the number is the rung's to
+   * choose and `layers.test.ts` is what holds the rung above `gate`. Between the two files the
+   * claim is complete; neither half says it alone. **jsdom paints nothing**, so a class is the
+   * whole of what the suite can check here — the pass that found this was a hit test in the
+   * real window, and that is what would have to be re-run to prove it again.
+   */
+  it("draws the caption above every surface the app can cover it with", () => {
+    const { container } = render(<TitleBar />);
+
+    expect(container.firstElementChild).toHaveClass(LAYER.caption);
   });
 
   /**
