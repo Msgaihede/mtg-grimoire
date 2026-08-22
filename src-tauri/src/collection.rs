@@ -862,6 +862,20 @@ pub struct CollectionRow {
     /// `foil` entry on a Surge Foil printing is a Surge Foil and a `nonfoil` one on the same
     /// printing is not. `src/lib/treatment.ts` owns the naming.
     pub promo_types: Option<String>,
+    /// JSON, verbatim: this printing's `legalities` object, the same blob
+    /// [`crate::deck::DeckCard::legalities`] carries and for the same reason — a fact, read by
+    /// TypeScript, never a verdict decided here.
+    ///
+    /// **It rides here for the Arena export filter and nothing else on this screen.** The
+    /// collection view draws none of it; `src/features/transfer/export/arena.ts` is the one
+    /// reader, and the export's paged sweep goes through this command like any other list. Its
+    /// cost is on the record because it is the largest string on the row by some way — 483
+    /// bytes on average and 528 at most, over the 116,712-printing corpus of 2026-08-22, where
+    /// `promo_types` beside it averages 23. The blob rather than `cards.legal_mask`, which
+    /// would have cost 8: bit positions are stored data this half of the app owns
+    /// ([`crate::legalities`]), and a copy of them in TypeScript would be a second place for
+    /// the frozen order to drift. Key *names* are Scryfall's public vocabulary and cannot.
+    pub legalities: Option<String>,
     /// How many decks this row's copies are spread across — `None` unless the collection is
     /// derived from them, because the hand-kept table has no such fact.
     ///
@@ -1130,7 +1144,7 @@ pub fn list_entries(conn: &Connection, q: &CollectionQuery) -> Result<Collection
                 e.purchase_price, e.purchase_currency, e.acquired_at, e.acquisition_source,
                 e.serial_number, e.altered, e.signed, e.proxy, e.misprint, e.grading,
                 e.tags, e.notes, e.needs_review, e.updated_at, c.oracle_id, c.promo_types,
-                {deck_count} AS deck_count
+                c.legalities, {deck_count} AS deck_count
          FROM {from} WHERE {where_sql} ORDER BY {order} LIMIT ? OFFSET ?",
         price = crate::sorting::price_expr(q.marketplace, ENTRY_FINISH),
         order = crate::sorting::order_by(
@@ -1187,9 +1201,11 @@ pub fn list_entries(conn: &Connection, q: &CollectionQuery) -> Result<Collection
                     // nullable TEXT, so an insertion above would have swapped two fields that
                     // each still held a plausible string.
                     promo_types: r.get(31)?,
-                    // 32, and the count above starts at `e.id` = 0: thirty-two columns, so
-                    // the appended one is the thirty-third position.
-                    deck_count: r.get(32)?,
+                    // 32, appended for the third time and for the same reason.
+                    legalities: r.get(32)?,
+                    // 33, the fourth. The count starts at `e.id` = 0, so with
+                    // thirty-four columns the last one is index thirty-three.
+                    deck_count: r.get(33)?,
                 })
             },
         )
@@ -1365,6 +1381,45 @@ mod tests {
 
         // A printing with no treatment answers `None` rather than an empty array.
         assert_eq!(of("bolt-lea", "nonfoil").promo_types, None);
+    }
+
+    /// **A collection row carries the printing's `legalities`, at the index the appended
+    /// column put it at.**
+    ///
+    /// Issue #192: the Arena export offers to leave out cards that are not in MTG Arena, and
+    /// this blob is the only fact that answers it — `src/features/transfer/export/arena.ts`
+    /// reads the key *names*, never a bit position. The verdict is TypeScript's; the column
+    /// arriving is this test's.
+    ///
+    /// Appended after `c.promo_types` on that field's own argument, and worth an assertion for
+    /// that field's own reason: it is the **third** nullable TEXT column on the end of the
+    /// list, so a fourth inserted above rather than appended would swap two fields that each
+    /// still held a plausible string. Both neighbours are asserted here for exactly that.
+    #[test]
+    fn a_collection_row_carries_the_printings_legalities() {
+        let conn = seeded();
+        conn.execute(
+            "UPDATE cards SET legalities = '{\"timeless\":\"legal\"}' WHERE id = 'bolt-lea'",
+            [],
+        )
+        .unwrap();
+        add_entry(&conn, &input("bolt-lea", "nonfoil", 1)).unwrap();
+        add_entry(&conn, &input("bolt-jp", "nonfoil", 1)).unwrap();
+
+        let rows = list_entries(&conn, &CollectionQuery::default())
+            .unwrap()
+            .items;
+        let of = |card: &str| rows.iter().find(|r| r.card_id == card).unwrap();
+
+        assert_eq!(
+            of("bolt-lea").legalities.as_deref(),
+            Some(r#"{"timeless":"legal"}"#)
+        );
+        // The two nullable TEXT neighbours an insertion would have displaced.
+        assert_eq!(of("bolt-lea").oracle_id.as_deref(), Some("o1"));
+        assert_eq!(of("bolt-lea").promo_types, None);
+        // A printing the seed gave no legalities answers `None`, not an empty object.
+        assert_eq!(of("bolt-jp").legalities, None);
     }
 
     /// One line of a bulk import, in the shape [`commit_import`]'s tests use it.
@@ -2999,6 +3054,7 @@ mod tests {
             // From the card, not the entry — and the entry above owns the plain copy, which is
             // the pair the two fields exist to tell apart.
             promo_types: Some(r#"["surgefoil"]"#.into()),
+            legalities: Some(r#"{"timeless":"legal","standard":"not_legal"}"#.into()),
             // The hand-kept collection's answer, and the one every row of this fixture is:
             // the figure exists only while the rows come from the decks.
             deck_count: None,
@@ -3019,6 +3075,7 @@ mod tests {
                 "signed": true, "proxy": false, "misprint": false, "grading": null,
                 "tags": "[]", "notes": null, "needsReview": null,
                 "updatedAt": 1800000000, "promoTypes": "[\"surgefoil\"]",
+                "legalities": "{\"timeless\":\"legal\",\"standard\":\"not_legal\"}",
                 "deckCount": null
             })
         );

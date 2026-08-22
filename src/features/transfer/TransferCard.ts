@@ -36,6 +36,19 @@ export interface TransferCard {
   rarity: string | null;
   typeLine: string | null;
   unitPrice: number | null;
+  /**
+   * This printing's `legalities` blob, JSON, verbatim — 23 keys and growing.
+   *
+   * **Not a field**: it is never written to a file and never draws a checkbox in the field
+   * row, which is why it is absent from `fields.ts`. It is the one fact the *Arena filter*
+   * reads (`export/arena.ts`), and all three surfaces answer it — `cards.legalities` is a
+   * fact about the printing, so a collection row and a wishlist row carry it as readily as a
+   * deck card does.
+   *
+   * `null` is the orphan case every other field here spells that way, and `arena.ts` says what
+   * the filter does with one.
+   */
+  legalities: string | null;
 }
 
 /** Every field a surface does not have, in one object to spread. */
@@ -45,7 +58,7 @@ const NOTHING = {
   condition: null, tradelistQuantity: null, purchasePrice: null, purchaseCurrency: null,
   acquiredAt: null, acquisitionSource: null, serialNumber: null, grading: null,
   altered: null, signed: null, proxy: null, misprint: null, tags: null, notes: null,
-  setName: null, rarity: null, typeLine: null, unitPrice: null,
+  setName: null, rarity: null, typeLine: null, unitPrice: null, legalities: null,
 } satisfies Omit<TransferCard, "name" | "quantity">;
 
 /**
@@ -75,6 +88,7 @@ export function fromDeckCard(card: DeckCard): TransferCard {
     rarity: card.rarity ?? null,
     typeLine: card.typeLine ?? null,
     unitPrice: card.unitPrice ?? null,
+    legalities: card.legalities,
   };
 }
 
@@ -105,6 +119,7 @@ export function fromCollectionRow(row: CollectionRow): TransferCard {
     rarity: row.rarity,
     typeLine: row.typeLine,
     unitPrice: row.unitPrice,
+    legalities: row.legalities,
   };
 }
 
@@ -121,5 +136,6 @@ export function fromWishRow(row: WishRow): TransferCard {
     rarity: row.rarity,
     typeLine: row.typeLine,
     unitPrice: row.unitPrice,
+    legalities: row.legalities,
   };
 }

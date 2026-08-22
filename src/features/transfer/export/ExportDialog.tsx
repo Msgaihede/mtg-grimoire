@@ -94,6 +94,7 @@ import {
 } from "../fields";
 import type { TransferSurface } from "../fields";
 import type { TransferCard } from "../TransferCard";
+import { isInArena, notInArenaCopies } from "./arena";
 import {
   EXPORT_FORMATS,
   EXPORT_FORMAT_EXTENSION,
@@ -212,7 +213,7 @@ function Body({
    *  `exportPrefs`, keyed by `surface` so a deck export is never dragged into the collection's. */
   const prefs = useAppStore((s) => s.exportPrefs[surface]);
   const setPrefs = useAppStore((s) => s.setExportPrefs);
-  const { format, fields } = prefs;
+  const { format, fields, arenaOnly } = prefs;
   /** The fields this format and this surface share — the whole of what decides which checkboxes
    *  draw, `ALWAYS` excluded (see the row below). */
   const available = useMemo(() => availableFields(format, surface), [format, surface]);
@@ -222,28 +223,64 @@ function Body({
    *  would silently drop most of it anyway. */
   const chooseFormat = useCallback(
     (next: ExportFormat) => {
-      setPrefs(surface, { format: next, fields: defaultFields(next, surface) });
+      // `arenaOnly` is spread through rather than re-derived: a field set chosen for CSV means
+      // nothing to Arena, but "leave out what Arena does not have" is the same answer whatever
+      // format the reader passed through on the way back.
+      setPrefs(surface, { ...prefs, format: next, fields: defaultFields(next, surface) });
       // The preview redraws for the new format; the clipboard does not. Left standing,
       // "Copied." would sit beside text it is no longer an honest claim about.
       setCopied(false);
     },
-    [setPrefs, surface],
+    [prefs, setPrefs, surface],
   );
 
   const toggleField = useCallback(
     (id: TransferFieldId) => {
       const on = fields.includes(id);
-      setPrefs(surface, { format, fields: on ? fields.filter((f) => f !== id) : [...fields, id] });
+      setPrefs(surface, {
+        ...prefs,
+        fields: on ? fields.filter((f) => f !== id) : [...fields, id],
+      });
       // The preview redraws; the clipboard does not — same claim, same reason as the format row.
       setCopied(false);
     },
-    [fields, format, setPrefs, surface],
+    [fields, prefs, setPrefs, surface],
   );
 
-  const text = useMemo(() => formatExport(cards, format, fields), [cards, format, fields]);
+  const toggleArenaOnly = useCallback(() => {
+    setPrefs(surface, { ...prefs, arenaOnly: !prefs.arenaOnly });
+    // Same claim, same reason: the preview redraws, the clipboard does not.
+    setCopied(false);
+  }, [prefs, setPrefs, surface]);
+
+  /**
+   * The Arena filter, applied **before** the writer rather than inside it.
+   *
+   * `formatExport` stays `(cards, format, fields) => string` — `export/`'s whole boundary, and
+   * the reason `decklists.test.ts` can drive it — so which cards go in is the dialog's question
+   * and never a fourth argument to the writer. It is also what keeps `omittedCount` honest: it
+   * counts what *this format* leaves out of the list it is given, and giving it the filtered
+   * list is what stops a card that is both outside Arena and in a switched-off pile being
+   * reported by both lines at once.
+   *
+   * Fenced on the format, not just on the flag. The checkbox only draws for `arena`, but a
+   * reader who ticked it and then moved to CSV must not find their CSV quietly short of rows.
+   */
+  const exported = useMemo(
+    () => (format === "arena" && arenaOnly ? cards.filter(isInArena) : cards),
+    [arenaOnly, cards, format],
+  );
+
+  const text = useMemo(() => formatExport(exported, format, fields), [exported, format, fields]);
   /** Copies this format will not write — see `omittedCount`. Recomputed with the format, because
    *  it is a claim about the text on screen and goes stale the moment that changes. */
-  const omitted = useMemo(() => omittedCount(cards, format), [cards, format]);
+  const omitted = useMemo(() => omittedCount(exported, format), [exported, format]);
+  /** Copies the Arena filter is holding back, or 0 when it is not the one holding anything.
+   *  Counted over `cards` rather than `exported`, which is the list it has already emptied. */
+  const notInArena = useMemo(
+    () => (format === "arena" && arenaOnly ? notInArenaCopies(cards) : 0),
+    [arenaOnly, cards, format],
+  );
   /**
    * Lines of the **file**, which is what the toggle names while the preview is shut.
    *
@@ -357,6 +394,39 @@ function Body({
               </label>
             ))}
         </fieldset>
+      )}
+
+      {/* The Arena filter — issue #192. **Drawn only for `arena`**, which is the field row's own
+          rule reached from the other side: a format offers what it has a channel for, and "leave
+          out what Arena does not have" is a question no other format can be asked. It is not a
+          *field* and so is not in `fields.ts` — it changes which cards are written, never what a
+          line says about one — which is why it sits under the format radios in a row of its own
+          rather than in the `Fields` fieldset, beside the scope checkbox it is shaped after. */}
+      {format === "arena" && (
+        <label className="flex w-fit items-center gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={arenaOnly}
+            onChange={toggleArenaOnly}
+            className={cn("size-4 accent-accent", FOCUS)}
+          />
+          Only cards MTG Arena has
+        </label>
+      )}
+
+      {/* The filter's own omission line, and `omitted`'s twin in every respect that matters:
+          not a `role="alert"` because nothing has failed, on screen before Copy is pressed
+          rather than after, and counted in **copies** — four copies of a card Arena has never
+          printed are four lines that will not be in the file. Two lines rather than one summed
+          number, because a maybeboard the reader can switch back on and a card Arena does not
+          have are two different things to do something about. */}
+      {notInArena > 0 && (
+        <p className="text-sm text-dim">
+          {notInArena === 1
+            ? "1 card is not in MTG Arena and is"
+            : `${notInArena} cards are not in MTG Arena and are`}{" "}
+          not written.
+        </p>
       )}
 
       {/* Not a `role="alert"`: nothing failed. It is a fact about the format the reader just

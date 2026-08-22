@@ -2859,6 +2859,9 @@ function toCollectionRow(
     // From the *card*, like every other `cards`-derived field here, and `null` for an orphan.
     // The entry's own `finish` above says which copy this is; together they are what names it.
     promoTypes: card?.promoTypes ?? null,
+    // Also from the card, and the fixtures carry real Scryfall blobs — so the Arena export
+    // filter answers over the corpus rather than over a hand-written yes/no.
+    legalities: card?.legalities ?? null,
   };
 }
 
@@ -2962,6 +2965,9 @@ function toWishRow(db: FakeDb, w: FakeWish, mp: MarketplaceId): WishRow {
     notes: w.notes,
     needsReview: w.needsReview,
     updatedAt: w.updatedAt,
+    // The joined card's, like `typeLine` and `artCardId` above — an any-printing wish carries
+    // one, and only a genuine orphan is `null`.
+    legalities: card?.legalities ?? null,
   };
 }
 

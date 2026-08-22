@@ -510,8 +510,30 @@ describe("the export dialog's remembered choice", () => {
     useAppStore.getState().setExportPrefs("collection", {
       format: "csv",
       fields: ["quantity", "name", "condition"],
+      arenaOnly: false,
     });
     expect(useAppStore.getState().exportPrefs.collection.format).toBe("csv");
     expect(useAppStore.getState().exportPrefs.deck.format).toBe("plain");
+  });
+
+  /** The Arena filter is remembered the same way and is **off** everywhere on a first run: the
+   *  Arena export has written every card handed to it since it shipped, and a filter that
+   *  started on would quietly change what an existing reader's next export contains. */
+  it("opens with the Arena filter off on every surface", () => {
+    const { exportPrefs } = useAppStore.getState();
+    expect([
+      exportPrefs.deck.arenaOnly,
+      exportPrefs.collection.arenaOnly,
+      exportPrefs.wishlist.arenaOnly,
+    ]).toEqual([false, false, false]);
+  });
+
+  /** Per surface, like the pair beside it — a reader who filters their deck exports for Arena
+   *  has said nothing about what a collection export should contain. */
+  it("keeps the Arena filter apart by surface", () => {
+    const prefs = useAppStore.getState().exportPrefs.deck;
+    useAppStore.getState().setExportPrefs("deck", { ...prefs, arenaOnly: true });
+    expect(useAppStore.getState().exportPrefs.deck.arenaOnly).toBe(true);
+    expect(useAppStore.getState().exportPrefs.collection.arenaOnly).toBe(false);
   });
 });
