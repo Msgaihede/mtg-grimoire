@@ -308,6 +308,22 @@ shared_cell` walks both into two databases and compares them column by column.
   created for the list to work, and a reader who never makes a folder sees the list they saw
   before the upgrade. `reset::clear_wishlist` sweeps the folders by hand for `clear_decks`'
   reason, and still answers the count of *wishes*.
+- **That SET NULL is a backstop and not the mechanism, because it rewrites a grain term.**
+  `wishlist_folders::delete_folder` collects the sub-tree and re-files every wish in it **by
+  hand, one at a time, through the same merge `set_wish_folder` uses**, inside the transaction
+  and before the folder row goes. Left to the cascade it answered
+  `UNIQUE constraint failed: index 'idx_wishlist_grain'` — with nothing moved and the folder
+  still standing — in two shapes, and the first is the feature's own documented state: a
+  sub-tree wish colliding with the second **root** row the three root-only writers above make,
+  and two sub-tree wishes colliding with *each other* once both land at the root. One at a time
+  is what answers the second. Every other write that can land on a taken wishlist grain already
+  merged; this was the one that let the index decide.
+- **All three writes that take a `folder_id` answer the same sentence.** `add_wish`,
+  `wishlist_folders::set_wish_folder` and `wishlist_folders::move_folder` each look the id up
+  and refuse with `deck_meta::FOLDER_GONE`. The foreign key alone is not the answer: it is
+  per-connection (`PRAGMA foreign_keys`), and `FOREIGN KEY constraint failed` names the
+  constraint rather than the mistake. `deck_meta::move_folder` still has the hole and is
+  deliberately left with it — fixing one side of a ported pair is worse than neither.
 - `needs_review` is a **sentence, not a flag** — the reconciler writes what happened, and
   the first message wins (a later sweep does not overwrite one). Non-NULL means "listed,
   counted, and asking to be looked at", never "hidden".

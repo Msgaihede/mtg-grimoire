@@ -389,9 +389,23 @@ describe("WishlistPage", () => {
     expect(screen.getByText("Any printing")).toBeInTheDocument();
   });
 
-  /** A shopping list is where the number of copies is *maintained*: the stepper writes
-   *  straight through, as the collection table's does. */
+  /**
+   * A shopping list is where the number of copies is *maintained*: the stepper writes
+   * straight through, as the collection table's does.
+   *
+   * **The mock answers the new number on the re-read as well as from the write**, and that is
+   * not fixture ceremony. Since 2026-08-22 the stepper settles the whole `["wishlist"]` root —
+   * a copy count is what a folder's subtotal is a function of, and that arithmetic is the
+   * backend's — so the list is asked again and its answer is the one that stands. A mock that
+   * went on returning four would be a backend that had not stored the write.
+   */
   it("writes the wanted quantity straight through from the row", async () => {
+    let quantity = 4;
+    wishlistList.mockImplementation(async () => page([{ ...BOLT, quantity }]));
+    wishlistSetQuantity.mockImplementation(async (id: number, next: number) => {
+      quantity = next;
+      return { id, quantity: next, removed: false };
+    });
     wrap(<WishlistPage />);
     await screen.findByText("Lightning Bolt");
 
@@ -416,8 +430,18 @@ describe("WishlistPage", () => {
    * list is for.
    */
   it("removes a wish through its own control, never through the stepper", async () => {
-    // At one copy, which is where the stepper would step into a deletion if it could.
-    wishlistList.mockResolvedValue(page([{ ...BOLT, quantity: 1 }]));
+    // At one copy, which is where the stepper would step into a deletion if it could. The list
+    // empties on the re-read for the reason the stepper's does above: `remove` settles the whole
+    // `["wishlist"]` root, so the backend's answer is what the row's absence rests on rather than
+    // the optimistic patch alone.
+    let gone = false;
+    wishlistList.mockImplementation(async () =>
+      gone ? page([]) : page([{ ...BOLT, quantity: 1 }]),
+    );
+    wishlistRemove.mockImplementation(async (id: number) => {
+      gone = true;
+      return { id, quantity: 0, removed: true };
+    });
     wrap(<WishlistPage />);
     await screen.findByText("Lightning Bolt");
 
@@ -435,6 +459,52 @@ describe("WishlistPage", () => {
 
     expect(wishlistRemove).toHaveBeenCalledWith(7);
     await waitFor(() => expect(screen.queryByText("Lightning Bolt")).not.toBeInTheDocument());
+  });
+
+  /**
+   * **The duplicate mark must not outlive the duplicate**, which is the second thing `remove`'s
+   * patch-and-invalidate-the-search settle could not answer for (fixed 2026-08-22).
+   *
+   * `elsewhere` is a correlated count over the **whole** table — deliberately, because the wish
+   * it is about is one the reader is not looking at — so it is not a field this page can adjust
+   * when a row goes. Patching the removed row out and stopping there left the survivor still
+   * saying "Also on your wishlist…", which is the one mark whose entire job is honesty about
+   * duplicates now pointing at a wish that does not exist. It is also the mark a reader consults
+   * before ordering the card again, so a stale one costs money rather than tidiness.
+   *
+   * **At the app's own `staleTime`** (`src/lib/query.ts`, 30s) and with no navigation in the
+   * test, because that is the shape the reader is in: nothing remounts the list, nothing refocuses
+   * the window, and an invalidation is the only event in the app that can ask the question again.
+   */
+  it("clears the elsewhere mark from the survivor when its duplicate is crossed off", async () => {
+    // Two wishes for one oracle card — the foil and the plain — which is a pair the storage grain
+    // makes legal and `elsewhere` exists to report.
+    const PLAIN: WishRow = { ...BOLT, id: 21, elsewhere: 1, preferredFinish: null };
+    const FOIL: WishRow = { ...BOLT, id: 22, elsewhere: 1 };
+    let gone = false;
+    wishlistList.mockImplementation(async () =>
+      gone ? page([{ ...PLAIN, elsewhere: 0 }]) : page([PLAIN, FOIL]),
+    );
+    wishlistRemove.mockImplementation(async (id: number) => {
+      gone = true;
+      return { id, quantity: 0, removed: true };
+    });
+
+    wrap(<WishlistPage />, { staleTime: 30_000 });
+    expect(await screen.findAllByRole("img", { name: /Also on your wishlist/ })).toHaveLength(2);
+
+    await userEvent.click(
+      screen.getByRole("button", {
+        name: /^Remove Lightning Bolt \(LEA 161, Foil\) from your wishlist/,
+      }),
+    );
+    expect(wishlistRemove).toHaveBeenCalledWith(22);
+
+    // The survivor stays listed and stops warning about a wish that is no longer there.
+    await waitFor(() =>
+      expect(screen.queryByRole("img", { name: /Also on your wishlist/ })).toBeNull(),
+    );
+    expect(screen.getByText("Lightning Bolt")).toBeInTheDocument();
   });
 
   /**
@@ -1613,6 +1683,137 @@ describe("the folders", () => {
     expect(
       screen.queryByText(/Add cards from search with the \+ on any row or tile/),
     ).not.toBeInTheDocument();
+  });
+
+  /**
+   * **A folder card counts a wish that is gone** — the first half of the settle that was missing
+   * from `remove` until 2026-08-22, and the reason both halves are pinned at the app's own
+   * `staleTime` rather than at this file's default of 0.
+   *
+   * `remove` patched the row out of `["wishlist", "list"]` and then invalidated `["cards",
+   * "search"]` and nothing else, on the argument that the page already held the answer. It held
+   * the answer about the *row*. `wishlist_folder_summary` is a `GROUP BY` with an owned-copies
+   * subquery and a price expression behind it — arithmetic this page cannot redo — so the drawer
+   * the wish had been in went on advertising it: `Ordered folder, 3 wishes, $30.00` over a
+   * backend holding two at $20. On a shopping list that subtotal is the number somebody buys
+   * against.
+   *
+   * **What `staleTime: 30_000` buys, precisely.** The summary's observer is mounted for the life
+   * of this page — nothing here unmounts it, so there is no remount to refetch on — and at the
+   * app's own number the answer stays *fresh* as well as mounted, which leaves an invalidation as
+   * the only thing in the app that can move it. Drilling in and climbing back out is deliberate:
+   * at a `staleTime` of 0 that round trip repairs the **list** for free on the new observer's
+   * mount, and a reader watching only the row would conclude the write settles correctly.
+   */
+  it("re-reads a folder's subtotal when a wish inside it is crossed off", async () => {
+    let removed = false;
+    wishlistList.mockImplementation(async (q: WishlistQuery) =>
+      removed && q.folderId === 1 ? page([]) : listByLevel(q),
+    );
+    // The backend after the delete: `Ordered`'s own row is gone from the `GROUP BY` entirely,
+    // because the read groups the wishes and there are none left directly in it. Its card is
+    // still the recursive total, so `Backordered`'s two survive underneath.
+    wishlistFolderSummary.mockImplementation(async () =>
+      removed ? SUMMARY.filter((s) => s.folderId !== 1) : SUMMARY,
+    );
+    wishlistRemove.mockImplementation(async (id: number) => {
+      removed = true;
+      return { id, quantity: 0, removed: true };
+    });
+
+    wrap(<WishlistPage />, { staleTime: 30_000 });
+    expect(
+      await screen.findByRole("button", { name: "Ordered folder, 3 wishes, $30.00" }),
+    ).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /^Ordered folder/ }));
+    await screen.findByText("Rhystic Study");
+    await userEvent.click(
+      screen.getByRole("button", { name: /^Remove Rhystic Study \(PCY 45\) from your wishlist/ }),
+    );
+    expect(wishlistRemove).toHaveBeenCalledWith(12);
+
+    const trail = screen.getByRole("navigation", { name: "Wishlist folders" });
+    await userEvent.click(within(trail).getByRole("button", { name: "Wishlist" }));
+
+    expect(
+      await screen.findByRole("button", { name: "Ordered folder, 2 wishes, $20.00" }),
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * The same hole under the other writer: **a stepper press multiplies straight through into the
+   * subtotal**, and `setQuantity` was the second of the two that re-read only the search.
+   *
+   * A copy count is exactly what a folder's money is a function of, so this is the case where the
+   * card's figure and the backend's disagree by a number the reader chose themselves — the drawer
+   * kept saying `$30.00` while the wish inside it had just been doubled.
+   */
+  it("re-reads a folder's subtotal when the stepper changes a wish inside it", async () => {
+    let quantity = 1;
+    wishlistList.mockImplementation(async (q: WishlistQuery) =>
+      q.folderId === 1 ? page([{ ...FILED, quantity }]) : listByLevel(q),
+    );
+    wishlistFolderSummary.mockImplementation(async () =>
+      SUMMARY.map((s) =>
+        s.folderId === 1 ? { ...s, missing: quantity, cost: 10 * quantity } : s,
+      ),
+    );
+    wishlistSetQuantity.mockImplementation(async (id: number, next: number) => {
+      quantity = next;
+      return { id, quantity: next, removed: false };
+    });
+
+    wrap(<WishlistPage />, { staleTime: 30_000 });
+    expect(
+      await screen.findByRole("button", { name: "Ordered folder, 3 wishes, $30.00" }),
+    ).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /^Ordered folder/ }));
+    await screen.findByText("Rhystic Study");
+    await userEvent.click(
+      screen.getByRole("button", { name: "Increase Copies wanted of Rhystic Study (PCY 45)" }),
+    );
+    expect(wishlistSetQuantity).toHaveBeenCalledWith(12, 2);
+
+    const trail = screen.getByRole("navigation", { name: "Wishlist folders" });
+    await userEvent.click(within(trail).getByRole("button", { name: "Wishlist" }));
+
+    expect(
+      await screen.findByRole("button", { name: "Ordered folder, 3 wishes, $40.00" }),
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * **The export dialog names the drawer, because the drawer is what is narrowing the sweep.**
+   *
+   * Nothing about the export was ever *wrong* — `folderId` and `flatten` ride in
+   * `wishlist.filters` and in the sweep's key, and the escape hatch sends `flatten: true` — but
+   * standing in `Ordered` with nothing typed and no chip pressed, the two sentences read
+   * "3 cards matching your filters" and "Export everything, ignoring the filters", and the only
+   * thing doing any narrowing was the one thing neither of them mentioned.
+   *
+   * The clause is on the checkbox at the **root** too, and that is not an oversight: an absent
+   * `folderId` asks for the wishes filed nowhere rather than for all of them, so a reader at the
+   * top of a cabinet is also looking at a sweep that leaves every drawer out.
+   */
+  it("names the folder the export is being taken from, and offers the whole cabinet", async () => {
+    const user = userEvent.setup();
+    wrap(<WishlistPage />);
+    // At the root there is no drawer to name, but ticking the box still widens past the drawers.
+    await user.click(await screen.findByRole("button", { name: "Export" }));
+    expect(
+      await screen.findByRole("checkbox", {
+        name: "Export everything, ignoring the filters and folders",
+      }),
+    ).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Close export" }));
+
+    await user.click(await screen.findByRole("button", { name: /^Ordered folder/ }));
+    await screen.findByText("Rhystic Study");
+    await user.click(screen.getByRole("button", { name: "Export" }));
+
+    expect(await screen.findByText("1 card in Ordered matching your filters")).toBeInTheDocument();
   });
 
   /**

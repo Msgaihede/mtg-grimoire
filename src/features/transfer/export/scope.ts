@@ -190,15 +190,65 @@ export function useExportScope(
 }
 
 /**
- * "1,204 cards matching your filters" / "3,000 cards, ignoring your filters" — already
- * pluralised, which is what {@link ExportDialogProps.scope}'s `label` asks its caller for.
+ * Where on its surface a sweep is standing — the whole of what the two sentences below need in
+ * order to name the thing doing the narrowing.
+ *
+ * **Two bits rather than one, because the top level is a narrowing with no name.** On the
+ * wishlist an absent `folderId` means "the wishes filed nowhere" rather than "every wish"
+ * (`WishlistQuery.folderId`, and `everythingFilters` above at length), so a reader standing at
+ * the root of a cabinet holding twenty drawers is looking at a sweep that leaves all twenty out:
+ * `folder` is `null` there and `narrows` is still `true`. Both off is a surface with no filing to
+ * speak of — the collection, a wishlist nobody has filed, and a *flattened* one, where the level
+ * on screen already is every folder.
+ */
+export interface ExportFiling {
+  /** The folder the reader is standing in, or `null` — at the top level, and for a folder the
+   *  page cannot name because another window deleted it between two reads. */
+  folder: string | null;
+  /** Whether the filing is narrowing this sweep at all. */
+  narrows: boolean;
+}
+
+/**
+ * "1,204 cards matching your filters" / "3 cards in Ordered matching your filters" /
+ * "3,000 cards, ignoring your filters and folders" — already pluralised, which is what
+ * {@link ExportDialogProps.scope}'s `label` asks its caller for.
  *
  * One function rather than one written out in each page: `CollectionPage` and `WishlistPage`
  * compose the identical sentence around a different noun for what they are exporting, and a
  * count is the one part of it neither page should be trusted to pluralise twice.
+ *
+ * **`filing` is why the sentence is not just about filters.** Standing inside `Ordered` with
+ * nothing typed and no chip pressed, the old line read `3 cards matching your filters` — true
+ * about the filters and silent about the drawer, which was the only thing narrowing anything.
+ * The count was always right; the sentence just did not name what produced it.
  */
-export function scopeLabel(total: number, everything: boolean): string {
+export function scopeLabel(total: number, everything: boolean, filing?: ExportFiling): string {
   const noun = total === 1 ? "card" : "cards";
   const count = total.toLocaleString();
-  return everything ? `${count} ${noun}, ignoring your filters` : `${count} ${noun} matching your filters`;
+  // With the escape hatch on there is no drawer left to name — the sweep really is every folder
+  // — so what the sentence owes the reader is the other half: that the filing was set aside too.
+  if (everything) return `${count} ${noun}, ignoring your filters${andFolders(filing)}`;
+  // The top level is deliberately unnamed here. It has no word a reader would recognise that is
+  // not also the word for the whole list ("your wishlist" is the dialog's own title), and
+  // "3 cards in Wishlist" would read as the whole of it rather than as the level. What says the
+  // drawers are being left out at the root is {@link everythingLabel}'s offer to include them.
+  const where = filing?.folder ? ` in ${filing.folder}` : "";
+  return `${count} ${noun}${where} matching your filters`;
+}
+
+/**
+ * The escape hatch's own words — {@link ExportDialogProps.scope}'s `everythingLabel`.
+ *
+ * **Here rather than written into the dialog, so both sentences are decided in one place.** The
+ * checkbox and the count line above are one statement made twice, and the dialog holding half of
+ * it is how the half about folders came to be missing from only one of them.
+ */
+export function everythingLabel(filing?: ExportFiling): string {
+  return `Export everything, ignoring the filters${andFolders(filing)}`;
+}
+
+/** The clause both sentences add where the reader's filing is part of what is being set aside. */
+function andFolders(filing: ExportFiling | undefined): string {
+  return filing?.narrows === true ? " and folders" : "";
 }

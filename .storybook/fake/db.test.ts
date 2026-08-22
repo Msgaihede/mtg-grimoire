@@ -2349,13 +2349,20 @@ describe("the wishlist's folders", () => {
    *
    * `wishlist_folder_create` refuses a parent that is gone, because `wishlist_folders.parent_id`
    * is a real foreign key and SQLite refuses one in the app. `wishlist_folder_move` writes the
-   * **same column** and so has to refuse the same thing, or the pair disagree — the app answers
-   * an FK error where the fake writes a sub-tree hanging off nothing, and a story then draws a
-   * folder that cannot exist.
+   * **same column** and so has to refuse the same thing, or the pair disagree — the fake would
+   * write a sub-tree hanging off nothing, and a story would then draw a folder that cannot
+   * exist.
    *
    * The walk is no substitute: `wishFolderById(db, cursor)?.parentId ?? null` reads an id no
    * folder has as "already at the root" and ends the climb on the first hop, so an unchecked
    * move sails straight through it.
+   *
+   * **This test was ahead of the crate and the crate was brought to it** (2026-08-22). Rust's
+   * `move_folder` had the identical hole — `optional()?.flatten()` reads a missing id as the
+   * root, exactly as the walk here does — so the `UPDATE` ran and answered
+   * `FOREIGN KEY constraint failed`, a sentence about a constraint rather than about the folder,
+   * and only while `PRAGMA foreign_keys` was on. It looks the id up and answers `FOLDER_GONE`
+   * now, which is what this had been asserting all along.
    */
   it("refuses a parent that is gone, the fence `wishlist_folder_create` already has", () => {
     const db = filing();
@@ -2368,11 +2375,21 @@ describe("the wishlist's folders", () => {
     expect(db.wishlistFolders.find((f) => f.id === 2)!.parentId).toBeNull();
   });
 
+  /**
+   * **The second wish is pinned to `BOLT_2X2` rather than made from its oracle id**, and the
+   * change is not cosmetic: `BOLT_2X2` is *a different printing of the same card*, so
+   * `BOLT_2X2.oracleId === BOLT.oracleId` and two any-printing wishes for it are one
+   * {@link wishGrain}. This fixture was therefore an unlabelled instance of the collision the
+   * two tests below are about — the old bare-loop un-filing wrote both rows at the root and
+   * this passed, while the app answered `UNIQUE constraint failed` and deleted nothing.
+   * Pinning the printing puts the two wishes on genuinely different grains, which is what this
+   * test meant by "both wishes are still on the list".
+   */
   it("takes the sub-folders and leaves the wishes standing at the root", () => {
     const db = filing({
       wishlistEntries: [
         wish({ id: 1, oracleId: BOLT.oracleId, folderId: 1 }),
-        wish({ id: 2, oracleId: BOLT_2X2.oracleId, folderId: 2 }),
+        wish({ id: 2, cardId: BOLT_2X2.id, folderId: 2 }),
       ],
     });
     writeHandlers(db).wishlist_folder_delete({ id: 1 });
@@ -2382,6 +2399,64 @@ describe("the wishlist's folders", () => {
     expect(db.wishlistEntries.map((x) => x.folderId)).toEqual([null, null]);
     // An id that resolves to nothing is a success: the caller wanted it gone and it is.
     expect(() => writeHandlers(db).wishlist_folder_delete({ id: 404 })).not.toThrow();
+  });
+
+  /**
+   * The delete **merges**, and the two shapes that make it have to.
+   *
+   * Un-filing a sub-tree rewrites the fourth term of {@link wishGrain} on every wish in it, so a
+   * press that files two wishes at the root for the same card lands twice on one grain. Both
+   * shapes are reachable in the shipped app:
+   *
+   * - a **root** wish plus the same card filed in the folder, which the design accepts on
+   *   purpose — the three writers that add at the root cannot name a folder, so a card the
+   *   reader has filed acquires a second root row;
+   * - two wishes in **sibling sub-folders**, colliding with each other with no root row in play.
+   *
+   * A bare loop over the rows produced both here while the app answered `UNIQUE constraint
+   * failed: index 'idx_wishlist_grain'` and deleted nothing at all — the fake kinder than the
+   * app, which is the drift that lets a story document a state the reader cannot reach. Both
+   * assertions fail on that loop, the first on the quantity and the second on the length.
+   */
+  it("merges a wish it un-files onto the root row already holding that card", () => {
+    const db = filing({
+      wishlistEntries: [
+        wish({ id: 1, oracleId: BOLT.oracleId, quantity: 1, folderId: null }),
+        wish({ id: 2, oracleId: BOLT.oracleId, quantity: 2, folderId: 1, notes: "ordered" }),
+      ],
+    });
+    writeHandlers(db).wishlist_folder_delete({ id: 1 });
+    expect(db.wishlistFolders).toHaveLength(0);
+    // One wish at the root for all three copies, wearing the filed row's note — the survivor
+    // had none, and `mergeWishOnto` falls back to the row it folds in.
+    expect(db.wishlistEntries).toEqual([
+      expect.objectContaining({ id: 1, folderId: null, quantity: 3, notes: "ordered" }),
+    ]);
+  });
+
+  it("merges two sub-folder wishes that collide with each other at the root", () => {
+    const db = makeDb({
+      wishlistFolders: [
+        { id: 1, parentId: null, name: "Top", sortOrder: 0 },
+        { id: 2, parentId: 1, name: "A", sortOrder: 0 },
+        { id: 3, parentId: 1, name: "B", sortOrder: 1 },
+      ],
+      wishlistEntries: [
+        wish({ id: 1, oracleId: BOLT.oracleId, quantity: 2, folderId: 2 }),
+        wish({ id: 2, oracleId: BOLT.oracleId, quantity: 5, folderId: 3 }),
+        // A card only one of them holds, so the merge is shown to be about the grain rather
+        // than about "everything in a deleted folder becomes one row".
+        wish({ id: 3, cardId: BOLT_2X2.id, quantity: 1, folderId: 3 }),
+      ],
+    });
+    writeHandlers(db).wishlist_folder_delete({ id: 1 });
+    expect(db.wishlistFolders).toHaveLength(0);
+    // Lowest id first, so the row that survives is a fact about the store and not about
+    // iteration order — the crate collects its sub-tree with `ORDER BY w.id` for the same reason.
+    expect(db.wishlistEntries).toEqual([
+      expect.objectContaining({ id: 1, folderId: null, quantity: 7 }),
+      expect.objectContaining({ id: 3, folderId: null, quantity: 1 }),
+    ]);
   });
 
   it("merges when the destination already holds the same card, and names the survivor", () => {

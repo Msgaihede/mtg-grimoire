@@ -147,25 +147,16 @@ describe("EditWishButton", () => {
     expect(change.parentElement).toBe(any.parentElement);
   });
 
-  /**
-   * **The panel's own room for the 4% it has not grown yet**, which is `AnchoredPopup`'s and is
-   * asserted from here because this is the panel the live pass measured it on.
-   *
-   * The caret is moved into the panel on the render that mounts it, while `popup` still holds it
-   * at `scale: 0.96` — so the browser's scroll-into-view is computed for a box 4% shorter than the
-   * one that ends up on screen, and the scroller clips the difference at the bottom for good.
-   * Measured at 8.5px of a 212px panel (2026-08-22, both window sizes), which rendered the panel
-   * bottomless. `scroll-mb-4` is the scroll margin that makes the scroll aim past it —
-   * `DROP_MARK_ROOM`'s twin, the same rule at the moment something scrolls rather than at rest.
-   *
-   * **jsdom implements neither scrolling nor layout**, so this pins the class and the live pass
-   * is what proves the pixels.
+  /*
+   * **The 4% this panel has not grown yet is `AnchoredPopup`'s problem and is pinned there now.**
+   * A `scroll-mb-4` stood here from 2026-08-22 until later the same day, asserted from this file
+   * because this is the panel the live pass measured the clip on. The diagnosis held to the pixel
+   * and the cure did not: a scroll margin asks the browser to scroll *further*, and what was wrong
+   * was the maximum it clamps to, which the scaled panel itself caps — raising the margin to 400px
+   * moved the landing `scrollTop` by nothing at all. The shell defers the scroll to the end of the
+   * entry tween instead, and `AnchoredPopup.test.tsx` pins that ordering for every caller rather
+   * than a class for one of them.
    */
-  it("leaves the scroller room for the panel it is still growing into", async () => {
-    const { user } = setup(BOLT);
-    const panel = await open(user, BOLT);
-    expect(panel).toHaveClass("scroll-mb-4");
-  });
 
   it("drops a pinned wish's printing through onAnyPrinting", async () => {
     const { user, onAnyPrinting } = setup(BOLT);

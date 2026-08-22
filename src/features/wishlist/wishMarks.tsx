@@ -33,6 +33,15 @@ import { useTooltip } from "@/components/tooltip/useTooltip";
  * `elsewhere` is the correlated count and answers `0` on almost every row, which is why this is
  * cheap: most readers have no duplicates and see nothing at all.
  *
+ * **It counts _wishes_, and it used to say "places".** The storage grain is
+ * `(oracle_id, card_id, preferred_finish, folder_id)`, so two of the counted rows can perfectly
+ * well sit in the same drawer — a foil Bolt and a nonfoil Bolt both loose at the root each read
+ * "1 other place" while both were in the one place there is. A number is only honest where the
+ * noun beside it names what was counted, and what this counted all along is other **wishes**. The
+ * app's own word, too: the header says `Wishes` and a folder card says `3 wishes`, so the count
+ * a reader is being warned about is spelled here the way it is spelled everywhere else they will
+ * go looking for it.
+ *
  * A `role="img"` with its whole sentence as the name, `GameChangerMark`'s arrangement — the glyph
  * says nothing on its own, and this sits beside a caption rather than inside a button, so naming
  * itself costs no other control its name.
@@ -42,7 +51,7 @@ export function ElsewhereMark({ count }: { count: number }) {
   // Not a guard the caller has to remember: nearly every row is `0`, and a mark that drew an
   // empty box on all of them would put a gap in every caption in the list.
   if (count <= 0) return null;
-  const sentence = `Also on your wishlist in ${count} other ${count === 1 ? "place" : "places"}`;
+  const sentence = `Also on your wishlist as ${count} other ${count === 1 ? "wish" : "wishes"}`;
   return (
     <Copy
       role="img"

@@ -12,6 +12,10 @@
 //! takes a zero as the removal it can only be.
 
 use crate::collection::{valid_quantity, EntryChange};
+// The refusal a folder id nothing answers to gets, reached across rather than re-spelled —
+// `wishlist_folders`' own import of it makes the same argument at length, and this is the third
+// write over `wishlist_entries.folder_id` to need the sentence.
+use crate::deck_meta::FOLDER_GONE;
 use crate::filters::{escape_like, LIKE_ESCAPE};
 use crate::schema::{FINISHES, WISHLIST_GRAIN};
 use crate::sync::{with_write, AppState};
@@ -48,9 +52,15 @@ pub struct WishInput {
     /// decision as a side effect of shopping, and moving a wish between folders is its own
     /// explicit act (`wishlist_folders::set_wish_folder`).
     ///
-    /// Not fenced against `wishlist_folders` here: the column carries a real foreign key
-    /// (`ON DELETE SET NULL`), so an id naming no folder is refused by the database on the
-    /// insert rather than by a lookup this command would have to make first.
+    /// **Fenced in words against `wishlist_folders`**, and the foreign key is not the reason
+    /// it needs to be. The column really does carry one (`ON DELETE SET NULL`), so an id
+    /// naming no folder is refused on the insert — with `FOREIGN KEY constraint failed`, which
+    /// names the constraint and not the mistake, and only while `PRAGMA foreign_keys` happens
+    /// to be on. `wishlist_folders::set_wish_folder` and `wishlist_folders::move_folder` both
+    /// look the id up and answer [`FOLDER_GONE`] instead, over the same column, and the three
+    /// writes disagreeing about it was a reader deleting a folder in one pane and being told
+    /// `FOREIGN KEY constraint failed` by **Add to → Wishlist → Ordered** while
+    /// **Move to folder…** said "That folder is not there any more." One mistake, one wording.
     pub folder_id: Option<i64>,
 }
 
@@ -329,6 +339,23 @@ pub fn add_wish(conn: &Connection, input: &WishInput) -> Result<EntryChange, Str
     // table's own CHECK says the same thing, in the database's voice rather than the app's).
     if card_id.is_none() && sent_oracle_id.is_none() {
         return Err("a wish needs either a card or an oracle id".into());
+    }
+    // The folder, before anything is looked up, for [`WishInput::folder_id`]'s reason: the
+    // foreign key would refuse this write anyway, in a sentence about a constraint rather than
+    // about the folder, and the two other writes over this column already answer
+    // [`FOLDER_GONE`]. Asked here rather than beside the finish check because it costs a query
+    // — a wish that is going to be refused for naming no card should not pay for it.
+    if let Some(folder) = input.folder_id {
+        let exists: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM wishlist_folders WHERE id = ?1)",
+                params![folder],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if !exists {
+            return Err(FOLDER_GONE.to_owned());
+        }
     }
 
     // Whatever the caller did not send, taken from the printing it named.
@@ -2588,6 +2615,32 @@ mod tests {
             "the wish the reader already had is not added to"
         );
         assert_eq!(folder_id, None, "nor moved out of the root");
+    }
+
+    /// A folder id nothing answers to is refused **in words**, and the sentence is the one the
+    /// other two writes over this column already give.
+    ///
+    /// `wishlist_entries.folder_id` carries a real foreign key, so this write was already
+    /// impossible — but only while `PRAGMA foreign_keys` is on, and the answer was
+    /// `FOREIGN KEY constraint failed`. A reader who deleted `Ordered` in one pane then got
+    /// that from **Add to → Wishlist → Ordered** and "That folder is not there any more." from
+    /// **Move to folder…**, over one column and one mistake.
+    #[test]
+    fn add_wish_refuses_a_folder_that_is_not_there() {
+        let conn = seeded();
+        let err = add_wish(
+            &conn,
+            &WishInput {
+                oracle_id: Some("o1".into()),
+                quantity: 1,
+                folder_id: Some(404),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+
+        assert_eq!(err, FOLDER_GONE);
+        assert_eq!(wish_count(&conn), 0, "and the refused add wrote nothing");
     }
 
     /// And the fold still bites *inside* a folder, which is the half a grain that had simply

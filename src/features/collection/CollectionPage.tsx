@@ -9,7 +9,7 @@ import { listWalkStops, usePublishCardWalk } from "@/features/card/cardWalk";
 import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
 import { CardGrid, type GridCard } from "@/features/search/CardGrid";
 import { ExportDialog } from "@/features/transfer/export/ExportDialog";
-import { scopeLabel, useExportScope } from "@/features/transfer/export/scope";
+import { everythingLabel, scopeLabel, useExportScope } from "@/features/transfer/export/scope";
 import { collectionDestination } from "@/features/transfer/import/destinations/CollectionPreview";
 import { ImportDialog } from "@/features/transfer/import/ImportDialog";
 import { FINISHES, isFinish } from "@/lib/finish";
@@ -592,6 +592,9 @@ export function CollectionPage() {
         onClose={() => setExporting(false)}
         scope={{
           label: scopeLabel(exportScope.total, exportScope.everything),
+          // No filing argument, because the collection has none: there is no drawer to be
+          // standing in, so both sentences are the plain ones `scope.ts` composes without it.
+          everythingLabel: everythingLabel(),
           loading: exportScope.loading,
           everything: exportScope.everything,
           onEverything: exportScope.setEverything,

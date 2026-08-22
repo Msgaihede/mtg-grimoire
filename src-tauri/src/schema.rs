@@ -2221,13 +2221,19 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // re-enterable is to ask the catalog first — `pragma_table_info` answers one row per
         // column and none for a column that is not there.
         //
-        // It has to be re-enterable because the rewind above this rung cannot be complete.
-        // [`UNDO_V23`] drops the folder table and the folder index and *leaves* `folder_id`
-        // standing: SQLite refuses `DROP COLUMN` on a column any index names, and this one is
-        // the fourth term of the grain index. So every rewound fixture beneath head re-enters
-        // this step carrying the column, and a blind `ALTER` would answer `duplicate column
-        // name` — a failure no real upgrade can produce, which is the definition of a fixture
-        // lying about what it is testing.
+        // It has to be re-enterable because [`UNDO_V23`] leaves `folder_id` standing, and that
+        // is a **choice** rather than something SQLite forbids: it is true that `DROP COLUMN`
+        // refuses a column any index names, and two name this one, but dropping
+        // `idx_wishlist_grain` and `idx_wishlist_folder` first makes the `DROP COLUMN` succeed
+        // (measured 2026-08-22). What the rewind will not do is the statement after that —
+        // putting the three-term index back means building a *narrow* unique index over rows
+        // written on the wide grain, which is a constraint failure on exactly the fixture that
+        // has something interesting in the table. So every rewound fixture beneath head
+        // re-enters this step carrying the column, and a blind `ALTER` would answer `duplicate
+        // column name` — a failure no real upgrade can produce, which is the definition of a
+        // fixture lying about what it is testing.
+        // [`migrating_a_v22_wishlist_files_every_existing_wish_at_the_root`] pays the full
+        // rewind by hand instead, because the probe skipping the `ALTER` is not the upgrade.
         let has_folder: bool = tx.query_row(
             "SELECT count(*) FROM pragma_table_info('wishlist_entries') WHERE name = 'folder_id'",
             [],
@@ -5540,15 +5546,18 @@ pub(crate) mod tests {
     /// this one would migrate perfectly happily and simply not be the version it claims: a
     /// "v11 database" carrying a table and a column that did not exist until v23.
     ///
-    /// **It is deliberately not a full rewind, and the half it cannot do is the half this
-    /// rung is interesting for.** `wishlist_entries.folder_id` stays: SQLite refuses
-    /// `DROP COLUMN` on a column an index names, the column is the fourth term of
-    /// `idx_wishlist_grain`, and putting the three-term index back so the column could go
-    /// would mean a rewind that rebuilds an index over a *narrower* grain than the rows
-    /// beneath it were written on. So the fixtures below carry the column, the v23 step's
-    /// probe finds it and skips the `ALTER`, and
-    /// [`migrating_a_v22_wishlist_files_every_existing_wish_at_the_root`] is where that
-    /// re-entry is driven on purpose rather than merely survived.
+    /// **It is deliberately not a full rewind, and "deliberately" is the word that matters
+    /// here.** `wishlist_entries.folder_id` stays, and not because SQLite will not take it
+    /// back: it does refuse `DROP COLUMN` on a column an index names, and two name this one,
+    /// but dropping `idx_wishlist_grain` and `idx_wishlist_folder` first makes the
+    /// `DROP COLUMN` succeed — measured 2026-08-22, and
+    /// [`migrating_a_v22_wishlist_files_every_existing_wish_at_the_root`] now runs exactly that
+    /// sequence. The reason is the statement after it: putting the three-term index back means
+    /// rebuilding a *unique* index over a narrower grain than the rows beneath it were written
+    /// on, which the moment two of them differ only by folder is a constraint failure inside
+    /// somebody else's fixture. A rewind is a helper for the fixtures below it and may not
+    /// carry that. So they carry the column instead, and the v23 step's probe finds it and
+    /// skips the `ALTER`.
     ///
     /// `idx_wishlist_grain` needs no line of its own: v23's own `DROP INDEX IF EXISTS` is what
     /// widens it, and it runs again over whatever the rewind left. `idx_wishlist_folder` does,
@@ -7725,12 +7734,33 @@ pub(crate) mod tests {
     /// The upgrade itself: a database that already has a shopping list gets folders without
     /// losing a wish, and every wish it was carrying surfaces at the root.
     ///
-    /// **The rewind is deliberately partial, and that is what this test drives rather than a
-    /// shortcut it takes.** [`UNDO_V23`] cannot take `folder_id` back off — SQLite refuses
-    /// `DROP COLUMN` on a column an index names, and the column is the fourth term of
-    /// `idx_wishlist_grain` — so what re-enters the v23 step here is a database that already
-    /// carries the column. That is exactly the state the step's `pragma_table_info` probe
-    /// exists for, so this fixture exercises the probe as well as the upgrade.
+    /// **The rewind here is a full one, spelled out on top of [`UNDO_V23`], and that is the
+    /// point of the test rather than housekeeping.** That constant stops short of the column
+    /// for the fixtures that share it (see its doc); leaning on it here would re-enter the v23
+    /// step with the *four-term* index already in place and the column already there, so the
+    /// probe would skip the `ALTER`, the `DROP INDEX`/`CREATE UNIQUE INDEX` pair would rebuild
+    /// an index identical to the one it replaced, and nothing in the suite would ever watch the
+    /// widening run over a genuinely three-term index with rows underneath it — which is the
+    /// only shape a real v22 database has.
+    ///
+    /// So both indexes that name `folder_id` go, then the column, then the three-term index
+    /// comes back: `DROP COLUMN`'s restriction is about indexes and nothing else here, and with
+    /// them gone SQLite takes it (measured 2026-08-22). What re-enters `migrate` is then a
+    /// database that has never heard of folders, holding a wish.
+    ///
+    /// The re-entry this used to be is not lost with it: **every fixture beneath head runs the
+    /// step over a column that is already there**, because they all spell [`UNDO_V23`] and then
+    /// walk to head, so a blind `ALTER TABLE … ADD COLUMN` would answer `duplicate column name`
+    /// in a dozen tests at once. The probe is the one half of this rung that cannot go
+    /// unwatched.
+    ///
+    /// **The upgrade is safe for a reason worth writing down, because a widening unique index
+    /// over existing rows is exactly the sort of step that fails in the field and nowhere
+    /// else**: `ADD COLUMN` supplies no default, so `folder_id` is NULL on every row and
+    /// `coalesce(folder_id, 0)` is the constant 0 across the whole table. The new key is the
+    /// old key plus a constant, which makes the widened index strictly more permissive than the
+    /// one it replaces — two rows that clash on four terms clashed on three, and the three-term
+    /// index would already have refused them.
     #[test]
     fn migrating_a_v22_wishlist_files_every_existing_wish_at_the_root() {
         let conn = Connection::open_in_memory().unwrap();
@@ -7741,12 +7771,28 @@ pub(crate) mod tests {
             [],
         )
         .unwrap();
-        // Rewind to 22. `folder_id` cannot be dropped -- SQLite refuses DROP COLUMN on an
-        // indexed column -- so the index is rewound and the column is left, which is what the
-        // v23 step's own guards have to survive anyway.
-        conn.execute_batch(&format!("{UNDO_V23} PRAGMA user_version = 22;"))
-            .unwrap();
+        // Rewind to 22, in full. `UNDO_V23` takes the folder table and `idx_wishlist_folder`;
+        // the grain index has to go before the column it names, and the three-term definition
+        // that replaces it is a literal for `v9_database`'s reason -- this is a description of
+        // history, and history does not change when `WISHLIST_GRAIN` does.
+        conn.execute_batch(&format!(
+            "{UNDO_V23}
+             DROP INDEX IF EXISTS idx_wishlist_grain;
+             ALTER TABLE wishlist_entries DROP COLUMN folder_id;
+             CREATE UNIQUE INDEX idx_wishlist_grain
+                ON wishlist_entries (coalesce(oracle_id, ''), coalesce(card_id, ''),
+                                     coalesce(preferred_finish, ''));
+             PRAGMA user_version = 22;"
+        ))
+        .unwrap();
+        assert_eq!(
+            has_column(&conn, "wishlist_entries", "folder_id"),
+            0,
+            "the fixture is a real v22 database, not head wearing a v22 label"
+        );
+
         migrate(&conn).unwrap();
+
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();

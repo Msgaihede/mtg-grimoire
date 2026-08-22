@@ -169,14 +169,19 @@ exists to prevent.
 
 **The mitigation changes no add semantics.** `wishlist_list` answers `elsewhere` per row — how many
 *other* wishes exist for the same oracle card — and a row carrying a non-zero one draws a small
-mark beside its printing caption in both views, `Copy` glyph, `text-dim`, "Also on your wishlist in
-2 other places". Most rows answer `0` and draw nothing, so it costs a reader without duplicates
+mark beside its printing caption in both views, `Copy` glyph, `text-dim`, "Also on your wishlist as
+2 other wishes". Most rows answer `0` and draw nothing, so it costs a reader without duplicates
 exactly nothing.
 
-Four properties of that count:
+Five properties of that count:
 
 - **It counts the same oracle card, not the same printing.** Two wishes for two different printings
   of one card are still two chances to buy it twice, which is the mistake being guarded against.
+- **It counts wishes, and the sentence said "places" for a day.** The grain is
+  `(oracle_id, card_id, preferred_finish, folder_id)`, so two of the counted rows can sit in the
+  same drawer — a foil Bolt and a nonfoil Bolt both loose at the root each read "1 other place"
+  while both were in the one place there is. Corrected 2026-08-22; the noun is the app's own, the
+  one the header and the folder cards already use.
 - **It is counted in SQL, over the whole table.** The list is paged, and a page cannot see the
   wishes it did not fetch — the same count done in TypeScript would answer `0` for exactly the pair
   that is split across two pages. A wishlist is tens of rows, so the correlated count is cheap.

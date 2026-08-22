@@ -19,7 +19,7 @@ import { listWalkStops, usePublishCardWalk } from "@/features/card/cardWalk";
 import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
 import { MoveToFolder } from "@/features/decks/MoveToFolder";
 import { ExportDialog } from "@/features/transfer/export/ExportDialog";
-import { scopeLabel, useExportScope } from "@/features/transfer/export/scope";
+import { everythingLabel, scopeLabel, useExportScope } from "@/features/transfer/export/scope";
 import { wishlistDestination } from "@/features/transfer/import/destinations/WishlistPreview";
 import { ImportDialog } from "@/features/transfer/import/ImportDialog";
 import { count } from "@/lib/counts";
@@ -97,6 +97,10 @@ interface FolderTotals {
  * `wishlist_folder_summary` is a `GROUP BY` over `wishlist_entries`, so a folder holding no
  * wishes emits no row at all, and a card fed a raw `Map.get` would render `undefined` figures
  * over exactly the folder whose whole job on this screen is to be empty.
+ *
+ * **It is the answer for a folder the summary skipped, and never for a summary that has not
+ * answered yet.** The two are one `Map.get` miss apart and mean opposite things — see the
+ * `summaryQuery.isPending` branch at the wall below, which is what keeps them apart.
  */
 const NO_WISHES: FolderTotals = { wishes: 0, missing: 0, cost: 0, unpriced: 0 };
 
@@ -305,39 +309,52 @@ export function WishlistPage() {
   );
 
   /**
-   * What every write here has in common: the search results are re-read, and the list is
-   * *not* — the row's own number has already been rewritten from the answer.
+   * How **every** write on this page finishes: the whole `["wishlist"]` root re-read, and the
+   * card search with it.
    *
-   * The search, because a result row now draws `wishlisted`: adding or clearing a wish
-   * changes the heart on every printing of that card, and a wall that goes on showing one
-   * for a wish the reader just crossed off is wrong on screen rather than stale in a cache.
-   * There is nothing else to invalidate — a wish write moves no copies, so the collection
-   * and its header are untouched.
-   */
-  const settle = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
-  }, [queryClient]);
-
-  /**
-   * The whole `["wishlist"]` root re-read, and {@link settle}'s search with it.
+   * The search, because a result row draws `wishlisted`: adding or clearing a wish changes the
+   * heart on every printing of that card, and a wall that goes on showing one for a wish the
+   * reader just crossed off is wrong on screen rather than stale in a cache. Nothing further out
+   * moves — a wish write moves no copies, so the collection and its header are untouched.
    *
-   * **One function for two kinds of caller, because the reason is the same shape in both: the
-   * answer is not something this page can compute.**
+   * **`["wishlist"]` rather than the three keys under it**, because it covers the list, the
+   * folder list and the summary at every marketplace at once, and because that is the shape of
+   * the eleven other wishlist writes in this app: `useWishlistFolders`' four, the card menu's
+   * add, the deck sweeps'. One page inventing a narrower settle is how the three fell out of step
+   * in the first place.
    *
-   * A *refusal* is almost always a row something else already deleted, and a list that has lost
-   * a row has lost the total and the cost it was part of. A *filing* is the same problem wearing
-   * the other hat: the wish is now in a list this page is not drawing, at a sort position and on
-   * a page only the backend knows, and two folder subtotals computed by a read of their own have
-   * moved with it. {@link patchWish} plus {@link settle} stays the pair for the one write whose
-   * answer this page already holds — the stepper's number.
+   * **One function for every caller here, because the reason is the same shape in all of them:
+   * the answer is not something this page can compute.**
    *
-   * `["wishlist"]` covers the list, the folder list and the summary at every marketplace, which
-   * is why the root is invalidated rather than the three keys under it.
+   * * A *refusal* is almost always a row something else already deleted, and a list that has lost
+   *   a row has lost the total and the cost it was part of.
+   * * A *filing* is the same problem wearing the other hat: the wish is now in a list this page is
+   *   not drawing, at a sort position and on a page only the backend knows, and two folder
+   *   subtotals have moved with it.
+   * * And the **stepper and the removal** are the same problem again, which is what this function
+   *   did not cover until 2026-08-22. Those two shipped patching the list and re-reading the
+   *   search alone, on the argument that the row's own number was already the answer. That
+   *   argument is true about the *row* and false about everything counted from it, in two ways a
+   *   reader acts on. `wishlist_folder_summary` is a `GROUP BY` carrying an owned-copies subquery
+   *   and a price expression — arithmetic this page cannot redo — so a folder card went on saying
+   *   `Ordered folder, 2 wishes, $20.00` over a drawer holding one, which on a shopping list is
+   *   the subtotal somebody buys against. And `elsewhere` is a correlated count over the whole
+   *   table, so crossing off one of two duplicates left the survivor still marked
+   *   "Also on your wishlist…" — the one mark whose entire job is honesty about duplicates,
+   *   pointing at a wish that no longer exists. **Neither repairs itself at the app's own
+   *   `staleTime`** (`lib/query.ts`, 30s): the summary's observer is mounted for the life of this
+   *   page, so marking it stale without a refetch changes nothing, and the suite's default of 0
+   *   hides the whole class.
+   *
+   * {@link patchWish} is not replaced by any of this and stays where it was. It is what the
+   * reader sees at the moment of the press — a stepper the cache controls must not be computed
+   * from a value a round trip is still on its way to confirm — and the re-read behind it is for
+   * the figures the press moved that this page was never holding.
    */
   const settleWhole = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
-    settle();
-  }, [queryClient, settle]);
+    void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
+  }, [queryClient]);
 
   const setQuantity = useMutation({
     mutationFn: ({ row, quantity }: { row: WishRow; quantity: number }) =>
@@ -356,9 +373,10 @@ export function WishlistPage() {
     },
     onSuccess: (change) => {
       // The answer, not the guess: the backend clamps and canonicalises, and this is the
-      // number it actually stored.
+      // number it actually stored. Then the re-read, for what the new number is counted into —
+      // the folder subtotal a copy count multiplies straight through.
       patchWish(change.id, (r) => ({ ...r, quantity: change.quantity }));
-      settle();
+      settleWhole();
     },
   });
 
@@ -366,8 +384,11 @@ export function WishlistPage() {
     mutationFn: (row: WishRow) => ipc.wishlistRemove(row.id),
     onError: settleWhole,
     onSuccess: (change) => {
+      // The row goes at once — a crossed-off wish must not sit there for the length of a round
+      // trip — and then everything the row was part of is re-read: the folder it was filed in,
+      // and the `elsewhere` mark on whatever duplicate it left behind.
       patchWish(change.id, null);
-      settle();
+      settleWhole();
     },
   });
 
@@ -425,8 +446,10 @@ export function WishlistPage() {
    * choosing the printing by hand *is* the review a flagged wish was waiting for. The caption
    * flips to "Any printing" on the press, which is the feedback the reader asked for.
    *
-   * **The answer is a re-read rather than a patch, which is where this parts company with the
-   * stepper above.** Un-pinning does not merely clear columns: the backend re-resolves the wish
+   * **The answer is a re-read rather than a patch, and that is where this parts company with the
+   * stepper above — which re-reads too, but holds its own row's number.** Every write on this
+   * page settles the same way now; the difference is how much of the row survives the settle.
+   * Un-pinning does not merely clear columns: the backend re-resolves the wish
    * against the newest printing of its oracle card, so the art the tile is drawn as, its rarity,
    * its mana cost and its unit price are all different afterwards and none of them is derivable
    * here. And this write **merges** on the same rule `wishlist_set_folder` does — un-pinning a
@@ -814,6 +837,27 @@ export function WishlistPage() {
   // page's own `sr-only` heading exists to avoid — and there are no cards to put under it.
   const hasFolders = folders.folders.length > 0;
   const filed = !flatten && childFolders.length > 0;
+
+  /**
+   * What the export dialog's two sentences have to say about where the reader is standing.
+   *
+   * `folderId` and `flatten` are already in `wishlist.filters` and already in the sweep's key, so
+   * the export has always been *correct* — it is the words that were not. Standing in `Ordered`
+   * with nothing typed, the dialog said `3 cards matching your filters` and offered
+   * "Export everything, ignoring the filters", when the only thing narrowing anything was the
+   * drawer neither sentence mentioned.
+   *
+   * **`narrows` is not simply "am I in a folder"**, because the top level narrows too: an absent
+   * `folderId` asks the backend for the wishes filed *nowhere* rather than for all of them
+   * (`WishlistQuery.folderId`), so a reader at the root of a cabinet is looking at a sweep that
+   * leaves every drawer out. It is off while the list is flattened, where the level on screen
+   * already is every folder, and off for a wishlist nobody has filed, where there is no cabinet
+   * to speak of and the extra clause would be about nothing.
+   */
+  const exportFiling = {
+    folder: !flatten && folderId !== null ? folderNameOf(folderId) : null,
+    narrows: hasFolders && !flatten,
+  };
   const status = statusOf(wishlist, failure, { filed, inFolder: !flatten && folderId !== null });
 
   // The notes a total needs to stay honest, in one string because they are one qualification
@@ -1025,7 +1069,22 @@ export function WishlistPage() {
                   node={node}
                   // The recursive total, never the summary row: that one is direct per folder,
                   // and a folder holding two sub-folders of six wishes each has none of its own.
-                  summary={subtotals.get(node.folder.id) ?? NO_WISHES}
+                  //
+                  // **`null` while the summary is still reading, and that is not the same
+                  // fallback as `NO_WISHES`.** This wall is gated on the folder *list*, which is
+                  // one flat `SELECT`; the figures come from a `GROUP BY` with the owned-copies
+                  // subquery and a price expression behind it, and it answers later. Across that
+                  // window a `Map.get` miss is indistinguishable from an empty drawer, so a
+                  // folder holding six wishes worth $312 drew `0 wishes` and then jumped — a
+                  // wrong number rather than a spinner. `isPending` is exactly the read that has
+                  // never answered *for this marketplace*, which is the right span: switching
+                  // marketplace is a new key, and the old currency's subtotals are not this
+                  // one's to draw either.
+                  summary={
+                    folders.summaryQuery.isPending
+                      ? null
+                      : (subtotals.get(node.folder.id) ?? NO_WISHES)
+                  }
                   currency={currency}
                   onOpen={() => wishlist.openFolder(node.folder.id)}
                   rowMenu={folderRowMenu(node.folder)}
@@ -1121,7 +1180,8 @@ export function WishlistPage() {
         onDismiss={() => setExporting(false)}
         onClose={() => setExporting(false)}
         scope={{
-          label: scopeLabel(exportScope.total, exportScope.everything),
+          label: scopeLabel(exportScope.total, exportScope.everything, exportFiling),
+          everythingLabel: everythingLabel(exportFiling),
           loading: exportScope.loading,
           everything: exportScope.everything,
           onEverything: exportScope.setEverything,

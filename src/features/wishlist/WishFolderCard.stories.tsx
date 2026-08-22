@@ -188,6 +188,34 @@ export const Empty: Story = {
 };
 
 /**
+ * The moment before the figures land — **which is not the same picture as {@link Empty}**.
+ *
+ * The page draws its cabinet as soon as the folder *list* answers, and that list is one flat
+ * `SELECT`; the numbers on this face come from `wishlist_folder_summary`, a `GROUP BY` carrying
+ * the owned-copies subquery and a marketplace price expression, and it answers later. Across that
+ * window a missing row and an unanswered read are one `Map.get` miss apart and mean opposite
+ * things — so a drawer holding six wishes worth $312 drew `0 wishes` and then jumped. That is a
+ * wrong number rather than a spinner, and the reader who glanced at the wall in that moment was
+ * told the drawer was empty.
+ *
+ * `null` is the page's way of saying "not counted yet" and the card draws the em dash every other
+ * unanswered figure in this app draws (`Figure`'s own `query.isPending ? "—"`), with the spoken
+ * half in words because a dash read aloud is punctuation. It is also what a **marketplace switch**
+ * looks like: that read is keyed on the marketplace, so the first frame in the new currency has
+ * no subtotals of its own and must not borrow the old one's.
+ */
+export const Counting: Story = {
+  args: { summary: null },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const tile = canvas.getByRole("button", { name: /^Expensive folder/ });
+    await expect(tile).toHaveTextContent("—");
+    await expect(tile).not.toHaveTextContent("0 wishes");
+    await expect(tile).toHaveAccessibleName("Expensive folder, still counting");
+  },
+};
+
+/**
  * Copies this marketplace could not price, counted beside the subtotal they are missing from.
  *
  * The note is written in the same `· 2 unpriced` shape the page header builds, so a folder's

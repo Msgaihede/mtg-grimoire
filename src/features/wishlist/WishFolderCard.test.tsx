@@ -121,7 +121,7 @@ describe("WishFolderCard", () => {
     canDrop = () => true,
     withSource = false,
   }: {
-    summary?: { wishes: number; missing: number; cost: number; unpriced: number };
+    summary?: { wishes: number; missing: number; cost: number; unpriced: number } | null;
     currency?: "usd" | "eur";
     canDrop?: (drag: WishDrag) => boolean;
     withSource?: boolean;
@@ -187,10 +187,43 @@ describe("WishFolderCard", () => {
     expect(screen.getByText("3 wishes · — · 3 unpriced")).toBeInTheDocument();
   });
 
+  /**
+   * **"Not counted yet" is not "empty", and the card has to draw the difference.** The wall is
+   * gated on the folder list — one flat `SELECT` — while these figures come from a `GROUP BY`
+   * with an owned-copies subquery and a price expression behind it, so there is a window in
+   * which a drawer holding six wishes worth $312 is on screen with nothing known about it.
+   * `0 wishes` across that window is a wrong number that then jumps, not a spinner.
+   */
+  it("says nothing is counted yet rather than `0 wishes`, while the summary is still reading", () => {
+    mount({ summary: null });
+    const tile = screen.getByRole("button", { name: /^Expensive folder/ });
+    expect(tile).toHaveTextContent("—");
+    expect(tile).not.toHaveTextContent("0 wishes");
+    // In words for a screen reader, because an em dash read aloud is punctuation.
+    expect(tile).toHaveAccessibleName("Expensive folder, still counting");
+  });
+
   /** A wall of these is otherwise a row of identically-named controls to a screen reader. */
   it("carries a manage trigger named for its own folder", () => {
     mount();
     expect(screen.getByRole("button", { name: "Manage Expensive" })).toBeInTheDocument();
+  });
+
+  /**
+   * The app's **first plain-click menu trigger**, so it inherits no precedent — and without this
+   * NVDA announces "Manage Expensive, button" and gives a reader no way to know a press opens
+   * anything at all. Every other popup trigger in the app declares its kind (`AnchoredPopup`'s
+   * `dialog`, `Submenu`'s `menu`).
+   *
+   * **No `aria-expanded`, deliberately.** The open menu is `ContextMenuProvider`'s single piece
+   * of state and this card never hears it close; a static `false` would be an assertion that is
+   * wrong for exactly as long as the panel is up, which is worse than saying nothing.
+   */
+  it("declares that the manage trigger opens a menu", () => {
+    mount();
+    const trigger = screen.getByRole("button", { name: "Manage Expensive" });
+    expect(trigger).toHaveAttribute("aria-haspopup", "menu");
+    expect(trigger).not.toHaveAttribute("aria-expanded");
   });
 
   it("opens the folder when pressed", async () => {

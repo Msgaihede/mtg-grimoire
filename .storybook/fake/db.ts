@@ -6995,6 +6995,24 @@ export function writeHandlers(db: FakeDb) {
      * being `ON DELETE CASCADE` on itself. A confirmation that said "and everything in it" would
      * be wrong about the half that matters: a folder is where a wish was kept, and the wish is
      * the thing the reader wanted. An id that resolves to nothing is a success.
+     *
+     * **The un-filing goes through {@link mergeWishOnto} and that is not a nicety** — it is the
+     * whole reason the crate stopped leaving this press to the `SET NULL`. The folder is the
+     * fourth term of {@link wishGrain}, so re-filing a sub-tree at the root rewrites the grain
+     * of every wish in it, and two shapes then land on a grain that is already taken:
+     *
+     * - a filed wish and a **root** wish for the same card — the state the design accepts on
+     *   purpose, since `deck_missing_to_wishlist`, `deck_theory_missing_to_wishlist` and
+     *   `wishlist_import_commit` all add at the root and cannot name a folder;
+     * - two wishes in **different sub-folders** of the one being deleted, which collide with
+     *   each other the moment both reach the root and need no root row at all.
+     *
+     * A bare loop over the rows produced two rows on one grain here while the app answered
+     * `UNIQUE constraint failed: index 'idx_wishlist_grain'` and deleted nothing — the fake
+     * being *kinder* than the app, which is the direction of drift that lets a story document a
+     * state the reader can never reach. One wish at a time, lowest id first, is what answers the
+     * second shape as well as the first: the crate collects the sub-tree with `ORDER BY w.id` and
+     * the first wish to reach the root becomes the row the next one merges into.
      */
     wishlist_folder_delete: (args: { id: number }): void => {
       refuseIfBusy(db);
@@ -7009,11 +7027,22 @@ export function writeHandlers(db: FakeDb) {
           }
         }
       }
+      // Ids rather than rows, taken before anything moves: a merge replaces `db.wishlistEntries`
+      // with a filtered copy, so a held reference is a row that is no longer in the store.
+      const filed = db.wishlistEntries
+        .filter((w) => w.folderId !== null && doomed.has(w.folderId))
+        .map((w) => w.id)
+        .sort((a, b) => a - b);
+      for (const id of filed) {
+        const wish = db.wishlistEntries.find((w) => w.id === id);
+        // Unreachable: a merge only ever deletes the row it was given, so no id here can go
+        // before its turn. Guarded because the alternative is a `TypeError` in a story.
+        if (!wish) continue;
+        if (mergeWishOnto(db, wish, { ...wish, folderId: null })) continue;
+        wish.folderId = null;
+        wish.updatedAt = stamp(db);
+      }
       db.wishlistFolders = db.wishlistFolders.filter((f) => !doomed.has(f.id));
-      for (const wish of db.wishlistEntries)
-        if (wish.folderId !== null && doomed.has(wish.folderId)) {
-          wish.folderId = null;
-        }
     },
 
     /**

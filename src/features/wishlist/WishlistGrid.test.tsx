@@ -281,26 +281,32 @@ describe("the elsewhere mark", () => {
     expect(screen.queryByRole("img", { name: /Also on your wishlist/ })).toBeNull();
   });
 
-  it("says how many other places the card is on the list, in both views", () => {
+  /**
+   * **Wishes, not places** — the noun is the fix of 2026-08-22 and it is the whole assertion.
+   * The grain is `(oracle_id, card_id, preferred_finish, folder_id)`, so a foil Bolt and a
+   * nonfoil Bolt both loose at the root are two counted rows in *one* place, and the old
+   * sentence said "2 other places" over them.
+   */
+  it("says how many other wishes on the list are for the card, in both views", () => {
     const rows = [{ ...BOLT, elsewhere: 2 }];
     const { unmount } = wall(rows);
     expect(
-      screen.getByRole("img", { name: "Also on your wishlist in 2 other places" }),
+      screen.getByRole("img", { name: "Also on your wishlist as 2 other wishes" }),
     ).toBeInTheDocument();
     unmount();
 
     list(rows);
     expect(
-      screen.getByRole("img", { name: "Also on your wishlist in 2 other places" }),
+      screen.getByRole("img", { name: "Also on your wishlist as 2 other wishes" }),
     ).toBeInTheDocument();
   });
 
-  /** One duplicate is one *place*, not two — the sentence is read by somebody deciding whether to
+  /** One duplicate is one *wish*, not two — the sentence is read by somebody deciding whether to
    *  buy the card again, so the number in it has to be the number of other rows. */
-  it("says one place in the singular", () => {
+  it("says one wish in the singular", () => {
     wall([{ ...BOLT, elsewhere: 1 }]);
     expect(
-      screen.getByRole("img", { name: "Also on your wishlist in 1 other place" }),
+      screen.getByRole("img", { name: "Also on your wishlist as 1 other wish" }),
     ).toBeInTheDocument();
   });
 });

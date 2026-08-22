@@ -67,12 +67,26 @@ interface WishFolderSummary {
  * the control and a middot read aloud is punctuation nobody asked for. Built together rather than
  * written twice, so the two can never disagree about what the card says.
  *
+ * **`null` is "not counted yet", and it is a different thing from a folder holding nothing.** The
+ * cabinet is drawn as soon as the folder *list* answers, and that list is one flat `SELECT` while
+ * the summary behind these figures is a `GROUP BY` carrying the owned-copies subquery and a price
+ * expression — so there is a real window in which a drawer holding six wishes worth $312 is on
+ * screen with nothing yet known about it. Drawing `0 wishes` across that window is not a spinner,
+ * it is a **wrong number that then jumps**, and a reader who glanced at the wall in that moment
+ * was told the drawer was empty. An em dash is what every other unanswered figure in this app
+ * draws (`Figure`'s own `query.isPending ? "—"`), and the spoken half says it in words because a
+ * dash read aloud is punctuation.
+ *
  * **A folder with nothing left to buy shows its wish count and no money at all.** `$0.00` on a
  * folder the reader has finished buying is noise — `formatPrice`'s own rule is that it is a price
  * nobody quoted — and the unpriced note goes with it, since that note exists to qualify a
  * subtotal and there is no subtotal to qualify.
  */
-function face(summary: WishFolderSummary, currency: Currency): { shown: string; spoken: string } {
+function face(
+  summary: WishFolderSummary | null,
+  currency: Currency,
+): { shown: string; spoken: string } {
+  if (summary === null) return { shown: "—", spoken: "still counting" };
   const wishes = plural(summary.wishes, "wish", "wishes");
   if (summary.missing === 0) return { shown: wishes, spoken: wishes };
   const parts = [
@@ -98,7 +112,9 @@ export function WishFolderCard({
   onDropWish,
 }: {
   node: FolderNode<WishlistFolder>;
-  summary: WishFolderSummary;
+  /** The recursive total the caller summed — or `null` while the summary read is still in
+   *  flight, which is not the same answer as an empty drawer. See {@link face}. */
+  summary: WishFolderSummary | null;
   currency: Currency;
   onOpen: () => void;
   /**
@@ -165,10 +181,25 @@ export function WishFolderCard({
       {/* The visible way into the same menu the right-click opens — the affordance a reader who
           does not know a card can be right-clicked has. Named for the folder, because a wall of
           these is otherwise a row of controls all called "Manage": a screen reader reads them
-          out of context, one after another, with nothing to tell them apart. */}
+          out of context, one after another, with nothing to tell them apart.
+
+          **`aria-haspopup="menu"` and no `aria-expanded`, which is a deliberately partial
+          declaration.** This is the app's first plain-click menu trigger — `menuClick` is new —
+          so it inherits nothing, and the two halves of the declaration cost very different
+          things. The popup *kind* is a fact about this button and is free: without it NVDA
+          announces "Manage Ordered, button" and a reader has no way to know a press opens
+          anything. The expanded *state* is a fact about `ContextMenuProvider`, which holds the
+          one open menu in state and publishes only `openMenu`/`closeMenu` — every other popup
+          trigger in the app (`AnchoredPopup`, `Submenu`) owns its own open flag and this one
+          cannot, because the panel is mounted at the app root and closes by routes this card
+          never hears about. Publishing it would put the open menu's identity in the context value
+          and re-render every card surface in the app on each open. A static `aria-expanded="false"`
+          that never changed would be worse than none — it is an assertion, and it would be wrong
+          for exactly as long as the menu is up. */}
       <button
         type="button"
         aria-label={`Manage ${node.folder.name}`}
+        aria-haspopup="menu"
         onClick={rowMenu.onClick}
         onKeyDown={rowMenu.onKeyDown}
         className={cn(

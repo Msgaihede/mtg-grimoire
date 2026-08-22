@@ -16,7 +16,11 @@
 //!   cabinet takes the drawers inside it in one press.
 //! * `wishlist_entries.folder_id` is `ON DELETE SET NULL`, so the same press leaves the *wishes*
 //!   standing at the root. A folder is where a wish was kept; the wish is the thing the reader
-//!   wanted, and no filing decision may throw one away.
+//!   wanted, and no filing decision may throw one away. **That one is a backstop and not the
+//!   mechanism**: `folder_id` is the fourth term of [`crate::schema::WISHLIST_GRAIN`], so
+//!   [`delete_folder`] re-files the sub-tree by hand, with the merge, before the row goes — see
+//!   there for the two collisions the cascade on its own answered with
+//!   `UNIQUE constraint failed`.
 //!
 //! **Nothing here writes history.** `deck_meta::delete_folder` is the one folder write in that
 //! module that records an audit row, because `decks` has a `deck_audit` to file it under and a
@@ -184,6 +188,19 @@ pub fn rename_folder(conn: &Connection, id: i64, name: &str) -> Result<WishlistF
 /// `parentId` names `id` itself — refuses rather than writing a loop `parent_id`'s own
 /// `ON DELETE CASCADE` would otherwise walk forever the day one of them is deleted.
 ///
+/// **The proposed parent is fenced in words first, and the cycle walk cannot stand in for
+/// it.** `wishlist_folders.parent_id REFERENCES wishlist_folders(id)` is a real foreign key
+/// between two user tables, so the `UPDATE` below does refuse a parent that is gone — with
+/// `FOREIGN KEY constraint failed`, which names the constraint rather than the mistake, and
+/// only while `PRAGMA foreign_keys` happens to be on. The walk reaches the same id and reads it
+/// as the root: `optional()?.flatten()` folds "no such folder" and "that folder is at the root"
+/// into one `None`, the climb ends on the first hop and the id sails through. So the check is
+/// its own statement, answering [`FOLDER_GONE`] the way [`create_folder`]'s parent and
+/// [`set_wish_folder`]'s destination already do — after this the three folder-taking writes in
+/// the feature all say the same sentence. **`deck_meta`'s `move_folder` has the identical hole
+/// and is deliberately left with it**: fixing one side of a ported pair is a difference somebody
+/// later reads as intentional, and the deck gallery is out of this branch's scope.
+///
 /// **The walk has a hop budget, and the budget is not about depth.** This walk is what *keeps*
 /// the tree acyclic, so it cannot assume it already is — a `parent_id` cycle that arrived some
 /// other way (a hand-edited database, a restored backup) would send the `candidate == id` arm
@@ -200,6 +217,16 @@ pub fn move_folder(
     parent_id: Option<i64>,
 ) -> Result<WishlistFolder, String> {
     if let Some(start) = parent_id {
+        let exists: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM wishlist_folders WHERE id = ?1)",
+                params![start],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        if !exists {
+            return Err(FOLDER_GONE.to_owned());
+        }
         let mut cursor = Some(start);
         let mut hops = 0usize;
         while let Some(candidate) = cursor {
@@ -238,23 +265,82 @@ pub fn move_folder(
 /// [`crate::deck_meta::delete_folder`] and [`crate::deck::delete_deck`], an id that resolves to
 /// nothing is a success: the caller wanted that folder gone, and it is gone.
 ///
-/// **Both of those are the DDL's work and neither is done by hand here**, which is the one
-/// thing to know before editing this function. `wishlist_entries.folder_id` is
-/// `ON DELETE SET NULL` and `wishlist_folders.parent_id` is `ON DELETE CASCADE` onto its own
-/// table (schema v23), so this single statement re-files every wish in the sub-tree and removes
-/// every folder in it. [`crate::deck_meta::delete_folder`] opens a transaction and reads rows
-/// first, and that is *not* un-filing anything either — it is collecting the deck ids for the
-/// `deck_audit` rows it owes, which this module has no log to write. There is no history and
-/// no second statement, so there is nothing for a transaction to hold together.
+/// # Why the un-filing is written out and not left to the cascade
 ///
-/// **It therefore depends on `PRAGMA foreign_keys` being ON**, which is per-connection.
-/// [`crate::db::open`] sets it for every connection the app hands out, so the app path is
-/// covered; a test that opens its own connection has to say so itself, and the `conn()` helper
-/// below does.
+/// `wishlist_entries.folder_id` is `ON DELETE SET NULL` (schema v23), and for one press it
+/// looks like the whole answer: one `DELETE`, every wish in the sub-tree re-filed at the root.
+/// It is not, because **that cascade rewrites the fourth term of
+/// [`crate::schema::WISHLIST_GRAIN`]** on every one of those rows, and a write that changes a
+/// wish's grain has to say what it will land on. Every other write in the crate does —
+/// [`crate::wishlist::add_wish`] through `ON CONFLICT`, [`set_wish_folder`] and
+/// [`crate::wishlist::set_wish_printing`] through the merge below,
+/// `reconcile::fold_wish_into_existing` through its own — and this one used to be the exception
+/// that let `idx_wishlist_grain` decide. Two shapes reached the reader as
+/// `UNIQUE constraint failed: index 'idx_wishlist_grain'`, with the folder still standing and
+/// nothing moved:
+///
+/// * a wish in the sub-tree and a **root** wish for the same card, which is the state spec §1
+///   accepts on purpose — `deck_missing_to_wishlist`, `deck_theory_missing_to_wishlist` and
+///   `wishlist_import_commit` all add at the root and cannot name a folder, so a card the
+///   reader has filed acquires a second root row and `WishRow.elsewhere` exists to advertise
+///   it. The duplicate the design tolerates was the one that bricked the delete.
+/// * **two sub-tree wishes colliding with each other**, needing no root row at all: `Top/A` and
+///   `Top/B` each holding the same card land on one grain the moment both reach the root.
+///
+/// So the sub-tree's wishes are collected and re-filed one at a time through [`refile_wish`],
+/// with [`set_wish_folder`]'s merge rule and not a third copy of it, **before** the folder row
+/// goes. By the time the `DELETE` runs every wish beneath it is already at the root, so the
+/// `SET NULL` has nothing left to rewrite and nothing left to collide on. One at a time is what
+/// answers the second shape as well as the first: the first wish to reach the root becomes the
+/// row the next one merges into.
+///
+/// `parent_id`'s `ON DELETE CASCADE` onto its own table is still the DDL's work and still done
+/// by one statement — a folder inside a deleted folder has nowhere else to be, and no grain is
+/// involved. **It therefore still depends on `PRAGMA foreign_keys` being ON**, which is
+/// per-connection. [`crate::db::open`] sets it for every connection the app hands out, so the
+/// app path is covered; a test that opens its own connection has to say so itself, and the
+/// `conn()` helper below does.
+///
+/// One transaction, which this function did not need while it was one statement: mid-delete the
+/// wishes are all re-filed and the folder is gone, or none of it happened.
 pub fn delete_folder(conn: &Connection, id: i64) -> Result<(), String> {
-    conn.execute("DELETE FROM wishlist_folders WHERE id = ?1", params![id])
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    // The sub-tree, in the database rather than in a Rust walk, because the cascade this
+    // stands in front of is itself recursive and the two must agree about which folders are
+    // doomed. **`UNION` and never `UNION ALL`**: a `parent_id` cycle that arrived some other
+    // way — a hand-edited database, a restored backup — is what [`move_folder`]'s hop budget
+    // exists for, and here the duplicate-row check is what makes the same corruption converge
+    // instead of looping. `ORDER BY w.id` so the row a merge folds into is decided by the
+    // table and not by the planner.
+    let filed: Vec<i64> = {
+        let mut stmt = tx
+            .prepare(
+                "WITH RECURSIVE doomed(id) AS (
+                     SELECT ?1
+                     UNION
+                     SELECT f.id FROM wishlist_folders f JOIN doomed d ON f.parent_id = d.id
+                 )
+                 SELECT w.id FROM wishlist_entries w
+                  WHERE w.folder_id IN (SELECT id FROM doomed)
+                  ORDER BY w.id",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![id], |r| r.get(0))
+            .map_err(|e| e.to_string())?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| e.to_string())?
+    };
+    // A merge only ever deletes the row it was *given*, so no id in this list can go before its
+    // turn and [`refile_wish`]'s [`WISH_GONE`] is unreachable from here. It is propagated rather
+    // than skipped anyway: if it ever did fire, something is deleting wishes underneath this
+    // transaction, and rolling the whole press back is the only honest answer to that.
+    for wish in filed {
+        refile_wish(&tx, wish, None)?;
+    }
+    tx.execute("DELETE FROM wishlist_folders WHERE id = ?1", params![id])
         .map_err(|e| e.to_string())?;
-    Ok(())
+    tx.commit().map_err(|e| e.to_string())
 }
 
 /// Move one wish into a folder, or — with `None` — back to the **root of the list**.
@@ -304,6 +390,24 @@ pub fn set_wish_folder(
             return Err(FOLDER_GONE.to_owned());
         }
     }
+    refile_wish(&tx, id, folder_id).and_then(|change| {
+        tx.commit().map_err(|e| e.to_string())?;
+        Ok(change)
+    })
+}
+
+/// The filing write itself, with no fence and no transaction of its own: move wish `id` onto
+/// `folder_id`, folding it into whatever already holds that grain.
+///
+/// **Factored out because [`delete_folder`] needs the very same rule**, and the merge had
+/// already been written three times in this crate before it did — a fourth copy in the un-filing
+/// path is how the two would come to disagree about what a duplicate wish is. It takes a
+/// `&Connection` rather than a `&Transaction` so either caller's `unchecked_transaction` handle
+/// fits, and it commits nothing: whoever opened the transaction owns it, which is what lets the
+/// delete run this once per wish in a sub-tree and still be one press.
+///
+/// [`set_wish_folder`] is where the rule is argued; the paragraph above it is the one to read.
+fn refile_wish(tx: &Connection, id: i64, folder_id: Option<i64>) -> Result<EntryChange, String> {
     // The three grain terms this write does *not* touch, plus the quantity the merge moves.
     // Read before anything is decided, because "is that wish still there?" is answered by the
     // same statement — an `UPDATE` that changed no rows cannot tell a missing row apart from a
@@ -356,7 +460,6 @@ pub fn set_wish_folder(
         .map_err(|e| e.to_string())?;
         tx.execute("DELETE FROM wishlist_entries WHERE id = ?1", params![id])
             .map_err(|e| e.to_string())?;
-        tx.commit().map_err(|e| e.to_string())?;
         return Ok(EntryChange {
             id: target,
             quantity: held + quantity,
@@ -373,7 +476,6 @@ pub fn set_wish_folder(
         params![id, folder_id],
     )
     .map_err(|e| e.to_string())?;
-    tx.commit().map_err(|e| e.to_string())?;
     Ok(EntryChange {
         id,
         quantity,
@@ -509,7 +611,7 @@ pub async fn wishlist_folder_move(
 }
 
 /// The wishes inside surface at the root and the sub-folders go too — see [`delete_folder`],
-/// where both are the DDL's work rather than this command's.
+/// where the sub-folders are the DDL's work and the wishes are emphatically not.
 #[tauri::command]
 pub async fn wishlist_folder_delete(
     state: tauri::State<'_, Arc<AppState>>,
@@ -729,6 +831,37 @@ mod tests {
         );
     }
 
+    /// The destination, which the cycle walk cannot check and does not.
+    /// `optional()?.flatten()` folds "no such folder" into the same `None` as "that folder is
+    /// at the root", so the climb ends on the first hop and an id nothing answers to sails
+    /// through to the `UPDATE` — which refuses it as `FOREIGN KEY constraint failed`, a
+    /// sentence about a constraint, and only while `PRAGMA foreign_keys` is on. `create_folder`
+    /// and `set_wish_folder` both answer [`FOLDER_GONE`] over the same column and this now does
+    /// too; `.storybook/fake/db.ts` has always answered it, and the fake being kinder than the
+    /// app is the drift that makes a story document a lie.
+    #[test]
+    fn move_folder_refuses_a_parent_that_is_not_there() {
+        let conn = conn();
+        let ordered = create_folder(&conn, None, "Ordered").unwrap();
+        let someday = create_folder(&conn, Some(ordered.id), "Someday").unwrap();
+
+        let err = move_folder(&conn, someday.id, Some(404)).unwrap_err();
+
+        assert_eq!(err, FOLDER_GONE);
+        assert_eq!(
+            read_folder(&conn, someday.id).unwrap().unwrap().parent_id,
+            Some(ordered.id),
+            "and the refused move wrote nothing"
+        );
+        // `None` is the root and is always a destination -- the one parent there is no row to
+        // look up, so the fence must not reach it.
+        move_folder(&conn, someday.id, None).unwrap();
+        assert_eq!(
+            read_folder(&conn, someday.id).unwrap().unwrap().parent_id,
+            None
+        );
+    }
+
     #[test]
     fn move_folder_refuses_moving_a_folder_into_itself_directly() {
         let conn = conn();
@@ -788,6 +921,98 @@ mod tests {
             .query_row("SELECT count(*) FROM wishlist_entries", [], |r| r.get(0))
             .unwrap();
         assert_eq!(wishes, 3, "all three wishes are still on the list");
+    }
+
+    /// **Shape (a) of the collision the un-filing exists for**: a wish at the root, and the same
+    /// card filed in the folder being deleted. Not contrived — it is the feature's own
+    /// documented state. Spec §1 accepts that `deck_missing_to_wishlist`,
+    /// `deck_theory_missing_to_wishlist` and `wishlist_import_commit` all add at the **root**
+    /// and cannot name a folder, so a card the reader has filed acquires a second root row and
+    /// `WishRow.elsewhere` exists to advertise it. That exact duplicate is the one that used to
+    /// brick the delete: with the re-filing left to `ON DELETE SET NULL`, this answered
+    /// `Err("UNIQUE constraint failed: index 'idx_wishlist_grain'")`, nothing moved and the
+    /// folder was still there.
+    ///
+    /// The notes are here rather than in a test of their own because they are what proves the
+    /// merge is [`set_wish_folder`]'s and not a second rule: `coalesce(notes, …)` keeps the
+    /// destination's and falls back to the source's, so a root row with none ends up wearing
+    /// the filed row's.
+    #[test]
+    fn delete_folder_merges_a_filed_wish_into_the_root_wish_for_the_same_card() {
+        let conn = conn();
+        let ordered = create_folder(&conn, None, "Ordered").unwrap();
+        conn.execute_batch(
+            "INSERT INTO wishlist_entries
+                (id, oracle_id, name, quantity, notes, folder_id, created_at, updated_at)
+             VALUES (1, 'o1', 'Bolt', 1, NULL, NULL, 0, 0),
+                    (2, 'o1', 'Bolt', 2, 'ordered on Tuesday', 1, 0, 0);",
+        )
+        .unwrap();
+
+        delete_folder(&conn, ordered.id).unwrap();
+
+        assert!(
+            list_folders(&conn).unwrap().is_empty(),
+            "the folder really went -- the collision used to leave it standing"
+        );
+        let rows: Vec<(i64, Option<i64>, i64, Option<String>)> = conn
+            .prepare("SELECT id, folder_id, quantity, notes FROM wishlist_entries ORDER BY id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(
+            rows,
+            vec![(1, None, 3, Some("ordered on Tuesday".to_owned()))],
+            "one wish at the root for all three copies, wearing the filed row's note"
+        );
+    }
+
+    /// **Shape (b), which needs no root row at all**: `Top/A` and `Top/B` each holding the same
+    /// card. Neither collides with anything while the folders stand; both land on the *root*
+    /// grain the moment the cabinet goes, so they collide with **each other**. That is why the
+    /// un-filing is one wish at a time through [`refile_wish`] rather than one `UPDATE` over the
+    /// sub-tree — the first to arrive becomes the row the second merges into, and `ORDER BY id`
+    /// is what makes which one that is a fact about the table rather than about the planner.
+    ///
+    /// It also drives the recursive walk two levels deep, which the single-level sub-tree of
+    /// [`delete_folder_keeps_its_wishes_and_cascades_its_subfolders`] cannot: nothing is filed
+    /// in `Top` itself.
+    #[test]
+    fn delete_folder_merges_two_subtree_wishes_that_collide_with_each_other() {
+        let conn = conn();
+        let top = create_folder(&conn, None, "Top").unwrap();
+        let a = create_folder(&conn, Some(top.id), "A").unwrap();
+        let b = create_folder(&conn, Some(top.id), "B").unwrap();
+        let first = wish(&conn, "o1", 2, Some(a.id));
+        let second = wish(&conn, "o1", 5, Some(b.id));
+        // A card only one of them holds, so the merge is shown to be about the grain and not
+        // about "everything in a deleted folder becomes one row".
+        let other = wish(&conn, "o2", 1, Some(b.id));
+
+        delete_folder(&conn, top.id).unwrap();
+
+        assert!(
+            list_folders(&conn).unwrap().is_empty(),
+            "all three cascaded"
+        );
+        let rows: Vec<(i64, Option<i64>, i64)> = conn
+            .prepare("SELECT id, folder_id, quantity FROM wishlist_entries ORDER BY id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(
+            rows,
+            vec![(first, None, 7), (other, None, 1)],
+            "the lower id survives and holds both lots of copies; `second` is gone, not zeroed"
+        );
+        assert_ne!(
+            first, second,
+            "two rows went in -- the fixture is not vacuous"
+        );
     }
 
     #[test]
