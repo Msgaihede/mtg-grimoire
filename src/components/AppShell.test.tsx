@@ -1,6 +1,13 @@
 import { useEffect, useRef, type ReactElement } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
-import { act, render as renderBare, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  render as renderBare,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeckDetail, SyncOutcome, SyncProgressEvent, SyncStatus } from "@/lib/ipc";
@@ -104,6 +111,7 @@ import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { CardToDeckProvider, useAddCardToDeck } from "@/features/card/cardMenu";
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { LAYER } from "@/lib/layers";
+import { DURATION } from "@/lib/motion";
 import type { Update } from "@/lib/useUpdate";
 import { cardDraggable, type DragPayload } from "@/features/decks/dnd";
 import { queryClient } from "@/lib/query";
@@ -570,6 +578,116 @@ describe("collapsing the sidebar", () => {
 
     expect(useAppStore.getState().activeView).toBe("decks");
     expect(screen.getByRole("button", { name: "Decks" })).toHaveAttribute("aria-current", "page");
+  });
+
+  /** An entry's word, which is in the DOM in both states and `sr-only` in one of them. */
+  const word = (label: string) =>
+    screen.getByRole("button", { name: label }).querySelector("span");
+
+  /**
+   * The first half of the 2026-08-22 report, as the rule rather than as the symptom.
+   *
+   * The rail's width is a CSS transition and its labels are a React commit, so flipping one flag
+   * put six words back in the flow at their full width while the rail was still 68px and
+   * growing — painted over the view beside it for the whole 180ms, because `<nav>` carries no
+   * `overflow-hidden` and cannot (the collapsed rail's floating notes hang off it at
+   * `left-full`).
+   *
+   * **Fake timers rather than an assertion racing a real 180ms.** The window this is about is
+   * exactly the tween's length, so on a loaded runner a real-timer version would be asserting
+   * about whichever side of it the machine happened to be on — green or red for reasons that
+   * are not the code's. `setTimeout` only, for the reason the drop-report block below gives:
+   * the mutation settles on a microtask and faking that stalls the press rather than the timer.
+   */
+  it("keeps the words out of the rail until it has finished widening", async () => {
+    navCollapsed.mockResolvedValue(true);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      render(<AppShell update={noUpdate}>{null}</AppShell>);
+      await act(async () => {});
+      expect(word("Decks")).toHaveClass("sr-only");
+
+      // `fireEvent` rather than `userEvent`: the latter's own scheduler runs on `setTimeout`,
+      // and pointing it back at the clock this test is holding still is a knot for no gain —
+      // what is being checked is one press, not a gesture.
+      fireEvent.click(screen.getByRole("button", { name: "Expand sidebar" }));
+      // **Query delivers its notifications on a `setTimeout(0)`**, so the optimistic write is
+      // not on screen until the clock is nudged — and a nudge of 0 fires exactly that and
+      // nothing else, leaving the reveal 180ms out where the assertions below want it.
+      await act(async () => {
+        vi.advanceTimersByTime(0);
+      });
+
+      // The rail is already on its way — this is the state the words must not be painted in.
+      expect(rail()).toHaveClass("w-52");
+      expect(word("Decks")).toHaveClass("sr-only");
+
+      await act(async () => {
+        vi.advanceTimersByTime(DURATION.base);
+      });
+
+      expect(word("Decks")).not.toHaveClass("sr-only");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /**
+   * And the other direction, which is asymmetric on purpose: the words leave in the same commit
+   * as the press, so nothing is ever painted wider than the rail holding it. A symmetric delay
+   * here would be the same overflow with the sign flipped.
+   */
+  it("drops the words in the commit that starts the rail closing", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    try {
+      render(<AppShell update={noUpdate}>{null}</AppShell>);
+      await act(async () => {
+        vi.advanceTimersByTime(0);
+      });
+      expect(word("Decks")).not.toHaveClass("sr-only");
+
+      fireEvent.click(screen.getByRole("button", { name: "Collapse sidebar" }));
+      await act(async () => {
+        vi.advanceTimersByTime(0);
+      });
+
+      // The same nudge that put the new width on screen: one commit, both facts.
+      expect(rail()).toHaveClass("w-17");
+      expect(word("Decks")).toHaveClass("sr-only");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /**
+   * The second half of the report, and the only part of it jsdom can hold an opinion about.
+   *
+   * The row used to centre its content while collapsed. That is the same place at rest — the
+   * icon sits 24px from the rail's left edge either way — but the class flips on the **press**
+   * and the width takes 180ms to follow, so for that 180ms each icon was being centred in a box
+   * still 183px wide: out to 81.5 and slid back as the rail closed around it. There is no layout
+   * engine here to measure the travel, so this pins the cause — an entry is left-anchored in both
+   * states, and the only thing its width can move is the box, not the icon inside it.
+   */
+  it("anchors every icon to the same edge in both states", async () => {
+    render(<AppShell update={noUpdate}>{null}</AppShell>);
+    const collapse = await screen.findByRole("button", { name: "Collapse sidebar" });
+    const entries = () =>
+      ["Search", "Tags", "Collection", "Wishlist", "Decks", "Settings"].map((label) =>
+        screen.getByRole("button", { name: label }),
+      );
+    for (const entry of [...entries(), collapse]) {
+      expect(entry).not.toHaveClass("justify-center");
+    }
+
+    await userEvent.click(collapse);
+    await waitFor(() => expect(rail()).toHaveClass("w-17"));
+
+    for (const entry of [...entries(), screen.getByRole("button", { name: "Expand sidebar" })]) {
+      expect(entry).not.toHaveClass("justify-center");
+      // Still 44px, which is what the row would lose to an out-of-flow label without it.
+      expect(entry).toHaveClass("h-11");
+    }
   });
 
   /** `aria-expanded` on the control and `aria-controls` at the region: the pair is what says

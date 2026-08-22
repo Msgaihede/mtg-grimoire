@@ -99,6 +99,46 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   activates something. The choice is one `app_meta` row (`nav_collapsed`, `"1"`/`"0"`), and it was
   observed written **through a running sync** — the optimistic write's BUSY case, costing nothing
   the reader can see.
+- **The rail's width is a CSS transition and its labels are a React commit, and the two used to
+  run at once — which was two bugs, not one** (2026-08-22, both reported against the shipped
+  window). The bullet above says "nothing else about an entry moves"; that was true *at rest* and
+  false for the 180ms in between. Sampled a frame at a time in the shipped window, debug build,
+  at the app's own 1920×1080 — and **both readings come from one build**, the old behaviour
+  reproduced by backing each fix out through `element.style` in the running window rather than by
+  rebuilding twice.
+  **The icons jumped away from the left on the way down.** The row centred its content while
+  collapsed, which is the same place to half a pixel at rest — the icon's left edge is **24**
+  expanded and **23.5** centred in the 43px collapsed row — but the class flipped on the *press*
+  while the width took 180ms to follow, so each icon was being centred in a box still 183px wide.
+  Frame by frame: **24 → 93.5** on the first frame, then 93.3, 92.6, 91.2, 88.8 … 24.5, 23.7,
+  settling at 23.5. A **69.5px** leap outward and a slow slide back, six icons at once. The fix is
+  to left-anchor in both states — `gap-3` unconditionally, `justify-center` gone, `h-11` while the
+  label is out of the flow — which reads **24 on all 40 frames** of the collapse and 24 on all 45
+  of the expand. **Nothing about the target changed**, which was the thing to check: the entry and
+  the toggle are still **43×44** collapsed and 183×44 expanded, `main` still gets **140px** back
+  (1712 → 1852 here), `documentElement.scrollWidth` is 1920 in both states, and the collapsed
+  tooltip still stands at **left: 63**, the number the pass above recorded.
+  **The words arrived 180ms before the room for them on the way up.** `collapsed` flipping in one
+  commit put all seven labels back in the flow at full width inside a 68px rail, painted over the
+  view beside them — `<nav>` carries no `overflow-hidden` and *cannot*, because the collapsed
+  rail's floating notes hang off it at `left-full`. Measured with the hold backed out: `Decks` sat
+  with its right edge at **102** against a rail 68 wide, **34px** outside it, for the first ~55ms;
+  `Tags` overhangs by 22, `Collapse` by 52, `Collection` by **62**. `src/lib/useNavLabels.ts` holds
+  them back for the length of the tween and the label sites fade them in over
+  `--duration-instant` (50ms, the tier added for this). The corrected sweep: the rail reaches 208
+  at **172ms**, the word leaves `sr-only` at **195ms**, opacity climbs 0 → 17 → 47 → 70 → 85 → 94
+  → 100 and is full at **242ms** — a **47ms** fade, and the word's right edge never leaves the
+  rail. **Asymmetric on purpose**: closing, the words go in the same commit as the press, because
+  a delay there is the same overflow with the sign flipped.
+  **The reduced-motion half is proven at the class and not in that window, and the reason is the
+  hook.** Under emulated `prefers-reduced-motion: reduce` the `<nav>` computes
+  `transition-property: none` (68 → 208 in **one frame**) and the label computes
+  `animation-name: none`, `animation-duration: 0s` against `enter`/`0.05s` normally — so the fade
+  is off and the rail does not travel. But the labels still waited the full 180ms, because
+  `useReducedMotion()` reads the media query **once at mount** and never updates on a live change
+  (`motion.md` says so about the hook generally). A reader whose OS setting is on *before the app
+  starts* gets `delayMs: 0`; emulating it mid-session cannot show that, and
+  `useNavLabels.test.ts` is what covers the zero-delay path.
 - **The ribbon says what the app is doing, and it is a registry rather than a sync.** A long
   job registers an `Activity` (`src/lib/activity.ts`) — key, rank, label, `detail`, value —
   through `useRegisterActivity`, and the lowest rank wins the row (`RANK.sync` 0 beats
