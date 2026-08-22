@@ -6957,9 +6957,24 @@ export function writeHandlers(db: FakeDb) {
      * a story documenting a lie.
      *
      * The walk is bounded by {@link MAX_FOLDER_DEPTH}, which is not about depth — see there.
+     *
+     * **The destination is checked, `wishlist_folder_create`'s fence two functions up.** The two
+     * write the same column and disagreeing about it is the fake drifting from the app in the
+     * one direction that matters: `wishlist_folders.parent_id REFERENCES wishlist_folders(id)`
+     * is a real foreign key, so the app refuses a parent that is gone while an unchecked store
+     * here would write an orphaned sub-tree and let a story draw a folder hanging off nothing.
+     * The cycle walk above cannot stand in for it — `wishFolderById(...)?.parentId ?? null` reads
+     * an id no folder has as "already at the root" and lets it straight through.
+     *
+     * **`deck_folder_move` has the identical hole and is deliberately left with it.** Fixing one
+     * side of a ported pair is a difference somebody will later read as intentional, so it is
+     * said out loud here rather than discovered: the decks' folder move is out of this branch's
+     * scope, and closing it is a change to the deck gallery's stories rather than to the
+     * wishlist's.
      */
     wishlist_folder_move: (args: { id: number; parentId: number | null }): WishlistFolder => {
       refuseIfBusy(db);
+      if (args.parentId !== null && !wishFolderById(db, args.parentId)) throw refuse(FOLDER_GONE);
       let cursor = args.parentId;
       for (let hops = 0; cursor !== null; hops += 1) {
         if (cursor === args.id) throw refuse(FOLDER_CYCLE);

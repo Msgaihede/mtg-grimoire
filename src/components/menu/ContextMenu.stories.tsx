@@ -16,7 +16,14 @@ import { buildDeckCardMenu, type DeckCardMenuDeps } from "@/features/decks/deckC
 import { buildDeckMenu, type DeckMenuDeps } from "@/features/decks/deckMenu";
 import { buildFolderMenu, type FolderMenuDeps } from "@/features/decks/folderMenu";
 import { SPECS } from "@/features/decks/validation/fixtures";
-import type { DeckCard, DeckCategory, DeckFolder, DeckRow, DeckTag } from "@/lib/ipc";
+import type {
+  DeckCard,
+  DeckCategory,
+  DeckFolder,
+  DeckRow,
+  DeckTag,
+  WishlistFolder,
+} from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
 import { deckCard, deckCategory, printing } from "../../../.storybook/fake/fixtures";
 
@@ -170,22 +177,39 @@ const ORPHANED_TARGET: CardMenuTarget = { ...CARD_TARGET, oracleId: null };
  * `DeckTargetSubmenu` is passed **as itself**, with no glue, which is how every surface passes it:
  * the picker reaches the app's one `useCardToDeck` through the context {@link Stage} mounts rather
  * than through a callback threaded from here.
+ *
+ * **`wishlistFolders` defaults to none, and that default is a case rather than a shortcut.** A
+ * reader who has never made a folder is the ordinary reader, and for them `Add to → Wishlist` is
+ * one row and one press straight to the root — the row it was before folders existed, which must
+ * not regress. {@link WISH_FOLDERS} is the other case, and {@link AddToWishlistFolders} is the
+ * story of it.
  */
-function cardDeps(act: Act): CardMenuDeps {
+function cardDeps(act: Act, wishlistFolders: readonly WishlistFolder[] = []): CardMenuDeps {
   return {
     marketplace: MARKETPLACES.cardmarket,
     addToCollection: (target, finish) => act(`collection:${target.cardId}:${finish}`),
     addToWishlist: (target, folderId) =>
       act(`wishlist:${target.cardId}${folderId === null ? "" : `:${folderId}`}`),
-    // **No folders**, which keeps `Add to → Wishlist` the single row these stories are about:
-    // one press, straight to the root list. A cabinet with drawers in it turns that row into a
-    // picker, and a story of that belongs beside the wishlist's own fixtures rather than here,
-    // where the subject is the panel's kinds and its keyboard model.
-    wishlistFolders: [],
+    wishlistFolders,
     openAllPrintings: (t) => act(`printings:${t.oracleId}`),
     DeckTargetSubmenu,
   };
 }
+
+/**
+ * A wishlist with a cabinet in it — the fake's own seeded three, so this picker and the wishlist
+ * page's folder cards describe one filing cabinet rather than two.
+ *
+ * The shape draws all three of `buildWishlistTargetItems`' rules at once: a folder with a child
+ * (`Ordered`, which therefore becomes a submenu holding **its own row first**), a folder with none
+ * (`Someday`, offered anyway, because here the folder *is* the destination rather than a container
+ * of them), and the nesting itself.
+ */
+const WISH_FOLDERS: WishlistFolder[] = [
+  { id: 1, parentId: null, name: "Ordered", sortOrder: 0 },
+  { id: 2, parentId: 1, name: "Backordered", sortOrder: 0 },
+  { id: 3, parentId: null, name: "Someday", sortOrder: 1 },
+];
 
 /** The command zone, and a pile the reader made and dragged to the end of their own order. Named
  *  rather than reached by index, because two stories are *about* which of the two they are. */
@@ -492,6 +516,86 @@ export const AddToDeck: Story = {
       { timeout: FRAME_WAIT },
     );
     await expect(canvas.getByRole("menuitem", { name: "Modern Goodstuff" })).toBeInTheDocument();
+  },
+};
+
+/**
+ * **Add to → Wishlist** once the reader has a filing cabinet — the same row, one kind wider.
+ *
+ * With no folders it is a plain `action` and one press ({@link AddToDeck} shows it that way, and
+ * that is the state every reader starts in). With folders it becomes a `submenu`, and
+ * deliberately **not** a `lazy` one, which is the opposite of the deck picker directly below it:
+ * `lazy` exists so a right-click on a wall of forty tiles fires no query, and `useCardMenuDeps`
+ * holds one `useWishlistFolders()` per **page mount** — the rows are in hand before the menu is
+ * built, so the whole `lazy` apparatus would buy a fetch that has already happened.
+ *
+ * Three rules of `buildWishlistTargetItems` are on screen at once, and each is a place it diverges
+ * from `buildDeckTargetItems`:
+ *
+ * - **The root goes first and is never omitted**, wearing the same `Heart` the row above it does
+ *   rather than a `Folder`, because it is the list itself and not a drawer in it. `NULL` is where
+ *   every wish lands unless somebody says otherwise, so it is the answer wanted most often and the
+ *   one that must not move when the reader makes their fourth folder. The separator under it says
+ *   what an indent would say on a page: everything below is filing.
+ * - **An empty folder is still offered.** `deckLevel` drops one, because there a folder is a
+ *   *container of destinations* and a drawer with no deck under it opens onto an empty panel.
+ *   Here the folder **is** the destination — filing the first wish into a folder made an hour ago
+ *   is exactly what an empty one is for — so `Someday` is a live row.
+ * - **A folder with children draws its own row first**, then a rule, then them. A submenu that
+ *   offered only the children would make `Ordered` the one drawer in the cabinet a card cannot be
+ *   filed into: the reader opens it looking for the folder and finds only what is inside it.
+ *
+ * No `sortOptions` anywhere near it, at either level. A folder tree is one of the two lists
+ * `src/lib/options.ts` exempts — an arrangement the reader made themselves — and ordering their
+ * drawers one way on the wishlist page and another in this picker would read as a bug because it
+ * is one.
+ */
+export const AddToWishlistFolders: Story = {
+  args: { build: (act) => buildCardMenu(CARD_TARGET, cardDeps(act, WISH_FOLDERS)) },
+  play: async ({ args, canvasElement }) => {
+    const canvas = within(canvasElement);
+    const addTo = await canvas.findByRole("menuitem", { name: "Add to" });
+    await waitFor(async () => await expect(addTo).toBeVisible(), { timeout: FRAME_WAIT });
+
+    await userEvent.click(addTo);
+    // The row that was one press is a question now, and says so in ARIA rather than only with a
+    // chevron — the chevron is `aria-hidden`, so this attribute is the whole of what is announced.
+    const wishlist = await canvas.findByRole("menuitem", { name: "Wishlist" });
+    await expect(wishlist).toHaveAttribute("aria-haspopup", "menu");
+
+    await userEvent.click(wishlist);
+    await waitFor(
+      async () =>
+        await expect(canvas.getByRole("menuitem", { name: "Someday" })).toBeVisible(),
+      { timeout: FRAME_WAIT },
+    );
+    // The root first, then the two top-level drawers in the reader's own `sortOrder` — and
+    // `Backordered` is *not* here, because it is inside `Ordered`.
+    const panels = canvas.getAllByRole("menu");
+    const rows = within(panels[panels.length - 1]).getAllByRole("menuitem");
+    await expect(rows.map((r) => r.textContent)).toEqual(["Wishlist", "Ordered", "Someday"]);
+
+    // `Ordered` holds a folder, so it is a submenu — and the first thing inside it is `Ordered`
+    // itself, which is what stops a parent being the one drawer nothing can be filed into.
+    const ordered = canvas.getByRole("menuitem", { name: "Ordered" });
+    await expect(ordered).toHaveAttribute("aria-haspopup", "menu");
+    await userEvent.click(ordered);
+    await waitFor(
+      async () =>
+        await expect(canvas.getByRole("menuitem", { name: "Backordered" })).toBeVisible(),
+      { timeout: FRAME_WAIT },
+    );
+    const inside = canvas.getAllByRole("menu");
+    await expect(
+      within(inside[inside.length - 1])
+        .getAllByRole("menuitem")
+        .map((r) => r.textContent),
+    ).toEqual(["Ordered", "Backordered"]);
+
+    // The press names the folder, which is the whole reason `addToWishlist` grew a second
+    // argument: an add that could not say where would file every card at the root.
+    await userEvent.click(canvas.getByRole("menuitem", { name: "Backordered" }));
+    await expect(args.act).toHaveBeenCalledWith(`wishlist:${CARD_TARGET.cardId}:2`);
   },
 };
 

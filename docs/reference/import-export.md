@@ -131,8 +131,12 @@ ever be optional anywhere.
 (**Counted** from `SURFACE_FIELDS` directly, not carried over from the plan's own estimate: the
 collection carries every fact a physical card can have except a pile, which is why its CSV is
 the tallest thing the export dialog draws.) `category` is the one field neither the collection nor
-the wishlist ever offers — a collection row and a wishlist wish are not filed anywhere, so there is
-no pile to name and no checkbox for one.
+the wishlist ever offers — a collection row is filed nowhere at all, so there is no pile to name and
+no checkbox for one. **A wish has been filed somewhere since schema v23 and still does not offer
+it**, which is a decision rather than an oversight: a wishlist folder is not a deck category, no
+format has a channel that means "the reader's own drawer", and the rule is the one stated with
+[the four import destinations](#the-four-import-destinations) below — folders are not carried in
+either direction.
 
 **The `csvHeader` column is the CSV vocabulary, both ways.** The writer reads it to name a column;
 the reader (`parse.ts`'s `HEADER_TO_FIELD`) builds the reverse map from the same table, case- and
@@ -264,7 +268,7 @@ one per surface plus the deck's "start a new one":
 | `deck` (existing) | `merge` / `replace` | `deck_id, variant, category_id, card_id, coalesce(finish,'')` (`schema::DECK_CARD_GRAIN`) | `replace` clears one **variant** first, named before it does; the mode radio says how many cards that would cost |
 | `newDeck` | `merge` only | same grain, on the deck just created | No mode radios at all — there is nothing to replace one line after `deck_create`, and `merge` is the mode that cannot clear anything if that ever stops being true |
 | `collection` | `add` / `set` | `cardId, finish, condition` (the importer's own fold key, `destinations/collection.ts`) — narrower than the storage grain, `card_id, finish, condition, lang, altered, signed, proxy, misprint, coalesce(serial_number,''), coalesce(grading,'')` (`schema::COLLECTION_GRAIN`) | No `replace`: the deck's version would empty a multi-thousand-row collection from a 40-line paste with the file that caused it looking ordinary |
-| `wishlist` | `add` / `set` | `oracleId, cardId, finish` (`destinations/wishlist.ts`) — the storage grain is `coalesce(oracle_id,''), coalesce(card_id,''), coalesce(preferred_finish,'')` (`schema::WISHLIST_GRAIN`) | `wishlist_set_quantity(id, 0)` **deletes** the wish — a wish for nothing is not a wish (`CHECK (quantity > 0)`) — but an import can never reach it: `parse.ts` refuses a quantity below 1 before a plan is even built (`:460`, `:671`), so `set` through this dialog never carries a 0 |
+| `wishlist` | `add` / `set` | `oracleId, cardId, finish` (`destinations/wishlist.ts`) — the storage grain is `coalesce(oracle_id,''), coalesce(card_id,''), coalesce(preferred_finish,''), coalesce(folder_id,0)` (`schema::WISHLIST_GRAIN`) | `wishlist_set_quantity(id, 0)` **deletes** the wish — a wish for nothing is not a wish (`CHECK (quantity > 0)`) — but an import can never reach it: `parse.ts` refuses a quantity below 1 before a plan is even built (`:460`, `:671`), so `set` through this dialog never carries a 0 |
 
 **Every one of the four commits in one transaction for the whole file** — `deck_import_commit`,
 `collection_import_commit`, `wishlist_import_commit` — the same rule `docs/reference/decks-storage.md`
@@ -273,6 +277,20 @@ one exception worth naming: it is `deck_create` then `deck_import_commit`, two c
 therefore two transactions, with a hand-rolled rollback (`useImport.ts`) that deletes the freshly
 created deck if the commit is refused — a refused import must not leave half a deck in the gallery,
 and the commit's own refusal is what the reader hears, never the clean-up delete's.
+
+**Folders are deliberately not carried, in either direction** (schema v23, 2026-08-22). The seven
+formats carry *cards*, and a folder is not one: no format has a channel for it, none of the four
+foreign formats this app reads would know what to do with one, and inventing a column would make
+this app's CSV unreadable by everything it was designed to interoperate with. So an export names no
+folder and an import writes none — `wishlist_import_commit` sends `folder_id: None` on every line,
+which is **one of the three writers that add at the root and cannot name a folder**, beside
+`deck_missing_to_wishlist` and `deck_theory_missing_to_wishlist`.
+
+The consequence is real and is written down rather than left to be discovered: with `folder_id` in
+the grain, a line for a card the reader has already filed in `Ordered` lands as a *second* row at
+the root instead of folding into the one they filed. `WishRow.elsewhere` is what tells them — the
+imported row draws an "also on your list" mark. Whole reasoning:
+[wishlist-folders.md](wishlist-folders.md).
 
 **The wishlist's own rule, stated once here because nothing else needs it twice**: a printing is
 pinned only when the file named one, or when the matched card has no `oracle_id` at all to wish for
