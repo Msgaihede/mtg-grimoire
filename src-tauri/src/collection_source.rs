@@ -19,6 +19,16 @@
 //! acquisition story, no grading, no proxy or altered or signed flag. [`rows`] emits those as
 //! constants, and `condition` as NULL rather than as the column's `'NM'` default, because a
 //! default written into an export is a fact the reader never stated.
+//!
+//! **Three table aliases are spoken for, and a caller cannot see that from where it stands.**
+//! The hand-kept arms bind `collection_entries e`; the derived arms bind `deck_cards dc`, and
+//! [`copies_of_oracle`] binds `cards k` beside it. So a `card_col` or `oracle_col` argument
+//! that itself begins `e.`, `dc.` or `k.` is captured by the **inner** alias rather than the
+//! caller's — which quietly turns [`owns_printing`] into a tautology, with no compile error and
+//! no runtime error, because the SQL that results is perfectly valid and simply asks a
+//! different question. Nothing collides today (`crate::search` binds only `c` and `cards_fts`,
+//! and `c` looks deliberately chosen), and that is the whole reason to write it down: `e`, `dc`
+//! and `k` are taken.
 
 use crate::sync::AppState;
 use rusqlite::Connection;
@@ -35,17 +45,37 @@ use std::sync::Arc;
 /// falls out of this predicate rather than needing a clause.
 ///
 /// Spelled against the alias `dc`, which every builder below binds to `deck_cards`.
+///
+/// **It is not the same kind of value as `deck::LIVE` or `deck_theory::LIVE`, which share its
+/// name**, and three files now see both. Those two are `crate::schema::DECK_VARIANTS[0]` — the
+/// bare variant *value* `live`, bound as a query parameter. This one is a whole **predicate**,
+/// interpolated into a SQL string. Both are `&'static str`, so binding this as a parameter (it
+/// would match no row) or interpolating one of those (it would be a syntax error, on a good
+/// day) is a mistake nothing but the reading catches.
 pub const LIVE: &str = "dc.variant = 'live'";
 
 /// The grouped row source — a `FROM` fragment aliased as the caller spells it.
 ///
-/// Off, the table. On, a subquery emitting **the same column names**, so the caller's `WHERE`,
-/// `ORDER BY`, price expression and `LEFT JOIN cards` are untouched.
+/// Off, the table. On, a subquery emitting **every column the table has**, so the caller's
+/// `WHERE`, `ORDER BY`, price expression and `LEFT JOIN cards` are untouched — **plus one the
+/// table does not have**. `deck_count` is the derived arm's alone, and `collection_entries` has
+/// no column for it: that is exactly why `crate::collection` picks `e.deck_count` or the
+/// literal `NULL` per mode rather than naming it unconditionally. A caller who read "the same
+/// columns" and wrote `e.deck_count` straight would get `no such column` in the **hand-kept**
+/// mode only — the half of the switch that a derived-mode test never reaches.
 ///
 /// `min(dc.id) AS id` is unique per group because the groups partition disjoint sets of rows,
 /// which is all a React key and a virtualiser need. **It is not a `collection_entries.id`** —
 /// which is exactly why the five collection writes refuse while this is on: they address rows
 /// by primary key, and the reader's hidden hand-built rows are still on disk.
+///
+/// **`set_code` and `collector_number` are bare columns in an aggregate.** They sit outside the
+/// `GROUP BY` with more than one aggregate function present, so SQLite's `min`/`max`
+/// bare-column rule does not apply and each is taken from an arbitrary row of its group. That
+/// is harmless here by construction rather than by luck: `deck_cards` denormalises both from
+/// the one `cards` row its `card_id` names, so every row of a group carries the same pair and
+/// the arbitrary choice cannot be observed. A column that is *not* constant per `card_id` may
+/// not be added to this list the same way.
 pub fn rows(conn: &Connection, alias: &str) -> String {
     if !crate::deck_driven::stored(conn) {
         return format!("collection_entries {alias}");
@@ -197,7 +227,18 @@ mod tests {
     use super::*;
     use crate::schema;
 
-    /// A database with one deck holding cards, and the equivalent hand-built collection.
+    /// Three decks, and **the hand-built collection that matches their live lists copy for
+    /// copy**: 4 regular and 1 foil Sol Ring, which is exactly what the `live` rows sum to.
+    /// `p2` gets no collection row, because deck 3 only ever *plans* it — a theory list is not
+    /// cards the reader has, on either side of the switch.
+    ///
+    /// Both sources in one database is what lets a test ask one builder the same question
+    /// twice and compare the two numbers, which is the only measurement that can catch the arms
+    /// drifting apart. It also turns every ON-arm assertion below into a second claim: that the
+    /// derived arm is **blind** to these rows. (Until 2026-08-22 this comment promised the
+    /// collection and the fixture inserted none, so the hand-kept arm of all four direct
+    /// builders was unexecuted anywhere in the module that owns the rule.)
+    ///
     /// `cards` is seeded here because a worktree database has never synced — and these rows
     /// are torn down with the connection, so no later measurement is made a fiction by them.
     fn db() -> Connection {
@@ -226,7 +267,12 @@ mod tests {
                          (1,11,'live','p1','cmr','472','en','Sol Ring',2,NULL,0,0),
                          (1,10,'live','p1','cmr','472','en','Sol Ring',1,'foil',0,0),
                          (2,12,'live','p1','cmr','472','en','Sol Ring',1,NULL,0,0),
-                         (3,13,'theory','p2','ltr','300','en','Sol Ring',4,NULL,0,0);",
+                         (3,13,'theory','p2','ltr','300','en','Sol Ring',4,NULL,0,0);
+
+             INSERT INTO collection_entries (card_id, set_code, collector_number, lang, finish,
+                                             condition, quantity, created_at, updated_at)
+                  VALUES ('p1','cmr','472','en','nonfoil','NM',4,0,0),
+                         ('p1','cmr','472','en','foil','NM',1,0,0);",
         )
         .unwrap();
         conn
@@ -243,10 +289,125 @@ mod tests {
             .unwrap()
     }
 
+    /// One scalar out of a fragment builder, in whichever mode the connection is in. `EXISTS`
+    /// answers `0` or `1`, so the one helper serves all four of them.
+    fn scalar(conn: &Connection, expr: &str) -> i64 {
+        conn.query_row(&format!("SELECT {expr}"), [], |r| r.get(0))
+            .unwrap()
+    }
+
+    /// The rowids the facet index's `owned` dimension would light up, either way round.
+    fn rowids(conn: &Connection) -> Vec<i64> {
+        conn.prepare(&owned_rowids(conn))
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap()
+    }
+
     #[test]
     fn off_it_is_the_table() {
         let conn = db();
         assert_eq!(rows(&conn, "e"), "collection_entries e");
+    }
+
+    // ---------------------------------------------------------------------------------
+    // Parity — every builder run in **both** modes against the one database.
+    //
+    // The fixture's hand-built rows are its live deck rows' exact equivalent, so each of these
+    // is one number asked twice. Two different answers is the two arms having drifted, and
+    // that is a failure no string comparison can see: `off_it_is_the_table` above would go on
+    // passing through any amount of it. They are also what executes the hand-kept arm at all.
+    // ---------------------------------------------------------------------------------
+
+    #[test]
+    fn the_grouped_source_answers_the_same_in_both_modes() {
+        let conn = db();
+        assert_eq!(copies(&conn, "p1", "nonfoil"), 4, "hand kept");
+        assert_eq!(copies(&conn, "p1", "foil"), 1, "hand kept");
+        assert_eq!(copies(&conn, "p2", "nonfoil"), 0, "hand kept");
+
+        crate::deck_driven::store(&conn, true).unwrap();
+        assert_eq!(copies(&conn, "p1", "nonfoil"), 4, "derived");
+        assert_eq!(copies(&conn, "p1", "foil"), 1, "derived");
+        assert_eq!(copies(&conn, "p2", "nonfoil"), 0, "derived");
+    }
+
+    #[test]
+    fn owns_printing_answers_the_same_in_both_modes() {
+        let conn = db();
+        let ask = |c: &Connection, card: &str| scalar(c, &owns_printing(c, &format!("'{card}'")));
+        assert_eq!(ask(&conn, "p1"), 1, "hand kept");
+        assert_eq!(
+            ask(&conn, "p2"),
+            0,
+            "hand kept: never acquired, only planned"
+        );
+
+        crate::deck_driven::store(&conn, true).unwrap();
+        assert_eq!(ask(&conn, "p1"), 1, "derived");
+        assert_eq!(
+            ask(&conn, "p2"),
+            0,
+            "derived: a theory row is not a card in hand"
+        );
+    }
+
+    #[test]
+    fn copies_of_printing_answers_the_same_in_both_modes() {
+        let conn = db();
+        let ask =
+            |c: &Connection, card: &str| scalar(c, &copies_of_printing(c, &format!("'{card}'")));
+        assert_eq!(ask(&conn, "p1"), 5, "hand kept: 4 regular and 1 foil");
+        assert_eq!(ask(&conn, "p2"), 0, "hand kept");
+
+        crate::deck_driven::store(&conn, true).unwrap();
+        assert_eq!(ask(&conn, "p1"), 5, "derived");
+        assert_eq!(ask(&conn, "p2"), 0, "derived");
+    }
+
+    /// Both printings share `o1`, so this is also the assertion that neither arm double-counts
+    /// the join: `p2` contributes nothing on either side, for two different reasons.
+    #[test]
+    fn copies_of_oracle_answers_the_same_in_both_modes() {
+        let conn = db();
+        assert_eq!(
+            scalar(&conn, &copies_of_oracle(&conn, "'o1'")),
+            5,
+            "hand kept"
+        );
+        assert_eq!(
+            scalar(&conn, &copies_of_oracle(&conn, "'o2'")),
+            0,
+            "hand kept"
+        );
+
+        crate::deck_driven::store(&conn, true).unwrap();
+        assert_eq!(
+            scalar(&conn, &copies_of_oracle(&conn, "'o1'")),
+            5,
+            "derived"
+        );
+        assert_eq!(
+            scalar(&conn, &copies_of_oracle(&conn, "'o2'")),
+            0,
+            "derived"
+        );
+    }
+
+    /// Two hand-built rows for one printing against three live deck rows for it, and one rowid
+    /// out of both — `DISTINCT` is doing the same work on each side.
+    #[test]
+    fn owned_rowids_answers_the_same_in_both_modes() {
+        let conn = db();
+        let p1: i64 = conn
+            .query_row("SELECT rowid FROM cards WHERE id = 'p1'", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(rowids(&conn), vec![p1], "hand kept");
+
+        crate::deck_driven::store(&conn, true).unwrap();
+        assert_eq!(rowids(&conn), vec![p1], "derived");
     }
 
     /// Three live rows of the regular printing across two decks — one of them in an

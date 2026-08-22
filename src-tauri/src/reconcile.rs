@@ -302,7 +302,7 @@ fn merge(
             // `oracle_id` is refreshed too, and only here: it is the **first term of
             // `WISHLIST_GRAIN`**, so a wish left on the old oracle card sits on a grain that
             // no longer describes it — a later wish for the same card would not fold into
-            // it, and the any-printing arm of `wishlist::OWNED_SQL` (which resolves through
+            // it, and the any-printing arm of `wishlist::owned_sql` (which resolves through
             // `cards.oracle_id`) would count the wrong copies against it. The collection has
             // no such column; the wishlist keeps one because an any-printing wish has no
             // card row to join to.

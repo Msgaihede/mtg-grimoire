@@ -3278,6 +3278,47 @@ mod tests {
         assert_eq!(commit_import(&conn, &[], "add").unwrap_err(), DECK_DRIVEN);
     }
 
+    /// The fence sits **above** `unchecked_transaction`, and this is the only thing that says
+    /// so. A refusal that had already opened a write is a different animal from one that never
+    /// started.
+    ///
+    /// `every_write_refuses_while_deck_driven` cannot make the claim, and neither can
+    /// `is_autocommit` on its own: a fence moved *below* the `BEGIN` would return the same
+    /// string and leave the connection in autocommit anyway, because the `Transaction` guard
+    /// rolls back as it drops. So the probe is a transaction **this test** opens first —
+    /// SQLite has no nested `BEGIN`, so a `commit_import` that reached `unchecked_transaction`
+    /// at all could only have answered *"cannot start a transaction within a transaction"*.
+    /// Getting `DECK_DRIVEN` back is proof it never got there.
+    ///
+    /// The list is deliberately **non-empty**, unlike the one in the test above: an empty one
+    /// writes nothing whatever the ordering, so "nothing landed" would be true by arithmetic.
+    #[test]
+    fn commit_import_refuses_before_it_opens_a_transaction() {
+        let conn = deck_driven_db();
+        crate::deck_driven::store(&conn, true).unwrap();
+
+        conn.execute_batch("BEGIN").unwrap();
+        let refused = commit_import(&conn, &[item("p1", 3, "nonfoil")], "add");
+        // Read inside the probe's transaction, before the rollback that would hide a write.
+        let landed = dump_entries(&conn);
+        conn.execute_batch("ROLLBACK").unwrap();
+
+        assert_eq!(refused.unwrap_err(), DECK_DRIVEN);
+        assert!(
+            landed.is_empty(),
+            "not one row of the list landed: {landed:?}"
+        );
+
+        // And the ordinary call, for the reader who expects `is_autocommit` here. It is true —
+        // it is simply true either way, which is the whole reason for the probe above.
+        assert_eq!(
+            commit_import(&conn, &[item("p1", 3, "nonfoil")], "add").unwrap_err(),
+            DECK_DRIVEN
+        );
+        assert!(conn.is_autocommit());
+        assert!(dump_entries(&conn).is_empty());
+    }
+
     /// The guarantee the whole "preserve, hide, restore" decision rests on.
     #[test]
     fn the_hidden_rows_are_unchanged_by_a_flip_there_and_back() {
