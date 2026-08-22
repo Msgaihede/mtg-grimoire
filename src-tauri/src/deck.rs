@@ -35,6 +35,7 @@
 //! [`missing_to_wishlist`] (it changes the wishlist, not the deck).
 
 use crate::collection::{valid_quantity, EntryChange, ZERO_ADD};
+use crate::collection_source::with_write_owned_if_derived as owned_if_derived;
 use crate::deck_meta::{DeckCategoryRow, DeckTagRow};
 use crate::sync::{with_write, AppState};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -3131,7 +3132,11 @@ pub fn get_deck(
     };
     let mut cards = read_deck_cards(conn, id, variant, marketplace)?;
     fill_unknown_power_toughness(conn, &mut cards)?;
-    attribute_owned(&mut cards, &owned_by_oracle(conn, id)?);
+    attribute_owned(
+        &mut cards,
+        &owned_by_oracle(conn, id)?,
+        crate::deck_driven::stored(conn),
+    );
     let categories = crate::deck_meta::list_categories(conn, id, variant, marketplace)?;
     let tags = crate::deck_meta::list_tags(conn, id, variant)?;
     Ok(Some(DeckDetail {
@@ -3366,6 +3371,15 @@ fn owned_by_oracle(conn: &Connection, deck_id: i64) -> Result<HashMap<String, i6
 /// a plan the copies the sleeved deck reserved. A plan reserves nothing and must say so —
 /// pinned by `the_allocator_claims_nothing_for_the_theory_variant`.
 ///
+/// **`deck_driven` is the whole of the derived arm, and it splits those two reasons apart.**
+/// Under a deck-driven collection ([`crate::deck_driven`]) a live row is covered by its own
+/// copies — true by construction, since the collection *is* the sum of these very rows — so
+/// there is no pool to hand out and no shortfall to report. The theory fence stays, for a
+/// second reason on top of the ledger one: a theory row is a card the reader has said they do
+/// **not** have yet. The inactive category is where the two modes deliberately part company —
+/// the allocator claims nothing for one, and [`crate::collection_source::LIVE`] counts it,
+/// because the reader still has the cards in a pile they have switched off.
+///
 /// This walk and [`allocate_deck`]'s are deliberately **not** the same order — the allocator
 /// spends copies in [`KIND_PRIORITY`], and this hands them out in the user's own category
 /// order — and the difference is visible in exactly one case: the same oracle card filed in
@@ -3373,10 +3387,30 @@ fn owned_by_oracle(conn: &Connection, deck_id: i64) -> Result<HashMap<String, i6
 /// *total* is identical either way (both walk every active row once, drawing on one pool);
 /// only which of the two rows wears the badge can differ. That is the trade for a read whose
 /// order is the order the deck is written in, which is what the editor draws.
-fn attribute_owned(rows: &mut [DeckCardRow], owned_by_oracle: &HashMap<String, i64>) {
+fn attribute_owned(
+    rows: &mut [DeckCardRow],
+    owned_by_oracle: &HashMap<String, i64>,
+    deck_driven: bool,
+) {
     let mut left = owned_by_oracle.clone();
     for row in rows.iter_mut() {
-        let claimed_for = row.category_active && row.variant == LIVE;
+        // **A plan reserves nothing, in either mode.** `deck_allocations` carries no variant,
+        // so a theory read walks the live deck's claims; and under a deck-driven collection a
+        // theory row is a card the reader has said they do *not* have yet. Two different
+        // reasons, one answer — which is why this test comes out of `claimed_for` and stands
+        // on its own rather than being folded in with the category one below.
+        if row.variant != LIVE {
+            row.owned_quantity = 0;
+            continue;
+        }
+        // **Derived: a live row is covered by its own copies.** No pool, no walk, no
+        // shortfall. It takes the inactive category with it, which is where this mode departs
+        // from [`allocate_deck`]'s rule on purpose — see this function's doc comment.
+        if deck_driven {
+            row.owned_quantity = row.quantity;
+            continue;
+        }
+        let claimed_for = row.category_active;
         let Some(oracle) = row.oracle_id.clone().filter(|_| claimed_for) else {
             row.owned_quantity = 0;
             continue;
@@ -3428,7 +3462,20 @@ struct Candidate {
 /// The collection is never written to. Not once, not by a column, not by a trigger: an
 /// allocation is a claim recorded beside the binder, and spec §6's non-destructive model is
 /// exactly that sentence.
+///
+/// **Under a deck-driven collection this stands down entirely.** That mode *is* the sum of the
+/// live lists, so every live row is covered by its own copies and the ledger has nothing left
+/// to describe — `deck_allocations.collection_entry_id` is a foreign key into a table this mode
+/// does not read. Returning before the DELETE is deliberate: the reader's existing claims are
+/// left exactly as they were, so switching the setting back off finds the ledger intact instead
+/// of emptied by a mode that never used it.
 pub fn allocate_deck(conn: &Connection, deck_id: i64) -> Result<(), String> {
+    // Nothing to allocate, and nothing to tear down — see the doc comment above. The early
+    // return is above the DELETE on purpose.
+    if crate::deck_driven::stored(conn) {
+        return Ok(());
+    }
+
     conn.execute(
         "DELETE FROM deck_allocations WHERE deck_id = ?1",
         params![deck_id],
@@ -3670,9 +3717,11 @@ pub async fn deck_update(
     patch: DeckPatch,
 ) -> Result<DeckRow, String> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || with_write(&state, |c| update_deck(c, id, &patch)))
-        .await
-        .map_err(unfinished)?
+    tauri::async_runtime::spawn_blocking(move || {
+        owned_if_derived(&state, |c| update_deck(c, id, &patch))
+    })
+    .await
+    .map_err(unfinished)?
 }
 
 /// Delete a deck, and the custom cover file that was only ever about it.
@@ -3690,7 +3739,7 @@ pub async fn deck_delete(
     let state = state.inner().clone();
     let covers = crate::paths::covers_dir(&app).ok();
     tauri::async_runtime::spawn_blocking(move || {
-        with_write(&state, |c| delete_deck(c, id, covers.as_deref()))
+        owned_if_derived(&state, |c| delete_deck(c, id, covers.as_deref()))
     })
     .await
     .map_err(unfinished)?
@@ -3735,7 +3784,7 @@ pub async fn deck_duplicate(
     let state = state.inner().clone();
     let covers = crate::paths::covers_dir(&app).ok();
     tauri::async_runtime::spawn_blocking(move || {
-        with_write(&state, |c| duplicate_deck(c, id, covers.as_deref()))
+        owned_if_derived(&state, |c| duplicate_deck(c, id, covers.as_deref()))
     })
     .await
     .map_err(unfinished)?
@@ -3883,7 +3932,7 @@ pub async fn deck_missing_to_wishlist(
 ) -> Result<usize, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        with_write(&state, |c| missing_to_wishlist(c, deck_id))
+        owned_if_derived(&state, |c| missing_to_wishlist(c, deck_id))
     })
     .await
     .map_err(unfinished)?
@@ -3905,7 +3954,7 @@ pub async fn deck_add_card(
 ) -> Result<EntryChange, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        with_write(&state, |c| {
+        owned_if_derived(&state, |c| {
             add_card(
                 c,
                 deck_id,
@@ -3934,7 +3983,7 @@ pub async fn deck_set_card_quantity(
 ) -> Result<EntryChange, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        with_write(&state, |c| {
+        owned_if_derived(&state, |c| {
             set_card_quantity(
                 c,
                 deck_id,
@@ -3961,7 +4010,7 @@ pub async fn deck_category_clear(
 ) -> Result<i64, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        with_write(&state, |c| {
+        owned_if_derived(&state, |c| {
             clear_category(c, deck_id, category_id, &variant)
         })
     })
@@ -3987,7 +4036,7 @@ pub async fn deck_move_card(
 ) -> Result<i64, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        with_write(&state, |c| {
+        owned_if_derived(&state, |c| {
             move_card(
                 c,
                 deck_id,
@@ -4018,7 +4067,7 @@ pub async fn deck_swap_printing(
 ) -> Result<SwapResult, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        with_write(&state, |c| {
+        owned_if_derived(&state, |c| {
             swap_printing(
                 c,
                 deck_id,
@@ -4050,7 +4099,7 @@ pub async fn deck_set_card_finish(
 ) -> Result<SwapResult, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        with_write(&state, |c| {
+        owned_if_derived(&state, |c| {
             set_card_finish(
                 c,
                 deck_id,
@@ -7418,6 +7467,122 @@ mod tests {
             0,
             "a plan reserves nothing even when the deck it is a plan for reserves everything"
         );
+    }
+
+    /// Every allocation row in the database, so a test can say "and nothing else moved".
+    fn allocation_rows(conn: &Connection) -> Vec<(i64, i64, i64)> {
+        conn.prepare(
+            "SELECT deck_id, collection_entry_id, quantity FROM deck_allocations
+              ORDER BY deck_id, collection_entry_id",
+        )
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+    }
+
+    /// Turn the setting on the way the command does — it is read back off the same
+    /// connection every assertion below reads through.
+    fn derive_from_decks(conn: &Connection) {
+        crate::deck_driven::store(conn, true).unwrap();
+    }
+
+    /// Under a deck-driven collection every live deck card is covered by its own copies —
+    /// which is true by construction, not a fudge. **No collection row exists at all here**,
+    /// so the hand-kept answer is 0 for every line, which the first assertion pins.
+    #[test]
+    fn a_live_deck_is_fully_owned_when_deck_driven() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add(&conn, deck.id, "bolt-lea", main, 3);
+
+        assert_eq!(
+            owned_of(&conn, deck.id, "bolt-lea", main),
+            0,
+            "hand kept, an empty collection owns none of it"
+        );
+
+        derive_from_decks(&conn);
+        let detail = get_deck(&conn, deck.id, LIVE, ANY_MARKET).unwrap().unwrap();
+        let row = card_row(&detail, "bolt-lea", main);
+        assert_eq!(row.owned_quantity, row.quantity);
+        assert_eq!(row.quantity, 3, "and it is the row's own number, not a 1");
+    }
+
+    /// A plan still reserves nothing — the rule the variant fence has always enforced, for a
+    /// second reason here: a theory row is a card the reader has said they do *not* have yet.
+    #[test]
+    fn a_theory_row_is_still_owned_nothing_when_deck_driven() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let main = main_of(&conn, deck.id);
+        add_card(
+            &conn,
+            deck.id,
+            "bolt-lea",
+            Some(main),
+            None,
+            THEORY,
+            None,
+            4,
+        )
+        .unwrap();
+
+        derive_from_decks(&conn);
+        let theory = get_deck(&conn, deck.id, THEORY, ANY_MARKET)
+            .unwrap()
+            .unwrap();
+        assert_eq!(card_row(&theory, "bolt-lea", main).owned_quantity, 0);
+    }
+
+    /// An inactive category is not the allocator's rule here: the reader has the cards, in a
+    /// pile they have switched off. This is the one place the derived mode departs from
+    /// [`allocate_deck`] on purpose, and it pins both halves of the split inside
+    /// [`attribute_owned`] — the same row reads 0 hand-kept and its full quantity derived.
+    #[test]
+    fn an_inactive_category_is_owned_too_when_deck_driven() {
+        let conn = seeded();
+        own(&conn, "bolt-lea", 4);
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let scratch = kind_of(&conn, deck.id, "maybe");
+        add(&conn, deck.id, "bolt-lea", scratch, 2);
+
+        let detail = get_deck(&conn, deck.id, LIVE, ANY_MARKET).unwrap().unwrap();
+        let before = card_row(&detail, "bolt-lea", scratch);
+        assert!(!before.category_active);
+        assert_eq!(
+            before.owned_quantity, 0,
+            "hand kept, a pile switched off claims nothing and so is handed nothing"
+        );
+
+        derive_from_decks(&conn);
+        let detail = get_deck(&conn, deck.id, LIVE, ANY_MARKET).unwrap().unwrap();
+        let inactive = detail.cards.iter().find(|r| !r.category_active).unwrap();
+        assert_eq!(inactive.owned_quantity, inactive.quantity);
+    }
+
+    /// The ledger is left exactly as it was, so switching the setting back off finds it
+    /// intact rather than rebuilt from a mode it does not describe. The `DELETE` at the top
+    /// of [`allocate_deck`] is what the early return has to stand above.
+    #[test]
+    fn allocate_deck_writes_nothing_and_deletes_nothing_when_deck_driven() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Burn", "modern")).unwrap();
+        let entry = own_and_claim(&conn, deck.id);
+        let before = allocation_rows(&conn);
+        assert_eq!(before, vec![(deck.id, entry, 4)]);
+
+        derive_from_decks(&conn);
+        allocate_deck(&conn, deck.id).unwrap();
+        assert_eq!(allocation_rows(&conn), before);
+
+        // And the other direction, which is what makes the assertion above mean something:
+        // hand kept, this very call empties the ledger, because the deck holds no cards.
+        crate::deck_driven::store(&conn, false).unwrap();
+        allocate_deck(&conn, deck.id).unwrap();
+        assert_eq!(allocation_rows(&conn), vec![]);
     }
 
     /// The read clamps: the allocation says 4, the entry has since been stepped to 1 →

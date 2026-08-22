@@ -176,12 +176,11 @@ pub(crate) fn with_write_owned<T>(
 /// The flag is read after the write rather than before, on the read pool, so it cannot
 /// contend with the write that has already finished. Nothing a deck write does can change it.
 ///
-/// **The `allow` is owed and temporary.** This landed before the deck writes that call it, and
-/// `dead_code` is a hard error under CI's `clippy -D warnings` — so the suppression is what
-/// lets the rule ship in one piece rather than in pieces beside each caller. **Delete it in
-/// the commit that repoints the first deck write here**; it is the only one in the crate, and
-/// left standing it would hide the next function that really is unreachable.
-#[allow(dead_code)]
+/// **Thirteen deck commands go through this**, and they are the ones that can move
+/// `deck_cards.quantity`, `.variant` or `.card_id` — every card write, plus `deck_update`
+/// (which carries the theory move), `deck_delete`, `deck_duplicate`, `deck_category_delete`
+/// and both halves of undo. `deck_meta::set_category_active` deliberately does not: see the
+/// comment there.
 pub(crate) fn with_write_owned_if_derived<T>(
     state: &Arc<AppState>,
     f: impl FnOnce(&Connection) -> Result<T, String>,
