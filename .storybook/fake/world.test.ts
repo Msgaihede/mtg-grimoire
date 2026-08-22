@@ -474,11 +474,17 @@ describe("the seeds", () => {
 });
 
 describe("the seeded rows agree with the cards they name", () => {
-  const names: ["empty", "starter", "needsReview", "large"] = [
+  const names: ["empty", "starter", "needsReview", "large", "deckDriven"] = [
     "empty",
     "starter",
     "needsReview",
     "large",
+    // The one seed with no `collection_entries` at all, which makes three of these four
+    // sweeps vacuous over that table and the fourth — the deck rows' denormalisation — the
+    // whole reason it is on the list: a derived collection row *is* those columns, so a seed
+    // whose deck card disagreed with its card would put a wrong set code on the page with
+    // nothing else to catch it.
+    "deckDriven",
   ];
 
   it.each(names)("%s denormalises set, collector and language faithfully", (name) => {

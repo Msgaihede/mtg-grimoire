@@ -37,6 +37,7 @@ import type {
   EntryChange,
   EntryInput,
   ImportResolveLine,
+  RowDeck,
   SearchRequest,
   SearchSortKey,
   TransferImportMode,
@@ -3134,6 +3135,249 @@ describe("the decklist import", () => {
   });
 });
 
+/**
+ * `deck_driven_collection` — the collection read from the decks instead of the table.
+ *
+ * The block this fake most needs, and for the reason its header gives about `ownedQuantity`:
+ * the setting changes the *source* of five separate reads, and a fake that branched in five
+ * places would be five chances for the workbench to answer something the window does not.
+ * Every test here is a rule `src-tauri/src/collection_source.rs` states, asked of the fake.
+ */
+describe("the collection driven by the decks", () => {
+  /** One deck, `n` regular copies of the Bolt, and the setting on. */
+  const derived = (over: Partial<FakeDb> = {}): FakeDb =>
+    makeDeckDb({
+      deckDrivenCollection: true,
+      decks: [deck({ id: 1 })],
+      deckCards: [deckCard({ id: 1, quantity: 2 })],
+      ...over,
+    });
+
+  const page = (db: FakeDb): CollectionPage =>
+    readHandlers(db).collection_list({ query: { limit: 100, offset: 0 } });
+
+  it("answers the setting, stores it, and lets a sync refuse the write", () => {
+    const db = makeDb();
+    expect(readHandlers(db).deck_driven_collection()).toBe(false);
+    writeHandlers(db).set_deck_driven_collection({ enabled: true });
+    expect(readHandlers(db).deck_driven_collection()).toBe(true);
+    // The read answers through a sync and the write does not — every preference's split.
+    const busy = makeDb({ fault: "busy" });
+    expect(readHandlers(busy).deck_driven_collection()).toBe(false);
+    expect(() => writeHandlers(busy).set_deck_driven_collection({ enabled: true })).toThrow(
+      /busy/i,
+    );
+  });
+
+  it("lists the live decks as the collection, with no condition and a deck count", () => {
+    const rows = page(derived());
+    expect(rows.total).toBe(1);
+    expect(rows.items[0].quantity).toBe(2);
+    // `NULL AS condition`, never the column's `'NM'` default: a default written into an export
+    // is a fact the reader never stated.
+    expect(rows.items[0].condition).toBeNull();
+    expect(rows.items[0].deckCount).toBe(1);
+    // The rest of what a derived row cannot carry.
+    expect(rows.items[0].tradelistQuantity).toBe(0);
+    expect(rows.items[0].purchasePrice).toBeNull();
+    expect(rows.items[0].grading).toBeNull();
+    expect(rows.items[0].tags).toBe("[]");
+    expect(rows.items[0].proxy).toBe(false);
+  });
+
+  it("counts an inactive pile and an archived deck, and never a plan", () => {
+    const rows = page(
+      derived({
+        decks: [deck({ id: 1 }), deck({ id: 2, name: "Retired", archived: true })],
+        deckCards: [
+          deckCard({ id: 1, deckId: 1, quantity: 4 }),
+          // A Maybeboard the reader switched off — `DECK_CATEGORIES` seeds it inactive. It
+          // counts, which is where this rule departs from the allocator's on purpose.
+          deckCard({ id: 2, deckId: 1, categoryKind: "maybe", quantity: 2 }),
+          // Archiving is filing, not disassembling.
+          deckCard({ id: 3, deckId: 2, quantity: 1 }),
+          // A plan is a card the reader has said they do *not* have yet.
+          deckCard({ id: 4, deckId: 1, variant: "theory", quantity: 9 }),
+        ],
+      }),
+    );
+    expect(rows.total).toBe(1);
+    expect(rows.items[0].quantity).toBe(7);
+    expect(rows.items[0].deckCount).toBe(2);
+  });
+
+  it("makes a foil and a regular copy of one printing two rows", () => {
+    const rows = page(
+      derived({
+        deckCards: [
+          deckCard({ id: 1, quantity: 3 }),
+          deckCard({ id: 2, quantity: 1, finish: "foil" }),
+        ],
+      }),
+    );
+    expect(rows.total).toBe(2);
+    // `coalesce(dc.finish, 'nonfoil')` in the grouping key: `deck_cards` spells the regular
+    // copy NULL and the collection spells it `nonfoil`. Binding the NULL through would make
+    // every regular line read zero.
+    expect(rows.items.map((r) => [r.finish, r.quantity]).sort()).toEqual([
+      ["foil", 1],
+      ["nonfoil", 3],
+    ]);
+  });
+
+  it("summarises the same rows the list is showing", () => {
+    const db = derived({
+      deckCards: [
+        deckCard({ id: 1, quantity: 3 }),
+        deckCard({ id: 2, cardId: BOLT_2X2.id, quantity: 1 }),
+      ],
+    });
+    const summary = readHandlers(db).collection_summary({ query: { limit: 100, offset: 0 } });
+    expect(summary.totalCards).toBe(4);
+    expect(summary.uniqueCards).toBe(2);
+    expect(summary.entries).toBe(2);
+    // Nothing on a deck card is offered for trade, so there is nothing for this to count.
+    expect(summary.tradelistCards).toBe(0);
+  });
+
+  it("reads the search's owned badge and the owned filter out of the decks", () => {
+    const db = derived({ deckCards: [deckCard({ id: 1, quantity: 2, finish: "foil" })] });
+    const found = (owned?: boolean) =>
+      (
+        readHandlers(db).search_cards({
+          req: { text: "Lightning Bolt", limit: 10, offset: 0, owned },
+        }) as { items: CardSummary[] }
+      ).items;
+    // Finish-blind, exactly as it is over the table: the badge is copies of the printing.
+    expect(found().find((i) => i.id === BOLT.id)!.ownedQuantity).toBe(2);
+    expect(found(true).map((i) => i.id)).toEqual([BOLT.id]);
+    expect(found(false).map((i) => i.id)).not.toContain(BOLT.id);
+    // The facet's own count of the same question — `collection_source::owned_rowids`.
+    const facets = readHandlers(db).facet_cards({
+      req: { text: "Lightning Bolt", limit: 10, offset: 0 },
+    });
+    expect(facets.owned.owned).toBe(1);
+  });
+
+  it("fills a wish from the decks, and still finish-aware", () => {
+    const owned = (preferredFinish: FakeWish["preferredFinish"]) =>
+      readHandlers(
+        derived({
+          deckCards: [deckCard({ id: 1, quantity: 4 })],
+          wishlistEntries: [wish({ id: 1, cardId: BOLT.id, preferredFinish, quantity: 1 })],
+        }),
+      ).wishlist_list({ query: { limit: 10, offset: 0 } }).items[0].ownedQuantity;
+    expect(owned(null)).toBe(4);
+    expect(owned("nonfoil")).toBe(4);
+    // A foil wish is not filled by the regular copies in the deck — and `deck_cards.finish` is
+    // NULL for those, so an arm that forgot the translation would answer 4 here.
+    expect(owned("foil")).toBe(0);
+  });
+
+  it("makes every live deck row own its own copies, and every plan row none", () => {
+    const db = derived({
+      deckCards: [
+        deckCard({ id: 1, quantity: 4 }),
+        // Inactive, which the allocator claims nothing for and this mode covers in full: the
+        // reader has the cards, in a pile they switched off.
+        deckCard({ id: 2, categoryKind: "maybe", quantity: 2 }),
+        // An orphan. `deck_driven` is tested before the oracle id, so it owns its own too.
+        deckCard({ id: 3, cardId: "gone", quantity: 3 }),
+        deckCard({ id: 4, variant: "theory", quantity: 5 }),
+      ],
+    });
+    const live = liveDeck(db)!;
+    // `deckReadOrder`: the category first, then the row's own name — so the orphan's "Gone"
+    // leads the main pile and the Maybeboard's row comes last.
+    expect(live.cards.map((c) => [c.name, c.quantity, c.ownedQuantity])).toEqual([
+      ["Gone", 3, 3],
+      ["Lightning Bolt", 4, 4],
+      ["Lightning Bolt", 2, 2],
+    ]);
+    const plan = readHandlers(db).deck_get({ id: 1, variant: "theory" })!;
+    expect(plan.cards.map((c) => c.ownedQuantity)).toEqual([0]);
+  });
+
+  it("names the decks behind a row, summed per deck and ordered by name", () => {
+    const db = derived({
+      decks: [deck({ id: 1, name: "Zed" }), deck({ id: 2, name: "alpha" })],
+      deckCards: [
+        deckCard({ id: 1, deckId: 1, quantity: 1 }),
+        // A second pile of the same deck: the tooltip's lines have to add up to the count
+        // above them, so these two are one line.
+        deckCard({ id: 2, deckId: 1, categoryKind: "maybe", quantity: 2 }),
+        deckCard({ id: 3, deckId: 2, quantity: 4 }),
+        // A different finish, so it belongs to a different row and must not appear here.
+        deckCard({ id: 4, deckId: 2, quantity: 9, finish: "foil" }),
+      ],
+    });
+    expect(
+      readHandlers(db).collection_row_decks({ cardId: BOLT.id, finish: "nonfoil", lang: "en" }),
+    ).toEqual([
+      // `COLLATE NOCASE`, so "alpha" sorts ahead of "Zed" rather than after it on byte order.
+      { deckId: 2, deckName: "alpha", quantity: 4 },
+      { deckId: 1, deckName: "Zed", quantity: 3 },
+    ]);
+    expect(
+      readHandlers(db).collection_row_decks({ cardId: BOLT.id, finish: "foil", lang: "en" }),
+    ).toEqual([{ deckId: 2, deckName: "alpha", quantity: 9 }]);
+  });
+
+  it("refuses every collection write while the setting is on", () => {
+    const db = derived({ collectionEntries: [entry({ id: 1 })] });
+    const w = writeHandlers(db);
+    const refused = /driven by your decks/;
+    expect(() =>
+      w.collection_add({ entry: { cardId: BOLT.id, finish: "nonfoil", quantity: 1 } }),
+    ).toThrow(refused);
+    expect(() => w.collection_set_quantity({ id: 1, quantity: 9 })).toThrow(refused);
+    expect(() => w.collection_update({ id: 1, patch: { notes: "no" } })).toThrow(refused);
+    expect(() => w.collection_remove({ id: 1 })).toThrow(refused);
+    expect(() => w.collection_import_commit({ items: [], mode: "add" })).toThrow(refused);
+    // The whole sentence, verbatim — a story renders it.
+    expect(() => w.collection_remove({ id: 1 })).toThrow(
+      "Your collection is driven by your decks. Turn the setting off in Settings to edit it " +
+        "by hand.",
+    );
+  });
+
+  it("hides the reader's own rows rather than deleting them", () => {
+    const db = derived({ collectionEntries: [entry({ id: 1, quantity: 5 })] });
+    // The hand-built row is in the store and off the page — which is the whole reason the
+    // writes refuse rather than addressing a row nobody can see.
+    expect(page(db).total).toBe(1);
+    expect(page(db).items[0].quantity).toBe(2);
+    expect(db.collectionEntries).toHaveLength(1);
+
+    writeHandlers(db).set_deck_driven_collection({ enabled: false });
+    expect(page(db).items).toEqual([
+      expect.objectContaining({ id: 1, quantity: 5, condition: "NM", deckCount: null }),
+    ]);
+  });
+
+  it("gives the deckDriven seed a page of five rows out of three decks", () => {
+    const db = seed("deckDriven");
+    expect(db.deckDrivenCollection).toBe(true);
+    // The assertion the seed is *for*: nothing on this page came from the table.
+    expect(db.collectionEntries).toEqual([]);
+    const rows = page(db);
+    expect(rows.total).toBe(5);
+    const bolt = rows.items.filter((r) => r.name === "Lightning Bolt");
+    expect(bolt).toHaveLength(1);
+    // Four played + two in a switched-off Maybeboard + one in an archived deck.
+    expect([bolt[0].quantity, bolt[0].deckCount]).toEqual([7, 3]);
+    // The foil beside its regular copy, on one printing.
+    expect(
+      rows.items
+        .filter((r) => r.name === "Urza's Saga")
+        .map((r) => r.finish)
+        .sort(),
+    ).toEqual(["foil", "nonfoil"]);
+    // The theory row is a plan and is not on the page at all.
+    expect(rows.items.map((r) => r.name)).not.toContain("Dismember");
+  });
+});
+
 describe("the busy fault", () => {
   it("refuses a write in words and leaves the row alone", () => {
     const db = makeDb({
@@ -3226,6 +3470,11 @@ describe("the busy fault", () => {
       // *could* be given: a boolean has no junk state, so this write's only refusal is the one
       // this loop is about.
       collapsed: true,
+      // `set_deck_driven_collection`'s, and never read on this path for `collapsed`'s reason —
+      // the lock comes first, and a boolean has no junk state for a second refusal to catch.
+      // The *other* refusal this command's neighbours grew (the deck-driven fence on the five
+      // collection writes) cannot bind here either: this world's setting is off.
+      enabled: true,
     };
     // The five above excluded, this is every command that really takes the write lock —
     // re-counted 2026-08-12 **after a merge in which three branches had each added one**,
@@ -3307,8 +3556,16 @@ describe("the busy fault", () => {
     // own**, a `boolean` having arrived narrowed, which is exactly why this loop matters more
     // for them than for their neighbours: a handler that forgot `refuseIfBusy` would have a
     // one-line body, and nothing else in the file would notice.
+    //
+    // The deck-driven collection then added `set_deck_driven_collection`, 53 → 54 — the
+    // **third** of those one-line boolean writes and on exactly the same split: the write takes
+    // `collection_source::with_write_owned` (which is `sync::with_write` plus an index refresh)
+    // and is refusable, while the read `deck_driven_collection` goes through `db_read` and
+    // answers through every second of a sync. The same branch put a **second** refusal on the
+    // five collection writes, and it deliberately does not show up in this count: a refusal is
+    // not a handler, and this loop asks each one for `busy` on a world whose setting is off.
     const names = Object.keys(w).filter((n) => !unlocked.includes(n));
-    expect(names).toHaveLength(53);
+    expect(names).toHaveLength(54);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -3347,6 +3604,21 @@ describe("the whole command table", () => {
     // `deck_missing_to_wishlist` takes `deckId` where its four neighbours take `id` — the
     // odd one out, and Tauri matches by name.
     await expect(invoke<number>("deck_missing_to_wishlist", { id: 1 })).rejects.toThrow();
+
+    // The deck-driven pair, whose three argument names are the ones most easily got wrong:
+    // `collection_row_decks` is the only read in the table taking a `finish` — in the
+    // *collection's* spelling, translated at the far end — beside a `cardId` and a `lang`.
+    await expect(
+      invoke<void>("set_deck_driven_collection", { enabled: true }),
+    ).resolves.toBeUndefined();
+    await expect(invoke<boolean>("deck_driven_collection", {})).resolves.toBe(true);
+    await expect(
+      invoke<RowDeck[]>("collection_row_decks", {
+        cardId: BOLT.id,
+        finish: "nonfoil",
+        lang: "en",
+      }),
+    ).resolves.toEqual([{ deckId: 1, deckName: "Test deck", quantity: 2 }]);
   });
 
   /**
