@@ -3106,6 +3106,11 @@ function ownsPrinting(db: FakeDb, cardId: string): boolean {
 const FINISHES: FakeEntry["finish"][] = ["nonfoil", "foil", "etched"];
 const CONDITIONS: FakeEntry["condition"][] = ["NM", "LP", "MP", "HP", "DMG"];
 
+/** Stands in for the derived source's `NULL AS condition` in an `inList` call — guaranteed
+ *  outside {@link CONDITIONS}, so it can never be the value a valid, non-empty filter is
+ *  looking for. See {@link collectionScope}'s condition term for why that is the point. */
+const NEVER_A_CONDITION = "";
+
 function inList(value: string, picked: string[] | undefined, allowed: string[]): boolean {
   if (!picked) return true;
   const values = picked.filter((v) => allowed.includes(v));
@@ -3127,7 +3132,20 @@ function collectionScope(db: FakeDb, q: CollectionQuery): FakeEntry[] {
       return false;
     }
     if (!inList(e.finish, q.finishes, FINISHES)) return false;
-    if (!inList(e.condition, q.conditions, CONDITIONS)) return false;
+    // The stored `"NM"` is `collection_source::rows`' own filler value while derived, never a
+    // fact the reader stated ({@link toCollectionRow} nulls it on the way out) — the crate's
+    // source projects `NULL AS condition` there, and `push_in_list` turns a non-empty filter
+    // into `e.condition IN (…)`, which **`NULL IN (…)` never satisfies, for any value asked
+    // for**. Matching the stored default instead — the bug this replaced — answered `["NM"]`
+    // with every row rather than the crate's zero. `NEVER_A_CONDITION` stands in for that NULL:
+    // it is outside {@link CONDITIONS}, so `inList` drops it from a valid, non-empty filter's
+    // matches exactly as SQLite drops NULL, while an absent or wholly-invalid filter still
+    // takes the `!picked` / `values.length === 0` branch and passes every row, agreeing with
+    // `push_in_list` skipping the predicate entirely in that case. Unreachable through the UI
+    // today (`useCollection.ts:207` drops the filter while derived), but exactly the
+    // fake-vs-crate drift `.storybook/CLAUDE.md` exists to prevent.
+    const condition = db.deckDrivenCollection ? NEVER_A_CONDITION : e.condition;
+    if (!inList(condition, q.conditions, CONDITIONS)) return false;
     if (q.needsReview === true && e.needsReview === null) return false;
     if (q.needsReview === false && e.needsReview !== null) return false;
     return true;

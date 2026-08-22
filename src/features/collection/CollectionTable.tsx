@@ -243,15 +243,23 @@ function columnsFor(
           label={`Quantity of ${row.name ?? row.cardId} (${copyLabel(row)})`}
           onChange={(next) => onSetQuantity(row, next)}
           /**
-           * Out of reach while the collection is derived, and it says why rather than simply
+           * Out of reach while **this row** is derived, and it says why rather than simply
            * not working. This number is the sum of what the decks hold: the place to change it
            * is the deck, and a stepper that silently swallowed a press would look broken.
            *
            * Greyed rather than removed, and `aria-disabled` rather than `disabled`, because
            * the reason is the point — both are `src/CLAUDE.md`'s rule and the prop's own doc
            * carries the argument.
+           *
+           * **`row.deckCount !== null`, never the `deckDriven` flag** — the same rule the
+           * finish cell states above, and for the same reason: `filterKey` folds the mode into
+           * the list query's key and the query uses `keepPreviousData`, so the render right
+           * after a flip to **off** can still be handed the previous mode's rows — `deck_cards`
+           * ids, `deckDriven === false` — while the Rust fence that refuses the write is
+           * already down. A flag-driven stepper would be enabled in exactly that frame; the
+           * row's own `deckCount` is never wrong about what the row is.
            */
-          disabledReason={deckDriven ? DECK_DRIVEN_REASON : undefined}
+          disabledReason={row.deckCount !== null ? DECK_DRIVEN_REASON : undefined}
         />
       ),
     },
@@ -324,15 +332,21 @@ function columnsFor(
       // one-click way to lose the lot from a list that scrolls under the pointer.
       cell: (row) =>
         /**
-         * **Two different columns behind one heading, and the mode is what decides which.**
+         * **Two different columns behind one heading, and the row is what decides which.**
          *
          * A derived row cannot be removed at all: the copies are in the decks, and the decks
          * are where they go. That leaves this 2rem column blank on every row — so it answers
          * the one question a derived row raises instead, which is which decks the copies are
          * in. `DeckCountCell` draws nothing on a row with no count, so the column is still
          * empty in the case where it has nothing to say.
+         *
+         * **`row.deckCount !== null`, never `deckDriven`** — the stepper's own comment states
+         * the reason once; this is the other control it applies to. Reading the flag here would
+         * offer the Remove button on a stale derived row the instant the mode flips off, which
+         * is a `deck_cards.id` reaching `collection_remove` for a hidden hand-kept row it was
+         * never about.
          */
-        deckDriven ? (
+        row.deckCount !== null ? (
           <DeckCountCell row={row} />
         ) : (
           row.quantity === 0 && (

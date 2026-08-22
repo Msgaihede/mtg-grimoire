@@ -89,7 +89,9 @@ export function DeckCountCell({ row }: { row: CollectionRow }) {
     <span
       {...tip(<RowDecks row={row} />, { describes: false })}
       // Dim and small, like the unit price under a value: it is a fact *about* the row rather
-      // than one of its columns, and the Actions column is 2rem wide.
+      // than one of its columns, and the Actions column is 4.5rem wide in the only mode this
+      // component renders in — `CollectionTable.tsx` widens it from the 2rem a bare removal
+      // icon needs.
       className="whitespace-nowrap text-[0.7rem] text-dim"
     >
       {/* Singular matters — a reader with one deck should not be told "1 decks". */}
