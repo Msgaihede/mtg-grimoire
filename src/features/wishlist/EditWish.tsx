@@ -120,13 +120,6 @@ const PANEL_BUTTON = cn(
  *  already `bg-surface` and a surface-coloured hover on a surface is no hover at all. */
 const NEUTRAL_HOVER = "hover:border-accent/60 hover:text-text";
 
-/** What the destination list is, once this panel has swapped its body for it: a list, not a
- *  popup. See {@link EditWishPanel} for why the anchoring and the chrome come off. */
-const UNPINNED_LIST = cn(
-  "[&>[role=dialog]]:static [&>[role=dialog]]:w-full",
-  "[&>[role=dialog]]:border-0 [&>[role=dialog]]:bg-transparent [&>[role=dialog]]:shadow-none",
-);
-
 /**
  * The panel's contents, and the one decision they make on their own: which of two panes is up.
  *
@@ -137,9 +130,9 @@ const UNPINNED_LIST = cn(
  * panel and getting out of one edit would cost two. One pane at a time, one rung, one press.
  *
  * Two consequences of that follow, and both are written at their own sites below: `MoveToFolder`
- * is stripped of the anchoring and the box it wears when it *is* a popup, and its `onClose` —
- * "focus left the layer" — has nothing to close here, because the layer focus left is the panel
- * and `AnchoredPopup` already closes that itself.
+ * is asked for its `inline` shape rather than the popup one, and its `onClose` — "focus left the
+ * layer" — has nothing to close here, because the layer focus left is the panel and
+ * `AnchoredPopup` already closes that itself.
  */
 function EditWishPanel({
   row,
@@ -191,32 +184,35 @@ function EditWishPanel({
           <ArrowLeft className="size-3.5" aria-hidden="true" />
           Back
         </button>
-        {/* **`MoveToFolder` is a popup everywhere else, and here it is not.** Its own root is
-            `absolute right-0 top-8 w-56` with a border, a background and a shadow — the box it
-            needs when it hangs off a deck tile, and the one thing that would make this swap read
-            as the nested layer the panel deliberately is not. The anchoring and the chrome come
-            off from this call site, because being a popup is a fact about the *other* two call
-            sites rather than about the list. */}
-        <div className={UNPINNED_LIST}>
-          <MoveToFolder
-            label={`Move ${wishLabel(row)} to a folder`}
-            nodes={nodes}
-            currentId={row.folderId}
-            // Nothing is forbidden: a wish has no descendants to be filed inside, which is the
-            // whole of what `forbidden` is for.
-            pending={false}
-            onPick={(folderId) => {
-              onSetFolder(row, folderId);
-              setPane("main");
-            }}
-            // **Deliberately nothing.** `onClose` means "focus left this layer on its own", and
-            // the only layer here is the panel — which `AnchoredPopup` closes itself when focus
-            // leaves its root. Wired to `setPane("main")` instead, it would fire on the caret
-            // merely reaching the Back button beside it, and unmount that button under the press
-            // that was about to be made on it.
-            onClose={() => {}}
-          />
-        </div>
+        <MoveToFolder
+          label={`Move ${wishLabel(row)} to a folder`}
+          nodes={nodes}
+          currentId={row.folderId}
+          // **`inline`, which is the whole of what makes this a swap rather than a second
+          // layer.** The popup shape — anchored, its own width, its own box, its own z-index —
+          // is what the deck gallery needs and what would make this read as the nested layer
+          // the panel deliberately is not. Asked for by name rather than un-styled from out
+          // here: an override would make this file depend on that component's internal DOM,
+          // and the day its root gains a wrapper the layer comes back with nothing going red.
+          inline
+          // The top level of *this* tree. `MoveToFolder` defaults to the deck gallery's word,
+          // which is the surface it was written for; a reader filing a card they are buying
+          // must not be told they are moving it into the deck gallery.
+          rootLabel="Wishlist"
+          // Nothing is forbidden: a wish has no descendants to be filed inside, which is the
+          // whole of what `forbidden` is for.
+          pending={false}
+          onPick={(folderId) => {
+            onSetFolder(row, folderId);
+            setPane("main");
+          }}
+          // **Deliberately nothing.** `onClose` means "focus left this layer on its own", and
+          // the only layer here is the panel — which `AnchoredPopup` closes itself when focus
+          // leaves its root. Wired to `setPane("main")` instead, it would fire on the caret
+          // merely reaching the Back button beside it, and unmount that button under the press
+          // that was about to be made on it.
+          onClose={() => {}}
+        />
       </div>
     );
   }

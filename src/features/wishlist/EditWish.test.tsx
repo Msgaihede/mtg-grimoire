@@ -179,6 +179,24 @@ describe("EditWishButton", () => {
   });
 
   /**
+   * The top level, in **this** tree's word.
+   *
+   * `MoveToFolder` defaults to the deck gallery's "All decks", which is the surface it was
+   * written for — and a reader filing a card they are about to buy must not be told they are
+   * moving it into the deck gallery. This is the one row whose copy is asserted here, because
+   * it is the one this call site chose; every other row's wording is the component's.
+   */
+  it("names the top level after this list, not after the deck gallery", async () => {
+    const { user } = setup(BOLT);
+    const panel = await open(user, BOLT);
+    await user.click(within(panel).getByRole("button", { name: /^Move to folder/ }));
+
+    const list = listIn(panel, BOLT);
+    expect(within(list).getByRole("button", { name: "Wishlist" })).toBeInTheDocument();
+    expect(within(list).queryByRole("button", { name: "All decks" })).toBeNull();
+  });
+
+  /**
    * The back affordance, and the trap under it: the caret is inside `MoveToFolder`, whose own
    * `onBlur` fires the moment a press lands on this button. Wired to leave the pane, that would
    * unmount the button under the press and the click would never arrive.
