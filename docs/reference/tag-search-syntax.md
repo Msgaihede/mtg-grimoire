@@ -180,6 +180,11 @@ typing `a:dog` one **query key** rather than two.
 art tags**. Both surfaces were driven — the search page and the deck editor's docked panel — and
 they answered identically, which is the claim "one wiring reaches both" made good.
 
+**Driven twice**, because `main` moved the deck editor underneath this branch mid-way (issue #183:
+the card pane became an overlay and the search column opens by default again). The search-page
+figures below are from the first pass and the deck-panel ones were re-taken on the merge, so no
+number here describes a tree that was not shipped.
+
 | what was typed | what the window did |
 | --- | --- |
 | `o:ramp` | one chip (`ORACLE ramp`), wall narrows to **2,149 cards** |
@@ -193,13 +198,17 @@ spellings of `spot removal` (`spot removal`, `spot-removal`, `SPOTREMOVAL`) fold
 `spot-removal`; `remov` and `""` both answered `null`. That is Scryfall's measured behaviour
 reproduced against a local 4,525-tag file.
 
+In the deck editor's panel, on the merged tree: `a:dragon -o:removal` draws both chips and answers
+**774 cards**, at `panelScrollWidth` **383** against `clientWidth` **383** and a page
+`scrollWidth` of 1920 against a `clientWidth` of 1920 — no overflow in either.
+
 **One thing found and deliberately not fixed here.** Dragged to its floor
-(`MIN_PANEL_WIDTH_PX`, 206), the deck editor's docked panel overflows its own content box —
-`scrollWidth` **258** against `clientWidth` **205**. It is **not this feature's**: the same
-measurement with the tag row absent reads 258 as well, and the two culprits are the search
-`<input>` (`min-w-56`, a hard 224px floor a flex item cannot shrink below) and the `Color
-identity` group, `flex gap-1.5` with **no `flex-wrap`** — six 36px chips plus five 6px gaps =
-**246**. That is exactly the failure `src/CLAUDE.md` warns about under "a row of fixed-width
-controls is sized by the narrowest surface that draws it", live on `main`. The tag chip row
-itself wraps and fits: 193px wide over two lines at that width, **0px overhang**, and at the
-panel's normal 384 it is 290px wide with `scrollWidth === clientWidth`.
+(`MIN_PANEL_WIDTH_PX`, 206), that panel overflows its own content box — `scrollWidth` **258**
+against `clientWidth` **205**. It is **not this feature's**, and the before/after was taken in one
+pass to prove it: clearing the box so the tag row is gone leaves the figure at **258**. The two
+culprits are the search `<input>` (`min-w-56`, a hard 224px floor a flex item cannot shrink below)
+and the `Color identity` group, `flex gap-1.5` with **no `flex-wrap`** — six 36px chips plus five
+6px gaps = **246**. That is exactly the failure `src/CLAUDE.md` warns about under "a row of
+fixed-width controls is sized by the narrowest surface that draws it", live and pre-existing. The
+tag chip row itself wraps and fits: **193px wide over two lines, 0px overhang** at that width, and
+290px at the panel's normal 384.
