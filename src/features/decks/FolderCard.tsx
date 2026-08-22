@@ -97,7 +97,7 @@ export function FolderCard({
         type="button"
         // Starts with the visible label, then says the two things the card's marks say — WCAG
         // 2.5.3, and the reason the count is not spliced into the middle of the name.
-        aria-label={`${node.folder.name} folder, ${plural(node.deckCount, "deck")}`}
+        aria-label={`${node.folder.name} folder, ${plural(node.count, "deck")}`}
         onClick={() => onOpen(node.folder.id)}
         className={cn(
           "block w-full rounded-xl border border-dashed border-border p-2.5 text-left",
@@ -112,7 +112,7 @@ export function FolderCard({
               aria-hidden="true"
               className="grid w-full place-items-center text-[0.7rem] text-dim"
             >
-              {node.deckCount === 0 ? "Empty" : "No cover art"}
+              {node.count === 0 ? "Empty" : "No cover art"}
             </span>
           ) : (
             arts.map((art) => <MemberArt key={art.id} cardId={art.cardId} />)
@@ -121,7 +121,7 @@ export function FolderCard({
         <span className="mt-2 flex items-baseline gap-2">
           <span className="min-w-0 flex-1 truncate text-sm">{node.folder.name}</span>
           <span className="flex-none font-mono text-[0.7rem] tabular-nums text-dim">
-            {node.deckCount}
+            {node.count}
           </span>
         </span>
         <span className="mt-0.5 block text-xs text-dim">Folder</span>

@@ -1061,11 +1061,11 @@ function DeleteFolderConfirm({
     >
       <p>Delete “{node.folder.name}”?</p>
       <p className="mt-1 leading-relaxed text-dim">
-        {node.deckCount === 0
+        {node.count === 0
           ? "It holds no decks."
-          : `The ${plural(node.deckCount, "deck")} in it ${
-              node.deckCount === 1 ? "is" : "are"
-            } kept — ${node.deckCount === 1 ? "it moves" : "they move"} to the top level.`}
+          : `The ${plural(node.count, "deck")} in it ${
+              node.count === 1 ? "is" : "are"
+            } kept — ${node.count === 1 ? "it moves" : "they move"} to the top level.`}
         {inside > 0 &&
           ` The ${plural(inside, "folder")} inside ${inside === 1 ? "goes" : "go"} with it.`}
       </p>
