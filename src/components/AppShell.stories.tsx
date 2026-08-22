@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useQueryClient } from "@tanstack/react-query";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 import { cardDraggable } from "@/features/decks/dnd";
 import { SettingsPage } from "@/features/settings/SettingsPage";
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
+import { LAYER } from "@/lib/layers";
 import { useAppStore, type ViewId } from "@/lib/store";
+import { NAV_COLLAPSED_KEY } from "@/lib/useNavCollapsed";
 import { useUpdate } from "@/lib/useUpdate";
 import { emitFake } from "../../.storybook/fake/event";
 import { printing } from "../../.storybook/fake/fixtures";
@@ -62,21 +65,39 @@ function ViewStandIn({ view }: { view: ViewId }) {
  * call would be a second subscription describing the same download. Everything the ribbon's
  * gold button says — whether it appears, which of its two labels it wears — is derived from
  * this one value against the seeded world.
+ *
+ * **The rail's width is seeded into the query cache rather than into the fake's rows, and that
+ * is a limitation of `parameters.fake` rather than a preference.** A story may ask its world for
+ * a `seed` and a `fault` and nothing else, and "the sidebar is collapsed" is neither — it is an
+ * ordinary user preference on a healthy database. So a story that wants to *open* collapsed puts
+ * the answer where `useNavCollapsed` reads it: `NAV_COLLAPSED_KEY`, at `staleTime: Infinity`, so
+ * a value already in the cache is the answer and no `nav_collapsed` call is made. This is the
+ * arrangement `AppShell.test.tsx` already uses for the open deck's detail, and the client is the
+ * story's own (`world.client`), so it cannot reach another story on the page. Pressing the
+ * toggle still goes through the fake and writes its row, which is what {@link Collapsed} leaves
+ * to the reader.
  */
 function Shell({
   view,
   deckId = null,
+  collapsed = false,
   children,
 }: {
   view: ViewId;
   /** A deck open in the editor. Only ever meaningful with `view: "decks"`. */
   deckId?: number | null;
+  /** Open with the rail down to icons. */
+  collapsed?: boolean;
   children?: ReactNode;
 }) {
+  const client = useQueryClient();
   useState(() => {
     const store = useAppStore.getState();
     store.setActiveView(view);
     if (deckId !== null) store.setOpenDeckId(deckId);
+    // Only when asked: left alone, the shell reads the fake's own row like the app reads the
+    // database, which is what keeps every other story on this page exercising that path.
+    if (collapsed) client.setQueryData(NAV_COLLAPSED_KEY, true);
   });
   const update = useUpdate();
   // **The store, not the `view` arg**, which is `App.tsx:16`'s own choice: `ActiveView`
@@ -243,7 +264,10 @@ const meta = {
   component: Shell,
   tags: ["autodocs"],
   args: { view: "search" },
-  render: (args) => <Shell key={`${args.view}:${args.deckId}`} {...args} />,
+  // The key carries `collapsed` too, for the reason the other two are in it: all three are read
+  // once, in a lazy initializer, so changing one in Controls has to remount rather than write to
+  // a store and a cache that are already being observed.
+  render: (args) => <Shell key={`${args.view}:${args.deckId}:${args.collapsed}`} {...args} />,
   decorators: [
     // The shell is `h-screen`, and in a docs page that is the *docs* page's screen. A fixed box
     // gives each story its own window; 1280 is the app's narrow rung — what it opens at on a
@@ -348,6 +372,67 @@ export const Wishlist: Story = { args: { view: "wishlist" } };
 /** The gallery state of the Decks view — no deck open, which is also the state that makes the
  *  sidebar's Decks entry inert for every drag started anywhere else. */
 export const Decks: Story = { args: { view: "decks" } };
+
+/**
+ * The rail at 68px, which is the whole of issue #177.
+ *
+ * **Width is the scarce thing in this app**, and this is the one control that gives some back:
+ * at the 1280×800 this page is drawn at, a deck editor with a card pane docked has a 602px desk
+ * row and ten pixels of headroom over `DECK_FLOOR` — so 208 → 68 hands `main` back **140px**
+ * exactly where it is tightest. Nothing else about an entry changes: 44px rows, `size-5` icons,
+ * the same gold hairline down the active one, the same drop targets.
+ *
+ * **The word is still in the DOM, as `sr-only` rather than as an `aria-label`**, which is why
+ * the assertions below are the ordinary `getByRole` queries every other story on this page uses.
+ * The name is computed from content in both states, so it is the same string in both — the two
+ * states cannot drift into two different names, and no test in the repository had to learn a
+ * second spelling. What the *eye* gets instead is `useTooltip()` at side `"right"`, the app's one
+ * hint mechanism; a native `title` would be the wrong tool twice over, and `AppShell.tsx` says
+ * why beside the one that survives.
+ *
+ * The toggle at the foot is the way back, and it is `aria-expanded`/`aria-controls` rather than
+ * a bare press: the rail is narrower, not hidden, and `expanded` is the honest word for that.
+ */
+export const Collapsed: Story = {
+  args: { view: "search", collapsed: true },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const rail = canvas.getByRole("navigation", { name: "Views" });
+    await expect(rail).toHaveClass("w-17");
+
+    // Every destination still answers to its own name, and the active one still says so.
+    for (const label of ["Search", "Tags", "Collection", "Wishlist", "Decks", "Settings"]) {
+      await expect(canvas.getByRole("button", { name: label })).toBeInTheDocument();
+    }
+    await expect(canvas.getByRole("button", { name: "Search" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+
+    const expand = canvas.getByRole("button", { name: "Expand sidebar" });
+    await expect(expand).toHaveAttribute("aria-expanded", "false");
+    await expect(expand).toHaveAttribute("aria-controls", rail.id);
+
+    // And the way back is one press, which is the half a seeded cache cannot show: this write
+    // goes through the fake's own `set_nav_collapsed`.
+    await userEvent.click(expand);
+
+    await waitFor(async () => {
+      await expect(rail).toHaveClass("w-52");
+    });
+    const collapse = canvas.getByRole("button", { name: "Collapse sidebar" });
+    await expect(collapse).toHaveAttribute("aria-expanded", "true");
+
+    // **Put back**, because the canvas runs this play the moment the story opens and a story
+    // named for a state has to be left in it — otherwise the workbench's whole point, seeing the
+    // thing, is spent by the test that checks it.
+    await userEvent.click(collapse);
+
+    await waitFor(async () => {
+      await expect(rail).toHaveClass("w-17");
+    });
+  },
+};
 
 /**
  * The one story whose child is a **real view**, because Settings is where the other half of
@@ -626,6 +711,51 @@ export const DroppedOnWishlist: Story = {
       await waitFor(async () => {
         await expect(canvas.getByText("Added to wishlist.")).toBeInTheDocument();
       });
+    } finally {
+      await held.cancel();
+    }
+  },
+};
+
+/**
+ * The same landing with the rail down to icons: the sentence has nowhere in the column to go, so
+ * it is drawn as a small panel floating beside the rail.
+ *
+ * **The region does not move and neither does its rule.** Same `role="status"`, same element,
+ * mounted for the life of the entry and `sr-only` while empty — a live region that first appears
+ * with its sentence already inside it announces nothing. All that changes is the box: at 68px
+ * there is no 183px line to set two lines of text on, so the note goes to `absolute left-full`
+ * beside the entry it belongs to, at `LAYER.popup`, on a bordered `bg-surface` panel.
+ *
+ * **`pointer-events-none` is the load-bearing class here**, and it is the reason this story is
+ * worth its place beside {@link DroppedOnWishlist}: the note hangs over the view for the four
+ * seconds it is up, and a panel that could take a pointer would eat the next drop or the click
+ * on whatever is underneath it. `pointer-events` inherits, so one class covers the sentence too.
+ *
+ * The refused card-menu add draws the same box, from the same component, for the same reason —
+ * `Chrome/AppShell` has no story for it because the refusal is a card menu's to produce.
+ */
+export const DroppedOnCollapsedRail: Story = {
+  args: { view: "search", collapsed: true, children: <CardSource /> },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // By name while it is an icon, which is the `sr-only` label doing its job: this is the query
+    // every other drag story on this page makes, unchanged.
+    const wishlist = canvas.getByRole("button", { name: "Wishlist" });
+
+    const held = await pickUp(canvas.getByText("Lightning Bolt"));
+    try {
+      await held.over(wishlist);
+      await held.drop(wishlist);
+
+      await waitFor(async () => {
+        await expect(canvas.getByText("Added to wishlist.")).toBeInTheDocument();
+      });
+      const note = canvas.getByText("Added to wishlist.");
+      await expect(note).toHaveClass("pointer-events-none", LAYER.popup);
+      // Beside the rail rather than in it, anchored on the entry's own wrapper so there is no
+      // offset arithmetic to get wrong.
+      await expect(note).toHaveClass("absolute", "left-full", "top-0");
     } finally {
       await held.cancel();
     }

@@ -794,6 +794,28 @@ export interface FakeDb {
    */
   cardZoom: Record<string, number>;
   /**
+   * `app_meta.nav_collapsed` — whether the reader has collapsed the global navigation sidebar
+   * down to its icons.
+   *
+   * **A plain `boolean`, and the only one of these five rows that is not nullable** — which is
+   * the whole of what is worth knowing about this field, because the shape is an argument
+   * rather than a shortcut. Its four neighbours are `string | null` (or `{}`) because each has
+   * two states a narrowed field could not reach: the row has never been written, and the row
+   * holds a word *this* build cannot place. This one has neither. `nav_collapsed` is infallible
+   * at the far end: a missing row, a junk row, a row a newer build wrote something else into —
+   * every one of them answers `false`, and the reader gets the expanded shell. So there is no
+   * "never set" for a story to stand in that is distinguishable from "set to the default", and
+   * a `boolean | null` here would be a third state the backend cannot produce, which is exactly
+   * the kind of fiction {@link FakeDb.marketplace}'s nullability exists to *avoid* rather than
+   * an instance of it.
+   *
+   * The consequence for the pair of handlers is the same one, said twice: the read cannot fall
+   * back because there is nothing to fall back from, and the write cannot refuse a value
+   * because a `boolean` off the IPC boundary has no junk state — see
+   * {@link readHandlers.nav_collapsed} and {@link writeHandlers.set_nav_collapsed}.
+   */
+  navCollapsed: boolean;
+  /**
    * `marketplace_prices` — the table that made a third and fourth marketplace possible.
    *
    * Keyed `(marketplace, cardId, finish)` and **not** a column on `cards`, for the schema's own
@@ -1106,6 +1128,12 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // says nothing about zoom is standing in. A story that wants a restored session passes the
     // sections it cares about and leaves the rest out — an absent key is a wall nobody has zoomed.
     cardZoom: {},
+    // The fifth row, and the only one whose default is a *value* rather than an absence: a
+    // shell nobody has collapsed. `false` is what the backend answers for the row never having
+    // been written and for its holding something unreadable alike, so there is no third state
+    // for `null` to stand in — see {@link FakeDb.navCollapsed}. Every story that says nothing
+    // about the sidebar is standing in the expanded shell.
+    navCollapsed: false,
     // Empty here and filled by a seed, exactly as the card corpus is: a downloaded feed is a
     // table with rows in it, and "no rows" is the honest state of an install that has never
     // chosen Card Kingdom. `starterSeed` fills both from the corpus.
@@ -4947,6 +4975,28 @@ export function readHandlers(db: FakeDb) {
       ),
 
     /**
+     * `nav::nav_collapsed` — whether the global navigation sidebar was left collapsed to icons.
+     *
+     * The fifth `app_meta` setting, and **the one with no fallback in it at all**, which is the
+     * whole of how it differs from the four above. Each of those narrows on the way out because
+     * the row can hold a word this build cannot place; this row holds a boolean, and the
+     * command is infallible at the far end — a missing row, a junk row, an unparseable one all
+     * answer `false`, so the shell that greets a reader whose `app_meta` is nonsense is the
+     * expanded one. That collapse happens in the Rust, before the value ever crosses the IPC
+     * boundary, which leaves this handler with nothing to decide: the stored boolean *is* the
+     * answer.
+     *
+     * Read at launch and only at launch — the shell asks once and then owns the state, so a
+     * story that presses the toggle is looking at its own React state rather than at a re-read.
+     * What this read is therefore *for* is the first frame: a story seeded collapsed has to
+     * open collapsed rather than opening wide and snapping shut, which is the bug a fake that
+     * always answered `false` here would hide.
+     *
+     * A read, so it answers through a sync like every other one here — the write below does not.
+     */
+    nav_collapsed: (): boolean => db.navCollapsed,
+
+    /**
      * `marketplace_feed::status` — one row per **feed-backed** marketplace, whether or not it
      * has ever been fetched.
      *
@@ -8049,6 +8099,36 @@ export function writeHandlers(db: FakeDb) {
         );
       }
       db.cardZoom = { ...db.cardZoom, [args.section]: args.zoom };
+    },
+
+    /**
+     * `nav::set_nav_collapsed` — remember that the reader collapsed the sidebar, or opened it.
+     *
+     * **The only thing it can refuse is a running sync, and that absence is the point rather
+     * than a gap.** Its three neighbours above each open with a validation — a marketplace id
+     * that is not on the list, a grouping mode this build cannot draw, a zoom outside the
+     * bounds — because each of those arrives as a `String` or a bare number and the read side
+     * *shrugs at* what it cannot use, so an unchecked write would leave `app_meta` holding a
+     * row that silently means the default forever. `set_printing_group_by`'s note calls that
+     * refusal the half a fake is easiest to leave out, and it is right about all three.
+     *
+     * There is no fourth instance of it here, and a reader comparing the two handlers should
+     * not have to wonder whether one was forgotten: a `boolean` off the IPC boundary has **no
+     * junk state**. Tauri's deserializer refuses anything that is not `true` or `false` before
+     * this handler is reached at all, so both values are storable, both round-trip, and there
+     * is nothing left for a validation to catch. Adding one would be inventing a refusal the
+     * backend does not make — the same mistake in the other direction as leaving one out.
+     *
+     * It honours `busy` like every other ordinary write here, which is the split that puts it
+     * on this side of the file at all: `nav_collapsed` takes the read connection and answers
+     * through every second of a sync, while this one takes the **write** connection and so
+     * answers `crate::db::BUSY` — `set_printing_group_by`'s pair exactly. A reader pressing the
+     * toggle mid-sync gets a refusal, and the sidebar that snaps back is the app telling the
+     * truth about a preference that was not saved.
+     */
+    set_nav_collapsed: (args: { collapsed: boolean }): void => {
+      refuseIfBusy(db);
+      db.navCollapsed = args.collapsed;
     },
 
     /**
