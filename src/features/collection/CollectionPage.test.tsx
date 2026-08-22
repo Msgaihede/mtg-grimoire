@@ -113,6 +113,8 @@ const BOLT: CollectionRow = {
   notes: null,
   needsReview: null,
   updatedAt: 1_800_000_000,
+  // A hand-kept row: `null` is what the collection says when it is not derived from the decks.
+  deckCount: null,
 };
 
 /** The one printing `import_resolve` answers with for the import test below — everything the

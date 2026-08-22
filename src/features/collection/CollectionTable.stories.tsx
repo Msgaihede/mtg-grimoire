@@ -80,6 +80,9 @@ function entry(card: FakeCard, finish: Finish, over: Partial<CollectionRow> = {}
     notes: null,
     needsReview: null,
     updatedAt: 1_786_266_000,
+    // A hand-kept row. A story about the deck-driven collection overrides this — and `condition`
+    // to `null` with it, since those two nulls arrive together or not at all.
+    deckCount: null,
     ...over,
   };
 }

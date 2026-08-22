@@ -46,6 +46,19 @@ function conditionLabel(raw: string): string {
 }
 
 /**
+ * Which copy a row is about, for the accessible name of a control that acts on it.
+ *
+ * `Foil, NM` where the reader stated a grade and `Foil` where they did not — **a derived row
+ * has no condition**, a deck card having nowhere to record one, and interpolating that `null`
+ * straight into a template literal reads out as the word "null" beside the finish. The em dash
+ * the cell draws is no better here: a dash is a gap on screen and noise in a sentence.
+ */
+function copyLabel(row: CollectionRow): string {
+  const finish = finishLabel(row.finish);
+  return row.condition === null ? finish : `${finish}, ${row.condition}`;
+}
+
+/**
  * The six columns.
  *
  * Only the name flexes: every other column holds something whose width is known — a set and
@@ -169,25 +182,40 @@ function columnsFor(
       // full string either way; the tooltip is for the reader who can see it is cut.
       headerTitle: "Finish · condition",
       cellClassName: "truncate text-xs text-dim",
-      cell: (row) => (
-        <>
-          {finishLabel(row.finish)} ·{" "}
-          {/* Not like this table's other tooltips (spec §4, "the one site that is not a
-            tooltip"): on `<abbr>`, `title` is the standard HTML expansion mechanism rather
-            than decoration, and `aria-label` on this roleless element is not reliably
-            announced. So the expansion also rides as `sr-only` text right beside the
-            abbreviation — text is the one route to assistive tech that always works — and the
-            hover/focus panel is bound separately, with `describes: false` so it does not also
-            wire `aria-describedby` onto a sentence the accessibility tree already has. */}
-          <abbr
-            className="no-underline"
-            {...tip(conditionLabel(row.condition), { describes: false })}
-          >
-            {row.condition}
-          </abbr>
-          <span className="sr-only"> ({conditionLabel(row.condition)})</span>
-        </>
-      ),
+      cell: (row) => {
+        const condition = row.condition;
+        return (
+          <>
+            {finishLabel(row.finish)} ·{" "}
+            {condition === null ? (
+              /* **A derived row states no grade** — a deck card has nowhere to record one, and
+                the column's `NM` default would be a fact nobody stated. An em dash is this
+                table's word for a hole in the data, the same one the value column draws for an
+                unpriced finish, and it is `aria-hidden` for `CountTag`'s reason: a dash read
+                aloud after the finish is noise, and the sentence is complete without it. */
+              <span aria-hidden="true">—</span>
+            ) : (
+              <>
+                {/* Not like this table's other tooltips (spec §4, "the one site that is not a
+                  tooltip"): on `<abbr>`, `title` is the standard HTML expansion mechanism rather
+                  than decoration, and `aria-label` on this roleless element is not reliably
+                  announced. So the expansion also rides as `sr-only` text right beside the
+                  abbreviation — text is the one route to assistive tech that always works — and
+                  the hover/focus panel is bound separately, with `describes: false` so it does
+                  not also wire `aria-describedby` onto a sentence the accessibility tree already
+                  has. */}
+                <abbr
+                  className="no-underline"
+                  {...tip(conditionLabel(condition), { describes: false })}
+                >
+                  {condition}
+                </abbr>
+                <span className="sr-only"> ({conditionLabel(condition)})</span>
+              </>
+            )}
+          </>
+        );
+      },
     },
     {
       key: "quantity",
@@ -205,7 +233,7 @@ function columnsFor(
           size="sm"
           value={row.quantity}
           min={0}
-          label={`Quantity of ${row.name ?? row.cardId} (${finishLabel(row.finish)}, ${row.condition})`}
+          label={`Quantity of ${row.name ?? row.cardId} (${copyLabel(row)})`}
           onChange={(next) => onSetQuantity(row, next)}
         />
       ),
@@ -275,7 +303,7 @@ function columnsFor(
           <button
             type="button"
             onClick={() => onRemove(row)}
-            aria-label={`Remove ${row.name ?? row.cardId} (${finishLabel(row.finish)}, ${row.condition}) from your collection`}
+            aria-label={`Remove ${row.name ?? row.cardId} (${copyLabel(row)}) from your collection`}
             {...tip("Remove from your collection", { describes: false })}
             className={cn(
               REVEAL_ON_HOVER,

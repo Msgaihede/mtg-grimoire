@@ -2862,6 +2862,11 @@ function toCollectionRow(
     // Also from the card, and the fixtures carry real Scryfall blobs — so the Arena export
     // filter answers over the corpus rather than over a hand-written yes/no.
     legalities: card?.legalities ?? null,
+    // `null` is the whole of what the hand-kept collection has to say here, and this fake keeps
+    // a hand-kept one: `collection_entries` is the only source it models, so there is no deck
+    // aggregate for a count to come out of. A world that derives the collection from its decks
+    // would fill this in — and would be a change to the *source*, not to this builder.
+    deckCount: null,
   };
 }
 
