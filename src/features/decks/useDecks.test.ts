@@ -10,11 +10,21 @@ const deckUpdate = vi.hoisted(() => vi.fn());
 const deckDelete = vi.hoisted(() => vi.fn());
 const deckDuplicate = vi.hoisted(() => vi.fn());
 const deckSetFolder = vi.hoisted(() => vi.fn());
+const deckDrivenCollection = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { deckList, deckCreate, deckUpdate, deckDelete, deckDuplicate, deckSetFolder },
+  ipc: {
+    deckList,
+    deckCreate,
+    deckUpdate,
+    deckDelete,
+    deckDuplicate,
+    deckSetFolder,
+    deckDrivenCollection,
+  },
 }));
 
+import { DECK_DRIVEN_KEY } from "@/lib/useDeckDrivenCollection";
 import { useDecks } from "./useDecks";
 
 const BURN: DeckRow = {
@@ -62,6 +72,71 @@ beforeEach(() => {
   deckDelete.mockReset().mockResolvedValue(undefined);
   deckDuplicate.mockReset().mockResolvedValue({ ...BURN, id: 5, name: "Burn (copy)" });
   deckSetFolder.mockReset().mockResolvedValue({ ...BURN, folderId: 1 });
+  deckDrivenCollection.mockReset().mockResolvedValue(false);
+});
+
+/**
+ * `useDeck.test.ts`'s helper and its reasoning — a `staleTime: 30_000` cache is *fresh*, so
+ * `isInvalidated` is the whole of what tells the Collection page anything happened.
+ *
+ * The decks root is stood for by an open editor's **detail** key rather than by `["decks",
+ * "list"]`, which is this hook's own query: `invalidateQueries` refetches an *observed* query
+ * and clears the flag again when the answer lands, so the list would be a race. Everything here
+ * is unobserved and stays marked.
+ */
+const OWNED_CACHES: readonly (readonly string[])[] = [
+  ["collection", "list", "{}"],
+  ["cards", "search", "{}"],
+  ["decks", "detail", "4", "live", "tcgplayer"],
+  ["wishlist", "list", "{}"],
+];
+
+function seedOwned(c: QueryClient): void {
+  for (const key of OWNED_CACHES) c.setQueryData(key, { items: [], total: 0 });
+}
+
+const staleRoots = (c: QueryClient): string[] =>
+  OWNED_CACHES.filter((key) => c.getQueryState(key)?.isInvalidated === true)
+    .map((key) => key[0])
+    .sort();
+
+/**
+ * "`allocate_deck` never touches `collection_entries`" is still true here and has stopped being
+ * sufficient, which is the whole shape of this setting: nothing in this file writes the
+ * collection table, it is that the collection table has stopped being where the collection comes
+ * from. Deleting a deck cascades away every `deck_cards` row in it, and in the derived mode those
+ * rows *were* the collection.
+ */
+describe("useDecks while the collection is deck driven", () => {
+  it("marks the whole of what the reader owns stale when a deck is deleted", async () => {
+    client.setQueryData(DECK_DRIVEN_KEY, true);
+    seedOwned(client);
+    const { result } = renderHook(() => useDecks(), { wrapper });
+    await waitFor(() => expect(result.current.decks).toEqual([BURN]));
+    // The list query above is seeded *and* observed, so re-seed it after the read landed —
+    // this is about what the write marks, not about what the mount did.
+    seedOwned(client);
+    expect(staleRoots(client)).toEqual([]);
+
+    await result.current.remove.mutateAsync(4);
+
+    await waitFor(() =>
+      expect(staleRoots(client)).toEqual(["cards", "collection", "decks", "wishlist"]),
+    );
+  });
+
+  /** Additively — `["decks"]` is the floor in both modes, because all five writes move the
+   *  gallery whether or not the collection is derived from it. */
+  it("marks only the decks stale while the collection is hand kept", async () => {
+    seedOwned(client);
+    const { result } = renderHook(() => useDecks(), { wrapper });
+    await waitFor(() => expect(result.current.decks).toEqual([BURN]));
+    seedOwned(client);
+
+    await result.current.remove.mutateAsync(4);
+
+    await waitFor(() => expect(staleRoots(client)).toEqual(["decks"]));
+  });
 });
 
 describe("useDecks", () => {

@@ -7,11 +7,13 @@ import type { DeckAuditEntry, DeckUndoState } from "@/lib/ipc";
 const deckUndoState = vi.hoisted(() => vi.fn());
 const deckUndoApply = vi.hoisted(() => vi.fn());
 const deckRedoApply = vi.hoisted(() => vi.fn());
+const deckDrivenCollection = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { deckUndoState, deckUndoApply, deckRedoApply },
+  ipc: { deckUndoState, deckUndoApply, deckRedoApply, deckDrivenCollection },
 }));
 
+import { DECK_DRIVEN_KEY } from "@/lib/useDeckDrivenCollection";
 import { useDeckUndo } from "./useDeckUndo";
 
 function entry(over: Partial<DeckAuditEntry> = {}): DeckAuditEntry {
@@ -44,6 +46,63 @@ beforeEach(() => {
   deckUndoState.mockReset().mockResolvedValue(state());
   deckUndoApply.mockReset().mockResolvedValue(undefined);
   deckRedoApply.mockReset().mockResolvedValue(undefined);
+  deckDrivenCollection.mockReset().mockResolvedValue(false);
+});
+
+/** `useDeck.test.ts`'s helper and its reasoning — a `staleTime: 30_000` cache is *fresh*, so
+ *  `isInvalidated` is the whole of what tells the Collection page anything happened. */
+const OWNED_CACHES: readonly (readonly string[])[] = [
+  ["collection", "list", "{}"],
+  ["cards", "search", "{}"],
+  ["decks", "list"],
+  ["wishlist", "list", "{}"],
+];
+
+function seedOwned(c: QueryClient): void {
+  for (const key of OWNED_CACHES) c.setQueryData(key, { items: [], total: 0 });
+}
+
+const staleRoots = (c: QueryClient): string[] =>
+  OWNED_CACHES.filter((key) => c.getQueryState(key)?.isInvalidated === true)
+    .map((key) => key[0])
+    .sort();
+
+/**
+ * An undo is a deck write, so it makes the same roots wrong as the write it reverses.
+ *
+ * Reversing an add of two copies takes two copies back out of a derived collection, and the
+ * page has no other way to find out: `src/lib/query.ts` sets `staleTime: 30_000`, so its cached
+ * answer is fresh and navigating to it refetches nothing.
+ */
+describe("useDeckUndo while the collection is deck driven", () => {
+  it("marks the whole of what the reader owns stale when a change is undone", async () => {
+    client.setQueryData(DECK_DRIVEN_KEY, true);
+    seedOwned(client);
+    const { result } = renderHook(() => useDeckUndo(4), { wrapper });
+    await waitFor(() => expect(result.current.undo).not.toBeNull());
+    expect(staleRoots(client)).toEqual([]);
+
+    await act(async () => {
+      result.current.runUndo();
+    });
+
+    await waitFor(() =>
+      expect(staleRoots(client)).toEqual(["cards", "collection", "decks", "wishlist"]),
+    );
+  });
+
+  /** Additively — `["decks"]` is the floor in both modes. */
+  it("marks only the decks stale while the collection is hand kept", async () => {
+    seedOwned(client);
+    const { result } = renderHook(() => useDeckUndo(4), { wrapper });
+    await waitFor(() => expect(result.current.undo).not.toBeNull());
+
+    await act(async () => {
+      result.current.runUndo();
+    });
+
+    await waitFor(() => expect(staleRoots(client)).toEqual(["decks"]));
+  });
 });
 
 describe("useDeckUndo", () => {
