@@ -46,6 +46,11 @@ const collection = (over: Record<string, unknown> = {}) =>
     toggleSort: vi.fn(),
     activeCount: 0,
     resetAll: vi.fn(),
+    // The hand-kept collection unless a case says otherwise. A field of the same object the
+    // bar already reads, rather than a hook this file would then have to put a
+    // `QueryClientProvider` around: `useCollection` reads the setting once, for the query key
+    // it must be in, and hands it out so the page, the bar and the table cannot disagree.
+    deckDriven: false,
     ...over,
   }) as unknown as Collection;
 
@@ -222,5 +227,24 @@ describe("CollectionFilterBar", () => {
       "aria-disabled",
       "true",
     );
+  });
+
+  /**
+   * The Condition chips are not drawn at all while the collection is derived.
+   *
+   * Gone rather than greyed, which is the reverse of this bar's every other out-of-reach
+   * control, and the reason is that there is nothing to say: every derived row's condition is
+   * `NULL` — a deck card has nowhere to record one — so each of the five chips could only ever
+   * return an empty table. A greyed chip promises "later"; this one has no later.
+   *
+   * The Finish group beside it is asserted in the same breath, because the two are built the
+   * same way three lines apart and a fence written around the wrong `role="group"` would go
+   * unnoticed by a test that only looked for the absence.
+   */
+  it("drops the condition chips when the collection is driven by the decks", () => {
+    render(<CollectionFilterBar collection={collection({ deckDriven: true })} />);
+
+    expect(screen.queryByRole("group", { name: "Condition" })).not.toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "Finish" })).toBeInTheDocument();
   });
 });
