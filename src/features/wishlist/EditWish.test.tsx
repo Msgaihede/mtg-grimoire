@@ -84,9 +84,15 @@ async function open(user: ReturnType<typeof userEvent.setup>, row: WishRow) {
   return screen.getByRole("dialog", { name: `Edit ${row.name}` });
 }
 
-/** The destination list, once the panel has swapped its body for it. */
+/**
+ * The destination list, once the panel has swapped its body for it.
+ *
+ * A `group` and not a `dialog`: the panel is the layer, and the list drawn into its body is not
+ * a second one. Found by that role rather than by a test id, so the case below that counts the
+ * dialogs in the tree and this helper cannot drift apart.
+ */
 const listIn = (panel: HTMLElement, row: WishRow) =>
-  within(panel).getByRole("dialog", { name: new RegExp(`^Move ${row.name}`) });
+  within(panel).getByRole("group", { name: new RegExp(`^Move ${row.name}`) });
 
 describe("EditWishButton", () => {
   /** The caption is `printingOf`'s words rather than the panel's own — one wording for the same
@@ -176,6 +182,24 @@ describe("EditWishButton", () => {
     expect(within(list).getByRole("button", { name: /Expensive.*Here now/ })).toBeDisabled();
     expect(within(list).getByRole("button", { name: "Ordered" })).toBeInTheDocument();
     expect(within(panel).queryByText("Copies wanted")).toBeNull();
+  });
+
+  /**
+   * **The assertion the two-pane design actually rests on.**
+   *
+   * "Not a nested layer" is a promise to a screen reader as much as to the eye: a dialog inside
+   * a dialog is announced as one whether or not anything is drawn over anything. Getting the
+   * box right and leaving the role behind would make the nesting a lie told to exactly the
+   * reader who cannot see that it is one.
+   */
+  it("adds no second dialog to the tree while the destination list is up", async () => {
+    const { user } = setup(BOLT);
+    const panel = await open(user, BOLT);
+    await user.click(within(panel).getByRole("button", { name: /^Move to folder/ }));
+
+    expect(listIn(panel, BOLT)).toBeInTheDocument();
+    expect(screen.getAllByRole("dialog")).toHaveLength(1);
+    expect(screen.getByRole("dialog")).toBe(panel);
   });
 
   /**

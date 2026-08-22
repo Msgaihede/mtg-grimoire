@@ -194,6 +194,8 @@ function EditWishPanel({
           // the panel deliberately is not. Asked for by name rather than un-styled from out
           // here: an override would make this file depend on that component's internal DOM,
           // and the day its root gains a wrapper the layer comes back with nothing going red.
+          // It carries the role as well as the box: inline the list is a `group`, so this panel
+          // stays the one dialog in the tree and a screen reader is told what the eye is.
           inline
           // The top level of *this* tree. `MoveToFolder` defaults to the deck gallery's word,
           // which is the surface it was written for; a reader filing a card they are buying

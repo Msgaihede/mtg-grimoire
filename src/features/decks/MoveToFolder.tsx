@@ -44,7 +44,9 @@ export function MoveToFolder({
   onPick,
   onClose,
 }: {
-  /** The dialog's accessible name — "Move Burn to a folder". */
+  /** What the list is called — "Move Burn to a folder". It is the accessible name of whichever
+   *  container {@link MoveToFolder.inline} settles on, and the caret lands on that container, so
+   *  it is announced either way. */
   label: string;
   nodes: readonly FolderNode[];
   /** Where it already is: offered, inert. Moving something where it already is writes nothing
@@ -79,10 +81,20 @@ export function MoveToFolder({
    * internal DOM and would have handed the layer back, silently, the day this element gained a
    * wrapper — with nothing going red, because jsdom has no layout engine to notice.
    *
-   * What it deliberately does **not** change is the role, the focus-on-mount or `onClose`: a
-   * caller that draws this inline still has a list the caret moves into, and what "focus left
-   * it" should mean there is that caller's question (`EditWish.tsx` answers it with nothing,
-   * because the layer focus left is its own panel).
+   * **The role goes with the box, because a role is a claim about layers too.** Inline the root
+   * is `role="group"`, not `role="dialog"`: getting the drawing right and leaving the role behind
+   * would announce a dialog inside a dialog to a screen reader — a nesting that by then exists
+   * for nobody else, so the one reader who cannot see that there is no second layer is the only
+   * one still told there is. `group` rather than a bare `<div>` because the caret is moved onto
+   * this element on mount and `aria-label` is name-prohibited on a generic container: dropping
+   * the role would drop {@link MoveToFolder.label} with it and land the reader on an unnamed box.
+   * It is also the honest word — a set of related controls, which is what this is once it is not
+   * a layer.
+   *
+   * What `inline` deliberately does **not** change is the focus-on-mount or `onClose`: a caller
+   * that draws this inline still has a list the caret moves into, and what "focus left it" should
+   * mean there is that caller's question (`EditWish.tsx` answers it with nothing, because the
+   * layer focus left is its own panel).
    */
   inline?: boolean;
   /** Folders it may not go into — itself and its descendants, for a folder move. */
@@ -136,7 +148,7 @@ export function MoveToFolder({
     <div
       ref={panelRef}
       tabIndex={-1}
-      role="dialog"
+      role={inline ? "group" : "dialog"}
       aria-label={label}
       // A press in here is a press on a control, never the start of a drag of the tile this
       // panel is anchored inside.
