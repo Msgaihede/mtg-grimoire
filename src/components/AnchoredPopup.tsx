@@ -31,6 +31,11 @@ import { cn } from "@/lib/utils";
  * `relatedTarget` being the trigger — a second press, or Escape's hand-back — closing there
  * would race the toggle and leave the panel open forever.
  *
+ * **The caret moves into the panel while the panel is still growing, and that is the one thing
+ * in here that is a *scrolling* decision rather than a focus one.** See {@link Panel}'s
+ * `scroll-mb-4`, which is `DROP_MARK_ROOM`'s twin: room for something drawn outside the box the
+ * scroll was computed for.
+ *
  * **The panel outlives `open` by the length of its fade**, which is what the last two guards are
  * about: `aria-hidden` and `pointer-events-none` from the render that starts the exit, so what
  * is on its way out is a picture rather than a second copy of the caller's form in the
@@ -164,6 +169,8 @@ function Panel({
   // The caret moves into the layer, as it does for the card pane and the set picker: the panel's
   // own controls are then the next thing Tab reaches, focus leaving it is what closes it, and
   // Escape has something to hand back.
+  //
+  // **This focus is also a scroll**, which is the half that bit — see the `scroll-mb-4` below.
   useEffect(() => {
     panelRef.current?.focus();
   }, []);
@@ -182,6 +189,39 @@ function Panel({
       aria-hidden={present ? undefined : true}
       className={cn(
         "absolute top-7 rounded-lg border border-border bg-surface p-3 text-left shadow-lg",
+        // **Room for the 4% this panel has not grown yet.**
+        //
+        // Focusing an element scrolls it into view, and the effect above runs on the render that
+        // mounts it — while `popup` still has it at `initial: { scale: 0.96 }` and
+        // `origin-top-*`, so the box the browser scrolls for is 4% shorter than the box that ends
+        // up on screen, and every pixel of that difference is at the **bottom**. The scroller then
+        // clips exactly that much, permanently, because nothing scrolls again once the tween ends.
+        //
+        // Measured in the shipped window (2026-08-22, both 1280x800 and 1920x1080): the wishlist's
+        // edit panel rendered **bottomless** — its bottom 8.5px gone, taking the 12px of padding,
+        // the 1px border and the 10px radius with it — and 8.5px is 4% of the 212px this panel
+        // ends up at. Identical at both window sizes, because a fixed-width panel's height does
+        // not depend on the window. Scrolling to the very bottom by hand revealed it (1058.5
+        // against a 1060 clip), which is what says the scroller had the room all along and the
+        // scroll simply stopped short.
+        //
+        // **This is `DROP_MARK_ROOM`'s twin** (`src/lib/dropMarks.ts`, and the rule in
+        // `src/CLAUDE.md`): that constant is padding on a scroller for a mark drawn outside a
+        // target's border box *at rest*, and this is a scroll margin for the same kind of overhang
+        // *at the moment something scrolls to it*. `CardGrid`'s tile carries `scroll-m-1.5` for
+        // its focus ring for exactly this reason. It goes here rather than on a caller, because
+        // both halves of the cause are the shell's: the shell picked the preset that scales, and
+        // the shell is what moves the caret.
+        //
+        // 16px rather than the measured 8.5: the overhang is 4% of the panel's *own* height, so a
+        // number matched to today's 212px panel would be short the day one grows. This covers a
+        // panel up to 400px, and it costs a panel that needs none of it nothing at all — a scroll
+        // margin only ever asks the browser to scroll further, and the browser clamps at the end
+        // of the scroller.
+        //
+        // **jsdom implements neither scrolling nor layout, so nothing in the suite can go red for
+        // this**; the numbers above come from a live pass and the next one is what re-checks it.
+        "scroll-mb-4",
         // Only ever effective against this panel's *siblings*: on a table row or a grid row the
         // anchor is inside a transformed element, which caps everything in it at that row's own
         // layer. See `LAYER`.

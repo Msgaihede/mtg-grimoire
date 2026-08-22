@@ -98,16 +98,30 @@ export function EditWishButton({
 
 /**
  * One control in the panel's stack — the shape the Remove button has had since it was the only
- * one, now that three more sit above it.
+ * one, now that three more sit under it.
  *
- * Width and hover colour stay with the caller: the pair in the Printing section shares a row and
- * the other two are full width, and a destructive press must not light up the same colour as a
- * neutral one.
+ * Hover colour stays with the caller, because a destructive press must not light up the same
+ * colour as a neutral one. **Width does not: every control in here is the panel's width.**
  *
- * **No glyph on the three new ones.** The Printing pair sits at about 129px each inside a 288px
- * panel, and an icon there costs the room the *second* word needs — and both labels are two
- * words that differ in the second. Remove keeps its `Trash2`, because a destructive control is
- * worth a mark the eye finds before it reads.
+ * That is a correction rather than a preference. The two Printing controls shared a row until the
+ * live pass of 2026-08-22, on the arithmetic written at this very spot — "about 129px each inside
+ * a 288px panel" — and the measured answer was 128px with `Change printing…` wrapped onto **two
+ * lines spanning 32px inside a 28px `h-7` box**, 2px proud top and bottom, beside a single-line
+ * `Any printing`. The prediction was right and the conclusion was wrong: a label's width is a
+ * font metric, and this file does not get to know one. Dropping the glyphs had already been spent
+ * buying room and did not buy enough.
+ *
+ * **A full-width control cannot be wrong about it**, which is the whole argument for the stack —
+ * the two labels have 264px each instead of 113px, and no future label, font or zoom re-opens the
+ * question. It costs one row of height, which is the trade `AnchoredPopup`'s scroll margin pays
+ * for. **Nothing in the suite can see any of this**: jsdom has no layout engine, and the overflow
+ * is a *wrap* rather than a scroll, so `scrollWidth === clientWidth` and no width assertion can
+ * catch it either.
+ *
+ * **No glyph on the three that are not Remove.** They are three spellings of two decisions —
+ * which printing, which folder — and a mark on each would be marks that say nothing the label
+ * does not. Remove keeps its `Trash2`, because a destructive control is worth a mark the eye
+ * finds before it reads.
  */
 const PANEL_BUTTON = cn(
   "flex h-7 items-center justify-center gap-1.5 rounded-md border border-border px-2",
@@ -241,7 +255,8 @@ function EditWishPanel({
 
       <div className="space-y-1.5">
         <SectionLine label="Printing" value={printingOf(row)} />
-        <div className="flex gap-1.5">
+        {/* Stacked, not a row: see {@link PANEL_BUTTON} for the measurement that settled it. */}
+        <div className="flex flex-col gap-1.5">
           <button
             type="button"
             // **`aria-disabled`, never the attribute** — a `disabled` button leaves the tab
@@ -254,7 +269,7 @@ function EditWishPanel({
             aria-label={`Change printing of ${wishLabel(row)}`}
             className={cn(
               PANEL_BUTTON,
-              "min-w-0 flex-1",
+              "w-full",
               NEUTRAL_HOVER,
               "aria-disabled:opacity-40 aria-disabled:hover:border-border aria-disabled:hover:text-dim",
             )}
@@ -272,7 +287,7 @@ function EditWishPanel({
               type="button"
               onClick={() => onAnyPrinting(row)}
               aria-label={`Any printing of ${row.name}, instead of this one`}
-              className={cn(PANEL_BUTTON, "min-w-0 flex-1", NEUTRAL_HOVER)}
+              className={cn(PANEL_BUTTON, "w-full", NEUTRAL_HOVER)}
             >
               Any printing
             </button>

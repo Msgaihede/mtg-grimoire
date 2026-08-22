@@ -241,9 +241,14 @@ const total = async (currency: "USD" | "EUR" = "USD") =>
  * `TooltipProvider` is the same trade as `ContextMenuProvider`, for `useTooltip` — the
  * needs-review band's and the printing cell's hover assertions below would bind a tooltip that
  * can never open without it.
+ *
+ * **`staleTime` is 0 here and 30 000 in the app** (`src/lib/query.ts`), and the gap hides a whole
+ * class of bug: at 0 every navigation refetches, so a cache nothing invalidated is repaired by
+ * the next visit and a missing invalidation is invisible. One test below opts into the app's own
+ * number for exactly that reason.
  */
-function wrap(ui: ReactElement) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+function wrap(ui: ReactElement, { staleTime = 0 }: { staleTime?: number } = {}) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime } } });
   return {
     client,
     ...render(
@@ -1366,21 +1371,92 @@ describe("the folders", () => {
   });
 
   /**
-   * **Filing a wish while flattened keeps it on screen**, which is the other half of the
-   * optimistic patch and the half a drag can never reach: with the filing ignored the list is not
-   * a level, so the row does not leave it — only the folder under its caption moves. Patched the
-   * way the drag's branch is (remove the row) this would blink a wish out of a list that had just
-   * promised to show every one of them.
+   * **A plain move is answered by a re-read, not by a guess about where the wish went.**
    *
-   * It is also the keyboard's whole route to `wishlist_set_folder`, which is why it stays
-   * complete on its own: a drag-only affordance is half a feature.
+   * This is the regression test for what the live pass of 2026-08-22 found: the write removed the
+   * row from every cached page and then invalidated only the folder summary, so a filed wish was
+   * gone from the app until a reload — the destination folder's card counted it while the
+   * folder's own list said "Nothing filed here yet." Only the *merge* path re-read, so the common
+   * case was the uncovered one.
+   *
+   * The mock is a backend that really moves the wish, because that is the only thing that can put
+   * the row in the destination's list: it is sorted and paged by the backend, and this page knows
+   * neither the position nor the page.
    */
-  it("moves a wish from its own panel, and keeps it in a flattened list", async () => {
-    wishlistSetFolder.mockResolvedValue({ id: 7, quantity: 4, removed: false });
+  it("re-reads the whole wishlist after a plain move, so the wish is where it was filed", async () => {
+    let filed = false;
+    wishlistList.mockImplementation(async (q: WishlistQuery) => {
+      const bolt = { ...BOLT, folderId: filed ? 1 : null };
+      if (q.flatten === true) return page([bolt, ANY, FILED]);
+      if (q.folderId === 1) return page(filed ? [FILED, bolt] : [FILED]);
+      return page(filed ? [ANY] : [bolt, ANY]);
+    });
+    wishlistSetFolder.mockImplementation(async (id: number) => {
+      filed = true;
+      // The **same** id, which is what makes this the plain path rather than the merge one.
+      return { id, quantity: 4, removed: false };
+    });
+
+    // **The app's own `staleTime`, which is what made the live bug persist rather than blink.**
+    // `src/lib/query.ts` keeps an answered query fresh for 30s, so the folder's list is served
+    // from cache when the reader drills back into it and an invalidation is the only thing that
+    // can mark it stale. At this file's default of 0 every navigation refetches and the whole
+    // defect is invisible — which is why the folder is visited *before* the move below.
+    const { client, container } = wrap(<WishlistPage />, { staleTime: 30_000 });
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    await screen.findByText("Lightning Bolt");
+
+    // Open the destination once, so its (wishless) page is in the cache and fresh.
+    await userEvent.click(await screen.findByRole("button", { name: /^Ordered folder/ }));
+    await screen.findByText("Rhystic Study");
+    const trail = screen.getByRole("navigation", { name: "Wishlist folders" });
+    await userEvent.click(within(trail).getByRole("button", { name: "Wishlist" }));
+    await screen.findByText("Lightning Bolt");
+
+    const card = (await screen.findByRole("button", { name: /^Ordered folder/ })).closest("li")!;
+    await dragOnto(container.querySelector('[draggable="true"]')!, card);
+
+    expect(wishlistSetFolder).toHaveBeenCalledWith(7, 1);
+    // The whole root, never the summary alone: the level being left, the level being joined and
+    // both folder subtotals have all moved, and the backend is the only thing that knows any of
+    // them.
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] }));
+    // The root loses the row because the *answer* says so, and the header follows the answer.
+    await waitFor(() => expect(wishes()).toHaveTextContent("1"));
+
+    // And the wish really is in the folder — the half the optimistic removal lost outright.
+    await userEvent.click(screen.getByRole("button", { name: /^Ordered folder/ }));
+    expect(await screen.findByText("Lightning Bolt")).toBeInTheDocument();
+  });
+
+  /**
+   * **Flattened, a moved wish stays listed and changes its caption**, which is where the removal
+   * was wrong in a second way: with the filing ignored the list is not a level, so nothing about
+   * the move takes the row off it — and a wish blinking out of a list that has just promised to
+   * show every one of them is the switch contradicting itself.
+   *
+   * It is also the keyboard's whole route to `wishlist_set_folder`, which is why the panel keeps
+   * it: a drag-only affordance is half a feature, and it is the half a keyboard cannot use.
+   */
+  it("keeps a moved wish listed while flattened, and moves its caption", async () => {
+    let filed = false;
+    wishlistList.mockImplementation(async (q: WishlistQuery) =>
+      q.flatten === true
+        ? page([{ ...BOLT, folderId: filed ? 1 : null }, ANY, FILED])
+        : page(q.folderId === 1 ? [FILED] : [BOLT, ANY]),
+    );
+    wishlistSetFolder.mockImplementation(async (id: number) => {
+      filed = true;
+      return { id, quantity: 4, removed: false };
+    });
+    /** The Bolt's own row, re-queried each time: the re-read replaces the element. */
+    const boltRow = () => screen.getByText("Lightning Bolt").closest('[role="row"]') as HTMLElement;
+
     wrap(<WishlistPage />);
     await screen.findByText("Lightning Bolt");
     await userEvent.click(screen.getByRole("button", { name: "Flatten" }));
     await screen.findByText("Rhystic Study");
+    expect(within(boltRow()).getByText("Wishlist")).toBeInTheDocument();
 
     await userEvent.click(
       screen.getByRole("button", {
@@ -1396,9 +1472,14 @@ describe("the folders", () => {
     await userEvent.click(within(destinations).getByRole("button", { name: /Ordered/ }));
 
     expect(wishlistSetFolder).toHaveBeenCalledWith(7, 1);
-    // Still listed, and now captioned with where it went.
-    expect(screen.getByText("Lightning Bolt")).toBeInTheDocument();
-    await waitFor(() => expect(screen.getAllByText("Ordered").length).toBeGreaterThan(0));
+    // The panel is shut first, and not for tidiness: it is drawn *inside this row*, and its own
+    // Folder line says the same word the caption is about to — so a query for it against an open
+    // panel matches two elements and cannot tell which one moved.
+    await userEvent.keyboard("{Escape}");
+
+    // Listed throughout — and captioned with where it went, once the answer is in.
+    await waitFor(() => expect(within(boltRow()).getByText("Ordered")).toBeInTheDocument());
+    expect(wishes()).toHaveTextContent("3");
   });
 
   /**

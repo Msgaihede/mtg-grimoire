@@ -319,27 +319,25 @@ export function WishlistPage() {
   }, [queryClient]);
 
   /**
-   * {@link settle}, plus the folder cards' own figures.
+   * The whole `["wishlist"]` root re-read, and {@link settle}'s search with it.
    *
-   * A wish that has left one drawer for another has changed two subtotals, and neither of them
-   * is computed from the rows on screen — `wishlist_folder_summary` is its own read, priced at
-   * its own marketplace. The list itself still is not re-read: the row on screen has already
-   * been rewritten optimistically, which is the pattern the whole file follows.
+   * **One function for two kinds of caller, because the reason is the same shape in both: the
+   * answer is not something this page can compute.**
+   *
+   * A *refusal* is almost always a row something else already deleted, and a list that has lost
+   * a row has lost the total and the cost it was part of. A *filing* is the same problem wearing
+   * the other hat: the wish is now in a list this page is not drawing, at a sort position and on
+   * a page only the backend knows, and two folder subtotals computed by a read of their own have
+   * moved with it. {@link patchWish} plus {@link settle} stays the pair for the one write whose
+   * answer this page already holds — the stepper's number.
+   *
+   * `["wishlist"]` covers the list, the folder list and the summary at every marketplace, which
+   * is why the root is invalidated rather than the three keys under it.
    */
-  const settleFiling = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: ["wishlist", "folderSummary"] });
+  const settleWhole = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
     settle();
   }, [queryClient, settle]);
-
-  /**
-   * What a refused write leaves behind. The whole list, because a refusal here is almost
-   * always a row something else already deleted — and a list that has lost a row has lost the
-   * total and the cost it was part of.
-   */
-  const settleFailure = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
-    void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
-  }, [queryClient]);
 
   const setQuantity = useMutation({
     mutationFn: ({ row, quantity }: { row: WishRow; quantity: number }) =>
@@ -354,7 +352,7 @@ export function WishlistPage() {
     },
     onError: (_error, _variables, saved) => {
       if (saved) restore(saved);
-      settleFailure();
+      settleWhole();
     },
     onSuccess: (change) => {
       // The answer, not the guess: the backend clamps and canonicalises, and this is the
@@ -366,7 +364,7 @@ export function WishlistPage() {
 
   const remove = useMutation({
     mutationFn: (row: WishRow) => ipc.wishlistRemove(row.id),
-    onError: settleFailure,
+    onError: settleWhole,
     onSuccess: (change) => {
       patchWish(change.id, null);
       settle();
@@ -378,38 +376,43 @@ export function WishlistPage() {
    * mutation: spec §9 says both routes reach `wishlist_set_folder`, so a merge behaves the same
    * whichever hand made the gesture.
    *
-   * **The optimistic patch depends on what the list is showing, because filing changes what
-   * *belongs* on screen rather than what a row says.** Flattened, the list ignores filing
-   * altogether, so the row stays exactly where it is and only the folder under its caption moves.
-   * Standing in a folder — or at the root — the wish has just left the level being drawn, so the
-   * row goes, and the total goes with it.
+   * **This is the one write on the page that is deliberately not optimistic**, and the reason is
+   * what a move actually changes: not a number the reader is holding down, but *which list the
+   * row belongs to*. Every optimistic answer to that is a guess this page is not entitled to
+   * make.
    *
-   * **A merge answers a different id than the one asked about, and that is the one thing about
-   * the merge that reaches the UI.** Moving a wish into a folder that already holds the same
-   * `(oracleId, cardId, preferredFinish)` sums the two quantities into the *destination* row and
-   * deletes the source, so `change.id` names a row this page may never have drawn — patching it
-   * would write the merged quantity onto whatever else happens to hold that id, and leave the
-   * destination's own row showing a total that is now short. There is nothing to patch towards,
-   * so the whole `["wishlist"]` root is re-read instead: the list, the folder list and the
-   * summary, all of which the merge has moved.
+   * * Taking the row off the level is the guess it shipped with, and the live pass found it wrong
+   *   three ways at once (2026-08-22): the row left the list and **nothing ever put it back**, so
+   *   a filed wish was gone from the app until a reload; the destination folder went on saying
+   *   "Nothing filed here yet." under a card already counting the wish; and the header
+   *   under-counted by one on the way *out* to the root as well as on the way in. Only the merge
+   *   path re-read, so a plain move — the common one — was the case nothing covered.
+   * * Putting the row in is the other guess, and it is worse: the destination list is sorted and
+   *   paged by the backend, so an insert has to invent both the position and the page, then be
+   *   undone whenever the answer disagrees.
+   * * And **a merge answers a different id than the one asked about** — moving a wish into a
+   *   folder that already holds the same `(oracleId, cardId, preferredFinish)` sums the two
+   *   quantities into the *destination* row and deletes the source — so there is not always a row
+   *   left to patch at all.
+   *
+   * So the answer is a re-read, both ways: {@link settleWhole}. It costs one query over a list of
+   * tens of rows, and it is the only thing that is right for the level being left, the level being
+   * joined, both folder subtotals and a merge at once. A folder move is one deliberate press
+   * rather than a held-down stepper, so there is no second press racing the first — which is the
+   * whole reason the stepper beside it *is* optimistic.
+   *
+   * **Flatten is where the difference shows on screen.** With the filing ignored the list is not a
+   * level, so a moved wish must stay listed and *change its caption* rather than leave — which the
+   * re-read gets right by construction, and which the optimistic remove got wrong in that view
+   * even before the missing invalidation.
    */
   const setFolder = useMutation({
     mutationFn: ({ id, folderId: to }: { id: number; folderId: number | null }) =>
       ipc.wishlistSetFolder(id, to),
-    onMutate: ({ id, folderId: to }) => {
-      const saved = snapshot();
-      patchWish(id, flatten ? (r) => ({ ...r, folderId: to }) : null);
-      return saved;
-    },
-    onError: (_error, _variables, saved) => {
-      if (saved) restore(saved);
-      settleFailure();
-    },
-    onSuccess: (change, { id }) => {
-      if (change.id !== id) void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
-      else patchWish(change.id, (r) => ({ ...r, quantity: change.quantity }));
-      settleFiling();
-    },
+    // Either way, and one handler because there is one behaviour: a refusal leaves the list
+    // exactly as unknown as a success does, since a refused move is almost always a row another
+    // surface has already moved or deleted.
+    onSettled: settleWhole,
   });
 
   /**
@@ -447,12 +450,9 @@ export function WishlistPage() {
     },
     onError: (_error, _variables, saved) => {
       if (saved) restore(saved);
-      settleFailure();
+      settleWhole();
     },
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
-      settle();
-    },
+    onSuccess: settleWhole,
   });
 
   const onSetQuantity = useCallback(

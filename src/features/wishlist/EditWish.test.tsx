@@ -122,6 +122,51 @@ describe("EditWishButton", () => {
     expect(within(panel).queryByRole("button", { name: /^Any printing/ })).toBeNull();
   });
 
+  /**
+   * **The two printing controls are stacked, and the class is the whole of what a test can hold.**
+   *
+   * They shared a row until the live pass of 2026-08-22, where `Change printing…` wrapped onto two
+   * lines spanning 32px inside its 28px box — 128px of button against a label that wanted more.
+   * The overflow is a *wrap* rather than a scroll, so `scrollWidth === clientWidth` and no width
+   * assertion can see it; jsdom has no layout engine, so nothing here can measure it either. What
+   * is testable is the decision: full-width controls in a column, which cannot be wrong about a
+   * font metric. Put back on one row, this goes red — which is the only warning the suite can give.
+   *
+   * `toHaveClass` reads `classList`, never the `className` string: a `hover:` variant makes a
+   * substring check pass before the state it names ever happens.
+   */
+  it("stacks the two printing controls rather than sharing a row", async () => {
+    const { user } = setup(BOLT);
+    const panel = await open(user, BOLT);
+    const change = within(panel).getByRole("button", { name: /^Change printing/ });
+    const any = within(panel).getByRole("button", { name: /^Any printing/ });
+
+    expect(change).toHaveClass("w-full");
+    expect(any).toHaveClass("w-full");
+    expect(change.parentElement).toHaveClass("flex-col");
+    expect(change.parentElement).toBe(any.parentElement);
+  });
+
+  /**
+   * **The panel's own room for the 4% it has not grown yet**, which is `AnchoredPopup`'s and is
+   * asserted from here because this is the panel the live pass measured it on.
+   *
+   * The caret is moved into the panel on the render that mounts it, while `popup` still holds it
+   * at `scale: 0.96` — so the browser's scroll-into-view is computed for a box 4% shorter than the
+   * one that ends up on screen, and the scroller clips the difference at the bottom for good.
+   * Measured at 8.5px of a 212px panel (2026-08-22, both window sizes), which rendered the panel
+   * bottomless. `scroll-mb-4` is the scroll margin that makes the scroll aim past it —
+   * `DROP_MARK_ROOM`'s twin, the same rule at the moment something scrolls rather than at rest.
+   *
+   * **jsdom implements neither scrolling nor layout**, so this pins the class and the live pass
+   * is what proves the pixels.
+   */
+  it("leaves the scroller room for the panel it is still growing into", async () => {
+    const { user } = setup(BOLT);
+    const panel = await open(user, BOLT);
+    expect(panel).toHaveClass("scroll-mb-4");
+  });
+
   it("drops a pinned wish's printing through onAnyPrinting", async () => {
     const { user, onAnyPrinting } = setup(BOLT);
     const panel = await open(user, BOLT);
