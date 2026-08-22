@@ -644,6 +644,92 @@ describe("ContextMenu", () => {
   });
 
   /**
+   * The third door: a button whose **whole job** is to open the menu, pressed the ordinary way.
+   *
+   * It exists because a `click` is two different presses wearing one event name. A pointer press
+   * carries the coordinates `menu()` anchors by; Enter or Space on a focused button fires a click
+   * with **no** coordinates and `detail === 0`, and anchoring that at `clientX/clientY` puts the
+   * panel in the top-left corner of the window — the same failure `menuKey`'s anchor exists to
+   * prevent, reached through a door it does not watch. `menuClick` asks which press it got.
+   *
+   * jsdom has no layout, so the trigger's box is stated the way the viewport is.
+   */
+  describe("menuClick", () => {
+    function ClickHost({ items }: { items: MenuItem[] }) {
+      const { menuClick } = useContextMenu();
+      return <button onClick={menuClick(() => items)}>target</button>;
+    }
+
+    function openByClick(items?: MenuItem[]) {
+      render(
+        <ContextMenuProvider>
+          <ClickHost
+            items={items ?? [{ kind: "action", id: "a", label: "First", onSelect: vi.fn() }]}
+          />
+        </ContextMenuProvider>,
+      );
+      const trigger = screen.getByRole("button", { name: "target" });
+      vi.spyOn(trigger, "getBoundingClientRect").mockReturnValue({
+        left: 120,
+        top: 200,
+        right: 300,
+        bottom: 232,
+        width: 180,
+        height: 32,
+        x: 120,
+        y: 200,
+        toJSON: () => ({}),
+      });
+      return trigger;
+    }
+
+    it("opens under the pointer for a press that had one", async () => {
+      const trigger = openByClick();
+      // Stated rather than driven through `userEvent`: jsdom gives a real pointer sequence
+      // `clientX/clientY` of 0, which is the very number this handle exists to tell apart from a
+      // keyboard's — so a test driven that way could not see the difference it is asserting.
+      const event = new MouseEvent("click", {
+        bubbles: true,
+        cancelable: true,
+        detail: 1,
+        clientX: 640,
+        clientY: 400,
+      });
+      act(() => {
+        trigger.dispatchEvent(event);
+      });
+
+      const panel = await screen.findByRole("menu");
+      expect(Number.parseFloat(panel.style.left)).toBe(640);
+      expect(Number.parseFloat(panel.style.top)).toBe(400);
+    });
+
+    /** The whole reason this handle exists — and `0, 0` is what it is not allowed to answer. */
+    it("opens at the button's bottom-left for a keyboard activation", async () => {
+      const user = userEvent.setup();
+      const trigger = openByClick();
+      trigger.focus();
+
+      await user.keyboard("{Enter}");
+
+      const panel = await screen.findByRole("menu");
+      expect(Number.parseFloat(panel.style.left)).toBe(120);
+      expect(Number.parseFloat(panel.style.top)).toBe(232);
+    });
+
+    it("keeps the shared rules: an empty list is not a menu, and the press is left alone", () => {
+      const trigger = openByClick([]);
+      const event = new MouseEvent("click", { bubbles: true, cancelable: true, detail: 1 });
+      act(() => {
+        trigger.dispatchEvent(event);
+      });
+
+      expect(screen.queryByRole("menu")).not.toBeInTheDocument();
+      expect(event.defaultPrevented).toBe(false);
+    });
+  });
+
+  /**
    * **The contract a lazy body builds against**, and the reason `MenuRows` is exported at all.
    *
    * "Add to → Deck" is a folder→deck→variant tree that cannot be built until the row is expanded,

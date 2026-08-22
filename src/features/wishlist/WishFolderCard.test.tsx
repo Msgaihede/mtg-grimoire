@@ -1,7 +1,9 @@
 import { useEffect, useRef } from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
+import { useContextMenu } from "@/components/menu/useContextMenu";
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import type { FolderNode } from "@/lib/folderTree";
 import type { WishlistFolder } from "@/lib/ipc";
@@ -68,17 +70,49 @@ function Source({ wish = WISH }: { wish?: WishDrag }) {
   return <div ref={ref}>the wish</div>;
 }
 
+/** A folder card wired to the real `useContextMenu`, for the one test that is about *which*
+ *  handle the trigger is on rather than about the card handing a press somewhere. */
+function MenuHost() {
+  const { menu, menuKey, menuClick } = useContextMenu();
+  const build = () => [
+    { kind: "action" as const, id: "rename", label: "Rename", onSelect: () => {} },
+  ];
+  return (
+    <ul>
+      <WishFolderCard
+        node={node(EXPENSIVE)}
+        summary={{ wishes: 1, missing: 0, cost: 0, unpriced: 0 }}
+        currency="usd"
+        onOpen={onOpen}
+        rowMenu={{
+          onContextMenu: menu(build),
+          onKeyDown: menuKey(build),
+          onClick: menuClick(build),
+        }}
+        canDrop={() => false}
+        onDropWish={onDropWish}
+      />
+    </ul>
+  );
+}
+
 const onOpen = vi.fn();
 const onDropWish = vi.fn();
 const onContextMenu = vi.fn();
 const onKeyDown = vi.fn();
+const onClickMenu = vi.fn();
 
 beforeEach(() => {
   onOpen.mockReset();
   onDropWish.mockReset();
   onContextMenu.mockReset();
   onKeyDown.mockReset();
+  onClickMenu.mockReset();
 });
+
+// The stated viewport and the stated trigger box below are `vi.spyOn`s on real getters; nothing
+// else in this file spies on anything, so one blanket restore is the whole cleanup.
+afterEach(() => vi.restoreAllMocks());
 
 describe("WishFolderCard", () => {
   function mount({
@@ -103,7 +137,7 @@ describe("WishFolderCard", () => {
             summary={summary}
             currency={currency}
             onOpen={onOpen}
-            rowMenu={{ onContextMenu, onKeyDown }}
+            rowMenu={{ onContextMenu, onKeyDown, onClick: onClickMenu }}
             canDrop={canDrop}
             onDropWish={onDropWish}
           />
@@ -169,40 +203,69 @@ describe("WishFolderCard", () => {
   it("reaches the page's menu from the trigger, a right-click and the keyboard", async () => {
     const user = userEvent.setup();
     mount();
+    // The trigger's own door is `menuClick`, not `menu` — a press on a button that exists to open
+    // a menu is not a right-click, and the two anchor differently.
     await user.click(screen.getByRole("button", { name: "Manage Expensive" }));
-    expect(onContextMenu).toHaveBeenCalledTimes(1);
+    expect(onClickMenu).toHaveBeenCalledTimes(1);
+    expect(onContextMenu).not.toHaveBeenCalled();
     // The press must not also drill into the folder — the trigger is a sibling of the card's
     // button rather than inside it, which is what keeps the two gestures apart.
     expect(onOpen).not.toHaveBeenCalled();
 
     const open = screen.getByRole("button", { name: /^Expensive folder/ });
     fireEvent.contextMenu(open);
-    expect(onContextMenu).toHaveBeenCalledTimes(2);
+    expect(onContextMenu).toHaveBeenCalledTimes(1);
     fireEvent.keyDown(open, { key: "F10", shiftKey: true });
     expect(onKeyDown).toHaveBeenCalledTimes(1);
   });
 
   /**
-   * The trap in being the app's first menu opened by a **plain click**: `menu()` anchors at
-   * `e.clientX/clientY`, and Enter on a focused button fires a click with `detail === 0` and no
-   * coordinates — a menu in the top-left corner of the window, which is the exact failure
-   * `menuKey()` was written to prevent. A keyboard press must take `menuKey()`'s route.
+   * The one claim spies cannot make, so this test wires the card to the **real** menu primitive.
+   *
+   * The trigger is a button whose whole job is to open a menu, and Enter on a focused button
+   * fires a click with no coordinates — so the naive `onClick={menu(build)}` would have opened
+   * every folder's menu in the top-left corner of the window for a reader on the keyboard, with
+   * a green suite and nothing on screen naming the culprit. `menuClick` is the handle that asks
+   * which press it got, and what is pinned here is that the card is wired to *that* one.
+   *
+   * jsdom has no layout, so both boxes are stated — `ContextMenu.test.tsx`'s arrangement, and the
+   * viewport is stated rather than read from `window.innerWidth`, which is the expression this
+   * repo has already pinned once as an expected answer.
    */
-  it("anchors the menu at the trigger when it is opened from the keyboard", async () => {
+  it("opens the folder's menu at the trigger, not at 0,0, from the keyboard", async () => {
     const user = userEvent.setup();
-    mount();
+    vi.spyOn(document.documentElement, "clientWidth", "get").mockReturnValue(1280);
+    vi.spyOn(document.documentElement, "clientHeight", "get").mockReturnValue(800);
+    render(
+      <ContextMenuProvider>
+        <MenuHost />
+      </ContextMenuProvider>,
+    );
+
+    const trigger = screen.getByRole("button", { name: "Manage Expensive" });
+    vi.spyOn(trigger, "getBoundingClientRect").mockReturnValue({
+      left: 120,
+      top: 200,
+      right: 300,
+      bottom: 232,
+      width: 180,
+      height: 32,
+      x: 120,
+      y: 200,
+      toJSON: () => ({}),
+    });
+
     // Tabbed to, not focused programmatically: a caret put there by `.focus()` is one a reader
     // cannot produce, and it is the shape of setup that has hidden a real entry point here before.
     await user.tab();
     await user.tab();
-    expect(screen.getByRole("button", { name: "Manage Expensive" })).toHaveFocus();
-
+    expect(trigger).toHaveFocus();
     await user.keyboard("{Enter}");
-    expect(onContextMenu).not.toHaveBeenCalled();
-    // Enter's own keydown reaches the handler too and is declined by it, so what is asserted is
-    // that the key `menuKey()` acts on arrived — not the number of presses.
-    const keys = onKeyDown.mock.calls.map(([event]) => (event as { key: string }).key);
-    expect(keys).toContain("ContextMenu");
+
+    const panel = await screen.findByRole("menu");
+    expect(screen.getByRole("menuitem", { name: "Rename" })).toBeInTheDocument();
+    expect(Number.parseFloat(panel.style.left)).toBe(120);
+    expect(Number.parseFloat(panel.style.top)).toBe(232);
   });
 
   it("raises a ring for a wish it can take, and a wash under the pointer", async () => {

@@ -101,11 +101,20 @@ export function WishFolderCard({
   summary: WishFolderSummary;
   currency: Currency;
   onOpen: () => void;
-  /** The page's own menu — Rename / Move to folder… / Delete — reached from three gestures here
-   *  and built once per page rather than once per card. */
+  /**
+   * The page's own menu — Rename / Move to folder… / Delete — reached from three gestures here
+   * and built once per page rather than once per card.
+   *
+   * **Three handles rather than two, because the trigger's press is a third kind of door.** A
+   * right-click carries the pointer's coordinates and a `ContextMenu` keypress carries none;
+   * a plain click on the `⋯` is *either*, depending on whether a pointer or the Enter key
+   * produced it, and only `useContextMenu`'s `menuClick` knows to ask. Built from
+   * `{ onContextMenu: menu(build), onKeyDown: menuKey(build), onClick: menuClick(build) }`.
+   */
   rowMenu: {
     onContextMenu: MouseEventHandler<HTMLButtonElement>;
     onKeyDown: KeyboardEventHandler<HTMLButtonElement>;
+    onClick: MouseEventHandler<HTMLButtonElement>;
   };
   /** Whether *this* folder would take the wish currently in the air — spec §9: the folder a wish
    *  is already filed in refuses it, and draws no ring rather than a ring that does nothing. */
@@ -116,38 +125,6 @@ export function WishFolderCard({
   const tip = useTooltip();
   const { armed, over } = useWishDropTarget({ ref, canDrop, onDrop: onDropWish });
   const { shown, spoken } = face(summary, currency);
-
-  /**
-   * The manage trigger's press, routed to the same menu a right-click opens — with the one
-   * correction the primitive cannot make for itself.
-   *
-   * `menu()` opens the panel at `e.clientX/clientY`, which is the pointer's position and **zero**
-   * for a keyboard: Enter or Space on a focused button fires a click carrying no coordinates and
-   * `detail === 0`, so a keyboard press here would open the menu in the top-left corner of the
-   * window. That is precisely the failure `menuKey()` exists to prevent — "a keypress has no
-   * coordinates and `0, 0` would put every one of these in the top-left corner" — arriving
-   * through the one door it does not watch, because this is the app's **first menu opened by a
-   * plain click** rather than by a right-click.
-   *
-   * So a keyboard press is handed to `menuKey()`'s route instead of `menu()`'s, by dispatching
-   * the key that route already watches at this very button: React's `keydown` listener is
-   * delegated at the root container, so a bubbling native event reaches this element's own
-   * `onKeyDown` and the panel anchors at the trigger's bottom-left, where the reader is looking.
-   * A `keyup`-style guess at the coordinates would be the alternative, and it would duplicate
-   * arithmetic the primitive already does correctly.
-   *
-   * If a second click-opened menu ever appears, this belongs in `useContextMenu` rather than
-   * here — one `menuClick()` beside `menu()` and `menuKey()`.
-   */
-  const openMenu: MouseEventHandler<HTMLButtonElement> = (e) => {
-    if (e.detail !== 0) {
-      rowMenu.onContextMenu(e);
-      return;
-    }
-    e.currentTarget.dispatchEvent(
-      new KeyboardEvent("keydown", { key: "ContextMenu", bubbles: true, cancelable: true }),
-    );
-  };
 
   return (
     <li ref={ref} className={cn("relative rounded-xl", armed && DROP_RING)}>
@@ -192,7 +169,7 @@ export function WishFolderCard({
       <button
         type="button"
         aria-label={`Manage ${node.folder.name}`}
-        onClick={openMenu}
+        onClick={rowMenu.onClick}
         onKeyDown={rowMenu.onKeyDown}
         className={cn(
           "absolute right-1 top-1 grid size-7 place-items-center rounded-md text-dim",
