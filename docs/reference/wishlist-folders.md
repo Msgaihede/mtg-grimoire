@@ -301,6 +301,53 @@ reader is being told about.
   [import-export.md](import-export.md), where the same decision is recorded beside the formats.
 - **Issue #164**, named in #165 as related and separate. It stays separate.
 
+## What driving the shipped window found
+
+Three CDP passes over `a534bf7`, on Windows, `tauri dev` (debug), at 1920×1080 and 1280×800. Every
+figure below was measured, not derived. The suite could not see any of them: jsdom has no layout
+engine, and its default `staleTime` is 0 where the app's is 30 s (`src/lib/query.ts`).
+
+**A wish filed into a folder used to vanish until reload, and that is the one worth remembering.**
+`setFolder` removed the row optimistically from every cached list page and then invalidated only the
+folder summary and the card search — so nothing ever put it back where it went. The folder card read
+`1 wish · $2.74` while the folder's own contents read `Nothing filed here yet.`, with the wish in the
+database the whole time. It reproduced on all three routes (drag into a folder, drag out onto the
+breadcrumb, the panel's `Move to folder…`), persisted at +8 s, and cleared only on a reload. The
+**merge** path already invalidated; a plain move never did. Fixed by dropping the optimism: a folder
+move is one deliberate press, not a held stepper, and an optimistic insert would have to guess the
+destination's sort position and page.
+
+**A held stepper costs four ipc calls per press** — `setQuantity`, then `folderList`,
+`folderSummary` and `list` — about 20 ms round trip. `QuantityStepper` has no hold-repeat, so the
+realistic case is Enter at Windows' ~33 ms key repeat, where the number is perfectly monotonic.
+Below ~25 ms it can flicker back by one for a single frame (~7 ms) and self-corrects; the committed
+value was always right. **Measured on 13 wishes only** — the re-read is the part that grows with the
+list.
+
+**A popup's entry animation can eat the scroll that reveals it.** `AnchoredPopup` focused its panel
+while the motion preset still held it at `scale: 0.96` with a top origin, so the browser computed
+scroll-into-view for a box 4 % shorter and the scroller clipped the panel's bottom — 8.5 px on a
+212 px panel, then 10.5 px once the panel grew to 272 px. Four per cent both times.
+
+**A scroll margin cannot fix that, and settling it took an experiment rather than an argument.**
+Forcing `scroll-margin-bottom` from 16 px to 400 px changed the landing `scrollTop` and the loss
+*not at all*: scaling the open panel drops the scroller's `scrollTop` maximum from 257 to 246, and
+246 is exactly where the auto-scroll landed. A margin only asks the browser to scroll further, and
+the browser clamps at a maximum the scaled panel itself caps. The fix is
+`focus({ preventScroll: true })` plus a `scrollIntoView` once the entry animation completes at
+`scale: 1`, after which the bottom lands 0.5 px **inside** the clip at both sizes and the maximum
+reads 257.
+
+**Two harness facts, for the next pass.** `window.__TAURI_INTERNALS__.invoke` is non-writable and
+non-configurable, so patching it to count ipc calls fails silently and reports zero — which reads
+exactly like an app that made no calls. Wrap the methods on `src/lib/ipc.ts`'s `ipc` object instead.
+And this app's confirmations carry **no** `dialog` or `alertdialog` role, so probing for one finds
+nothing on a confirmation plainly on screen; find it by its text.
+
+**Confirmed and unchanged across all three passes**: the drop ring clears its scroller by exactly
+6.0 px on the first and last folder card mid-drag, 8 of 8 ringed; and the `⋯` menu opens at
+dx 0.0 / dy 0.0 from its trigger on keyboard activation, which is what `menuClick` exists for.
+
 ## Where the code is
 
 | Path | What is in it |
