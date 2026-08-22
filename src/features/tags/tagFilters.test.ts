@@ -7,6 +7,7 @@ import {
   EMPTY_SELECTION,
   removeChip,
   termsFor,
+  toggleChip,
   toggleChipMode,
 } from "./tagFilters";
 
@@ -81,6 +82,44 @@ describe("removeChip", () => {
   it("gives back the same selection when there is nothing to remove", () => {
     const s = addChip(EMPTY_SELECTION, artHit("forest"));
     expect(removeChip(s, "forest", "oracle")).toBe(s);
+  });
+});
+
+describe("toggleChip", () => {
+  it("picks a tag that is not picked yet", () => {
+    const s = toggleChip(EMPTY_SELECTION, artHit("landscape"));
+    expect(s.chips.map((c) => c.slug)).toEqual(["landscape"]);
+    expect(s.chips[0].mode).toBe("include");
+  });
+
+  /**
+   * The whole of issue #181. The rail row was `addChip` alone, which answers an already-picked
+   * tag with the same object — so the press that turned a filter on could not turn it off, and
+   * the only way back was to find the chip and press its ×.
+   */
+  it("un-picks a tag that is already picked", () => {
+    const h = artHit("landscape");
+    expect(toggleChip(toggleChip(EMPTY_SELECTION, h), h).chips).toEqual([]);
+  });
+
+  /**
+   * An excluded chip is *picked* — the rail draws its tick and the wall is filtered by it — so a
+   * press takes it off rather than flipping it back to an include. Include ↔ exclude is
+   * `toggleChipMode`, and it lives on the chip, where both states are drawn and named.
+   */
+  it("takes an excluded chip off rather than flipping it back to an include", () => {
+    const h = artHit("forest");
+    const s = toggleChipMode(addChip(EMPTY_SELECTION, h), "forest", "art");
+    expect(s.chips[0].mode).toBe("exclude");
+    expect(toggleChip(s, h).chips).toEqual([]);
+  });
+
+  /** The two id spaces share plenty of slugs, so a toggle keyed on the slug alone would take the
+   *  other taxonomy's chip off with it. */
+  it("leaves the same slug in the other namespace alone", () => {
+    const s = addChip(addChip(EMPTY_SELECTION, artHit("dragon")), oracleHit("dragon"));
+    const t = toggleChip(s, artHit("dragon"));
+    expect(t.chips.map((c) => c.namespace)).toEqual(["oracle"]);
   });
 });
 

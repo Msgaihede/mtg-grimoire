@@ -20,11 +20,11 @@ import { TagResults } from "./TagResults";
 import { TagSearchBox } from "./TagSearchBox";
 import { TagTree } from "./TagTree";
 import {
-  addChip,
   chipKey,
   EMPTY_SELECTION,
   removeChip,
   termsFor,
+  toggleChip,
   toggleChipMode,
   type TagSelection,
 } from "./tagFilters";
@@ -135,8 +135,10 @@ function useArtTagStatus(): ArtTagStatus | null {
  * **At the page rather than in `tagFilters`' reducers**, deliberately: a reducer that preserves
  * state it was not asked to touch is the more predictable rule, and this is a fact about the one
  * control the *page* draws rather than about what a chip is. It is applied to every write rather
- * than to `removeChip`'s call site alone, because two paths reach the empty state — a removal and
- * a flip to exclude — and a third would otherwise be somebody else's to remember.
+ * than to `removeChip`'s call site alone, because more than one path reaches the empty state —
+ * the chip's ×, a flip to exclude, and now a rail row toggled back off — and each new one would
+ * otherwise be somebody's to remember. The third arrived with issue #181 and cost nothing here,
+ * which is the argument for the rule.
  */
 function settleFloor(next: TagSelection): TagSelection {
   if (next.floor === "any") return next;
@@ -278,7 +280,16 @@ export function TagsPage() {
     [queryClient],
   );
 
-  const pickTag = useCallback((hit: TagHit) => update((s) => addChip(s, hit)), [update]);
+  /**
+   * A press on a rail row: on if the tag is off, off if it is on.
+   *
+   * `toggleChip` rather than `addChip`, which is the whole of issue #181 — the row could turn a
+   * filter on and not off, so the way back was the chip's ×, a control the reader had no reason
+   * to be looking at. It goes through `update` like every other write, so {@link settleFloor}
+   * sees the un-pick: toggling the last art include off is a third path into the state where a
+   * `strong` floor narrows nothing.
+   */
+  const toggleTag = useCallback((hit: TagHit) => update((s) => toggleChip(s, hit)), [update]);
   const removeTag = useCallback(
     (slug: string, namespace: TagNamespace) => update((s) => removeChip(s, slug, namespace)),
     [update],
@@ -348,7 +359,7 @@ export function TagsPage() {
             namespace={selection.namespace}
             hits={railHits}
             pending={isPending}
-            onPick={pickTag}
+            onToggle={toggleTag}
             onMute={hideTag}
             picked={picked}
           />
