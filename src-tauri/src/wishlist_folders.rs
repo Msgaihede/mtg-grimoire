@@ -486,7 +486,7 @@ fn refile_wish(tx: &Connection, id: i64, folder_id: Option<i64>) -> Result<Entry
 /// The four numbers each folder tile draws, one row per folder that holds at least one wish.
 ///
 /// **Every figure is [`crate::wishlist`]'s own arithmetic rather than a second spelling of it.**
-/// `missing` is `max(0, quantity - owned)` over [`crate::wishlist::owned_sql`] — which is why
+/// `missing` is `max(0, quantity - owned)` over [`crate::wishlist::OWNED_SQL`] — which is why
 /// that constant is `pub(crate)`, and why the wishlist table is aliased `w` here: the alias is
 /// part of its contract. The unit price is [`crate::sorting::price_expr`] over
 /// [`crate::wishlist::WISH_FINISH`], the same expression `list_wishes` puts in its `unit_price`
@@ -508,17 +508,13 @@ pub fn folder_summary(
     marketplace: Marketplace,
 ) -> Result<Vec<WishlistFolderSummary>, String> {
     // Both expressions are evaluated once per row in an inner SELECT and aggregated by name in
-    // the outer one. `owned_sql` is a correlated subquery and the price can be another; spelling
+    // the outer one. `OWNED_SQL` is a correlated subquery and the price can be another; spelling
     // either of them three times in the aggregate list would run it three times per row for one
     // answer.
     //
-    // **Asked of the connection rather than pasted from a constant**, because what the reader owns
-    // is switchable: `crate::deck_driven` decides whether "owned" means the collection table or the
-    // live deck lists, and `wishlist::owned_sql` answers with a different subquery for each. A
-    // folder's subtotal and the page header's total have to be the same arithmetic — a copy frozen
-    // at the table arm would put a wrong number on every folder card the moment the reader switched
-    // to deck-driven, while the header beside it stayed right.
-    let owned = crate::wishlist::owned_sql(conn);
+    // **Shared with `wishlist::list` rather than respelled here**, because a folder's subtotal and
+    // the page header's total have to be the same arithmetic.
+    let owned = crate::wishlist::OWNED_SQL;
     let sql = format!(
         "SELECT folder_id,
                 count(*) AS wishes,
@@ -1120,7 +1116,7 @@ mod tests {
         wish(&conn, "o2", 4, Some(someday.id));
         wish(&conn, "o1", 9, None);
         // One copy already in the binder, so `missing` is not just the quantity: this is
-        // `wishlist::owned_sql` doing the subtraction, which is the arithmetic the page header
+        // `wishlist::OWNED_SQL` doing the subtraction, which is the arithmetic the page header
         // uses too.
         own(&conn, "bolt-lea", 1);
 

@@ -1219,9 +1219,10 @@ pub async fn deck_undo_apply(
 ) -> Result<(), String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        crate::collection_source::with_write_owned_if_derived(&state, |conn| {
-            apply_reversal(conn, deck_id, audit_id, true)
-        })
+        // Plain `with_write`: a deck write moves nothing the reader owns. PR 3's
+        // `collection_to_deck`/`deck_to_collection` DO move ownership and must use
+        // `collection_source::with_write_owned` instead.
+        crate::sync::with_write(&state, |conn| apply_reversal(conn, deck_id, audit_id, true))
     })
     .await
     .map_err(|e| format!("the change could not be undone: {e}"))?
@@ -1236,7 +1237,10 @@ pub async fn deck_redo_apply(
 ) -> Result<(), String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        crate::collection_source::with_write_owned_if_derived(&state, |conn| {
+        // Plain `with_write`: a deck write moves nothing the reader owns. PR 3's
+        // `collection_to_deck`/`deck_to_collection` DO move ownership and must use
+        // `collection_source::with_write_owned` instead.
+        crate::sync::with_write(&state, |conn| {
             apply_reversal(conn, deck_id, audit_id, false)
         })
     })
