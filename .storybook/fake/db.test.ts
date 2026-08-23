@@ -3213,9 +3213,11 @@ describe("the collection's folders", () => {
    * `allocation: "unallocated"` — the copies a **deck** is holding, and nothing else.
    *
    * The root, a folder the reader made and `Recently removed` are all cards on their desk; only
-   * a copy a deck has taken off it is spoken for. Nothing in this build creates a `deck` folder,
-   * so the fixture seeds one by hand — which is the only way to exercise the branch at all, and
-   * saying so is better than a test that passes because the state is unreachable.
+   * a copy a deck has taken off it is spoken for. The fixture seeds all four folders by hand
+   * over `makeDb`, which has no decks in it: the branch is then exercised by the *kind* column
+   * alone, with no `deck_create` and no `collection_to_deck` in the way. The two writes reach it
+   * from the other end in "takes a copy out of the unallocated list by moving it" below, so the
+   * predicate and the presses that produce it are each pinned once.
    */
   it("drops only a deck folder's copies when the query asks for the unallocated ones", () => {
     const db = makeDb({
@@ -3421,6 +3423,66 @@ describe("moving copies across the deck boundary", () => {
     expect(copiesIn(db, null)).toBe(4);
   });
 
+  /**
+   * **The name arm, and the reason it exists.** `collection_to_deck` took a category **id** for
+   * one release, so an owned add that had to invent a pile resolved the name in TypeScript and
+   * created it through `deck_category_create` — the reader's own "New category" write, which
+   * marks a pile `"user"`. `drawsWhenEmpty` reads that flag, so a `Ramp` the app invented drew an
+   * empty heading for ever where the same pile invented by a `need` add left the desk with its
+   * last card. `categoryForName` is the one write that records `"auto"`.
+   */
+  it("marks a pile it had to invent as the app's, not the reader's", () => {
+    const db = boundary();
+    writeHandlers(db).collection_to_deck({
+      entryId: 1,
+      deckId: 1,
+      categoryName: "Ramp",
+      quantity: 1,
+    });
+    const made = db.deckCategories.find((c) => c.deckId === 1 && c.name === "Ramp")!;
+    expect(made.origin).toBe("auto");
+    expect(listed(db, 1)).toBe(1);
+    expect(db.deckCards.find((dc) => dc.cardId === BOLT.id)!.categoryId).toBe(made.id);
+  });
+
+  /** And it finds before it creates, so a pile the reader made keeps `"user"` however many cards
+   *  the app later files into it — `category_for_name`'s own rule, and the case a name-matching
+   *  drawing rule gets wrong. */
+  it("files into a pile the reader made rather than making a second", () => {
+    const db = boundary();
+    const w = writeHandlers(db);
+    const mine = w.deck_category_create({ deckId: 1, name: "Ramp" });
+    expect(mine.origin).toBe("user");
+
+    w.collection_to_deck({ entryId: 1, deckId: 1, categoryName: "Ramp", quantity: 1 });
+
+    expect(db.deckCategories.filter((c) => c.deckId === 1 && c.name === "Ramp")).toHaveLength(1);
+    expect(db.deckCategories.find((c) => c.id === mine.id)!.origin).toBe("user");
+    expect(db.deckCards.find((dc) => dc.cardId === BOLT.id)!.categoryId).toBe(mine.id);
+  });
+
+  /** The id and the name are alternatives and exactly one must arrive: `deck_add_card` lets the
+   *  id win because a drag carries both, and nothing sends both here — so both is a caller that
+   *  has lost track of which it meant, refused in words rather than silently preferred. */
+  it("refuses a pile named and pointed at together, and neither at all", () => {
+    const db = boundary();
+    const w = writeHandlers(db);
+    expect(() =>
+      w.collection_to_deck({
+        entryId: 1,
+        deckId: 1,
+        categoryId: categoryId(1, "main"),
+        categoryName: "Ramp",
+        quantity: 1,
+      }),
+    ).toThrow(/one pile/);
+    expect(() => w.collection_to_deck({ entryId: 1, deckId: 1, quantity: 1 })).toThrow(
+      /needs a category/,
+    );
+    expect(copiesIn(db, null)).toBe(4);
+    expect(db.deckCategories.some((c) => c.name === "Ramp")).toBe(false);
+  });
+
   it("refuses a deck with no folder to hold its cards", () => {
     const db = boundary();
     db.collectionFolders = db.collectionFolders.filter((f) => f.deckId !== 1);
@@ -3432,6 +3494,51 @@ describe("moving copies across the deck boundary", () => {
         quantity: 1,
       }),
     ).toThrow(/no folder to hold its cards/);
+  });
+
+  /**
+   * **A refused filing by name leaves no pile behind** —
+   * `collection_alloc::a_refused_filing_by_name_leaves_no_pile_behind`, mirrored.
+   *
+   * The name arm has to be resolved *before* the refusals below it, because the history row this
+   * write files names the pile the card went into. In the crate that is free: the create is
+   * inside the move's own transaction, so a refusal that lands after it takes the invented pile
+   * with it. The fake has no transaction, so it has to undo the one write by hand — and without
+   * that it shows a state the backend cannot produce, which is the class of defect this feature
+   * has already shipped once.
+   *
+   * Driven through `NOT_THAT_MANY`, the refusal a reader actually meets: they asked for more
+   * copies than the row holds and would otherwise be left with an empty column they never made.
+   */
+  it("leaves no pile behind when a filing by name is refused", () => {
+    const db = boundary();
+    const before = db.deckCategories.length;
+
+    expect(() =>
+      writeHandlers(db).collection_to_deck({
+        entryId: 1,
+        deckId: 1,
+        categoryName: "Ramp",
+        quantity: 99,
+      }),
+    ).toThrow(/that many/);
+
+    expect(db.deckCategories.some((c) => c.deckId === 1 && c.name === "Ramp")).toBe(false);
+    expect(db.deckCategories).toHaveLength(before);
+  });
+
+  /** And the pile the reader already had is **not** swept up with it: the name arm finds before
+   *  it creates, so a refusal after a *find* has nothing to undo. */
+  it("keeps a pile the reader made when a filing by name is refused", () => {
+    const db = boundary();
+    const w = writeHandlers(db);
+    const mine = w.deck_category_create({ deckId: 1, name: "Ramp" });
+
+    expect(() =>
+      w.collection_to_deck({ entryId: 1, deckId: 1, categoryName: "Ramp", quantity: 99 }),
+    ).toThrow(/that many/);
+
+    expect(db.deckCategories.find((c) => c.id === mine.id)).toBeDefined();
   });
 
   it("files what the deck's group held into Recently removed when the card is cut", () => {
@@ -3511,7 +3618,7 @@ describe("moving copies across the deck boundary", () => {
 
     const out = w.deck_to_collection({ deckCardId: dc.id, quantity: 1 });
 
-    expect(out).toEqual({ entryId: null, fromDeck: null, quantity: 0 });
+    expect(out).toEqual({ entryId: null, fromDeck: null, deckCardId: null, quantity: 0 });
     expect(db.collectionEntries).toHaveLength(0);
     expect(db.deckCards).toHaveLength(0);
   });
@@ -3563,6 +3670,179 @@ describe("moving copies across the deck boundary", () => {
   });
 
   /**
+   * **The history the pair writes**, and neither row is a shape of its own: filing a card into a
+   * deck from the collection is an *add*, cutting one is a *removal*, and a reader cannot see
+   * which command ran. So `collection_to_deck` writes `deck::add_card`'s row and
+   * `deck_to_collection` writes `deck::set_card_quantity`'s — same kinds, same payload keys,
+   * same signed `delta` — which is what lets `auditText.ts` word both with no new arm.
+   *
+   * `collection_alloc.rs` gained the add row on 2026-08-23, and this is that write mirrored.
+   * The cut's has been there since v25; it was missing **here** the whole time, and a fake that
+   * recorded only the add would have drawn a Collection Search press in the drawer with the cut
+   * that reverses it missing.
+   */
+  it("records the add and the removal deck_add_card and the stepper would have", () => {
+    const db = boundary();
+    const w = writeHandlers(db);
+    w.collection_to_deck({ entryId: 1, deckId: 1, categoryId: categoryId(1, "main"), quantity: 2 });
+
+    const add = db.deckAudit[db.deckAudit.length - 1];
+    expect(add).toMatchObject({ deckId: 1, kind: "add", variant: "live", cardName: BOLT.name });
+    // The copies **added**, never the total the row landed on: `delta` is what the day header
+    // adds up, so a fold from 2 to 3 is one copy of history and not three.
+    expect(add.delta).toBe(2);
+    expect(JSON.parse(add.payload)).toEqual({ category: "Main deck", quantity: 2 });
+
+    // Part of the row: the stepper's `quantity` shape, `from` and `to` rather than a count.
+    const dc = db.deckCards.find((row) => row.deckId === 1)!;
+    w.deck_to_collection({ deckCardId: dc.id, quantity: 1 });
+    const part = db.deckAudit[db.deckAudit.length - 1];
+    expect(part).toMatchObject({ kind: "quantity", delta: -1 });
+    expect(JSON.parse(part.payload)).toEqual({ category: "Main deck", from: 2, to: 1 });
+
+    // The whole of it: a `remove`, and `reason` is null because where the copies went is a
+    // standing fact about every cut on this list rather than something true of this row.
+    w.deck_to_collection({ deckCardId: dc.id, quantity: 1 });
+    const whole = db.deckAudit[db.deckAudit.length - 1];
+    expect(whole).toMatchObject({ kind: "remove", delta: -1 });
+    expect(JSON.parse(whole.payload)).toEqual({
+      category: "Main deck",
+      quantity: 1,
+      reason: null,
+    });
+  });
+
+  /**
+   * **The *source* deck's own history, which was a hole this pair opened.** Taking a copy out of
+   * another deck decrements that deck's live list — the whole of `fromDeck` — and recorded
+   * nothing there until 2026-08-23. The reader is told once, in a dialog sentence that dies with
+   * the dialog, and then opens Deck A a week later to find the card simply gone.
+   *
+   * **One row per `deckCards` row decremented, in the stepper's two shapes.** The walk can span
+   * two piles of one deck, so there is no single row a summary could name; the seed puts the Bolt
+   * in two piles precisely because that is the case one row cannot describe.
+   */
+  it("records the source deck's loss, one row per pile it took from", () => {
+    const db = boundary({
+      collectionEntries: [entry({ id: 1, cardId: BOLT.id, quantity: 4, folderId: groupId(1) })],
+      deckCards: [
+        deckCard({ id: 1, cardId: BOLT.id, categoryKind: "main", quantity: 2 }),
+        deckCard({ id: 2, cardId: BOLT.id, categoryKind: "side", quantity: 2 }),
+      ],
+    });
+
+    writeHandlers(db).collection_to_deck({
+      entryId: 1,
+      deckId: 2,
+      categoryId: categoryId(2, "main"),
+      quantity: 3,
+    });
+
+    const lost = db.deckAudit.filter((a) => a.deckId === 1);
+    expect(lost.map((a) => [a.kind, a.delta])).toEqual([
+      ["remove", -2],
+      ["quantity", -1],
+    ]);
+    expect(JSON.parse(lost[0].payload)).toEqual({
+      category: "Main deck",
+      quantity: 2,
+      reason: null,
+    });
+    expect(JSON.parse(lost[1].payload)).toEqual({ category: "Sideboard", from: 2, to: 1 });
+    // The deck the copies went *to* keeps its own single `add`: two logs describing one press
+    // from its two ends, neither a summary of the other.
+    expect(db.deckAudit.filter((a) => a.deckId === 2).map((a) => a.kind)).toEqual(["add"]);
+  });
+
+  /**
+   * **The `deckCards` row the filing wrote, answered back** — the only thing a caller has to
+   * point at, because an owned add lands a row the editor has never seen and the `ON CONFLICT`
+   * arm makes the id underivable from the arguments. The second press is the half worth pinning:
+   * it inserts nothing, so a fake reading `nextId` would answer a row that does not exist.
+   */
+  it("answers the deck card it wrote, through both arms", () => {
+    const db = boundary();
+    const w = writeHandlers(db);
+    const first = w.collection_to_deck({
+      entryId: 1,
+      deckId: 1,
+      categoryId: categoryId(1, "main"),
+      quantity: 1,
+    });
+    const written = db.deckCards.find((row) => row.deckId === 1)!;
+    expect(first.deckCardId).toBe(written.id);
+
+    const rootRow = db.collectionEntries.find((e) => e.folderId === null)!;
+    const again = w.collection_to_deck({
+      entryId: rootRow.id,
+      deckId: 1,
+      categoryId: categoryId(1, "main"),
+      quantity: 1,
+    });
+    expect(again.deckCardId).toBe(first.deckCardId);
+    expect(db.deckCards.filter((row) => row.deckId === 1)).toHaveLength(1);
+  });
+
+  /**
+   * **A cut is recorded even when nothing moved.** A deck card nobody owned still *left the
+   * deck*, and the history is a record of the deck rather than of the collection — so the row
+   * quotes what the list held, not what the group gave back.
+   */
+  it("records a cut of a card nobody owned, which moved nothing", () => {
+    const db = boundary({ collectionEntries: [] });
+    const w = writeHandlers(db);
+    w.deck_add_card({
+      deckId: 1,
+      cardId: BOLT.id,
+      categoryId: categoryId(1, "main"),
+      categoryName: null,
+      variant: "live",
+      quantity: 1,
+    });
+    const dc = db.deckCards.find((row) => row.deckId === 1)!;
+
+    const out = w.deck_to_collection({ deckCardId: dc.id, quantity: 1 });
+
+    expect(out.quantity).toBe(0);
+    expect(db.deckAudit[db.deckAudit.length - 1]).toMatchObject({ kind: "remove", delta: -1 });
+  });
+
+  /**
+   * **Neither files an undo step, and that is a decision.** Each moves copies across the deck
+   * boundary; `deck_undo` restores `deck_cards` cells and its primitives touch no collection
+   * table, so the only step available would put the list back and leave the copies where they
+   * went — a deck claiming cards its own group no longer holds, told to a reader who pressed
+   * Ctrl+Z and watched the row reappear. Both are on `NO_UNDO_STEP` for that, rather than
+   * slipping through {@link journalled} because their arguments happen not to carry a deck id.
+   *
+   * Read through `allHandlers`, because the wrapper is what would file the step — `writeHandlers`
+   * alone could not tell a decision from an omission.
+   */
+  it("files no undo step either way, so the cursor still names the press before", () => {
+    const db = boundary();
+    const h = allHandlers(db);
+    h.deck_add_card({
+      deckId: 1,
+      cardId: BOLT_2X2.id,
+      categoryId: categoryId(1, "main"),
+      categoryName: null,
+      variant: "live",
+      quantity: 1,
+    });
+    h.deck_update({ id: 1, patch: { name: "Renamed" } });
+    const before = db.deckUndo.length;
+    const cursor = h.deck_undo_state({ deckId: 1, redoId: null }).undo!.id;
+
+    h.collection_to_deck({ entryId: 1, deckId: 1, categoryId: categoryId(1, "main"), quantity: 1 });
+    const dc = db.deckCards.find((row) => row.cardId === BOLT.id)!;
+    h.deck_to_collection({ deckCardId: dc.id, quantity: 1 });
+
+    // Two history rows written, and not one step behind them.
+    expect(db.deckUndo).toHaveLength(before);
+    expect(h.deck_undo_state({ deckId: 1, redoId: null }).undo!.id).toBe(cursor);
+  });
+
+  /**
    * Exclusivity read from the collection's own end: `allocation: "unallocated"` drops the copies
    * a **deck** is holding and nothing else, so the only copy stops being available the moment it
    * is filed into a group — with no ledger consulted and nothing to recompute.
@@ -3585,6 +3865,120 @@ describe("moving copies across the deck boundary", () => {
     // leaving the database is back on the reader's desk.
     w.deck_to_collection({ deckCardId: db.deckCards[0].id, quantity: 1 });
     expect(free()).toBe(1);
+  });
+
+  /**
+   * **The other two callers of the same walk**, and until 2026-08-23 this fake had neither:
+   * `deck_category_clear` and `deck_category_delete` took whole piles of `deck_cards` out and
+   * released **no** copies at all, where the crate files every one of them into
+   * `Recently removed` through `deck::release_group_copies`. It was noted in PR 3's review,
+   * deliberately not widened then, and closed here because Bucket F was already in the file.
+   *
+   * The state it left behind is the feature's central invariant broken quietly — *a copy in a
+   * deck's group is backed by a deck card in that deck* — so a Storybook world that cleared a
+   * pile went on drawing those copies under a folder for a pile that was gone, and no other
+   * deck could ever have them.
+   */
+  describe("the pile writes release their copies too", () => {
+    /** One deck, four Bolts already filed into its group and listed on its main pile. */
+    const filled = (over: Partial<FakeDb> = {}) => {
+      const db = boundary(over);
+      writeHandlers(db).collection_to_deck({
+        entryId: 1,
+        deckId: 1,
+        categoryId: categoryId(1, "main"),
+        quantity: 4,
+      });
+      return db;
+    };
+
+    it("files a cleared pile's copies into Recently removed", () => {
+      const db = filled();
+      expect(copiesIn(db, groupId(1))).toBe(4);
+
+      const cleared = writeHandlers(db).deck_category_clear({
+        deckId: 1,
+        categoryId: categoryId(1, "main"),
+        variant: "live",
+      });
+
+      // The answer is still `deck_cards` copies, never the copies that moved — what the
+      // confirmation quoted is what left the deck.
+      expect(cleared).toBe(4);
+      expect(copiesIn(db, groupId(1))).toBe(0);
+      expect(copiesIn(db, REMOVED_FOLDER)).toBe(4);
+    });
+
+    /** A plan holds no cards, so there is nothing in any folder behind a theory row — the
+     *  refusal `deck_to_collection` makes one card at a time is simply an empty loop here. */
+    it("moves nothing when the pile being cleared is the plan", () => {
+      const db = filled();
+      writeHandlers(db).deck_add_card({
+        deckId: 1,
+        cardId: BOLT.id,
+        categoryId: categoryId(1, "main"),
+        categoryName: null,
+        variant: "theory",
+        quantity: 2,
+      });
+
+      writeHandlers(db).deck_category_clear({
+        deckId: 1,
+        categoryId: categoryId(1, "main"),
+        variant: "theory",
+      });
+
+      expect(copiesIn(db, groupId(1))).toBe(4);
+      expect(copiesIn(db, REMOVED_FOLDER)).toBe(0);
+    });
+
+    it("files a deleted category's copies away when the cards go with it", () => {
+      const db = filled();
+
+      writeHandlers(db).deck_category_delete({
+        id: categoryId(1, "main"),
+        moveToCategoryId: null,
+      });
+
+      expect(copiesIn(db, groupId(1))).toBe(0);
+      expect(copiesIn(db, REMOVED_FOLDER)).toBe(4);
+    });
+
+    /** **And the move arm releases nothing**, which is the half a blanket release would get
+     *  wrong: those cards are still in this deck, one pile over, so the group is still exactly
+     *  where their copies belong. */
+    it("leaves the copies alone when the cards are re-filed into another pile", () => {
+      const db = filled();
+
+      writeHandlers(db).deck_category_delete({
+        id: categoryId(1, "main"),
+        moveToCategoryId: categoryId(1, "side"),
+      });
+
+      expect(copiesIn(db, groupId(1))).toBe(4);
+      expect(copiesIn(db, REMOVED_FOLDER)).toBe(0);
+    });
+
+    /**
+     * The oracle arm, in bulk. `deck_swap_printing` rewrites a deck row's identity and touches
+     * no collection table, so after "Use this printing" the group holds the *old* printing —
+     * matched exactly, a cleared pile would strand every copy behind it.
+     */
+    it("reaches another printing of the same card when the pile is cleared", () => {
+      const db = boundary({
+        collectionEntries: [entry({ id: 1, cardId: BOLT.id, quantity: 2, folderId: groupId(1) })],
+        deckCards: [deckCard({ id: 1, cardId: BOLT_2X2.id, categoryKind: "main", quantity: 2 })],
+      });
+
+      writeHandlers(db).deck_category_clear({
+        deckId: 1,
+        categoryId: categoryId(1, "main"),
+        variant: "live",
+      });
+
+      expect(copiesIn(db, groupId(1))).toBe(0);
+      expect(copiesIn(db, REMOVED_FOLDER)).toBe(2);
+    });
   });
 });
 
@@ -3667,6 +4061,63 @@ describe("collection_import_commit", () => {
       }),
     ).toThrow(/not an import mode/);
     expect(db.collectionEntries).toHaveLength(0);
+  });
+
+  /**
+   * **A deck import files the whole file into that deck's group; every other import lands at the
+   * root.** The command hard-coded the root until 2026-08-23, so ticking "Add cards to
+   * collection" on a deck import left the deck reading *missing* on every line the reader had
+   * just said they own, with every other deck still free to claim the copies.
+   *
+   * The assertion is the **folder column**, never the counts: a root import and a group import
+   * both answer `added: 1`, which is exactly why the counters that were already tested could not
+   * see it. The second half imports the same line with no folder — the folder is the eleventh
+   * term of the grain, so it is a second row rather than four more copies.
+   */
+  it("files a deck import into that deck's group, and everything else at the root", () => {
+    const db = makeDeckDb({ decks: [deck({ id: 1, name: "Deck A" })] });
+    const line: CollectionImportItem[] = [{ cardId: BOLT.id, finish: "nonfoil", quantity: 4 }];
+    const w = writeHandlers(db);
+
+    w.collection_import_commit({ items: line, mode: "add", folderId: groupId(1) });
+    expect(db.collectionEntries.map((e) => e.folderId)).toEqual([groupId(1)]);
+
+    w.collection_import_commit({ items: line, mode: "add" });
+    expect(db.collectionEntries.map((e) => [e.folderId, e.quantity])).toEqual([
+      [groupId(1), 4],
+      [null, 4],
+    ]);
+  });
+
+  /**
+   * **The widened fence is widened by exactly one kind**, and both refusals land before anything
+   * is written. `Recently removed` is where copies go when they *leave* a deck, so a file naming
+   * it would be an import that arrives already discarded; a binder is still a destination, which
+   * is what keeps this a fence about the *kind* rather than a list of two ids.
+   */
+  it("still refuses a folder that is gone or is the holding area", () => {
+    const db = makeDeckDb({ decks: [deck({ id: 1, name: "Deck A" })] });
+    const line: CollectionImportItem[] = [{ cardId: BOLT.id, finish: "nonfoil", quantity: 1 }];
+    const w = writeHandlers(db);
+
+    expect(() => w.collection_import_commit({ items: line, mode: "add", folderId: 404 })).toThrow(
+      /not there any more/,
+    );
+    expect(() =>
+      w.collection_import_commit({ items: line, mode: "add", folderId: REMOVED_FOLDER }),
+    ).toThrow(/the app's own/);
+    expect(db.collectionEntries).toHaveLength(0);
+
+    db.collectionFolders.push({
+      id: 7,
+      parentId: null,
+      name: "Binder",
+      kind: "user",
+      deckId: null,
+      sortOrder: 9,
+    });
+    w.collection_import_commit({ items: line, mode: "add", folderId: 7 });
+    expect(db.collectionEntries.map((e) => e.folderId)).toEqual([7]);
   });
 });
 
@@ -4792,6 +5243,15 @@ describe("the busy fault", () => {
     // own — the flag rode `deck_update` and the allocator was called by writes rather than being
     // one. So this is the rare move that is a pure addition, and it is still measured rather
     // than reasoned about.
+    //
+    // **Re-measured at 66 on 2026-08-23 and it had not moved** — the first entry in this comment
+    // that records a release rather than a delta, and it needed one. The deck builder's
+    // Collection Search tab, the own/need toggle and the import's "add these to my collection"
+    // box are a whole feature that adds no command at all: `collection_to_deck` was registered a
+    // release early and called by nothing, and what shipped here is its first caller. A comment
+    // that reasoned "a feature lands, so add one" would have written 67 and been wrong. The
+    // figure is a fact about the *handlers*, and a release can be entirely about who presses
+    // them.
     const names = Object.keys(w).filter((n) => !unlocked.includes(n));
     expect(names).toHaveLength(66);
     for (const name of names) {

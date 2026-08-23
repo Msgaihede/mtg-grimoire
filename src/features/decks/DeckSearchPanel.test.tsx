@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -9,7 +9,7 @@ import {
   TooltipProvider,
 } from "@/components/tooltip/TooltipProvider";
 import type { FormatFilterOption } from "@/features/search/useCardSearch";
-import type { CardSummary, DeckCategory, SearchResponse } from "@/lib/ipc";
+import type { CardSummary, CollectionRow, DeckCategory, SearchResponse } from "@/lib/ipc";
 import { startDrag } from "@/test-drag";
 import { readDragData } from "./dnd";
 
@@ -27,6 +27,21 @@ const prefetchImages = vi.hoisted(() => vi.fn());
 // resolved mock and a resolved cache entry are not the same moment.
 const deckSearchOpen = vi.hoisted(() => vi.fn());
 const setDeckSearchOpen = vi.hoisted(() => vi.fn());
+/**
+ * The collection tab's three reads and its one write — **and the panel opens on that tab**, so
+ * these are asked for on every mount in this file rather than only by the tests that name them.
+ *
+ * They were missing when the strip landed (T1-c). An `ipc` mock is an object literal, so a
+ * command it does not carry is `undefined` and calling it is a synchronous `TypeError` — which,
+ * fired from inside a hook on the way up, no `.catch` in a `queryFn` can reach.
+ */
+const collectionList = vi.hoisted(() => vi.fn());
+const collectionToDeck = vi.hoisted(() => vi.fn());
+const collectionFolderList = vi.hoisted(() => vi.fn());
+// `useMarketplace` is the real hook on both tabs — the marketplace is in every price-bearing
+// key — so its two reads need answers as well.
+const getMarketplace = vi.hoisted(() => vi.fn());
+const marketplaceFeedStatus = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -49,10 +64,16 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     prefetchImages,
     deckSearchOpen,
     setDeckSearchOpen,
+    collectionList,
+    collectionToDeck,
+    collectionFolderList,
+    getMarketplace,
+    marketplaceFeedStatus,
   },
 }));
 
-import { DeckSearchPanel } from "./DeckSearchPanel";
+import { DECK_SEARCH_TAB_KEY, DeckSearchPanel, type DeckSearchTab } from "./DeckSearchPanel";
+import { DEFAULT_ADD_MODE, type AddMode } from "./NormalSearchAdd";
 import { DECK_SEARCH_OPEN_KEY } from "./useDeckSearchOpen";
 import { useDeck } from "./useDeck";
 import { useAppStore } from "@/lib/store";
@@ -98,6 +119,51 @@ const RHYSTIC_STUDY: CardSummary = {
   gameChanger: true,
 };
 
+/**
+ * The **collection**'s answer for the same card — a `CollectionRow`, which is a different object
+ * from the `CardSummary` above and is the whole distinction between the two tabs.
+ *
+ * One row is one printing, one finish, one condition and one folder: `folderId: null` is the root
+ * of the collection, which is a copy on the reader's desk and the ordinary case.
+ */
+const OWNED_BOLT: CollectionRow = {
+  id: 1,
+  cardId: "1",
+  folderId: null,
+  folderName: null,
+  name: "Lightning Bolt",
+  oracleId: "o-bolt",
+  setCode: "lea",
+  setName: "Limited Edition Alpha",
+  collectorNumber: "161",
+  lang: "en",
+  rarity: "common",
+  manaCost: "{R}",
+  typeLine: "Instant",
+  layout: "normal",
+  finish: "nonfoil",
+  condition: "NM",
+  quantity: 2,
+  tradelistQuantity: 0,
+  unitPrice: 400.5,
+  purchasePrice: null,
+  purchaseCurrency: null,
+  acquiredAt: null,
+  acquisitionSource: null,
+  serialNumber: null,
+  altered: false,
+  signed: false,
+  proxy: false,
+  misprint: false,
+  grading: null,
+  tags: "[]",
+  notes: null,
+  needsReview: null,
+  updatedAt: 0,
+  promoTypes: null,
+  legalities: null,
+};
+
 const page = (items: CardSummary[]): SearchResponse => ({
   items,
   total: items.length,
@@ -140,6 +206,15 @@ beforeEach(() => {
   prefetchImages.mockReset().mockResolvedValue(undefined);
   deckSearchOpen.mockReset().mockResolvedValue(true);
   setDeckSearchOpen.mockReset().mockResolvedValue(undefined);
+  collectionList.mockReset().mockResolvedValue({ items: [OWNED_BOLT], total: 1 });
+  // `deckCardId` is the `deck_cards` row the move landed on — always named by this command,
+  // so a mock that omitted it would encode an answer the backend cannot give.
+  collectionToDeck
+    .mockReset()
+    .mockResolvedValue({ entryId: 9, fromDeck: null, deckCardId: 41, quantity: 1 });
+  collectionFolderList.mockReset().mockResolvedValue([]);
+  getMarketplace.mockReset().mockResolvedValue("tcgplayer");
+  marketplaceFeedStatus.mockReset().mockResolvedValue([]);
 });
 
 /**
@@ -194,9 +269,16 @@ const SEEDED: DeckCategory[] = [MAIN, SIDE, MAYBE];
  */
 interface Props {
   categories: DeckCategory[];
+  /** The deck the collection tab's write is addressed with — the editor's own id, threaded
+   *  through this panel since 2026-08-23 rather than inferred from `categories[0].deckId`. */
+  deckId: number;
   targetCategoryId: number;
   roomy: boolean;
   defaultFormat?: FormatFilterOption | null;
+  /** What a press on the card search's Add button means. The editor holds the answer (it governs
+   *  the toolbar's quick-add field too) and this panel draws the control. */
+  mode: AddMode;
+  onMode: (mode: AddMode) => void;
   /** The editor's cap on the drag. Absent is `Infinity`, which is what a story and the first
    *  paint both get — see the prop's own doc. */
   maxWidth?: number;
@@ -209,8 +291,13 @@ function Harness(props: Props) {
 
 function panel({
   categories = SEEDED,
+  deckId = 4,
   targetCategoryId = MAIN.id,
   roomy = true,
+  /** The mode the editor is holding. `need` is `DEFAULT_ADD_MODE`, which is what every deck
+   *  starts on. */
+  mode = DEFAULT_ADD_MODE as AddMode,
+  onMode = vi.fn(),
   // `null` rather than an omission, because `null` is what the editor actually sends for a deck
   // it has no format to seed the search with — the annotation is what keeps the other cases
   // assignable.
@@ -227,12 +314,31 @@ function panel({
    * `staleTime: Infinity`, so this is exactly what the reader's own last press leaves behind.
    */
   storedOpen = undefined as boolean | undefined,
+  /**
+   * Which tab the cache already holds, or `undefined` for a session in which nobody has
+   * pressed one.
+   *
+   * Seeded rather than pressed for {@link storedOpen}'s reason, and it stands for the same
+   * thing one scope smaller: {@link DECK_SEARCH_TAB_KEY} is the app's memory of the reader's
+   * last press, so a seeded entry is a *second* deck opened after they made a choice.
+   */
+  storedTab = undefined as DeckSearchTab | undefined,
 } = {}) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   if (storedOpen !== undefined) client.setQueryData(DECK_SEARCH_OPEN_KEY, storedOpen);
-  let props: Props = { categories, targetCategoryId, roomy, defaultFormat, maxWidth };
+  if (storedTab !== undefined) client.setQueryData(DECK_SEARCH_TAB_KEY, storedTab);
+  let props: Props = {
+    categories,
+    deckId,
+    targetCategoryId,
+    roomy,
+    defaultFormat,
+    maxWidth,
+    mode,
+    onMode,
+  };
   const ui = (p: Props) => (
     <QueryClientProvider client={client}>
       <TooltipProvider>
@@ -240,17 +346,36 @@ function panel({
       </TooltipProvider>
     </QueryClientProvider>
   );
-  const view = render(ui(props));
+  let view = render(ui(props));
   /** Re-render with one prop changed — what the editor does when the deck row answers a new
    *  default category, or when it re-measures the row the deck and the panel share. */
   const update = (patch: Partial<Props>) => {
     props = { ...props, ...patch };
     view.rerender(ui(props));
   };
+  /**
+   * Close this editor and open the **same deck** again, over the same query cache.
+   *
+   * That is what a reader does every time they leave a deck and come back, and it is a very
+   * different thing from {@link update}: the editor is keyed on the deck id, so the whole panel
+   * is torn down and a fresh one is built. Anything held in a `useState` in this component goes
+   * with it; anything in the query cache — which is app-scoped and is the same client here —
+   * does not.
+   *
+   * Queries afterwards have to go through `screen` rather than through the returned `container`,
+   * which is the first render's and is detached once this has run.
+   */
+  const remount = () => {
+    view.unmount();
+    view = render(ui(props));
+  };
   return {
     ...view,
     update,
+    remount,
     retarget: (categoryId: number) => update({ targetCategoryId: categoryId }),
+    /** The editor's end of the own/need control — this panel holds no memory of its own. */
+    onMode,
   };
 }
 
@@ -268,8 +393,34 @@ function panel({
 async function openPanel(options: Parameters<typeof panel>[0] = {}) {
   const view = panel(options);
   await screen.findByRole("button", { name: "Search cards" });
+  // **And one more press than it used to be** (2026-08-23). The card search is a *tab* now and
+  // the panel opens on the other one, so a test that reached straight for the wall would be
+  // asking about a body that is not mounted — the same failure this helper was named for when
+  // the disclosure opened collapsed, one control further in.
+  //
+  // Skipped when the editor has railed the panel, because there is no strip in 36px of rail and
+  // `roomy: false` is a state two tests here open in deliberately. Nothing is lost: neither of
+  // them looks at a body.
+  const cards = screen.queryByRole("button", { name: ALL_CARDS });
+  if (cards) await userEvent.click(cards);
   return view;
 }
+
+/**
+ * The tab that draws today's card search, by the words on it.
+ *
+ * A constant rather than the string typed out at each call site: it is this file's most-repeated
+ * accessible name, and the two tabs are one `TABS` array in the component — so a rename that
+ * reached the component and not this file should fail in one obvious place rather than in thirty
+ * `getByRole` calls that each read as "the wall never arrived".
+ */
+const ALL_CARDS = "All cards";
+/** Its sibling — the tab the panel opens on. */
+const COLLECTION = "Collection";
+
+/** One tab, by its words. Both are plain buttons: the strip is `aria-pressed` over a `.map` and
+ *  deliberately not `role="tab"`, which would bring a keyboard contract nothing else here has. */
+const tab = (name: string) => screen.getByRole("button", { name });
 
 /**
  * The filter row's Format select, reached by its label.
@@ -302,7 +453,10 @@ describe("DeckSearchPanel", () => {
     const rail = await screen.findByRole("button", { name: "Search cards" });
     expect(rail).toHaveAttribute("aria-expanded", "true");
     expect(rail).not.toHaveAttribute("aria-disabled");
-    expect(screen.getByRole("searchbox", { name: "Search cards" })).toBeInTheDocument();
+    // The strip rather than the searchbox, since 2026-08-23: what "open" draws is a *body*, and
+    // which body is the tab's question rather than this one's. `DeckSearchPanel tabs` below is
+    // where the answer to that is pinned.
+    expect(screen.getByRole("group", { name: "Search in" })).toBeInTheDocument();
   });
 
   /**
@@ -318,12 +472,14 @@ describe("DeckSearchPanel", () => {
    */
   it("remembers which way the reader left it, across decks", async () => {
     const first = panel();
-    await screen.findByRole("searchbox", { name: "Search cards" });
+    await screen.findByRole("group", { name: "Search in" });
 
     await userEvent.click(screen.getByRole("button", { name: "Search cards" }));
 
     expect(setDeckSearchOpen).toHaveBeenCalledWith(false);
-    expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+    // The strip is the tell that the body has gone, whichever tab was on: a searchbox would have
+    // asked about the card search alone, which the panel no longer opens on.
+    expect(screen.queryByRole("group", { name: "Search in" })).not.toBeInTheDocument();
     first.unmount();
 
     // A fresh editor over a database that has been told. Seeded rather than pressed, for the
@@ -350,10 +506,11 @@ describe("DeckSearchPanel", () => {
    * search mounted for the frame before it and prove nothing about the deck this reader is
    * opening. **The press at the end is what makes the silence discriminate**: a mock wired to
    * nothing would pass the first assertion on its own, and the second one is what says the search
-   * really is behind the disclosure.
+   * really is behind the disclosure. Seeded on the card search tab as well, so that one press is
+   * still all it takes to reach the wall this test is about.
    */
   it("asks the backend for nothing while it is shut", async () => {
-    panel({ storedOpen: false });
+    panel({ storedOpen: false, storedTab: "all" });
 
     const rail = await screen.findByRole("button", { name: "Search cards" });
     expect(rail).toHaveAttribute("aria-expanded", "false");
@@ -863,6 +1020,334 @@ describe("DeckSearchPanel", () => {
 
     await waitFor(() => expect(searchCards).toHaveBeenCalled());
     expect(prefetchImages).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The two searches this column offers, and the strip that picks between them.
+ *
+ * The strip is `aria-pressed` over a `.map` — the shape `DeckEditor`'s Theory/Live switch
+ * already uses — and deliberately **not** `role="tab"`: that role brings a keyboard contract
+ * (arrow-key roving focus, `aria-controls`, a `tabpanel`) that nothing else in this app
+ * implements, so adopting it here would either be half-built or would make this one control
+ * behave unlike every other two-way choice on screen. So every query below is `getByRole
+ * ("button")`, which is what a reader's screen reader is actually handed.
+ */
+describe("DeckSearchPanel tabs", () => {
+  /**
+   * **The panel opens on the reader's own cards**, which is the product decision this whole
+   * change is (spec §7.2).
+   *
+   * A deck is built out of cards you have; a search of everything Scryfall has printed is the
+   * thing you go to when your binder does not answer. So the collection is the resting state and
+   * the wider search is one press away, which is the reverse of what this panel did until now.
+   *
+   * `searchCards` is the half that discriminates. The two tabs' bodies are two components and
+   * only the mounted one has a hook — so "the card search is not on screen" and "the card search
+   * was never asked for" are different claims, and the second is the one that would catch a strip
+   * drawn over a body that had been mounted all along.
+   */
+  it("opens on the collection tab rather than on the card search", async () => {
+    panel();
+
+    const strip = await screen.findByRole("group", { name: "Search in" });
+    expect(within(strip).getByRole("button", { name: COLLECTION })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(within(strip).getByRole("button", { name: ALL_CARDS })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    // Nothing of the card search is mounted, so nothing of it has been asked for: no page, and
+    // no set list for a filter row that is not drawn.
+    expect(searchCards).not.toHaveBeenCalled();
+    expect(listSets).not.toHaveBeenCalled();
+    // **And the collection body really is mounted**, which is the half a marked strip cannot
+    // prove. `collection_to_deck` shipped in PR 3 fully tested with no caller at all and nothing
+    // went red; this is the assertion that makes "wired" a thing the suite checks.
+    await waitFor(() => expect(collectionList).toHaveBeenCalled());
+  });
+
+  /**
+   * The panel's default state, end to end: the reader's own copies, and **only the ones no deck is
+   * holding**.
+   *
+   * Asserted on the payload as well as on the row, because `allocation` is a field nothing in this
+   * app had ever sent before this tab: a body that mounted, listed and quietly dropped the field
+   * would look right on screen and answer the wrong question.
+   */
+  it("draws the reader's own copies, and asks only for the free ones", async () => {
+    panel();
+
+    expect(await screen.findByText(/LEA 161/)).toBeInTheDocument();
+    expect(collectionList.mock.calls[0][0].allocation).toBe("unallocated");
+  });
+
+  /**
+   * **The collection tab is addressed by the deck the editor named**, not by the piles it was
+   * handed.
+   *
+   * It read `categories[0].deckId` for a day — true of every deck the editor can open, since
+   * `deck_create` seeds four piles in the deck's own transaction — and the objection is not that
+   * it answered wrongly but that a list of *piles* is a different fact from *which deck this is*.
+   * The categories here belong to another deck, which is a state nothing in the app produces and
+   * is exactly what tells the two apart.
+   */
+  it("addresses the collection tab's write with the deck it was given", async () => {
+    panel({ categories: [category({ deckId: 99 })], deckId: 4 });
+
+    await userEvent.click(await screen.findByRole("button", { name: /^Add Lightning Bolt/ }));
+
+    await waitFor(() =>
+      expect(collectionToDeck).toHaveBeenCalledWith(OWNED_BOLT.id, 4, { id: MAIN.id }, 1),
+    );
+  });
+
+  /**
+   * The other direction of the switch, from the collection body's side.
+   *
+   * The existing pair above proves the card search is not asked for while the collection is up;
+   * this proves the reverse, which is the half that would go unnoticed — a `collection_list`
+   * running under a wall of Scryfall printings costs a round trip nobody can see.
+   */
+  it("stops reading the collection once the reader leaves the tab", async () => {
+    panel();
+    await waitFor(() => expect(collectionList).toHaveBeenCalled());
+    const asked = collectionList.mock.calls.length;
+
+    await userEvent.click(tab(ALL_CARDS));
+    await screen.findByRole("button", { name: "Lightning Bolt" });
+
+    expect(collectionList.mock.calls.length).toBe(asked);
+    expect(screen.queryByText(/LEA 161/)).not.toBeInTheDocument();
+  });
+
+  /**
+   * The press, in both directions, and what it does to the *other* tab.
+   *
+   * Two bodies, one mounted at a time, is the whole design: each tab's data hook lives in its own
+   * component so it can be called conditionally, which is `OpenPanel`'s reason exactly one level
+   * out. So the assertion is not merely that the wall appears — it is that going back takes it
+   * away again, and that the collection tab costs the card search nothing while it is on.
+   */
+  it("switches bodies on a press, and mounts only the tab being read", async () => {
+    panel();
+    await screen.findByRole("group", { name: "Search in" });
+
+    await userEvent.click(tab(ALL_CARDS));
+
+    expect(tab(ALL_CARDS)).toHaveAttribute("aria-pressed", "true");
+    expect(tab(COLLECTION)).toHaveAttribute("aria-pressed", "false");
+    expect(await screen.findByRole("button", { name: "Lightning Bolt" })).toBeInTheDocument();
+    expect(screen.getByRole("searchbox", { name: "Search cards" })).toBeInTheDocument();
+    const asked = searchCards.mock.calls.length;
+    expect(asked).toBeGreaterThan(0);
+
+    await userEvent.click(tab(COLLECTION));
+
+    expect(tab(COLLECTION)).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByRole("button", { name: "Lightning Bolt" })).not.toBeInTheDocument();
+    // Unmounted, not hidden: the wall's own filter row goes with it.
+    expect(screen.queryByRole("searchbox", { name: "Search cards" })).not.toBeInTheDocument();
+    expect(searchCards.mock.calls.length).toBe(asked);
+  });
+
+  /**
+   * **The choice outlives the deck**, which is what makes a default defensible at all.
+   *
+   * The editor is keyed on the deck id, so leaving a deck and coming back tears this panel down
+   * and builds a new one — a `useState` here would put every reader who works from the wider
+   * search back on the collection tab on every deck they opened, which is the complaint that
+   * moved the disclosure into `app_meta` (issue #183) one control over.
+   *
+   * Remounted over the **same query client**, because that is where the answer lives and it is
+   * what the app has: one client for the process. The wall coming back is the half that says the
+   * memory reaches the *body* rather than only the strip's marking.
+   */
+  it("keeps the reader's tab across a remount of the same deck", async () => {
+    const view = panel();
+    await screen.findByRole("group", { name: "Search in" });
+
+    await userEvent.click(tab(ALL_CARDS));
+    await screen.findByRole("button", { name: "Lightning Bolt" });
+
+    view.remount();
+
+    expect(await screen.findByRole("button", { name: ALL_CARDS })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(tab(COLLECTION)).toHaveAttribute("aria-pressed", "false");
+    expect(await screen.findByRole("button", { name: "Lightning Bolt" })).toBeInTheDocument();
+  });
+
+  /**
+   * A collapse is not a change of mind about *which* search, so it does not answer one.
+   *
+   * The strip goes with the body — there is no room for it in 36px of rail — and the choice it
+   * draws is in the cache rather than in the strip, so it is still the reader's when the column
+   * comes back. This is the same split the disclosure itself is built on: what is *drawn* and
+   * what was *chosen* are two things.
+   */
+  it("keeps the tab across a collapse, and draws no strip in the rail", async () => {
+    await openPanel();
+    await screen.findByRole("button", { name: "Lightning Bolt" });
+
+    await userEvent.click(screen.getByRole("button", { name: "Search cards" }));
+
+    expect(screen.queryByRole("group", { name: "Search in" })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Search cards" }));
+
+    expect(tab(ALL_CARDS)).toHaveAttribute("aria-pressed", "true");
+    expect(await screen.findByRole("button", { name: "Lightning Bolt" })).toBeInTheDocument();
+  });
+
+  /** The editor's refusal takes the strip with the rest of the body — a control for a body that
+   *  is not drawn is a control that cannot do the thing it names. */
+  it("draws no strip when the editor has no room for the panel", async () => {
+    panel({ roomy: false });
+
+    await screen.findByRole("button", { name: "Search cards" });
+    expect(screen.queryByRole("group", { name: "Search in" })).not.toBeInTheDocument();
+  });
+
+  /**
+   * **The strip has to wrap, because this panel is 206px wide when the reader drags it there**
+   * ({@link MIN_PANEL_WIDTH_PX}), and 206 is ~193px of content box.
+   *
+   * The row holds the disclosure (**99px** of icon, gap and "Search cards") and the strip
+   * (**141px** of two `text-xs` labels inside their own padding and border) — 248px with the row's
+   * `gap-2`, which is 55px more than there is. Unwrapped that is not a squeeze but an *overhang*:
+   * a flex item cannot shrink below its own min-content, and `DeckEditor`'s page section is
+   * `overflow-y-auto`, which computes `overflow-x` to `auto` — so the overflow becomes a
+   * horizontal scrollbar across the whole deck builder, which the app's 1024px floor forbids.
+   * That is `src/CLAUDE.md`'s rule, and it shipped once already through `ManaValueChips`.
+   *
+   * **jsdom lays nothing out, so the class is the assertion.** The wrap itself was driven headless
+   * over the built stylesheet on 2026-08-23 — at 206 the row reads `scrollWidth` **193** against a
+   * `clientWidth` of **193** on two lines, and at the panel's 384px opening width one line inside
+   * 371. This is what keeps the class from being deleted by someone tidying the row at 1280, where
+   * it is invisible.
+   */
+  it("wraps the header row, so the strip cannot hang out of a narrow panel", async () => {
+    await openPanel();
+
+    const strip = screen.getByRole("group", { name: "Search in" });
+    const row = strip.parentElement!;
+    expect(row).toHaveClass("flex-wrap");
+    // Both children of that row, so the wrap is a wrap of the two of them rather than of
+    // whatever else happens to be in the panel.
+    expect(row).toContainElement(screen.getByRole("button", { name: "Search cards" }));
+  });
+});
+
+/**
+ * ## The own/need toggle
+ *
+ * A press on the card search's Add button is one of two things — a card the reader **has**, or one
+ * they are putting on the list in order to buy it — and the app cannot guess which. The control
+ * says which, and it lives **here**, on the tab whose button it decides: it shipped on the deck's
+ * toolbar for a day because this file belonged to another agent while it was built.
+ *
+ * The *answer* is still the editor's, because it governs the toolbar's quick-add field too, so
+ * this panel takes a `mode`/`onMode` pair and remembers nothing. `DeckEditor.test.tsx` is where
+ * the memory and the two writes it picks between are driven; this file is about the control.
+ */
+describe("DeckSearchPanel add mode", () => {
+  /**
+   * **On the card search, and only there.** A row of the collection tab is a copy the reader
+   * already has — that is what a collection row *is* — so the question is answered before it is
+   * asked, and a mode control drawn beside that list would be a switch with one meaning.
+   */
+  it("asks which kind of add the card search makes, on the tab that makes it", async () => {
+    panel();
+    await screen.findByRole("group", { name: "Search in" });
+
+    expect(screen.queryByRole("group", { name: "Adding" })).not.toBeInTheDocument();
+
+    await userEvent.click(tab(ALL_CARDS));
+
+    const modes = await screen.findByRole("group", { name: "Adding" });
+    expect(within(modes).getByRole("button", { name: "Cards I need" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(within(modes).getByRole("button", { name: "Cards I own" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+  });
+
+  /** And it goes away again with the tab, rather than lingering over a list it says nothing
+   *  about. */
+  it("takes the control away when the reader goes back to their binder", async () => {
+    await openPanel();
+    await screen.findByRole("group", { name: "Adding" });
+
+    await userEvent.click(tab(COLLECTION));
+
+    expect(screen.queryByRole("group", { name: "Adding" })).not.toBeInTheDocument();
+  });
+
+  /**
+   * **The press is handed up and the marking comes back down**, which is the whole of this
+   * panel's part in it.
+   *
+   * Two assertions rather than one, because a control that reported the press and drew its own
+   * answer would pass the first: the mark has to follow the *prop*, or the panel and the
+   * quick-add field across the desk would disagree about which mode the deck is in.
+   */
+  it("hands the press to the editor rather than remembering it", async () => {
+    const view = await openPanel();
+    await screen.findByRole("group", { name: "Adding" });
+
+    await userEvent.click(screen.getByRole("button", { name: "Cards I own" }));
+
+    expect(view.onMode).toHaveBeenCalledWith("own");
+    // Nothing moved on screen, because nothing here holds the answer.
+    expect(screen.getByRole("button", { name: "Cards I own" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+
+    view.update({ mode: "own" });
+
+    expect(screen.getByRole("button", { name: "Cards I own" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: "Cards I need" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+  });
+
+  /**
+   * **Three controls on the header row now, and the wrap is what keeps them inside a dragged-down
+   * panel** ({@link MIN_PANEL_WIDTH_PX}).
+   *
+   * Driven headless over the built stylesheet on 2026-08-23, the way the strip's own labels were:
+   * at 206px the content box is **193**, the disclosure is **99**, the strip **141** and this pair
+   * **175** — so each takes a line of its own and the row reads `scrollWidth` **193** against a
+   * `clientWidth` of **193**, with the panel at 205/205. No overhang, and the cost is height: the
+   * row is **100px** at the floor against 62 with the strip alone, **68** at the panel's 384px
+   * opening width, and one 30px line by ~1000px. Shorter labels buy nothing at the floor —
+   * `Own`/`Need` measures 95 and the strip above already forces the wrap — so the reader's own
+   * words stay.
+   *
+   * **jsdom lays nothing out, so the class is the assertion** and the numbers are the record of
+   * where they came from.
+   */
+  it("puts the control on the panel's own wrapped header row", async () => {
+    await openPanel();
+
+    const modes = await screen.findByRole("group", { name: "Adding" });
+    const row = modes.parentElement!;
+    expect(row).toHaveClass("flex-wrap");
+    expect(row).toContainElement(screen.getByRole("group", { name: "Search in" }));
+    expect(row).toContainElement(screen.getByRole("button", { name: "Search cards" }));
   });
 });
 

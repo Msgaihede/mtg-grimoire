@@ -19,10 +19,12 @@ import { FOCUS } from "@/lib/focus";
 import {
   ipcError,
   type DeckVariant,
+  type ImportCommitOutcome,
   type ImportMatch,
   type ImportMode,
   type ImportOutcome,
 } from "@/lib/ipc";
+import { useAppStore } from "@/lib/store";
 import { useSync } from "@/lib/useSync";
 import { cn } from "@/lib/utils";
 import { useDeck } from "@/features/decks/useDeck";
@@ -30,6 +32,7 @@ import { useFormatSpecs } from "@/features/decks/useFormatSpecs";
 import type { DestinationPreviewProps } from "../destination";
 import { useImport } from "../useImport";
 import { CommitBar } from "../shared/CommitBar";
+import { planCollectionImport } from "./collection";
 import {
   buildImportPlan,
   tallyOf,
@@ -110,9 +113,29 @@ export function DeckPreview({
   /** The commander the reader picked out of the candidates — plural, because a partner pair is
    *  two. Only ever read when the plan is asking. */
   const [picked, setPicked] = useState<readonly string[]>(NO_COMMANDERS);
+  /**
+   * "I have physically built this deck" — see {@link OwnCopies}.
+   *
+   * **Here beside `mode`, and never on {@link DeckImportInto}.** That interface is identity only
+   * and `deckDestination` is memoised on what it closes over, so a presentational field there
+   * would rebuild the wrapper the moment it moved and remount this whole step under the reader
+   * mid-import. It dies on Back with everything else the preview holds, which
+   * `DestinationPreviewProps.onBack` argues is the invariant rather than the accident.
+   */
+  const [alsoOwn, setAlsoOwn] = useState(false);
 
   const { commit } = useImport();
   const { formatSpecFor } = useFormatSpecs();
+  /**
+   * The condition and finish a line that says nothing falls back to — the reader's standing
+   * answer, shared with the collection's own import step rather than asked again here.
+   *
+   * The deck arm asks one extra question, "did you buy these", and a second pair of selects
+   * under it would be two more answers for a step that is about a decklist. A CSV carrying its
+   * own `Condition` column still overrides this per row, and a `*F*` marker still overrides the
+   * finish — `planCollectionImport` reads both before it reads these.
+   */
+  const importDefaults = useAppStore((s) => s.importDefaults);
 
   /**
    * The deck being imported into, read for two fields: its format, and how much is in the list
@@ -161,14 +184,30 @@ export function DeckPreview({
   const categories = useMemo(() => tallyOf(items), [items]);
   const blameSync = useBlameSync(plan);
 
+  /**
+   * The same lines a **second** time, at the collection's own grain.
+   *
+   * Not `items` adapted across: a deck item is `(cardId, category, finish)` and a collection item
+   * is the eleven-column grain carrying condition, the four flags, a serial number, a grading
+   * blob and the acquisition story a CSV can put on a row. `planCollectionImport` is pure and
+   * reads all of it out of the same `resolved` rows, so calling it again costs a fold over an
+   * array the reader is already looking at — and it is computed whether or not the box is
+   * ticked, because a hook cannot be conditional and the count is what the box's own sentence
+   * says.
+   */
+  const owned = useMemo(
+    () => planCollectionImport(list, resolved, importDefaults),
+    [list, resolved, importDefaults],
+  );
+
   const runImport = () => {
     if (items.length === 0) return;
     commit.mutate(
-      { deckId, variant, mode, items },
+      { deckId, variant, mode, items, collectionItems: alsoOwn ? owned.items : undefined },
       {
-        onSuccess: (outcome) => {
+        onSuccess: ({ outcome, owned: ownedOutcome, ownRefusal }) => {
           onImported?.(deckId, outcome);
-          onDone(reportOf(outcome));
+          onDone(reportOf(outcome, ownedOutcome, ownRefusal));
         },
       },
     );
@@ -193,6 +232,14 @@ export function DeckPreview({
           name={`${id}-mode`}
           variant={variant}
           cardsInVariant={cardsInVariant}
+        />
+        {/* Under the mode radios, because those are about the deck and this is about the box on
+            the desk. Last on the step, immediately above the button it changes the meaning of. */}
+        <OwnCopies
+          checked={alsoOwn}
+          onChange={setAlsoOwn}
+          copies={owned.totalCards}
+          id={`${id}-own`}
         />
       </div>
 
@@ -279,10 +326,93 @@ export function useBlameSync(plan: ImportPlan): boolean {
   );
 }
 
-/** What the shell reports back to its host. The dialog's own numbers are on screen; this is the
- *  one sentence a surface with a status line can print after it closes. */
-export function reportOf(outcome: ImportOutcome): string {
-  return `${plural(outcome.added, "card")} imported.`;
+/**
+ * What the shell reports back to its host. The dialog's own numbers are on screen; this is the
+ * one sentence a surface with a status line can print after it closes.
+ *
+ * **The collection half rides here rather than in the `CommitBar`'s live region, and that is the
+ * ordering rule seen from the reader's end.** By the time the copies can be refused the list is
+ * already in the deck, so the dialog closes either way — leaving it open over a landed import
+ * invites a second press that merges the whole thing again. The refusal is therefore a second
+ * sentence after the first rather than a red message instead of it.
+ */
+export function reportOf(
+  outcome: ImportOutcome,
+  owned: ImportCommitOutcome | null = null,
+  ownRefusal: string | null = null,
+): string {
+  const imported = `${plural(outcome.added, "card")} imported.`;
+  if (ownRefusal !== null) {
+    return `${imported} The copies could not be added to your collection — ${ownRefusal}`;
+  }
+  if (owned === null) return imported;
+  // Rows, which is what the command counts: `added` is entries created and `updated` is entries
+  // whose quantity moved, and a playset landing on a row the reader already had is one of the
+  // second and not four of the first.
+  return `${imported} ${plural(owned.added + owned.updated, "row")} in your collection.`;
+}
+
+/**
+ * The sentence under the box, and it says what the write does rather than apologising for it.
+ *
+ * **The copies are filed into this deck's own group**, which is what makes the decklist and the
+ * collection agree the moment the dialog closes — the deck stops reading *missing* on the lines
+ * the reader just said they own, and no other deck can claim the copies while this one holds
+ * them. It said the opposite for one PR, because `collection_import_commit` took no folder and
+ * `commit_import` hard-coded the root; the sentence was here because nothing this dialog does may
+ * be silent, and it is here now for the same reason with the true thing in it.
+ *
+ * **Exclusivity is the half worth saying out loud**, and it is why this is one sentence rather
+ * than none: a reader ticking "I own these" is also, whether they mean to or not, taking those
+ * copies off every other deck's desk. That is the point of a group — copies are custody rather
+ * than a reservation — and it is not something a checkbox label implies.
+ */
+export const OWN_COPIES_HINT =
+  "They are filed into this deck’s own folder, so no other deck can use them.";
+
+/**
+ * "I have physically built this deck."
+ *
+ * One checkbox, because the reader is answering yes or no to a question about cardboard — there
+ * is no third state and nothing to choose between. It draws nothing when the list resolved
+ * nothing to own, the way {@link Tally} and {@link Commander} draw nothing they have no answer
+ * for; the Import button is already dark in that case, since both item lists are built from the
+ * same matched rows.
+ *
+ * The count is in **copies**, which is what a reader counts and what the collection stores: six
+ * basic lands on one line are six copies and one row.
+ */
+export function OwnCopies({
+  checked,
+  onChange,
+  copies,
+  id,
+}: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  copies: number;
+  id: string;
+}) {
+  if (copies === 0) return null;
+  return (
+    <div className="space-y-1">
+      <label className="flex items-baseline gap-2 text-sm">
+        <input
+          id={id}
+          type="checkbox"
+          checked={checked}
+          onChange={(e) => onChange(e.target.checked)}
+          aria-describedby={`${id}-hint`}
+          className="accent-accent"
+        />
+        Add cards to collection
+      </label>
+      <p id={`${id}-hint`} className="text-[0.6875rem] text-dim">
+        Tick this if you already own these cards — {plural(copies, "copy", "copies")} are added to
+        what you have. {OWN_COPIES_HINT}
+      </p>
+    </div>
+  );
 }
 
 /** The variant as a reader names it. Two words, and both of them are in the editor's own

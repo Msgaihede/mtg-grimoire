@@ -17,20 +17,33 @@
  * `deck_import_commit` with a hand-rolled rollback between them, and that rollback belongs
  * inside the mutation that invalidates `["decks"]` on refusal as well as on success — two
  * commands are two transactions, and a refused import must not leave half a deck in the gallery.
+ *
+ * **This arm draws the "Add cards to collection" box too, and it is the arm that needs it most.**
+ * The question was whether a *new* deck should offer it at all, and the code answers it: the
+ * gallery's own path is "here is a decklist, make it a deck", which is overwhelmingly a list of
+ * cards somebody has just built out of cardboard — a deck that already exists is more often a
+ * list being edited. Leaving it off here would have made the one control that says "I own these"
+ * available only on the path where the reader is least likely to. It costs nothing structurally:
+ * `importIntoNewDeck` was already the file's multi-command case, so the copies are a third
+ * command after a rollback window that had to exist anyway, and the box is `DeckPreview`'s
+ * exported {@link OwnCopies} rather than a second one drawn here.
  */
 import { useId, useMemo, useState, type JSX } from "react";
 import { ipcError, type DeckGame } from "@/lib/ipc";
+import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { DEFAULT_FORMAT, FormatSelect, GameSelect } from "@/features/decks/FormatSelect";
 import { ANY_GAME, useFormatSpecs } from "@/features/decks/useFormatSpecs";
 import type { DestinationPreviewProps } from "../destination";
 import { useImport } from "../useImport";
 import { CommitBar } from "../shared/CommitBar";
+import { planCollectionImport } from "./collection";
 import { buildImportPlan, tallyOf, toImportItems } from "./deck";
 import {
   Commander,
   Headline,
   NO_COMMANDERS,
+  OwnCopies,
   Problems,
   Tally,
   commanderIdsOf,
@@ -84,9 +97,17 @@ export function NewDeckPreview({
    */
   const [gameKey, setGameKey] = useState<DeckGame>(ANY_GAME);
   const [picked, setPicked] = useState<readonly string[]>(NO_COMMANDERS);
+  /**
+   * "I have physically built this deck", offered here as well as on the deck that already
+   * exists — see this file's own doc for why this arm is the one that needs it most.
+   */
+  const [alsoOwn, setAlsoOwn] = useState(false);
 
   const { importIntoNewDeck } = useImport();
   const { formatSpecFor } = useFormatSpecs();
+  /** The reader's standing answer for what a line that says nothing means, shared with both
+   *  other import steps rather than asked a third time. `DeckPreview` argues it. */
+  const importDefaults = useAppStore((s) => s.importDefaults);
 
   const spec = formatSpecFor(formatKey);
   const plan = useMemo(
@@ -98,19 +119,32 @@ export function NewDeckPreview({
   const categories = useMemo(() => tallyOf(items), [items]);
   const blameSync = useBlameSync(plan);
 
+  /** The same lines at the collection's own grain — `DeckPreview`'s memo, verbatim and for its
+   *  reason: the grains differ, so the second list is planned rather than adapted. */
+  const owned = useMemo(
+    () => planCollectionImport(list, resolved, importDefaults),
+    [list, resolved, importDefaults],
+  );
+
   const trimmedName = name.trim();
   const nameMissing = trimmedName === "";
 
   const runImport = () => {
     if (items.length === 0 || nameMissing) return;
     importIntoNewDeck.mutate(
-      { name: trimmedName, formatKey, gameKey, items },
       {
-        onSuccess: ({ deck, outcome }) => {
+        name: trimmedName,
+        formatKey,
+        gameKey,
+        items,
+        collectionItems: alsoOwn ? owned.items : undefined,
+      },
+      {
+        onSuccess: ({ deck, outcome, owned: ownedOutcome, ownRefusal }) => {
           onImported?.(deck.id, outcome);
           // The deck's own name in front of the shared sentence: the gallery is about to open
           // a tile the reader has never seen, and "6 cards imported" alone does not say into what.
-          onDone(`${deck.name} — ${reportOf(outcome)}`);
+          onDone(`${deck.name} — ${reportOf(outcome, ownedOutcome, ownRefusal)}`);
         },
       },
     );
@@ -165,7 +199,14 @@ export function NewDeckPreview({
         <Problems plan={plan} blameSync={blameSync} />
         {/* No mode radios: `merge` into a deck made one line ago is the only sensible mode —
             there is nothing to replace, and `merge` is the one that cannot clear anything if
-            that ever stops being true. */}
+            that ever stops being true. The box below stands where they would be, so the
+            question sits in the same place on both deck arms. */}
+        <OwnCopies
+          checked={alsoOwn}
+          onChange={setAlsoOwn}
+          copies={owned.totalCards}
+          id={`${id}-own`}
+        />
       </div>
 
       <CommitBar

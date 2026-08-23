@@ -124,7 +124,9 @@ shared_cell` walks both into two databases and compares them column by column.
   card it had to invent a column for; `'user'` the reader pressing "New category", and the four
   seeded zones count as the reader's. TS hides an **empty** `auto` pile and always draws a `user`
   one; Rust records the fact and concludes nothing. **Four writers, each spelling its own answer
-  rather than leaning on the DEFAULT**: `deck_meta::category_for_name` (`auto`),
+  rather than leaning on the DEFAULT** — and the count is of *writers*, so
+  `collection_alloc::collection_to_deck`'s name arm added a fifth **caller** of the first and no
+  fifth writer: `deck_meta::category_for_name` (`auto`),
   `deck_meta::create_category` (`user`), `deck_meta::ensure_predefined_categories` (`user`), and
   `deck::duplicate_deck`, which **copies** the source pile's answer — a copy has the same shape as
   its original, and defaulting there would make every auto pile in the duplicate draw empty. No
@@ -292,7 +294,14 @@ shared_cell` walks both into two databases and compares them column by column.
   exactly those folders, and the fence belongs to the *command*.
 - **`collection_alloc.rs` holds the only pair that moves a row across the deck boundary**, and
   nothing else in the crate may grow a third. `collection_to_deck` takes copies out of a binder or
-  **another deck's group** and writes the `deck_cards` row in the same transaction;
+  **another deck's group** and writes the `deck_cards` row in the same transaction — **naming its
+  pile by id or by name and never both** (`collection_alloc::Pile`, with `Pile::from_args` the one
+  place the wire's two nullable fields become it and `BOTH_PILES` where both arrive). The name arm
+  is `deck_meta::category_for_name`, inside the move's own transaction, so a pile the app has to
+  invent is recorded `origin = 'auto'`; without it an owned add had to make the pile from
+  TypeScript through `deck_category_create` and left the reader an empty heading marked as theirs.
+  It refuses both where `deck::add_card` lets the id win, because there a drag carries both and
+  here nothing does;
   `deck_to_collection` cuts a deck card and files whatever the group held into `Recently removed`.
   **Two writes in `deck.rs`/`deck_meta.rs` do the second of those in bulk and are not a third
   route**: `deck_meta::delete_category`'s cascade arm and `deck::clear_category` take a whole pile
@@ -345,9 +354,13 @@ shared_cell` walks both into two databases and compares them column by column.
     would reverse, so it goes on naming the press before the cut — **which means a cut does not
     advance the undo cursor and the previous step stays the one Ctrl+Z will take**, so pressing
     it after a cut reverses the *older* change rather than the cut or nothing. The complete way
-    back is `collection_to_deck`, which restores both halves at once, and **nothing calls it in
-    this release**: until the Collection Search tab lands the way back is two presses, add the
-    card again and re-file its copies out of `Recently removed` by hand.
+    back is `collection_to_deck`, which restores both halves at once, and **the deck builder's
+    Collection Search tab is what calls it** (2026-08-23,
+    `src/features/decks/useCollectionSearch.ts`): the cut copies are sitting in
+    `Recently removed`, that tab lists them, and its Add button is the one press that files them
+    back into the deck's group and writes the `deck_cards` row again. Until that tab landed the
+    command had no caller at all and the way back was two presses done by hand — so a note here
+    saying nothing calls it is now a note telling the next agent the feature does not exist.
     `deck::clear_category` reached the same conclusion for the same reason and does file a step,
     because its `deck_cards` half is a whole pile no stepper can rebuild.
   Every refusal is a **sentence** rather than a `CHECK` or a foreign-key failure —

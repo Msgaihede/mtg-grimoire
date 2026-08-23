@@ -5,6 +5,16 @@
  * question, and what a reader owns is a decision about their collection. The one thing this
  * knows that the deck's planner does not is that a **CSV can carry a condition** — so `extra`
  * is read first and `options` only fills the silence.
+ *
+ * **It has three callers now, and the two deck arms are why it is worth saying it is pure.**
+ * `CollectionPreview` is the destination this was written for; `DeckPreview` and
+ * `NewDeckPreview` call it a **second time over the same `resolved` rows** when the reader ticks
+ * "Add cards to collection", rather than adapting the deck's own items across. The grains do not
+ * meet: a deck item is `(cardId, category, finish)` and one of these is the eleven-column
+ * collection grain, carrying a condition, four flags, a serial number, a grading blob and a
+ * whole acquisition story a deck row has nowhere to put. Two lists planned from one set of rows
+ * is a fold; one list derived from the other would be a lossy translation in one direction and
+ * an invented default in the other.
  */
 import { normalizeCondition, type Condition } from "@/lib/conditions";
 import type { CollectionImportItem, DeckFinish, ImportResolveRow } from "@/lib/ipc";
@@ -169,14 +179,21 @@ export function planCollectionImport(
  *   from the caller — "letting a caller supply these would let a caller disagree with the card
  *   it named" — so two lines resolving to one printing can never differ in it. A CSV *has* a
  *   `Lang` column; it is a fact the export writes and the import cannot act on.
- * - **`folderId` is a constant here, and the constant is the root.** An importer names no
- *   folder — there is no control for one and `CollectionImportItem` has no field — so every
- *   imported row lands with `folder_id` NULL, which is where every unfiled row is and is a real
- *   destination rather than an omission. A constant term partitions nothing, so leaving it out
- *   costs the key nothing. What it *does* mean is that an import can never land on a row the
- *   reader has filed into a binder: that row's grain has an eleventh term this one does not
- *   share, so it is a different row, exactly as an altered copy is. That is the folder grain
- *   working, not this fold failing.
+ * - **`folderId` is a constant *per commit*, and it is never a property of an item.**
+ *   `CollectionImportItem` has no such field; `collection_import_commit` takes the folder as an
+ *   argument of its own and files the whole file into it. So the term is constant across every
+ *   item this planner folds, and a constant term partitions nothing — leaving it out costs the
+ *   key nothing, whichever folder the press names. What it *does* mean is that an import can
+ *   never land on a row filed somewhere else: that row's grain has an eleventh term this one
+ *   does not share, so it is a different row, exactly as an altered copy is. That is the folder
+ *   grain working, not this fold failing.
+ *
+ *   **Which folder is the caller's decision and is made after this runs.** A file says nothing
+ *   about a reader's filing, so the collection's own import step names none and its rows land at
+ *   the root. The **deck** arms' "Add cards to collection" box says *these copies are in this
+ *   deck*, so `useImport` sends that deck's `collection_folders` group — the decklist and the
+ *   group agree the moment the dialog closes, and no other deck can claim the copies.
+ *   `DeckPreview`'s `OWN_COPIES_HINT` is where the reader is told the second half.
  *
  * `grading` is compared **verbatim**, where `collection::canonical_grading` would re-serialise
  * it into `GRADING_FIELDS` order first. Two spellings of one slab therefore survive as two items

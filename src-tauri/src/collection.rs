@@ -317,7 +317,7 @@ fn valid_condition(condition: Option<&str>) -> Result<&str, String> {
 /// cannot be the app's, which is `collection_folders::user_folder`'s ordering, and a NULL `kind`
 /// is unreachable (the column is `NOT NULL`, CHECKed against
 /// `schema::COLLECTION_FOLDER_KINDS`).
-fn folder_named(conn: &Connection, folder_id: Option<i64>) -> Result<(), String> {
+fn folder_named(conn: &Connection, folder_id: Option<i64>, kinds: &[&str]) -> Result<(), String> {
     let Some(folder) = folder_id else {
         return Ok(());
     };
@@ -331,10 +331,37 @@ fn folder_named(conn: &Connection, folder_id: Option<i64>) -> Result<(), String>
         .map_err(|e| e.to_string())?;
     match kind.as_deref() {
         None => Err(FOLDER_GONE.to_owned()),
-        Some(USER_KIND) => Ok(()),
+        Some(kind) if kinds.contains(&kind) => Ok(()),
         Some(_) => Err(FOLDER_NOT_YOURS.to_owned()),
     }
 }
+
+/// What an ordinary add may file into: the reader's own drawers, and nothing else.
+///
+/// The default set — [`add_entry`]'s door, and the whole of the paragraph above. A `deck` or
+/// `removed` folder named here is a stale client or a bug.
+const READER_FOLDERS: &[&str] = &[USER_KIND];
+
+/// …and what a **deck import** may file into, which is the reader's drawers plus the group of
+/// the deck the same press just wrote a list into.
+///
+/// **The one widening of the fence in the crate, and it is a widening of that fence rather than
+/// a second check.** The argument the paragraph above makes is that a request naming a `deck`
+/// folder asserts something only the app's own writes may make true — and this *is* one of those
+/// writes: `useImport`'s deck arm calls `deck_import_commit` and this command in one press, so
+/// the `deck_cards` rows and the copies backing them are written together or not at all. Filed
+/// at the root instead, the deck would read *missing* on every line the reader had just told the
+/// app they own, and every other deck could still claim the copies.
+///
+/// `removed` stays out. `Recently removed` is where copies go when they *leave* a deck, and a
+/// file naming it would be an import that arrives already discarded.
+const IMPORT_FOLDERS: &[&str] = &[USER_KIND, DECK_KIND];
+
+/// `COLLECTION_FOLDER_KINDS[1]` — the one folder that stands for a deck.
+///
+/// By index rather than by spelling, [`crate::collection_alloc`]'s rule: the word here and the
+/// word the CHECK allows cannot drift. `collection_folders`' own copy is private to that module.
+const DECK_KIND: &str = crate::schema::COLLECTION_FOLDER_KINDS[1];
 
 /// The printing, as the entry will remember it.
 fn printing_of(conn: &Connection, card_id: &str) -> Result<(String, String, String), String> {
@@ -357,6 +384,23 @@ fn printing_of(conn: &Connection, card_id: &str) -> Result<(String, String, Stri
 /// a follow-up move — the conflict target is `COLLECTION_GRAIN` verbatim, so the column that
 /// decides which row is folded into must be set before the conflict is resolved.
 pub fn add_entry(conn: &Connection, input: &EntryInput) -> Result<EntryChange, String> {
+    add_entry_filed(conn, input, READER_FOLDERS)
+}
+
+/// [`add_entry`] with the folder fence handed in, for the one caller that files into a folder no
+/// reader may name themselves.
+///
+/// **A parameter rather than a second write**, and a private one rather than a widening of the
+/// public door: [`commit_import`] passes [`IMPORT_FOLDERS`] so a deck import can file into that
+/// deck's group, and everything else in the crate — 70-odd call sites, every one of them the
+/// reader's own add — reaches this through [`add_entry`] and keeps [`READER_FOLDERS`]. The
+/// alternative was an add that landed at the root and was then *moved*, which for a printing the
+/// reader already owns is a fold into their root row followed by a move of the whole thing.
+fn add_entry_filed(
+    conn: &Connection,
+    input: &EntryInput,
+    folders: &[&str],
+) -> Result<EntryChange, String> {
     let finish = valid_finish(&input.finish)?;
     let condition = valid_condition(input.condition.as_deref())?;
     // Not `valid_quantity`: *adding* zero copies is a no-op dressed as a write, and would
@@ -367,7 +411,7 @@ pub fn add_entry(conn: &Connection, input: &EntryInput) -> Result<EntryChange, S
     }
     valid_quantity(input.tradelist_quantity, "tradelist quantity")?;
     let grading = canonical_grading(input.grading.as_deref())?;
-    folder_named(conn, input.folder_id)?;
+    folder_named(conn, input.folder_id, folders)?;
     let (set_code, collector_number, lang) = printing_of(conn, &input.card_id)?;
 
     // The conflict target is `COLLECTION_GRAIN` verbatim — the same text the unique index
@@ -525,13 +569,19 @@ pub struct ImportCommitOutcome {
 /// clamp — `min(existing, new quantity)` — rather than `add_entry`'s additive cap, because a
 /// written total is not a delta and clamping against the *old* quantity as well would let the
 /// tradelist outlive the very quantity that bounds it.
-fn set_entry(conn: &Connection, input: &EntryInput) -> Result<EntryChange, String> {
+/// `folders` is [`add_entry_filed`]'s parameter for [`add_entry_filed`]'s reason. This function
+/// has exactly one caller, so it takes the fence directly rather than through a door of its own.
+fn set_entry(
+    conn: &Connection,
+    input: &EntryInput,
+    folders: &[&str],
+) -> Result<EntryChange, String> {
     let finish = valid_finish(&input.finish)?;
     let condition = valid_condition(input.condition.as_deref())?;
     valid_quantity(input.quantity, "collection quantity")?;
     valid_quantity(input.tradelist_quantity, "tradelist quantity")?;
     let grading = canonical_grading(input.grading.as_deref())?;
-    folder_named(conn, input.folder_id)?;
+    folder_named(conn, input.folder_id, folders)?;
     let (set_code, collector_number, lang) = printing_of(conn, &input.card_id)?;
 
     // The conflict target is `COLLECTION_GRAIN` verbatim, exactly as [`add_entry`]'s is.
@@ -628,6 +678,7 @@ fn commit_import(
     conn: &Connection,
     items: &[CollectionImportItem],
     mode: &str,
+    folder_id: Option<i64>,
 ) -> Result<ImportCommitOutcome, String> {
     // Before the transaction opens, not inside it: a refusal that has already begun a write
     // is a rollback the reader pays for.
@@ -636,6 +687,11 @@ fn commit_import(
             "`{mode}` is not an import mode. Use `add` or `set`."
         ));
     }
+    // The folder, for the same reason and one line later. [`add_entry_filed`] and [`set_entry`]
+    // each ask again per item — that is their own door and it stays theirs — but a stale folder
+    // id asked about *here* is a sentence rather than a rollback, which is what the mode check
+    // above is buying too.
+    folder_named(conn, folder_id, IMPORT_FOLDERS)?;
     let before: i64 = conn
         .query_row("SELECT count(*) FROM collection_entries", [], |r| r.get(0))
         .map_err(|e| e.to_string())?;
@@ -668,15 +724,18 @@ fn commit_import(
             // nothing to say about it.
             tags: None,
             notes: item.notes.clone(),
-            // Spelled rather than defaulted, `deck_categories.origin`'s rule: an import names
-            // no folder, and a `..Default::default()` here would be a decision nobody can see
-            // at the call site on the one field that is part of the grain.
-            folder_id: None,
+            // The whole file into one folder, and `None` — the root — is what every caller that
+            // names none still gets. **A file says nothing about a reader's filing**, which is
+            // why this is the *command's* argument rather than a column on
+            // [`CollectionImportItem`]: the import dialog's plain arm sends nothing and its rows
+            // land at the root exactly as they always have, and only the deck arm names a
+            // destination, because that press wrote the deck list in the same breath.
+            folder_id,
         };
         if mode == "add" {
-            add_entry(&tx, &input)?;
+            add_entry_filed(&tx, &input, IMPORT_FOLDERS)?;
         } else {
-            let change = set_entry(&tx, &input)?;
+            let change = set_entry(&tx, &input, IMPORT_FOLDERS)?;
             if change.quantity == 0 {
                 remove_entry(&tx, change.id)?;
                 removed += 1;
@@ -1133,15 +1192,24 @@ pub async fn collection_remove(
 
 /// One transaction for a whole imported file — see [`commit_import`] for why added/updated are
 /// counted rather than looked up on the grain.
+///
+/// **`folder_id` is absent for every import but one.** A file describes cards, not filing, so the
+/// collection's own import step sends nothing and its rows land at the root. The deck arm of the
+/// import dialog sends the group of the deck it just wrote a list into, so the list and the
+/// copies backing it agree the moment the dialog closes — see [`IMPORT_FOLDERS`], which is the
+/// only place in the crate that fence is wider than the reader's own drawers.
 #[tauri::command]
 pub async fn collection_import_commit(
     state: tauri::State<'_, Arc<AppState>>,
     items: Vec<CollectionImportItem>,
     mode: String,
+    folder_id: Option<i64>,
 ) -> Result<ImportCommitOutcome, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        crate::collection_source::with_write_owned(&state, |c| commit_import(c, &items, &mode))
+        crate::collection_source::with_write_owned(&state, |c| {
+            commit_import(c, &items, &mode, folder_id)
+        })
     })
     .await
     .map_err(|e| format!("the collection could not be written: {e}"))?
@@ -1929,6 +1997,7 @@ mod tests {
             &conn,
             &[item("card-1", 3, "nonfoil"), altered, graded],
             "add",
+            None,
         )
         .unwrap();
 
@@ -1975,6 +2044,7 @@ mod tests {
                 },
             ],
             "add",
+            None,
         )
         .unwrap();
         assert_eq!((again.added, again.updated), (0, 2));
@@ -4082,7 +4152,7 @@ mod tests {
     fn an_add_import_accumulates_quantities_on_the_grain() {
         let conn = seeded();
         let items = vec![item("card-1", 2, "nonfoil"), item("card-1", 3, "nonfoil")];
-        let out = commit_import(&conn, &items, "add").unwrap();
+        let out = commit_import(&conn, &items, "add", None).unwrap();
         // Two items, one row: the file named the same grain twice and the copies add up.
         assert_eq!(out.added, 1);
         assert_eq!(out.updated, 1);
@@ -4092,8 +4162,8 @@ mod tests {
     #[test]
     fn a_set_import_writes_the_files_quantity_rather_than_adding_to_it() {
         let conn = seeded();
-        commit_import(&conn, &[item("card-1", 4, "nonfoil")], "add").unwrap();
-        commit_import(&conn, &[item("card-1", 1, "nonfoil")], "set").unwrap();
+        commit_import(&conn, &[item("card-1", 4, "nonfoil")], "add", None).unwrap();
+        commit_import(&conn, &[item("card-1", 1, "nonfoil")], "set", None).unwrap();
         assert_eq!(quantity_of(&conn, "card-1", "nonfoil"), 1);
     }
 
@@ -4103,9 +4173,9 @@ mod tests {
     #[test]
     fn a_set_of_zero_deletes_the_row_the_reader_owned_and_counts_it_removed() {
         let conn = seeded();
-        commit_import(&conn, &[item("card-1", 4, "nonfoil")], "add").unwrap();
+        commit_import(&conn, &[item("card-1", 4, "nonfoil")], "add", None).unwrap();
 
-        let out = commit_import(&conn, &[item("card-1", 0, "nonfoil")], "set").unwrap();
+        let out = commit_import(&conn, &[item("card-1", 0, "nonfoil")], "set", None).unwrap();
 
         assert_eq!(
             (out.added, out.updated, out.removed),
@@ -4128,7 +4198,7 @@ mod tests {
     fn a_set_of_zero_for_an_unowned_printing_never_answers_a_negative_updated() {
         let conn = seeded();
 
-        let out = commit_import(&conn, &[item("card-1", 0, "nonfoil")], "set").unwrap();
+        let out = commit_import(&conn, &[item("card-1", 0, "nonfoil")], "set", None).unwrap();
 
         assert_eq!(
             (out.added, out.updated, out.removed),
@@ -4145,6 +4215,7 @@ mod tests {
             &conn,
             &[item("card-1", 1, "nonfoil"), item("card-1", 1, "foil")],
             "add",
+            None,
         )
         .unwrap();
         assert_eq!(quantity_of(&conn, "card-1", "nonfoil"), 1);
@@ -4156,13 +4227,91 @@ mod tests {
         let conn = seeded();
         // A finish no CHECK will take. A half-imported collection is worse than a refused one.
         let items = vec![item("card-1", 1, "nonfoil"), item("card-1", 1, "glitter")];
-        assert!(commit_import(&conn, &items, "add").is_err());
+        assert!(commit_import(&conn, &items, "add", None).is_err());
         assert_eq!(entry_count(&conn), 0);
     }
 
     #[test]
     fn an_unknown_mode_is_refused_rather_than_defaulted() {
         let conn = seeded();
-        assert!(commit_import(&conn, &[item("card-1", 1, "nonfoil")], "replace").is_err());
+        assert!(commit_import(&conn, &[item("card-1", 1, "nonfoil")], "replace", None).is_err());
+    }
+
+    /// **A deck import files the copies into that deck's own group, and the root is where they
+    /// used to land.**
+    ///
+    /// This is the whole of the blocker. "Add cards to collection" on a deck import is one press
+    /// that writes two things — the `deck_cards` rows and the copies backing them — so a file
+    /// whose copies stopped at the root left the deck reading *missing* on every line the reader
+    /// had just said they own, with every other deck still free to claim them.
+    ///
+    /// The assertion is the **folder column**, never the count: a root import and a group import
+    /// both answer `added: 1`, which is exactly why the bug survived the counters that were
+    /// already tested. `coalesce(folder_id, 0)` being the eleventh term of `COLLECTION_GRAIN` is
+    /// what makes the two land in different rows at all — the same printing at the root and in
+    /// the group is two rows — so the second half of this test imports the same line twice, once
+    /// each way, and counts them.
+    #[test]
+    fn a_deck_import_files_the_copies_into_that_decks_group() {
+        let conn = seeded();
+        let group = folder(&conn, "deck", "Mono red");
+
+        commit_import(&conn, &[item("card-1", 4, "nonfoil")], "add", Some(group)).unwrap();
+
+        let filed: Vec<Option<i64>> = conn
+            .prepare("SELECT folder_id FROM collection_entries")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(
+            filed,
+            vec![Some(group)],
+            "the copies are in the deck's group, not at the root"
+        );
+
+        // The same line again with no folder is the *other* import, and it is a second row
+        // rather than four more copies in the group — the folder is part of the grain.
+        commit_import(&conn, &[item("card-1", 4, "nonfoil")], "add", None).unwrap();
+        let rows: Vec<(Option<i64>, i64)> = conn
+            .prepare("SELECT folder_id, quantity FROM collection_entries ORDER BY id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(rows, vec![(Some(group), 4), (None, 4)]);
+    }
+
+    /// **The widened fence is widened by exactly one kind**, and the two it still refuses are
+    /// refused before the transaction opens.
+    ///
+    /// `IMPORT_FOLDERS` is the only place in the crate where a `deck` folder may be *named* by a
+    /// caller, so the pair of refusals is what says it is a widening rather than a hole: an id
+    /// nothing answers to is still `FOLDER_GONE`, and `Recently removed` is still
+    /// `FOLDER_NOT_YOURS` — a file naming it would be an import that arrives already discarded.
+    /// Nothing is written by either, which is the point of checking before the loop.
+    #[test]
+    fn an_import_still_refuses_a_folder_that_is_gone_or_is_the_holding_area() {
+        let conn = seeded();
+        let removed = folder(&conn, "removed", "Recently removed");
+        let line = [item("card-1", 1, "nonfoil")];
+
+        assert_eq!(
+            commit_import(&conn, &line, "add", Some(404)).unwrap_err(),
+            crate::deck_meta::FOLDER_GONE
+        );
+        assert_eq!(
+            commit_import(&conn, &line, "add", Some(removed)).unwrap_err(),
+            crate::collection_folders::FOLDER_NOT_YOURS
+        );
+        assert_eq!(entry_count(&conn), 0, "a refused import writes nothing");
+
+        // …and the reader's own binder is still a destination, which is what keeps this a fence
+        // about the *kind* rather than a list of two ids.
+        let binder = folder(&conn, "user", "Binder");
+        commit_import(&conn, &line, "add", Some(binder)).unwrap();
+        assert_eq!(entry_count(&conn), 1);
     }
 }

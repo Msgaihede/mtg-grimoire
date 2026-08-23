@@ -594,8 +594,17 @@ export const ZeroRemovesTheCard: Story = {
       await expect(canvas.queryByRole("spinbutton", { name: label })).toBeNull();
     });
     // Gone, not emptied: no card, and nothing offering to remove one.
-    await expect(canvas.queryByText("Black Lotus")).toBeNull();
-    await expect(canvas.queryByRole("button", { name: /^Remove/ })).toBeNull();
+    //
+    // **Scoped to the pile, and the reason is the whole feature.** This read `canvas` until the
+    // search column grew a Collection tab and started opening on it: the cut copy goes back to
+    // `Recently removed`, so the reader's own binder — drawn a few hundred pixels to the left —
+    // now legitimately says `Black Lotus` at the moment the deck stops saying it. Asserting over
+    // the whole canvas would make this play fail for the feature working, and widening it to
+    // `getAllByText(...).toHaveLength(1)` would pass for the wrong reason the day the tab is
+    // closed. The claim being made is about the *pile*, so it is made about the pile.
+    const main = within(canvas.getByRole("region", { name: "Main deck" }));
+    await expect(main.queryByText("Black Lotus")).toBeNull();
+    await expect(main.queryByRole("button", { name: /^Remove/ })).toBeNull();
     // The pile's own count moved with it — 22 cards less the one copy.
     await expect(
       within(canvas.getByRole("region", { name: "Main deck" })).getByText("21 cards"),
@@ -1032,6 +1041,11 @@ export const SwapFolds: Story = {
     // button and the search field share the name "Search cards" — the disclosure names what it
     // reveals — so each is still addressed by its own role.
     //
+    // **The tab is pressed, though.** The panel opens on its Collection tab, and the card
+    // search — the wall this play adds `sld 913` from — is the second one. Without this the
+    // searchbox below is not mounted at all.
+    await userEvent.click(await canvas.findByRole("button", { name: "All cards" }));
+
     // The wall is searched rather than scrolled: it is virtualised, one column wide under
     // `src/stories.test.tsx`'s layout stub, and Sol Ring is far enough down an alphabetical list
     // of 36 cards that its tile is not mounted.

@@ -818,14 +818,26 @@ const REMOVED_GROUP_KIND: &str = crate::schema::COLLECTION_FOLDER_KINDS[2];
 ///
 /// **`Option` rather than a refusal, even though every deck has one.** Schema v25 gave one to
 /// every deck that existed and [`create_deck`] and [`duplicate_deck`] give one to every deck
-/// made since, so the `None` arm is unreachable through the app — but the only caller that
-/// needs to ask is [`delete_deck`], whose whole contract is that deleting something that is not
+/// made since, so the `None` arm is unreachable through the app — but the caller that needs to
+/// ask here is [`delete_deck`], whose whole contract is that deleting something that is not
 /// there is a success. A helper that raised there would turn a hand-edited database into a deck
-/// the reader can never remove.
-fn deck_group(conn: &Connection, deck_id: i64) -> Result<Option<i64>, String> {
+/// the reader can never remove. Answering the fact and letting each caller conclude is the
+/// crate's boundary read one module in: [`crate::collection_alloc::collection_to_deck`] takes
+/// the same `None` and **refuses** it, in words, because a reader who ticked "put these copies
+/// in this deck" must not have them filed at the root instead.
+///
+/// **`pub(crate)`, and the two copies of it are why.** `collection_alloc` had a private twin of
+/// this query — same table, same column, one lookup written twice — carried from the PR that
+/// added it. A helper duplicated across modules is a fix that has to be made twice or is made
+/// once, so this is the one definition and that one is gone.
+///
+/// The `kind` fence is redundant against `CHECK ((kind = 'deck') = (deck_id IS NOT NULL))` and
+/// is kept from the twin anyway: it costs nothing, and it says at the call site which of the
+/// three folder kinds this row can be.
+pub(crate) fn deck_group(conn: &Connection, deck_id: i64) -> Result<Option<i64>, String> {
     conn.query_row(
-        "SELECT id FROM collection_folders WHERE deck_id = ?1",
-        params![deck_id],
+        "SELECT id FROM collection_folders WHERE deck_id = ?1 AND kind = ?2",
+        params![deck_id, DECK_GROUP_KIND],
         |r| r.get(0),
     )
     .optional()

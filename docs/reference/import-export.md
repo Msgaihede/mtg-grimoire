@@ -280,8 +280,8 @@ one per surface plus the deck's "start a new one":
 
 | Destination | Modes | Grain the write folds on | Notes |
 | --- | --- | --- | --- |
-| `deck` (existing) | `merge` / `replace` | `deck_id, variant, category_id, card_id, coalesce(finish,'')` (`schema::DECK_CARD_GRAIN`) | `replace` clears one **variant** first, named before it does; the mode radio says how many cards that would cost |
-| `newDeck` | `merge` only | same grain, on the deck just created | No mode radios at all — there is nothing to replace one line after `deck_create`, and `merge` is the mode that cannot clear anything if that ever stops being true |
+| `deck` (existing) | `merge` / `replace` | `deck_id, variant, category_id, card_id, coalesce(finish,'')` (`schema::DECK_CARD_GRAIN`) | `replace` clears one **variant** first, named before it does; the mode radio says how many cards that would cost. Since 2026-08-23 it also draws the optional ["Add cards to collection" box](#the-deck-arms-add-cards-to-collection-box), which makes the press two writes |
+| `newDeck` | `merge` only | same grain, on the deck just created | No mode radios at all — there is nothing to replace one line after `deck_create`, and `merge` is the mode that cannot clear anything if that ever stops being true. Draws the same "Add cards to collection" box, from the **same** exported `OwnCopies` rather than a second one written here |
 | `collection` | `add` / `set` | Every term of the storage grain (`schema::COLLECTION_GRAIN` — `card_id, finish, condition, lang, altered, signed, proxy, misprint, coalesce(serial_number,''), coalesce(grading,''), coalesce(folder_id, 0)`) the importer can vary, so nine of the eleven. `lang` follows `cardId` and `folder_id` is always the root. It was `cardId, finish, condition` alone until 2026-08-23 — see the fold section above for what that cost | No `replace`: the deck's version would empty a multi-thousand-row collection from a 40-line paste with the file that caused it looking ordinary |
 | `wishlist` | `add` / `set` | `oracleId, cardId, finish` (`destinations/wishlist.ts`) — the storage grain is `coalesce(oracle_id,''), coalesce(card_id,''), coalesce(preferred_finish,''), coalesce(folder_id,0)` (`schema::WISHLIST_GRAIN`) | `wishlist_set_quantity(id, 0)` **deletes** the wish — a wish for nothing is not a wish (`CHECK (quantity > 0)`) — but an import can never reach it: `parse.ts` refuses a quantity below 1 before a plan is even built (`:460`, `:671`), so `set` through this dialog never carries a 0 |
 
@@ -306,6 +306,65 @@ the grain, a line for a card the reader has already filed in `Ordered` lands as 
 the root instead of folding into the one they filed. `WishRow.elsewhere` is what tells them — the
 imported row draws an "also on your list" mark. Whole reasoning:
 [wishlist-folders.md](wishlist-folders.md).
+
+### The deck arms' "Add cards to collection" box
+
+**Added 2026-08-23, spec §7.4.** Both deck destinations — `deck` and `newDeck` — draw one checkbox
+under the preview: *"Add cards to collection"*, with the hint *"Tick this if you already own these
+cards — n copies are added to what you have."* It is the reader saying they have physically built
+this deck, and it turns one press into **two writes**.
+
+**The second write is `planCollectionImport` called a second time over the same `resolved` rows,
+never the deck's items adapted across**, and that is the load-bearing decision. The two grains are
+not the same list of facts: a deck item is `(cardId, category, finish)`, while a collection item is
+the eleven-column grain carrying the condition, the four flags, a serial number, a grading blob and
+the whole acquisition story a CSV can put on a row. That planner is already pure and already reads
+all of it out of those rows, so calling it twice is cheaper *and* more correct than widening
+`ImportItem` to carry a condition — which would put a collection fact in the deck's write and give
+the two grains one shape they cannot both be right about. Its fold key has been the full grain
+since 2026-08-23, so this cannot write a second all-defaults row beside an altered one.
+
+Four rules the pair holds, each with a reason that is not obvious:
+
+- **The deck's write goes first and its refusal stops the press.** The list is the thing the reader
+  asked for; the copies are the extra. A collection refusal comes back as `ownRefusal` on a
+  *resolved* mutation rather than being thrown, so the outcome line can say *"n cards imported. The
+  copies could not be added to your collection — …"*. A thrown refusal would report the whole press
+  as failed over a deck that really was written.
+- **The state lives in the preview, never on `DeckImportInto`.** That interface is identity-only
+  and `deckDestination` is memoised on what it closes over, so a presentational field there
+  remounts the step under the reader.
+- **Absent and an empty array are the same statement**, which is what keeps every caller written
+  before the box existed unchanged by construction.
+- **The invalidation is the union of the deck's roots and the collection's**, and only when the box
+  was ticked. The collection's list and summary, the wishlist's owned progress and the search
+  wall's owned badges each answer a question those copies just changed.
+
+**The copies land in the deck's own group, and a plain collection import still lands at the
+root.** `collection_import_commit` is `(items, mode, folderId)` since 2026-08-23 — `folderId`
+defaults to `null`, which is the root and is what the collection's own import step sends, because
+a file says nothing about a reader's filing. The deck arms are the one caller that names a folder:
+`useImport` reads the deck's `kind: "deck"` group out of `collection_folder_list` **at press
+time** — a query would be `undefined` while it loaded, and `importIntoNewDeck`'s deck did not
+exist a statement earlier — and sends it, so the decklist and the group agree the moment the
+dialog closes and no other deck can claim the copies. `collection::IMPORT_FOLDERS` is the fence:
+the reader's own folders and a deck group, never `Recently removed` and never an id nothing
+answers to. A deck with no group **refuses** (`NO_DECK_GROUP`, the crate's own sentence) rather
+than falling back to the root, and the refusal rides back in `ownRefusal` like every other on this
+half. `OWN_COPIES_HINT` says the consequence a checkbox label cannot imply: *"They are filed into
+this deck's own folder, so no other deck can use them."*
+
+**It shipped filing at the root for one PR**, with `commit_import` hard-coding `folder_id: None`,
+and the symptom is worth keeping: the deck went on reading *missing* on every line the reader had
+just ticked, and every other deck could still take the copies. The counters cannot see it — a root
+import and a group import both answer `added: 1` — so the test that holds it asserts the
+**folder column**.
+
+The counting is worth pinning too, because the two halves count different things. The headline
+under the checkbox is in **copies** — six basic lands on one line are six copies — which is what a
+reader counts and what the collection stores. The outcome line afterwards is in **rows**
+(`added + updated`), which is what the command answers: a playset landing on a row the reader
+already had is one updated row and not four added ones.
 
 **The wishlist's own rule, stated once here because nothing else needs it twice**: a printing is
 pinned only when the file named one, or when the matched card has no `oracle_id` at all to wish for
@@ -399,6 +458,17 @@ the section, not "gallery vs. editor", and does not move — but the page itself
 not on the gallery looking at its new tile. This path has no regression test anywhere in the suite,
 so this pass is its only verification.
 
+### The "Add cards to collection" box — not driven yet
+
+**This section is waiting rather than empty.** The box landed on 2026-08-23 and the pass belongs
+after the code, so there are deliberately no figures for it — a number written before the window
+was driven would be a guess with a date on it. What it owes an answer to: an import into an
+existing deck with the box ticked, read back out of SQLite to confirm the copies are at
+`folder_id IS NULL` and *not* in the deck's group (which is the hint's whole claim); the same on
+the new-deck arm, where the deck is created a command earlier; and the outcome line when the
+collection half is refused while the deck half committed, which is the one state the two writes can
+end in that neither command can report on its own.
+
 ## Where the code is
 
 `src/features/transfer/` (`TransferCard.ts`, `fields.ts`, `csv.ts`, `formats.ts`, `export/` —
@@ -408,3 +478,12 @@ TypeScript side; `src-tauri/src/import.rs` (renamed from
 `wishlist_import_commit` are the Rust side. `src/components/Dialog.tsx` is the shared modal shell
 both `ExportDialog` and `ImportDialog` are built on. `src/features/decks/CLAUDE.md` still owns
 deck-specific rules this feature reads or reaches into — categories, validation, formats.
+
+The "Add cards to collection" box is three files of that tree: `destinations/DeckPreview.tsx`
+(`OwnCopies`, `OWN_COPIES_HINT`, and the outcome line), `destinations/NewDeckPreview.tsx` (which
+imports that same component rather than drawing a second), and `useImport.ts` (`OwnedCopies`,
+`ownCopies`). `OWNED_WRITE_KEYS` — the four query roots such a write moves — moved to
+`src/lib/query.ts` on 2026-08-23, because the deck builder's own `own` add makes the same change
+from the other side of the app and the two had drifted to two different invalidations. Where those
+copies end up is
+[collection-folders.md](collection-folders.md)'s subject, not this page's.

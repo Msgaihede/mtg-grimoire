@@ -4,6 +4,7 @@ import { TOOLTIP_OPEN_MS } from "@/components/tooltip/TooltipProvider";
 import type { FormatFilterOption } from "@/features/search/useCardSearch";
 import { AUTO_CATEGORY } from "./autoCategory";
 import { DeckSearchPanel } from "./DeckSearchPanel";
+import { useAddMode } from "./NormalSearchAdd";
 import { useDeck } from "./useDeck";
 
 /**
@@ -49,16 +50,41 @@ function Panel({
   maxWidth?: number;
 }) {
   const deck = useDeck(deckId);
+  /**
+   * The own/need answer, mounted **here** for `add`'s reason: it is the editor's, because it
+   * governs the toolbar's quick-add field as well as the panel's Add button, and this wrapper is
+   * standing in for the editor. The panel draws the control and remembers nothing, which is why
+   * pressing it in a story sticks — the memory is the query cache's, keyed by this deck.
+   */
+  const { mode, setMode } = useAddMode(deckId);
   return (
     <DeckSearchPanel
       add={deck.addCard}
+      mode={mode}
+      onMode={setMode}
       categories={deck.categories}
+      deckId={deckId}
       targetCategoryId={deck.deck?.defaultCategoryId ?? AUTO_CATEGORY}
       defaultFormat={defaultFormat}
       roomy={roomy}
       maxWidth={maxWidth}
     />
   );
+}
+
+/**
+ * Move the panel to the card search.
+ *
+ * **Every play that wants a wall of printings presses this first, and none of them used to**
+ * (2026-08-23): this column offers two searches now and opens on the reader's own collection, so
+ * a play reaching straight for `37 cards` would be asking about a body that is not mounted.
+ *
+ * A named helper rather than the press inlined thirty times, for `openPanel`'s reason in
+ * `DeckSearchPanel.test.tsx`: "this story needs the wall" is what these call sites mean, and the
+ * day the default tab moves again it is one function that changes.
+ */
+async function showAllCards(panel: HTMLElement) {
+  await userEvent.click(within(panel).getByRole("button", { name: "All cards" }));
 }
 
 const meta = {
@@ -82,7 +108,17 @@ const meta = {
     docs: {
       description: {
         component:
-          "The path by which cards enter a deck — **not a second search**. It is " +
+          "The path by which cards enter a deck, and since 2026-08-23 it offers **two** searches — " +
+          "a tab strip on its header row, opening on **Collection**, with the card search this " +
+          "panel has always been beside it as **All cards**. Every story below that wants a wall " +
+          "of printings presses that second tab first.\n\n" +
+          "**The Collection tab is `CollectionSearchTab`, storied on its own page** " +
+          "(`Decks/CollectionSearchTab`), and it is a different kind of answer rather than the " +
+          "same wall over different rows: collection *rows*, one per printing, finish and " +
+          "condition, each saying where that copy is filed, and an Add that calls " +
+          "`collection_to_deck` — the write that physically moves a card into this deck's group. " +
+          "{@link Tabs} is where the two bodies are the subject here.\n\n" +
+          "The card search itself is **not a second search**. It is " +
           "`useCardSearch` + `FilterBar` + `CardGrid`, the search view's own parts, in a 384px " +
           "column beside the deck, with the wall's two slots pointed at this job: the badge " +
           "keeps telling the collection story, and the action becomes **Add to deck**.\n\n" +
@@ -111,13 +147,17 @@ const meta = {
           "in the first place — is the disclosure it names itself by ({@link Collapsed}), and " +
           "the one state where that control refuses is {@link NoRoom} — measured width, not a " +
           "guess.\n\n" +
-          "**It opens collapsed** (2026-08-14), which is why every play below presses that " +
-          "disclosure before it looks at anything. 384px plus the desk's 16px gap out of a row " +
-          "measured at **602px** at 1280×800 with the card pane docked leaves the deck 202px — " +
-          "one stack column — so open by default every reader paid for the wall on every deck " +
-          "they opened whether or not they were adding cards. The choice is this component's " +
-          "`useState` and deliberately not a `useAppStore` field: it is per editor-open and not " +
-          "remembered.\n\n" +
+          "**It opens open again** (issue #183, 2026-08-22), and remembers which way the reader " +
+          "last left it — `app_meta.deck_search_open` behind `useDeckSearchOpen`, written on the " +
+          "**press** and never on the drawn state. It opened collapsed for eight days on a width " +
+          "argument that has since gone: 384px plus the desk's 16px gap out of a row measured at " +
+          "**602px** at 1280×800 *with the card pane docked beside the editor* left the deck " +
+          "202px, and that pane is an overlay now and takes width from neither column. " +
+          "{@link Collapsed} is where the other state is the subject rather than the setup.\n\n" +
+          "**Which tab is remembered too, and only for the session** — the query cache under " +
+          "`DECK_SEARCH_TAB_KEY`, which is app-scoped, so it survives the remount that opening a " +
+          "second deck is. There is no `app_meta` row behind it: `SCHEMA_VERSION` did not move " +
+          "for this change.\n\n" +
           "**`Docked` and the plan's `Results` are one state, not two.** This panel has no " +
           "empty-and-docked shape to tell apart from a docked one with results: with the seed " +
           "it is given, docking it *is* showing results. What genuinely differs is why a wall " +
@@ -159,9 +199,11 @@ export const Docked: Story = {
     const canvas = within(canvasElement);
     const panel = canvas.getByRole("region", { name: "Add cards" });
     const toggle = within(panel).getByRole("button", { name: "Search cards" });
-    // Open at rest, so the wall is simply there (issue #183). {@link Collapsed} is where the
-    // other state is the subject rather than the setup.
+    // Open at rest, so the strip is simply there (issue #183). {@link Collapsed} is where the
+    // other state is the subject rather than the setup, and {@link Tabs} is where the tab the
+    // panel opens on is the subject rather than a press to get past.
     await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await showAllCards(panel);
     await expect(await within(panel).findByText("37 cards")).toBeInTheDocument();
 
     // The pile is in every Add button's name, and it is the only part of the press a
@@ -181,6 +223,124 @@ export const Docked: Story = {
     await expect(
       await within(panel).findByRole("button", { name: "Add Ancient Tomb to Land" }),
     ).toBeInTheDocument();
+  },
+};
+
+/**
+ * The two searches this column offers, and the one it opens on.
+ *
+ * **Collection first** (spec §7.2): a deck is built out of cards you have, so the reader's own
+ * binder is the resting state and the wider search — every printing Scryfall has published — is
+ * one press away. That reverses what this panel did until 2026-08-23, when the collection could
+ * not be searched from a deck at all.
+ *
+ * **`aria-pressed` over a `.map`, not `role="tab"`.** The role is a contract rather than a name:
+ * roving focus on the arrow keys, `aria-controls`, a `tabpanel` that takes the caret. Nothing else
+ * in this app implements it — `DeckEditor`'s Theory/Live switch, `FilterChips`' layout pair and
+ * the card pane's toggles are all pressed buttons — so a `tab` role here would announce a contract
+ * this control does not honour. Two buttons, one pressed, which is why every query in every play
+ * on this page reaches for `role="button"`.
+ *
+ * **Each tab's body is its own component**, so only the one being read is mounted and only its
+ * hook runs — `OpenPanel`'s reason one level in. Switching therefore throws the other tab's
+ * search away, exactly as a collapse does.
+ */
+export const Tabs: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const panel = canvas.getByRole("region", { name: "Add cards" });
+    const strip = within(panel).getByRole("group", { name: "Search in" });
+    const collection = within(strip).getByRole("button", { name: "Collection" });
+    const cards = within(strip).getByRole("button", { name: "All cards" });
+
+    // At rest, with nothing pressed.
+    await expect(collection).toHaveAttribute("aria-pressed", "true");
+    await expect(cards).toHaveAttribute("aria-pressed", "false");
+    // The card search is not merely hidden — it is not mounted, so its wall and its filter row
+    // are both absent rather than empty. **Both boxes are `type="search"` now** (2026-08-23), so
+    // the query is by name: an unnamed `queryByRole("searchbox")` was null while the collection
+    // tab was a placeholder sentence and would find that tab's own box today.
+    await expect(within(panel).queryByRole("searchbox", { name: "Search cards" })).toBeNull();
+    await expect(
+      within(panel).getByRole("searchbox", { name: "Search your collection" }),
+    ).toBeInTheDocument();
+
+    await userEvent.click(cards);
+
+    await expect(cards).toHaveAttribute("aria-pressed", "true");
+    await expect(collection).toHaveAttribute("aria-pressed", "false");
+    await expect(await within(panel).findByText("37 cards")).toBeInTheDocument();
+    // And the collection body went with the press, rather than being hidden under the wall.
+    await expect(
+      within(panel).queryByRole("searchbox", { name: "Search your collection" }),
+    ).toBeNull();
+
+    // And back, which is what says the strip switches a body rather than only marking itself.
+    await userEvent.click(collection);
+    await expect(within(panel).queryByText("37 cards")).toBeNull();
+    await expect(within(panel).queryByRole("searchbox", { name: "Search cards" })).toBeNull();
+  },
+};
+
+/**
+ * The strip at the narrowest this panel goes — **the width it has to survive, and the one nobody
+ * designs at**.
+ *
+ * `MIN_PANEL_WIDTH_PX` is 206, measured from one 150px card and the chrome around it, and a reader
+ * drags the column there. Its content box is **193px**; the disclosure is **99** and the strip
+ * **141**, so the two cannot share a line and the row's `flex-wrap` drops the strip below. That
+ * class is the whole of what keeps this safe: a flex item cannot shrink below its own min-content,
+ * so unwrapped this would be an *overhang* rather than a squeeze — and `DeckEditor`'s page section
+ * is `overflow-y-auto`, which computes `overflow-x` to `auto`, so the overhang would be a
+ * horizontal scrollbar across the whole deck builder. `ManaValueChips` shipped exactly that once.
+ *
+ * It is also why the tabs are two short words. Driven headless over the built stylesheet on
+ * 2026-08-23: at "Collection Search" / "Normal Search" the strip measures **216px** against that
+ * 193px box and the row reads `scrollWidth` 216 / `clientWidth` 193 — the overhang, in the label
+ * text. At these labels it reads 193/193 on two lines.
+ *
+ * **And there is a third control on that row now**, on the card-search tab: the own/need pair,
+ * measured the same way and **175px** at "Cards I own" / "Cards I need". It fits the 193px box with
+ * 18px to spare, so it takes a third line and the row still reads 193/193 — 100px tall here against
+ * 62 with the strip alone, 68 at the panel's 384px opening width, and one 30px line by ~1000px.
+ * Shorter labels would buy nothing at *this* width (`Own`/`Need` is 95, and the strip above already
+ * forces the wrap), which is why the reader's own words stayed. The play presses the tab and reads
+ * the row again, because that is the state with the most in it.
+ *
+ * `maxWidth` is the editor's cap and is what pins the panel here; in the app it is
+ * `min(half the window, what the desk can spare over DECK_FLOOR)`.
+ */
+export const Narrow: Story = {
+  args: { maxWidth: 206 },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const panel = canvas.getByRole("region", { name: "Add cards" });
+    const strip = within(panel).getByRole("group", { name: "Search in" });
+    const toggle = within(panel).getByRole("button", { name: "Search cards" });
+
+    // Both controls are drawn and both are reachable — the wrap is a layout answer, never a
+    // control being dropped.
+    await expect(strip).toBeVisible();
+    await expect(toggle).toBeVisible();
+    await expect(within(strip).getByRole("button", { name: "Collection" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    // The row wraps rather than overflowing. Storybook runs in a real browser, so unlike the
+    // suite this can be read off the box rather than off the class.
+    const row = strip.parentElement!;
+    await expect(row.scrollWidth).toBe(row.clientWidth);
+    await expect(panel.scrollWidth).toBe(panel.clientWidth);
+
+    // And again with the row at its fullest: the card-search tab draws the own/need pair beside
+    // the two controls above, which is three lines inside 193px and the state this width is most
+    // likely to break in.
+    await showAllCards(panel);
+    const modes = await within(panel).findByRole("group", { name: "Adding" });
+    await expect(modes).toBeVisible();
+    await expect(row).toContainElement(modes);
+    await expect(row.scrollWidth).toBe(row.clientWidth);
+    await expect(panel.scrollWidth).toBe(panel.clientWidth);
   },
 };
 
@@ -206,9 +366,10 @@ export const DeckFormat: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const panel = canvas.getByRole("region", { name: "Add cards" });
-    // The filter row lives in `OpenPanel`, which the disclosure mounts — and the disclosure is
-    // open at rest again (issue #183), so the seed is applied on the panel's own first paint.
-    // `findBy`, not `getBy`: the search still has a round trip to make.
+    // The filter row lives in `OpenPanel`, which the **tab** mounts: the disclosure is open at
+    // rest again (issue #183) but the panel opens on the collection, so the seed is applied when
+    // the card search itself arrives. `findBy`, not `getBy`: it still has a round trip to make.
+    await showAllCards(panel);
     const format = (await within(panel).findByLabelText("Format")) as HTMLSelectElement;
 
     // The value is what the request carries; the option's own text is the whole of what the
@@ -256,8 +417,9 @@ export const Collapsed: Story = {
     const canvas = within(canvasElement);
     const panel = canvas.getByRole("region", { name: "Add cards" });
     const toggle = within(panel).getByRole("button", { name: "Search cards" });
-    // At rest, before anything is pressed — open, with the wall already answered.
+    // At rest, before anything is pressed — open, and one tab press from the wall.
     await expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await showAllCards(panel);
     await expect(await within(panel).findByText("37 cards")).toBeInTheDocument();
 
     // Shut, which is what this story is named for, and then open again: the round trip out and
@@ -265,13 +427,17 @@ export const Collapsed: Story = {
     await userEvent.click(toggle);
     await expect(toggle).toHaveAttribute("aria-expanded", "false");
     await userEvent.click(toggle);
+    // Straight back to the wall with no second tab press: the tab is the app's answer rather than
+    // this panel's, so a collapse cannot take it away.
     await expect(await within(panel).findByText("37 cards")).toBeInTheDocument();
     await userEvent.click(toggle);
 
     await expect(toggle).toHaveAttribute("aria-expanded", "false");
     // The same button, not a new one in the same place — across both presses.
     await expect(within(panel).getByRole("button", { name: "Search cards" })).toBe(toggle);
-    // Everything below the rail is gone with it: the filters, the count and the wall.
+    // Everything below the rail is gone with it: the tab strip, the filters, the count and the
+    // wall.
+    await expect(within(panel).queryByRole("group", { name: "Search in" })).toBeNull();
     await expect(within(panel).queryByText("37 cards")).toBeNull();
     await expect(within(panel).queryByRole("searchbox")).toBeNull();
     await expect(within(panel).queryByLabelText("Add to")).toBeNull();
@@ -353,6 +519,7 @@ export const Empty: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const panel = canvas.getByRole("region", { name: "Add cards" });
+    await showAllCards(panel);
     await expect(
       await within(panel).findByText(
         "Card database is empty — waiting for the first sync to finish.",
@@ -373,6 +540,7 @@ export const NoMatch: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const panel = canvas.getByRole("region", { name: "Add cards" });
+    await showAllCards(panel);
     await expect(await within(panel).findByText("37 cards")).toBeInTheDocument();
 
     // Addressed by role: the panel's disclosure carries the same name as this field's `sr-only`
@@ -408,6 +576,7 @@ export const Busy: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const panel = canvas.getByRole("region", { name: "Add cards" });
+    await showAllCards(panel);
     // Matched by prefix, where the click-to-add story above spells the category out.
     //
     // The name's tail is the category the picker is on, which is the deck's **first** in
