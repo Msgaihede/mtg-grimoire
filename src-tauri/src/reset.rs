@@ -6,9 +6,11 @@
 //! beside the reads of that table. These name a *table*, they are reachable from exactly one
 //! screen, and the thing they have in common is not the data they touch but the question the
 //! UI has to ask before calling them. Filing `collection_clear` in `collection.rs` beside
-//! `remove_entry` would put a command that empties the collection next to the one that is
-//! documented as *the only way a collection row is ever deleted*, which is the sentence it
-//! contradicts.
+//! `remove_entry` would put a command that empties the *whole table* next to the deletes that
+//! each name **one row** — `remove_entry`, the unconditional one, and since schema v24 the two
+//! conditional ones beside it (`set_quantity`'s zero and `fold_entry`'s merge). None of the three
+//! can be asked to take anything it was not pointed at, which is the property these four do not
+//! have and the reason they are filed apart from them.
 //!
 //! ## The three destructive ones lean on cascades already declared
 //!

@@ -475,7 +475,12 @@ groups and `Recently removed` are filtered out (`kind === "user"`), because copi
 through the next PR's two writes. `Move to → folder` for a collection row calls
 `collection_set_folder`, the same command the drag writes through, so a drag and a menu press merge
 on a taken grain identically — and the menu exists because a drag-only affordance is half a
-feature, and it is the half a keyboard cannot use.
+feature, and it is the half a keyboard cannot use. **One command and, since the review of this
+branch, one mutation**: `useSetCollectionFolder` in `src/features/collection/useCollectionFolders.ts`
+owns the write and the keys it settles, and the two callers pass in nothing but what they do about a
+refusal (the page's banner, the menu's `CardMenuRefusal`). They were two mutations for a day and had
+already drifted — the menu's settled `["decks"]` and the drag's did not, so one gesture left a built
+deck's claims stale or fresh depending on which hand made it.
 
 ## The importer's fold, and what it was
 

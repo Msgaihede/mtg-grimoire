@@ -623,20 +623,25 @@ describe("CollectionPage", () => {
   });
 
   /**
-   * Task 5's ruling: `set_quantity(0)` keeps the row, with its condition, its purchase price
-   * and its acquisition story. So the list keeps it too — dimmed, because a row with no
-   * copies is a record rather than a holding — and offers the explicit removal that is the
-   * only thing that actually deletes one.
+   * The rule since schema v24, which reverses the one this test was written under:
+   * `set_quantity(0)` **deletes** the row — its condition, its purchase price and its whole
+   * acquisition story with it — and answers `removed: true`. So the list drops it on the
+   * answer, exactly as it does for an explicit removal, and no second command is sent.
+   *
+   * **The mock is as much the subject here as the assertion is.** It answered `removed: false`
+   * for a while after the reversal — a response the backend cannot produce any more — and that
+   * is a green test drawn over a ghost: the entry was gone from SQLite, the header (which
+   * `settle` re-reads) had already stopped counting it, and the table went on drawing the row
+   * until a filter change or a reload, with a `+` on it answering GONE.
    */
-  it("keeps a row that has been emptied to zero, and offers to remove it", async () => {
-    collectionSetQuantity.mockResolvedValue({ id: 7, quantity: 0, removed: false });
+  it("drops a row the stepper empties to zero, because zero deletes it", async () => {
+    collectionSetQuantity.mockResolvedValue({ id: 7, quantity: 0, removed: true });
     collectionList.mockResolvedValue(page([{ ...BOLT, quantity: 1 }]));
     wrap(<CollectionPage />);
     await screen.findByText("Lightning Bolt");
 
-    // And the reader is told so before they get there: removal is offered on a row at zero
-    // and nowhere else, so a mis-added four-copy row would otherwise only be got rid of by
-    // accidental discovery.
+    // And the reader is told where the way out is before they look for one: the stepper is it,
+    // and the sentence under the table is the whole of what says so.
     expect(screen.getByText(/to remove an entry, set its copies to zero/i)).toBeInTheDocument();
 
     await userEvent.click(
@@ -644,17 +649,10 @@ describe("CollectionPage", () => {
     );
 
     expect(collectionSetQuantity).toHaveBeenCalledWith(7, 0);
-    const row = (await screen.findByText("Lightning Bolt")).closest('[role="row"]');
-    expect(row).toBeInTheDocument();
-    expect(row).toHaveClass("text-dim");
-
-    const remove = screen.getByRole("button", {
-      name: /^Remove Lightning Bolt \(Foil, NM\) from your collection/,
-    });
-    await userEvent.click(remove);
-
-    expect(collectionRemove).toHaveBeenCalledWith(7);
     await waitFor(() => expect(screen.queryByText("Lightning Bolt")).not.toBeInTheDocument());
+    // And on the one command: the delete happened inside `collection_set_quantity`, so a
+    // second write here would be the page removing a row that is already gone.
+    expect(collectionRemove).not.toHaveBeenCalled();
   });
 
   /**
@@ -664,7 +662,11 @@ describe("CollectionPage", () => {
    * word about why, and the header went on counting it.
    */
   it("re-reads every list that counts these copies when a removal is refused", async () => {
-    collectionSetQuantity.mockResolvedValue({ id: 7, quantity: 0, removed: false });
+    // The stepper is not pressed here — the fixture below is what puts a row at zero on screen
+    // — but the answer is the one the backend would actually give if it were: since v24 a
+    // quantity of 0 comes back `removed: true`, and a mock saying otherwise is a shape nothing
+    // can produce.
+    collectionSetQuantity.mockResolvedValue({ id: 7, quantity: 0, removed: true });
     collectionList.mockResolvedValue(page([{ ...BOLT, quantity: 0 }]));
     collectionRemove.mockRejectedValue("That collection entry is not there any more.");
     const { client } = wrap(<CollectionPage />);
@@ -1784,6 +1786,11 @@ describe("the collection's folders", () => {
 
     await waitFor(() => expect(collectionSetFolder).toHaveBeenCalledWith(7, 3));
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["collection"] }));
+    // And every deck, which is the half this page's own copy of the mutation was missing before
+    // the two were collapsed onto `useSetCollectionFolder`: a move onto a taken grain **merges**,
+    // deleting one row, and a built deck holding a claim on that `collection_entry_id` would go
+    // on drawing a reservation it has just lost.
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] });
     // And the row is still on screen: nothing took it off the level on a guess about where it
     // went. The backend is what says which list it belongs to now.
     expect(screen.getByText("Lightning Bolt")).toBeInTheDocument();

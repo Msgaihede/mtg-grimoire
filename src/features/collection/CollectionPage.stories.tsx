@@ -82,11 +82,16 @@ const meta = {
           "a played nonfoil of one printing are two rows — and one of the twelve holds zero " +
           'copies. Measured 2026-08-10 by calling `readHandlers(seed("starter")).' +
           "collection_summary`: `totalCards: 20`, `uniqueCards: 12`, `entries: 12`.\n\n" +
-          "**Quantity 0 keeps the row.** That is the rule this page exists to make visible, and " +
-          "{@link ZeroKeepsTheRow} is it: the condition, the purchase price, the tags and the " +
-          "acquisition story all survive the day the user owns none of the card, and deleting is " +
-          "`collection_remove` and only ever that. The wishlist is the exact opposite by table " +
-          "CHECK, and `Wishlist/Page` says so from the other side.\n\n" +
+          "**Quantity 0 deletes the row, and this reverses what this page said until v24.** " +
+          "{@link ZeroDeletesTheRow} is it, and carries the argument on both sides: the row's " +
+          "condition, purchase price, tags and acquisition story go with it, which is exactly " +
+          "what the previous rule was preserving. The collection is now the record of what the " +
+          "reader physically has, so a row holding no copies is not a card they have — the same " +
+          "answer the wishlist has always given, reached from a different argument.\n\n" +
+          "**The seeded zero-copy row above is therefore a state no shipped write can reach.** " +
+          "It stays because `collection_update` can still produce one — an edit form sends eight " +
+          "fields at once and must not delete its own subject — and it is what the Folder " +
+          "column's removal control exists for.\n\n" +
           "**One state has no story: a page-load failure.** The `busy` fault is honoured by " +
           "write handlers only — deliberately, because reads go through a second, read-only " +
           "connection — so no seed or fault makes `collection_list` throw, and the " +
@@ -282,50 +287,51 @@ export const Busy: Story = {
 };
 
 /**
- * Stepping a row down to zero — **and the row stays.**
+ * Stepping a row down to zero — **and the row goes.**
  *
- * The clearest demonstration in the app of an asymmetry that is easy to get backwards.
- * `collection_set_quantity(0)` keeps the row with its condition, its purchase price, its tags and
- * its acquisition story (`db.ts:1886-1896`), because the day you own none of a card is not the
- * day the record of having owned it stops mattering. `wishlist_set_quantity(0)` **deletes**
- * (`db.ts:1968-1977`), because a wish for none of something is not a wish.
+ * This story asserted the opposite until schema v24, and the reversal is recorded here rather
+ * than quietly rewritten, because the old rule was argued for and this is where it was argued.
+ * `collection_set_quantity(0)` used to keep the row with its condition, its purchase price, its
+ * tags and its acquisition story, on the reasoning that the day you own none of a card is not the
+ * day the record of having owned it stops mattering. It now **deletes**, matching
+ * `wishlist_set_quantity(0)`: the collection is the record of what you physically have, and a row
+ * holding no copies is not a card you have.
  *
- * The row chosen is the seeded acquisition story — Alpha Lightning Bolt at Heavily Played, bought
- * from Card Kingdom for $450 in 2021 (`.storybook/fake/seeds.ts:216-223`). None of that is a
- * column in this table; what the table *can* show is that the row is still there, still Heavily
- * Played, and now offering the one control that deletes.
+ * **The cost is real and was accepted deliberately.** The row chosen is the seeded acquisition
+ * story — Alpha Lightning Bolt at Heavily Played, bought from Card Kingdom for $450 in 2021
+ * (`.storybook/fake/seeds.ts`) — and stepping it to zero takes the condition, the
+ * `conditionOriginal`, the purchase price and currency, the acquired-at date, the source, the
+ * notes and the tags with it. That is precisely what the previous rule was preserving.
  *
- * That control appearing is the second half of the rule: removal is offered on a row at zero and
- * nowhere else (`CollectionTable.tsx:200`), so a mis-added four-copy row cannot be lost to one
- * click on a list that scrolls under the pointer.
+ * **What this play is really guarding.** The row is deleted in the database either way; the bug
+ * worth a story is the row that stays on *screen* after it is gone — a ghost whose `+` answers
+ * "that row is gone", with the header disagreeing with the list beside it. That is what shipped
+ * for a few hours in this PR, because `setQuantity`'s handler ignored `change.removed` while
+ * `settle()` deliberately skips re-reading the list. jsdom unit tests could not catch it: they
+ * mocked `{ quantity: 0, removed: false }`, a response the backend can no longer produce.
  */
-export const ZeroKeepsTheRow: Story = {
+export const ZeroDeletesTheRow: Story = {
   args: { view: "table" },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const label = "Quantity of Lightning Bolt (Nonfoil, HP)";
     const box = await canvas.findByRole("spinbutton", { name: label });
     await expect(box).toHaveValue(1);
-    // Nothing to remove with, yet.
+
+    await userEvent.click(canvas.getByRole("button", { name: `Decrease ${label}` }));
+
+    // The row leaves the list. Addressed by a name built from its condition, so its absence is
+    // a claim about this row and not merely about some row.
+    await waitFor(async () => {
+      await expect(canvas.queryByRole("spinbutton", { name: label })).toBeNull();
+    });
+    // And no removal control lingers for a row that is not there.
     await expect(
       canvas.queryByRole("button", {
         name: "Remove Lightning Bolt (Nonfoil, HP) from your collection",
       }),
     ).toBeNull();
-
-    await userEvent.click(canvas.getByRole("button", { name: `Decrease ${label}` }));
-
-    await waitFor(async () => {
-      await expect(canvas.getByRole("spinbutton", { name: label })).toHaveValue(0);
-    });
-    // Still a row, still Heavily Played — the stepper is addressed by a name built from the
-    // condition, so finding it at all is the claim that the condition survived the write.
-    await expect(
-      canvas.getByRole("button", {
-        name: "Remove Lightning Bolt (Nonfoil, HP) from your collection",
-      }),
-    ).toBeInTheDocument();
-    // And no refusal: this is a successful write, not a tolerated failure.
+    // No refusal: this is a successful write, not a tolerated failure.
     await expect(canvas.queryByRole("alert")).toBeNull();
   },
 };

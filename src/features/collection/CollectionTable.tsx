@@ -264,8 +264,9 @@ function columnsFor(
             {/* What one of them is worth, under what all of them are worth — and only where the
               two are different numbers *and there is something to be worth it*. On the
               single-copy rows that are most of a collection it would be the same price written
-              twice; on a zero-copy row — a state the Copies stepper reaches at `min={0}` and the
-              Actions column exists to clear — it was a unit price under a total of nothing,
+              twice; on a zero-copy row — which the Copies stepper produced at `min={0}` until
+              schema v24 made zero a delete, and which only `collectionUpdate` can leave behind
+              now — it was a unit price under a total of nothing,
               quoting $105.18 each for cards that are not there. Hence `> 1` rather than `!== 1`,
               which is what the wishlist's twin cell already guards on. */}
             {unit !== null && row.quantity > 1 && (
@@ -322,14 +323,22 @@ function columnsFor(
           <span className="min-w-0 truncate" {...tip(row.folderName, { whenClipped: true })}>
             {row.folderName ?? "—"}
           </span>
-          {/* Offered on an empty row and nowhere else. **The stepper no longer produces one**:
-              since schema v24 `collectionSetQuantity(id, 0)` deletes the row outright, so a row
-              at zero now arrives only from the entry editor — `collectionUpdate` is the one
-              write that still keeps the row it is editing, because an edit form sends eight
-              fields at once and must not delete its own subject. That row is a real state with
-              no other way out, and this is the only thing in the app that removes it. On a row
-              that still holds cards it would be a one-click way to lose the lot from a list that
-              scrolls under the pointer. */}
+          {/* Offered on an empty row and nowhere else — and **no shipped write can produce one
+              today, so this button is unreachable in the app as it stands**. Since schema v24
+              `collectionSetQuantity(id, 0)` deletes the row outright and the importer's `set`
+              mode does the same, and the v24 rung swept away every zero row that was already
+              stored. `collectionUpdate` is the one write left that keeps a row at zero — an
+              edit form sends eight fields at once and must not delete its own subject — and it
+              has no caller in `src/`: there is no entry editor yet.
+
+              It is kept rather than deleted because it is the **only** way out of that row if
+              one ever does appear (a hand-edited database, a future entry editor, a command
+              added without this table in mind), and a row that cannot be removed from the one
+              surface that lists it is a card the reader is stuck with. What it is not is
+              ordinary: nothing a reader can press reaches this branch, and a test that
+              exercises it is testing the escape hatch rather than the stepper. On a row that
+              still holds cards it would be a one-click way to lose the lot from a list that
+              scrolls under the pointer, which is why it stays fenced on `quantity === 0`. */}
           {row.quantity === 0 && (
             <button
               type="button"

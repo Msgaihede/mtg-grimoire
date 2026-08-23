@@ -832,7 +832,9 @@ export interface CollectionImportItem {
  *
  * One line can also count in **two** of these at once: a `set` of 0 for a printing the reader does
  * not own inserts the row and then deletes it, so it reads one `added` and one `removed`. Both
- * numbers describe statements that really ran.
+ * numbers describe statements that really ran — and because that one item is then subtracted
+ * twice, `updated` is **clamped at zero** by both commands rather than allowed to go negative. No
+ * field here is ever below zero, so a caller may sum or compare them without a guard.
  */
 export interface ImportCommitOutcome {
   added: number;

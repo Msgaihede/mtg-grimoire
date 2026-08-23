@@ -276,8 +276,10 @@ shared_cell` walks both into two databases and compares them column by column.
 - **`reset.rs` holds the only writes in the crate with no subject, and they belong there.**
   `collection_clear`, `wishlist_clear`, `decks_clear` and `cache_clear` name a *table* rather
   than a row: none takes an id and none can be scoped. Filing one beside the reads of its table
-  would put it next to the rule it contradicts — `remove_entry` is documented as the only way a
-  collection row is ever deleted. **Nothing there writes history and nothing is undoable**:
+  would put it next to the deletes that each name **one row** and cannot be asked to take
+  anything they were not pointed at — `remove_entry`, the unconditional one, plus the two
+  conditional deletes schema v24 put beside it (`set_quantity`'s zero and `fold_entry`'s merge).
+  **Nothing there writes history and nothing is undoable**:
   `deck_audit` and `deck_undo` are per-deck and cascade away with the decks they describe, so a
   wipe has nowhere to be recorded. The confirmation is the **webview's** and the commands take
   no `confirm` argument — a fence passed as a parameter is a fence a caller can forget.

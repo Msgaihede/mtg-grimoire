@@ -6333,20 +6333,27 @@ function userCollectionFolder(db: FakeDb, id: number): FakeCollectionFolder {
 }
 
 /**
- * `collection::folder_named` — the folder an **add** names, refused in words unless it is there.
- * `null` is the root and is always a destination: there is no row to look up, so the fence must
- * not reach it.
+ * `collection::folder_named` — the folder an **add** names, refused in words unless it is there
+ * **and is the reader's own**. `null` is the root and is always a destination: there is no row to
+ * look up, so the fence must not reach it.
  *
- * **Existence only, and deliberately no kind check**, which is what makes it a second helper
- * rather than a call to {@link userCollectionFolder}: the crate splits the same two questions the
- * same way. `collection_set_folder` is where a *reader* is stopped from filing into the app's own
- * cabinet, and an add is fenced only against an id nothing answers to — which in the app is a real
- * foreign key, so an unchecked one fails with `FOREIGN KEY constraint failed`, a sentence about a
- * constraint, and only while `PRAGMA foreign_keys` happens to be on. The reader who deleted a
- * folder in one pane and pressed "Add to" in another meets one wording either way.
+ * **Both halves, and the kind half is the correction of what this comment used to say.** It was
+ * existence-only, on the stated grounds that the crate split the same two questions the same way.
+ * The crate does not: `collection::folder_named` answers {@link FOLDER_NOT_YOURS} for a `deck` or
+ * `removed` folder, in `collection_folders`' own wording and for its reason — a folder that stands
+ * for a deck asserts something only the app's own writes may make true. So an
+ * `Add to → Collection → <a deck's folder>` succeeded here and was refused in the window, which is
+ * the one thing a fake must never do.
+ *
+ * It stays a helper of its own rather than becoming a call site of {@link userCollectionFolder}
+ * for one reason, and it is the same reason the crate keeps two functions: `null` is legal here
+ * and is not a folder at all, where every caller of that one is naming a row.
  */
 function collectionFolderNamed(db: FakeDb, folderId: number | null): number | null {
-  if (folderId !== null && !collectionFolderById(db, folderId)) throw refuse(FOLDER_GONE);
+  if (folderId === null) return null;
+  // Gone before not-yours, which is `user_folder`'s ordering: a folder that is not there cannot
+  // be the app's.
+  userCollectionFolder(db, folderId);
   return folderId;
 }
 
@@ -7291,14 +7298,15 @@ export function writeHandlers(db: FakeDb) {
       let removed = 0;
       try {
         for (const item of args.items) {
-          // **Ten fields, and the six grain columns are not among them** — `altered`, `signed`,
-          // `proxy`, `misprint`, `serialNumber` and `grading` are left at `addEntry`'s defaults
-          // because `CollectionImportItem` has no slot for them, on this wire or the crate's.
-          // That is `collection::commit_import` copied faithfully rather than a shortcut here,
-          // and it is why a re-import cannot land on the reader's altered row.
-          // `destinations/collection.ts` now folds on the full grain and *sends* all six; when
-          // `CollectionImportItem` and the crate's struct carry them, this map is where the fake
-          // catches up. See `docs/reference/import-export.md`.
+          // **The full grain, carried rather than defaulted** — `collection::commit_import`'s own
+          // map since schema v24, where `CollectionImportItem` grew the six columns beyond the
+          // printing and its finish. Absent stays absent: `addEntry` reads an omitted flag as the
+          // plain unmarked copy, which is what a file with three columns in it means, and
+          // `destinations/collection.ts` folds its lines on the same eleven terms before any of
+          // them reach here. While these were dropped, a Storybook or vitest import of an altered
+          // or graded line landed on the plain grain in the fake and on its own grain in the app —
+          // and a re-import could never add to the reader's altered row, it wrote an anonymous
+          // twin beside it. See `docs/reference/import-export.md`.
           const entry: EntryInput = {
             cardId: item.cardId,
             finish: item.finish,
@@ -7309,7 +7317,18 @@ export function writeHandlers(db: FakeDb) {
             purchaseCurrency: item.purchaseCurrency,
             acquiredAt: item.acquiredAt,
             acquisitionSource: item.acquisitionSource,
+            serialNumber: item.serialNumber,
+            altered: item.altered,
+            signed: item.signed,
+            proxy: item.proxy,
+            misprint: item.misprint,
+            grading: item.grading,
             notes: item.notes,
+            // Spelled rather than left off, exactly as the crate spells it: an import names no
+            // folder, and the one field that is part of the grain must not be a decision nobody
+            // can see at the call site. `tags` is deliberately not here — it is a set the reader
+            // curates on the row, and a file has nothing to say about it.
+            folderId: null,
           };
           if (args.mode === "add") {
             addEntry(db, entry);
@@ -7332,7 +7351,10 @@ export function writeHandlers(db: FakeDb) {
         throw e;
       }
       const added = db.collectionEntries.length - before + removed;
-      return { added, updated: args.items.length - added - removed, removed };
+      // Clamped at zero, exactly as `collection::commit_import` clamps it: a `set 0` for a
+      // printing the reader does not own is counted as both an add and a removal — two statements
+      // that really ran — so that one item is subtracted twice and `updated` would read `-1`.
+      return { added, updated: Math.max(0, args.items.length - added - removed), removed };
     },
 
     /** `wishlist::add_wish`. */

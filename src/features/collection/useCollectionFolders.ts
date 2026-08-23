@@ -165,3 +165,82 @@ export function useCollectionFolders() {
 
 /** The whole of what a folder tree consumes, named so the view and the hook agree. */
 export type CollectionFolders = ReturnType<typeof useCollectionFolders>;
+
+/**
+ * What a caller does about a refusal, which is the only thing the two callers of
+ * {@link useSetCollectionFolder} do differently.
+ */
+export interface SetCollectionFolderHandlers {
+  /** Before the write. Both callers use it to clear whatever the last refusal left on screen. */
+  onMutate?: () => void;
+  /** The refusal, for a surface to draw. The invalidation is not this hook's caller's business
+   *  and happens either way. */
+  onError?: (error: unknown) => void;
+}
+
+/**
+ * Filing one copy — `collection_set_folder` — and **the only mutation in the app that does it**.
+ *
+ * There were two for a while, the drag's and the card menu's, with different settle sets and a
+ * comment on the page claiming there was one. Two implementations of one write disagree the first
+ * time either changes, and these already had: the menu's took `["decks"]` and the drag's did not,
+ * so the same gesture left a built deck's claims stale or fresh depending on which hand made it.
+ * The hook is the settle set plus the two hooks a surface needs to draw its own refusal, and
+ * nothing else.
+ *
+ * **Not optimistic, deliberately, and the wishlist is why this is written down rather than merely
+ * done.** That page shipped a `setFolder` that removed the row optimistically from every cached
+ * list page and then invalidated only the summary and the card search — so **nothing ever put it
+ * back where it went**. The folder card read `1 wish` while the folder's own contents read
+ * `Nothing filed here yet`, with the row in the database the whole time; it reproduced on all
+ * three routes and cleared only on reload.
+ *
+ * Every optimistic answer to "which list does this row belong to now" is a guess a surface is not
+ * entitled to make:
+ *
+ * * Taking the row off the level is the guess that shipped, and it is wrong in both directions —
+ *   out to the root as well as in.
+ * * Putting the row in is the other guess, and it is worse: the destination list is sorted and
+ *   paged by the backend, so an insert has to invent both the position and the page and then be
+ *   undone whenever the answer disagrees.
+ * * And **a merge answers a different id than the one asked about** — filing a copy into a drawer
+ *   that already holds the same eleven-column grain sums the quantities into the *destination* row
+ *   and deletes the source (`collection_folders::refile_entry`) — so there is not always a row
+ *   left to patch at all.
+ *
+ * So the answer is a re-read, both ways. A folder move is one deliberate press rather than a
+ * held-down stepper, so there is no second press racing the first — which is the whole reason the
+ * collection table's quantity stepper *is* optimistic.
+ */
+export function useSetCollectionFolder({ onMutate, onError }: SetCollectionFolderHandlers = {}) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ entryId, folderId }: { entryId: number; folderId: number | null }) =>
+      ipc.collectionSetFolder(entryId, folderId),
+    onMutate: () => {
+      onMutate?.();
+    },
+    onError: (error) => onError?.(error),
+    // **On success and on failure both**, and one handler because there is one behaviour: a
+    // refusal leaves the list exactly as unknown as a success does, since a refused move is
+    // almost always a row another surface has already moved or deleted.
+    onSettled: () => {
+      // **The whole `["collection"]` root, which is the list as well as everything counted from
+      // it** — the level being left, the level being joined, both folder subtotals and the
+      // header. `invalidateQueries` matches by key *prefix*, so this reaches
+      // `["collection", "list", …]` itself and refetches it because it is mounted; a settle that
+      // named only the summary and the folder keys is precisely the wishlist bug above. And
+      // marking it stale would not be enough on its own: `lib/query.ts` sets `staleTime: 30_000`,
+      // so a mounted observer that is merely stale never refetches.
+      void queryClient.invalidateQueries({ queryKey: ["collection"] });
+      // **And every deck, which is the half the drag's own mutation was missing.** A move changes
+      // no quantity, so no wish's `ownedQuantity` and no search row's owned badge can be
+      // different afterwards — but the destination may already hold this printing at this grain,
+      // in which case the backend *merges*: one row is deleted and the deck claims on it are
+      // carried onto the survivor. A deck holding a `collection_entry_id` that no longer exists
+      // would draw a claim it has just lost.
+      void queryClient.invalidateQueries({ queryKey: ["decks"] });
+    },
+  });
+}

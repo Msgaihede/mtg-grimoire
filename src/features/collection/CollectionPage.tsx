@@ -46,7 +46,7 @@ import { CollectionSummaryHeader } from "./CollectionSummary";
 import { CollectionTable } from "./CollectionTable";
 import type { CollectionDrag } from "./collectionDrag";
 import { useCollection, type Collection } from "./useCollection";
-import { useCollectionFolders } from "./useCollectionFolders";
+import { useCollectionFolders, useSetCollectionFolder } from "./useCollectionFolders";
 
 /**
  * What the top of the cabinet is called, in the two places this page has to say it —
@@ -449,8 +449,16 @@ export function CollectionPage() {
     },
     onSuccess: (change) => {
       // The answer, not the guess: the backend clamps and canonicalises, and this is the
-      // number it actually stored.
-      patchEntry(change.id, (r) => ({ ...r, quantity: change.quantity }));
+      // number it actually stored — **or says the row is not there any more**.
+      //
+      // `removed` is not decoration. Since schema v24 `collection::set_quantity(id, 0)`
+      // *deletes* the entry, and the stepper is `min={0}`, so one press on a single copy is a
+      // delete. Read as "quantity 0" it left a ghost: the row stayed in the list, dimmed,
+      // while `settle()` — which deliberately does not re-read the list — had already sent the
+      // header off to count a collection the row is no longer in, so the two disagreed on
+      // screen instantly, and the next `+` on the ghost answered GONE. `remove.onSuccess`
+      // below is these same two lines, and this is the same write with a different gesture.
+      patchEntry(change.id, change.removed ? null : (r) => ({ ...r, quantity: change.quantity }));
       settle();
     },
   });
@@ -469,56 +477,21 @@ export function CollectionPage() {
   });
 
   /**
-   * Filing a copy — the drag's write and the menu's, one command and deliberately one mutation, so
-   * a merge behaves the same whichever hand made the gesture.
+   * Filing a copy — the drag's write, and **the same mutation the row's own context menu makes it
+   * through**, so a merge behaves the same whichever hand made the gesture.
    *
-   * **This is the one write on the page that is deliberately not optimistic, and the wishlist is
-   * the reason it is written down rather than merely done.** That page shipped a `setFolder` that
-   * removed the row optimistically from every cached list page and then invalidated only the
-   * summary and the card search — so **nothing ever put it back where it went**. The folder card
-   * read `1 wish` while the folder's own contents read `Nothing filed here yet`, with the row in
-   * the database the whole time; it reproduced on all three routes and cleared only on reload.
+   * The command, the settle set and the reason none of it is optimistic all live on
+   * {@link useSetCollectionFolder}; this page adds only its refusal surface, which is the banner
+   * under the header that every other write here shares (`bannerFailure` below). The menu's copy
+   * of this hook draws `CardMenuRefusal` instead, because a menu is already closing by the time
+   * the answer arrives and has nothing left on screen to report to — that difference is the whole
+   * of what the two callers do differently, and it is why the hook takes handlers rather than
+   * owning one.
    *
-   * Every optimistic answer to "which list does this row belong to now" is a guess this page is
-   * not entitled to make:
-   *
-   * * Taking the row off the level is the guess that shipped, and it is wrong in both directions —
-   *   out to the root as well as in.
-   * * Putting the row in is the other guess, and it is worse: the destination list is sorted and
-   *   paged by the backend, so an insert has to invent both the position and the page and then be
-   *   undone whenever the answer disagrees.
-   * * And **a merge answers a different id than the one asked about** — filing a copy into a
-   *   drawer that already holds the same eleven-column grain sums the quantities into the
-   *   *destination* row and deletes the source (`collection_folders::refile_entry`) — so there is
-   *   not always a row left to patch at all.
-   *
-   * So the answer is a re-read, both ways. A folder move is one deliberate press rather than a
-   * held-down stepper, so there is no second press racing the first — which is the whole reason
-   * the stepper above *is* optimistic.
+   * This page's sentence was that there was one mutation while there were two of them. There is
+   * one now.
    */
-  const settleFiling = useCallback(() => {
-    // **The whole `["collection"]` root, which is the list as well as everything counted from
-    // it** — the level being left, the level being joined, both folder subtotals and the header.
-    // `invalidateQueries` matches by key *prefix*, so this reaches `["collection", "list", …]`
-    // itself and refetches it because it is mounted; a settle that named only the summary and the
-    // folder keys is precisely the wishlist bug above. And marking it stale would not be enough on
-    // its own: `lib/query.ts` sets `staleTime: 30_000`, so a mounted observer that is merely stale
-    // never refetches.
-    //
-    // Nothing further out moves. Filing a copy changes no quantity, so no wish's `ownedQuantity`,
-    // no search row's owned badge and no deck's claims are any different afterwards — which is
-    // where this parts company with the stepper's `settle` beside it.
-    void queryClient.invalidateQueries({ queryKey: ["collection"] });
-  }, [queryClient]);
-
-  const setFolder = useMutation({
-    mutationFn: ({ id, folderId: to }: { id: number; folderId: number | null }) =>
-      ipc.collectionSetFolder(id, to),
-    // Either way, and one handler because there is one behaviour: a refusal leaves the list
-    // exactly as unknown as a success does, since a refused move is almost always a row another
-    // surface has already moved or deleted.
-    onSettled: settleFiling,
-  });
+  const setFolder = useSetCollectionFolder();
 
   const onSetQuantity = useCallback(
     (row: CollectionRow, quantity: number) => setQuantity.mutate({ row, quantity }),
@@ -843,7 +816,8 @@ export function CollectionPage() {
    */
   const canFile = useCallback((drag: CollectionDrag, to: number | null) => drag.folderId !== to, []);
   const fileCard = useCallback(
-    (drag: CollectionDrag, to: number | null) => setFolder.mutate({ id: drag.entryId, folderId: to }),
+    (drag: CollectionDrag, to: number | null) =>
+      setFolder.mutate({ entryId: drag.entryId, folderId: to }),
     [setFolder],
   );
 
@@ -1196,10 +1170,12 @@ export function CollectionPage() {
                 rowMenuKey={rowMenuKey}
                 marketplace={marketplace}
               />
-              {/* The one thing about this table a reader cannot see: removal is offered on a
-                  row at zero and nowhere else, so a mis-added four-copy row would only ever
-                  be got rid of by accident. Said once, under the table, at the end of the
-                  line the removal itself lives on — not per row, where forty copies of a
+              {/* The one thing about this table a reader cannot see: **the stepper is the
+                  removal**. Since schema v24 a row taken to zero is deleted rather than kept
+                  (`collection::set_quantity`), and the stepper is `min={0}` — so a mis-added
+                  four-copy row is got rid of by holding Decrease down, and there is no other
+                  control in the table that does it. Said once, under the table, at the end of
+                  the line the stepper itself lives on — not per row, where forty copies of a
                   sentence about a rare action would be louder than the rows. */}
               <p className="text-right text-[0.7rem] text-dim">
                 To remove an entry, set its copies to zero.

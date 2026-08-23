@@ -2247,6 +2247,35 @@ describe("the collection grain", () => {
     expect(db.collectionEntries).toHaveLength(2);
   });
 
+  /**
+   * **The add is fenced on the folder's *kind* as well as on its existence**, which this fake was
+   * missing for a day. `collection::folder_named` answers `FOLDER_NOT_YOURS` for a `deck` folder
+   * or `Recently removed`, in `collection_folders`' own wording and exactly as
+   * `collection_set_folder` does — so an `Add to → Collection → <a deck's group>` succeeded here
+   * and was refused in the window, which is the direction of drift a fake must never take.
+   *
+   * The menu offers `kind === "user"` and nothing else and no build creates a `deck` folder yet,
+   * so the fixture seeds one by hand: that is the only way to exercise the branch at all, and
+   * saying so is better than a test that passes because the state is unreachable.
+   */
+  it("refuses an add into a folder the app owns, and still takes the reader's own", () => {
+    const db = makeDb({
+      collectionFolders: [
+        { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0 },
+        { id: 2, parentId: null, name: "Burn", kind: "deck", deckId: 7, sortOrder: 1 },
+      ],
+    });
+    const w = writeHandlers(db);
+
+    expect(() => w.collection_add(add({ folderId: 2 }))).toThrow(/the app's own/);
+    expect(db.collectionEntries).toHaveLength(0);
+
+    // And the reader's own drawer is untouched by the fence — the two halves are one question
+    // asked in one order, gone before not-yours.
+    expect(w.collection_add(add({ quantity: 1, folderId: 1 }))).toMatchObject({ quantity: 1 });
+    expect(db.collectionEntries).toHaveLength(1);
+  });
+
   it("is one row for one slab however its JSON was spelled", () => {
     const db = makeDb();
     const w = writeHandlers(db);
@@ -3194,6 +3223,33 @@ describe("collection_import_commit", () => {
     });
     expect(out).toEqual({ added: 0, updated: 0, removed: 1 });
     expect(db.collectionEntries).toHaveLength(0);
+  });
+
+  /**
+   * **An import line lands on its own grain, not on the plain one** — the fake's half of the fold
+   * `collection::commit_import` does, and the six grain columns were dropped from this map while
+   * `CollectionImportItem` already carried them. A file describing an altered copy therefore
+   * folded into the plain row here and into its own row in the app, and a re-import could never
+   * add to the reader's altered row: it wrote an anonymous twin beside it.
+   *
+   * One altered line and one plain line for the same printing is the cheapest seed where the two
+   * answers differ — two rows if the column is carried, one folded row of three copies if it is
+   * not.
+   */
+  it("keeps an altered import line off the plain grain", () => {
+    const db = makeDb();
+    const items: CollectionImportItem[] = [
+      { cardId: BOLT.id, finish: "nonfoil", quantity: 1 },
+      { cardId: BOLT.id, finish: "nonfoil", quantity: 2, altered: true },
+    ];
+
+    const out = writeHandlers(db).collection_import_commit({ items, mode: "add" });
+
+    expect(out).toEqual({ added: 2, updated: 0, removed: 0 });
+    expect(db.collectionEntries.map((e) => [e.altered, e.quantity])).toEqual([
+      [false, 1],
+      [true, 2],
+    ]);
   });
 
   it("is all or nothing: one line it cannot land leaves the collection as it was", () => {

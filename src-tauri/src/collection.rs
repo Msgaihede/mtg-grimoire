@@ -256,6 +256,33 @@ fn valid_finish(finish: &str) -> Result<&str, String> {
     })
 }
 
+/// `tags` as the column will take it, refused in words rather than as a constraint failure —
+/// or, worse, as silence.
+///
+/// The column is `tags TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(tags))`, and this asks the
+/// same question one layer up. **It exists because [`PATCH_SQL`] is `UPDATE OR IGNORE`**: a
+/// statement that violates a CHECK there does not raise, it updates nothing — which is
+/// indistinguishable from the grain collision the ignore is *for*, and from an id that resolves
+/// to no row. [`update_entry`] would look for the collision, find none, and answer [`GONE`]:
+/// "that collection entry is not there any more" about a row that is plainly there, sending the
+/// reader to look for something that was never deleted. Refusing before the statement runs is
+/// what keeps a rejected write and a missing row two different answers.
+///
+/// **`json_valid` and no more**, deliberately. The wire calls this a JSON array of strings, but
+/// the column has never said so and the collection can already hold rows that are not one; a
+/// validator stricter than the constraint it stands in for would refuse an edit to a row the
+/// database is perfectly happy with.
+fn valid_tags(tags: &str) -> Result<(), String> {
+    serde_json::from_str::<serde_json::Value>(tags)
+        .map(|_| ())
+        .map_err(|e| {
+            format!(
+                "`{tags}` is not a tag list ({e}). Tags are stored as JSON, like \
+                 [\"cube\", \"trade\"]."
+            )
+        })
+}
+
 fn valid_condition(condition: Option<&str>) -> Result<&str, String> {
     let c = condition.unwrap_or(DEFAULT_CONDITION);
     CONDITIONS.contains(&c).then_some(c).ok_or_else(|| {
@@ -588,6 +615,15 @@ fn set_entry(conn: &Connection, input: &EntryInput) -> Result<EntryChange, Strin
 /// delete takes it away, and the outcome reads one added and one removed rather than nothing.
 /// Both numbers describe statements that really ran, and the cheaper answer would be a
 /// per-item `count(*)` over a table that can hold tens of thousands of rows.
+///
+/// **`updated` is therefore clamped at zero**, because that same line spends the item twice:
+/// `items.len() - added - removed` is `1 - 1 - 1` for a one-line file of that shape, and a
+/// negative count of rows updated is not a number any dialog can say. It is unreachable from the
+/// shipped importer — both parsers refuse a quantity below 1 (`src/features/transfer/import/
+/// parse.ts`) — so the clamp is a fence rather than a case, and the honest reading of a `0` here
+/// is "nothing was updated", which is exactly what happened. Clamped rather than restructured:
+/// `added` and `removed` each name statements that ran, and making `updated` the subtraction of
+/// two counts that can overlap is what costs the invariant, not the counters themselves.
 fn commit_import(
     conn: &Connection,
     items: &[CollectionImportItem],
@@ -655,7 +691,9 @@ fn commit_import(
     let added = after - before + removed;
     Ok(ImportCommitOutcome {
         added,
-        updated: items.len() as i64 - added - removed,
+        // `.max(0)` for the one line that is counted in two of the three — see this function's
+        // doc. Every other file shape makes this subtraction exact.
+        updated: (items.len() as i64 - added - removed).max(0),
         removed,
     })
 }
@@ -728,6 +766,19 @@ pub fn set_quantity(conn: &Connection, id: i64, quantity: i64) -> Result<EntryCh
 /// which is the same answer an id that is not there gives; telling the two apart is the caller's
 /// next question, and it is a cheaper one than unpicking an error string.
 ///
+/// **`OR IGNORE` ignores *every* constraint on the table, though, not only
+/// `idx_collection_grain` — so the ignore is narrowed by refusing the rest in words before this
+/// statement ever runs.** Otherwise a third reason for "no row changed" arrives dressed as the
+/// first two: a bad value updates nothing, no collision target is found, and the answer is
+/// [`GONE`] about a row that is sitting right there. The census, and where each one is stopped:
+/// `finish` and `condition` by [`valid_finish`] and [`valid_condition`], `quantity` and
+/// `tradelist_quantity` by [`valid_quantity`], `grading`'s `json_valid` by [`canonical_grading`],
+/// which re-serialises it, and `tags`' by [`valid_tags`], which was the one hole and the one this
+/// paragraph was written for. `NOT NULL` cannot fire — every hole is a `coalesce` over the
+/// column's own value — and the two soft columns (`card_id`, `lang`) are not reachable from a
+/// patch at all. **A new CHECK on `collection_entries` needs its refusal on this list**, or it
+/// will be reported to a reader as a deleted row.
+///
 /// One constant because [`update_entry`] runs it **twice** on the folding path — once with every
 /// hole filled, and once with the eight grain holes bound to NULL, which is the same statement
 /// saying "leave the grain alone".
@@ -799,6 +850,11 @@ pub fn update_entry(conn: &Connection, id: i64, patch: &EntryPatch) -> Result<En
     }
     if let Some(t) = patch.tradelist_quantity {
         valid_quantity(t, "tradelist quantity")?;
+    }
+    // The one CHECK on this table that nothing else here stands in front of — see [`valid_tags`]
+    // for why `OR IGNORE` makes it this function's problem rather than SQLite's.
+    if let Some(t) = patch.tags.as_deref() {
+        valid_tags(t)?;
     }
     let grading = canonical_grading(patch.grading.as_deref())?;
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
@@ -2617,6 +2673,45 @@ mod tests {
         assert_eq!(rows, 1);
     }
 
+    /// **A malformed `tags` is refused in words, not reported as a row that is gone.**
+    ///
+    /// [`PATCH_SQL`]'s `OR IGNORE` from the other end: the column carries
+    /// `CHECK (json_valid(tags))`, an ignored CHECK failure updates nothing, and "nothing was
+    /// updated" is exactly what [`update_entry`] then reads as either a grain collision or a
+    /// missing row. With nothing standing in front of it the reader was told the entry was not
+    /// there any more — about the row this test reads back, unchanged, on the next line.
+    #[test]
+    fn an_edit_with_malformed_tags_says_so_rather_than_calling_the_row_gone() {
+        let conn = seeded();
+        let added = add_entry(&conn, &input("bolt-lea", "nonfoil", 2)).unwrap();
+
+        let err = update_entry(
+            &conn,
+            added.id,
+            &EntryPatch {
+                tags: Some("cube, trade".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap_err();
+
+        assert!(err.contains("is not a tag list"), "{err}");
+        assert!(
+            !err.contains(GONE),
+            "a row that is there must not be reported as deleted: {err}"
+        );
+        // And nothing was written on the way to the refusal — the guard runs before the
+        // transaction, so there is no half-applied patch to roll back.
+        let (quantity, tags): (i64, String) = conn
+            .query_row(
+                "SELECT quantity, tags FROM collection_entries WHERE id = ?1",
+                params![added.id],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((quantity, tags.as_str()), (2, "[]"));
+    }
+
     /// A tradelist bigger than the pile it is drawn from is not a promise anyone can keep.
     /// `set_quantity` and `update_entry` clamp already; the importer is the caller that will
     /// send one to `add_entry`, on the insert and on the fold alike.
@@ -4003,6 +4098,47 @@ mod tests {
         commit_import(&conn, &[item("card-1", 4, "nonfoil")], "add").unwrap();
         commit_import(&conn, &[item("card-1", 1, "nonfoil")], "set").unwrap();
         assert_eq!(quantity_of(&conn, "card-1", "nonfoil"), 1);
+    }
+
+    /// **A `set` of 0 deletes the row, and `removed` counts it** — [`set_quantity`]'s reversal
+    /// reaching the importer, and the path the counter was added for. A file saying a printing is
+    /// at zero is a file saying the reader does not own it.
+    #[test]
+    fn a_set_of_zero_deletes_the_row_the_reader_owned_and_counts_it_removed() {
+        let conn = seeded();
+        commit_import(&conn, &[item("card-1", 4, "nonfoil")], "add").unwrap();
+
+        let out = commit_import(&conn, &[item("card-1", 0, "nonfoil")], "set").unwrap();
+
+        assert_eq!(
+            (out.added, out.updated, out.removed),
+            (0, 0, 1),
+            "the row was emptied and deleted, not updated to zero"
+        );
+        assert_eq!(entry_count(&conn), 0);
+    }
+
+    /// **The same line for a printing the reader does *not* own spends its item twice**, and
+    /// `updated` is clamped rather than allowed to go negative.
+    ///
+    /// The upsert inserts the row and the delete takes it away again inside the one transaction,
+    /// so one item counts as both one `added` and one `removed` — statements that really ran —
+    /// and `items.len() - added - removed` is `-1`. Unreachable from the shipped importer, since
+    /// both parsers refuse a quantity below 1, which is precisely why the counter needs a test of
+    /// its own: nothing a reader can do produces the file that reaches it, so nothing else would
+    /// ever go red.
+    #[test]
+    fn a_set_of_zero_for_an_unowned_printing_never_answers_a_negative_updated() {
+        let conn = seeded();
+
+        let out = commit_import(&conn, &[item("card-1", 0, "nonfoil")], "set").unwrap();
+
+        assert_eq!(
+            (out.added, out.updated, out.removed),
+            (1, 0, 1),
+            "inserted and deleted inside the transaction, and nothing updated"
+        );
+        assert_eq!(entry_count(&conn), 0);
     }
 
     #[test]

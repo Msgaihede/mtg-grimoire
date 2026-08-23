@@ -17,7 +17,10 @@
  */
 import { useCallback, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { useCollectionFolderList } from "@/features/collection/useCollectionFolders";
+import {
+  useCollectionFolderList,
+  useSetCollectionFolder,
+} from "@/features/collection/useCollectionFolders";
 import { useWishlistFolderList } from "@/features/wishlist/useWishlistFolders";
 import type { Finish } from "@/lib/finish";
 import { ipc, ipcError } from "@/lib/ipc";
@@ -182,28 +185,23 @@ export function useCardMenuDeps(): CardMenuWiring {
 
   /**
    * One row the reader already owns, filed somewhere else — the menu's half of the collection
-   * page's drag.
+   * page's drag, and **the same mutation that page makes**.
    *
-   * **Two keys, and `["decks"]` is the one worth arguing.** Nothing about a move changes how many
-   * copies of a printing the reader owns, so no wish's `ownedQuantity` and no search row's badge
-   * can move — but the destination may already hold the same printing at the same grain, in which
-   * case the backend **merges**: one row is deleted and any deck claims on it are carried onto the
-   * survivor. A deck reading a `collection_entry_id` that no longer exists would draw a claim it
-   * has just lost, so the deck reads go with the collection's.
+   * `useSetCollectionFolder` owns the command, the two keys it settles (`["collection"]` for the
+   * lists and everything counted from them, `["decks"]` because a merge deletes a row whose
+   * `collection_entry_id` a cached claim still names) and the argument for not being optimistic.
+   * This file kept its own copy of all three until they were collapsed; the copies had already
+   * drifted on the deck key, so one gesture left a built deck's claims stale or fresh depending
+   * on whether the reader dragged the row or used its menu.
    *
-   * **No optimism, deliberately.** A merge means the row this was called with may not exist
-   * afterwards, so there is no local edit that could be right — the answer has to come from the
-   * backend.
+   * **What stays here is the refusal, and it is why the hook takes handlers at all.** A menu's
+   * panel is already closing when the answer arrives, so there is no observer left on screen to
+   * report to — the sentence has to be lifted into the page through {@link CardMenuWiring.error},
+   * where the collection page instead folds its own copy of this write into its banner.
    */
-  const setFolder = useMutation({
-    mutationFn: ({ entryId, folderId }: { entryId: number; folderId: number | null }) =>
-      ipc.collectionSetFolder(entryId, folderId),
+  const setFolder = useSetCollectionFolder({
     // Superseded on the next write, exactly as the two adds are, and clearing the same sentence.
     onMutate: () => setRefusal(null),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["collection"] });
-      void queryClient.invalidateQueries({ queryKey: ["decks"] });
-    },
     onError: (error) => setRefusal(`Could not move that card — ${ipcError(error)}`),
   });
 

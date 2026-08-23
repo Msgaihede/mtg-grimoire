@@ -116,9 +116,13 @@ pub struct CollectionFolder {
 pub struct CollectionFolderSummary {
     pub folder_id: i64,
     /// **Copies** filed directly in this folder, not rows — `sum(quantity)`, which is
-    /// [`crate::collection::CollectionSummary::total_cards`]' arithmetic and its reason: a row
-    /// stepped to zero is a real row here, so a tile counting rows would be wrong the first time
-    /// somebody trades a playset away. The tree sums it across children; SQL does not.
+    /// [`crate::collection::CollectionSummary::total_cards`]' arithmetic and its reason: an entry
+    /// is one printing at one grain and holds however many copies of it the reader owns, so a
+    /// tile counting rows would say `1` over a drawer holding a playset. A row at **zero** no
+    /// longer makes the same point twice — since schema v24 the stepper deletes it
+    /// ([`crate::collection::set_quantity`]) and only an edit through
+    /// [`crate::collection::update_entry`] leaves one standing — and it is still copies rather
+    /// than rows that a reader is being shown. The tree sums it across children; SQL does not.
     pub cards: i64,
     /// What those copies are worth at the named marketplace, `sum(quantity * unit_price)` over
     /// [`crate::sorting::price_expr`] — the collection header's own expression, so a tile and
