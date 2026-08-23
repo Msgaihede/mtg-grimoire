@@ -440,7 +440,10 @@ Every one of these has its measurement and its story in
   the list is capped). **Ordering is a display decision, so it lives in TS** — Rust's `ORDER BY`
   is not the bug when a picker reads wrong. Pinned rows (`Any card`, `Any format`, `Custom…`,
   `Auto (by what it does)`, `Top level`) stay outside the sort, and `CategoriesDialog`'s
-  `are deleted with it` stays pinned **last**. **The search's format select pins two of them, as
+  destructive answer — `go with it` since schema v25, because the `deck_cards` rows go but the
+  copies the reader owns are filed into `Recently removed` rather than destroyed — stays pinned
+  **last**, so the alphabet can never make it the row the select opens on. **The search's format
+  select pins two of them, as
   a ladder rather than an alphabet** — `Any card`, `Any format`, then the formats — because
   `Any card` is what the `Unplayable` chip became on 2026-08-14: that chip and this select were
   moving one axis in opposite directions, and only the pair could reach "Modern **and** the art

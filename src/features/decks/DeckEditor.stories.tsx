@@ -162,13 +162,13 @@ const meta = {
           "pile of the user's own that they switch off behaves identically. {@link MaybePile} " +
           "is the proof, on a card that is `modern: not_legal` while the chip beside it still " +
           "reads no issues.\n\n" +
-          "**Owned is an allocation, never a decrement.** It is rebuilt on a card write, the " +
-          "Built toggle, or “Send missing to wishlist” — those three and nothing else — and a " +
-          "**built** deck's claims come off what every other deck can see. Measured 2026-08-10 " +
-          "by flipping deck 2's `isBuilt` off and re-reading deck 1: Counterspell 1→2, Ragavan " +
-          "0→1, Tarmogoyf 2→3, Urza's Saga 3→4, and the deck's shortfall 65→61 of 75. " +
-          "{@link Modern60} reads one of those marks and {@link BuiltToggle} presses the " +
-          "switch.\n\n" +
+          "**Owned is where the card physically is, never a claim staked over it.** A deck's " +
+          "copies are the collection rows filed into that deck's group, so every deck blocks " +
+          "every other by construction and there is no reservation to switch on. The header " +
+          "carried a `Built` toggle until the claim ledger was deleted — it meant \"this deck " +
+          "is on a table, so its claims come off what the others can reach\", which is now " +
+          "what *being in the deck at all* means. {@link Modern60} reads one of those marks." +
+          "\n\n" +
           "**Every card carries the same three affordances in every view, from one module.** A " +
           "stepper whose zero *removes* the card, a `draggable()` registration and the slot " +
           "attribute the card pane finds its way home by all come from `cardControl.tsx` — " +
@@ -269,10 +269,14 @@ type Story = StoryObj<typeof meta>;
  * header says "Modern decks need at least 60 cards", and a "Cards 75" next to that sentence
  * would be two numbers for one question.
  *
- * The 1/4 on Counterspell is what a built deck elsewhere costs this one. Two foil Counterspells
- * are in the binder; the built Kenrith deck has claimed one, so this deck can reach exactly one
- * of the four it wants — measured, and the number moves to 2 the moment that deck stops being
- * built.
+ * The **2/4** on Counterspell is what custody looks like: since schema v25 a deck owns exactly
+ * the copies filed in its own collection group, so the number is a sum over this deck's folder
+ * and nothing else. The seed files two Counterspells into it, this deck wants four, and the
+ * other two are wherever the reader put them. **It moves when the copies do** — dragging one out
+ * of the group takes it to 1, and no write to any other deck can change it, which is the whole
+ * of what replaced the reservation this paragraph used to describe (*"the built Kenrith deck has
+ * claimed one … the number moves to 2 the moment that deck stops being built"* — there is no
+ * allocator, no claim and no `is_built`).
  */
 export const Modern60: Story = {
   args: { deckId: 1 },
@@ -299,8 +303,14 @@ export const Modern60: Story = {
 
     // The shortage, spoken rather than only marked: every mark on a stacked card is
     // `aria-hidden`, so the button's own name is the whole of what a keyboard reader gets.
+    //
+    // **2 since v25, where this read 1.** The figure is now `sum(quantity)` over the copies in
+    // this deck's *own* collection group, matched by oracle id — a Bolt is still a Bolt — and
+    // the seed files two Counterspells into it. It is no longer a claim the allocator worked
+    // out across the whole collection, which is why a number here can move without any card
+    // being bought or sold.
     await expect(
-      canvas.getByRole("button", { name: /^Counterspell.*you own 1 of 4/ }),
+      canvas.getByRole("button", { name: /^Counterspell.*you own 2 of 4/ }),
     ).toBeInTheDocument();
   },
 };
@@ -532,61 +542,36 @@ export const MaybePile: Story = {
     await expect(tomb.getAttribute("aria-label")).not.toMatch(/you own/i);
 
     // And nothing it holds reaches the size figure or the rules: two copies are on screen and
-    // the deck is still sixty cards, still legal, still short of the same 65.
+    // the deck is still sixty cards, still legal, still short of the same shortage.
     await expect(canvas.getByRole("button", { name: "No issues · Modern" })).toBeInTheDocument();
     await expect(
       within(canvas.getByRole("region", { name: "Main deck" })).getByText("60 cards"),
     ).toBeInTheDocument();
-    await expect(canvas.getByText("65 of 75 missing")).toBeInTheDocument();
+    // **72, not the 65 this read before v25**, and the three copies of the difference are the
+    // whole of what changed: the deck owns what its *own collection group* holds, and the seed
+    // files three copies into deck 1's group. Before, "owned" was whatever the allocator had
+    // reserved out of the entire collection, so a deck could read owned for copies sitting
+    // loose in a binder. It cannot any more — which is the point of the feature and is why this
+    // number went **up**.
+    await expect(canvas.getByText("72 of 75 missing")).toBeInTheDocument();
   },
 };
 
 /**
- * The one switch in this view with a consequence outside the deck it is on.
+ * Stepping a deck card to zero — **and the card goes, while the copies come back.**
  *
- * A built deck has its copies *reserved*: `allocate_deck` runs in the same transaction, and every
- * other deck's `ownedQuantity` is computed from what is left. That is why the chip carries its
- * hint into its accessible name — "Built, Reserves your copies for this deck" — rather than
- * leaving the consequence to a tooltip.
- *
- * **A build never moves the built deck's own numbers, and that is the point rather than a gap.**
- * Deck 2 reads 6 of 101 owned whether it is built or not (measured 2026-08-10, both ways); what
- * moves is deck 1, four cards of it — Counterspell 1→2, Ragavan 0→1, Tarmogoyf 2→3, Urza's Saga
- * 3→4, its shortfall 65→61 — and there is no surface in the app that shows two decks at once, so
- * that half is measured here and read in {@link Modern60}'s card name.
- */
-export const BuiltToggle: Story = {
-  args: { deckId: 2 },
-  play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement);
-    const chip = await canvas.findByRole("button", {
-      name: "Built, Reserves your copies for this deck",
-    });
-    await expect(chip).toHaveAttribute("aria-pressed", "true");
-    await expect(canvas.getByText("95 of 101 missing")).toBeInTheDocument();
-
-    await userEvent.click(chip);
-
-    await waitFor(async () => {
-      await expect(chip).toHaveAttribute("aria-pressed", "false");
-    });
-    // Its own claims are unchanged: releasing a reservation gives copies back to *other* decks.
-    await expect(canvas.getByText("95 of 101 missing")).toBeInTheDocument();
-    await expect(canvas.queryByRole("alert")).toBeNull();
-  },
-};
-
-/**
- * Stepping a deck card to zero — **and the card goes.**
- *
- * The exact opposite of the collection's asymmetry, and the pair is easy to get backwards.
- * `collection_set_quantity(0)` keeps the row with its condition, its purchase price, its tags
- * and its acquisition story; `deck_set_card_quantity(0)` **deletes** (mirroring the table's
- * `CHECK (quantity > 0)`), because a category slot holds an intention and nothing else.
+ * A deck row holds an intention and nothing else, so zero deletes it (mirroring the table's
+ * `CHECK (quantity > 0)`). What the reader physically owns is a different thing in a different
+ * table: on the **Live** list the copies the deck's group was holding are filed into
+ * `Recently removed`, which is what `deck_to_collection` does in the same transaction and what
+ * the standing sentence at the foot of the deck says. The collection's own zero is the pair
+ * that is easy to get backwards — `collection_set_quantity(0)` deletes as well since schema
+ * v24, taking the condition, the purchase price and the acquisition story with it.
  *
  * **There is no remove control here to look for**, and that absence is the claim. A deck card
- * simply leaves, and the two ways to make it leave — the stepper's zero and a drop on the
- * remove tray — are the same `setQuantity(…, 0)` write.
+ * simply leaves, and the three ways to make it leave — the stepper's zero, a drop on the remove
+ * tray and the card menu's `Remove card` — are one write, routed through
+ * `useDeck.setQuantity`.
  *
  * And the caret does not fall on `<body>` when the control it was on unmounts: it goes to the
  * pile the card left, which is where the reader is looking and which announces its own name.
@@ -955,10 +940,12 @@ export const NeedsReview: Story = {
  * to leave its sentence up while a rename succeeded behind it. The docked panel's add is
  * deliberately not among them: it reports beside the button that was pressed.
  *
- * The Built toggle is the write pressed here because it is the one this rebuild still has a
- * control for; before the four views replaced the category columns it would have been a stepper,
- * which also exercised the optimistic rollback. That rollback is still `useDeck`'s and still
- * tested there — what this story shows is the *banner*, and that the deck survives a refusal.
+ * The header's `Deck game` select is the write pressed here because it is a one-act deck-row
+ * write the header always draws; before the four views replaced the category columns it would
+ * have been a stepper, which also exercised the optimistic rollback. That rollback is still
+ * `useDeck`'s and still tested there — what this story shows is the *banner*, and that the deck
+ * survives a refusal. (It was the `Built` toggle until that chip was removed with the claim
+ * ledger.)
  */
 export const Busy: Story = {
   args: { deckId: 1 },
@@ -967,7 +954,7 @@ export const Busy: Story = {
     const canvas = within(canvasElement);
     await canvas.findByRole("region", { name: "Main deck" });
 
-    await userEvent.click(canvas.getByRole("button", { name: /^Built/ }));
+    await userEvent.selectOptions(canvas.getByLabelText("Deck game"), "paper");
 
     const alert = await canvas.findByRole("alert");
     await expect(alert).toHaveTextContent(

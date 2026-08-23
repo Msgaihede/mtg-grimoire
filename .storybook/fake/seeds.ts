@@ -69,9 +69,9 @@ export type SeedName = "empty" | "starter" | "needsReview" | "large";
  * Row ids, handed out in insertion order — `INTEGER PRIMARY KEY`'s own behaviour, and what
  * `nextId` continues from after the first write.
  *
- * Not cosmetic. Row id is the allocator's last tiebreaker ("then the oldest entry") and it is
- * the whole of both lists' `sort: "added"`, so declaration order below is the order a reader
- * sees under "Recently added" and the order two decks compete for the same copies in.
+ * Not cosmetic. Row id is what `deck_to_collection` takes copies out of a deck's group in
+ * ("oldest row first") and it is the whole of both lists' `sort: "added"`, so declaration order
+ * below is the order a reader sees under "Recently added" and the order copies come back in.
  */
 function ids(): () => number {
   let n = 0;
@@ -247,10 +247,10 @@ function starterCategories(): FakeDeckCategory[] {
     ["main", "Ramp", true, "auto"],
     ["main", "Card advantage", true, "user"],
     // **The point of the whole fixture.** A pile the *reader* made and switched off, which
-    // counts toward nothing — no size, no copy limit, no legality check — and claims no copies,
-    // exactly as the Maybeboard above it does. Nothing in the engine, the allocator or the
-    // stats knows which of the two is which, and the illegal card filed here is how a story can
-    // show that: switch it on and the deck reports a banned card.
+    // counts toward nothing — no size, no copy limit, no legality check — and is attributed no
+    // copies, exactly as the Maybeboard above it does. Nothing in the engine, the deck read or
+    // the stats knows which of the two is which, and the illegal card filed here is how a story
+    // can show that: switch it on and the deck reports a banned card.
     //
     // It is also this seed's **empty user pile**: it holds one card in the live list and none in
     // the plan, so opening deck 4 on its theory tab draws it with nothing under it. An `auto`
@@ -357,10 +357,17 @@ function emptySeed(): FakeDb {
  * entries**, which is why `collection_summary`'s `totalCards` and `entries` disagree in every
  * story built on this seed — as they must, since a row at zero is still a row.
  *
- * **Four of the twelve are filed into {@link starterCollectionFolders} and eight are at the
- * root** (schema v24). Filing moves no copies and changes no total: `CollectionQuery.folderId`
- * is absent by default and means *every* folder, so every count above is what it always was and
+ * **Four of the twelve sit in binders the reader named, two sit in deck 1's group, and six are
+ * at the root.** Filing moves no copies and changes no total: `CollectionQuery.folderId` is
+ * absent by default and means *every* folder, so every count above is what it always was and
  * every story that says nothing about folders sees the list it always saw.
+ *
+ * **The two in {@link DECK_1_GROUP} are the ones schema v25 made different in kind.** A binder is
+ * the reader's filing; a deck's group is *where the cards physically are*, so those three copies
+ * are spoken for — `allocation: "unallocated"` drops them, `deck_theory`'s spare count does not
+ * see them, and `deck_to_collection` on deck 1's matching rows is what puts them back on the
+ * desk. The other three decks hold nothing, which is the state a decklist typed out of a file
+ * leaves behind and is just as much a shape a story has to draw.
  */
 function starterEntries(): FakeEntry[] {
   const next = ids();
@@ -387,7 +394,11 @@ function starterEntries(): FakeEntry[] {
     // `lang: "ja"` card and one of two that offer `etched`. `lang` is copied off the card, so
     // a story cannot accidentally file a Japanese printing under `en`.
     entry(next(), printing("sta", "105"), "etched", "NM", 1),
-    entry(next(), printing("mh2", "267"), "foil", "NM", 2),
+    // **In deck 1's group**, which is what "this card is physically in that deck" looks like
+    // since schema v25 — and the fixture that makes `ownedQuantity`'s oracle match visible: deck
+    // 1 lists four *nonfoil* `mh2 267`, this row is foil, and the deck still reads owned 2. A
+    // Bolt is a Bolt.
+    entry(next(), printing("mh2", "267"), "foil", "NM", 2, { folderId: DECK_1_GROUP }),
     // Two Sol Rings, and the pair is the fixture for "same card, different printing": the
     // any-printing wish below is filled by both, the Commander deck's exact-printing rule
     // prefers this one, and the row after it is the unpriced one.
@@ -398,9 +409,12 @@ function starterEntries(): FakeEntry[] {
     // which is what makes that folder's `value` **null rather than 0** at TCGplayer.
     entry(next(), printing("sld", "913"), "foil", "NM", 1, { folderId: 2 }),
     // The nonfoil Ragavan that does **not** fill the foil wish below — the wishlist's
-    // finish-aware rule, staged as two rows rather than asserted in a comment.
+    // finish-aware rule, staged as two rows rather than asserted in a comment. Also in deck 1's
+    // group, and the second row that makes it non-empty: a wish is finish-aware wherever the
+    // copy is filed, so this row proves both things at once.
     entry(next(), printing("mh2", "138"), "nonfoil", "DMG", 1, {
       conditionOriginal: "Damaged",
+      folderId: DECK_1_GROUP,
     }),
     entry(next(), printing("fut", "153"), "nonfoil", "MP", 3, { signed: true }),
     entry(next(), printing("mh2", "259"), "nonfoil", "NM", 4, { tradelistQuantity: 1 }),
@@ -419,8 +433,9 @@ function starterEntries(): FakeEntry[] {
       notes: "Traded away at the last Modern night. Keeping the row for the note.",
     }),
     // A proxy, and the fixture's second unpriced card (`lea 232` has no `usd` at all — it is
-    // priced in euros and in tickets). The archived deck's Black Lotus is allocated from this
-    // row, because the allocator prefers real copies to proxies and there is no real copy.
+    // priced in euros and in tickets). The archived deck lists a Black Lotus and this is the
+    // only copy of one anywhere — filed in `Trade binder`, so that deck reads owned 0 against a
+    // card the reader really does have. Which is the point: owning it is not holding it.
     entry(next(), printing("lea", "232"), "nonfoil", "NM", 1, {
       proxy: true,
       notes: "Cube proxy. The real one is not happening.",
@@ -450,21 +465,54 @@ function starterEntries(): FakeEntry[] {
  * that built its tree from the summary rather than from `collection_folder_list` would draw two
  * folders here and never notice, and the empty-folder sentence would be unreachable.
  *
- * **Every one is `kind: "user"`, and that is the whole cabinet in this build.** Nothing creates
- * a `deck` folder or the `removed` one yet, so a story about the pinned section they belong to
- * has to seed one by hand — which is the honest state rather than a gap, since the page must
- * draw nothing at all where those folders are not.
- *
  * `sortOrder` is what `collection_folder_create` writes — `max + 1` **among siblings** — so the
  * two at the root are 0 and 1 while the child starts at 0 again rather than continuing their run.
+ *
+ * # And then five the reader did not make
+ *
+ * **Schema v25 turned the app's own folders into the physical ledger**, so this seed carries the
+ * world the app really has: **one `kind: "deck"` folder per deck**, wearing the deck's name and
+ * carrying its id, plus **exactly one `kind: "removed"` folder** called `Recently removed`. A
+ * seed without them could not draw the collection page's pinned section at all, and every
+ * `collection_to_deck` in a story would answer "That deck has no folder to hold its cards."
+ *
+ * Only **deck 1's group holds anything** ({@link starterEntries}), and the three empty ones are
+ * the point rather than a shortage: a deck whose cards were typed out of a decklist owns none of
+ * them, which is the commoner state by far, and `Recently removed` starts empty because nothing
+ * has been cut yet. Both shapes have to draw.
+ *
+ * `sortOrder` is 0 on all five — a deck's group is not something the reader ordered, and
+ * `collection_folder_list` sorts by name within a parent anyway.
  */
-function starterCollectionFolders(): FakeCollectionFolder[] {
+function starterCollectionFolders(decks: FakeDeck[]): FakeCollectionFolder[] {
   return [
     { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0 },
     { id: 2, parentId: 1, name: "Trade binder", kind: "user", deckId: null, sortOrder: 0 },
     { id: 3, parentId: null, name: "Someday", kind: "user", deckId: null, sortOrder: 1 },
+    // Ids 4 through 7, in deck order, which is what {@link DECK_1_GROUP} names.
+    ...decks.map((d, i) => ({
+      id: 4 + i,
+      parentId: null,
+      name: d.name,
+      kind: "deck",
+      deckId: d.id,
+      sortOrder: 0,
+    })),
+    {
+      id: 4 + decks.length,
+      parentId: null,
+      name: "Recently removed",
+      kind: "removed",
+      deckId: null,
+      sortOrder: 0,
+    },
   ];
 }
+
+/** Deck 1's group, and the one folder in this seed the *app* filed cards into. Named because
+ *  {@link starterEntries} has to say where two of its rows are and a bare `4` is a number no
+ *  reader can resolve. */
+const DECK_1_GROUP = 4;
 
 /**
  * Three folders (schema v23), and each is a shape the wishlist page has to be able to draw.
@@ -617,9 +665,10 @@ function starterDecks(): FakeDeck[] {
       formatKey: "modern",
       description: "Sixty legal cards and no plan. The shell every Modern story is cut from.",
       coverCardId: printing("mh2", "138").id,
-      // A draft. Its claims are computed from what the built deck below left, and stored
-      // nowhere — which is exactly what an unbuilt deck is.
-      isBuilt: false,
+      // **The deck whose group actually holds cards** — see {@link starterEntries}: three of the
+      // four `2x2` Bolts and the etched Swords sit in folder 4, this deck's group. So its Bolt
+      // row reads owned 3 of 4 and those copies are unavailable to every other deck, which is
+      // the whole of what exclusivity means since schema v25.
       archived: false,
       updatedAt: CLOCK_BASE - HOUR,
     }),
@@ -630,11 +679,10 @@ function starterDecks(): FakeDeck[] {
       description:
         "Every permanent in the 99 costs two or less. The commander is the one card that does not.",
       coverCardId: printing("eld", "303").id,
-      // **The one built deck**, and what makes cross-deck contention visible at all: a built
-      // deck's claims come off what every other deck can see. It takes one of the four
-      // `2x2` Bolts, so the Modern draft above can only claim three of that printing and
-      // fills its fourth copy from another Bolt in the binder — measured in `world.test.ts`.
-      isBuilt: true,
+      // **A deck whose group is empty**, and the commoner state by far: every card it lists was
+      // typed out of a decklist rather than moved off a shelf, so every row reads owned 0 and
+      // `deck_to_collection` on any of them files nothing into `Recently removed`. A seed where
+      // every deck held its cards could not draw that.
       archived: false,
       updatedAt: CLOCK_BASE - DAY,
     }),
@@ -644,7 +692,6 @@ function starterDecks(): FakeDeck[] {
       formatKey: "oldschool",
       description: "Twenty-two cards in, and then the prices were looked up.",
       coverCardId: printing("lea", "232").id,
-      isBuilt: false,
       archived: true,
       // **A plan that is an exact copy of the deck**, which is not a degenerate fixture: it is
       // the state `deck_theory_copy_from_live` *produces*, and the only command that produces
@@ -674,7 +721,6 @@ function starterDecks(): FakeDeck[] {
       // is the no-cover affordance — the state, not the bytes, is what this seeds.
       coverCardId: null,
       coverKind: "custom",
-      isBuilt: false,
       archived: false,
       // Filed, so the root wall is still the three decks every gallery story was written
       // against — see {@link FILED_DECK_FOLDER}.
@@ -729,8 +775,8 @@ function starterFolders(): FakeDeckFolder[] {
  * fixture with a real curve and a real land count, not a list anyone would sleeve. The
  * Maybeboard row is `Ancient Tomb`, which is `modern: "not_legal"` **on purpose**: an
  * **inactive** category counts toward nothing at all — not size, not copies, not legality, and
- * the allocator claims no copies for it — and a pile holding an illegal card is the only way a
- * story can show that. It is inactive because it was seeded that way, not because of its kind:
+ * no copy of the deck's is attributed to it — and a pile holding an illegal card is the only way
+ * a story can show that. It is inactive because it was seeded that way, not because of its kind:
  * switch it on and the deck reports an illegal card.
  *
  * **Deck 2, `commander` — 99 main + 1 commander + 1 companion.** Kenrith commands, so colour
@@ -962,7 +1008,7 @@ function starterTags(): FakeDeckTag[] {
  * A timestamp `daysAgo` days back at a fixed local hour — **the one clock in this file that is
  * not {@link CLOCK_BASE}**, and the exception is forced.
  *
- * Every other timestamp here is an *ordering* number and `db.ts`'s simplification 8 says so:
+ * Every other timestamp here is an *ordering* number and `db.ts`'s simplification 7 says so:
  * nothing renders one as a date. `deck_audit.at` is the exception, because `auditText`'s day
  * grouping renders exactly that — so a history dated from a fixed instant in the past would
  * file every row under one absolute heading and put "Today" and "Yesterday" out of reach.
@@ -1156,7 +1202,7 @@ function starterSeed(): FakeDb {
     ...starterFeeds(CARDS),
     ...starterTaxonomy(CARDS),
     collectionEntries: starterEntries(),
-    collectionFolders: starterCollectionFolders(),
+    collectionFolders: starterCollectionFolders(decks),
     wishlistEntries: starterWishes(),
     wishlistFolders: starterWishFolders(),
     decks,

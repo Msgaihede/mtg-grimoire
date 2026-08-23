@@ -775,14 +775,13 @@ pub struct ImportOutcome {
 
 /// A whole decklist into one deck, in one transaction.
 ///
-/// **This command exists for the allocator.** Looping [`crate::deck::add_card`] from the
-/// frontend would be correct in every other respect and would run
-/// [`crate::deck::allocate_deck`] once per line — a hundred rebuilds of a deck's claims for one
-/// import, each one deleting and re-deriving every row the last one wrote. Here it runs
-/// **once**, at the end, over the finished deck.
-/// `the_allocator_runs_once_for_the_whole_import` counts the row changes, because that is the
-/// only place the difference is visible: the allocator is delete-and-rebuild, so one run and a
-/// hundred runs leave identical rows.
+/// **This command existed for the allocator, and outlives it.** Looping
+/// [`crate::deck::add_card`] from the frontend would have run `allocate_deck` once per line — a
+/// hundred rebuilds of a deck's claims for one import, each deleting and re-deriving every row
+/// the last one wrote — and this command ran it once, at the end, over the finished deck.
+/// Schema v25 dropped the allocator, and what is left is the reason that survives it: **one
+/// transaction**. A hundred `add_card` calls are a hundred transactions, so a list that is
+/// refused on line 90 leaves 89 cards in the deck and a history of 89 edits nobody made.
 ///
 /// Everything else is [`crate::deck::add_card`]'s shape held to deliberately: the same two
 /// opening fences (a variant the schema knows, a deck that is still there), the same
@@ -945,8 +944,6 @@ pub fn commit_import(
             added = added.saturating_add(item.quantity);
         }
     }
-
-    crate::deck::allocate_deck(&tx, deck_id)?;
 
     // Facts only — `auditText.ts` words them. `None` for the card because an import is about no
     // one card, and the counts are what a reader is owed instead.
@@ -1991,72 +1988,6 @@ mod tests {
             "the seeded row, whose kind is what the rules read"
         );
         assert_eq!(after, before, "and nothing new was made");
-    }
-
-    /// **The whole reason this command exists.** Looping `deck::add_card` would be correct in
-    /// every other respect and would run `allocate_deck` once per line.
-    ///
-    /// "Once" is not observable in the *result* — the allocator deletes and rebuilds, so twenty
-    /// runs and one run leave the same rows — so this counts **work** instead, through
-    /// SQLite's own `total_changes`. Both figures were measured 2026-08-12 by running this
-    /// fixture each way, and they are exactly the arithmetic, for twenty cards each owned once:
-    ///
-    /// * one run — 1 `touch_deck` + 1 category + 20 `deck_cards` + (0 claims deleted + 20
-    ///   written) + 1 audit row — **43**;
-    /// * one run per item — the allocator's k-th pass deletes `k−1` claims and writes `k`, so
-    ///   `sum(2k−1)` over 1..20 is 400 for the allocator alone — **423**, measured by moving
-    ///   `allocate_deck` inside the loop, which fails this test with that number.
-    ///
-    /// The assertion sits at 100, roughly an order of magnitude clear of both: it cannot fail
-    /// because a later change writes a few more rows, and cannot pass if the allocator is ever
-    /// moved back inside the loop.
-    #[test]
-    fn the_allocator_runs_once_for_the_whole_import() {
-        let conn = seeded();
-        let id = deck(&conn);
-        let mut items = Vec::new();
-        for n in 0..20 {
-            let card = format!("bulk-{n:02}");
-            conn.execute(
-                "INSERT INTO cards (id, oracle_id, name, set_code, collector_number, lang,
-                                    released_at, is_paper, layout, rarity, type_line, prices, raw)
-                 VALUES (?1, ?2, ?3, 'blk', ?4, 'en', '2020-01-01', 1, 'normal', 'common',
-                         'Artifact', '{\"usd\":\"1.00\"}', '{}')",
-                params![
-                    card,
-                    format!("o-bulk-{n:02}"),
-                    format!("Bulk {n:02}"),
-                    n.to_string()
-                ],
-            )
-            .unwrap();
-            own(&conn, &card, 1);
-            items.push(item(&card, 1, "Main deck"));
-        }
-
-        let before = conn.total_changes();
-        let out = commit_import(&conn, id, "live", "merge", &items).unwrap();
-        let spent = conn.total_changes() - before;
-
-        assert_eq!(out.added, 20);
-        let claimed: (i64, i64) = conn
-            .query_row(
-                "SELECT count(*), coalesce(sum(quantity), 0) FROM deck_allocations
-                  WHERE deck_id = ?1",
-                params![id],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .unwrap();
-        assert_eq!(
-            claimed,
-            (20, 20),
-            "every card owned, every copy claimed once"
-        );
-        assert!(
-            spent < 100,
-            "one allocator run costs ~43 row changes and twenty cost ~423; this import spent \
-             {spent}"
-        );
     }
 
     #[test]

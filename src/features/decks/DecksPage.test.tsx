@@ -76,7 +76,6 @@ const BURN: DeckRow = {
   description: null,
   coverCardId: "0000419b-0bba-4488-8f7a-6194544ce91d",
   coverArtist: "Rebecca Guay",
-  isBuilt: false,
   archived: false,
   cardCount: 60,
   updatedAt: 1_800_000_000,
@@ -1015,6 +1014,28 @@ describe("DecksPage", () => {
     await userEvent.click(within(confirm).getByRole("button", { name: "Delete deck" }));
 
     expect(deckDelete).toHaveBeenCalledWith(4);
+  });
+
+  /**
+   * **The question names the destination, not only the loss.** A card is in a deck because its
+   * collection row physically sits in that deck's group, so a delete refiles those copies into
+   * `Recently removed` rather than destroying them — the half of the sentence a reader is
+   * actually afraid of. It is unconditional: no checkbox, because where the copies land is a
+   * fact about the write and not an option.
+   *
+   * The collection's own folder-delete confirmation is the precedent this follows ("Its cards
+   * move back to your collection; folders inside it are deleted"), and the failure it guards
+   * against is a sentence that says only "and everything in it".
+   */
+  it("says where a deleted deck's cards go, with nothing to switch off", async () => {
+    wrap(<DecksPage />);
+
+    await userEvent.click(await screen.findByRole("button", { name: "Delete Burn" }));
+
+    const confirm = screen.getByRole("dialog", { name: /delete burn/i });
+    expect(confirm).toHaveTextContent("Its 60 cards move to Recently removed.");
+    expect(within(confirm).queryByRole("checkbox")).toBeNull();
+    expect(deckDelete).not.toHaveBeenCalled();
   });
 
   /** The way out of the question, for the reader who did not mean to ask it. */

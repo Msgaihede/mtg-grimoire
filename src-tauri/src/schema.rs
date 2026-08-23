@@ -1,7 +1,9 @@
 //! Database schema: `cards`, `sets`, `sync_meta`, the `cards_fts` search index, the user's
-//! own tables — `collection_entries`, `wishlist_entries`, `card_migrations`, `decks`,
-//! `deck_cards`, `deck_allocations` — and `format_specs`, which is seeded *data*: the
-//! format rules the validation engine reads instead of embodying.
+//! own tables — `collection_entries`, `collection_folders`, `wishlist_entries`,
+//! `card_migrations`, `decks`, `deck_cards` — and `format_specs`, which is seeded *data*: the
+//! format rules the validation engine reads instead of embodying. (`deck_allocations` was on
+//! that list until schema v25 replaced a deck's *claim* on copies with the copies being filed
+//! in that deck's group.)
 //!
 //! Nullability here is load-bearing. Scryfall omits `oracle_id`, `cmc` and `type_line` at
 //! the top level on some printings (reversible cards, art series), `collector_number` is
@@ -23,18 +25,26 @@
 //! CASCADE where the parent's deletion genuinely means the child should go too, SET NULL
 //! where the child has to outlive it.
 //!
-//! CASCADE is the common case — `deck_cards.deck_id`, `deck_cards.category_id`,
-//! `deck_allocations.deck_id`, `deck_allocations.collection_entry_id`,
-//! `deck_categories.deck_id`, `deck_audit.deck_id`, `deck_undo.audit_id`,
-//! `deck_undo.deck_id`, `deck_folders.parent_id`, `wishlist_folders.parent_id`,
-//! `collection_folders.parent_id` and `collection_folders.deck_id` all take
-//! it, because a deleted deck's cards and reservations, a deleted category's cards, a
-//! reversal for a history row that is gone, and a deleted folder's sub-folders have nowhere
-//! else to be. It is right, too, at the app's one *non-user* delete:
-//! [`crate::reconcile`]'s fold repoints
-//! allocations onto the surviving entry *before* the delete runs, so the cascade fires over
-//! nothing, and `collection::remove_entry` relies on the same action to free reservations on
-//! copies that no longer exist. SET NULL is the other four — `decks.folder_id` (a folder is
+//! CASCADE is the common case, and there are **ten** of them — `deck_cards.deck_id`,
+//! `deck_cards.category_id`, `deck_categories.deck_id`, `deck_audit.deck_id`,
+//! `deck_undo.audit_id`, `deck_undo.deck_id`, `deck_folders.parent_id`,
+//! `wishlist_folders.parent_id`, `collection_folders.parent_id` and
+//! `collection_folders.deck_id` — because a deleted deck's cards, a deleted category's cards,
+//! a reversal for a history row that is gone, and a deleted folder's sub-folders have nowhere
+//! else to be.
+//!
+//! **`deck_allocations.deck_id` and `deck_allocations.collection_entry_id` left this list at
+//! schema v25, with their table**, and they are worth a line rather than a silent deletion
+//! because what replaced them is on both lists above and below. A deck no longer *claims*
+//! copies somebody else's row holds; the copies sit in that deck's group. So deleting a deck
+//! takes the group with it (`collection_folders.deck_id`, CASCADE) while the cards themselves
+//! surface at the root (`collection_entries.folder_id`, SET NULL) — which is the whole
+//! difference between a claim and custody, written as two `ON DELETE` actions pointing
+//! opposite ways at the same press. It also retires the two delete-sites this paragraph used
+//! to name: [`crate::reconcile`]'s fold no longer has allocations to repoint before it runs,
+//! and `collection::remove_entry` has no reservations left to free.
+//!
+//! SET NULL is the other four — `decks.folder_id` (a folder is
 //! a filing decision, and the decks inside it are the user's work, not the folder's to take
 //! down with it), `deck_cards.tag_id` (deleting a tag must never delete a card),
 //! `wishlist_entries.folder_id` (`decks.folder_id`'s argument one list over: a wish is the
@@ -62,7 +72,7 @@
 //! wearing it. [`crate::reset::clear_decks`] sweeps that table by hand, which is the one case —
 //! every deck at once — where clearing it is right.
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::HashMap;
 
 /// The `cards` columns **as version 1 created them. FROZEN.**
@@ -244,7 +254,7 @@ fn json_raw(col: &str) -> String {
 /// wrote *head* would commit "fully migrated" before the steps after it had run — and
 /// would keep the version assertion passing while doing it. This constant is the thing
 /// tests compare against, not the thing steps write.
-pub const SCHEMA_VERSION: i64 = 24;
+pub const SCHEMA_VERSION: i64 = 25;
 
 /// What makes two collection rows the *same* row, as one SQL fragment.
 ///
@@ -452,8 +462,15 @@ pub fn tag_name_key(name: &str) -> String {
 /// and `theory`, what it is being built toward. CHECK-constrained on `deck_cards.variant`
 /// and `deck_audit.variant`, and part of [`DECK_CARD_GRAIN`] — the reason a change tried out
 /// in Theory is a different row from the Live one it is being tried against, never a draft
-/// that could silently overwrite it. `deck::allocate_deck` reserves collection copies for
-/// `live` only: a theory list is a plan, and a plan claims nothing.
+/// that could silently overwrite it.
+///
+/// **A theory list is a plan, and a plan holds no cards.** That sentence used to read
+/// *"`deck::allocate_deck` reserves collection copies for `live` only"*, naming a function
+/// schema v25 deleted along with the ledger it wrote. Nothing reserves anything now: a deck
+/// holds a card because a `collection_entries` row sits in that deck's group, and the two
+/// places that draw the conclusion for `theory` say so themselves — `deck::attribute_owned`
+/// zeroes every theory row explicitly, and
+/// [`crate::collection_alloc::THEORY_HOLDS_NOTHING`] refuses to move copies for one.
 pub const DECK_VARIANTS: [&str; 2] = ["live", "theory"];
 
 /// Where a card can be played, as Scryfall spells it — the vocabulary of `cards.games` and,
@@ -510,12 +527,12 @@ pub const AUDIT_KINDS: [&str; 9] = [
     "add", "remove", "quantity", "move", "swap", "tag", "category", "folder", "deck",
 ];
 
-/// One deck's claim on one collection entry. Both columns are `NOT NULL` enforced foreign
-/// keys, so the grain is the pair and nothing else: a deck reserves copies *of a collection
-/// row*, and a second claim on the same row by the same deck is the same claim.
-///
-/// Read by no SQL at all, like [`DECK_CATEGORY_GRAIN`].
-pub const ALLOCATION_GRAIN: &str = "deck_id, collection_entry_id";
+// `ALLOCATION_GRAIN` — `deck_id, collection_entry_id`, one deck's claim on one collection
+// row — stood here until schema v25 dropped `deck_allocations` with the whole idea of a
+// claim. A deck no longer reserves copies it does not hold: the copies sit in that deck's
+// group, so "which deck holds this card" is a `collection_entries.folder_id` and the grain
+// that answers it is [`COLLECTION_GRAIN`]'s eleventh term. Nothing replaces this constant,
+// which is why the space it left is a comment rather than a rename.
 
 /// The format rules as DATA (spec §6), so a rules change is an UPDATE and not a release,
 /// and the validation engine reads rules rather than embodying them.
@@ -2417,6 +2434,193 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         tx.execute_batch("PRAGMA user_version = 24;")?;
         tx.commit()?;
     }
+    if v < 25 {
+        let tx = conn.unchecked_transaction()?;
+        // **The folders stop being empty, and a deck stops *claiming* copies it does not
+        // hold.** v24 built the cabinet — [`COLLECTION_FOLDER_KINDS`]' three words, both
+        // partial unique indexes, `folder_id` as the grain's eleventh term — and filed nothing
+        // into it. This is the rung that files. After it, "which deck holds this card" is
+        // answered by where the collection row *sits* rather than by a claim ledger an
+        // allocator recomputed, and `deck_allocations` has nothing left to say.
+        //
+        // **Order is the whole of this step's correctness: insert the folders, convert, then
+        // drop.** Dropping the ledger before reading it destroys the very thing being
+        // converted, and there is no second copy of it anywhere.
+        //
+        // The DDL and the conflict target below are **spelled out literally and never
+        // interpolated from [`COLLECTION_GRAIN`]/[`COLLECTION_FOLDER_KINDS`]**, for the reason
+        // [`CARDS_COLUMNS`] is frozen and the v4, v8, v23 and v24 steps repeat: a migration
+        // step is history, and a step that read a constant would silently rewrite what a
+        // *fresh* install creates the next time that constant moves.
+
+        // One holding area for the whole database — where copies go when they leave the
+        // collection without leaving the database. The partial unique index v24 created makes
+        // a second one impossible, so this insert is also the assertion that there is one.
+        tx.execute_batch(
+            "INSERT INTO collection_folders
+                 (parent_id, name, kind, deck_id, sort_order, created_at, updated_at)
+             VALUES (NULL, 'Recently removed', 'removed', NULL, 0, unixepoch(), unixepoch());",
+        )?;
+        // One group per deck, named after it. **Archived decks included**: archiving is a flag
+        // and not a delete, and an archived deck still holds its cards — leaving it out would
+        // make the upgrade lose exactly the copies nobody is looking at.
+        tx.execute_batch(
+            "INSERT INTO collection_folders
+                 (parent_id, name, kind, deck_id, sort_order, created_at, updated_at)
+             SELECT NULL, name, 'deck', id, 0, unixepoch(), unixepoch() FROM decks;",
+        )?;
+
+        // **The conversion is in Rust rather than in SQL, because it splits rows.** One
+        // statement cannot both create the placement and reduce the row it came from, and the
+        // clamp below is not expressible over a table that same statement is writing to.
+        //
+        // **Ascending by `id`, which is first-claim-first-served**, and the order matters
+        // wherever two decks claimed the same row and the copies do not stretch to both: a
+        // claim was a *reservation* and could overlap, a placement is *custody* and cannot, so
+        // one of them has to lose and the older claim is the one with the better story.
+        let claims: Vec<(i64, i64, i64)> = {
+            let mut stmt = tx.prepare(
+                "SELECT deck_id, collection_entry_id, quantity FROM deck_allocations ORDER BY id",
+            )?;
+            let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+            rows.collect::<rusqlite::Result<Vec<_>>>()?
+        };
+        for (deck_id, entry_id, claimed) in claims {
+            // The source can already be gone: an earlier claim on the same row may have taken
+            // every copy, and a row holding nothing is deleted rather than left at zero (v24's
+            // rule). `.optional()` rather than an unwrap, because that is a normal outcome.
+            //
+            // `tradelist_quantity` is read here with the quantity because the split has to
+            // divide it — see the two clamps below.
+            let source: Option<(i64, i64)> = tx
+                .query_row(
+                    "SELECT quantity, tradelist_quantity FROM collection_entries WHERE id = ?1",
+                    params![entry_id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()?;
+            let held = source.map(|(q, _)| q);
+            let offered = source.map_or(0, |(_, t)| t);
+            // **The clamp, and it is not optional.** The old ledger could out-claim a row that
+            // was later stepped down — nothing refused it, because `deck::owned_by_oracle`
+            // applied `min(a.quantity, e.quantity)` at *read* time and the stored overclaim
+            // never showed. Reading the claim literally here would invent copies the reader
+            // does not own, permanently and with nothing to compare against afterwards.
+            let take = held.unwrap_or(0).min(claimed);
+            if take == 0 {
+                continue;
+            }
+            // **The trade list is split, never copied**, and this is the second clamp the rung
+            // owes. `tradelist_quantity` says how many of *these* copies are offered for trade;
+            // carrying the number verbatim onto the placement and leaving the source's alone
+            // would make a row of 4 offered 2, split in half, into two rows of 2 **each**
+            // offering 2 — the reader promising four copies they do not have, with both halves
+            // holding `tradelist > quantity`. Nothing in the database refuses that: there is no
+            // CHECK tying the two columns, so it would commit in silence, and a rung is
+            // one-shot. Every writer that runs afterwards clamps against exactly this invariant
+            // — [`crate::collection::add_entry`], `set_quantity`, `update_entry` and
+            // [`crate::collection_folders::take_copies`], whose doc says it in one line:
+            // *"Duplicating it would put a card on the trade list twice by moving it."*
+            //
+            // The arithmetic is `take_copies`' own: the copies that travel take
+            // `min(offered, take)` and the remainder keeps what is left. **Each half is then
+            // clamped to its own quantity a second time**, which matters only for a database
+            // that already held `tradelist > quantity` — nothing this crate writes can, but a
+            // hand-edited row can, and a conversion that carried such a row forward would
+            // manufacture the very state it is here to avoid. Both clamps can only leave the
+            // total where it was or take it down; neither can grow it.
+            let moved_trade = offered.min(take);
+            let kept_trade = (offered - moved_trade).min(held.unwrap_or(0) - take);
+            let folder: i64 = tx.query_row(
+                "SELECT id FROM collection_folders WHERE deck_id = ?1",
+                params![deck_id],
+                |r| r.get(0),
+            )?;
+            // **The placement carries every grain column and every column that is the row's
+            // story**, because the copies in the deck are the same physical cards: bought on
+            // the same day, for the same money, in the same condition, with the same note on
+            // the sleeve. A bare row here would be the upgrade quietly deleting a history that
+            // took years to accumulate — the same cost v24 accepted for a stepper taken to
+            // zero, and there is no reason to pay it twice.
+            //
+            // `ON CONFLICT` rather than a plain insert because two claims on one entry from
+            // **one** deck are one placement (two decks are two placements, which the folder
+            // term keeps apart). It is the eleven-term grain v24 built, verbatim.
+            //
+            // **The `DO UPDATE` sums the trade list beside the quantity**, for the same reason
+            // [`crate::collection::fold_entry`] does: two rows that merge are one pile, and
+            // what each was offering is still offered. Leaving that column at the survivor's
+            // value would quietly *drop* the arriving row's promise, which is the safe
+            // direction but not the true one — and the sum cannot break the invariant either
+            // way, since each side arrives already clamped to its own quantity and the
+            // quantities sum in the same statement.
+            tx.execute(
+                "INSERT INTO collection_entries
+                     (card_id, set_code, collector_number, lang, finish, condition,
+                      condition_original, quantity, tradelist_quantity, purchase_price,
+                      purchase_currency, acquired_at, acquisition_source, serial_number,
+                      altered, signed, proxy, misprint, grading, tags, notes, needs_review,
+                      folder_id, created_at, updated_at)
+                 SELECT card_id, set_code, collector_number, lang, finish, condition,
+                        condition_original, ?2, ?4, purchase_price,
+                        purchase_currency, acquired_at, acquisition_source, serial_number,
+                        altered, signed, proxy, misprint, grading, tags, notes, needs_review,
+                        ?3, created_at, unixepoch()
+                   FROM collection_entries WHERE id = ?1
+                 ON CONFLICT (card_id, finish, condition, lang, altered, signed, proxy,
+                              misprint, coalesce(serial_number, ''), coalesce(grading, ''),
+                              coalesce(folder_id, 0))
+                 DO UPDATE SET quantity = quantity + excluded.quantity,
+                               tradelist_quantity = tradelist_quantity
+                                                    + excluded.tradelist_quantity,
+                               updated_at = unixepoch()",
+                params![entry_id, take, folder, moved_trade],
+            )?;
+            // And the source loses exactly what left it — never more, never less — including
+            // the share of its trade list that travelled. It is deleted at zero rather than
+            // left standing empty, for v24's reason: with the folder in the grain, a row
+            // holding no copies is indistinguishable from a row somebody filed and emptied.
+            // (The `DELETE` below takes the trade list with it, so a row emptied of copies
+            // cannot leave a promise standing.)
+            tx.execute(
+                "UPDATE collection_entries
+                    SET quantity = quantity - ?2, tradelist_quantity = ?3,
+                        updated_at = unixepoch()
+                  WHERE id = ?1",
+                params![entry_id, take, kept_trade],
+            )?;
+            tx.execute(
+                "DELETE FROM collection_entries WHERE id = ?1 AND quantity = 0",
+                params![entry_id],
+            )?;
+        }
+
+        // **Last, and only now.** `DROP TABLE` takes `idx_deck_allocations_grain` and
+        // `idx_deck_allocations_entry` with it, which is why neither is named here.
+        //
+        // **`is_built` is dropped rather than kept, and SQLite would refuse if any index named
+        // it** — `DROP COLUMN` fails on an indexed column, and it would fail at a real reader's
+        // first upgrade rather than in any test that starts from a fresh database. Nothing
+        // indexes it: the column exists only in v8's `CREATE TABLE` body and in the reads
+        // `deck.rs` makes of it (verified 2026-08-23, and every fixture on this ladder walks
+        // this statement over a `decks` table built by a different route).
+        //
+        // The `app_meta` row is the deck-driven collection switch, whose whole question this
+        // rung answers: the decks *are* where the cards are now, so there is nothing left to
+        // turn on. A key nothing writes any more is a key that would sit in that table forever.
+        tx.execute_batch(
+            "DROP TABLE deck_allocations;
+             ALTER TABLE decks DROP COLUMN is_built;
+             DELETE FROM app_meta WHERE key = 'deck_driven_collection';",
+        )?;
+        // Nothing here is FTS-indexed and no `cards` rowid moves, so no rebuild is owed — the
+        // reasoning `the_v2_backfill_leaves_the_search_index_answering` pins.
+        //
+        // Literal `25`, for the reason every step before it writes its own: this step is what
+        // *makes* a database version 25, and [`SCHEMA_VERSION`] moves again at v26.
+        tx.execute_batch("PRAGMA user_version = 25;")?;
+        tx.commit()?;
+    }
 
     // **Outside the ladder, on purpose: the tag indexes are replayed on every launch, from
     // every version.** Not belt and braces — the thing this prevents is a hung window, and the
@@ -3060,8 +3264,8 @@ pub(crate) mod tests {
             .query_row(
                 "SELECT count(*) FROM sqlite_master WHERE name IN
                  ('cards','sets','sync_meta','cards_fts',
-                  'collection_entries','wishlist_entries','card_migrations',
-                  'decks','deck_cards','deck_allocations','format_specs')",
+                  'collection_entries','collection_folders','wishlist_entries',
+                  'card_migrations','decks','deck_cards','format_specs')",
                 [],
                 |r| r.get(0),
             )
@@ -3140,8 +3344,8 @@ pub(crate) mod tests {
     /// The fence the frozen migration steps need, and the one thing freezing them costs.
     ///
     /// Every grain index in the DDL is now a **literal**, because a migration step is history
-    /// and must keep building the index it built the day it shipped. The price is that three
-    /// of the six grain constants — [`ALLOCATION_GRAIN`], [`DECK_CATEGORY_GRAIN`] and
+    /// and must keep building the index it built the day it shipped. The price is that two
+    /// of the five grain constants — [`DECK_CATEGORY_GRAIN`] and
     /// [`DECK_TAG_GRAIN`] — are read by no SQL at all any more, and a constant nothing reads
     /// is a constant that can drift from the index it claims to describe without anything
     /// saying so. [`COLLECTION_GRAIN`], [`WISHLIST_GRAIN`] and [`DECK_CARD_GRAIN`] are held
@@ -3165,7 +3369,6 @@ pub(crate) mod tests {
         for (index, grain) in [
             ("idx_deck_categories_grain", DECK_CATEGORY_GRAIN),
             ("idx_deck_tags_grain", DECK_TAG_GRAIN),
-            ("idx_deck_allocations_grain", ALLOCATION_GRAIN),
         ] {
             let mut stmt = conn
                 .prepare(&format!("PRAGMA index_info({index})"))
@@ -4417,56 +4620,87 @@ pub(crate) mod tests {
         .unwrap()
     }
 
-    /// One deck's claim on one collection entry. A reservation, never a transfer: the
-    /// collection row it points at keeps every copy it had.
-    pub(crate) fn allocate(conn: &Connection, deck_id: i64, entry_id: i64, quantity: i64) -> i64 {
-        conn.query_row(
-            "INSERT INTO deck_allocations
-                (deck_id, collection_entry_id, quantity, created_at, updated_at)
-             VALUES (?1,?2,?3,unixepoch(),unixepoch()) RETURNING id",
-            rusqlite::params![deck_id, entry_id, quantity],
-            |r| r.get(0),
-        )
-        .unwrap()
-    }
-
-    /// The three enforced FKs, exercised at their delete sites. `foreign_keys=ON`, as
-    /// `db::open` sets it — these tests fail without the pragma, which is the point.
+    /// The enforced FKs a deck delete reaches, exercised at that delete site.
+    /// `foreign_keys=ON`, as `db::open` sets it — these tests fail without the pragma, which
+    /// is the point.
+    ///
+    /// **The two actions point opposite ways and that is the whole of what schema v25
+    /// changed.** `deck_cards.deck_id` and `collection_folders.deck_id` CASCADE, because
+    /// neither a deck's card list nor the folder that *stands for* it means anything once the
+    /// deck is gone; `collection_entries.folder_id` SET NULLs, because the cards in that
+    /// folder are the reader's property and surface at the root. Before v25 the second half of
+    /// this test read `deck_allocations` and asserted that the collection row was untouched —
+    /// a deck was a claim, never custody. It is custody now, so what has to survive is the
+    /// *card* rather than the row's folder.
     #[test]
-    fn deleting_a_deck_cascades_its_cards_and_allocations() {
+    fn deleting_a_deck_cascades_its_cards_and_its_group_but_never_the_cards_in_it() {
         let conn = Connection::open_in_memory().unwrap();
         conn.pragma_update(None, "foreign_keys", "ON").unwrap();
         migrate(&conn).unwrap();
         seed_card(&conn, "bolt", "lea", "161");
         let deck = deck(&conn, "Burn");
-        let entry = entry(&conn, "bolt", 4);
         let main = category(&conn, deck, "main", "Main deck");
         deck_card(&conn, deck, "bolt", main, 4);
-        allocate(&conn, deck, entry, 4);
+        // The four copies sit *in* the deck's group, which is what an allocation used to say
+        // from outside.
+        let group: i64 = conn
+            .query_row(
+                "INSERT INTO collection_folders
+                     (parent_id, name, kind, deck_id, sort_order, created_at, updated_at)
+                 VALUES (NULL, 'Burn', 'deck', ?1, 0, unixepoch(), unixepoch()) RETURNING id",
+                [deck],
+                |r| r.get(0),
+            )
+            .unwrap();
+        conn.execute(
+            "INSERT INTO collection_entries
+                (card_id,set_code,collector_number,lang,finish,condition,quantity,folder_id,
+                 created_at,updated_at)
+             VALUES ('bolt','lea','161','en','nonfoil','NM',4,?1,unixepoch(),unixepoch())",
+            [group],
+        )
+        .unwrap();
 
         conn.execute("DELETE FROM decks WHERE id = ?1", [deck])
             .unwrap();
 
-        for table in ["deck_cards", "deck_allocations"] {
+        for (table, scope) in [
+            ("deck_cards", "1"),
+            // Scoped, because `migrate` has already made the one `removed` folder and that one
+            // belongs to no deck — which is the point of the partial index it is under.
+            ("collection_folders", "deck_id IS NOT NULL"),
+        ] {
             let n: i64 = conn
-                .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+                .query_row(
+                    &format!("SELECT count(*) FROM {table} WHERE {scope}"),
+                    [],
+                    |r| r.get(0),
+                )
                 .unwrap();
             assert_eq!(n, 0, "{table} rows die with their deck");
         }
-        // …and the collection entry is untouched: a deck is a claim, never custody.
-        let q: i64 = conn
-            .query_row("SELECT quantity FROM collection_entries", [], |r| r.get(0))
+        // …and the cards themselves are untouched, at the root: deleting a deck may never
+        // delete a card the reader physically owns.
+        let (q, filed): (i64, Option<i64>) = conn
+            .query_row(
+                "SELECT quantity, folder_id FROM collection_entries",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
             .unwrap();
-        assert_eq!(q, 4);
+        assert_eq!((q, filed), (4, None));
     }
 
-    /// `collection::remove_entry`'s CASCADE site — the second of the two *user-initiated*
-    /// deletes the action was chosen for. The allocation goes (a reservation on copies
-    /// that no longer exist is a lie); the deck card stays, because the deck still wants
-    /// the card and is simply missing it now, which is what Task 5's availability
-    /// computes rather than something the schema decides.
+    /// `collection::remove_entry`'s site, which is a *user-initiated* delete and the one the
+    /// SET NULL above is not for. The row goes; the deck card stays, because the deck still
+    /// wants the card and is simply missing it now, which is availability's conclusion rather
+    /// than something the schema decides.
+    ///
+    /// **It read `deck_allocations` until v25** — a claim on copies that are gone was a lie,
+    /// and the CASCADE swept it. There is no claim any more, so what this pins is the absence
+    /// of any reach from the collection into the decks at all.
     #[test]
-    fn removing_a_collection_entry_frees_its_allocations_and_nothing_else() {
+    fn removing_a_collection_entry_leaves_the_deck_wanting_the_card() {
         let conn = Connection::open_in_memory().unwrap();
         conn.pragma_update(None, "foreign_keys", "ON").unwrap();
         migrate(&conn).unwrap();
@@ -4475,15 +4709,10 @@ pub(crate) mod tests {
         let entry = entry(&conn, "bolt", 4);
         let main = category(&conn, deck, "main", "Main deck");
         deck_card(&conn, deck, "bolt", main, 4);
-        allocate(&conn, deck, entry, 4);
 
         conn.execute("DELETE FROM collection_entries WHERE id = ?1", [entry])
             .unwrap();
 
-        let allocations: i64 = conn
-            .query_row("SELECT count(*) FROM deck_allocations", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(allocations, 0, "a claim on copies that are gone is a lie");
         let (cards, wanted): (i64, i64) = conn
             .query_row(
                 "SELECT count(*), coalesce(sum(quantity), 0) FROM deck_cards",
@@ -4520,10 +4749,9 @@ pub(crate) mod tests {
             [deck],
         )
         .unwrap();
-        let entry = entry(&conn, "bolt", 4);
+        entry(&conn, "bolt", 4);
         let main = category(&conn, deck, "main", "Main deck");
         deck_card(&conn, deck, "bolt", main, 4);
-        allocate(&conn, deck, entry, 4);
 
         create_staging(&conn).unwrap();
         conn.execute(
@@ -4534,7 +4762,7 @@ pub(crate) mod tests {
         .unwrap();
         swap_staging(&conn).expect("a sync must not be blocked by the user's decks");
 
-        for table in ["decks", "deck_cards", "deck_allocations"] {
+        for table in ["decks", "deck_cards", "collection_entries"] {
             let n: i64 = conn
                 .query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
                 .unwrap();
@@ -4822,20 +5050,19 @@ pub(crate) mod tests {
              CREATE UNIQUE INDEX idx_deck_cards_grain ON deck_cards (deck_id, card_id, zone);
              CREATE INDEX idx_deck_cards_card ON deck_cards (card_id);
 
-             -- Reduced to the columns an allocation and its target need, plus the six the
-             -- grain names — nothing decorative — but the FK and its CASCADE are the real
-             -- v4/v5 DDL verbatim, because those are exactly what this fixture exists to
-             -- put under load.
+             -- **No longer reduced at all, and the third telling of one lesson.** It began as
+             -- the columns an allocation and its target need; the six grain columns were added
+             -- when v24 widened `idx_collection_grain` over them; and **v25's conversion reads
+             -- the row in full** — it carries every provenance column onto the placement it
+             -- splits off, so a fixture missing one reaches head with
+             -- `no such column: condition_original`, which no real upgrade can produce. The
+             -- shape below is therefore v1's `CREATE TABLE` verbatim, which is exactly what a
+             -- real v6 database has. The FK and its CASCADE are the real v4/v5 DDL verbatim,
+             -- because those are what this fixture exists to put under load.
              --
-             -- The six were added for `format_specs`' and `wishlist_entries`' reason, and
-             -- cost the same lesson a third time: a real v6 database went through v3 and
-             -- has every one of them, `migrate` reads `user_version` once and skips every
-             -- step below v7, and **a step above this rung now writes to them** — v24
-             -- rebuilds `idx_collection_grain` over eleven terms, six of which this
-             -- fixture used to lack. Without them it is a pre-v3 `collection_entries`
-             -- wearing a v6 label, and it reaches head with `no such column: altered`,
-             -- which no real upgrade can produce. Literals, because this fixture describes
-             -- history: these are v3's columns, and the eleventh term is v24's to add.
+             -- Literals, because this fixture describes history: these are v1's columns, the
+             -- eleventh grain term is v24's to add, and nothing here may be interpolated from
+             -- `COLLECTION_GRAIN`.
              CREATE TABLE collection_entries (
                 id INTEGER PRIMARY KEY,
                 card_id TEXT NOT NULL,
@@ -4845,7 +5072,14 @@ pub(crate) mod tests {
                 finish TEXT NOT NULL CHECK (finish IN ('nonfoil','foil','etched')),
                 condition TEXT NOT NULL DEFAULT 'NM'
                     CHECK (condition IN ('NM','LP','MP','HP','DMG')),
+                condition_original TEXT,
                 quantity INTEGER NOT NULL CHECK (quantity >= 0),
+                tradelist_quantity INTEGER NOT NULL DEFAULT 0
+                    CHECK (tradelist_quantity >= 0),
+                purchase_price REAL,
+                purchase_currency TEXT,
+                acquired_at TEXT,
+                acquisition_source TEXT,
                 serial_number TEXT,
                 altered INTEGER NOT NULL DEFAULT 0,
                 signed INTEGER NOT NULL DEFAULT 0,
@@ -4853,6 +5087,8 @@ pub(crate) mod tests {
                 misprint INTEGER NOT NULL DEFAULT 0,
                 grading TEXT CHECK (grading IS NULL OR json_valid(grading)),
                 tags TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(tags)),
+                notes TEXT,
+                needs_review TEXT,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
              );
@@ -4865,6 +5101,12 @@ pub(crate) mod tests {
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
              );
+
+             -- v6's own table, and the same lesson one version up: **v25 deletes the
+             -- `deck_driven_collection` row from it**, so a fixture without it reaches head
+             -- with `no such table: app_meta`. v6 is the step that *creates* it, which is
+             -- exactly why a database labelled 6 has to have it already.
+             CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
              -- v5's own table, and it is here for the reason the five `cards` columns above
              -- are: a real v6 database went through v5 and has it, `migrate` reads
@@ -5063,21 +5305,40 @@ pub(crate) mod tests {
             "the rebuild must leave no dangling foreign key anywhere in the database: {violations:?}"
         );
 
-        let allocated: i64 = conn
+        // **The claim seeded above arrives at head as a placement, and this is the longest
+        // route on the ladder to that conversion** — nineteen rungs, over a `decks` table and
+        // a `collection_entries` table built by hand rather than by [`migrate`]. It read the
+        // allocation back off `deck_allocations` until v25 dropped that table; what it asks
+        // now is the same question one level up: the user's four claimed copies are still four
+        // copies, and they are in this deck's group.
+        let (placed, group_deck): (i64, i64) = conn
             .query_row(
-                "SELECT da.quantity FROM deck_allocations da
-                   JOIN collection_entries ce ON ce.id = da.collection_entry_id
-                   JOIN decks d ON d.id = da.deck_id
-                  WHERE da.deck_id = ?1",
+                "SELECT ce.quantity, f.deck_id
+                   FROM collection_entries ce
+                   JOIN collection_folders f ON f.id = ce.folder_id
+                   JOIN decks d ON d.id = f.deck_id
+                  WHERE f.deck_id = ?1",
                 [deck_id],
-                |r| r.get(0),
+                |r| Ok((r.get(0)?, r.get(1)?)),
             )
             .unwrap_or_else(|e| {
-                panic!("the pre-existing allocation must still resolve after the migration: {e}")
+                panic!("the pre-existing allocation must arrive as a placement: {e}")
             });
         assert_eq!(
-            allocated, 4,
-            "the migration must not quietly clear a user's existing allocation"
+            (placed, group_deck),
+            (4, deck_id),
+            "the migration must not quietly clear a user's existing claim"
+        );
+        let loose: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM collection_entries WHERE folder_id IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            loose, 0,
+            "every copy was claimed, so nothing stays at the root"
         );
 
         for (owner, zone, card_id, id) in ids {
@@ -5767,6 +6028,60 @@ pub(crate) mod tests {
     const UNDO_V24: &str = "DROP TABLE IF EXISTS collection_folders;
          DROP INDEX IF EXISTS idx_collection_folder;";
 
+    /// And v25's deck groups. **The first rewind on this ladder that has to put a table
+    /// *back***, because v25 is the first rung that takes one away.
+    ///
+    /// Owed for [`UNDO_V13`]'s **loud** reason rather than [`UNDO_V14`]'s quiet one, and that
+    /// is what makes it unskippable: `DROP TABLE deck_allocations` and
+    /// `ALTER TABLE decks DROP COLUMN is_built` are not idempotent in either direction, so a
+    /// fixture that walked to head and then forgot this line does not merely mislabel itself —
+    /// it dies at `no such table: main.deck_allocations` on the way back up.
+    ///
+    /// The DDL is the v8 table verbatim, because that is what a v24 database has and this is a
+    /// description of history. `IF NOT EXISTS` throughout for the reason every rewind carries
+    /// it: a chain is spelled once per fixture, but the fixture below it may have got there by
+    /// another route.
+    ///
+    /// **The `ALTER` is the one statement that cannot be guarded**, and it is why this constant
+    /// is only ever spelled after a full [`migrate`]: `ADD COLUMN` has no `IF NOT EXISTS` and
+    /// always appends, so `is_built` comes back at the *end* of `decks`. v25 drops it again on
+    /// the way up, which is what keeps
+    /// [`every_version_ends_with_the_same_schema_as_a_fresh_install`] comparing two tables that
+    /// have both lost it — a rewind that left the column standing would fail that test on
+    /// ordinals.
+    ///
+    /// **The `app_meta` row is restored rather than merely tolerated**, and it is the only
+    /// place in the crate that writes it: the deck-driven switch that owned it is gone, so
+    /// without this line the rung's `DELETE` would run over an empty table in every test and
+    /// the assertion that it goes would be decoration.
+    ///
+    /// The two folder rows are *deleted* rather than created, this being the only half of a
+    /// rewind that looks the usual way round. `collection_entries.folder_id` is
+    /// `ON DELETE SET NULL`, so any copies the conversion filed surface at the root again —
+    /// which is a rewind for a fixture with no rows and nothing more; a fixture that wants the
+    /// *quantities* back as well would have to un-split them, and none does.
+    ///
+    /// **It runs first, before [`UNDO_V24`]**, for that constant's stated reason: newest-first.
+    /// Here the order is load-bearing rather than tidy — the `DELETE` names a table
+    /// [`UNDO_V24`] drops.
+    const UNDO_V25: &str = "DELETE FROM collection_folders WHERE kind IN ('deck', 'removed');
+         CREATE TABLE IF NOT EXISTS deck_allocations (
+            id INTEGER PRIMARY KEY,
+            deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+            collection_entry_id INTEGER NOT NULL
+                REFERENCES collection_entries(id) ON DELETE CASCADE,
+            quantity INTEGER NOT NULL CHECK (quantity > 0),
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+         );
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_deck_allocations_grain
+            ON deck_allocations (deck_id, collection_entry_id);
+         CREATE INDEX IF NOT EXISTS idx_deck_allocations_entry
+            ON deck_allocations (collection_entry_id);
+         ALTER TABLE decks ADD COLUMN is_built INTEGER NOT NULL DEFAULT 0;
+         INSERT OR REPLACE INTO app_meta (key, value)
+            VALUES ('deck_driven_collection', '1');";
+
     /// A database that stopped at version 9 — the version below the step that *widens*
     /// `idx_cards_collapse`, which is the property this fixture exists for.
     ///
@@ -5813,7 +6128,7 @@ pub(crate) mod tests {
              ALTER TABLE cards DROP COLUMN legal_mask;
              CREATE INDEX idx_cards_collapse
                  ON cards(oracle_id, is_paper, released_at, id, name, price_usd);
-             {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20}
+             {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20}
              {UNDO_V12}
              {UNDO_V13}
              {UNDO_V14}
@@ -6014,7 +6329,7 @@ pub(crate) mod tests {
         conn.execute_batch(&format!(
             "DROP TABLE marketplace_prices;
              DROP TABLE marketplace_feed_meta;
-             {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20}
+             {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20}
              {UNDO_V12}
              {UNDO_V13}
              {UNDO_V14}
@@ -6042,7 +6357,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V12} {UNDO_V13} {UNDO_V14} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} \
+            "{UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V12} {UNDO_V13} {UNDO_V14} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} \
              {UNDO_V19} PRAGMA user_version = 11;"
         ))
         .unwrap();
@@ -6116,7 +6431,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V13} {UNDO_V14} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} \
+            "{UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V13} {UNDO_V14} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} \
              {UNDO_V19} PRAGMA user_version = 12;"
         ))
         .unwrap();
@@ -6430,7 +6745,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V14} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 13;"
+            "{UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V14} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 13;"
         ))
         .unwrap();
         conn
@@ -6728,7 +7043,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 14;"
+            "{UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 14;"
         ))
         .unwrap();
         conn
@@ -6903,7 +7218,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V16} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 15;"
+            "{UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V16} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 15;"
         ))
         .unwrap();
         conn
@@ -6926,7 +7241,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 16;"
+            "{UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 16;"
         ))
         .unwrap();
         conn
@@ -7031,7 +7346,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} PRAGMA user_version = 19;"
+            "{UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} PRAGMA user_version = 19;"
         ))
         .unwrap();
         conn
@@ -7048,7 +7363,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V24} {UNDO_V23} {UNDO_V21} PRAGMA user_version = 20;"
+            "{UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} PRAGMA user_version = 20;"
         ))
         .unwrap();
         conn
@@ -7595,8 +7910,10 @@ pub(crate) mod tests {
     fn v21_database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
-        conn.execute_batch(&format!("{UNDO_V24} {UNDO_V23} PRAGMA user_version = 21;"))
-            .unwrap();
+        conn.execute_batch(&format!(
+            "{UNDO_V25} {UNDO_V24} {UNDO_V23} PRAGMA user_version = 21;"
+        ))
+        .unwrap();
         conn
     }
 
@@ -7970,7 +8287,7 @@ pub(crate) mod tests {
         // that replaces it is a literal for `v9_database`'s reason -- this is a description of
         // history, and history does not change when `WISHLIST_GRAIN` does.
         conn.execute_batch(&format!(
-            "{UNDO_V24} {UNDO_V23}
+            "{UNDO_V25} {UNDO_V24} {UNDO_V23}
              DROP INDEX IF EXISTS idx_wishlist_grain;
              ALTER TABLE wishlist_entries DROP COLUMN folder_id;
              CREATE UNIQUE INDEX idx_wishlist_grain
@@ -8042,7 +8359,7 @@ pub(crate) mod tests {
             "DROP INDEX IF EXISTS idx_collection_folder;
              DROP INDEX IF EXISTS idx_collection_grain;
              ALTER TABLE collection_entries DROP COLUMN folder_id;
-             {UNDO_V24}
+             {UNDO_V25} {UNDO_V24}
              CREATE UNIQUE INDEX idx_collection_grain ON collection_entries (
                  card_id, finish, condition, lang, altered, signed, proxy, misprint,
                  coalesce(serial_number, ''), coalesce(grading, '')
@@ -8060,26 +8377,87 @@ pub(crate) mod tests {
         conn
     }
 
-    /// [`v23_database`] must really sit one step below head, or the tests below it are a fresh
+    /// [`v24_database`] must really sit one step below head, or the tests below it are a fresh
     /// install compared against itself. The next step added to the ladder renumbers this
     /// fixture, and `SCHEMA_VERSION - 1` is the line that says so.
     ///
-    /// **The fixture named here has changed ten times** — v14's, then v15's, v16's, v17's,
-    /// v18's, v19's, v20's, v21's, v22's, now v23's — and each move was this assertion going
-    /// red, which is the whole reason it is written against `SCHEMA_VERSION - 1` rather than a
-    /// number.
+    /// **The fixture named here has changed eleven times** — v14's, then v15's, v16's, v17's,
+    /// v18's, v19's, v20's, v21's, v22's, v23's, now v24's — and each move was this assertion
+    /// going red, which is the whole reason it is written against `SCHEMA_VERSION - 1` rather
+    /// than a number.
     ///
-    /// What head-minus-one has to *lack* is a thing, and there are two of them here:
-    /// `collection_folders`, and the column. [`schema_at_23`] pays the full rewind, so this is
-    /// the one fixture that can be asked about `folder_id` at all.
+    /// **What head-minus-one has to lack is now three things it *has*, which inverts this
+    /// test.** Every rung before v25 added; v25 takes away, so a real v24 database is the one
+    /// that still carries `deck_allocations`, `decks.is_built` and the `app_meta` flag —
+    /// [`schema_at_24`] pays the full rewind that puts all three back, and this is the one
+    /// fixture that can be asked about any of them.
     #[test]
     fn the_head_minus_one_fixture_really_sits_one_step_below_head() {
-        let conn = v23_database();
+        let conn = v24_database();
 
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(version, SCHEMA_VERSION - 1, "one step below head");
+        assert_eq!(
+            has_column(&conn, "decks", "is_built"),
+            1,
+            "the fixture is a real v24 database, not head wearing a v24 label"
+        );
+        let ledger: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE name = 'deck_allocations'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(ledger, 1, "the table v25 takes must still be there");
+        let flag: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM app_meta WHERE key = 'deck_driven_collection'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(flag, 1, "and so must the row v25 deletes");
+
+        migrate(&conn).unwrap();
+
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        let ledger: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE name = 'deck_allocations'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(ledger, 0, "and the v25 step must not have been skipped");
+        assert_eq!(has_column(&conn, "decks", "is_built"), 0);
+        let flag: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM app_meta WHERE key = 'deck_driven_collection'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(flag, 0, "the flag the rung deletes is really deleted");
+    }
+
+    /// [`v23_database`] kept the "one step below head" title until v25 arrived and
+    /// [`v24_database`] took it, and it keeps the half of the assertion that is about *v24's*
+    /// rung: a database at 23 lacks `collection_folders` and the eleventh grain term, and gets
+    /// both.
+    #[test]
+    fn the_v23_fixture_carries_none_of_v24() {
+        let conn = v23_database();
+
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 23);
         assert_eq!(
             has_column(&conn, "collection_entries", "folder_id"),
             0,
@@ -8221,6 +8599,389 @@ pub(crate) mod tests {
         );
     }
 
+    // ---- v25: the deck groups, and the ledger they replace ------------------------------
+
+    /// Rewind a head-shaped database to version 24: everything v24 left behind, and none of
+    /// v25.
+    ///
+    /// **This is the awkward rewind on the ladder, because v25 is the first rung that takes a
+    /// table and a column *away*.** Every undo above it puts back something a step added; this
+    /// one has to put back `deck_allocations`, `decks.is_built` and the `app_meta` flag, and
+    /// then take away the folder rows the rung inserted. [`UNDO_V25`] is that batch, and it is
+    /// shared with every fixture beneath head for the reason each of them spells [`UNDO_V24`]:
+    /// they all walk to head first, so every statement v25 writes has already run over them.
+    ///
+    /// **Re-adding a dropped column is not symmetrical with dropping it**, and the asymmetry is
+    /// the trap [`schema_at_23`] warns about one rung down. `ALTER TABLE … ADD COLUMN` has no
+    /// `IF NOT EXISTS` and always appends, so `decks.is_built` comes back at the *end* of the
+    /// table rather than where v8 put it. That is survivable here and only here: v25 drops the
+    /// column again on the way back up, so
+    /// [`every_version_ends_with_the_same_schema_as_a_fresh_install`] compares two `decks`
+    /// tables that have both lost it, in the same order. A rewind that left the column standing
+    /// would fail that test on ordinals, which is the failure it exists to catch.
+    fn schema_at_24(conn: &Connection) {
+        migrate(conn).unwrap();
+        conn.execute_batch(&format!("{UNDO_V25} PRAGMA user_version = 24;"))
+            .unwrap();
+    }
+
+    /// A database at version 24, as a fixture. [`schema_at_24`] with the connection made for
+    /// it — the shape every other `vNN_database` on this ladder has.
+    fn v24_database() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        schema_at_24(&conn);
+        conn
+    }
+
+    /// A deck, by the name the v25 tests read it under. [`deck`] under a `seed_` prefix so the
+    /// six conversion tests below name their three seeds the same way.
+    fn seed_deck(conn: &Connection, name: &str) -> i64 {
+        deck(conn, name)
+    }
+
+    /// One collection row, nonfoil NM, optionally already filed. [`entry`] plus the folder,
+    /// because the conversion has to work over a reader who had already made themselves a
+    /// binder on v24 — the copies a deck claims move out of *wherever* they were.
+    fn seed_entry(conn: &Connection, card_id: &str, quantity: i64, folder: Option<i64>) -> i64 {
+        conn.query_row(
+            "INSERT INTO collection_entries
+                (card_id,set_code,collector_number,lang,finish,condition,quantity,folder_id,
+                 created_at,updated_at)
+             VALUES (?1,'lea','161','en','nonfoil','NM',?2,?3,unixepoch(),unixepoch())
+             RETURNING id",
+            rusqlite::params![card_id, quantity, folder],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// The same row with copies **on the trade list** — [`seed_entry`] plus the one column a
+    /// split can silently duplicate, since no `CHECK` ties `tradelist_quantity` to `quantity`
+    /// and nothing would go red if it did.
+    fn seed_entry_traded(conn: &Connection, card_id: &str, quantity: i64, tradelist: i64) -> i64 {
+        conn.query_row(
+            "INSERT INTO collection_entries
+                (card_id,set_code,collector_number,lang,finish,condition,quantity,
+                 tradelist_quantity,created_at,updated_at)
+             VALUES (?1,'lea','161','en','nonfoil','NM',?2,?3,unixepoch(),unixepoch())
+             RETURNING id",
+            rusqlite::params![card_id, quantity, tradelist],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// The same row with a story on it — the columns a split must carry onto the placement
+    /// rather than handing the deck a bare row.
+    fn seed_entry_full(
+        conn: &Connection,
+        card_id: &str,
+        quantity: i64,
+        condition: &str,
+        purchase_price: Option<f64>,
+        acquisition_source: Option<&str>,
+    ) -> i64 {
+        conn.query_row(
+            "INSERT INTO collection_entries
+                (card_id,set_code,collector_number,lang,finish,condition,condition_original,
+                 quantity,tradelist_quantity,purchase_price,purchase_currency,acquired_at,
+                 acquisition_source,notes,tags,created_at,updated_at)
+             VALUES (?1,'lea','161','en','nonfoil',?3,'GD',?2,0,?4,'USD','2021-04-01',?5,
+                     'shelf 3','[\"pet\"]',unixepoch(),unixepoch())
+             RETURNING id",
+            rusqlite::params![
+                card_id,
+                quantity,
+                condition,
+                purchase_price,
+                acquisition_source
+            ],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// One deck's claim on one collection entry, on a database that still has a ledger to
+    /// write it in. A reservation, never a transfer — which is the whole of what v25 changes.
+    fn seed_allocation(conn: &Connection, deck_id: i64, entry_id: i64, quantity: i64) -> i64 {
+        conn.query_row(
+            "INSERT INTO deck_allocations
+                (deck_id, collection_entry_id, quantity, created_at, updated_at)
+             VALUES (?1,?2,?3,unixepoch(),unixepoch()) RETURNING id",
+            rusqlite::params![deck_id, entry_id, quantity],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// The conversion, at the grain that decides whether the upgrade feels like a regression:
+    /// a claim on *some* of a row's copies splits that row in two.
+    #[test]
+    fn v25_converts_a_claim_into_a_placement_and_splits_the_row() {
+        let conn = Connection::open_in_memory().unwrap();
+        schema_at_24(&conn);
+        let deck = seed_deck(&conn, "Mono-Red");
+        // Four copies, two of them claimed by the deck.
+        let entry = seed_entry(&conn, "bolt", 4, None);
+        seed_allocation(&conn, deck, entry, 2);
+
+        migrate(&conn).unwrap();
+
+        let folder: i64 = conn
+            .query_row(
+                "SELECT id FROM collection_folders WHERE deck_id = ?1",
+                params![deck],
+                |r| r.get(0),
+            )
+            .expect("the deck got its group");
+        let filed: i64 = conn
+            .query_row(
+                "SELECT quantity FROM collection_entries WHERE folder_id = ?1",
+                params![folder],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let loose: i64 = conn
+            .query_row(
+                "SELECT quantity FROM collection_entries WHERE folder_id IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            (filed, loose),
+            (2, 2),
+            "the row splits; no copy is invented or lost"
+        );
+    }
+
+    /// The other half of the split: when the claim was for everything, there is no remainder
+    /// and the source row goes rather than staying behind holding nothing.
+    #[test]
+    fn v25_moves_the_whole_row_when_every_copy_was_claimed() {
+        let conn = Connection::open_in_memory().unwrap();
+        schema_at_24(&conn);
+        let deck = seed_deck(&conn, "Mono-Red");
+        let entry = seed_entry(&conn, "bolt", 2, None);
+        seed_allocation(&conn, deck, entry, 2);
+        migrate(&conn).unwrap();
+        let loose: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM collection_entries WHERE folder_id IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            loose, 0,
+            "a fully claimed row leaves nothing behind at the root"
+        );
+    }
+
+    /// The clamp, which is the one line of the conversion that is not obvious and the one the
+    /// old ledger's own laxity requires.
+    #[test]
+    fn v25_clamps_a_claim_that_out_counts_the_row_it_claims() {
+        // The old ledger could out-claim a row later stepped down; `owned_by_oracle`'s
+        // `min(a.quantity, e.quantity)` papered over it. The conversion must not invent copies.
+        let conn = Connection::open_in_memory().unwrap();
+        schema_at_24(&conn);
+        let deck = seed_deck(&conn, "Mono-Red");
+        let entry = seed_entry(&conn, "bolt", 1, None);
+        seed_allocation(&conn, deck, entry, 3);
+        migrate(&conn).unwrap();
+        let total: i64 = conn
+            .query_row("SELECT sum(quantity) FROM collection_entries", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(total, 1, "one copy in, one copy out");
+    }
+
+    /// The trade list is a **promise about copies**, so a split divides it and can never copy
+    /// it — [`crate::collection_folders::take_copies`]' rule, which the rung has to spell for
+    /// itself because it splits rows before that function's table shape exists to be called.
+    ///
+    /// **Nothing in the database would catch the other answer.** There is no CHECK tying
+    /// `tradelist_quantity` to `quantity`, so a placement and a remainder that each claim the
+    /// whole trade list is a state the rung can commit silently — and every writer that comes
+    /// afterwards (`add_entry`, `set_quantity`, `update_entry`, `take_copies`) clamps against
+    /// exactly that invariant, so the upgrade would be the one thing in the crate that breaks
+    /// it. **A rung is one-shot**: it would be wrong on every database that ever upgrades.
+    #[test]
+    fn v25_splits_the_tradelist_rather_than_duplicating_it() {
+        let conn = Connection::open_in_memory().unwrap();
+        schema_at_24(&conn);
+        let deck = seed_deck(&conn, "Mono-Red");
+        // Four copies, three of them offered for trade; the deck claims two of the four.
+        let entry = seed_entry_traded(&conn, "bolt", 4, 3);
+        seed_allocation(&conn, deck, entry, 2);
+
+        migrate(&conn).unwrap();
+
+        let rows: Vec<(i64, i64)> = {
+            let mut stmt = conn
+                .prepare("SELECT quantity, tradelist_quantity FROM collection_entries ORDER BY id")
+                .unwrap();
+            let read = stmt
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap();
+            read
+        };
+        assert_eq!(rows.len(), 2, "the row splits: a placement and a remainder");
+        for (quantity, tradelist) in &rows {
+            assert!(
+                tradelist <= quantity,
+                "a trade list bigger than the pile it is drawn from is not a promise: \
+                 {tradelist} of {quantity}"
+            );
+        }
+        let offered: i64 = rows.iter().map(|(_, t)| t).sum();
+        assert_eq!(
+            offered, 3,
+            "the promise is divided between the halves, never handed to both"
+        );
+    }
+
+    /// A split must not hand the deck a bare row.
+    #[test]
+    fn v25_carries_the_provenance_onto_the_placement() {
+        // A split must not hand the deck a bare row: the copies in the deck are the same physical
+        // cards, bought on the same day for the same money.
+        let conn = Connection::open_in_memory().unwrap();
+        schema_at_24(&conn);
+        let deck = seed_deck(&conn, "Mono-Red");
+        let entry = seed_entry_full(&conn, "bolt", 4, "LP", Some(450.0), Some("Card Kingdom"));
+        seed_allocation(&conn, deck, entry, 1);
+        migrate(&conn).unwrap();
+        let (cond, price, source): (String, Option<f64>, Option<String>) = conn
+            .query_row(
+                "SELECT e.condition, e.purchase_price, e.acquisition_source
+                   FROM collection_entries e JOIN collection_folders f ON f.id = e.folder_id
+                  WHERE f.deck_id = ?1",
+                params![deck],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(cond, "LP");
+        assert_eq!(price, Some(450.0));
+        assert_eq!(source.as_deref(), Some("Card Kingdom"));
+    }
+
+    /// The cabinet the rung files into: one holding area for the whole database, and one group
+    /// per deck — archived decks included, because an archived deck still holds its cards.
+    #[test]
+    fn v25_leaves_exactly_one_removed_folder_and_one_group_per_deck() {
+        let conn = Connection::open_in_memory().unwrap();
+        schema_at_24(&conn);
+        seed_deck(&conn, "A");
+        seed_deck(&conn, "B");
+        migrate(&conn).unwrap();
+        let removed: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM collection_folders WHERE kind = 'removed'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let groups: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM collection_folders WHERE kind = 'deck'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!((removed, groups), (1, 2));
+    }
+
+    /// And what the rung takes away, over a *fresh* install — the population that never had a
+    /// claim to convert and must still end up without the ledger, the flag or the column.
+    #[test]
+    fn v25_drops_the_ledger_the_flag_and_the_built_column() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        // One name rather than a loop over one name — `clippy::single_element_loop`, and the
+        // loop was only ever a place for the next table this rung takes to be added.
+        let gone = "deck_allocations";
+        let n: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name = ?1",
+                params![gone],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 0, "{gone} is still here");
+        let built: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM pragma_table_info('decks') WHERE name = 'is_built'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(built, 0);
+        let flag: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM app_meta WHERE key = 'deck_driven_collection'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(flag, 0);
+    }
+
+    /// A database with no allocations at all — a fresh install, or one that had deck-driven
+    /// on — must be completely unaffected: every deck still gets its empty group, and every
+    /// card stays exactly where the reader filed it.
+    #[test]
+    fn v25_leaves_a_database_with_no_claims_exactly_where_it_was() {
+        let conn = Connection::open_in_memory().unwrap();
+        schema_at_24(&conn);
+        let deck = seed_deck(&conn, "Mono-Red");
+        let binder: i64 = conn
+            .query_row(
+                "INSERT INTO collection_folders (name, kind, sort_order, created_at, updated_at)
+                 VALUES ('Binder', 'user', 0, unixepoch(), unixepoch()) RETURNING id",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        seed_entry(&conn, "bolt", 4, Some(binder));
+        seed_entry(&conn, "shock", 2, None);
+
+        migrate(&conn).unwrap();
+
+        let group: i64 = conn
+            .query_row(
+                "SELECT id FROM collection_folders WHERE deck_id = ?1",
+                params![deck],
+                |r| r.get(0),
+            )
+            .expect("the deck still gets its group");
+        let filed: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM collection_entries WHERE folder_id = ?1",
+                params![group],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(filed, 0, "an empty group, and nothing swept into it");
+        let (in_binder, at_root): (i64, i64) = conn
+            .query_row(
+                "SELECT (SELECT quantity FROM collection_entries WHERE folder_id = ?1),
+                        (SELECT quantity FROM collection_entries WHERE folder_id IS NULL)",
+                params![binder],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            (in_binder, at_root),
+            (4, 2),
+            "every card stays where it was"
+        );
+    }
+
     // ---- v19: a deck card names a finish ---------------------------------------------
 
     /// A database at version 18: everything v18 left behind, and none of v19.
@@ -8234,7 +8995,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V19} PRAGMA user_version = 18;"
+            "{UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V19} PRAGMA user_version = 18;"
         ))
         .unwrap();
         conn
@@ -8385,7 +9146,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 17;"
+            "{UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 17;"
         ))
         .unwrap();
         conn
@@ -8619,14 +9380,14 @@ pub(crate) mod tests {
     /// the first found this assertion already reading a higher number and had to choose the next
     /// rung rather than discover the clash in the field.
     #[test]
-    fn the_schema_version_is_twenty_four() {
+    fn the_schema_version_is_twenty_five() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         let v: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 24);
+        assert_eq!(SCHEMA_VERSION, 25);
     }
 
     /// The v19 grain widens rather than the row changing meaning: a foil copy and a regular

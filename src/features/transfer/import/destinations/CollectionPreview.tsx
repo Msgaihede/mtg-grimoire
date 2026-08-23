@@ -55,8 +55,11 @@ export function CollectionPreview({
   // (`settle`/`settleFailure`) — `["collection"]` covers both the list and the summary a bulk
   // import moves the same as a single row does, and the other three are what else reads "what
   // is owned": the wishlist's owned-progress, the search wall's owned badges, and every open
-  // deck's allocator claims. A 300-row import moves ownership at least as much as one stepper
-  // press, so it earns the same invalidation set rather than a narrower one of its own.
+  // deck. That last one is a real move even though this import lands `folder_id: None` and so
+  // touches no deck's group: since schema v25 a theory list's spare column counts exactly the
+  // copies that are in no group, and a 300-row import into the root is 300 of them. It moves
+  // ownership at least as much as one stepper press, so it earns the same invalidation set
+  // rather than a narrower one of its own.
   const commit = useImportCommit(
     [["collection"], ["wishlist"], ["cards", "search"], ["decks"]],
     () => ipc.collectionImportCommit(plan.items, mode as TransferImportMode),

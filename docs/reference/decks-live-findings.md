@@ -130,6 +130,12 @@ are all things no suite could have seen.
   category write rebuilt it (11 rows) and the shortage marks vanished from precisely the owned
   cards. A card in an **inactive** category shows no shortage mark at all, because nothing was
   claimed for it.
+  **This finding is history as of schema v25** and is kept because it is what the pass measured on
+  the day. There is no allocator and no trigger list: owned/missing is `sum(quantity)` over the
+  deck's own `collection_folders` group, current at every read, so seeding `collection_entries`
+  directly now leaves the deck reading "66 of 66 missing" **and going on saying so** until the
+  copies are filed into that group. The inactive-category half of the finding still holds and is
+  now `attribute_owned`'s doing rather than the allocator's.
 - **Console over the whole pass: clean.** 377 recorded lines, no JavaScript error, no React
   warning, no unhandled rejection. Everything else was `502` from `mtgimg://` — see the
   unverified note below.

@@ -43,7 +43,6 @@ const MADE: DeckRow = {
   coverKind: "card_art",
   coverArtist: null,
   cardCount: 0,
-  isBuilt: false,
   archived: false,
   folderId: null,
   theoryEnabled: false,
@@ -113,10 +112,12 @@ const staleRoots = (c: QueryClient): string[] =>
 /**
  * A deck import is a **deck** write, and the roots it fires say so.
  *
- * `deck_import_commit` runs the allocator inside its own transaction, so every deck's
- * `ownedQuantity` may have moved — and nothing about what the reader *owns* has. The collection,
- * the wishlist and the search wall are allocation-blind, so firing their roots here would be
- * three refetches per import that can only ever answer what is already on screen.
+ * `deck_import_commit` writes `deck_cards` and nothing else, so every `ownedQuantity` in *this*
+ * deck re-attributes — the group's copies are handed out across a list that just changed — and
+ * nothing about what the reader *owns* has moved. Since schema v25 the copies enter a deck only
+ * through `collection_to_deck`, so the collection, the wishlist and the search wall cannot have
+ * changed, and firing their roots here would be three refetches per import that can only ever
+ * answer what is already on screen.
  */
 describe("the roots an import commit fires", () => {
   it("marks only the decks stale after a commit", async () => {
@@ -207,8 +208,8 @@ describe("useImport", () => {
   });
 
   /**
-   * The `["decks"]` root and not one key: a commit runs the allocator, so the gallery's tile
-   * counts and every open deck's `ownedQuantity` may have moved together.
+   * The `["decks"]` root and not one key: a commit changes this deck's list, so the gallery's
+   * tile counts and every `ownedQuantity` in the open editor move together.
    */
   it("invalidates the deck and the deck list after a commit", async () => {
     client.setQueryData(["decks", "list"], []);

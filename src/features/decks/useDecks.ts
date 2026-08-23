@@ -27,18 +27,39 @@ export function useDecks() {
    * The whole root, from every write.
    *
    * Not `["decks", "list"]`: a rename changes the tile *and* the header of the editor that
-   * deck is open in, and a build toggle rewrites the deck's claims — which is what every
-   * `DeckCard.ownedQuantity` in the open detail is attributed from. Only the queries actually
-   * mounted pay for a refetch, and at most two of these are ever on screen.
+   * deck is open in, and every `DeckCard.ownedQuantity` in the open detail is a sum over the
+   * deck's collection group. Only the queries actually mounted pay for a refetch, and at most
+   * two of these are ever on screen.
    *
-   * **The collection and the wishlist are deliberately left alone**: `allocate_deck` writes
-   * `deck_allocations` and never once touches `collection_entries` — spec §6's non-destructive
-   * model is exactly that sentence — so neither list can have moved.
-   *
-   * `["decks"]` alone, then, because the five writes here move the gallery and nothing else.
+   * **The wishlist is deliberately left alone** by all five: no quantity changes and no
+   * printing is added or dropped, so no wish's `ownedQuantity` can be different afterwards.
    */
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ["decks"] });
+  };
+
+  /**
+   * **And the collection's root too, for the four writes that move a `collection_folders` row.**
+   *
+   * This is the sentence that used to read *"`allocate_deck` writes `deck_allocations` and never
+   * once touches `collection_entries`"*, and schema v25 made it false: a deck's group **is** a
+   * collection folder, so `deck_create` and `deck_duplicate` insert one, a rename renames one,
+   * and `deck_delete` files every copy the group was holding into `Recently removed` and drops
+   * the folder. After any of those the collection page's tree, its list, its summary and both
+   * folder cards are describing a world that is gone, and `["decks"]` reaches none of them —
+   * which is the ghost-row class PR 2 shipped. Marking is not enough on its own either:
+   * `lib/query.ts` sets `staleTime: 30_000`, so a mounted observer that is merely stale never
+   * refetches.
+   *
+   * **Two of the five do not take it**, and the absence is as deliberate as the presence.
+   * `setFolder` files the deck into a `deck_folders` row — the gallery's own tree, which the
+   * collection page has never drawn. And a patch is only a group write when it carries a
+   * `name`: archiving a deck, choosing a cover or changing a format leaves every folder exactly
+   * where it was, so firing the root for one would be a refetch that can only answer what is
+   * already on screen.
+   */
+  const invalidateCollection = () => {
+    void queryClient.invalidateQueries({ queryKey: ["collection"] });
   };
 
   /**
@@ -54,18 +75,52 @@ export function useDecks() {
    */
   const writes = { onSuccess: invalidate, onError: invalidate };
 
+  /**
+   * The same rule plus {@link invalidateCollection}, for the three writes that always move a
+   * folder. **On error as well**, for `writes`' reason read one table over: a refused create
+   * that had already inserted the group is not a shape the backend can produce — both halves
+   * are one transaction — but a refusal the *webview* saw and the database did not is, and that
+   * is the one a re-read exists for.
+   */
+  const groupWrites = {
+    onSuccess: () => {
+      invalidate();
+      invalidateCollection();
+    },
+    onError: () => {
+      invalidate();
+      invalidateCollection();
+    },
+  };
+
   const create = useMutation({
     mutationFn: (deck: DeckInput) => ipc.deckCreate(deck),
-    ...writes,
+    ...groupWrites,
   });
 
   const update = useMutation({
     mutationFn: ({ id, patch }: { id: number; patch: DeckPatch }) => ipc.deckUpdate(id, patch),
-    ...writes,
+    onSuccess: (_row, { patch }) => {
+      invalidate();
+      // The rename arm of {@link invalidateCollection}: `deck_update` renames the deck's group
+      // when — and only when — the patch names a name, so this is the one patch key that can
+      // reach a collection folder.
+      if (patch.name !== undefined) invalidateCollection();
+    },
+    onError: (_error, { patch }) => {
+      invalidate();
+      if (patch.name !== undefined) invalidateCollection();
+    },
   });
 
   /**
-   * The real delete: the deck, its cards and its claims, by cascade.
+   * The real delete: the deck, its cards, its categories and its history, by cascade.
+   *
+   * **And its copies, which is the half that is not a cascade.** `delete_deck` walks the
+   * group's sub-tree and files every `collection_entries` row in it into `Recently removed`,
+   * one at a time and before the `DELETE`, because a `deck_cards` row is an intention and a row
+   * in the group is a card the reader physically owns. So this takes the collection's root as
+   * well — see {@link invalidateCollection}.
    *
    * Named `remove` rather than `delete` because `delete` is a reserved word, and offered
    * beside `update`'s `archived` on purpose — archiving is what a gallery's "Remove" should
@@ -73,12 +128,16 @@ export function useDecks() {
    */
   const remove = useMutation({
     mutationFn: (id: number) => ipc.deckDelete(id),
-    ...writes,
+    ...groupWrites,
   });
 
+  /** A copy of the deck, its piles and its cards — and a **group of its own**, made by
+   *  `create_deck_group` in the same transaction, which is why this takes the collection's
+   *  root. The copy's group starts empty: copies are custody, and duplicating a list does not
+   *  duplicate cards. */
   const duplicate = useMutation({
     mutationFn: (id: number) => ipc.deckDuplicate(id),
-    ...writes,
+    ...groupWrites,
   });
 
   /**

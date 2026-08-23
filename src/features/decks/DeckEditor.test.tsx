@@ -33,6 +33,7 @@ import {
 import { THEORY_MATCH_ATTR } from "./CardMarks";
 import { deckCardSlot, DECK_CARD_ATTR } from "./dnd";
 import { PANE_OVER_ATTR } from "./DeckEditor";
+import { CUT_CARDS_NOTE } from "./PriceStrip";
 import { theorySlot } from "./theoryMatch";
 import { QUICK_ZONE_ATTR } from "./QuickZones";
 import { card, resetRowIds, spec } from "./validation/fixtures";
@@ -40,6 +41,10 @@ import { card, resetRowIds, spec } from "./validation/fixtures";
 const deckGet = vi.hoisted(() => vi.fn());
 const deckUpdate = vi.hoisted(() => vi.fn());
 const deckSetCardQuantity = vi.hoisted(() => vi.fn());
+// The cut: since schema v25 a decrease on the **Live** list goes through this instead, because
+// it files the copies the deck's group was holding into `Recently removed` in the same
+// transaction. Every removal in this view is one of these two, never both.
+const deckToCollection = vi.hoisted(() => vi.fn());
 const deckMoveCard = vi.hoisted(() => vi.fn());
 const deckAddCard = vi.hoisted(() => vi.fn());
 const deckMissingToWishlist = vi.hoisted(() => vi.fn());
@@ -122,6 +127,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckGet,
     deckUpdate,
     deckSetCardQuantity,
+    deckToCollection,
     deckMoveCard,
     deckAddCard,
     deckMissingToWishlist,
@@ -198,7 +204,6 @@ const DECK: DeckRow = {
   description: null,
   coverCardId: null,
   coverArtist: null,
-  isBuilt: false,
   archived: false,
   cardCount: 6,
   updatedAt: 1_800_000_000,
@@ -565,6 +570,8 @@ beforeEach(() => {
     );
   deckUpdate.mockReset().mockResolvedValue(DECK);
   deckSetCardQuantity.mockReset().mockResolvedValue({ id: 1, quantity: 0, removed: true });
+  // What a cut gave back: the row in `Recently removed` the copies landed in, and how many.
+  deckToCollection.mockReset().mockResolvedValue({ entryId: 21, fromDeck: null, quantity: 1 });
   deckMoveCard.mockReset().mockResolvedValue(undefined);
   deckAddCard.mockReset().mockResolvedValue({ id: 9, quantity: 1, removed: false });
   deckMissingToWishlist.mockReset().mockResolvedValue(3);
@@ -643,24 +650,12 @@ describe("DeckEditor", () => {
     );
   });
 
-  /** The header is the deck: what it is called, what it is for, and whether it is sleeved up. */
-  it("heads the editor with the deck's name, format and build state", async () => {
+  /** The header is the deck: what it is called and what it is for. */
+  it("heads the editor with the deck's name and format", async () => {
     await open();
 
     expect(screen.getByLabelText("Deck name")).toHaveValue("Burn");
     expect(screen.getByLabelText("Deck format")).toHaveValue("modern");
-    const built = screen.getByRole("button", { name: /^Built/ });
-    expect(built).toHaveAttribute("aria-pressed", "false");
-    // `ToggleChip`'s `hint` is redundant with its own composed `aria-label` ("Built, Reserves
-    // …"), so it binds `describes: false` — no `role="tooltip"`, found by the panel's one id.
-    fireEvent.pointerEnter(built);
-    const tooltip = await screen.findByText(
-      "Reserves your copies for this deck",
-      {},
-      { timeout: TOOLTIP_OPEN_MS + 1000 },
-    );
-    expect(tooltip.id).toBe(TOOLTIP_PANEL_ID);
-    fireEvent.pointerLeave(built);
   });
 
   /**
@@ -922,9 +917,9 @@ describe("DeckEditor", () => {
   });
 
   /**
-   * The third header write, and it is here for the same reason the two around it are: this file
-   * owns the **wiring** — that the field's decision reaches `deck.update` with the field the
-   * backend renames on.
+   * The second header write, and it is here for the same reason the format select above it is:
+   * this file owns the **wiring** — that the field's decision reaches `deck.update` with the
+   * field the backend renames on.
    *
    * `DeckNameField.test.tsx` pins the field's own half (the draft, the blank and unchanged
    * refusals, blur and Enter both committing) against an `onRename` spy, which is a claim about
@@ -941,15 +936,6 @@ describe("DeckEditor", () => {
     await userEvent.type(name, "Sunday burn{Enter}");
 
     await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { name: "Sunday burn" }));
-  });
-
-  /** Built is the one switch with a consequence outside this deck, so it says what it does. */
-  it("marks the deck built", async () => {
-    await open();
-
-    await userEvent.click(screen.getByRole("button", { name: /^Built/ }));
-
-    await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { isBuilt: true }));
   });
 
   /**
@@ -1200,18 +1186,27 @@ describe("DeckEditor", () => {
   });
 
   /**
-   * Zero removes, and it is `deck_set_card_quantity` that does it — never a `−1` through
-   * `deck_add_card`, which refuses the orphaned cards a reader most needs to be able to clear.
+   * Zero removes — and on the **Live** list it is `deck_to_collection` that does it, because
+   * removing a card from a deck the reader has built is also a statement about where the copies
+   * physically are: they go to `Recently removed` in the same transaction.
+   *
+   * **The row's own `deck_cards.id` and a delta**, which is the one deck command in this app
+   * addressed that way; every other one takes the grain and an absolute. The editor looks the
+   * row up to supply them, so a wrong lookup would cut a different card — which is why the id
+   * is asserted rather than matched loosely.
+   *
+   * The absolute write is asserted *absent*: `deck_to_collection` decrements the row itself, so
+   * sending both would take the copies off the list twice.
    */
   it("removes a card when its stepper reaches zero", async () => {
-    deckGet
-      .mockResolvedValueOnce(detail({}, [bolt({ quantity: 1 })]))
-      .mockResolvedValue(detail({}, []));
+    const row = bolt({ quantity: 1 });
+    deckGet.mockResolvedValueOnce(detail({}, [row])).mockResolvedValue(detail({}, []));
 
     await open();
     await userEvent.click(screen.getByRole("button", { name: `Decrease ${COPIES}` }));
 
-    expect(deckSetCardQuantity).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, "live", null, 0);
+    expect(deckToCollection).toHaveBeenCalledWith(row.id, 1);
+    expect(deckSetCardQuantity).not.toHaveBeenCalled();
     await waitFor(() =>
       expect(screen.queryByRole("button", { name: /^Lightning Bolt/ })).not.toBeInTheDocument(),
     );
@@ -1247,7 +1242,9 @@ describe("DeckEditor", () => {
    * passes with no rollback at all.
    */
   it("puts a refused removal back before the re-read answers", async () => {
-    deckSetCardQuantity.mockRejectedValue("The database is busy with a sync — try again.");
+    // The cut, because this is the Live list — see `removes a card when its stepper reaches
+    // zero`. The rollback is the mutation's and does not care which command was refused.
+    deckToCollection.mockRejectedValue("The database is busy with a sync — try again.");
     deckGet
       .mockResolvedValueOnce(detail({}, [bolt({ quantity: 1 })]))
       .mockReturnValue(new Promise(() => {}));
@@ -1357,7 +1354,7 @@ describe("DeckEditor", () => {
 
   /**
    * **The switch is the deck's, not the editor's** — `decks.separate_x_group`, written through
-   * the same `update` the Built toggle writes.
+   * the same `update` the header's rename and format select write.
    *
    * A `useState` here would look identical for one session and lose the reader's answer the
    * moment they closed the deck, which is the one thing a per-deck reading preference exists to
@@ -2085,7 +2082,7 @@ describe("DeckEditor", () => {
         CATEGORIES.filter((c) => c.id !== SIDE),
       ),
     );
-    await userEvent.click(screen.getByRole("button", { name: /^Built/ }));
+    await userEvent.selectOptions(screen.getByLabelText("Deck game"), "paper");
 
     // Read off the Add button, which is where the answer is visible: `Creature` is what
     // `autoCategoryFor` makes of this card, so the editor is on Auto.
@@ -2913,7 +2910,7 @@ describe("DeckEditor", () => {
     // before the press would take the deck away on the way in rather than on the write.
     deckUpdate.mockRejectedValue("That deck is not there any more.");
     deckGet.mockResolvedValue(null);
-    await userEvent.click(screen.getByRole("button", { name: /^Built/ }));
+    await userEvent.selectOptions(screen.getByLabelText("Deck game"), "paper");
 
     expect(await screen.findByText(/this deck is not there any more/i)).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
@@ -3221,6 +3218,46 @@ describe("DeckEditor", () => {
     expect(screen.getByText("TCGplayer prices as of the last card-data sync.")).toBeInTheDocument();
   });
 
+  /**
+   * **Where a cut card goes, said once and standing.** A Live row's copies are collection rows
+   * filed into this deck's group, so cutting one returns them to `Recently removed` — and there
+   * are three ways to make that cut (the tray, a stepper stepped to zero, the card menu's
+   * `Remove card`). This is the strip's own argument for the price line applied to the second
+   * fact: one sentence at the foot of the deck rather than three spellings at three controls.
+   *
+   * **Not a `role="status"`**, which is the other half of the claim: a held stepper firing this
+   * sentence per press is noise, so nothing here announces it and it is simply always there.
+   */
+  it("says once, standing, where a card cut from the deck goes", async () => {
+    await open();
+
+    expect(screen.getByText(CUT_CARDS_NOTE)).toBeInTheDocument();
+    // Every live region in this view speaks for a press — the refile note, the wishlist
+    // sentence. A standing fact is in none of them.
+    for (const region of screen.queryAllByRole("status")) {
+      expect(region).not.toHaveTextContent(CUT_CARDS_NOTE);
+    }
+  });
+
+  /**
+   * **And it is a claim about the Live list only.** A Theory row is a plan: it holds no copy, so
+   * a cut has nothing to give back and a sentence promising otherwise would be the one kind of
+   * wrong a reader cannot check against their own binder.
+   */
+  it("does not promise a cut card back on the plan", async () => {
+    withPlan();
+    await open();
+
+    expect(screen.getByText(CUT_CARDS_NOTE)).toBeInTheDocument();
+
+    await userEvent.click(tab("Theory"));
+
+    await waitFor(() => expect(screen.queryByText(CUT_CARDS_NOTE)).toBeNull());
+    // The price line is the strip's permanent half and is drawn on both tabs — so the absence
+    // above is this sentence being withheld rather than the strip having gone.
+    expect(screen.getByText("TCGplayer prices as of the last card-data sync.")).toBeInTheDocument();
+  });
+
   /** A deck deleted from another view is a deck the editor is holding a ghost of. It says so
    *  and offers the way back rather than throwing. */
   it("says so when the deck is not there any more", async () => {
@@ -3242,7 +3279,7 @@ describe("DeckEditor", () => {
     deckGet.mockResolvedValueOnce(detail({}, [bolt()])).mockResolvedValue(null);
 
     await open();
-    await userEvent.click(screen.getByRole("button", { name: /^Built/ }));
+    await userEvent.selectOptions(screen.getByLabelText("Deck game"), "paper");
 
     expect(await screen.findByText(/this deck is not there any more/i)).toBeInTheDocument();
   });
@@ -3311,7 +3348,7 @@ describe("DeckEditor", () => {
     deckUpdate.mockRejectedValue("The database is busy with a sync — try again in a moment.");
 
     await open();
-    await userEvent.click(screen.getByRole("button", { name: /^Built/ }));
+    await userEvent.selectOptions(screen.getByLabelText("Deck game"), "paper");
 
     expect(await screen.findByRole("alert")).toHaveTextContent("The database is busy with a sync");
   });
@@ -3328,6 +3365,17 @@ describe("DeckEditor", () => {
  * the *same* write, not a second one.
  */
 describe("DeckEditor drag and drop", () => {
+  /**
+   * The tray's own words, in both its shapes — "Remove from deck" and "Remove <card> from deck".
+   *
+   * **`/remove/i` used to be enough and is not any more.** The strip the tray is drawn on now
+   * carries a standing sentence naming `Recently removed` ({@link CUT_CARDS_NOTE}), so a loose
+   * match finds the *fact* wherever the *affordance* is absent — and every assertion below is
+   * about the affordance being absent. A query that cannot tell one from the other is the shape
+   * of thing that passes for months and then reads as a regression on a prose edit.
+   */
+  const TRAY_TEXT = /remove(\s.*)? from deck/i;
+
   /** A card in the deck, from the name it shows. The `<li>` is the drag handle — the whole
    *  card is. */
   const card_ = (name: string) =>
@@ -3388,7 +3436,7 @@ describe("DeckEditor drag and drop", () => {
    */
   it("offers a way out of the deck while a card is in the air", async () => {
     await open();
-    expect(screen.queryByText(/remove/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(TRAY_TEXT)).not.toBeInTheDocument();
 
     const held = await startDrag(card_("Lightning Bolt"));
     const tray = screen.getByText("Remove from deck");
@@ -3396,8 +3444,11 @@ describe("DeckEditor drag and drop", () => {
     expect(screen.getByText("Remove Lightning Bolt from deck")).toBeInTheDocument();
     await held.drop();
 
-    expect(deckSetCardQuantity).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, "live", null, 0);
-    await waitFor(() => expect(screen.queryByText(/remove/i)).not.toBeInTheDocument());
+    // The same cut the stepper's zero makes, addressed by the row the drag started from — the
+    // tray writes no command of its own.
+    expect(deckToCollection).toHaveBeenCalledWith(expect.any(Number), 4);
+    expect(deckSetCardQuantity).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByText(TRAY_TEXT)).not.toBeInTheDocument());
   });
 
   /**
@@ -3409,7 +3460,7 @@ describe("DeckEditor drag and drop", () => {
     await open();
 
     const held = await startDrag(await tile());
-    expect(screen.queryByText(/remove/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(TRAY_TEXT)).not.toBeInTheDocument();
 
     await held.cancel();
   });
@@ -3440,8 +3491,9 @@ describe("DeckEditor drag and drop", () => {
 
     await held.cancel();
 
-    expect(screen.queryByText(/remove/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(TRAY_TEXT)).not.toBeInTheDocument();
     expect(deckSetCardQuantity).not.toHaveBeenCalled();
+    expect(deckToCollection).not.toHaveBeenCalled();
     expect(deckMoveCard).not.toHaveBeenCalled();
     window.removeEventListener("keydown", listen);
   });
@@ -3472,7 +3524,7 @@ describe("DeckEditor drag and drop", () => {
       const held = await startDrag(await tile());
       expect(zone("Auto")).toBeInTheDocument();
       // The tray is not: there is nothing in this deck to take out.
-      expect(screen.queryByText(/remove/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(TRAY_TEXT)).not.toBeInTheDocument();
       await held.over(zone("Auto"));
       await held.drop();
 
@@ -3810,7 +3862,10 @@ describe("DeckEditor — a card's menu", () => {
     await userEvent.click(screen.getByRole("menuitem", { name: "Remove card" }));
 
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    expect(deckSetCardQuantity).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, "live", null, 0);
+    // The third caller of one removal write, which on the Live list is the cut — see
+    // `removes a card when its stepper reaches zero`.
+    expect(deckToCollection).toHaveBeenCalledWith(expect.any(Number), 4);
+    expect(deckSetCardQuantity).not.toHaveBeenCalled();
     await waitFor(() =>
       expect(document.querySelector(`[${DECK_GROUP_ATTR}="${MAIN}"]`)).toHaveFocus(),
     );

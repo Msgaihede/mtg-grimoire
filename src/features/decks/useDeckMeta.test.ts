@@ -186,6 +186,38 @@ describe("useDeckMeta invalidation", () => {
 
     await waitFor(() => expect(staleRoots(client)).toEqual(["decks"]));
   });
+
+  /**
+   * **The one write here that moves a collection row.** Deleting a pile with no destination
+   * cascades its `deck_cards` rows away, and the copies the deck's group was holding behind the
+   * `live` ones are filed into `Recently removed` in the same transaction — so the collection's
+   * list, its summary and both folder cards are wrong and `["decks"]` reaches none of them.
+   */
+  it("marks the collection stale when a category is deleted with its cards", async () => {
+    seedOwned(client);
+    const { result } = renderHook(() => useDeckMeta(4), { wrapper });
+    await waitFor(() => expect(result.current.categories).toHaveLength(3));
+    expect(staleRoots(client)).toEqual([]);
+
+    await result.current.deleteCategory.mutateAsync({ id: 2, moveToCategoryId: null });
+
+    await waitFor(() => expect(staleRoots(client)).toEqual(["collection", "decks"]));
+  });
+
+  /**
+   * And the move arm does not, which is the half worth pinning as an absence: those cards are
+   * still in this deck, one pile over, so the group is still exactly where their copies belong
+   * and `delete_category`'s move arm releases nothing.
+   */
+  it("leaves the collection alone when a category's cards are moved rather than deleted", async () => {
+    seedOwned(client);
+    const { result } = renderHook(() => useDeckMeta(4), { wrapper });
+    await waitFor(() => expect(result.current.categories).toHaveLength(3));
+
+    await result.current.deleteCategory.mutateAsync({ id: 2, moveToCategoryId: 1 });
+
+    await waitFor(() => expect(staleRoots(client)).toEqual(["decks"]));
+  });
 });
 
 describe("useDeckMeta", () => {

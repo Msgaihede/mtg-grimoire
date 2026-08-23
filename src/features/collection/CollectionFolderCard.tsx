@@ -83,8 +83,14 @@ export interface CollectionFolderTotals {
  * genuinely holds thousands of copies where a wishlist holds tens, and `plural` writes its number
  * plainly on purpose — its own doc says a caller that reaches four figures wants
  * `${count(n)} ${…}` and its own thought about it. This is that caller.
+ *
+ * **Exported for `PinnedFolders`, which draws the app's own folders beside these.** A deck group
+ * and `Recently removed` are drawn by a different component — they take no drop, offer no menu and
+ * are not part of the nestable tree — but they answer the *same* two questions about themselves,
+ * and a second spelling of "12 cards · $340.00" is a second chance for one wall to disagree with
+ * the wall under it.
  */
-function face(
+export function folderFace(
   summary: CollectionFolderTotals | null,
   currency: Currency,
 ): { shown: string; spoken: string } {
@@ -115,7 +121,7 @@ export function CollectionFolderCard({
 }: {
   node: FolderNode<CollectionFolder>;
   /** The recursive total the caller summed — or `null` while the summary read is still in flight,
-   *  which is not the same answer as an empty drawer. See {@link face}. */
+   *  which is not the same answer as an empty drawer. See {@link folderFace}. */
   summary: CollectionFolderTotals | null;
   currency: Currency;
   onOpen: () => void;
@@ -142,7 +148,7 @@ export function CollectionFolderCard({
   const ref = useRef<HTMLLIElement>(null);
   const tip = useTooltip();
   const { armed, over } = useCollectionDropTarget({ ref, canDrop, onDrop: onDropCard });
-  const { shown, spoken } = face(summary, currency);
+  const { shown, spoken } = folderFace(summary, currency);
 
   return (
     <li ref={ref} className={cn("relative rounded-xl", armed && DROP_RING)}>

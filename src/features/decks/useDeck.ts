@@ -9,6 +9,7 @@ import {
   type DeckTag,
   type DeckVariant,
   type DeckViewState,
+  type MoveOutcome,
 } from "@/lib/ipc";
 import { useAppStore, type PaneDeckContext } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
@@ -188,6 +189,43 @@ async function oracleTagsFor(cardId: string): Promise<readonly string[]> {
 }
 
 /**
+ * The `deck_cards` row a decrease is being taken *out of* — the one thing a slot cannot say.
+ *
+ * `deck_cards.id` is what {@link ipc.deckToCollection} addresses, and it is the only deck
+ * command in the app that does; every other one takes the grain, which is why nothing else here
+ * carries an id. `quantity` is what the row holds **now**, because the command takes a *delta*
+ * where the stepper states an absolute.
+ *
+ * **Supplied by the caller rather than read from the cache, and that is not a preference.**
+ * TanStack runs `onMutate` before `mutationFn`, and `onMutate` here removes the row
+ * optimistically — so by the time the write runs, the cache no longer holds the row it would
+ * have to read. The caller has it in hand: every removal in this editor starts from a
+ * {@link DeckCard} or from a slot it looks up in the list it is drawing.
+ *
+ * Absent means "route this the old way": a theory list, a caller that could not find the row
+ * (a drag can outlive the list it started in), or an *increase*.
+ */
+export interface CutFrom {
+  deckCardId: number;
+  quantity: number;
+}
+
+/**
+ * What the quantity write answers, whichever command it actually sent.
+ *
+ * The first two fields are `EntryChange`'s and are about the **deck list**. `outcome` is about
+ * the **collection** and is `null` for every write that did not touch it — a theory row, an
+ * increase, a caller with no {@link CutFrom}. A caller reading `outcome.quantity` is asking how
+ * many copies landed on the reader's desk, which is not the number it asked to remove and is
+ * `0` for a card the reader never owned.
+ */
+export interface QuantityResult {
+  quantity: number;
+  removed: boolean;
+  outcome: MoveOutcome | null;
+}
+
+/**
  * One deck, everything in it, and every write that changes what is in it.
  *
  * **One query, not three.** The editor, the mana curve and the legality panel all read
@@ -264,33 +302,60 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
   };
 
   /**
-   * Every card write reallocates — `allocate_deck` runs inside the same transaction — so the
-   * whole `["decks"]` root, not this one detail: every `ownedQuantity` in the deck may have
-   * moved, and the gallery tile's `cardCount` and `updatedAt` with them.
+   * The whole `["decks"]` root, not this one detail: a card write can move every
+   * `ownedQuantity` in the deck, and the gallery tile's `cardCount` and `updatedAt` with them.
    *
-   * **And nothing wider than that.** A card write moves `deck_allocations`; it never touches
-   * `collection_entries`, so the collection page, the search wall's owned counts and the
-   * wishlist's have/want are all provably unmoved and firing their roots would be three
-   * refetches per press of the stepper that can only answer what is already on screen.
-   * `missingToWishlist` takes `["wishlist"]` on top, because it is the one command here that
-   * actually writes wishes.
+   * **And, for most writes, nothing wider than that.** Owned/missing is a sum over the rows
+   * sitting in this deck's collection group, so a write that only changes the *list* — an add, a
+   * move between piles, a finish, a tag — provably leaves `collection_entries` where it was, and
+   * firing the collection's root as well would be a refetch per press of the stepper that can
+   * only answer what is already on screen. `missingToWishlist` takes `["wishlist"]` on top,
+   * because it is the one command here that actually writes wishes.
+   *
+   * **{@link invalidateCollection} is the exception and it is a real one**, so read that one
+   * before adding a write to this file: since schema v25 a cut on the live list *moves a
+   * collection row*, and this invalidation cannot see that.
    */
   const invalidate = () => {
     void queryClient.invalidateQueries({ queryKey: ["decks"] });
   };
 
   /**
-   * The deck itself: its name, its format, its cover, whether it is built.
+   * The collection's root as well — for the one write here that files copies somewhere else.
+   *
+   * Cutting a card from a **live** list takes the copies the deck's group was holding and files
+   * them into `Recently removed`, in the same transaction as the `deck_cards` write. That is a
+   * row leaving one folder and often *merging into another and being deleted*, which is exactly
+   * the shape PR 2 shipped a ghost row for: the collection's list, its summary, both folder
+   * cards and the folder tree are all now wrong, and the deck root reaches none of them.
+   *
+   * **Two writes here call it, and each is as precise as its own answer allows.**
+   *
+   * The **cut** is called only when the outcome says copies actually moved: a deck card nobody
+   * owned answers `quantity: 0` and `entryId: null` — nothing in any folder was behind it, so
+   * nothing in the collection changed and a refetch could only re-answer what is on screen. The
+   * arguments that went in cannot tell the two apart; only {@link MoveOutcome} can.
+   *
+   * The **clear** ({@link clearCategory}) is the second, and it cannot be that precise:
+   * `deck_category_clear` answers how many `deck_cards` rows it emptied, never how many copies
+   * moved, so a pile of cards the reader never owned reads the same as one they did. What it can
+   * say is when nothing moved *for certain* — a `theory` clear (a plan holds no cards, and the
+   * backend's release is fenced on `live`) and a clear that emptied no rows at all — and it is
+   * gated on both. The remaining over-fire is one refetch against a ghost row, which is the
+   * right way round.
+   */
+  const invalidateCollection = () => {
+    void queryClient.invalidateQueries({ queryKey: ["collection"] });
+  };
+
+  /**
+   * The deck itself: its name, its format, its cover, whether it is archived.
    *
    * `useDecks.update`, narrowed to the deck that is open — it takes a patch and no id,
    * because an editor has exactly one deck and cannot be given the wrong one. Both write the
    * same command and both invalidate the same `["decks"]` root, so the gallery's tile and
    * this header can never disagree about a name; what this one buys is an editor that does
    * not have to mount the gallery's list query to rename the deck it is showing.
-   *
-   * `isBuilt` is the field with a consequence outside this deck: sending it reallocates in
-   * the same transaction, and every *other* deck's `ownedQuantity` may move with it — which
-   * the shared root already covers.
    */
   const update = useMutation({
     mutationFn: (patch: DeckPatch) => ipc.deckUpdate(opened(id), patch),
@@ -447,10 +512,53 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
    * answer reads 4 and sends 5, so three presses land on 5. Cancel first, or an in-flight
    * read of the old deck lands on top of the guess; roll back on a refusal, because zero
    * *removes* here and a refused removal that stayed removed would be a card silently gone.
+   *
+   * ## A decrease on the **live** list is a different command
+   *
+   * Since schema v25 a deck holds a card because a collection row sits in that deck's group, so
+   * cutting one has to put the copies somewhere: `deck_to_collection` files them into
+   * `Recently removed` and decrements the `deck_cards` row **in the same transaction**. It
+   * replaces `deckSetCardQuantity` for that press rather than joining it — sending both would
+   * take the copies off the list twice — and it is the write that makes
+   * {@link CUT_CARDS_NOTE}, the standing sentence at the foot of the deck, true.
+   *
+   * **Three things decide which command goes**, all of them cheap and all of them necessary: the
+   * list has to be `live` (a plan holds no cards, and the backend refuses a theory row outright,
+   * so the UI must not ask); the quantity has to be going *down* (an increase moves no copies —
+   * putting a card *into* a deck is `collectionToDeck`, the Collection Search tab's write, which
+   * is the next PR); and the caller has to have supplied {@link CutFrom}, because the command
+   * addresses `deck_cards.id` and takes a delta while a stepper states an absolute.
+   *
+   * **The answer is a {@link QuantityResult} and its `outcome` is load-bearing**, not a
+   * courtesy: a cut of a card the reader never owned moves nothing at all, and only the outcome
+   * can tell that from a cut that emptied a folder — see {@link invalidateCollection}.
    */
   const setQuantity = useMutation({
-    mutationFn: ({ cardId, categoryId, finish, quantity }: Slot & { quantity: number }) =>
-      ipc.deckSetCardQuantity(opened(id), cardId, categoryId, variant, finish, quantity),
+    mutationFn: async ({
+      cardId,
+      categoryId,
+      finish,
+      quantity,
+      held,
+    }: Slot & { quantity: number; held?: CutFrom }): Promise<QuantityResult> => {
+      if (variant === "live" && held !== undefined && quantity < held.quantity) {
+        // The cut, and **instead of** `deckSetCardQuantity` rather than beside it: the command
+        // decrements the `deck_cards` row itself, so sending both would take the copies off the
+        // list twice. What it buys is the other half — the copies the group was holding are
+        // filed into `Recently removed` in the same transaction.
+        const outcome = await ipc.deckToCollection(held.deckCardId, held.quantity - quantity);
+        return { quantity, removed: quantity === 0, outcome };
+      }
+      const change = await ipc.deckSetCardQuantity(
+        opened(id),
+        cardId,
+        categoryId,
+        variant,
+        finish,
+        quantity,
+      );
+      return { quantity: change.quantity, removed: change.removed, outcome: null };
+    },
     onMutate: async ({ cardId, categoryId, finish, quantity }) => {
       await queryClient.cancelQueries({ queryKey: detailKey });
       const saved = queryClient.getQueryData<DeckDetail | null>(detailKey);
@@ -466,14 +574,19 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
       if (saved !== undefined) queryClient.setQueryData(detailKey, saved);
       invalidate();
     },
-    onSuccess: (change, { cardId, categoryId, finish }) => {
+    onSuccess: (result, { cardId, categoryId, finish }) => {
       // The answer, not the guess: the backend clamps and canonicalises, and this is the
       // number it actually stored.
       patchSlot(
         { cardId, categoryId, finish },
-        change.removed ? null : (card) => ({ ...card, quantity: change.quantity }),
+        result.removed ? null : (card) => ({ ...card, quantity: result.quantity }),
       );
       invalidate();
+      // **The outcome, not the argument.** A cut of a card nobody owned moves nothing, and
+      // refetching the collection for it would answer exactly what is already on screen — see
+      // {@link invalidateCollection}, which is where the ghost row this guards against is
+      // written down.
+      if (result.outcome !== null && result.outcome.quantity > 0) invalidateCollection();
     },
   });
 
@@ -482,10 +595,16 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
    *
    * **One command, not a `setQuantity(…, 0)` per row**, and the reason is the one that made
    * `deck_import_commit` a command: the rows are all in hand here, so the loop would compile —
-   * and it would be one transaction, one allocator run and one `["decks"]` invalidation *per
-   * card*, with the deck re-read forty times while the reader watches. It would also be forty
-   * history rows for one press, and any one of them could be refused halfway leaving the pile
-   * half-empty with no way to say so.
+   * and it would be one transaction and one `["decks"]` invalidation *per card*, with the deck
+   * re-read forty times while the reader watches. It would also be forty history rows for one
+   * press, and any one of them could be refused halfway leaving the pile half-empty with no way
+   * to say so.
+   *
+   * **On the live list it is a collection write too**, and the second one in this file:
+   * `deck::clear_category` releases every `live` row's backing copies into `Recently removed`
+   * before the `DELETE`, through the same walk the cut goes through. See
+   * {@link invalidateCollection} for what it costs to miss that, and for why the two gates below
+   * are the whole of what this press can honestly say.
    *
    * **No optimistic patch**, unlike the stepper beside it. The stepper is optimistic because it
    * is *held down* — a controlled control read back from the cache mid-press sends the same
@@ -498,12 +617,17 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
    */
   const clearCategory = useMutation({
     mutationFn: (categoryId: number) => ipc.deckCategoryClear(opened(id), categoryId, variant),
-    onSuccess: invalidate,
+    onSuccess: (cleared) => {
+      invalidate();
+      if (variant === "live" && cleared > 0) invalidateCollection();
+    },
   });
 
-  /** Move every copy from one category to another. A claim released or made even though
-   *  nothing was added or removed — an inactive category reserves nothing — so it invalidates
-   *  like the rest. */
+  /** Move every copy from one category to another. It moves no copy out of the deck's group —
+   *  the cards are still in this deck, one pile over — but a pile can be switched off, and an
+   *  inactive pile is handed nothing from that group, so every `ownedQuantity` in the deck can
+   *  move even though nothing was added or removed. `["decks"]` like the rest, and nothing
+   *  wider. */
   const moveCard = useMutation({
     mutationFn: ({
       cardId,
@@ -633,9 +757,11 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
    * worth the beat it saves: the row keeps saying what the last read said until the next one
    * lands.
    *
-   * `["decks"]` like every card write, for the same reason: `allocate_deck` runs inside the
-   * swap's transaction, and the allocator takes the exact printing first — so the copies this
-   * deck reserves can change even though its counts did not.
+   * `["decks"]` like every card write, and nothing wider: since schema v25 a swap rewrites the
+   * `deck_cards` row's `card_id` and touches no collection table at all, so no copy moves and
+   * no folder changes. What *can* change is the number this deck shows — owned/missing is
+   * matched by oracle id, so it is the same answer for both printings, and a fold onto a
+   * printing the pile already held moves two rows into one.
    *
    * **And `["decks"]` again when it is refused, which no other write here does.** The reason is
    * where this one is pressed: the control is on the card pane's printings rows, and the pane

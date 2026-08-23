@@ -1,6 +1,7 @@
 pub mod card;
 pub mod card_row;
 pub mod collection;
+pub mod collection_alloc;
 pub mod collection_folders;
 pub mod collection_source;
 pub mod db;
@@ -330,6 +331,11 @@ pub fn run() {
             collection_folders::collection_folder_delete,
             collection_folders::collection_set_folder,
             collection_folders::collection_folder_summary,
+            // The two writes that move copies across the deck boundary. Registered from
+            // `collection_alloc::commands` so the wire names match the crate's own — see that
+            // module. `generate_handler!` names a command after the last path segment.
+            collection_alloc::commands::collection_to_deck,
+            collection_alloc::commands::deck_to_collection,
             wishlist::wishlist_add,
             wishlist::wishlist_set_quantity,
             wishlist::wishlist_remove,

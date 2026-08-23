@@ -165,10 +165,12 @@ function AddForm({
       void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
       if (mode === "collection") {
         void queryClient.invalidateQueries({ queryKey: ["collection"] });
-        // And every deck, for the collection add only: a deck's claim is clamped to what the
-        // entry still holds when the deck is read, so a copy added under a built deck is a
-        // copy that deck may now read as owning. A *wish* is a copy the user does not have,
-        // and changes no deck's arithmetic at all.
+        // And every deck, for the collection add only. `collection_add` takes no folder, so
+        // the copy lands unfiled at the root — which is *not* any deck's group, and since
+        // schema v25 a live deck owns exactly what its own group holds. What moves is the
+        // theory list's spare column: `OWNED_SPARE_SQL` counts the copies that are in no deck
+        // group, so a copy added here is a copy some plan may now read as spare. A *wish* is a
+        // copy the user does not have, and changes no deck's arithmetic at all.
         void queryClient.invalidateQueries({ queryKey: ["decks"] });
       }
       // And the search results, which now *draw* what this write changed: `ownedQuantity`

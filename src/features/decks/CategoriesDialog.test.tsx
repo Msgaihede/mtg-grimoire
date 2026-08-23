@@ -120,7 +120,6 @@ const DECK_ROW: DeckRow = {
   coverCardId: null,
   coverKind: "card_art",
   coverArtist: null,
-  isBuilt: false,
   archived: false,
   cardCount: 21,
   updatedAt: 0,
@@ -698,7 +697,7 @@ describe("categories", () => {
     );
 
     await user.selectOptions(picker, "delete");
-    expect(within(dialog).getByText(/^The 7 cards in it are deleted too/)).toHaveTextContent(
+    expect(within(dialog).getByText(/^The 7 cards in it go with it/)).toHaveTextContent(
       "both the live and theory lists, not just the one on screen",
     );
     await user.click(within(dialog).getByRole("button", { name: "Delete “Ramp”" }));
@@ -751,7 +750,11 @@ describe("categories", () => {
     const dialog = await screen.findByRole("group", { name: "Delete Ramp" });
     await user.selectOptions(within(dialog).getByLabelText("Its 12 cards"), "delete");
 
-    expect(within(dialog).getByText(/are deleted too\. This cannot be undone/)).toBeInTheDocument();
+    // The destructive arm says where the cards actually end up: the `deck_cards` rows go, and
+    // the copies the reader owns are filed into `Recently removed` rather than destroyed.
+    expect(
+      within(dialog).getByText(/go with it.*Any copies you own go back to Recently removed/),
+    ).toBeInTheDocument();
     await user.click(within(dialog).getByRole("button", { name: "Delete “Ramp”" }));
 
     expect(deckCategoryDelete).toHaveBeenCalledWith(2, null);

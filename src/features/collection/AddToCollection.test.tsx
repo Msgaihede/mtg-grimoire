@@ -290,8 +290,9 @@ describe("AddToCollectionButton", () => {
     // one copy out of date.
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["collection"] });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] });
-    // And every deck: a claim is clamped to what the entry still holds at read time, so a
-    // copy added under a built deck is a copy that deck may now read as owning.
+    // And every deck: the copy lands unfiled at the root, which is no deck's group — but the
+    // theory list's spare column counts exactly the copies that are in no group, so a copy
+    // added here is a copy some plan may now read as spare.
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] });
     // Refetched, not merely marked. It used to carry `refetchType: "none"` because the only
     // thing this write changed on a result row was a field no view drew; Task 12's badges

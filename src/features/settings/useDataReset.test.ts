@@ -31,7 +31,7 @@ beforeEach(() => {
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   invalidate = vi.spyOn(client, "invalidateQueries").mockReturnValue(Promise.resolve());
-  collectionClear.mockReset().mockResolvedValue({ entries: 12, allocations: 3 });
+  collectionClear.mockReset().mockResolvedValue({ entries: 12 });
   wishlistClear.mockReset().mockResolvedValue(4);
   decksClear.mockReset().mockResolvedValue({ decks: 2, folders: 1, covers: 0 });
   cacheClear.mockReset().mockResolvedValue({ files: 20, bytes: 4_000, rows: 20, failed: 0 });
@@ -53,17 +53,21 @@ describe("useDangerZone", () => {
   });
 
   /**
-   * Deliberately short, and worth pinning as an absence. Nothing the collection page or the
-   * search wall draws is derived from a deck's allocation — `CardSummary.ownedQuantity` is
-   * allocation-blind — so clearing every deck must not refetch either of them.
+   * **Two roots, and the second is what schema v25 added.** Every deck's group is a
+   * `collection_folders` row, so a wipe takes the whole set of them and files the copies they
+   * were holding into `Recently removed` — the collection's folder tree, its summary and its
+   * list are all changed by that press. The **card** roots are still an absence worth pinning:
+   * a copy that changes folder is a copy the reader still owns, `CardSummary.ownedQuantity` is
+   * a sum over quantities, and no quantity moved — so neither the search wall nor the wishlist
+   * can read differently afterwards.
    */
-  it("marks only the decks when the decks are cleared", async () => {
+  it("marks the decks and the collection when the decks are cleared", async () => {
     const { result } = renderHook(() => useDangerZone(), { wrapper });
 
     act(() => result.current.decks.run());
 
     await waitFor(() => expect(invalidate).toHaveBeenCalled());
-    expect(invalidatedRoots()).toEqual(["decks"]);
+    expect(invalidatedRoots().sort()).toEqual(["collection", "decks"]);
   });
 
   it("reports what the clear did, in the panel's plain tone", async () => {
@@ -114,7 +118,7 @@ describe("useDangerZone", () => {
     await waitFor(() =>
       expect(result.current.status).toEqual({
         tone: "plain",
-        text: "Cleared 12 collection entries and released 3 deck reservations.",
+        text: "Cleared 12 collection entries.",
       }),
     );
   });

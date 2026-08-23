@@ -14,6 +14,7 @@ import type {
 const deckGet = vi.hoisted(() => vi.fn());
 const deckAddCard = vi.hoisted(() => vi.fn());
 const deckSetCardQuantity = vi.hoisted(() => vi.fn());
+const deckToCollection = vi.hoisted(() => vi.fn());
 const deckCategoryClear = vi.hoisted(() => vi.fn());
 const deckMoveCard = vi.hoisted(() => vi.fn());
 const deckMissingToWishlist = vi.hoisted(() => vi.fn());
@@ -27,6 +28,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckGet,
     deckAddCard,
     deckSetCardQuantity,
+    deckToCollection,
     deckCategoryClear,
     deckMoveCard,
     deckMissingToWishlist,
@@ -48,7 +50,6 @@ const DECK: DeckRow = {
   description: null,
   coverCardId: null,
   coverArtist: null,
-  isBuilt: false,
   archived: false,
   cardCount: 4,
   updatedAt: 1_800_000_000,
@@ -178,6 +179,9 @@ beforeEach(() => {
   deckGet.mockReset().mockResolvedValue(DETAIL);
   deckAddCard.mockReset().mockResolvedValue({ id: 9, quantity: 4, removed: false });
   deckSetCardQuantity.mockReset().mockResolvedValue({ id: 9, quantity: 3, removed: false });
+  // A cut that really did give a copy back — the destination row, the deck it came out of
+  // (never set by this direction), and what actually moved.
+  deckToCollection.mockReset().mockResolvedValue({ entryId: 21, fromDeck: null, quantity: 1 });
   // The copies it removed — this command answers a number, not a row.
   deckCategoryClear.mockReset().mockResolvedValue(4);
   deckMoveCard.mockReset().mockResolvedValue(undefined);
@@ -328,6 +332,40 @@ describe("useDeck", () => {
     expect(cleared).toBe(4);
     expect(deckCategoryClear).toHaveBeenCalledTimes(1);
     expect(deckSetCardQuantity).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **A clear of the live list moves collection rows**, which is the second write in this file
+   * that does — `deck::clear_category` releases every `live` row's backing copies into `Recently
+   * removed` before the `DELETE`, through the same walk the cut uses. So it takes the
+   * collection's root, exactly as the cut does, and for the ghost-row reason written on
+   * `invalidateCollection`.
+   */
+  it("marks the collection stale when a live pile is cleared", async () => {
+    seedOwned(client);
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+    seedOwned(client);
+    expect(staleRoots(client)).toEqual([]);
+
+    await result.current.clearCategory.mutateAsync(MAIN.id);
+
+    await waitFor(() => expect(staleRoots(client)).toEqual(["collection", "decks"]));
+  });
+
+  /**
+   * And a **theory** clear does not, which is the absence worth pinning: a plan holds no cards,
+   * so the backend's release is fenced on `variant == 'live'` and nothing in any folder moves.
+   */
+  it("leaves the collection alone when a theory pile is cleared", async () => {
+    seedOwned(client);
+    const { result } = renderHook(() => useDeck(4, "theory"), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+    seedOwned(client);
+
+    await result.current.clearCategory.mutateAsync(MAIN.id);
+
+    await waitFor(() => expect(staleRoots(client)).toEqual(["decks"]));
   });
 
   /** A deck the gallery has not refreshed since another view deleted it. `null` is the
@@ -831,6 +869,164 @@ describe("useDeck", () => {
     // printing of every card the deck was short of, and a search behind this is visibly wrong
     // rather than stale in a field nothing draws.
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cards", "search"] });
+  });
+
+  /**
+   * **A decrease on the live list is a cut, and a cut is `deck_to_collection`.** Since schema
+   * v25 the deck holds a card because a collection row sits in its group, so taking a copy off
+   * the list has to put that copy somewhere — `Recently removed`, in the same transaction as the
+   * `deck_cards` write.
+   *
+   * **It replaces the absolute write rather than joining it**, which is the half a reader of
+   * this hook has to get right: `deck_to_collection` decrements the row itself, so sending
+   * `deck_set_card_quantity` as well would take the copies off the list twice. Asserting the
+   * absolute write was *not* called is the whole point of the second expectation.
+   *
+   * The arguments are the row's own id and a **delta** — 4 held, 1 wanted, so 3 copies come
+   * back — where every other deck command takes the grain and an absolute.
+   */
+  it("cuts a live row through `deck_to_collection` and not through the absolute write", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.cards).toEqual([BOLT]));
+
+    await result.current.setQuantity.mutateAsync({
+      cardId: "p1",
+      categoryId: MAIN.id,
+      finish: null,
+      quantity: 1,
+      held: { deckCardId: BOLT.id, quantity: BOLT.quantity },
+    });
+
+    expect(deckToCollection).toHaveBeenCalledWith(BOLT.id, 3);
+    expect(deckSetCardQuantity).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **The three ways a decrease is not a cut**, each of which must keep the absolute write.
+   *
+   * A `theory` row is a plan and holds no cards — the backend refuses one outright, so the UI
+   * must not ask. An *increase* moves nothing out of the group; putting a card *into* a deck is
+   * `collectionToDeck`, which is the Collection Search tab's write. And a caller with no `held`
+   * could not find the row it was pointed at, which a drag outliving its list can do.
+   */
+  it("keeps the absolute write for a theory row, an increase and a caller with no row", async () => {
+    const PLAN: DeckCard = { ...BOLT, id: 11, variant: "theory", quantity: 2 };
+    deckGet.mockImplementation((_id: number, variant: string) =>
+      Promise.resolve(variant === "theory" ? { ...DETAIL, cards: [PLAN] } : DETAIL),
+    );
+    const plan = renderHook(() => useDeck(4, "theory"), { wrapper });
+    await waitFor(() => expect(plan.result.current.cards).toEqual([PLAN]));
+
+    await plan.result.current.setQuantity.mutateAsync({
+      cardId: "p1",
+      categoryId: MAIN.id,
+      finish: null,
+      quantity: 1,
+      held: { deckCardId: PLAN.id, quantity: PLAN.quantity },
+    });
+    expect(deckSetCardQuantity).toHaveBeenCalledWith(4, "p1", MAIN.id, "theory", null, 1);
+
+    const live = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(live.result.current.cards).toEqual([BOLT]));
+
+    await live.result.current.setQuantity.mutateAsync({
+      cardId: "p1",
+      categoryId: MAIN.id,
+      finish: null,
+      quantity: 6,
+      held: { deckCardId: BOLT.id, quantity: BOLT.quantity },
+    });
+    expect(deckSetCardQuantity).toHaveBeenCalledWith(4, "p1", MAIN.id, "live", null, 6);
+
+    await live.result.current.setQuantity.mutateAsync({
+      cardId: "p1",
+      categoryId: MAIN.id,
+      finish: null,
+      quantity: 0,
+    });
+    expect(deckSetCardQuantity).toHaveBeenCalledWith(4, "p1", MAIN.id, "live", null, 0);
+
+    expect(deckToCollection).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **A cut is a collection write, so the collection's root goes stale with the deck's.** The
+   * copies leave the deck's folder and land in `Recently removed`, often *merging into a row
+   * that is already there and deleting the one that moved* — so the list, its summary, both
+   * folder cards and the folder tree are every one of them wrong, and `["decks"]` reaches none
+   * of them.
+   *
+   * `staleTime` is 30 s, so a page that already has an answer refetches nothing on a
+   * navigation: invalidation is the only thing that can tell the Collection page this happened.
+   * That is the ghost row PR 2 shipped, arrived at from the deck side.
+   *
+   * **The search wall and the wishlist stay fresh**, and deliberately: a move between folders
+   * changes no `quantity`, so how many copies of a printing the reader owns is exactly what it
+   * was.
+   */
+  it("marks the collection stale when a cut actually moved copies", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.cards).toEqual([BOLT]));
+    seedOwned(client);
+
+    await result.current.setQuantity.mutateAsync({
+      cardId: "p1",
+      categoryId: MAIN.id,
+      finish: null,
+      quantity: 3,
+      held: { deckCardId: BOLT.id, quantity: BOLT.quantity },
+    });
+
+    await waitFor(() => expect(staleRoots(client)).toEqual(["collection", "decks"]));
+  });
+
+  /**
+   * **And leaves it alone when nothing moved**, which is the reason the outcome is read rather
+   * than the arguments. A deck card added from search is an intention to buy: no collection row
+   * is behind it, cutting it puts nothing on the reader's desk, and `MoveOutcome` says so with
+   * `quantity: 0` and `entryId: null`. The arguments that went in are identical either way.
+   */
+  it("leaves the collection alone when the cut gave nothing back", async () => {
+    deckToCollection.mockResolvedValue({ entryId: null, fromDeck: null, quantity: 0 });
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.cards).toEqual([BOLT]));
+    seedOwned(client);
+
+    await result.current.setQuantity.mutateAsync({
+      cardId: "p1",
+      categoryId: MAIN.id,
+      finish: null,
+      quantity: 0,
+      held: { deckCardId: BOLT.id, quantity: BOLT.quantity },
+    });
+
+    await waitFor(() => expect(staleRoots(client)).toEqual(["decks"]));
+  });
+
+  /**
+   * A refused cut puts the row back, exactly as a refused absolute write does — zero *removes*
+   * here, and a refusal that stayed removed would be a card silently gone from the deck. The
+   * rollback is the mutation's and does not care which command was sent, which is what this
+   * pins: the branch above it must not have introduced a second, un-rolled-back path.
+   */
+  it("puts a refused cut back on the desk", async () => {
+    deckToCollection.mockRejectedValue("The database is busy with a sync — try again.");
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.cards).toEqual([BOLT]));
+
+    await expect(
+      result.current.setQuantity.mutateAsync({
+        cardId: "p1",
+        categoryId: MAIN.id,
+        finish: null,
+        quantity: 0,
+        held: { deckCardId: BOLT.id, quantity: BOLT.quantity },
+      }),
+    ).rejects.toBeTruthy();
+
+    expect(
+      client.getQueryData<DeckDetail>(["decks", "detail", 4, "live", "tcgplayer"])?.cards,
+    ).toEqual([BOLT]);
   });
 
   /**

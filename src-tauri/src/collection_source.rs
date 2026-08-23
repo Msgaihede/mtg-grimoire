@@ -14,8 +14,10 @@
 //!   subquery about ownership; the rows themselves.
 //! - [`crate::wishlist`]'s `OWNED_SQL` — how much of a wish is already filled, narrowed by
 //!   **finish**, which none of the fragments here does.
-//! - [`crate::deck_theory`]'s `OWNED_SPARE_SQL` — copies no built deck has claimed, so it has
-//!   to subtract `deck_allocations` and narrow by finish in the same statement.
+//! - [`crate::deck_theory`]'s `OWNED_SPARE_SQL` — copies **no deck's group holds**, so it
+//!   narrows by finish *and* by where each row is filed, neither of which any fragment here
+//!   does. (It subtracted a claim ledger until schema v25 dropped one; the question is now a
+//!   `collection_folders.kind` lookup, and it is still its own statement.)
 //!
 //! Each of the three binds its own aliases and does not go through the paragraph below.
 //! `src-tauri/CLAUDE.md` carries the short form of this rule.

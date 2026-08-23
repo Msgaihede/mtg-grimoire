@@ -138,7 +138,6 @@ const DECK: DeckRow = {
   coverKind: "card_art",
   coverArtist: null,
   cardCount: 42,
-  isBuilt: false,
   archived: false,
   folderId: null,
   theoryEnabled: false,

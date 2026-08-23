@@ -111,7 +111,9 @@ export function CommitBar({
  * `CollectionPage`'s and `WishlistPage`'s own row-level writes (`settle`/`settleFailure`) each
  * invalidate several keys for a *single* stepper press, because a change to what is owned moves
  * more than one screen: the collection's own list and summary, the wishlist's owned-progress,
- * the search wall's owned badges, and every open deck's allocator claims. A bulk import moves
+ * the search wall's owned badges, and every open deck — which since schema v25 owns exactly the
+ * copies filed in its own group, and reads the copies filed in no group as spare, so a write to
+ * `collection_entries` is a write to one or the other of those. A bulk import moves
  * ownership at least as much as one stepper press — usually far more of it — so each caller
  * passes the same set its row-level neighbours do rather than a narrower one of its own; see the
  * two call sites for which keys that is. A refused write can still have been a database another

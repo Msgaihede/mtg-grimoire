@@ -1543,8 +1543,11 @@ clientWidth` at 1024, 1280 and 1920, and the deck view's own scroller matched it
     right thing for the backend to say. Do not fix a picker by changing an `ORDER BY`.
   - **A pinned row stays pinned, outside the sort**: `Any card`, `Any format`, `Any set`, the
     disabled `Custom…` a table-header sort leaves behind, `Auto (by what it does)`, `Top level`.
-    `CategoriesDialog`'s `are deleted with it` is pinned **last** — the destructive answer is
-    not allowed to become the default by alphabet. (A seventh, the deck card's permanent `Move…`
+    `CategoriesDialog`'s destructive answer is pinned **last** — it is not allowed to become the
+    default by alphabet. That row reads `go with it` since schema v25; it read
+    `are deleted with it` until the deck groups landed, and that had become the wrong half of a
+    true sentence, because the `deck_cards` rows do go while the copies the reader physically owns
+    are filed into `Recently removed`. (A seventh pinned row, the deck card's permanent `Move…`
     verb, went with that select on 2026-08-14.)
   - **The search's format select pins _two_ rows, and their order is a ladder rather than an
     alphabet** (2026-08-14): `Any card`, then `Any format`, then the sorted formats — widest to

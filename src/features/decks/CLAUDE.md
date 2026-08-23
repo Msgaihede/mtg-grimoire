@@ -2,7 +2,7 @@
 
 **Validation is TypeScript** (spec §3). Rust supplies **facts** (`DeckCardRow`: per-printing
 `legalities`, `color_identity`, P/T, `ever_uncommon`, `game_changer`); TS draws **every**
-conclusion. The storage side — tables, the card commands, the allocator, the audit log —
+conclusion. The storage side — tables, the card commands, how owned/missing is answered, the audit log —
 is [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md) and
 [src-tauri/CLAUDE.md](../../../src-tauri/CLAUDE.md).
 
@@ -45,7 +45,7 @@ is [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md) a
   [decks-storage.md](../../../docs/reference/decks-storage.md).
 - **`is_active = 0` is the whole of what `maybe` used to mean**, and **nothing anywhere may
   branch on the kind being `maybe`.** An inactive category counts toward nothing — not size, not
-  copies, not legality — and the allocator claims no copy for it. That was measured: the old
+  copies, not legality — and it is handed no copies from the deck's group. That was measured: the old
   shape looked correct and was wrong the first time a user deactivated a pile of their own.
 - **"Counts toward nothing" is a rule about the _deck_, and since 2026-08-20 it is emphatically
   not a rule about the _card's mark_** (issue #134). A card in a switched-off pile still draws
@@ -134,7 +134,7 @@ is [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md) a
   cleans up at the delete — so what is left is the one commit where the deck row and the category
   list disagree, and Auto is where the deck already is.
 - **The list is every pile, active and inactive.** `isActive` means "counts toward nothing"
-  (size, copy limits, legality, the allocator) and has never meant "cannot be filed into"; a
+  (size, copy limits, legality, owned/missing) and has never meant "cannot be filed into"; a
   switched-off Maybeboard is exactly the pile a reader building a shortlist wants adds to land
   in. The option is marked `(off)` and the row's caption says what that costs, which is the fact
   most likely to surprise somebody who set this weeks ago.
@@ -301,7 +301,7 @@ reader to configure the deck they had just made; it now asks all of them.
 
 - **A write to what is _in_ a deck goes through a `useDeck` mutation — but the refused-write family
   stopped being all of one hook's on 2026-08-14.** `DeckEditor`'s `newestWrite([...])` takes
-  **every `useDeck` mutation but `rememberView`** — update (rename, cover, Built toggle, the
+  **every `useDeck` mutation but `rememberView`** — update (rename, cover, format, the
   `Split X` chip), add-card, set-quantity, move, set-tag, missing-to-wishlist, swap-printing — and
   **the `useDeckMeta` writes a right-click can now reach**, which are the tag create and a
   category's rename, switch and delete. Read the array rather than a number here; a count stood in
@@ -315,6 +315,26 @@ reader to configure the deck they had just made; it now asks all of them.
   started it has closed by the time an answer arrives**. `useDeckMeta`'s observer here is a
   _different_ one from the dialog's — TanStack shares a query's cache between observers and a
   mutation's state with nobody — so this banner speaks only for presses made out here.
+- **Taking a card off the _Live_ list is a write to the collection, and it is not
+  `deck_set_card_quantity`.** Since schema v25 a deck holds a card because a collection row sits
+  in that deck's group, so a decrease has to put the copies somewhere: `ipc.deckToCollection`
+  files them into `Recently removed` and decrements the `deck_cards` row **in one transaction**.
+  It **replaces** the absolute write for that press rather than joining it — sending both takes
+  the copies off the list twice — and it is the write that makes `CUT_CARDS_NOTE`, the standing
+  sentence at the foot of the deck, true rather than a promise.
+  **All three removals are one path**: the stepper's zero, the card menu's `Remove card` and the
+  remove tray all reach `DeckEditor`'s `setQuantityAt`, which looks the row up and hands
+  `useDeck.setQuantity` a `CutFrom` — `deck_cards.id` and what the row holds now, because the
+  command addresses the row by id and takes a *delta*. The lookup is the editor's and not the
+  hook's for a reason worth knowing: TanStack runs `onMutate` before the write and `onMutate`
+  removes the row optimistically, so the cache no longer has it by the time the write runs.
+  **Three things fall back to the absolute write** — a `theory` list (a plan holds no cards, and
+  the backend refuses one outright), an *increase* (putting a card **into** a deck is
+  `collectionToDeck`, the Collection Search tab's write), and a caller that could not find the row.
+  **And the answer is read, never assumed**: `MoveOutcome.quantity` is `0` for a card the reader
+  never owned, and `useDeck` fires `["collection"]` only when copies actually moved. `query.ts`
+  caches 30 s, so a missing invalidation there is a ghost row on the collection page rather than a
+  stale one.
 - **A deck card names a finish, and the grain says so** (schema v19, 2026-08-17). This reverses
   "a deck names a printing and never a finish", which was true for as long as Scryfall's model
   went unread: foil is a **finish of a printing** rather than a printing, so 53 224 of 107 337
@@ -330,9 +350,9 @@ reader to configure the deck they had just made; it now asks all of them.
   the reader moved a card or chose a printing, not an object.
   **Two rules did not change and both look as though they should have.** `engine.ts` counts
   copies by card **name** and sums across rows, so `1 foil + 3 regular` is four copies — the
-  rules have never heard of a finish, and `engine.test.ts` pins it. And `allocate_deck` matches
-  on oracle id and has always ignored finish, condition and language, so a foil row reserves
-  whatever copy is free. **The undo `Cell` is deliberately finish-blind** too: a finish change
+  rules have never heard of a finish, and `engine.test.ts` pins it. And owned/missing matches
+  on oracle id and has always ignored finish, condition and language, so a foil row is answered
+  by whatever copies of that card the deck's group holds. **The undo `Cell` is deliberately finish-blind** too: a finish change
   moves quantity *between* two rows of one printing, so a scope naming one would restore half of
   what it read — `deck_undo::CardRow` is what grew the column instead.
 - **`Set as foil` is one row with three shapes, and it greys _silently_.** `deckCardMenu.tsx`'s
@@ -377,7 +397,7 @@ reader to configure the deck they had just made; it now asks all of them.
 - **Emptying a whole pile is a command, and that is the one write that is _not_ a loop over
   `setQuantity`** (`useDeck.clearCategory` → `deck_category_clear`, 2026-08-15, behind a heading's
   right-click `Clear stack…`). The rows are all in hand, so the loop would compile — and would be
-  a transaction, an allocator run and a `["decks"]` invalidation **per card**, plus a history line
+  a transaction and a `["decks"]` invalidation **per card**, plus a history line
   each for one press. It is `deck_import_commit`'s argument applied to the reverse operation, and
   [decks-storage.md](../../../docs/reference/decks-storage.md) carries the rest.
   **It is scoped to the variant on screen**, which is the exact reverse of `deleteCategory`: that
@@ -617,7 +637,7 @@ reader to configure the deck they had just made; it now asks all of them.
   not apply: what was removed re-implemented the comparison `deck_theory_diff` owns (it counted
   disagreement on `(categoryId, cardId)`, both directions, so a card filed in two piles scored
   twice), while this asks for rows no command answers. The **cost** half is answered by the
-  command: two columns of one indexed scan, no join to `cards`, no prices, no allocation roll-up,
+  command: two columns of one indexed scan, no join to `cards`, no prices, no owned roll-up,
   no marketplace — against a `deck_get` that does all four. It is enabled only when
   `theoryEnabled && variant === "live"`, so a deck with no plan and the whole Theory tab pay
   nothing at all.
@@ -712,7 +732,8 @@ reader to configure the deck they had just made; it now asks all of them.
   actions past the toolbar row beneath them, and `gap-x-3` already leaves the ring three times
   the room it asks for on that axis. The height is `FILTER_CONTROL`'s rather than a number this
   folder invented: `CONTROL` was 32px "so the two rows read as rows", but both rows have grown a
-  `ToggleChip` since — `Built` in the header, `Split X` in the toolbar — and a `ToggleChip` is
+  `ToggleChip` since — `Split X` in the toolbar, and `Built` in the header until schema v25
+  deleted the flag it toggled — and a `ToggleChip` is
   36, so the height meant to unify was drawing every plain press four pixels shorter than the
   chips beside it. **`text-xs` stays where it is, and that is the load-bearing half**:
   `FILTER_CONTROL` carries `text-sm`, but the header's actions block is **692px** at max-content
@@ -792,7 +813,7 @@ price | type`). An **inactive category stays its own group in all three grouping
     and gives them _opposite_ answers, so a membership test there would fold two rules into one and
     lose the half that is about the format.
   - **A switched-off command zone is not in the head run at all.** It counts toward nothing — not
-    size, not copies, not legality, not the allocator — so it is not what the rest of the deck is
+    size, not copies, not legality, not owned/missing — so it is not what the rest of the deck is
     read _against_ either, and it stays exactly where it was: in `sortOrder` under `category`, in
     the inactive tail under a derived grouping, and in the rail under both. The tail is unchanged
     by construction rather than by two filters that happen to agree — the head run takes only
@@ -934,7 +955,7 @@ price | type`). An **inactive category stays its own group in all three grouping
 - **The editor reopens on the view the reader left, and the deck row is where that is kept.**
   `lastVariant`/`lastGroupBy`/`lastSortBy` come off `DeckRow` and go back through
   `useDeck`'s `rememberView` (`deck_set_view_state`), which touches no `updated_at`, writes no
-  history and reallocates nothing — looking at a deck is not editing it. It is deliberately
+  history and moves no card — looking at a deck is not editing it. It is deliberately
   **not** `useAppStore`: `searchView` and `collectionView` are one session-wide answer about the
   _app_, and which list of a _particular_ deck the reader was reading is a fact about that deck.
   `cardZoom` used to be named in that pair and no longer belongs there — since 2026-08-14 it is one
@@ -1005,7 +1026,7 @@ price | type`). An **inactive category stays its own group in all three grouping
   as the rename and the cover, and is audited as one. This one is an answer about a particular
   curve: a storm list where half the spells are `{X}` reads quite differently from an aggro deck
   with one Fireball in it. It reaches no rule — not size, not copies, not legality, not the
-  allocator — and nothing in `validation/` has heard of it or should.
+  owned/missing — and nothing in `validation/` has heard of it or should.
 - **`DeckStats` honours the flag under _every_ grouping while the chip that sets it is drawn under
   one, and that is a decision with a known cost rather than an oversight.** `DeckEditor` reads the
   flag once and hands the same value to `buildGroups` and to `DeckStats`, because a curve counting
@@ -1077,7 +1098,7 @@ price | type`). An **inactive category stays its own group in all three grouping
   mistake to avoid**: an inactive category _holding cards_ still draws, the empty seeded Maybeboard
   draws, and an empty auto pile stays out however active it is. **There is no per-category "hide"
   flag, none is wanted, and `isActive` is not one** — it means "counts toward nothing" (size, copy
-  limits, legality, the allocator) and deliberately keeps drawing the pile, because the affordance
+  limits, legality, owned/missing) and deliberately keeps drawing the pile, because the affordance
   for switching it back on is seeing what is in it. **Delete is the removal**, and the four seeded
   piles cannot be deleted at all. An auto pile that goes empty is not deleted and loses nothing:
   it is still a row, still in `DeckEditor`'s `categories`, still listed in the Categories dialog
@@ -1362,7 +1383,7 @@ price | type`). An **inactive category stays its own group in all three grouping
   this page said** (changed 2026-08-17). `splitRail`'s second test is `!isActive`, and the old rule
   refused it in writing: _"a switched-off pile is still that pile"_. True, and an argument about
   identity where the question is placement. `is_active = 0` is the whole of what `maybe` ever meant
-  — the pile counts toward nothing and the allocator claims no copy for it — so it is not part of
+  — the pile counts toward nothing and is handed no copies from the group — so it is not part of
   the deck being laid out, and leaving it in the flow spent a column of the desk on cards the reader
   had already said were out. The old argument survives as what the rail **preserves**: this is a
   place and not a deletion. The pile keeps its id, its heading, its menu and its drop target, and

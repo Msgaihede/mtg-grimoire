@@ -181,7 +181,6 @@ const BURN: DeckRow = {
   coverCardId: null,
   coverKind: "card_art",
   coverArtist: null,
-  isBuilt: false,
   archived: false,
   cardCount: 0,
   updatedAt: 0,
@@ -211,6 +210,34 @@ const FOILS: CollectionFolder = {
   parentId: 3,
   name: "Foils",
   kind: "user",
+  deckId: null,
+  sortOrder: 0,
+};
+
+/**
+ * The two kinds the **app** owns, which schema v25 creates and nothing on this page can make,
+ * rename or delete: one folder per deck, and exactly one holding area.
+ *
+ * They are not fixtures of convenience — every rule the pinned section has is about one of them,
+ * and each is a rule the reader can otherwise walk into by dragging: a copy may not be dropped
+ * *into* either (the backend refuses the destination outright, and a deck group would end up
+ * holding copies no `deck_cards` row knows about), and a copy may not be dragged *out of* a deck
+ * group (which the backend would happily allow, leaving the deck listing a card whose copies have
+ * gone). Out of `Recently removed` is the one direction that is the feature.
+ */
+const DECK_GROUP: CollectionFolder = {
+  id: 20,
+  parentId: null,
+  name: "Mono-Red Aggro",
+  kind: "deck",
+  deckId: 1,
+  sortOrder: 0,
+};
+const REMOVED: CollectionFolder = {
+  id: 21,
+  parentId: null,
+  name: "Recently removed",
+  kind: "removed",
   deckId: null,
   sortOrder: 0,
 };
@@ -611,9 +638,10 @@ describe("CollectionPage", () => {
     // row, so a search left on screen behind this write is now visibly wrong rather than
     // stale in a field nothing draws.
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cards", "search"] });
-    // And every deck: a deck's claims are `min(claim, entry.quantity)` at read time, so a
-    // copy stepped away from under a built deck has just changed what that deck reads as
-    // owning — and the shortfall its "missing to wishlist" button would push.
+    // And every deck: a deck owns what its own group holds, summed per oracle id, so a copy
+    // stepped away from a deck's group has just changed what that deck reads as owning — and
+    // the shortfall its "missing to wishlist" button would push. A copy stepped away from
+    // outside one moves the theory list's spare column instead.
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] });
     // And the header really is re-read — not just marked.
     await waitFor(() => expect(collectionSummary).toHaveBeenCalledTimes(2));
@@ -1348,10 +1376,11 @@ describe("the card menu", () => {
    *
    * They differ because the writes differ. A copy recorded changes what every wish counts as
    * owned (`ownedQuantity` is summed from `collection_entries`), what every search row is
-   * badged with, and what every deck reads as claimed. A wish is a copy the reader does *not*
-   * have, so it moves no collection figure and no deck's arithmetic — only the heart on a
-   * result row. Three pages writing that out again is three places for one rule to drift, and
-   * the drift is silent: a stale badge fails nothing.
+   * badged with, and what every deck's theory list reads as spare — the copy lands unfiled at
+   * the root, which is no deck's group, and the spare column counts exactly those. A wish is a
+   * copy the reader does *not* have, so it moves no collection figure and no deck's arithmetic
+   * — only the heart on a result row. Three pages writing that out again is three places for
+   * one rule to drift, and the drift is silent: a stale badge fails nothing.
    */
   it("re-reads what a menu add changed, and only that", async () => {
     const user = userEvent.setup();
@@ -1369,7 +1398,8 @@ describe("the card menu", () => {
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cards", "search"] });
 
     // And the wish's two, which are a strict subset — so the assertion that matters is the one
-    // that must *not* fire: nothing a wishlist add did could have moved a deck's claims.
+    // that must *not* fire: a wish is a copy nobody has, so it files nothing anywhere and no
+    // deck's group — or the spare count outside every group — can have moved.
     invalidate.mockClear();
     rightClick(screen.getByRole("row", { name: /Lightning Bolt/ }));
     await screen.findByRole("menu");
@@ -1787,9 +1817,10 @@ describe("the collection's folders", () => {
     await waitFor(() => expect(collectionSetFolder).toHaveBeenCalledWith(7, 3));
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["collection"] }));
     // And every deck, which is the half this page's own copy of the mutation was missing before
-    // the two were collapsed onto `useSetCollectionFolder`: a move onto a taken grain **merges**,
-    // deleting one row, and a built deck holding a claim on that `collection_entry_id` would go
-    // on drawing a reservation it has just lost.
+    // the two were collapsed onto `useSetCollectionFolder`: since schema v25 a deck owns the
+    // copies filed in its own group, and a copy dragged *out* of one is a copy that deck has
+    // just lost — and a move onto a taken grain **merges**, deleting one row and adding its
+    // copies to the survivor, which moves the destination folder's sum too.
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] });
     // And the row is still on screen: nothing took it off the level on a guess about where it
     // went. The backend is what says which list it belongs to now.
@@ -1821,40 +1852,175 @@ describe("the collection's folders", () => {
 
   /**
    * **Deck groups and `Recently removed` are the app's, not the reader's**, so they never join the
-   * nestable tree — they belong to a pinned flat section with no rename or delete affordance, and
-   * in this PR that section is always empty because nothing yet creates either kind. Rendering
-   * nothing at all is the point: an empty heading is a promise about a feature that has not
-   * shipped.
+   * nestable tree — they are a pinned flat section beside it.
    *
-   * The fixture is a folder this PR cannot produce, which is exactly why the test is worth having:
-   * PR 3 creates them, and the day it does they must not appear beside `Trade binder`.
+   * This test was written one PR early, when nothing created either kind and the section was
+   * deliberately empty; schema v25 creates them now, so it asserts the arrangement rather than the
+   * absence. The half that has not changed is the one that mattered then and matters now: the
+   * `Folders` wall holds the reader's drawer and **only** the reader's drawer. A pinned folder
+   * leaking into it would be a folder the reader could drag a card into, drag between other
+   * folders, rename and delete — four writes the backend refuses in words.
    */
-  it("keeps an app-owned folder out of the reader's own tree", async () => {
-    collectionFolderList.mockResolvedValue([
-      BINDER,
-      { id: 20, parentId: null, name: "Mono-Red Aggro", kind: "deck", deckId: 1, sortOrder: 0 },
-      {
-        id: 21,
-        parentId: null,
-        name: "Recently removed",
-        kind: "removed",
-        deckId: null,
-        sortOrder: 1,
-      },
-    ]);
+  it("pins the app's own folders beside the reader's tree, never inside it", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, DECK_GROUP, REMOVED]);
     wrap(<CollectionPage />);
 
     await screen.findByRole("button", { name: /^Trade binder folder/ });
-    expect(
-      screen.queryByRole("button", { name: /^Mono-Red Aggro folder/ }),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByRole("button", { name: /^Recently removed folder/ }),
-    ).not.toBeInTheDocument();
-    // One card in the wall, and it is the reader's own.
+    expect(await screen.findByRole("button", { name: /^Mono-Red Aggro deck/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Recently removed folder/ })).toBeInTheDocument();
+    // One card in the reader's own wall, and it is the drawer they made.
     expect(
       within(screen.getByRole("list", { name: "Folders" })).getAllByRole("listitem"),
     ).toHaveLength(1);
+    // And each pinned kind is in its own list, so a reader scanning under "Decks" for their decks
+    // does not find the holding area among them.
+    expect(
+      within(screen.getByRole("list", { name: "Deck folders" })).getAllByRole("listitem"),
+    ).toHaveLength(1);
+    expect(
+      within(screen.getByRole("list", { name: "Removed cards" })).getAllByRole("listitem"),
+    ).toHaveLength(1);
+  });
+
+  /**
+   * **Locked means no affordance, not a refusal after the press.** Every folder write in
+   * `collection_folders` calls `user_folder` first and answers `FOLDER_NOT_YOURS` for either
+   * pinned kind, so a `⋯` here would open a menu of three rows that each end in the same sentence.
+   * The reader's own drawer keeps its trigger, which is what makes this a statement about the
+   * pinned entries rather than about the page.
+   */
+  it("gives a pinned folder no rename, move or delete affordance", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, DECK_GROUP, REMOVED]);
+    wrap(<CollectionPage />);
+    await screen.findByRole("button", { name: /^Mono-Red Aggro deck/ });
+
+    expect(screen.getByRole("button", { name: "Manage Trade binder" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Manage Mono-Red Aggro" })).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: "Manage Recently removed" }),
+    ).not.toBeInTheDocument();
+  });
+
+  /**
+   * **A deck group takes no drop, and the reason is that the drag has no way to write the other
+   * half of the move.** A copy reaches a deck's group through `collection_to_deck`, which files
+   * the row *and* writes the `deck_cards` row in one transaction. A drag would call
+   * `collection_set_folder`, which knows nothing about decks — so the copy would land in the group
+   * with no deck card behind it, and the collection would claim a deck holds a card that deck has
+   * never heard of.
+   *
+   * The ring is asserted as well as the write: `useCollectionDropTarget` raises every eligible
+   * target's ring the moment a row leaves the table, so a ring on a target that then refuses the
+   * drop is a promise this page cannot keep.
+   */
+  it("refuses a drop onto a deck group", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, DECK_GROUP, REMOVED]);
+    const { container } = wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+    const group = (await screen.findByRole("button", { name: /^Mono-Red Aggro deck/ })).closest(
+      "li",
+    )!;
+
+    const row = container.querySelector('[draggable="true"]')!;
+    const held = await startDrag(row, { pressOn: screen.getByText("Lightning Bolt") });
+    expect(group.classList.contains("ring-2")).toBe(false);
+
+    await held.over(group);
+    await held.drop();
+    expect(collectionSetFolder).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **The other half of the deck boundary, and the half with no backend fence behind it.**
+   * `collection_set_folder` would accept this move — the destination is a folder the reader made,
+   * which is the only thing it checks — and the copy would leave the deck's custody without
+   * anything touching `deck_cards`, leaving the deck listing a card whose copies have walked off.
+   * Copies leave a deck through `deck_to_collection`, which decrements the list in the same
+   * transaction.
+   *
+   * So this refusal is the page's own, and it is the reason `canFile` reads the drag's **source**
+   * as well as its destination.
+   */
+  it("refuses to drag a copy out of a deck group", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, DECK_GROUP, REMOVED]);
+    collectionList.mockResolvedValue(
+      page([{ ...BOLT, folderId: 20, folderName: "Mono-Red Aggro" }]),
+    );
+    const { container } = wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+    const binder = (await screen.findByRole("button", { name: /^Trade binder folder/ })).closest(
+      "li",
+    )!;
+
+    const row = container.querySelector('[draggable="true"]')!;
+    const held = await startDrag(row, { pressOn: screen.getByText("Lightning Bolt") });
+    expect(binder.classList.contains("ring-2")).toBe(false);
+
+    await held.over(binder);
+    await held.drop();
+    expect(collectionSetFolder).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **Issue #209's whole story, in one gesture.** Copies that leave a deck land in
+   * `Recently removed` rather than vanishing, and the reader sorts them back into their collection
+   * from there. The source side of a move is not fenced — only the destination is — so a row
+   * standing in the holding area files into any drawer the reader made.
+   *
+   * **The wall inside that folder is the reader's own top level**, which is the one place this page
+   * substitutes one list for another: nothing nests under the holding area, so its own children are
+   * always empty and a reader standing in the pile would have had no drop target on screen at all.
+   *
+   * The invalidation is asserted rather than the row leaving the screen, for the reason the folder
+   * move above states in full: the answer to "which list does this row belong to now" is the
+   * backend's, and `lib/query.ts` caches 30s, so marking the list stale without refetching it is
+   * how the wishlist shipped a row that was gone until reload.
+   */
+  it("files a copy back out of Recently removed and re-reads the list", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, DECK_GROUP, REMOVED]);
+    collectionList.mockResolvedValue(
+      page([{ ...BOLT, folderId: 21, folderName: "Recently removed" }]),
+    );
+    const { client, container } = wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+
+    await userEvent.click(await screen.findByRole("button", { name: /^Recently removed folder/ }));
+    await waitFor(() => expect(lastQuery().folderId).toBe(21));
+
+    // The sentence that says what the wall of binders under it is for.
+    expect(
+      screen.getByText(/drag a card onto a folder to file it back into your collection/i),
+    ).toBeInTheDocument();
+    const binder = (await screen.findByRole("button", { name: /^Trade binder folder/ })).closest(
+      "li",
+    )!;
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    const row = container.querySelector('[draggable="true"]')!;
+    const held = await startDrag(row, { pressOn: screen.getByText("Lightning Bolt") });
+    await held.over(binder);
+    await held.drop();
+
+    await waitFor(() => expect(collectionSetFolder).toHaveBeenCalledWith(7, 3));
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["collection"] }));
+  });
+
+  /**
+   * **A pinned folder is a place a reader can be standing, and the breadcrumb is the only way back
+   * out of one.** The trail used to be drawn only where the reader had folders of their own, which
+   * was right while every folder was theirs — a reader with none can now open a deck group, and
+   * the gate would have closed the door behind them.
+   */
+  it("walks a reader back out of a deck group they have no folders of their own", async () => {
+    collectionFolderList.mockResolvedValue([DECK_GROUP, REMOVED]);
+    wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+
+    await userEvent.click(await screen.findByRole("button", { name: /^Mono-Red Aggro deck/ }));
+    await waitFor(() => expect(lastQuery().folderId).toBe(20));
+
+    await userEvent.click(screen.getByRole("button", { name: "Collection" }));
+    await waitFor(() => expect(lastQuery().folderId).toBeUndefined());
   });
 
   /**

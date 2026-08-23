@@ -95,18 +95,20 @@ async function tagsFor(rows: readonly ImportResolveRow[]): Promise<PrintingTags[
  * Resolve, commit, read a file — and make a deck out of a list.
  *
  * **`["decks"]`, the whole root, from every write and on refusal as well as on success** —
- * `useDeck`'s and `useDecks`' rule, kept here for their reasons. A commit runs `allocate_deck`
- * inside its own transaction, so every `ownedQuantity` in every open deck may have moved; a
- * create adds a tile; and a refusal is either a busy database or a deck another surface has
- * already deleted, the second of which must not leave a screen painting a deck that is gone.
- * The root is a prefix of `["decks", "list"]` and of every `["decks", "detail", id, variant]`,
- * so one key covers the gallery and the editor both.
+ * `useDeck`'s and `useDecks`' rule, kept here for their reasons. A commit adds and removes rows
+ * in **this** deck, and `ownedQuantity` is the deck's own group handed out across them, so every
+ * row of it re-attributes; a create adds a tile; and a refusal is either a busy database or a
+ * deck another surface has already deleted, the second of which must not leave a screen painting
+ * a deck that is gone. The root is a prefix of `["decks", "list"]` and of every
+ * `["decks", "detail", id, variant]`, so one key covers the gallery and the editor both.
  *
- * **And it is only that root**, because a deck write is not a collection write: an import into a
- * deck moves `deck_allocations` and every other deck's `ownedQuantity` with it, and nothing
- * about what the reader *owns*. `CollectionRow`'s counts and `CardSummary`'s owned count are
- * allocation-blind, so firing the collection, wishlist and search roots here would be three
- * refetches per import that can only ever answer what is already on screen.
+ * **And it is only that root**, because a deck write is not a collection write: since schema v25
+ * an import writes `deck_cards` and nothing else, and the copies that back those rows are filed
+ * into the deck's group by `collection_to_deck` — a separate gesture the reader makes on
+ * purpose. So `CollectionRow`'s counts and `CardSummary`'s owned count cannot have moved, and
+ * firing the collection, wishlist and search roots here would be three refetches per import that
+ * can only ever answer what is already on screen. **No other deck moves either**: a group is one
+ * deck's, so an import can no longer take copies off a deck the reader is not looking at.
  *
  * `resolve` and `readFile` take no key at all: neither writes anything.
  */

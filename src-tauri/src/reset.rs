@@ -42,7 +42,7 @@
 //! so emptying them would leave every price an em dash until the reader noticed and pressed
 //! something. That is a different promise from "self-healing" and is not this button's.
 
-use rusqlite::Connection;
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use std::fs;
 use std::path::Path;
@@ -53,17 +53,19 @@ use crate::sync::{with_write, AppState};
 
 /// What emptying the collection took with it.
 ///
-/// `allocations` is the number a reader would not have predicted and is why this is a struct
-/// rather than a count: `deck_allocations.collection_entry_id` is
-/// `REFERENCES collection_entries(id) ON DELETE CASCADE`, so every deck's reservations against
-/// owned copies go with the collection. The decks themselves are untouched — a deck is a list
-/// of cards, not a list of *your* cards — but every "owned" mark in the app is now false, and
-/// the panel says so with this number.
+/// **One field, and it stays a struct.** It carried an `allocations` count until schema v25 —
+/// the number of `deck_allocations` rows the collection's `ON DELETE CASCADE` took with it,
+/// which was the number a reader could not have predicted. There is no such table and no such
+/// cascade: the decks lose the *copies* they were holding, which is the same `entries` number
+/// said once. A struct rather than a bare count because [`DecksCleared`] and [`CacheCleared`]
+/// are structs and the panel reads all three the same way.
+///
+/// The decks themselves are untouched — a deck is a list of cards, not a list of *your*
+/// cards — and every group they file into is rebuilt empty; see [`clear_collection`].
 #[derive(Debug, Clone, Copy, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CollectionCleared {
     pub entries: i64,
-    pub allocations: i64,
 }
 
 /// What emptying the decks took with it.
@@ -152,11 +154,21 @@ fn sweep_dir(root: &Path, out: &mut Swept) {
     }
 }
 
-/// Empty the collection, and the folders that filed it.
+/// What the one holding area is called when this command builds it back.
 ///
-/// The count is taken **first and inside the transaction**, because after the `DELETE` there is
-/// nothing left to count: the cascade has already run and `deck_allocations` is empty whether it
-/// held ten rows or none.
+/// **Spelled here as well as in schema v25's rung, and the two are not shared on purpose.** That
+/// step is history and is frozen by [`crate::schema::CARDS_COLUMNS`]' rule — a constant read
+/// there would silently rewrite what a *fresh* install creates the next time it moved. This is
+/// head, and head is where a rename would land.
+const REMOVED_FOLDER_NAME: &str = "Recently removed";
+
+/// The kind columns this command writes back, by index into
+/// [`crate::schema::COLLECTION_FOLDER_KINDS`] rather than by spelling, so the words here and
+/// the words the DDL CHECKs cannot drift.
+const DECK_KIND: &str = crate::schema::COLLECTION_FOLDER_KINDS[1];
+const REMOVED_KIND: &str = crate::schema::COLLECTION_FOLDER_KINDS[2];
+
+/// Empty the collection, and the folders that filed it — then build the app's own back.
 ///
 /// **Two statements, because the schema will not do it in one** — [`clear_wishlist`]'s situation
 /// one table over, and for the same reason. `collection_entries.folder_id` is `ON DELETE SET
@@ -166,22 +178,56 @@ fn sweep_dir(root: &Path, out: &mut Swept) {
 /// CASCADEs onto itself, and clearing the folders first would be a second cascade running under
 /// the statement that matters.
 ///
+/// # And then two more, which is where this stops being the wishlist's twin
+///
+/// **`Recently removed` and one group per surviving deck are rebuilt in the same transaction,
+/// and a wipe that skipped them would be unrecoverable.** Since schema v25 those rows are not
+/// the reader's filing at all — they are *where the app puts cards*: `collection_alloc`'s two
+/// writes look the destination up by `deck_id` and by `kind`, and both refuse in words when it
+/// is not there. So a database swept and left bare is one where **no deck can ever hold a card
+/// again and nothing can be put aside**, permanently, because those rows are created by a
+/// migration and a machine already at head never runs one again. Nothing self-repairs and
+/// nothing goes red.
+///
+/// Sweeping and rebuilding rather than deleting `kind = 'user'` only: the app's folders are
+/// where cards *were*, and a wipe that left a `Recently removed` full of nothing while claiming
+/// to have emptied the collection would be keeping the shape of a thing it just threw away.
+///
+/// **Archived decks get a group like every other**, schema v25's rule verbatim: archiving is a
+/// flag and not a delete, so leaving them out would be the button quietly deciding which decks
+/// may hold cards afterwards.
+///
 /// **The number answered stays the count of *cards*** and never counts a folder, because that is
 /// what the Settings sentence promises: a folder is where a card was kept rather than a card.
+/// The rebuilt rows are not in it either — they are the cabinet, not what was in it.
 pub fn clear_collection(conn: &Connection) -> Result<CollectionCleared, String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-    let allocations: i64 = tx
-        .query_row("SELECT count(*) FROM deck_allocations", [], |r| r.get(0))
-        .map_err(|e| e.to_string())?;
     let entries = tx
         .execute("DELETE FROM collection_entries", [])
         .map_err(|e| e.to_string())?;
     tx.execute("DELETE FROM collection_folders", [])
         .map_err(|e| e.to_string())?;
+    // The partial unique index `idx_collection_folder_removed` is what makes a second holding
+    // area impossible, so this insert is also the assertion that the sweep above really ran.
+    tx.execute(
+        "INSERT INTO collection_folders
+             (parent_id, name, kind, deck_id, sort_order, created_at, updated_at)
+         VALUES (NULL, ?1, ?2, NULL, 0, unixepoch(), unixepoch())",
+        rusqlite::params![REMOVED_FOLDER_NAME, REMOVED_KIND],
+    )
+    .map_err(|e| e.to_string())?;
+    // `sort_order` 0 and the deck's own name, which is what both `deck::create_deck_group` and
+    // v25's backfill write: a deck's group is not something the reader ordered.
+    tx.execute(
+        "INSERT INTO collection_folders
+             (parent_id, name, kind, deck_id, sort_order, created_at, updated_at)
+         SELECT NULL, name, ?1, id, 0, unixepoch(), unixepoch() FROM decks",
+        rusqlite::params![DECK_KIND],
+    )
+    .map_err(|e| e.to_string())?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(CollectionCleared {
         entries: entries as i64,
-        allocations,
     })
 }
 
@@ -222,7 +268,27 @@ pub fn clear_wishlist(conn: &Connection) -> Result<i64, String> {
 /// would be a second cascade running under the statement that matters.
 ///
 /// The `DELETE FROM decks` is most of the rest — `deck_cards`, `deck_categories`,
-/// `deck_audit`, `deck_undo` and `deck_allocations` all carry `deck_id … ON DELETE CASCADE`.
+/// `deck_audit`, `deck_undo` and, since schema v25, each deck's `collection_folders` group all
+/// carry `deck_id … ON DELETE CASCADE`.
+///
+/// **The group goes and the cards in it do not**, which is the one place this command reaches
+/// the collection at all. `collection_folders.deck_id` CASCADEs because a folder that *stands
+/// for* a deck has no meaning once the deck is gone. A press about decks may not destroy a card
+/// the reader owns, and `clearing_the_decks_leaves_the_collection_owning_its_cards` is that
+/// promise pinned.
+///
+/// **They go to `Recently removed`, which is [`crate::deck::delete_deck`]'s destination, and the
+/// two agree deliberately.** This command let them surface at the root by
+/// `collection_entries.folder_id`'s `ON DELETE SET NULL` until 2026-08-23, and nothing said which
+/// press did which — so the same act, "take every card out of this deck", put copies in two
+/// different places depending on whether the reader pressed Delete forty times or pressed Clear
+/// once. A wipe is not a *different* act from a delete; it is the same one at scale. `Recently
+/// removed` is also the more recoverable answer: at the root the copies are indistinguishable
+/// from cards the reader filed there on purpose, while the holding area is the one folder whose
+/// whole meaning is "these just came out of a deck". The `SET NULL` stays underneath as the
+/// backstop it is everywhere else — it rewrites the eleventh term of
+/// [`crate::schema::COLLECTION_GRAIN`] with nothing saying what it will land on, which is why the
+/// refile above is the mechanism.
 ///
 /// **`deck_tags` is the exception and is swept by name.** It lost its `deck_id` in schema v21
 /// and is not a deck's any more, so no cascade reaches it — see the statement's own comment for
@@ -238,6 +304,58 @@ pub fn clear_wishlist(conn: &Connection) -> Result<i64, String> {
 /// starting; the rows still go, and the pictures they pointed at are inert.
 pub fn clear_decks(conn: &Connection, covers: Option<&Path>) -> Result<DecksCleared, String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    // **Every deck group's copies go to `Recently removed`, by hand and before the `DELETE`** —
+    // [`crate::deck::delete_deck`]'s destination and its loop, borrowed rather than re-argued.
+    // See this function's doc for why the two must not differ.
+    //
+    // The recursive half is `delete_folder`'s, for its reason: no command can nest a folder
+    // under a group today, so on every real database this finds exactly the groups themselves —
+    // it is here because the *DDL* allows what those commands refuse, and the day one permits it
+    // the alternative is a sub-tree's worth of cards scattered to the root by `SET NULL`.
+    // `ORDER BY e.id` so the row a merge folds into is a fact about the table and not about the
+    // planner.
+    let filed: Vec<i64> = {
+        let mut stmt = tx
+            .prepare(
+                "WITH RECURSIVE doomed(id) AS (
+                     SELECT id FROM collection_folders WHERE kind = ?1
+                     UNION
+                     SELECT f.id FROM collection_folders f JOIN doomed d ON f.parent_id = d.id
+                 )
+                 SELECT e.id FROM collection_entries e
+                  WHERE e.folder_id IN (SELECT id FROM doomed)
+                  ORDER BY e.id",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![crate::schema::COLLECTION_FOLDER_KINDS[1]], |r| {
+                r.get(0)
+            })
+            .map_err(|e| e.to_string())?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| e.to_string())?
+    };
+    if !filed.is_empty() {
+        // **The destination is looked up rather than assumed**, `delete_deck`'s handling
+        // verbatim: schema v25 creates exactly one `removed` folder and a partial unique index
+        // makes a second impossible, so `None` here is a database somebody has edited by hand —
+        // and the honest answer to that is the root, which is where the `SET NULL` below would
+        // have put these rows anyway. A refusal would be a wipe the reader can never complete.
+        let removed: Option<i64> = tx
+            .query_row(
+                "SELECT id FROM collection_folders WHERE kind = ?1",
+                params![crate::schema::COLLECTION_FOLDER_KINDS[2]],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        // One at a time, through the merge: two decks' groups can hold the same grain, and the
+        // holding area may already hold it from a cut last week. Left to the cascade's SET NULL
+        // that is `UNIQUE constraint failed: index 'idx_collection_grain'`.
+        for entry in filed {
+            crate::collection_folders::refile_entry(&tx, entry, removed)?;
+        }
+    }
     let decks = tx
         .execute("DELETE FROM decks", [])
         .map_err(|e| e.to_string())?;
@@ -395,42 +513,32 @@ mod tests {
         conn
     }
 
-    /// One owned card, one deck holding it, one allocation between them.
+    /// One owned card, one deck, and the card **filed in that deck's group** — which is how a
+    /// deck holds a card since schema v25, where it used to be a `deck_allocations` row between
+    /// the two.
     ///
     /// Written out rather than taken from a fixture module because the *shape* is what every
-    /// test below asserts against — which table each row lands in is the thing under test.
+    /// test below asserts against — which table each row lands in is the thing under test. One
+    /// batch and in this order, because `foreign_keys` is ON in [`db`]: the deck folder before
+    /// the deck, the deck before its group, the group before the card in it.
+    ///
+    /// The `removed` folder is **not** seeded: schema v25 puts one in every database and the
+    /// partial unique index on `kind` makes a second impossible.
     fn seed(conn: &Connection) {
-        conn.execute(
-            "INSERT INTO collection_entries
-                (id, card_id, set_code, collector_number, lang, finish, condition, quantity,
-                 created_at, updated_at)
-             VALUES (1, 'a', 'lea', '1', 'en', 'nonfoil', 'NM', 4, 0, 0)",
-            [],
-        )
-        .unwrap();
-        conn.execute(
+        conn.execute_batch(
             "INSERT INTO wishlist_entries (id, oracle_id, name, quantity, created_at, updated_at)
-             VALUES (1, 'o', 'Black Lotus', 1, 0, 0)",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO deck_folders (id, name, sort_order, created_at, updated_at)
-             VALUES (1, 'Cube', 0, 0, 0)",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO decks (id, name, folder_id, created_at, updated_at)
-             VALUES (1, 'Mono Red', 1, 0, 0)",
-            [],
-        )
-        .unwrap();
-        conn.execute(
-            "INSERT INTO deck_allocations
-                (deck_id, collection_entry_id, quantity, created_at, updated_at)
-             VALUES (1, 1, 2, 0, 0)",
-            [],
+             VALUES (1, 'o', 'Black Lotus', 1, 0, 0);
+             INSERT INTO deck_folders (id, name, sort_order, created_at, updated_at)
+             VALUES (1, 'Cube', 0, 0, 0);
+             INSERT INTO decks (id, name, folder_id, created_at, updated_at)
+             VALUES (1, 'Mono Red', 1, 0, 0);
+             INSERT INTO collection_folders
+                (id, parent_id, name, kind, deck_id, sort_order, created_at, updated_at)
+             VALUES (100, NULL, 'Mono Red', 'deck', 1, 0, 0, 0);
+             INSERT INTO collection_entries
+                (id, card_id, set_code, collector_number, lang, finish, condition, quantity,
+                 folder_id, created_at, updated_at)
+             VALUES (1, 'a', 'lea', '1', 'en', 'nonfoil', 'NM', 4, 100, 0, 0);",
         )
         .unwrap();
     }
@@ -440,20 +548,22 @@ mod tests {
             .unwrap()
     }
 
-    /// The number the confirmation promises. `allocations` is counted *before* the delete, and
-    /// the delete is what makes it uncountable — so a version of this that counted afterwards
-    /// would report 0 and be wrong in exactly the case the reader cares about.
+    /// The number the confirmation promises, and it counts **rows of `collection_entries`**.
+    ///
+    /// **The seeded card is inside a deck's group**, which is the case that used to need a
+    /// second number: a reader's copies sitting in a deck were reported as `entries` plus an
+    /// `allocations` count, because a claim ledger went with them and they could not have
+    /// predicted it. Custody needs no second number — the copies in the box *are* entries, they
+    /// are counted once, and the deck losing them is the same sentence said once.
     #[test]
-    fn clearing_the_collection_reports_the_allocations_the_cascade_took() {
+    fn clearing_the_collection_reports_the_cards_it_removed() {
         let conn = db();
         seed(&conn);
 
         let out = clear_collection(&conn).unwrap();
 
         assert_eq!(out.entries, 1);
-        assert_eq!(out.allocations, 1);
         assert_eq!(count(&conn, "collection_entries"), 0);
-        assert_eq!(count(&conn, "deck_allocations"), 0);
     }
 
     /// The half of the promise that is about what *survives*. A deck is a list of cards, not a
@@ -490,11 +600,11 @@ mod tests {
         conn.execute_batch(
             "INSERT INTO collection_folders
                 (id, parent_id, name, kind, deck_id, sort_order, created_at, updated_at)
-             VALUES (1, NULL, 'Binder', 'user', NULL, 0, 0, 0);
+             VALUES (100, NULL, 'Binder', 'user', NULL, 0, 0, 0);
              INSERT INTO collection_entries
                 (card_id, set_code, collector_number, lang, finish, condition, quantity,
                  folder_id, created_at, updated_at)
-             VALUES ('a', 'lea', '1', 'en', 'nonfoil', 'NM', 4, 1, 0, 0);
+             VALUES ('a', 'lea', '1', 'en', 'nonfoil', 'NM', 4, 100, 0, 0);
              INSERT INTO wishlist_folders (id, parent_id, name, sort_order, created_at, updated_at)
              VALUES (1, NULL, 'Ordered', 0, 0, 0);
              INSERT INTO deck_folders (id, parent_id, name, sort_order, created_at, updated_at)
@@ -509,9 +619,89 @@ mod tests {
             "the number is cards removed, and the folder is not one"
         );
         assert_eq!(count(&conn, "collection_entries"), 0);
-        assert_eq!(count(&conn, "collection_folders"), 0);
+        // **The reader's binder goes and the app's holding area comes back**, which is why this
+        // is 1 rather than 0 — see `clearing_the_collection_rebuilds_the_folders_the_app_owns`
+        // for the whole of why the second half is not optional. The `kind` is asserted, not just
+        // the count: a sweep that missed the binder would also read as 1 here.
+        assert_eq!(count(&conn, "collection_folders"), 1);
+        assert_eq!(
+            count(&conn, "collection_folders WHERE kind = 'removed'"),
+            1,
+            "and the one row left is the app's, not the reader's"
+        );
         assert_eq!(count(&conn, "wishlist_folders"), 1);
         assert_eq!(count(&conn, "deck_folders"), 1);
+    }
+
+    /// **The wipe rebuilds the two kinds of folder the app owns, and this is the assertion the
+    /// feature cannot ship without.** `Recently removed` and one group per deck are not the
+    /// reader's filing — they are *where the app puts cards*, and every write that files one
+    /// looks the row up by `kind` or by `deck_id`. A wipe that swept them and stopped would
+    /// leave a database in which no deck can ever hold a card again and nothing can be put
+    /// aside, and it would do it silently: those rows are created by a **migration**, and a
+    /// machine already at head never runs one again. There is no self-repair anywhere.
+    ///
+    /// **Two decks, and the reader's own binder beside them**, so the three assertions are each
+    /// about something: one deck cannot tell "a group per deck" from "a group", and a
+    /// `collection_folders` row that survived would make the sweep itself look like it worked.
+    #[test]
+    fn clearing_the_collection_rebuilds_the_folders_the_app_owns() {
+        let conn = db();
+        conn.execute_batch(
+            "INSERT INTO decks (id, name, created_at, updated_at) VALUES (1, 'Mono Red', 0, 0);
+             INSERT INTO decks (id, name, created_at, updated_at) VALUES (2, 'Storm', 0, 0);
+             INSERT INTO collection_folders
+                (parent_id, name, kind, deck_id, sort_order, created_at, updated_at)
+             VALUES (NULL, 'Binder', 'user', NULL, 0, 0, 0),
+                    (NULL, 'Mono Red', 'deck', 1, 0, 0, 0),
+                    (NULL, 'Storm', 'deck', 2, 0, 0, 0);",
+        )
+        .unwrap();
+
+        clear_collection(&conn).unwrap();
+
+        let folders: Vec<(String, String, Option<i64>)> = conn
+            .prepare(
+                "SELECT kind, name, deck_id FROM collection_folders
+                  ORDER BY kind, coalesce(deck_id, 0)",
+            )
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(
+            folders,
+            vec![
+                ("deck".to_owned(), "Mono Red".to_owned(), Some(1)),
+                ("deck".to_owned(), "Storm".to_owned(), Some(2)),
+                ("removed".to_owned(), REMOVED_FOLDER_NAME.to_owned(), None),
+            ],
+            "one group per surviving deck, named after it, and the one holding area"
+        );
+        assert_eq!(
+            count(&conn, "collection_folders"),
+            3,
+            "and the reader's own binder is gone with the cards that were in it"
+        );
+    }
+
+    /// An empty database wipes to the holding area alone — no decks, so no groups. The floor
+    /// case, and the one that would go wrong if the rebuild were written as a join.
+    #[test]
+    fn clearing_a_collection_with_no_decks_still_leaves_the_holding_area() {
+        let conn = db();
+
+        clear_collection(&conn).unwrap();
+
+        let kinds: Vec<String> = conn
+            .prepare("SELECT kind FROM collection_folders")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(kinds, vec!["removed".to_owned()]);
     }
 
     #[test]
@@ -619,14 +809,24 @@ mod tests {
             "deck_tags",
             "deck_audit",
             "deck_undo",
-            "deck_allocations",
+            // The deck's collection group, by `collection_folders.deck_id`'s CASCADE — a folder
+            // that *stands for* a deck has no meaning once the deck is gone. The cards that were
+            // in it are the next test's subject.
+            "collection_folders WHERE kind = 'deck'",
         ] {
             assert_eq!(count(&conn, table), 0, "{table} should have been cleared");
         }
     }
 
-    /// The collection is not a deck's to take. The allocation goes — it names a deck — and the
-    /// owned row it pointed at stays, because the reader still owns the card.
+    /// **The collection is not a deck's to take**, and schema v25 made that a sharper claim than
+    /// it was: the copies were a *reservation* the deck held against somebody else's row, and
+    /// they are now sitting inside the deck's own group. Deleting the deck takes the group
+    /// (`collection_folders.deck_id`, CASCADE) — so the question is what happens to the cards in
+    /// it, and the answer has to be that they come back to the reader's desk.
+    ///
+    /// `collection_entries.folder_id` is `ON DELETE SET NULL`, the strongest of the schema's
+    /// three, for exactly this: a collection row is a card that physically exists, and no press
+    /// about *decks* may destroy one. The row survives at the root with every copy on it.
     #[test]
     fn clearing_the_decks_leaves_the_collection_owning_its_cards() {
         let conn = db();
@@ -635,15 +835,27 @@ mod tests {
         clear_decks(&conn, None).unwrap();
 
         assert_eq!(count(&conn, "collection_entries"), 1);
-        assert_eq!(count(&conn, "deck_allocations"), 0);
-        let quantity: i64 = conn
+        let (quantity, folder): (i64, Option<i64>) = conn
             .query_row(
-                "SELECT quantity FROM collection_entries WHERE id = 1",
+                "SELECT quantity, folder_id FROM collection_entries WHERE id = 1",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(quantity, 4, "the copies are the reader's, and all of them");
+        let removed: i64 = conn
+            .query_row(
+                "SELECT id FROM collection_folders WHERE kind = 'removed'",
                 [],
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(quantity, 4, "an allocation is a reservation, not a debit");
+        assert_eq!(
+            folder,
+            Some(removed),
+            "and they wait in `Recently removed` — the same destination `delete_deck` uses, \
+             because a wiped deck's cards are exactly cards taken out of a deck"
+        );
     }
 
     #[test]

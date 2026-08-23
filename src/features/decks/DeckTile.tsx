@@ -488,9 +488,21 @@ function Cover({ deck }: { deck: DeckRow }) {
 /**
  * The one question this view asks before doing something it cannot undo.
  *
- * `deckDelete` really deletes — the deck, its cards and its claims, by cascade — and a deck
- * is minutes of work, so the destructive control asks once, in words, naming what it would
- * take and offering the reversible thing instead.
+ * `deckDelete` really deletes — the deck row and every `deck_cards` row in it, by cascade — and
+ * a deck is minutes of work, so the destructive control asks once, in words, naming what it
+ * would take and offering the reversible thing instead.
+ *
+ * **It says where the cards go, and it says so unconditionally.** A card is in a deck because
+ * its collection row physically sits in that deck's group, so deleting the deck does not
+ * destroy anything the reader owns — the copies are refiled into `Recently removed`, the one
+ * pinned folder in the collection that exists to catch them. "Its 60 cards go with it" was
+ * true of the rows and wrong about the cardboard, which is the half a reader is actually
+ * afraid of. The collection's own folder-delete confirmation set the precedent — "Its cards
+ * move back to your collection; folders inside it are deleted" — and it is the same rule: a
+ * destructive question names the destination as well as the loss.
+ *
+ * **No checkbox and no "ask me each time."** Where the copies land is a fact about the write
+ * rather than a choice being offered, and a switch here would imply the other answer exists.
  */
 function DeleteConfirm({
   deck,
@@ -555,8 +567,8 @@ function DeleteConfirm({
     >
       <p>Delete “{deck.name}”?</p>
       <p className="mt-1 text-dim">
-        Its {cards} {deck.cardCount === 1 ? "goes" : "go"} with it. Archiving keeps the deck
-        instead.
+        Its {cards} {deck.cardCount === 1 ? "moves" : "move"} to Recently removed. Archiving
+        keeps the deck instead.
       </p>
       <div className="mt-2 flex gap-2">
         <button

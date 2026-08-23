@@ -193,7 +193,6 @@ const BURN: DeckRow = {
   // says "No cover" *inside* the button, and that would be the first thing read on it.
   coverCardId: "0000419b-0bba-4488-8f7a-6194544ce91d",
   coverArtist: "Rebecca Guay",
-  isBuilt: false,
   archived: false,
   cardCount: 0,
   updatedAt: 1_800_000_000,

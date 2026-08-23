@@ -209,11 +209,16 @@ export const Archived: Story = {
 /**
  * The one question this view asks before doing something it cannot undo.
  *
- * `deck_delete` really deletes — the deck, its cards and its claims, by cascade (`db.ts:2026-2032`)
- * — and a deck is minutes of work, so the destructive control asks once, in words, naming what
- * would go with it and offering the reversible thing instead. The count in the question is the
- * tile's own, from one derivation of the plural, so the caption and the question can never
- * disagree about whether it is "card" or "cards".
+ * `deck_delete` really deletes the deck and every row in it, by cascade — and a deck is minutes
+ * of work, so the destructive control asks once, in words, naming what would go with it and
+ * offering the reversible thing instead. The count in the question is the tile's own, from one
+ * derivation of the plural, so the caption and the question can never disagree about whether it
+ * is "card" or "cards".
+ *
+ * **The destination is asserted, not just the loss.** A card is in a deck because its collection
+ * row sits in that deck's group, so the copies are refiled into `Recently removed` rather than
+ * destroyed — and the sentence says so unconditionally, with no checkbox, because where they
+ * land is a fact about the write and not a choice.
  *
  * The panel is anchored to the tile rather than portalled — the shipped CSP is `style-src 'self'`
  * and every overlay primitive in reach injects a runtime `<style>` the moment it opens — and it
@@ -232,7 +237,7 @@ export const DeleteAsksFirst: Story = {
     await expect(dialog).not.toHaveAttribute("aria-modal");
     await expect(dialog).toHaveTextContent("Delete “Modern Goodstuff”?");
     await expect(dialog).toHaveTextContent(
-      "Its 60 cards go with it. Archiving keeps the deck instead.",
+      "Its 60 cards move to Recently removed. Archiving keeps the deck instead.",
     );
     // Neither button is focused: the reader has not decided yet, and a stray Enter should not
     // decide for them. The panel itself holds the caret so Escape has something to hand back.

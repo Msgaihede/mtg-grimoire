@@ -107,12 +107,13 @@ const SORT_BY_PICKER = sortOptions(SORT_OPTIONS, (o) => o.label);
  *
  * **36px, and the number is `FILTER_CONTROL`'s rather than one of this file's own.** It was 32
  * for the same stated reason it is 36 now — "so the two rows read as rows rather than as a pile
- * of differently sized boxes" — but the rows it was measured against have both grown a chip
- * since: `Built` sits in the header and `Split X` in the toolbar, and `ToggleChip` is
- * `FILTER_CONTROL`, which is 36. So a height meant to unify was drawing the plain presses four
- * pixels shorter than the chips beside them, in both rows, and shorter again than the `h-9` back
- * button at the head of the first one. Every other filter row in the app (search, collection,
- * wishlist) is already 36; this is the deck editor joining them rather than a size invented here.
+ * of differently sized boxes" — but the rows it was measured against grew a chip since:
+ * `Split X` sits in the toolbar, and `ToggleChip` is `FILTER_CONTROL`, which is 36. So a height
+ * meant to unify was drawing the plain presses four pixels shorter than the chip beside them,
+ * and shorter again than the `h-9` back button at the head of the header row. Every other filter
+ * row in the app (search, collection, wishlist) is already 36; this is the deck editor joining
+ * them rather than a size invented here. The header carried a `Built` chip of its own when this
+ * was measured; that chip is gone, and 36 stands on the app-wide agreement rather than on it.
  *
  * **`text-xs` stays, and that is a width decision with a measurement behind it.** `FILTER_CONTROL`
  * carries `text-sm`, but the six controls drawn with this string are the header's widest block —
@@ -1806,15 +1807,41 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     focusDeckGroup(owed);
   }, [cards]);
 
+  /**
+   * **The app's one removal path**, and since schema v25 that is a statement about the reader's
+   * *cards* rather than about a list. The stepper stepped to zero, the card menu's `Remove card`
+   * and the remove tray under the deck all arrive here, and on the **Live** list a decrease is
+   * the write that files the copies the deck's group was holding into `Recently removed`
+   * ({@link CUT_CARDS_NOTE}, the standing sentence on the price line).
+   *
+   * The row is looked up here rather than in the hook, and the reason is the ordering: TanStack
+   * runs `onMutate` before the write, `onMutate` takes the row out of the cache optimistically,
+   * and `deck_to_collection` addresses `deck_cards.id` and takes a *delta* — so the id and the
+   * copies it currently holds have to travel with the press. See {@link CutFrom}.
+   *
+   * The finish is part of the `find` for the reason it is part of the write: a pile can hold this
+   * printing twice, and stepping the foil row must not read the regular one's number. A row that
+   * is not there is not an error — a drag can outlive the list it started in — and it falls back
+   * to the absolute write, which is what every list did before the group existed.
+   */
   const setQuantityAt = useCallback(
     (cardId: string, categoryId: number, finish: DeckFinish, quantity: number) => {
       // Zero takes the card out from under the caret — optimistically, so it happens on the
       // press — and the control the caret was on goes with it. Before the write, because the
       // card is gone by the time an answer arrives.
       if (quantity === 0) handOffTo(categoryId);
-      writeQuantity({ cardId, categoryId, finish, quantity });
+      const row = cards.find(
+        (c) => c.cardId === cardId && c.categoryId === categoryId && c.finish === finish,
+      );
+      writeQuantity({
+        cardId,
+        categoryId,
+        finish,
+        quantity,
+        held: row ? { deckCardId: row.id, quantity: row.quantity } : undefined,
+      });
     },
-    [writeQuantity, handOffTo],
+    [cards, writeQuantity, handOffTo],
   );
 
   const moveTo = useCallback(
@@ -2004,11 +2031,17 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   /**
    * **Remove card** — the stepper's zero, addressed by the row.
    *
-   * `setQuantity(card, 0)` and nothing else, which is what makes this row free of consequences:
+   * `setQuantity(card, 0)` and nothing else, which is what makes this row free of *surprises*:
    * it goes through `setQuantityAt`, so it is the same optimistic patch, the same rollback and
    * the same hand-off of the caret to the pile the card just left that the stepper and the
    * remove tray already get. There is no `remove` mutation in this app because zero is the
    * removal — see `useDeck.setQuantity`.
+   *
+   * **It is not free of consequences, and that changed with schema v25**: on the Live list this
+   * takes the copies the deck's group was holding and files them into `Recently removed`. The
+   * reader still owns them, which is why the row still needs no confirmation — but the sentence
+   * saying where they went is {@link CUT_CARDS_NOTE}, standing at the foot of the deck rather
+   * than repeated on every one of the three ways to make this press.
    */
   const removeCard = useCallback(
     (card: DeckCard) => setQuantityAt(card.cardId, card.categoryId, card.finish, 0),
@@ -2315,7 +2348,9 @@ export function DeckEditor({ deckId }: { deckId: number }) {
 
   /** The deck's new name, once {@link DeckNameField} has decided there is one. The field holds
    *  the draft and refuses a blank or an unchanged name, so there is nothing to re-check here —
-   *  this is the same `deck.update` the format select and the Built switch ride. */
+   *  this is the same `deck.update` the format select and the `Split X` chip ride. (It named the
+   *  Built switch until schema v25 dropped `decks.is_built` along with the allocator the word
+   *  meant something to.) */
   const renameDeck = useCallback(
     (name: string) => {
       deck.update.mutate({ name });
@@ -2894,8 +2929,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                         onClick={() => pickVariant(id)}
                         aria-pressed={variant === id}
                         className={cn(
-                          // 36px like every other press in this ribbon — the back button, the
-                          // `Built` chip and {@link CONTROL}. At 28px this segmented pair was
+                          // 36px like every other press in this ribbon — the back button and
+                          // {@link CONTROL}. (It was measured against the header's `Built` chip
+                          // too; that chip is gone, and the number stands on the app-wide
+                          // agreement rather than on it.) At 28px this segmented pair was
                           // the shortest thing in the row by eight pixels and read as a
                           // secondary control, which is the opposite of what it is: it says
                           // which of the deck's two lists is on screen.
@@ -2988,15 +3025,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                   </option>
                 ))}
               </select>
-
-              {/* The one switch with a consequence outside this deck, so it says what it
-                  does: a built deck's claims come off what every other deck can reach. */}
-              <ToggleChip
-                label="Built"
-                pressed={row.isBuilt}
-                hint="Reserves your copies for this deck"
-                onClick={() => deck.update.mutate({ isBuilt: !row.isBuilt })}
-              />
 
               {/* What the rules make of the deck, in the ribbon of chips that governs it — and
                   nothing at all while the seeded rules are not in hand. A format the seed no
@@ -3167,10 +3195,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                 category or by type. A control that persists across a grouping it has no effect
                 on is a control the reader has to remember the scope of.
 
-                **Its state is the deck's, written through the same `update` the Built toggle
-                writes** — one `deck_update`, no `deck_cards` row touched, and a refusal lands in
-                the banner above with every other write of this editor's, because the refusal
-                rule lives on the mutation's single definition and never on a call site.
+                **Its state is the deck's, written through the same `update` the header's format
+                select writes** — one `deck_update`, no `deck_cards` row touched, and a refusal
+                lands in the banner above with every other write of this editor's, because the
+                refusal rule lives on the mutation's single definition and never on a call site.
 
                 The whole sentence is the chip's `title`, which `ToggleChip` also makes its
                 accessible name: "Split X" alone is a control naming a thing rather than an
@@ -3412,15 +3440,17 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       )}
 
       {/* The strip under the deck: how old these prices are (spec §5, said once here rather
-          than as a tooltip on every one of sixty cards) and, while a card is in the air, the
-          way out of the deck drawn over it.
+          than as a tooltip on every one of sixty cards), where a card cut from the Live list
+          goes (said once for the same reason — the three ways to cut one would otherwise carry
+          three spellings of it, and a stepper held down would narrate it per press) and, while
+          a card is in the air, the way out of the deck drawn over it.
 
           **A direct child of this column, and it has to be.** The tray inside it is `-top-3`
           over the empty `gap-3` above this line, so the gap it reaches back into is this
           column's — one box further in and the number would be measuring nothing. It owns its
           own drag monitor for `QuickZones`' reason, which is why no `dragging` state reaches
           this file any more: see {@link PriceStrip}. */}
-      <PriceStrip marketplace={marketplace} onRemove={applyDrop} />
+      <PriceStrip marketplace={marketplace} variant={variant} onRemove={applyDrop} />
 
       {row && (
         // What the deck adds up to — the foot of the page, and the last thing under the deck.

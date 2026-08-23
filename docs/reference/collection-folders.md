@@ -1,6 +1,7 @@
 # The collection's folders, and the eleventh term of its grain
 
-Schema v24, [issue #215](https://github.com/Msgaihede/mtg-grimoire/issues/215). The design is
+Schema **v24 and v25**, [issue #215](https://github.com/Msgaihede/mtg-grimoire/issues/215). The
+design is
 [2026-08-23-collection-folders-design.md](../superpowers/specs/2026-08-23-collection-folders-design.md);
 this page is the record of what shipped, with the reason at each site. Every figure keeps the date
 and the build it was taken on.
@@ -10,6 +11,15 @@ every row lands unless the reader says otherwise, and **the folder is part of wh
 the same row**. That last clause is the load-bearing one and everything else on this page is a
 consequence of it.
 
+**And since v25 this cabinet is the physical ledger of where every card sits.** A card is in a
+deck because its `collection_entries` row is filed in that deck's group — not because a claim
+table says a deck has reserved it. `deck_allocations`, `deck::allocate_deck`,
+`allocate_every_deck`, `kind_rank`, `Candidate` and `decks.is_built` are all **deleted** at that
+rung. Exclusivity stopped being a sum somebody has to remember to recompute and became a fact the
+reader can see and drag: two decks cannot both hold a copy, because one row cannot sit in two
+folders. Everything in [the deck groups](#the-deck-groups-recently-removed-and-what-v25-converted)
+is a consequence of that sentence the way everything above it is a consequence of the grain.
+
 **This is the wishlist's cabinet one table over** — [wishlist-folders.md](wishlist-folders.md) is
 the page it is a port of, and where a rule here is that page's rule, it is named rather than
 re-argued. What the collection has that the wishlist does not is a folder that can belong to the
@@ -18,29 +28,28 @@ joined it.
 
 ## The rung is split, and the split is the deviation worth knowing
 
-Spec §3 lists **one** v24 rung doing everything: create the folder table, widen the grain, insert
+Spec §3 lists **one** rung doing everything: create the folder table, widen the grain, insert
 the `Recently removed` folder and one folder per deck, convert every `deck_allocations` row into a
-placement, then drop `deck_allocations` and `decks.is_built`. **That rung could not ship here**,
-because the shipped PR keeps the allocator working and the PR after it is what removes it. A rung
-that dropped `deck_allocations` at v24 would take out the app's only source of owned/missing while
-nothing had yet replaced it.
+placement, then drop `deck_allocations` and `decks.is_built`. **That rung could not ship in one
+release**, because the first PR keeps the allocator working and the one after it is what removes
+it. A rung that dropped `deck_allocations` at v24 would have taken out the app's only source of
+owned/missing while nothing had yet replaced it.
 
 | Rung | Does |
 | --- | --- |
-| **v24** (this page) | Creates `collection_folders` **in its full final shape**, `kind` and `deck_id` columns and both partial unique indexes included. Adds `collection_entries.folder_id`. Rebuilds `idx_collection_grain` with the eleventh term. Deletes zero-quantity rows. **Files nothing** — every existing row stays at the root, which is where it already was. |
-| **v25** (the next PR) | Inserts the single `removed` folder and one `deck` folder per deck, converts every allocation into a placement, then drops `deck_allocations`, `decks.is_built` and the orphaned `app_meta` row `deck_driven_collection`. |
+| **v24** | Creates `collection_folders` **in its full final shape**, `kind` and `deck_id` columns and both partial unique indexes included. Adds `collection_entries.folder_id`. Rebuilds `idx_collection_grain` with the eleventh term. Deletes zero-quantity rows. **Files nothing** — every existing row stays at the root, which is where it already was. |
+| **v25** | Inserts the single `removed` folder and one `deck` folder per deck, converts every allocation into a placement, then drops `deck_allocations`, `decks.is_built` and the orphaned `app_meta` row `deck_driven_collection`. |
 
-**Creating `kind` and `deck_id` at v24 rather than v25 is deliberate.** They are plain columns with
-no rows using them yet, and adding them now means v25 needs no `ALTER TABLE` at all — it only
-inserts, backfills and drops. Both partial indexes are created here for the same reason. The cost,
-if that judgement is wrong, is two columns and two indexes nothing writes for one release, which
-is invisible to the reader and cheap to carry.
+**Creating `kind` and `deck_id` at v24 rather than v25 was deliberate, and it paid.** They were
+plain columns with no rows using them, so v25 needed no `ALTER TABLE` at all: it inserts, converts
+and drops. Both partial indexes were created there for the same reason, and the `removed` insert
+leans on one of them — the partial unique index on `kind` is what makes a second holding area
+impossible, so that single `INSERT` is also the assertion that there is exactly one.
 
-The consequence a reader of the code has to hold: **`collection_folders.kind` is `'user'` on every
-row this release can produce.** Nothing in `collection_folders.rs` creates a `deck` or a `removed`
-folder. Every write in it nevertheless already refuses to touch one — see
-[the three refusals](#the-three-refusals-are-sentences-not-constraint-failures) — because a fence
-written after the thing it fences is a fence somebody has to remember to add.
+**v25 takes three things away, which makes it the first rung on this ladder that is not
+additive.** That is why the rewind fixtures had to learn to put a table *back* (`UNDO_V25`), and
+why the v25 tests start from a real v24 database rather than from a fresh install — a fresh
+install has no claims to convert, so a test that starts there proves nothing about the conversion.
 
 ## The table, and the three `ON DELETE` actions
 
@@ -141,6 +150,21 @@ history, and a step that read the constant would silently rewrite what a *fresh*
 the next time the grain moves while every already-upgraded database kept the old shape — with the
 two then disagreeing about what makes two rows the same row, and nothing anywhere going red.
 
+### A new folder is numbered among the reader's own, and only those
+
+`create_folder` takes `max(sort_order) + 1` **over `kind = 'user'` siblings**, not over every
+sibling. The distinction did not exist before v25 and arrived with the app's own folders:
+`Recently removed` is a root sibling sitting at `sort_order` 0 and every deck's group is another,
+so counting them started the reader's *first* folder at 1 and left the holding area sorting ahead
+of everything they would ever name. Nobody chose that ordering; it fell out of a query written
+when every folder in the table was the reader's.
+
+The UI draws the app's folders in a pinned section of their own (`PinnedFolders.tsx`), so their
+numbers have no business in the reader's sequence at all — which is why the fence is on `kind`
+rather than on "skip slot 0". `a_folder_the_app_owns_is_not_part_of_the_readers_numbering` seeds a
+group at `sort_order` 9 alongside the holding area at 0, because either weaker spelling passes with
+one system folder in the table.
+
 ## The eleventh term, and why it is load-bearing
 
 ```rust
@@ -232,25 +256,38 @@ each a decision:
   reader no longer has this", and here the copies are emphatically still theirs; the caller
   re-reads and selects the id it was handed.
 
-### The fold is five statements, not two, and the reason is `deck_allocations`
+### The fold went from five statements to two at v25, and the guard they were went with the table
 
-`merge_entry` follows **`reconcile::fold_into_existing`'s five statements** rather than the
-wishlist's two, and the difference is not stylistic. `deck_allocations.collection_entry_id` is the
-only enforced foreign key pointed at a collection entry, and it is `ON DELETE CASCADE` (schema v5)
-so that `remove_entry` takes a deck's reservations with the row it deletes. **A merge must
-therefore leave nothing for that cascade to take**: the copies still exist and the deck still
-wants them, and a folder press that quietly unbuilt a built deck would be the worst kind of
-silent.
+`collection::fold_entry` is the crate's one answer to "one collection row becomes another", and
+`merge_entry` is this module's name for it. It stood at **five** statements while
+`deck_allocations` existed, because `deck_allocations.collection_entry_id` was the only enforced
+foreign key pointed at a collection entry and it was `ON DELETE CASCADE` (schema v5), so that
+`remove_entry` took a deck's reservations with the row it deleted. A merge had to leave nothing
+for that cascade to take: the copies still existed and the deck still wanted them, and a folder
+press that quietly unbuilt a built deck would have been the worst kind of silent. The five were:
+sum the entries, fold any allocation where the destination was *already* claimed by the same deck,
+delete those now-duplicate claims, repoint every remaining claim at the destination, and only then
+delete the source.
 
-So the five are: sum the entries, fold any allocation where the destination is *already* claimed by
-the same deck, delete those now-duplicate claims, repoint every remaining claim at the
-destination, and only then delete the source. All three allocation statements seek through
-`idx_deck_allocations_entry`, and every one of them is inside the caller's transaction — an
-allocation is never briefly homeless.
+**The three middle ones are gone.** `deck_allocations` is dropped at v25, **no enforced foreign
+key points at `collection_entries` any more**, and what is left is the sum and the delete. That is
+the wishlist's shape, arrived at by the guard becoming unnecessary rather than by anyone deciding
+to simplify.
 
-`deck_allocations` is deleted by the **next** rung, so these three statements are the next PR's to
-remove. Until then they are load-bearing, and a "simplification" that drops them to match the
-wishlist's shape strips a built deck's claims with no test in either half failing.
+**The count is two, and this page and `collection_folders.rs` both say two.** One `UPDATE` that
+sums the source into the survivor and one `DELETE` that removes the source — two `execute` calls.
+Reading the source is not a third: it rides in the `UPDATE`'s own `FROM (SELECT … WHERE id = ?2)`
+subquery, which is what lets one statement do the work two used to. *"Read the source, sum into the
+survivor, delete the source"* describes the same code in three **steps**, and counting those steps
+as statements is where a second number comes from — it is a true sentence about a two-statement
+function, and mixing the two spellings is how a reader ends up reconciling two numbers that were
+never in disagreement. Say **two**.
+
+**And the fold cannot disturb where a deck's copies are, which is the property that replaced the
+guard.** The survivor is on the grain the source was landing on, the folder is the eleventh term
+of that grain, so both rows are in the same folder by construction: a fold inside a deck's group
+leaves the copies in that group, and a fold at the root cannot pull anything out of one. The old
+statements existed to keep a *pointer* valid; there is no pointer now, only a placement.
 
 **What moves in the entry fold**: the quantities and the tradelist quantities add, and the five
 columns the reader typed themselves — what they paid, in what currency, when, where from, and
@@ -261,6 +298,297 @@ one about a row that no longer exists. `tags` and `condition_original` are delib
 exactly as they are from `add_entry`'s `DO UPDATE` — merging two curated sets is not something one
 statement should decide, and `condition_original` is the provenance of *this* row's condition and
 cannot describe a condition it was never written beside.
+
+## The deck groups, `Recently removed`, and what v25 converted
+
+Two kinds of folder belong to the app rather than to the reader, and v25 is the rung that creates
+them:
+
+- **one `deck` folder per deck**, named after it and pointed at it by `collection_folders.deck_id`
+  — the group. `idx_collection_folder_deck` is unique on that column, so a deck has at most one.
+  **Archived decks get one too**: archiving is a flag and not a delete, an archived deck still
+  holds its cards, and leaving it out of the conversion would have lost exactly the copies nobody
+  is looking at.
+- **one `removed` folder for the whole database**, `Recently removed` — where copies go when they
+  leave the collection's shelves without leaving the database. `idx_collection_folder_removed` is
+  unique on `kind` where `kind = 'removed'`, so the single `INSERT` that makes it is also the
+  proof that there is one.
+
+`create_deck` makes a group for every deck since, so "every deck has a group" is a property of
+both the rung and the command rather than of the rung alone.
+
+### The conversion is what stops the release feeling like a regression
+
+The rung had one job that could not be got wrong: **every former claim becomes a placement.** A
+reader who upgrades and finds their decks empty has lost years of filing to a release note, and
+there is no second copy of `deck_allocations` anywhere to recover it from. Four decisions in that
+loop are each load-bearing.
+
+**It runs in Rust, not in SQL, because it splits rows.** One statement cannot both create the
+placement in the group and reduce the row the copies came out of, and the clamp below is not
+expressible over a table that same statement is writing to.
+
+**`min(claim, row)`, and the clamp is not optional.** The old ledger could out-claim a row that was
+later stepped down — nothing refused it, because `deck::owned_by_oracle` applied
+`min(a.quantity, e.quantity)` at *read* time and the stored overclaim never showed on screen.
+Reading the claim literally here would invent copies the reader does not own, permanently, with
+nothing left to compare against afterwards. The source can also be **gone** by the time its claim
+comes up, because an earlier claim on the same row may have taken every copy and a row holding
+nothing is deleted rather than left at zero (v24's rule) — that is a normal outcome and is read
+through `.optional()`, not an unwrap.
+
+**Ascending by `id`, which is first-claim-first-served.** The order only matters where two decks
+claimed the same row and the copies do not stretch to both — and that state was reachable, because
+a claim was a *reservation* and could overlap while a placement is **custody** and cannot. One of
+the two decks has to lose, and the older claim is the one with the better story.
+
+**The placement carries every provenance column**, not just the grain: condition and
+`condition_original`, purchase price and currency, acquired-at, acquisition source, serial number,
+grading, tags, notes, `needs_review`, `tradelist_quantity` and the original `created_at`. The
+copies in the deck are the same physical cards — bought on the same day, for the same money, in
+the same condition, with the same note on the sleeve — so a bare row here would be the upgrade
+quietly deleting a history that took years to accumulate. `ON CONFLICT` on the eleven-term grain
+rather than a plain insert, because two claims on one entry from **one** deck are one placement
+(two decks are two placements, which the folder term keeps apart).
+
+**Order is the whole of the step's correctness: insert the folders, convert, then drop.** Dropping
+the ledger before reading it destroys the very thing being converted. `DROP TABLE deck_allocations`
+takes `idx_deck_allocations_grain` and `idx_deck_allocations_entry` with it, which is why neither
+is named. `ALTER TABLE decks DROP COLUMN is_built` is a drop rather than a keep because a kept
+column nothing writes is a column somebody reads by accident — and SQLite refuses `DROP COLUMN` on
+an indexed column, so it was checked (2026-08-23) that nothing indexes `is_built`, a failure that
+would otherwise have landed at a real reader's first upgrade and in no test starting from a fresh
+database. The `app_meta` row `deck_driven_collection` goes in the same statement: that switch asked
+whether the decks *are* the collection, which this rung answers yes to permanently, so a key
+nothing writes any more would have sat in that table forever.
+
+### The two writes, and why a deck group is not a drop target
+
+`collection_alloc.rs` holds the only pair in the crate that moves a row across the deck boundary:
+
+```text
+         collection_to_deck                 deck_to_collection
+binder / another deck ─────────▶ deck group ─────────────────▶ Recently removed
+```
+
+**A card reaches a deck's group only through `collection_to_deck`, which also writes the
+`deck_cards` row.** That is why `set_entry_folder` refuses a `deck` destination and the page offers
+no ring on a deck group: a bare drag would file copies into the group and leave the deck's list
+saying nothing about them — a placement with no deck card behind it, which reads to the reader as
+cards that vanished into a deck that does not play them. The refusal is the command's, not
+`refile_entry`'s; the write underneath carries no kind fence at all, which is exactly what lets
+these two file into the two folders a reader may not point at.
+
+**Taking a copy out of another deck's group decrements that deck's live list too.** The copies are
+custody rather than a reservation, so a deck that loses them loses the card. `MoveOutcome.fromDeck`
+carries the name because that side effect lands on a deck the reader is not looking at, and the UI
+says so before the press. Rows are taken from the other deck's list oldest first and there may be
+several — one printing can sit in two categories of one deck — and the take is **clamped at what
+is there rather than refused**, because the group and the list can legitimately disagree (an import
+writes a list without moving copies) and refusing would leave the copies half moved over a
+disagreement this write did not cause.
+
+**A deck card with no backing copies just goes away when it is cut, and that is the answer
+[issue #209](https://github.com/Msgaihede/mtg-grimoire/issues/209) could not find.** That issue
+asked whether a deck card needs a per-card provenance flag — *did this copy come out of the
+collection, or was it typed in from a search?* — and could not answer it, because nothing in the
+old model recorded the difference. The group **is** the record: a card added from search is an
+intention to buy, the reader never owned it, there is nothing in any folder behind it, and cutting
+it therefore puts nothing on their desk. No flag, no column, no migration — the question stopped
+being askable when placement replaced claim.
+
+**A theory row is refused outright.** A theory list is a plan and a plan holds no cards, so there
+is nothing in any folder to give back; the alternative is a press that reports success and moves
+nothing, which reads as a card that vanished. The same fact one level up is why
+`attribute_owned` zeroes every `theory` row rather than serving it last.
+
+Each refusal is a sentence rather than a constraint failure, `deck::set_folder`'s rule — a `CHECK`
+or a foreign key names the table and not the mistake, and `PRAGMA foreign_keys` is per-connection
+anyway:
+
+| Constant | Sentence |
+| --- | --- |
+| `THEORY_HOLDS_NOTHING` | A theory list is a plan, and a plan holds no cards. |
+| `NOT_THAT_MANY` | There are not that many copies to move. |
+| `ZERO_MOVE` | Moving copies needs a quantity of at least one. |
+| `ALREADY_HERE` | Those copies are already in this deck. |
+| `DECK_CARD_GONE` | That card is not in this deck any more. |
+| `NO_DECK_GROUP` | That deck has no folder to hold its cards. |
+| `NO_REMOVED_FOLDER` | There is no Recently removed folder to file these into. |
+
+The last two describe a hand-edited database — every deck gets a group and every database gets one
+`Recently removed` — and `NO_DECK_GROUP` is deliberately only on the way **in**: cutting a card
+from a deck whose group is missing is a deck with no backing copies, which the rule above already
+answers, and a reader must always be able to cut a card. Four more sentences are borrowed rather
+than re-spelled — `collection::GONE`, `deck::GONE` (through `touch_deck`, which doubles as the
+deck fence), `deck_meta::CATEGORY_GONE` and `deck_meta::CATEGORY_WRONG_DECK`.
+
+**The split is forward and the source row is the half that travels.** `collection_folders::
+take_copies` steps the source down to exactly the copies that are moving, `refile_entry` files
+*that* row into the destination (folding it into whatever already holds the grain there), and the
+remainder is then re-inserted into the folder the source has just left. That order is forced by the
+grain: a remainder written *before* the move would collide with the source itself, which is the one
+row in that folder holding that grain. `tradelist_quantity` is **split rather than duplicated** —
+the moving copies take `min(tradelist, quantity)` and the remainder keeps the rest — because
+duplicating it would put a card on the trade list twice by moving it.
+
+**There is one of it, and there were two.** `collection_alloc` wrote this split first, for the deck
+boundary's two commands, as a private `move_copies`; the category writes then needed the same rule
+and could not reach a private item, so it was spelled a second time in `collection_folders`. Two
+implementations of one rule disagree the first time either changes, and this rule moves the
+reader's cards — so the twin was deleted at fan-in and both commands call `take_copies`, which sits
+beside the merge it is built on and the fence-free refile it extends.
+
+### The history a cut writes, and the undo it deliberately does not
+
+Cutting a card from the **live** list used to go through `deck_set_card_quantity`, which wrote a
+`deck_audit` row and a `deck_undo` step like every other deck write. Routing the press through
+`deck_to_collection` took both away, and the two halves of that are not equally negotiable.
+
+**The history row is not optional, and it is the old one verbatim.** A command that replaces
+another must write what that one wrote, or a deck's log skips exactly the press a reader goes
+looking for. So a whole row cut records `remove` with `{ category, quantity, reason: null }`, part
+of one records `quantity` with `{ category, from, to }`, `delta` is negative in both, and the card
+carries its stored name so the line still reads once the printing has left `cards`. `auditText.ts`
+needs no new arm and a deck's history reads continuously across a change of command the reader
+cannot see. **It is recorded even when nothing moved** — a deck card nobody owned still left the
+deck, and the history is a record of the *deck*.
+
+**The undo step is deliberately absent, and this is the decision on the page.** A cut changes two
+rows in two tables: the `deck_cards` row, and a `collection_entries` row now sitting in `Recently
+removed`. `deck_undo` can express the first and only the first — a step names cells of `deck_cards`
+and *restores rows*, never running a command backwards, and its four primitives touch no collection
+table at all. Three things follow:
+
+- **The half-step is the state that must not ship.** Filing an `Op::Cards` beside the audit row
+  would put the list back and leave the copies where they went, so a deck would claim four copies
+  its own group no longer holds while the reader — who pressed Ctrl+Z and watched the row reappear
+  — believed the cut was reversed. That is worse than no undo, because the wrong number is one the
+  reader has been given a reason to trust.
+- **The other half cannot be taught to the journal.** `take_copies` files the copies through the
+  merge, so the source row may have been *folded into* whatever `Recently removed` already held and
+  no longer exists to restore; putting them back is a quantity moved between two folders, which is
+  a command run backwards, and it can fail for reasons that are nobody's bug (the reader filed them
+  in a binder, or sold them) while `MISSING_ROW` is the module's one failure and is documented as a
+  bug at a call site.
+- **The absence is visible, and the way back is better than Ctrl+Z.** The Undo button's name *is*
+  the change it would reverse — "Undo — Removed 2 × Lightning Bolt", read from `next_undo` — so a
+  cut that files no step leaves the button naming the press *before* it and never offers one it
+  cannot deliver. The copies are in `Recently removed`, and the standing sentence at the foot of the
+  deck (`CUT_CARDS_NOTE`) says so.
+
+  **Say the consequence plainly, because the button's name is only visible to somebody reading
+  it: a cut does not advance the undo cursor, so the previous step remains the one Ctrl+Z will
+  take.** Cut a card and press Ctrl+Z and the *older* change is reversed — the rename, the add,
+  the pile move before it — not the cut, and not nothing. The label is honest about that the whole
+  time; a keyboard user who never looks at it is the one this sentence is for. It is not a
+  keystroke that fails, it is a keystroke that succeeds at something else.
+
+  **The cost, stated plainly, and it is larger in this release than it will be in the next.** A cut
+  cannot be reversed from the keyboard at all. `collection_to_deck` is the write that restores
+  **both** halves in one press — but *nothing calls it yet*, and a deck group is deliberately not a
+  drop target (see [the fence](#a-deck-group-is-not-a-drop-target)), so there is no gesture in this
+  release that puts a cut card back where it was. Until the Collection Search tab lands, the way
+  back is two presses: add the card to the deck again, and re-file its copies out of
+  `Recently removed` by hand. **The card is never lost** — that is the whole of what the holding
+  area guarantees, and it is less than an undo.
+
+`a_cut_is_not_offered_to_undo_and_files_no_step` is what holds this — it drives a stepper press,
+then a cut, and asserts the cursor has not moved. Adding the half-step turns it red.
+
+**`collection_to_deck` records neither, and that is the next PR's.** The write is registered but no
+surface calls it yet — putting a card *into* a deck from the collection is the Collection Search
+tab's press, which has not landed — so the hole is not reachable from the window. It is the same
+hole and wants the same answer: the `add` row `deck_add_card` would have written.
+
+### Deleting a deck sends its cards to `Recently removed`
+
+A `deck_cards` row is an intention and dies with the deck. A row in the deck's **group** is a card
+the reader physically owns, so `delete_deck` re-files it into `Recently removed` **by hand, one at
+a time, and before the `DELETE`** — `delete_folder`'s rule borrowed rather than re-argued. Left to
+the DDL, `collection_folders.deck_id`'s CASCADE takes the group and
+`collection_entries.folder_id`'s SET NULL scatters the cards to the root, which is both the wrong
+destination and a rewrite of the grain's eleventh term with nothing saying what it will land on.
+
+It goes through `refile_entry` rather than `set_entry_folder` for the reason above: the command
+refuses a `removed` destination, and is right to. This is the app saying it, not a reader
+asserting it.
+
+**The reachable collision is a printing already sitting in `Recently removed`** — which is every
+second deck delete of a card the reader plays in two decks — and one at a time is what makes the
+second arrival *merge* into the first instead of raising `UNIQUE constraint failed: index
+'idx_collection_grain'`. **Two of the deck's own rows cannot collide with each other**, and an
+earlier draft of this page said they could: two rows in one folder already differ in one of the
+grain's first ten terms, or they would be one row. The sub-tree walk is still a `WITH RECURSIVE`
+rather than a single-folder read, because the DDL permits a folder nested under a group even though
+`create_folder` and `move_folder` both refuse to make one — the day a command permits it, the
+alternative is not a wrong number but a sub-tree's worth of cards scattered to the root.
+
+### Deleting or clearing a category sends its cards there too
+
+**The same act in bulk.** `deck_meta::delete_category` (in its cascade arm) and
+`deck::clear_category` each take a pile of `deck_cards` rows out at once, and every `live` row in
+that pile may have copies sitting in the deck's group behind it. Left where they were, those copies
+would stay filed under a deck that has never heard of them — invisible on the collection page under
+a folder for a pile that is gone, and unavailable to every other deck for ever. That is the
+feature's central invariant broken quietly: **a copy in a deck's group is backed by a deck card in
+that deck.**
+
+So both writes release the copies first, in their own transaction and before anything is deleted,
+through `deck::release_group_copies`. **That function is the crate's one copy of the walk and
+`deck_to_collection` calls it too** — the single-card cut spelled the same backing query and the
+same greedy loop inline until this round, and what the cut has that this does not is only the
+`deck_cards` write, the history row and the `MoveOutcome` it answers. Four rules the one copy
+holds: the deck's group is looked up and an absent one means "holds nothing" rather than a
+refusal; rows are taken **oldest first**; the take is **clamped** at what the group actually
+holds, because a list and a group can legitimately disagree; and `Recently removed` is resolved
+only when there is something to file, so a hand-edited database still lets a pile be cleared.
+
+**It matches on the oracle card, not on the printing, and that was a stranding bug while the walk
+existed twice.** `deck_swap_printing` and `deck_set_card_finish` rewrite a `deck_cards` row's
+identity and touch no collection table, so after "Use this printing" the group goes on holding the
+*old* printing's row. Matched exactly, the release then found nothing: the deck card went away and
+the copies stayed filed under a deck that no longer listed them. Upgraded readers meet it without
+pressing anything, because the allocator v25 replaced matched candidates by oracle id and the
+conversion faithfully files a printing the deck does not list. The arms are the exact printing and
+finish **first**, then any other row in the group holding the same `cards.oracle_id` — which is
+`owned_by_oracle`'s "a Bolt is a Bolt" read from the other end, since a deck that *counts* an
+Alpha Bolt toward an M10 line has to be able to give that copy back. The ordering is what keeps
+every cut of a card nobody ever swapped exactly what it was. The join to `cards` is a `LEFT JOIN`
+so a row whose printing has left the corpus is still releasable by the exact arm, and a deck card
+that is itself an orphan degrades to exactly that arm.
+
+Three scopes are decisions rather than details:
+
+- **`live` only.** A theory row is a plan and no folder backs one — `THEORY_HOLDS_NOTHING` is a
+  refusal one card at a time and simply an empty loop here.
+- **`delete_category`'s move arm releases nothing.** Those cards are still in this deck, one pile
+  over, so the group is still exactly where their copies belong. It is fenced on
+  `move_to_category_id.is_none()` and the release runs *before* the move's own `DELETE`, rather
+  than leaning on that `DELETE` having emptied the pile already — an ordering an edit three
+  statements away can undo without meaning to.
+- **The count each confirmation quotes is `deck_cards`, never the copies that moved.** The two
+  differ wherever the group holds fewer copies than the list claims, and what the dialog warns
+  about is what leaves the deck.
+
+**Undo restores the list and not the custody**, which is worth knowing rather than rediscovering:
+`deck_undo` puts the `deck_cards` cells back, while the copies stay in `Recently removed`. An
+undone delete therefore reads with its owned counts at zero until the reader files them again.
+Teaching the journal about collection rows would be a change to what a step *is* — the argument in
+full is under "The history a cut writes, and the undo it deliberately does not" above.
+
+**These two do file a step where `deck_to_collection` does not**, and the difference is what the
+`deck_cards` half is worth on its own. A cleared or deleted pile is many rows in an order and a
+filing nothing else records, so the step is the only way back to it; one cut card is a single
+stepper press away from being put back by hand, and the copies are one drag from being back where
+they were. Neither restores custody, so both leave the same honest, representable state: a deck
+that wants cards it does not currently hold.
+
+The split itself is `collection_folders::take_copies`, which is where a partial row move lives:
+`refile_entry` moves a row **whole**, and a pile that claims 3 of the 4 copies the group holds for
+a grain needs the source stepped down, refiled, and the remainder re-inserted behind it. It is the
+crate's one copy of that rule — `collection_alloc` carried a private twin until fan-in, and the
+note under "The two writes" says what happened to it.
 
 ## `delete_folder` re-files one row at a time
 
@@ -285,6 +613,15 @@ the root, so the `SET NULL` has nothing left to rewrite and nothing left to coll
 **One at a time is what answers the second shape**, and it is the reason this is a loop rather than
 one statement: the first row to reach the root becomes the row the next one merges into. A batch
 update would present both to the index at once.
+
+**The second shape is this command's own and does not carry over to a deck's group.** It needs two
+*sub-folders*, and a user folder can have them; a deck group cannot, because `create_folder` and
+`move_folder` both refuse a parent the app owns. Two rows filed directly in one folder already
+differ in one of the grain's first ten terms, or they would be one row — so on the deck-delete path
+the collision that is actually reachable is a printing **already waiting in `Recently removed`**.
+Same loop, different reason, and
+[the deck groups](#deleting-a-deck-sends-its-cards-to-recently-removed) is where that one is
+written down.
 
 Three smaller decisions inside it:
 
@@ -377,7 +714,7 @@ doc lists as something only three statements in the crate do. It is now a fourth
 `collection::from_sql`'s reason: it reads the entries as its rows rather than asking a question
 about them.
 
-## The three refusals are sentences, not constraint failures
+## The refusals are sentences, not constraint failures
 
 `deck::set_folder`'s reasoning, twice over: **a constraint failure names the table and not the
 mistake**, and `PRAGMA foreign_keys` is a per-connection setting in any case. `collection_entries.
@@ -390,19 +727,22 @@ only while that pragma happens to be on.
 | The folder is gone | `That folder is not there any more.` (`deck_meta::FOLDER_GONE`) | Every write that names a folder id |
 | The move writes a loop | `A folder cannot be moved inside itself.` (`deck_meta::FOLDER_CYCLE`) | `move_folder` |
 | The folder is the app's | `That folder is the app's own and is not yours to change.` (`FOLDER_NOT_YOURS`) | Every write, both ends |
+| The card is in a deck | `Those copies are in a deck. Cut the card from the deck to get them back.` (`ENTRY_IN_A_DECK`) | `set_entry_folder`, on the row it was given |
 
 The first two are borrowed from `deck_meta` rather than re-spelled — a reader who has met "That
 folder is not there any more." in the deck gallery and on the wishlist must meet the same sentence
 here, and `deck_meta::CATEGORY_WRONG_DECK`'s doc is the standing rule that a second copy of a
 refusal is a second thing to drift.
 
-**The third is local, because it is a fact this cabinet has and the other two do not.**
+**The last two are local, because they are a fact this cabinet has and the other two do not.**
 `deck_folders` and `wishlist_folders` carry no `kind` column at all, so there is no sentence in
 either module to reach for. And the schema could not say it anyway: the DDL CHECKs that a `deck`
 folder names a deck and that the kind is one of three, but nothing in it says who may *edit* a row,
-and a CHECK that could would fire as `CHECK constraint failed: collection_folders`.
+or whose copies a row is holding, and a CHECK that could would fire as
+`CHECK constraint failed: collection_folders`.
 
-Three properties of that fence are each a decision:
+Each property of that fence is a decision, and they read in pairs — the folder end, then the row
+end:
 
 - **It guards both ends of a move.** `move_folder` reads the *subject* first — a folder the app
   owns is refused whether or not the parent it was aimed at exists — and the destination second.
@@ -413,10 +753,26 @@ Three properties of that fence are each a decision:
   parent that is one, and `set_entry_folder` refuses a destination that is one. Those two folders
   say something the *app* is responsible for — that a deck holds these copies, that these copies
   have left the collection — and a reader dragging a card into one would be asserting it without
-  any of the writes that make it true.
-- **`refile_entry` carries no such fence**, and the absence is deliberate: it is what lets the next
-  PR's deck-driven writes file into exactly those two folders. The fence belongs to the *command*,
-  not to the write.
+  any of the writes that make it true. Since v25 that is not hypothetical: a card filed into a
+  group by hand would be a placement with **no `deck_cards` row behind it**, which is a deck
+  holding copies it does not play.
+- **Nothing may be filed *out* of a `deck` folder by hand either**, and that end took longer to
+  notice. `set_entry_folder` reads the row's *current* folder and refuses a `deck` one with
+  `ENTRY_IN_A_DECK` — *"Those copies are in a deck. Cut the card from the deck to get them
+  back."* — a sibling sentence rather than `FOLDER_NOT_YOURS`, because the reader is not changing
+  anything about the folder: they are taking a card out of it, and a refusal that names the wrong
+  noun is worse than a generic one. A copy walking out of a group leaves the deck listing a card
+  whose copies are gone, which is the invariant the category cascade broke from the other side.
+  The frontend's `canFile` already refused the drag; that made the *page* the only guard, and the
+  command was one careless caller away from being the last one.
+  **`removed` is deliberately not fenced as a source**: taking a cut card out of the holding area
+  and filing it in a binder is what that folder is for.
+- **`refile_entry` carries no such fence**, and the absence is deliberate: it is what lets
+  `collection_alloc.rs`'s two writes, and `deck::delete_deck`, file into exactly those two folders.
+  The fence belongs to the *command*, not to the write — and the distinction is **who is asking**,
+  not which table is touched: `set_entry_folder` is the reader's own filing gesture, and a silent
+  drag must not be a second, unrecorded route out of a deck. Neither `refile_entry` nor
+  `deck_to_collection` may ever grow this fence; both would stop a card being cut at all.
 
 The cycle walk climbs `parent_id` from the **proposed** parent and is bounded at
 `MAX_FOLDER_DEPTH` (64). **The budget is not about depth.** This walk is what keeps the tree
@@ -462,9 +818,35 @@ an optimistic insert would have to guess the destination's sort position and pag
 re-read — and invalidate the **list itself**, not only its root: `src/lib/query.ts` caches 30 s, so
 a mounted query that is merely marked stale never refetches.
 
-**The pinned section for deck groups and `Recently removed` renders nothing in this release**,
-because v25 is what creates those folders. An empty heading over an empty flat list is a promise
-the page cannot keep yet.
+**The app's own folders are a pinned, flat, locked section, and every one of those three words is
+a decision** (`PinnedFolders.tsx`). *Pinned*, because it is drawn at every level rather than only
+at the root — that is how a reader reaches `Recently removed` from three drawers down without
+walking back out, and a section that moved as you navigated is not one anybody can learn the
+position of. *Flat*, because `parent_id` is `NULL` on every row v25 creates and no command can nest
+anything under one, so there is no tree to build and the summary's **direct** count is the whole
+count: asking `subtotalsOf` to add up children here would be an answer computed from a tree these
+rows are deliberately not in. *Locked*, because every write in `collection_folders.rs` refuses a
+folder that is not `kind = 'user'` — a `⋯` menu here would be three rows that each end in
+`FOLDER_NOT_YOURS`, and a control whose only outcome is a sentence explaining that it does not work
+teaches nothing its absence would not have. Both kinds nevertheless answer their two questions
+through **`folderFace`**, exported from `CollectionFolderCard.tsx` rather than re-spelled, because a
+second spelling of "12 cards · $340.00" is a second chance for one wall to disagree with the wall
+under it.
+
+**Neither kind is a drop target, and the two refusals are not the same refusal.** A **deck group**
+is refused up here, on the page, because a copy reaches one only through `collection_to_deck`,
+which writes the `deck_cards` row in the same transaction — a bare drag would call
+`collection_set_folder`, which knows nothing about decks, and file the copy into the group with no
+deck card behind it. **`Recently removed`** is refused a layer lower: `set_entry_folder` calls
+`user_folder` on its destination, so that write is refused whatever the page draws. A ring is a
+promise, and a ring over a target the backend always says no to is a promise the next press breaks.
+
+**Dragging a copy *out* of `Recently removed` is the whole point of it**, and is the "so you can
+sort them back into your collection" half of [#209](https://github.com/Msgaihede/mtg-grimoire/issues/209):
+the source side carries no fence, so a row standing there files into any folder the reader made.
+`CollectionPage`'s `canFile` is where the matching half is written — a copy may not be dragged out
+of a **deck group** either, because taking it back is `deck_to_collection`'s job and that write
+also cuts the deck's list.
 
 The card menu's `buildCollectionTargetItems` mirrors `buildWishlistTargetItems` including both of
 its rules, which differ from the deck picker's: **root first and never omitted**, and **a leaf
@@ -472,7 +854,7 @@ folder is a plain action while a folder with children is a submenu whose first i
 so a parent folder is always pickable. Empty folders are **kept**, the opposite of `deckLevel`,
 which drops a folder with no deck under it: an empty drawer is where the next card goes. Deck
 groups and `Recently removed` are filtered out (`kind === "user"`), because copies reach those only
-through the next PR's two writes. `Move to → folder` for a collection row calls
+through `collection_alloc.rs`'s two writes and never through a folder press. `Move to → folder` for a collection row calls
 `collection_set_folder`, the same command the drag writes through, so a drag and a menu press merge
 on a taken grain identically — and the menu exists because a drag-only affordance is half a
 feature, and it is the half a keyboard cannot use. **One command and, since the review of this
@@ -508,10 +890,41 @@ separate two items the other nine fold together.
 `reset::clear_collection` empties `collection_entries` **and then** `collection_folders`, and needs
 the second statement rather than getting it by cascade: `collection_entries.folder_id` is SET NULL,
 so a wipe that stopped at the entries would hand the reader an empty filing cabinet to take apart
-one drawer at a time. The returned count stays the count of **cards** deleted, which is what the
-reader is being told about.
+one drawer at a time. Entries first, because `collection_folders.parent_id` CASCADEs onto itself
+and clearing the folders first would be a second cascade running under the statement that matters.
+
+**Then two more statements, and this is where it stops being the wishlist's twin: `Recently
+removed` and one group per surviving deck are rebuilt in the same transaction.** Since v25 those
+rows are not the reader's filing at all — they are *where the app puts cards*. Both
+`collection_alloc` writes look their destination up by `deck_id` and by `kind` and refuse in words
+when it is not there, so a database swept and left bare is one where **no deck can ever hold a card
+again and nothing can be put aside** — permanently, because those rows are created by a migration
+and a machine already at head never runs one again. Nothing self-repairs and nothing goes red.
+
+Sweeping and rebuilding, rather than deleting `kind = 'user'` only: the app's folders are where
+cards *were*, and a wipe that left a `Recently removed` full of nothing while claiming to have
+emptied the collection would be keeping the shape of a thing it had just thrown away. **Archived
+decks get a group like every other**, v25's rule verbatim — leaving them out would be the button
+quietly deciding which decks may hold cards afterwards.
+
+The returned count stays the count of **cards** deleted, which is what the reader is being told
+about; a folder is where a card was kept rather than a card, and the rebuilt rows are the cabinet
+rather than what was in it.
 
 ## What driving the shipped window found
+
+### v25 — not driven yet
+
+**The deck groups, `Recently removed` and the two moves have not been driven in the shipped window
+at the time of writing, and there are deliberately no figures here for them.** The pass belongs
+after the code lands, and a number written before it would be a guess with a date on it, which is
+worse than a gap. What it owes an answer to, at least: the upgrade of a **real v24 database with
+claims in it** — a copy of the main checkout's `mtg.db`, because a worktree is a fresh install and
+can never show an upgrade bug — the pinned section drawn at a level other than the root, a drag
+onto a deck group being refused rather than silently written, and a cut card with no backing copies
+leaving nothing behind. Fill this in from the running window, not from the suite.
+
+### v24 — one pass, 2026-08-23
 
 One CDP pass over `3036e18`, on **Windows**, `tauri dev` (**debug**), at 1920×1080, against a
 worktree database carrying the full 116,700-card corpus. Every claim below was read out of the
@@ -559,15 +972,14 @@ React never sees** — go through
 
 ## Deliberately out of scope
 
-- **Deck groups and `Recently removed`.** They are the next PR's, at schema **v25** — the columns
-  and both partial indexes exist here, and nothing writes them. Until then
-  `collection_folders.kind` is `'user'` on every row the app can produce.
 - **Folders in import and export.** The seven formats carry cards, and a folder is not one — see
   [import-export.md](import-export.md), where the same decision is recorded beside the formats.
   This is `wishlist-folders.md`'s decision made again, deliberately and for the same reason.
 - **The deck builder's two search tabs and the import "add cards to collection" toggle**
-  (spec §7.2 and §7.4). They belong to the PR after the groups exist, because both of them file
-  into a deck's group.
+  (spec §7.2 and §7.4). They are the PR after this one's, because both of them file into a deck's
+  group and the group is what had to exist first. **`ipc.collectionToDeck` exists already and has
+  no caller** — its half of the mirror is written so the pair cannot be completed from memory
+  later, and its doc says so at the site. Do not delete it as unused.
 - **Per-folder price summaries beyond `folder_summary`'s two numbers**, and any change to the
   wishlist's own folders. Both are spec §2's "out", and neither is a thing this cabinet needs to
   work.
@@ -576,13 +988,19 @@ React never sees** — go through
 
 | Path | What is in it |
 | --- | --- |
-| `src-tauri/src/schema.rs` | The v24 step, `COLLECTION_GRAIN`, `COLLECTION_FOLDER_KINDS`, `UNDO_V24`, `schema_at_23`, and the whole-schema `ON DELETE` inventory |
-| `src-tauri/src/collection_folders.rs` | The seven commands, `set_entry_folder`, `refile_entry`, `merge_entry`, `folder_summary`, `FOLDER_NOT_YOURS` |
-| `src-tauri/src/collection.rs` | The grain's other ten terms, `set_quantity`'s zero-delete, `update_entry`'s merge, `EntryChange`, `ENTRY_FINISH` |
+| `src-tauri/src/schema.rs` | The v24 and v25 steps, `COLLECTION_GRAIN`, `COLLECTION_FOLDER_KINDS`, `UNDO_V24`, `UNDO_V25`, `schema_at_23`, `v24_database`, and the whole-schema `ON DELETE` inventory |
+| `src-tauri/src/collection_folders.rs` | The seven commands, `set_entry_folder` and its two fences, `refile_entry`, `take_copies` (the split), `merge_entry`, `folder_summary`, `FOLDER_NOT_YOURS`, `ENTRY_IN_A_DECK` |
+| `src-tauri/src/collection_alloc.rs` | `collection_to_deck` and `deck_to_collection` — the only pair that moves a row across the deck boundary — `take_from_deck_list`, `MoveOutcome`, the cut's history row and the argument for its missing undo step, and the seven refusal sentences |
+| `src-tauri/src/collection.rs` | The grain's other ten terms, `set_quantity`'s zero-delete, `update_entry`'s merge, `fold_entry`, `EntryChange`, `ENTRY_FINISH`, `Allocation` |
+| `src-tauri/src/deck.rs` | `owned_by_oracle` and `attribute_owned` — owned/missing as a sum over the group — `delete_deck`, which re-files into `Recently removed`, and `release_group_copies`, the crate's one walk over a group's rows — oracle-matched, exact printing first — which `clear_category`, `deck_meta::delete_category` and `deck_to_collection` all share |
 | `src-tauri/src/reset.rs` | `clear_collection` — entries, then folders |
-| `src-tauri/src/reconcile.rs` | `fold_into_existing` — the five statements `merge_entry` follows — and `collision_target`, the crate's other eleven-term probe |
+| `src-tauri/src/reconcile.rs` | `fold_into_existing`, which calls `fold_entry` as `merge_entry` does, and `collision_target`, the crate's other eleven-term probe |
 | `src/lib/folderTree.ts` | `buildFolderTree` and friends, shared with the deck gallery and the wishlist, **unchanged** |
 | `src/features/collection/collectionDrag.ts` | The payload under its own key, the tile that offers it, the targets that take it |
-| `src/features/collection/CollectionFolderCard.tsx` | The tile, and its stories beside it |
+| `src/features/collection/CollectionFolderCard.tsx` | The tile, `folderFace`, and its stories beside it |
+| `src/features/collection/PinnedFolders.tsx` | The app's own folders — pinned, flat and locked — `DECK_KIND`, `REMOVED_KIND`, and neither one a drop target |
 | `src/features/card/cardMenu.tsx` | `buildCollectionTargetItems` — `Add to → Collection`, and `Move to → folder` |
 | `src/features/transfer/import/destinations/collection.ts` | `grainKey` — the importer's fold, now every grain term it can vary |
+| `src/lib/ipc.ts` | `MoveOutcome`, `collectionToDeck` (no caller yet, deliberately) and `deckToCollection` |
+| `src/features/decks/useDeck.ts` | `setQuantity`, which routes a **live** decrease through `deckToCollection`, and `invalidateCollection`, which fires only when the outcome says copies moved |
+| `src/features/decks/DeckEditor.tsx` | `setQuantityAt` — the app's one removal path, and where the `CutFrom` row is looked up |

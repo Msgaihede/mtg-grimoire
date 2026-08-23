@@ -49,7 +49,6 @@ const BURN: DeckRow = {
   coverCardId: "c-Lightning Bolt",
   coverKind: "card_art",
   coverArtist: "Christopher Rush",
-  isBuilt: false,
   archived: false,
   cardCount: 60,
   updatedAt: 1_800_000_000,
