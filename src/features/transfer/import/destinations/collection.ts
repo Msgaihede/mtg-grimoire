@@ -53,9 +53,10 @@ export function planCollectionImport(
   const unmatched: UnmatchedLine[] = [];
   const hintMisses: HintMiss[] = [];
   const unknownConditions: UnknownCondition[] = [];
-  // Keyed on the part of the collection's grain an import can produce. A file naming the same
-  // grain twice is one intention said twice: under `add` it would double-count, and under
-  // `set` the second line would silently win.
+  // Keyed on the part of the collection's grain an import can produce — {@link grainKey}, which
+  // is where the two terms it cannot produce are argued. A file naming the same grain twice is
+  // one intention said twice: under `add` it would double-count, and under `set` the second line
+  // would silently win.
   const folded = new Map<string, CollectionImportItem>();
 
   list.lines.forEach((line, index) => {
@@ -91,7 +92,26 @@ export function planCollectionImport(
     const condition =
       normalized !== null && normalized.matched ? normalized.condition : options.condition;
     const finish = line.finish ?? options.finish;
-    const key = `${matched.cardId} ${finish ?? ""} ${condition}`;
+    // The six columns that are part of what *identifies* a collection row rather than
+    // decoration on one. A CSV this app wrote carries all six (`SURFACE_FIELDS.collection`),
+    // and until 2026-08-23 none of them was read back — see the fold key below.
+    const altered = flagOf(line.extra.altered);
+    const signed = flagOf(line.extra.signed);
+    const proxy = flagOf(line.extra.proxy);
+    const misprint = flagOf(line.extra.misprint);
+    const serialNumber = textOrUndefined(line.extra.serialNumber);
+    const grading = textOrUndefined(line.extra.grading);
+    const key = grainKey({
+      cardId: matched.cardId,
+      finish,
+      condition,
+      altered,
+      signed,
+      proxy,
+      misprint,
+      serialNumber,
+      grading,
+    });
     const seen = folded.get(key);
     if (seen !== undefined) {
       seen.quantity += line.quantity;
@@ -104,6 +124,12 @@ export function planCollectionImport(
       finish: finish ?? "nonfoil",
       condition,
       conditionOriginal: normalized?.original ?? undefined,
+      altered,
+      signed,
+      proxy,
+      misprint,
+      serialNumber,
+      grading,
       purchasePrice: numberOrUndefined(line.extra.purchasePrice),
       purchaseCurrency: line.extra.purchaseCurrency,
       acquiredAt: line.extra.acquiredAt,
@@ -121,6 +147,98 @@ export function planCollectionImport(
     parseIssues: list.issues,
     totalCards: items.reduce((n, i) => n + i.quantity, 0),
   };
+}
+
+/**
+ * `schema::COLLECTION_GRAIN` as a key, as far as an *importer* can spell it.
+ *
+ * **Eleven columns identify a collection row and this used to fold on three of them**
+ * (`cardId, finish, condition`). Two exported rows differing only in `Altered` folded into one
+ * item, `commit_import` hard-coded all six flag/identity columns to their defaults, and
+ * `ON CONFLICT(COLLECTION_GRAIN)` could therefore never match the reader's altered or graded
+ * row — the import wrote a **second, all-defaults entry beside it**, in `add` mode summing the
+ * quantities of both. `docs/reference/import-export.md` works the arithmetic through and called
+ * it latent, because nothing let a reader set one of the six; PR 4's import toggle is what makes
+ * it live, so it is fixed with the grain change rather than after it.
+ *
+ * **Two of the eleven terms are absent from this key, and each for a reason that makes it
+ * complete rather than short:**
+ *
+ * - **`lang` is a function of `cardId`**, not of the file. `collection::add_entry` copies
+ *   `lang`, `set_code` and `collector_number` off `cards` at write time and never takes them
+ *   from the caller — "letting a caller supply these would let a caller disagree with the card
+ *   it named" — so two lines resolving to one printing can never differ in it. A CSV *has* a
+ *   `Lang` column; it is a fact the export writes and the import cannot act on.
+ * - **`folderId` is a constant here, and the constant is the root.** An importer names no
+ *   folder — there is no control for one and `CollectionImportItem` has no field — so every
+ *   imported row lands with `folder_id` NULL, which is where every unfiled row is and is a real
+ *   destination rather than an omission. A constant term partitions nothing, so leaving it out
+ *   costs the key nothing. What it *does* mean is that an import can never land on a row the
+ *   reader has filed into a binder: that row's grain has an eleventh term this one does not
+ *   share, so it is a different row, exactly as an altered copy is. That is the folder grain
+ *   working, not this fold failing.
+ *
+ * `grading` is compared **verbatim**, where `collection::canonical_grading` would re-serialise
+ * it into `GRADING_FIELDS` order first. Two spellings of one slab therefore survive as two items
+ * and are folded by the commit's `ON CONFLICT` instead — which is the right end for it, because
+ * a second reading of that parser over here is a second thing to drift. This fold's own job is
+ * narrower: a file naming one intention twice must not be sent twice.
+ *
+ * `JSON.stringify` rather than a joined template, because a serial number and a grading blob are
+ * free text and a space-separated key cannot tell `"a b"` from `"a" "b"`.
+ */
+function grainKey(terms: {
+  cardId: string;
+  finish: DeckFinish;
+  condition: Condition;
+  altered: boolean;
+  signed: boolean;
+  proxy: boolean;
+  misprint: boolean;
+  serialNumber: string | undefined;
+  grading: string | undefined;
+}): string {
+  return JSON.stringify([
+    terms.cardId,
+    terms.finish ?? "",
+    terms.condition,
+    terms.altered,
+    terms.signed,
+    terms.proxy,
+    terms.misprint,
+    // The crate's `coalesce(serial_number, '')` and `coalesce(grading, '')`: a NULL in a UNIQUE
+    // index is distinct from every other NULL, so both terms have to be flattened to a value.
+    terms.serialNumber ?? "",
+    terms.grading ?? "",
+  ]);
+}
+
+/**
+ * One of the four boolean grain columns, read out of a cell.
+ *
+ * `TRANSFER_FIELDS`' own writer emits `yes`/`no`/`""`, so `yes` is the answer this has to know;
+ * the rest of the vocabulary is here because **import is permissive and export is canonical** —
+ * a file a reader edited in a spreadsheet says `TRUE`, and one another tool wrote says `1`.
+ *
+ * **Anything else is `false`, and silence is `false`.** The column is `INTEGER NOT NULL DEFAULT
+ * 0`: a card is altered or it is not, so there is no third state to carry and nothing for an
+ * `unknownConditions`-style warning row to be about. That is the one place this is looser than
+ * the condition reader beside it, and the difference is the column's rather than a choice —
+ * a grade this app cannot read could have been any of five, and a flag it cannot read is a
+ * card nobody said anything true about.
+ */
+function flagOf(raw: string | undefined): boolean {
+  const cleaned = (raw ?? "").trim().toLowerCase();
+  return cleaned === "yes" || cleaned === "y" || cleaned === "true" || cleaned === "t" ||
+    cleaned === "1";
+}
+
+/** A free-text grain cell — trimmed, and blank read as absent. An empty `Serial number` column
+ *  is a card with no serial, which is the same row as one whose file had no such column at all;
+ *  `""` and `undefined` must not be two grains. */
+function textOrUndefined(raw: string | undefined): string | undefined {
+  const cleaned = (raw ?? "").trim();
+  return cleaned === "" ? undefined : cleaned;
 }
 
 /**

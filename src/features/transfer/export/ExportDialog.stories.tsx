@@ -145,6 +145,9 @@ function collectionEntry(
     promoTypes: null,
     // The corpus's own blob, so the Arena filter answers over real legalities.
     legalities: card.legalities,
+    // At the root: export carries cards, and a folder is not one.
+    folderId: null,
+    folderName: null,
     id: 1,
     cardId: card.id,
     name: card.name,
