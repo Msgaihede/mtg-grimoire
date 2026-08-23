@@ -45,6 +45,10 @@ function entry(card: FakeCard, finish: Finish, over: Partial<CollectionRow> = {}
     legalities: card.legalities,
     id: nextId++,
     cardId: card.id,
+    // Unfiled unless a story says otherwise, which is what most of a collection is: the Folder
+    // column draws an em dash for the root.
+    folderId: null,
+    folderName: null,
     name: card.name,
     oracleId: card.oracleId,
     setCode: card.setCode,
@@ -231,10 +235,12 @@ export const Empty: Story = {
       "aria-rowcount",
       "1",
     );
-    // Six columns, the removal column included: it draws nothing, and a screen reader still
-    // needs its name, or every row announces "column 6".
+    // Six columns still, but the sixth is `Folder` since v24 — it carries where the copy is
+    // filed on *every* row, where the removal column it replaced drew nothing on all but the
+    // rare emptied one. Its header is visible rather than `srOnlyHeader` for the same reason a
+    // name was needed before: a column a reader cannot name is announced as "column 6".
     await expect(canvas.getAllByRole("columnheader")).toHaveLength(6);
-    await expect(canvas.getByRole("columnheader", { name: "Actions" })).toBeInTheDocument();
+    await expect(canvas.getByRole("columnheader", { name: "Folder" })).toBeInTheDocument();
   },
 };
 
@@ -334,10 +340,11 @@ export const Orphan: Story = {
     const orphan = canvas.getByText("LEA · 232").closest('[role="row"]');
     await expect(orphan).toHaveAttribute("aria-rowindex", "2");
     const row = within(orphan as HTMLElement);
-    // Exactly two em dashes, and they are two different holes: the name the card can no longer
-    // supply (`row.name ?? "—"`), and the price of a finish of a printing that is not there
-    // (`usdPrice(null)`). Never `$0.00`, which is a price nobody quoted.
-    await expect(row.getAllByText("—")).toHaveLength(2);
+    // Exactly three em dashes, and they are three different holes: the name the card can no
+    // longer supply (`row.name ?? "—"`), the price of a finish of a printing that is not there
+    // (`usdPrice(null)`), and — since v24 — the folder, where the dash is not a hole at all but
+    // the root, which is where every card starts. Never `$0.00`, which is a price nobody quoted.
+    await expect(row.getAllByText("—")).toHaveLength(3);
     // The one handle left. `Quantity of ${row.name ?? row.cardId}` falls back to the card id,
     // so the control is still addressable by something even though nothing can name the card.
     await expect(
@@ -451,7 +458,11 @@ export const InEuros: Story = {
 
     // The etched row: unpriced in euros, and its dollar figure is nowhere on screen.
     const etched = canvas.getByText("ACR · 211").closest('[role="row"]');
-    await expect(within(etched as HTMLElement).getByText("—")).toBeInTheDocument();
+    // Two dashes since v24 and they say different things: this one is the missing euro price,
+    // and the other is the Folder column's root. Counted rather than fetched singly, because
+    // `getByText` now finds both and throws — which reads like a missing price rather than an
+    // extra column.
+    await expect(within(etched as HTMLElement).getAllByText("—")).toHaveLength(2);
     const usd = finishPrice(printing("acr", "211").prices, "etched", "usd");
     await expect(canvas.queryByText(usdPrice(usd))).toBeNull();
 

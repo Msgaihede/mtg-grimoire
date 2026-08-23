@@ -13,7 +13,7 @@ import { RarityGem } from "@/components/RarityGem";
 import { VirtualTable, type TableColumn } from "@/components/table/VirtualTable";
 import { useTooltip, type TooltipBinder } from "@/components/tooltip/useTooltip";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
-import { cardDraggable } from "@/features/decks/dnd";
+import { collectionDraggable } from "@/features/collection/collectionDrag";
 import { CONDITION_LABEL, type Condition } from "@/lib/conditions";
 import { finishLabel, isFinish } from "@/lib/finish";
 import { finishTreatments } from "@/lib/treatment";
@@ -48,14 +48,12 @@ function conditionLabel(raw: string): string {
 /**
  * Which copy a row is about, for the accessible name of a control that acts on it.
  *
- * `Foil, NM` where the reader stated a grade and `Foil` where they did not — interpolating a
- * `null` condition straight into a template literal reads out as the word "null" beside the
- * finish. The em dash the cell draws is no better here: a dash is a gap on screen and noise
- * in a sentence.
+ * `Foil, NM` — both halves always, because `condition` is `NOT NULL DEFAULT 'NM'` on the column
+ * and non-nullable on {@link CollectionRow}. The "no grade" branch this used to carry was
+ * unreachable.
  */
 function copyLabel(row: CollectionRow): string {
-  const finish = finishLabel(row.finish);
-  return row.condition === null ? finish : `${finish}, ${row.condition}`;
+  return `${finishLabel(row.finish)}, ${row.condition}`;
 }
 
 /**
@@ -71,6 +69,12 @@ function copyLabel(row: CollectionRow): string {
  * value cell, under the number it multiplies into and only on rows where the two differ —
  * which is exactly where it says something. The name truncates last because it is what
  * identifies a row, the same conclusion the search table reached the hard way.
+ *
+ * **Still six with the folders, and that is why the filing shares the last column rather than
+ * taking one of its own.** `Folder` is where `DeckCountCell` used to sit and where the removal
+ * still does: one heading, two things, the row deciding which — the arrangement the derived mode
+ * already proved this column can carry. A seventh column at 4.5rem would take the name to about
+ * 44px at the width the paragraph above measured, which is the failure it exists to record.
  *
  * That squeeze is also why the two orders with no column stay on the filter bar's select
  * rather than becoming columns: there is no room, and this table has already given one up.
@@ -184,10 +188,8 @@ function columnsFor(
       cellClassName: "truncate text-xs text-dim",
       cell: (row) => {
         const condition = row.condition;
-        /* A row with no grade draws the finish alone, and the separator goes with it: a
-          dangling middle dot before nothing reads as a rendering fault. The test is the DTO's
-          own `null`, which is the fact about *this row*. */
-        if (condition === null) return <>{finishLabel(row.finish)}</>;
+        /* Always both halves and always the separator: `condition` is `NOT NULL DEFAULT 'NM'`
+          on the column, so the "no grade" arm this cell used to carry could not be reached. */
         return (
           <>
             {finishLabel(row.finish)} ·{" "}
@@ -276,67 +278,119 @@ function columnsFor(
       },
     },
     {
-      key: "actions",
-      // 2rem holds an icon button, and nothing wider ever goes in this column.
-      width: "2rem",
-      // The removal column. Nothing to show, and a header a screen reader still needs: an
-      // unnamed column is announced as "column 6" for every row.
-      header: "Actions",
-      srOnlyHeader: true,
+      key: "folder",
+      /**
+       * `4.5rem` is the width `DeckCountCell` was measured at for `11 decks` at 0.7rem, and a
+       * folder name is the same shape of thing: a short word the reader chose, truncating with
+       * its whole name on the tooltip. The 2.5rem over the icon button's 2rem comes off the
+       * name, the only flexing column — the same trade the derived mode made for the same
+       * column, and the reason this is *not* a seventh column: the header of this file argues
+       * six against seven with the figures, and at 1280px with the card pane open a seventh
+       * would take the name column to about 44px.
+       */
+      width: "4.5rem",
+      /**
+       * **Where the copy is filed, and the removal, under one heading — the row decides which.**
+       *
+       * `DeckCountCell` held this column while the collection was derived and PR 1 took it out,
+       * leaving a 2rem strip that was empty on every row but the rare emptied one. Folders give
+       * it something to say on **every** row instead, and it is a value already on the row rather
+       * than a hover query — a net deletion of a lazy per-row ipc call (spec §7.1).
+       *
+       * The header is visible now, where the removal's was `srOnlyHeader`: a column carrying a
+       * value on every row is a column a reader has to be able to name, and an unnamed one is
+       * announced as "column 6" for every row either way.
+       */
+      header: "Folder",
+      // The cell holds a control on an emptied row, so the row's own press must not also fire.
+      // `interactive` stamps `data-no-drag` and swallows the click and the two activation keys.
+      // It costs this cell as a grab handle and as a place to click the card open — the cheapest
+      // price available, since the name, Set and Value cells are all three still both.
       interactive: true,
-      // Offered on an empty row and nowhere else. Zero copies is a state the stepper can
-      // reach and nothing else can leave: the backend keeps the row — with its condition, its
-      // purchase price and its acquisition story — until something says delete, and this is
-      // the only thing in the app that does. On a row that still holds cards it would be a
-      // one-click way to lose the lot from a list that scrolls under the pointer.
-      cell: (row) =>
-        row.quantity === 0 && (
-          <button
-            type="button"
-            onClick={() => onRemove(row)}
-            aria-label={`Remove ${row.name ?? row.cardId} (${copyLabel(row)}) from your collection`}
-            {...tip("Remove from your collection", { describes: false })}
-            className={cn(
-              REVEAL_ON_HOVER,
-              "grid size-6 place-items-center rounded-md border border-border text-dim",
-              "transition-colors duration-150 hover:border-destructive/60 hover:text-destructive",
-              FOCUS,
-              "motion-reduce:transition-none",
-            )}
-          >
-            <Trash2 className="size-3.5" aria-hidden="true" />
-          </button>
-        ),
+      cellClassName: "flex items-center justify-between gap-1 text-xs text-dim",
+      cell: (row) => (
+        <>
+          {/* An em dash for a copy at the root, which is where every card starts and where a
+              deleted folder's cards return to. Not the word "Collection": the breadcrumb says
+              that about the *level*, and repeating it four hundred times down a column would be
+              a name for the absence of filing rather than a folder.
+
+              `folderName` is the row's own join, so a folder renamed in another window is named
+              by whatever the last read said. `null` with a `folderId` set cannot happen through
+              the join and reads as the root if it ever does — an em dash is the honest answer for
+              a drawer this row cannot name. */}
+          <span className="min-w-0 truncate" {...tip(row.folderName, { whenClipped: true })}>
+            {row.folderName ?? "—"}
+          </span>
+          {/* Offered on an empty row and nowhere else. **The stepper no longer produces one**:
+              since schema v24 `collectionSetQuantity(id, 0)` deletes the row outright, so a row
+              at zero now arrives only from the entry editor — `collectionUpdate` is the one
+              write that still keeps the row it is editing, because an edit form sends eight
+              fields at once and must not delete its own subject. That row is a real state with
+              no other way out, and this is the only thing in the app that removes it. On a row
+              that still holds cards it would be a one-click way to lose the lot from a list that
+              scrolls under the pointer. */}
+          {row.quantity === 0 && (
+            <button
+              type="button"
+              onClick={() => onRemove(row)}
+              aria-label={`Remove ${row.name ?? row.cardId} (${copyLabel(row)}) from your collection`}
+              {...tip("Remove from your collection", { describes: false })}
+              className={cn(
+                REVEAL_ON_HOVER,
+                "grid size-6 flex-none place-items-center rounded-md border border-border text-dim",
+                "transition-colors duration-150 hover:border-destructive/60 hover:text-destructive",
+                FOCUS,
+                "motion-reduce:transition-none",
+              )}
+            >
+              <Trash2 className="size-3.5" aria-hidden="true" />
+            </button>
+          )}
+        </>
+      ),
     },
   ];
 }
 
 /**
- * A row that is also the card it lists — spec §1's second drag source.
+ * A row that is both the card it lists and the entry it is — spec §1's second drag source, and
+ * since the folders (spec §7.1) the app's only source of a filing drag.
  *
- * What it carries is the **card**, never the entry: a deck names a printing, and the finish
- * and the condition that make this row an entry are exactly what a drop cannot answer. (Which
- * is the same reason the collection is not a drop *target*.)
+ * **Two payloads under two keys on one registration.** The **card** half is what a deck category
+ * or the sidebar's Decks entry reads, and it carries no finish and no condition: a deck names a
+ * printing, and the two columns that make this row an *entry* are exactly what such a drop cannot
+ * answer. The **entry** half is what a folder card or a breadcrumb segment reads, and it is the
+ * whole of what a filing write needs — the entry's id, its name for whatever says what moved, and
+ * where it is filed now so a folder can refuse the row it already holds. `collectionDrag.ts`
+ * argues at length why those are two keys rather than one; the short of it is that both readers
+ * have to say yes to the same row at once.
  *
  * A component rather than a callback ref in the map, because the registration has to hold
  * still: React detaches and re-runs a ref whose identity changed, and this list re-renders on
  * every scrolled row — a source that unregisters mid-drag is a drop that never arrives. So the
- * effect re-runs only when what the row would carry has changed.
+ * effect re-runs only when what the row would carry has changed, `folderId` included: a row
+ * dropped into a drawer and then picked up again must carry the drawer it is in now, or that
+ * drawer would go on offering itself.
  *
  * A wrapper rather than a whole row component: everything else about a row is the table's, and
  * the props ride through untouched. The wishlist keeps its own copy of this, for its own
  * reason — its `cardId` is nullable.
  */
 function DraggableRow({
+  entryId,
   cardId,
   name,
   typeLine,
+  folderId,
   children,
   ...rest
 }: {
+  entryId: number;
   cardId: string;
   name: string | null;
   typeLine: string | null;
+  folderId: number | null;
 } & ComponentProps<"div">) {
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -346,12 +400,14 @@ function DraggableRow({
     // empty one is what the payload contract allows for exactly that (`dnd.ts`: a name may be
     // empty, an id may not). Its type line is `null` for the same reason, which files it under
     // `Uncategorized` if it is carried into a deck — the honest pile for a card the database
-    // cannot describe.
-    return cardDraggable({
+    // cannot describe. The entry half takes the same fallback name, for the sentence a refusal
+    // would print about it.
+    return collectionDraggable({
       element,
-      payload: () => ({ kind: "card", cardId, name: name ?? "", typeLine }),
+      card: () => ({ kind: "card", cardId, name: name ?? "", typeLine }),
+      entry: () => ({ entryId, name: name ?? "", folderId }),
     });
-  }, [cardId, name, typeLine]);
+  }, [entryId, cardId, name, typeLine, folderId]);
   return (
     <div ref={ref} {...rest}>
       {children}
@@ -434,9 +490,9 @@ export function CollectionTable({
       // A row opens the card, from the mouse and from the keyboard both.
       onActivate={(row) => selectCard(row.cardId)}
       isSelected={(row) => row.cardId === selectedCardId}
-      // Last, so it wins over the selection colour: a row emptied to zero is a record of a
+      // Last, so it wins over the selection colour: a row holding no copies is a record of a
       // card the user no longer holds, and it says so by receding rather than by
-      // disappearing (see the stepper's contract).
+      // disappearing (see the removal button's comment for the one write that still makes one).
       rowClassName={(row) => (row.quantity === 0 ? "text-dim" : undefined)}
       onNeedNextPage={onNeedNextPage}
       // A right-click is not an activation: `onActivate` above is a left click and the two
@@ -451,9 +507,11 @@ export function CollectionTable({
       // before it builds anything.
       renderRow={(props, row) => (
         <DraggableRow
+          entryId={row.id}
           cardId={row.cardId}
           name={row.name}
           typeLine={row.typeLine}
+          folderId={row.folderId}
           {...props}
           onContextMenu={rowMenu?.(row)}
           onKeyDown={(e) => {
