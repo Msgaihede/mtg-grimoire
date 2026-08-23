@@ -350,8 +350,6 @@ describe("the seeds", () => {
     expect(quantityIn(2, ["main", "commander"])).toBe(100);
     expect(quantityIn(2, ["companion"])).toBe(1);
     expect(quantityIn(3, ["main"])).toBe(22);
-    // Exactly one built deck, which is what makes cross-deck contention visible at all.
-    expect(db.decks.filter((d) => d.isBuilt).map((d) => d.id)).toEqual([2]);
     expect(db.decks.filter((d) => d.archived).map((d) => d.id)).toEqual([3]);
   });
 
@@ -642,23 +640,56 @@ describe("the seeded rows agree with the cards they name", () => {
 });
 
 describe("a story can read the world it was given", () => {
-  it("reads a built deck's claims out of the collection it was seeded beside", async () => {
+  /**
+   * What a deck owns is what sits in **its own group**, and the two seeded shapes are here in one
+   * test because they are one rule read from both ends.
+   *
+   * Deck 1's group holds two foil Counterspells and one damaged Ragavan; the deck lists four
+   * *nonfoil* of each, and reads owned 2 and 1 — **finish-blind and oracle-grained**, which is
+   * the half of the old allocator that survived it. Deck 2's group holds nothing at all, so
+   * every row of it reads 0 however many copies of that card the collection has: a Sol Ring in
+   * the binder is not a Sol Ring in the deck.
+   */
+  it("reads what a deck owns out of the deck's own group", async () => {
     installWorld({ seed: "starter" });
-    const commander = await invoke<DeckDetail>("deck_get", { id: 2, variant: "live" });
-    const sol = commander!.cards.find((c) => c.name === "Sol Ring");
-    // One copy wanted, one owned, and the exact printing preferred over the foil `sld` one.
-    expect(sol?.ownedQuantity).toBe(1);
-    expect(sol?.setCode).toBe("c21");
-    // The zero row: a printing the deck wants and the collection records without holding.
-    const copter = commander!.cards.find((c) => c.name === "Smuggler's Copter");
-    expect(copter?.ownedQuantity).toBe(0);
-
-    // The built deck above took one of the four Bolts, so the draft can only plan with three
-    // of that printing — it fills the fourth from another printing of the same oracle card.
     const draft = await invoke<DeckDetail>("deck_get", { id: 1, variant: "live" });
-    const bolt = draft!.cards.find((c) => c.name === "Lightning Bolt" && c.categoryKind === "main");
-    expect(bolt?.quantity).toBe(4);
-    expect(bolt?.ownedQuantity).toBe(4);
+    const owned = (detail: DeckDetail | null, name: string) =>
+      detail!.cards.find((c) => c.name === name && c.categoryKind === "main")?.ownedQuantity;
+    expect(owned(draft, "Counterspell")).toBe(2);
+    expect(owned(draft, "Ragavan, Nimble Pilferer")).toBe(1);
+    // Four in the binder and none in this deck's folder: the copies are on the reader's desk,
+    // not in the deck, and `deck_to_collection` on this row would file nothing away.
+    expect(owned(draft, "Lightning Bolt")).toBe(0);
+
+    const commander = await invoke<DeckDetail>("deck_get", { id: 2, variant: "live" });
+    expect(commander!.cards.every((c) => c.ownedQuantity === 0)).toBe(true);
+    // Including the two the collection really does hold a copy of — they are just not here.
+    expect(owned(commander, "Sol Ring")).toBe(0);
+    expect(owned(commander, "Counterspell")).toBe(0);
+  });
+
+  /**
+   * The world schema v25 built: **exactly one holding area**, and **one group per deck**, each
+   * wearing its deck's name. Both are what `collection_alloc`'s two writes look up by hand and
+   * refuse in words when they are missing, so a seed without them is a world where no deck can
+   * hold a card.
+   */
+  it("starter mirrors v25's cabinet: one removed folder, one group per deck", () => {
+    const db = seed("starter");
+    const removed = db.collectionFolders.filter((f) => f.kind === "removed");
+    expect(removed.map((f) => f.name)).toEqual(["Recently removed"]);
+    expect(removed[0].deckId).toBeNull();
+    const groups = db.collectionFolders.filter((f) => f.kind === "deck");
+    expect(groups.map((f) => f.deckId)).toEqual(db.decks.map((d) => d.id));
+    // The name is a snapshot taken when the group was made, and `deck_update` is the only thing
+    // that moves it — so a seed whose two halves disagreed would be a folder tree labelled with
+    // names the gallery stopped using.
+    expect(groups.map((f) => f.name)).toEqual(db.decks.map((d) => d.name));
+    // Only deck 1's holds anything, and `Recently removed` starts empty: nothing has been cut.
+    const copiesIn = (folderId: number) =>
+      db.collectionEntries.filter((e) => e.folderId === folderId).reduce((n, e) => n + e.quantity, 0);
+    expect(groups.map((f) => copiesIn(f.id))).toEqual([3, 0, 0, 0]);
+    expect(copiesIn(removed[0].id)).toBe(0);
   });
 
   /**
