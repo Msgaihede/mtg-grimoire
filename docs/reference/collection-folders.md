@@ -484,22 +484,105 @@ table at all. Three things follow:
   time; a keyboard user who never looks at it is the one this sentence is for. It is not a
   keystroke that fails, it is a keystroke that succeeds at something else.
 
-  **The cost, stated plainly, and it is larger in this release than it will be in the next.** A cut
-  cannot be reversed from the keyboard at all. `collection_to_deck` is the write that restores
-  **both** halves in one press — but *nothing calls it yet*, and a deck group is deliberately not a
-  drop target (see [the fence](#a-deck-group-is-not-a-drop-target)), so there is no gesture in this
-  release that puts a cut card back where it was. Until the Collection Search tab lands, the way
-  back is two presses: add the card to the deck again, and re-file its copies out of
-  `Recently removed` by hand. **The card is never lost** — that is the whole of what the holding
-  area guarantees, and it is less than an undo.
+  **The cost, stated plainly, and it got smaller on 2026-08-23.** A cut still cannot be reversed
+  from the keyboard. What changed is that `collection_to_deck` — the write that restores **both**
+  halves in one press — now has a caller: the deck builder's **Collection Search** tab. A deck
+  group is still deliberately not a drop target (see
+  [the fence](#a-deck-group-is-not-a-drop-target)), so the recovery is not a drag; it is a press.
+  **What it costs now**, spelled out because "one press" is only true if you know where the press
+  is: open the search column on the deck you cut from, stay on the Collection tab, clear the
+  **only unallocated** default or leave it — `Recently removed` is on the *unallocated* side, so
+  the cut copies are in the default list — find the row and press **Add**. That is one press over
+  a list the reader is already looking at, against the two it used to be (add the card again from
+  the card search, then re-file its copies out of `Recently removed` by hand). It is still not
+  Ctrl+Z, and the reason it is not is above. **The card is never lost** — that is the whole of
+  what the holding area guarantees.
 
 `a_cut_is_not_offered_to_undo_and_files_no_step` is what holds this — it drives a stepper press,
 then a cut, and asserts the cursor has not moved. Adding the half-step turns it red.
 
-**`collection_to_deck` records neither, and that is the next PR's.** The write is registered but no
-surface calls it yet — putting a card *into* a deck from the collection is the Collection Search
-tab's press, which has not landed — so the hole is not reachable from the window. It is the same
-hole and wants the same answer: the `add` row `deck_add_card` would have written.
+**`collection_to_deck` writes its own history row as of 2026-08-23, and files no step, for the
+same two reasons.** The row was deferred while nothing called the command: a hole nothing could
+reach is not a hole a reader can fall into. The Collection Search tab is what reaches it, so the
+deferral expired with it. The row is `deck::add_card`'s **verbatim** — kind `add`, payload
+`{ category, quantity }`, `delta` positive, the card's stored name — because filing a card into a
+deck from the collection *is* an add and a reader cannot see which command ran; `auditText.ts`
+needs no new arm and the deck's history reads continuously across the two. `quantity` is the
+copies that **moved**, never the total the `ON CONFLICT` arm landed the row on.
+
+The undo step stays absent, and here the asymmetry genuinely does not bite: a reader who files the
+wrong card cuts it, which is one press and fully recorded. Both directions are therefore on the
+fake's `NO_UNDO_STEP` too, so a story cannot quietly grow a step the crate does not write.
+
+### Collection Search, and the first caller `collection_to_deck` ever had
+
+**Shipped 2026-08-23, spec §7.2.** The deck builder's docked search column has two tabs —
+`Collection` and `All cards` — and **it opens on `Collection`**. That default is the whole product
+decision: a deck is built out of cards you have, so a search of everything Scryfall has published
+is the thing one press away rather than the thing in front of you. Until this landed there was no
+way to search a collection from a deck at all, and `collection_to_deck` had been registered,
+tested and reachable from nothing for a whole release. **This is what calls it.**
+
+**The list's grain is the collection's, not the card search's** — one row per printing, finish and
+condition, each saying where that copy is filed — because the press is about a *copy* and not
+about a card. The root is drawn as the word `Collection` rather than a blank cell: an empty
+"where is this" reads as data that failed to arrive, where the root is the ordinary place for a
+copy to be.
+
+**`CollectionQuery.allocation` gets its first sender here, and the default is `unallocated`.** The
+field has existed since v25 and every caller written before folders gets `All` by omission. The
+tab sends the other word, so what a reader who has pressed nothing sees is the copies **no deck is
+holding** — the root, a binder they made, and `Recently removed`, all three being cards on the
+desk. That is what makes the list answer "what can I build with today" rather than "what do I
+own". `All cards` on the toggle beside it widens it to every row.
+
+**Where a copy is filed decides which of three presses the Add button makes**, and this is the
+piece to get right:
+
+| Where the copy sits | What Add does |
+| --- | --- |
+| The root, a binder, `Recently removed` | Moves silently. One press. |
+| This deck's own group | Cannot move — `ALREADY_HERE` refuses it in words. |
+| **Another deck's group** | **Confirms first, naming that deck.** |
+
+The third row is the one that needs a sentence: the side effect lands on a deck the reader is not
+looking at. Taking the copies decrements that deck's live list as well as emptying its group,
+because copies are custody rather than a reservation and a deck that loses them loses the card.
+`MoveOutcome.fromDeck` carries the name **after** the fact as well as before it, so the
+confirmation and the result say the same thing. Note that this app's confirmations carry no
+`dialog` or `alertdialog` role — a test or a CDP pass finds this one by its text.
+
+**Which pile a press files into is decided before the press and named on the button**, which is
+the promise the card-search tab's Add already makes. A named default category is used as it
+stands; `AUTO_CATEGORY` goes through `autoCategoryFor` over the row's type line — the documented
+floor for a database whose oracle tags have never been downloaded. **Where that rule names a pile
+the deck has not got, it falls back to the deck's main pile rather than creating one**, and what
+keeps that honest is that the button names the pile before the press. It used to be forced as
+well: `collection_to_deck` took a category **id** and there was no id to send for a pile that did
+not exist yet. **That is no longer true** — the command takes a `collection_alloc::Pile`, an id
+**or** a name, since 2026-08-23, and the name arm resolves through `category_for_name` inside the
+move's own transaction exactly as `deck_add_card` does. The tab still sends an id, because a tab
+whose Add button names its destination has one in hand; the arm exists for the `All cards` tab's
+owned add, which files by what a card *does* and so can name a pile the deck has never had. A
+call carrying both is refused in words (`BOTH_PILES`) rather than silently preferring one.
+
+**A move is one deliberate press, so nothing here is optimistic.** `src/lib/query.ts` caches 30 s,
+which means a mounted query merely *marked* stale never refetches — the collection list, the
+folder summary and the deck are each invalidated, not just their roots. PR 2 of this series
+shipped a ghost row by getting exactly that wrong.
+
+**The `All cards` tab grew an own/need toggle at the same time** (`NormalSearchAdd.ts`), and its
+default is `need` — today's behaviour exactly, a `deck_cards` row and nothing else, which reads
+as missing. `own` prefers to move a **free** copy the reader already has into the deck's group and
+records a new one there only when there is none. Its preference order is the deleted allocator's,
+kept deliberately: exact printing, then another printing of the same oracle card, real copies
+before proxies, then entry id — which is why a reader who used to let the allocator choose sees
+the same copy chosen now. **Copies in another deck's group are never candidates on that path**:
+it is silent, and taking another deck's card only ever happens through the confirm above.
+
+**The import's "Add cards to collection" box is the third surface and it does _not_ file into the
+group** — see [import-export.md](import-export.md#the-deck-arms-add-cards-to-collection-box), where
+the missing argument is written down beside the formats.
 
 ### Deleting a deck sends its cards to `Recently removed`
 
@@ -913,16 +996,31 @@ rather than what was in it.
 
 ## What driving the shipped window found
 
-### v25 — not driven yet
+### v25 and Collection Search — not driven yet
 
-**The deck groups, `Recently removed` and the two moves have not been driven in the shipped window
-at the time of writing, and there are deliberately no figures here for them.** The pass belongs
-after the code lands, and a number written before it would be a guess with a date on it, which is
-worse than a gap. What it owes an answer to, at least: the upgrade of a **real v24 database with
-claims in it** — a copy of the main checkout's `mtg.db`, because a worktree is a fresh install and
-can never show an upgrade bug — the pinned section drawn at a level other than the root, a drag
-onto a deck group being refused rather than silently written, and a cut card with no backing copies
-leaving nothing behind. Fill this in from the running window, not from the suite.
+**The deck groups, `Recently removed`, the two moves and the Collection Search tab have not been
+driven in the shipped window at the time of writing, and there are deliberately no figures here
+for them.** The pass belongs after the code lands, and a number written before it would be a guess
+with a date on it, which is worse than a gap. **This section is waiting rather than empty**, and
+the two PRs before this one left it in exactly this state and were right to.
+
+What it owes an answer to, at least:
+
+- The upgrade of a **real v24 database with claims in it** — a copy of the main checkout's
+  `mtg.db`, because a worktree is a fresh install and can never show an upgrade bug.
+- The pinned section drawn at a level other than the root, and a drag onto a deck group being
+  refused rather than silently written.
+- A cut card with no backing copies leaving nothing behind.
+- **Collection Search:** the tab strip at `MIN_PANEL_WIDTH_PX` in the real window rather than
+  headless over `dist/`'s stylesheet; a row leaving the unallocated list on the press it was
+  added by; and the cross-deck confirmation — its wording, and that the *other* deck's list has
+  really lost the card afterwards.
+- **The own/need toggle**, both paths, and that `own` picks the same copy the deleted allocator
+  would have.
+- **The import box ticked**, and where the copies land — see the note below the checkbox, which
+  says the root and not the deck's group.
+
+Fill this in from the running window, not from the suite.
 
 ### v24 — one pass, 2026-08-23
 
@@ -975,11 +1073,12 @@ React never sees** — go through
 - **Folders in import and export.** The seven formats carry cards, and a folder is not one — see
   [import-export.md](import-export.md), where the same decision is recorded beside the formats.
   This is `wishlist-folders.md`'s decision made again, deliberately and for the same reason.
-- **The deck builder's two search tabs and the import "add cards to collection" toggle**
-  (spec §7.2 and §7.4). They are the PR after this one's, because both of them file into a deck's
-  group and the group is what had to exist first. **`ipc.collectionToDeck` exists already and has
-  no caller** — its half of the mirror is written so the pair cannot be completed from memory
-  later, and its doc says so at the site. Do not delete it as unused.
+- ~~**The deck builder's two search tabs and the import "add cards to collection" toggle**~~
+  (spec §7.2 and §7.4) — **shipped 2026-08-23**, the PR after this cabinet's, because both of them
+  needed a deck's group to exist first. See
+  [Collection Search, and the first caller `collection_to_deck` ever had](#collection-search-and-the-first-caller-collection_to_deck-ever-had)
+  below. `ipc.collectionToDeck` is no longer callerless; the note telling a future reader not to
+  delete it as unused has come out with the state that made it necessary.
 - **Per-folder price summaries beyond `folder_summary`'s two numbers**, and any change to the
   wishlist's own folders. Both are spec §2's "out", and neither is a thing this cabinet needs to
   work.
@@ -1001,6 +1100,10 @@ React never sees** — go through
 | `src/features/collection/PinnedFolders.tsx` | The app's own folders — pinned, flat and locked — `DECK_KIND`, `REMOVED_KIND`, and neither one a drop target |
 | `src/features/card/cardMenu.tsx` | `buildCollectionTargetItems` — `Add to → Collection`, and `Move to → folder` |
 | `src/features/transfer/import/destinations/collection.ts` | `grainKey` — the importer's fold, now every grain term it can vary |
-| `src/lib/ipc.ts` | `MoveOutcome`, `collectionToDeck` (no caller yet, deliberately) and `deckToCollection` |
+| `src/lib/ipc.ts` | `MoveOutcome`, `collectionToDeck` and `deckToCollection`, and `CollectionQuery.allocation` — whose two words nothing sent until Collection Search |
+| `src/features/decks/DeckSearchPanel.tsx` | The two tabs, `DEFAULT_DECK_SEARCH_TAB` (`collection`) and `DECK_SEARCH_TAB_KEY` |
+| `src/features/decks/CollectionSearchTab.tsx` | The list, `landingCategory`, and the confirmation that names the other deck |
+| `src/features/decks/useCollectionSearch.ts` | `collection_list` with `allocation`, `CopySource`'s three answers, and the invalidation a move fires |
+| `src/features/decks/NormalSearchAdd.ts` | The card-search tab's own/need toggle — `ADD_MODES`, `DEFAULT_ADD_MODE` (`need`), `addModeKey` |
 | `src/features/decks/useDeck.ts` | `setQuantity`, which routes a **live** decrease through `deckToCollection`, and `invalidateCollection`, which fires only when the outcome says copies moved |
 | `src/features/decks/DeckEditor.tsx` | `setQuantityAt` — the app's one removal path, and where the `CutFrom` row is looked up |

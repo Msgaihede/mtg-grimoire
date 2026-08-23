@@ -71,7 +71,8 @@ export interface DestinationPreviewProps {
    * Back to the paste step, keeping the text.
    *
    * **This unmounts the preview, so nothing a destination holds survives it** — the mode, the
-   * condition default, the name typed for a new deck, a commander picked. That is the rule
+   * condition default, the name typed for a new deck, a commander picked, whether the reader
+   * ticked "Add cards to collection". That is the rule
    * rather than an accident: the alternative is the shell holding state it must not know the
    * shape of, which is the coupling this seam exists to remove. Anything that has to outlive a
    * Back belongs to the *paste* and therefore to the shell, or is re-derived from `list` on the

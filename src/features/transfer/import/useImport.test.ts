@@ -3,7 +3,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createElement, type ReactNode } from "react";
 import type {
+  CollectionImportItem,
   DeckRow,
+  ImportCommitOutcome,
   ImportItem,
   ImportMatch,
   ImportOutcome,
@@ -17,6 +19,8 @@ const deckImportCommit = vi.hoisted(() => vi.fn());
 const importResolve = vi.hoisted(() => vi.fn());
 const importReadFile = vi.hoisted(() => vi.fn());
 const oracleTagsForPrintings = vi.hoisted(() => vi.fn());
+const collectionImportCommit = vi.hoisted(() => vi.fn());
+const collectionFolderList = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -26,10 +30,26 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     importResolve,
     importReadFile,
     oracleTagsForPrintings,
+    collectionImportCommit,
+    collectionFolderList,
   },
 }));
 
-import { useImport } from "./useImport";
+import { NO_DECK_GROUP, useImport } from "./useImport";
+
+/**
+ * The cabinet as `collection_folder_list` answers it: unfiltered by kind, so a **deck** group
+ * and a binder the reader made sit in one flat list and are told apart by `kind`/`deckId`.
+ *
+ * Deck 4's group is `77` and deck 12's — {@link MADE}, the deck `importIntoNewDeck` makes — is
+ * `78`. Two of them, because a lookup that took the first `deck` row would pass with one.
+ */
+const FOLDERS = [
+  { id: 5, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0 },
+  { id: 77, parentId: null, name: "Selvala", kind: "deck", deckId: 4, sortOrder: 1 },
+  { id: 78, parentId: null, name: "Selvala", kind: "deck", deckId: 12, sortOrder: 2 },
+  { id: 9, parentId: null, name: "Recently removed", kind: "removed", deckId: null, sortOrder: 3 },
+];
 
 const MADE: DeckRow = {
   gameKey: "any",
@@ -57,6 +77,15 @@ const MADE: DeckRow = {
 const OUTCOME: ImportOutcome = { added: 117, removed: 0, categoriesCreated: 3 };
 
 const ITEMS: ImportItem[] = [{ cardId: "p1", quantity: 1, categoryName: "Main deck" }];
+
+/** The **same line** at the collection's own grain — eleven columns rather than the deck's
+ *  three, which is the whole reason the two lists are planned separately rather than adapted
+ *  across. */
+const COPIES: CollectionImportItem[] = [
+  { cardId: "p1", quantity: 1, finish: "nonfoil", condition: "NM" },
+];
+
+const OWNED: ImportCommitOutcome = { added: 1, updated: 0, removed: 0 };
 
 /** A resolved row, thin: this hook reads exactly one field off a match — the printing id it
  *  asks the taxonomy about — so the rest is not invented here. */
@@ -89,6 +118,8 @@ beforeEach(() => {
   importResolve.mockReset().mockResolvedValue([]);
   importReadFile.mockReset().mockResolvedValue("");
   oracleTagsForPrintings.mockReset().mockResolvedValue([]);
+  collectionImportCommit.mockReset().mockResolvedValue(OWNED);
+  collectionFolderList.mockReset().mockResolvedValue(FOLDERS);
 });
 
 /** `useDeck.test.ts`'s helper and its reasoning — a `staleTime: 30_000` cache is *fresh*, so
@@ -201,7 +232,15 @@ describe("useImport", () => {
       items: ITEMS,
     });
 
-    expect(landed).toEqual({ deck: MADE, outcome: OUTCOME });
+    expect(landed).toEqual({
+      deck: MADE,
+      outcome: OUTCOME,
+      // Nothing was claimed, so both halves of the collection answer are absent rather than
+      // zero: `owned: { added: 0 }` would be the command saying it wrote nothing, and it was
+      // never called.
+      owned: null,
+      ownRefusal: null,
+    });
     // `live` and `merge`, into a deck made one line ago: there is nothing to replace.
     expect(deckImportCommit).toHaveBeenCalledWith(MADE.id, "live", "merge", ITEMS);
     expect(deckDelete).not.toHaveBeenCalled();
@@ -319,5 +358,273 @@ describe("the Oracle tags a resolve reads", () => {
       result.current.resolve.mutateAsync(LINES),
     ).rejects.toBe("The card database is busy finishing a sync.");
     expect(oracleTagsForPrintings).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * "I have physically built this deck" - the box on the preview, and the second command one
+ * press now makes.
+ *
+ * **Two commands, one press**, `importIntoNewDeck`'s shape one file up: the deck's own commit
+ * first, then the collection's. The order is the whole of what a reader is protected by. A
+ * collection write that landed and a deck write that then failed would leave copies claimed by
+ * a deck with no list to spend them on - a state nothing on screen explains. The other way
+ * round, a deck write that landed and a collection write that failed is **exactly the import
+ * the reader would have got with the box unticked**, which is a state the app has shipped since
+ * the importer existed.
+ *
+ * So the deck half's refusal is thrown, the way it always was, and the collection half's is
+ * carried back beside the outcome instead. Re-pressing Import after a landed deck commit would
+ * merge the whole list a second time.
+ */
+describe("the collection half of a deck import", () => {
+  it("writes the copies after the deck's own commit", async () => {
+    const order: string[] = [];
+    deckImportCommit.mockImplementation(async () => {
+      order.push("deck");
+      return OUTCOME;
+    });
+    collectionImportCommit.mockImplementation(async () => {
+      order.push("collection");
+      return OWNED;
+    });
+    const { result } = renderHook(() => useImport(), { wrapper });
+
+    const landed = await result.current.commit.mutateAsync({
+      deckId: 4,
+      variant: "live",
+      mode: "merge",
+      items: ITEMS,
+      collectionItems: COPIES,
+    });
+
+    expect(order).toEqual(["deck", "collection"]);
+    // `add` and never `set`: the reader is saying they own these copies as well as whatever
+    // else is in the box, not that this file is the whole of what they own.
+    // **The deck's own group, never the root** — the blocker this argument settled. Filed at
+    // the top level the deck goes on reading *missing* on every line the reader just said they
+    // own, and every other deck can still claim the copies.
+    expect(collectionImportCommit).toHaveBeenCalledWith(COPIES, "add", 77);
+    expect(landed).toEqual({ outcome: OUTCOME, owned: OWNED, ownRefusal: null });
+  });
+
+  /** The box unticked is the import this app has always made: `deck_cards` and nothing else. */
+  it("touches the collection not at all when the box is unticked", async () => {
+    const { result } = renderHook(() => useImport(), { wrapper });
+
+    await result.current.commit.mutateAsync({
+      deckId: 4,
+      variant: "live",
+      mode: "merge",
+      items: ITEMS,
+    });
+
+    expect(collectionImportCommit).not.toHaveBeenCalled();
+  });
+
+  /** An empty list is the same statement as an unticked box, and a command asked to write
+   *  nothing is a round trip that can only answer that it wrote nothing. */
+  it("makes no second call when the collection half is empty", async () => {
+    const { result } = renderHook(() => useImport(), { wrapper });
+
+    const landed = await result.current.commit.mutateAsync({
+      deckId: 4,
+      variant: "live",
+      mode: "merge",
+      items: ITEMS,
+      collectionItems: [],
+    });
+
+    expect(collectionImportCommit).not.toHaveBeenCalled();
+    expect(landed.owned).toBeNull();
+  });
+
+  /**
+   * The deck's refusal still ends the press, and the collection is never written on top of an
+   * import that did not land.
+   */
+  it("writes no copies when the deck's own commit is refused", async () => {
+    deckImportCommit.mockRejectedValue("That deck is gone.");
+    const { result } = renderHook(() => useImport(), { wrapper });
+
+    await expect(
+      result.current.commit.mutateAsync({
+        deckId: 4,
+        variant: "live",
+        mode: "merge",
+        items: ITEMS,
+        collectionItems: COPIES,
+      }),
+    ).rejects.toBe("That deck is gone.");
+
+    expect(collectionImportCommit).not.toHaveBeenCalled();
+  });
+
+  /**
+   * And the collection's refusal does **not** throw, because the deck import behind it really
+   * did land. Throwing would put "Could not import the list" over a list that is now in the
+   * deck, and invite a second press that merges all of it again.
+   */
+  it("keeps the landed deck import when the copies are refused", async () => {
+    collectionImportCommit.mockRejectedValue("The card database is busy finishing a sync.");
+    const { result } = renderHook(() => useImport(), { wrapper });
+
+    const landed = await result.current.commit.mutateAsync({
+      deckId: 4,
+      variant: "live",
+      mode: "merge",
+      items: ITEMS,
+      collectionItems: COPIES,
+    });
+
+    expect(landed).toEqual({
+      outcome: OUTCOME,
+      owned: null,
+      ownRefusal: "The card database is busy finishing a sync.",
+    });
+  });
+
+  /**
+   * **A deck with no group refuses rather than quietly filing at the root**, which is the
+   * failure mode this whole change exists to remove: the reader ticked a box saying these copies
+   * belong to *this deck*, and the top level is a different statement. Every deck has a group —
+   * schema v25 made one per deck and `deck_create` makes one since — so this is a database
+   * edited by hand, and the sentence is `collection_alloc::NO_DECK_GROUP`'s rather than a second
+   * wording invented here.
+   *
+   * It rides back as `ownRefusal` like every other refusal on this half: the deck list has
+   * already landed, so throwing would put "Could not import the list" over a list that is in the
+   * deck.
+   */
+  it("refuses the copies rather than filing them at the root when a deck has no group", async () => {
+    collectionFolderList.mockResolvedValue(FOLDERS.filter((f) => f.kind !== "deck"));
+    const { result } = renderHook(() => useImport(), { wrapper });
+
+    const landed = await result.current.commit.mutateAsync({
+      deckId: 4,
+      variant: "live",
+      mode: "merge",
+      items: ITEMS,
+      collectionItems: COPIES,
+    });
+
+    expect(collectionImportCommit).not.toHaveBeenCalled();
+    expect(landed).toEqual({ outcome: OUTCOME, owned: null, ownRefusal: NO_DECK_GROUP });
+  });
+
+  /** The lookup is only made when there is something to file — an unticked box must not cost a
+   *  round trip to the folder table either. */
+  it("does not read the folder list when the box is unticked", async () => {
+    const { result } = renderHook(() => useImport(), { wrapper });
+
+    await result.current.commit.mutateAsync({ deckId: 4, variant: "live", mode: "merge", items: ITEMS });
+
+    expect(collectionFolderList).not.toHaveBeenCalled();
+  });
+
+  /** The same three rules with a `deck_create` in front of them - and the create's rollback
+   *  still belongs to the deck half alone. */
+  it("writes the copies for a list imported as a new deck", async () => {
+    const { result } = renderHook(() => useImport(), { wrapper });
+
+    const landed = await result.current.importIntoNewDeck.mutateAsync({
+      name: "Selvala",
+      formatKey: "commander",
+      items: ITEMS,
+      collectionItems: COPIES,
+    });
+
+    // The group of the deck `deck_create` just made, which is why the lookup happens at press
+    // time: a second before this there was no deck for a query to have been keyed on.
+    expect(collectionImportCommit).toHaveBeenCalledWith(COPIES, "add", 78);
+    expect(landed).toEqual({ deck: MADE, outcome: OUTCOME, owned: OWNED, ownRefusal: null });
+  });
+
+  /**
+   * A refused deck commit deletes the deck it just made **and** leaves the collection alone -
+   * the rollback would otherwise have nothing to say about copies filed against a deck that no
+   * longer exists.
+   */
+  it("rolls the new deck back without having written any copies", async () => {
+    deckImportCommit.mockRejectedValue("A category name cannot be blank.");
+    const { result } = renderHook(() => useImport(), { wrapper });
+
+    await expect(
+      result.current.importIntoNewDeck.mutateAsync({
+        name: "Selvala",
+        formatKey: "commander",
+        items: ITEMS,
+        collectionItems: COPIES,
+      }),
+    ).rejects.toBe("A category name cannot be blank.");
+
+    expect(deckDelete).toHaveBeenCalledWith(MADE.id);
+    expect(collectionImportCommit).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The roots a ticked box fires: the **union** of the deck import's own and the collection
+ * import's.
+ *
+ * `src/lib/query.ts` caches 30 s, so a root left out is a stale screen rather than a slow one -
+ * the search wall's owned badges, the wishlist's owned-progress and the collection's own list and
+ * summary each answer a question this write just changed the answer to. It is the set
+ * `CollectionPreview` already passes `useImportCommit` for exactly the same command, plus the
+ * `["decks"]` this hook has always fired.
+ */
+describe("the roots a ticked box fires", () => {
+  it("marks the collection, the wishlist, the search wall and the decks stale", async () => {
+    seedOwned(client);
+    const { result } = renderHook(() => useImport(), { wrapper });
+
+    await result.current.commit.mutateAsync({
+      deckId: 4,
+      variant: "live",
+      mode: "merge",
+      items: ITEMS,
+      collectionItems: COPIES,
+    });
+
+    await waitFor(() =>
+      expect(staleRoots(client)).toEqual(["cards", "collection", "decks", "wishlist"]),
+    );
+  });
+
+  /** And on the way out of a refusal, for the reason the deck root already does it: the
+   *  database can have been changed by the half that landed, or by another surface. */
+  it("marks the same four stale when the deck's commit is refused", async () => {
+    deckImportCommit.mockRejectedValue("That deck is gone.");
+    seedOwned(client);
+    const { result } = renderHook(() => useImport(), { wrapper });
+
+    await expect(
+      result.current.commit.mutateAsync({
+        deckId: 4,
+        variant: "live",
+        mode: "merge",
+        items: ITEMS,
+        collectionItems: COPIES,
+      }),
+    ).rejects.toBe("That deck is gone.");
+
+    await waitFor(() =>
+      expect(staleRoots(client)).toEqual(["cards", "collection", "decks", "wishlist"]),
+    );
+  });
+
+  /** The unticked press is unchanged, which is the half this union must not cost: three
+   *  refetches per plain decklist import that can only ever answer what is already on screen. */
+  it("still marks only the decks stale for a list imported as a new deck with no copies", async () => {
+    seedOwned(client);
+    const { result } = renderHook(() => useImport(), { wrapper });
+
+    await result.current.importIntoNewDeck.mutateAsync({
+      name: "Selvala",
+      formatKey: "commander",
+      items: ITEMS,
+    });
+
+    await waitFor(() => expect(staleRoots(client)).toEqual(["decks"]));
   });
 });
