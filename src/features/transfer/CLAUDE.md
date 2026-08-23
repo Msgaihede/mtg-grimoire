@@ -156,8 +156,11 @@ Pathway` is one card and there are seven such names in the reference list alone,
   card in a deck is more than a card. Every existing caller passes a whole `DeckCard`, which
   satisfies a `Pick` of itself, so the widening changed no call site.
 - **An import is not an add path and must never become one.** Routing a list through
-  `useDeck.addCard` would be one transaction and one **allocator run per line**;
-  `deck_import_commit` is one of each. `useImport`'s fourth mutation, `importIntoNewDeck`, is
+  `useDeck.addCard` would be **one transaction per line**; `deck_import_commit` is one for the
+  whole file. Both write `deck_cards` and nothing else: since schema v25 the copies that back a
+  deck's rows are the `collection_entries` filed in that deck's group, and only
+  `collection_to_deck` / `deck_to_collection` move a row across that boundary. So an import
+  fills the list and leaves the reader to file the cardboard. `useImport`'s fourth mutation, `importIntoNewDeck`, is
   `deck_create` then that commit with a **hand-rolled rollback** — two commands are two
   transactions, and a refused import must not leave half a deck in the gallery. The commit's
   refusal is what the caller hears, never the clean-up delete's.

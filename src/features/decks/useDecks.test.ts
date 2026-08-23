@@ -33,7 +33,6 @@ const BURN: DeckRow = {
   description: null,
   coverCardId: null,
   coverArtist: null,
-  isBuilt: false,
   archived: false,
   cardCount: 60,
   updatedAt: 1_800_000_000,
@@ -65,7 +64,7 @@ beforeEach(() => {
   });
   deckList.mockReset().mockResolvedValue([BURN]);
   deckCreate.mockReset().mockResolvedValue(BURN);
-  deckUpdate.mockReset().mockResolvedValue({ ...BURN, isBuilt: true });
+  deckUpdate.mockReset().mockResolvedValue({ ...BURN, archived: true });
   deckDelete.mockReset().mockResolvedValue(undefined);
   deckDuplicate.mockReset().mockResolvedValue({ ...BURN, id: 5, name: "Burn (copy)" });
   deckSetFolder.mockReset().mockResolvedValue({ ...BURN, folderId: 1 });
@@ -128,10 +127,10 @@ describe("useDecks", () => {
   });
 
   /**
-   * The **root**, not `["decks", "list"]`, from all four: a rename changes the tile *and*
-   * the header of the editor that deck is open in, and a build toggle rewrites the deck's
-   * claims — which is what every `ownedQuantity` in the open detail is attributed from.
-   * Invalidating only the list would leave a detail on screen describing the deck as it was.
+   * The **root**, not `["decks", "list"]`, from all four: a rename changes the tile *and* the
+   * header of the editor that deck is open in, and archiving reorders a gallery the editor is
+   * open on top of. Invalidating only the list would leave a detail on screen describing the
+   * deck as it was.
    */
   it("refreshes every deck query after each of the four gallery writes", async () => {
     const { result } = renderHook(() => useDecks(), { wrapper });
@@ -143,8 +142,8 @@ describe("useDecks", () => {
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] });
 
     invalidate.mockClear();
-    await result.current.update.mutateAsync({ id: 4, patch: { isBuilt: true } });
-    expect(deckUpdate).toHaveBeenCalledWith(4, { isBuilt: true });
+    await result.current.update.mutateAsync({ id: 4, patch: { archived: true } });
+    expect(deckUpdate).toHaveBeenCalledWith(4, { archived: true });
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] });
 
     invalidate.mockClear();
@@ -169,7 +168,7 @@ describe("useDecks", () => {
     await waitFor(() => expect(result.current.decks).toEqual([BURN]));
     const invalidate = vi.spyOn(client, "invalidateQueries");
 
-    await result.current.update.mutateAsync({ id: 4, patch: { isBuilt: true } });
+    await result.current.update.mutateAsync({ id: 4, patch: { archived: true } });
 
     expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["collection"] });
     expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["wishlist"] });

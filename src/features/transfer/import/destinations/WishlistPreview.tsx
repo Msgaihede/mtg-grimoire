@@ -40,8 +40,9 @@ export function WishlistPreview({
   );
 
   // `["wishlist"]` and `["cards", "search"]` — the same pair `WishlistPage`'s own `settle()`
-  // invalidates after a single wish write, since a wish write moves no copies and touches
-  // neither the collection nor a deck's claims. See `useImportCommit`'s own doc.
+  // invalidates after a single wish write, since a wish write moves no copies: it files nothing
+  // into any folder, so neither the collection nor any deck's group — which since schema v25 is
+  // what a deck owns — can have moved. See `useImportCommit`'s own doc.
   const commit = useImportCommit(
     [["wishlist"], ["cards", "search"]],
     () => ipc.wishlistImportCommit(toWishlistImportItems(plan.items), mode as TransferImportMode),

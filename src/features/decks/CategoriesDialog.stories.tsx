@@ -184,9 +184,9 @@ export const DeletingACategoryAndItsCards: Story = {
 
     const dialog = await canvas.findByRole("group", { name: "Delete Ramp" });
     await userEvent.selectOptions(within(dialog).getByLabelText("Its 7 cards"), "delete");
-    await expect(within(dialog).getByText(/This cannot be undone/)).toHaveTextContent(
-      "The 7 cards in it are deleted too",
-    );
+    await expect(
+      within(dialog).getByText(/Any copies you own go back to Recently removed/),
+    ).toHaveTextContent("The 7 cards in it go with it");
     await expect(within(dialog).getByRole("button", { name: "Delete “Ramp”" })).toBeInTheDocument();
   },
 };

@@ -16,9 +16,8 @@
  *
  * **This is not an add path, and it must never become one.** `useDeck.addCard` files a single
  * add by the same rule ({@link autoCategoryFor}, applied on its one definition), and routing an
- * import through it would send one write per line — 105 transactions and 105 allocator runs for
- * the reference list. `deck_import_commit` exists to be one of each; {@link toImportItems} is
- * what feeds it. The tag read obeys the same arithmetic: **one call for the list**, never one
+ * import through it would send one write per line — 105 transactions for the reference list.
+ * `deck_import_commit` exists to be one; {@link toImportItems} is what feeds it. The tag read obeys the same arithmetic: **one call for the list**, never one
  * per line.
  */
 import type {
@@ -137,7 +136,8 @@ export interface HintMiss {
 export interface CategoryTally {
   name: string;
   cards: number;
-  /** The pile counts toward nothing: no size, no copy limit, no legality, no allocation. */
+  /** The pile counts toward nothing: no size, no copy limit, no legality, and none of the
+   *  copies the deck's own collection group holds — `attribute_owned` passes it over. */
   inactive: boolean;
 }
 

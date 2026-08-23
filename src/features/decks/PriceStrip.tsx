@@ -4,6 +4,7 @@ import {
   monitorForElements,
 } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import { Trash2 } from "lucide-react";
+import type { DeckVariant } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import type { Marketplace } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
@@ -11,14 +12,34 @@ import { cn } from "@/lib/utils";
 import { dropWrite, readDragData, type DeckWrite, type DragPayload } from "./dnd";
 
 /**
- * The strip under the deck: how old the prices are, and — while a card is in the air — the way
- * out of the deck drawn over it.
+ * What a reader should know that is true of the whole deck rather than of one card in it, said
+ * once at the foot of it — plus, while a card is in the air, the way out of the deck drawn over
+ * the same line.
  *
  * **Named for the strip rather than for the tray, because the strip is the permanent half.**
  * Spec §5: a price is never shown without saying how old it is, said once here rather than as a
  * tooltip on every one of sixty cards. The tray is the transient thing drawn *on* it, and it
  * takes the place of the price line rather than a place of its own — appearing in the flow would
  * push every pile up by its own height at the exact moment the reader is aiming at one.
+ *
+ * ## The second standing sentence, and why it is on this line
+ *
+ * {@link CUT_CARDS_NOTE} is here for the price line's own reason, applied to the other fact this
+ * view owes a reader. Cutting a card from the **Live** list moves the copies that deck's
+ * collection group was holding into `Recently removed` — they are not destroyed, because the
+ * reader still physically owns them — and there are three ways to make that cut (the tray below,
+ * a stepper stepped to zero, the card menu's `Remove card`). Saying it at each of them would be
+ * three spellings of one rule; saying it *per press* would be a `role="status"` line narrating a
+ * held stepper, which is noise rather than information. So it is said once, standing, at the foot
+ * of the deck — the same argument that put "prices as of…" here rather than on sixty tooltips,
+ * and the tray it shares a line with is the affordance it is about.
+ *
+ * **It rides the price line rather than taking a line of its own**, because a permanent second
+ * row under the deck is deck height (see `DECK_HEIGHT_FLOOR`), and this sentence is not worth
+ * any. It is a `<span>` of its own inside that `<p>` so each sentence stays separately
+ * addressable: `getNodeText` reads only an element's **direct** text children, so a bare second
+ * text node would have folded both into one string and broken every existing exact match on the
+ * price sentence.
  *
  * ## Why this owns its own monitor rather than living in `DeckEditor`
  *
@@ -48,14 +69,39 @@ import { dropWrite, readDragData, type DeckWrite, type DragPayload } from "./dnd
  * `DeckEditor.test.tsx` pins the document order — the stats band comes after this line, because
  * a band between them would put four charts between a card and the one drop that takes it out.
  */
+/**
+ * Where a card cut from the Live list ends up, in one sentence and one place.
+ *
+ * Exported so a test, a story or a second reader quotes it rather than re-spells it — the folder
+ * is named `Recently removed` in Rust, in the collection's tree and here, and three spellings of
+ * one proper noun is the failure this constant exists to prevent.
+ *
+ * **"Copies", not "cards".** What comes back is whatever the deck's group was actually holding: a
+ * deck row the reader never owned a copy of has nothing to return and simply goes away, so a
+ * sentence promising the *card* back would be wrong for exactly the rows a reader is least sure
+ * about.
+ */
+export const CUT_CARDS_NOTE = "Copies you cut from this deck go to Recently removed.";
+
 export function PriceStrip({
   marketplace,
+  variant,
   onRemove,
 }: {
   /** Whose prices the deck was read at — its label and whether it is a feed, which is the whole
    *  of what {@link pricesAsOf} needs. The editor's, so the strip and the stats band under it
    *  can never name two marketplaces. */
   marketplace: Marketplace;
+  /**
+   * Which of the deck's two lists is on screen, because {@link CUT_CARDS_NOTE} is true of one of
+   * them only.
+   *
+   * A Live row's copies are collection rows physically filed into this deck's group, so cutting
+   * one returns them to `Recently removed`. A Theory row is a plan — it holds no copy, so there
+   * is nothing for a cut to give back, and a standing sentence promising otherwise on that tab
+   * would be the one kind of wrong a reader cannot check.
+   */
+  variant: DeckVariant;
   /**
    * What a drop on the tray writes. `DeckEditor`'s `applyDrop`, which is stable — see it. The
    * tray's own write is always the zero the stepper's last press writes; there is no remove
@@ -136,7 +182,10 @@ export function PriceStrip({
        class is gone and the strip sits in the flow under the deck, which is where a line
        saying how old the prices are belongs. */
     <div className={cn("relative shrink-0", dragging && "sticky bottom-0")}>
-      <p className="text-[0.7rem] text-dim">{pricesAsOf(marketplace)}</p>
+      <p className="text-[0.7rem] text-dim">
+        {pricesAsOf(marketplace)}{" "}
+        {variant === "live" && <span>{CUT_CARDS_NOTE}</span>}
+      </p>
 
       {dragging && (
         // The way out of a deck, for a hand that is already holding the card. It exists only

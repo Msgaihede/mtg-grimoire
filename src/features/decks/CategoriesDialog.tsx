@@ -352,7 +352,7 @@ function CategoryRow({
   confirming: boolean;
   onConfirm: () => void;
   onDone: () => void;
-  /** Where this category's cards could go instead of being deleted with it. */
+  /** Where this category's cards could go instead of going with it. */
   others: readonly DeckCategory[];
 }) {
   const tip = useTooltip();
@@ -645,8 +645,14 @@ export function DeleteCategory({
               </option>
             ))}
             {/* Last, and never first: the destructive answer must not be what the select opens
-                on. Pinned below the moves whatever order they are in. */}
-            <option value="delete">are deleted with it</option>
+                on. Pinned below the moves whatever order they are in.
+
+                It read `are deleted with it` until schema v25, and that had become the one
+                wrong half of a true sentence: the `deck_cards` rows do go, but the copies the
+                reader physically owns are filed into `Recently removed` rather than destroyed.
+                `go with it` is what is true of both halves, and the line below says where the
+                cards themselves end up. */}
+            <option value="delete">go with it</option>
           </select>
         </div>
       )}
@@ -662,7 +668,7 @@ export function DeleteCategory({
         {cards === 0
           ? "It is empty, so nothing goes with it."
           : losing
-            ? `The ${count} in it are deleted too${bothLists}. This cannot be undone.`
+            ? `The ${count} in it go with it${bothLists}. Any copies you own go back to Recently removed.`
             : `The ${count} in it move to “${target?.name}”${bothLists}. Nothing is lost.`}
       </p>
 

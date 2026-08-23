@@ -27,6 +27,15 @@
  * when there is something in the other list to reassure the reader about — `> 0` is exactly that
  * condition, and a deck with one list would otherwise read a sentence about a list it has not
  * got.
+ *
+ * ## Where the cards go, which is not "nowhere"
+ *
+ * Since schema v25 a Live row is backed by a collection row sitting in that deck's group, so
+ * clearing the pile files those copies into `Recently removed` — the reader still physically
+ * owns them, and a confirmation saying only "this cannot be undone" was the destructive half of
+ * a sentence whose other half is reassuring. A **Theory** pile is a plan and holds no copies, so
+ * it says so instead rather than promising a folder nothing will arrive in. The two are one
+ * ternary because they answer the same question and a reader must never see both.
  */
 import { plural } from "@/lib/counts";
 import type { DeckCategory, DeckVariant } from "@/lib/ipc";
@@ -76,8 +85,10 @@ export function ClearCategory({
       {/* The sentence carries the outcome, not the button — `DeleteCategory`'s rule, and the
           reason holds here too: this is the line a reader's eye is on while they decide. */}
       <p className="mt-1.5 text-[0.6875rem] leading-relaxed text-destructive">
-        The {plural(here, "card")} in it leave the {listName(variant)} and the pile stays. This
-        cannot be undone.
+        The {plural(here, "card")} in it leave the {listName(variant)} and the pile stays.{" "}
+        {variant === "live"
+          ? "Any copies you own go back to Recently removed."
+          : "A theory list holds no copies, so nothing else moves."}
       </p>
       {elsewhere > 0 && (
         <p className="mt-1 text-[0.6875rem] leading-relaxed text-dim">

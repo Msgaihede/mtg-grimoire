@@ -70,7 +70,6 @@ const MADE: DeckRow = {
   coverKind: "card_art",
   coverArtist: null,
   cardCount: 0,
-  isBuilt: false,
   archived: false,
   folderId: null,
   theoryEnabled: false,

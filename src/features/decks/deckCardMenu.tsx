@@ -136,6 +136,11 @@ export interface DeckCardMenuDeps {
    * one write rather than a second way to take a card out — nothing new can be refused, and the
    * refusal that can arrive is already in the editor's banner family.
    *
+   * **On the Live list that write also gives the copies back**, into `Recently removed` — the
+   * deck's group is where they physically sat. The row says `Remove card` rather than naming the
+   * folder because the sentence that names it stands at the foot of the deck (`CUT_CARDS_NOTE`),
+   * which is where it is true of all three ways to make this press instead of only this one.
+   *
    * **No confirmation, deliberately, where the pile's `Clear stack…` has one.** One card is one
    * add to put back and the reader can see which one it was; a pile is a column they would have
    * to rebuild, and the two rows differ by exactly that.

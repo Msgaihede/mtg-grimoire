@@ -34,7 +34,6 @@ const ATRAXA: DeckRow = {
   coverCardId: null,
   coverArtist: null,
   coverKind: "card_art",
-  isBuilt: false,
   archived: false,
   cardCount: 100,
   updatedAt: 1_800_000_000,

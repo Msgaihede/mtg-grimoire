@@ -447,7 +447,6 @@ const deck = (over: Partial<DeckRow> & { id: number; name: string }): DeckRow =>
   coverCardId: null,
   coverKind: "card_art",
   coverArtist: null,
-  isBuilt: false,
   archived: false,
   cardCount: 0,
   updatedAt: 0,
