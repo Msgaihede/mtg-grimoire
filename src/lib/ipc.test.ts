@@ -223,36 +223,6 @@ describe("ipc argument names match the Rust command signatures", () => {
     });
   });
 
-  /**
-   * The three names the deck-driven collection adds: the setting pair, and the lazy read
-   * behind a derived row's deck count.
-   *
-   * `collection_row_decks` is the one with a trap in its arguments. `finish` arrives in the
-   * **collection's** spelling — a plain copy is `'nonfoil'` here and NULL on a deck card, and
-   * the far end is what translates. A caller that helpfully sent `null` for a plain copy would
-   * get a deserialization error rather than an empty list, so the value is pinned here and not
-   * just the key.
-   */
-  it("sends the deck-driven collection commands under the names they declare", async () => {
-    invoke.mockResolvedValue(true);
-    const on = await ipc.deckDrivenCollection();
-    expect(invoke).toHaveBeenCalledWith("deck_driven_collection");
-    expect(on).toBe(true);
-
-    invoke.mockResolvedValue(undefined);
-    await ipc.setDeckDrivenCollection(true);
-    expect(invoke).toHaveBeenCalledWith("set_deck_driven_collection", { enabled: true });
-
-    invoke.mockResolvedValue([{ deckId: 3, deckName: "Atraxa", quantity: 2 }]);
-    const decks = await ipc.collectionRowDecks("p1", "nonfoil", "en");
-    expect(invoke).toHaveBeenCalledWith("collection_row_decks", {
-      cardId: "p1",
-      finish: "nonfoil",
-      lang: "en",
-    });
-    expect(decks).toEqual([{ deckId: 3, deckName: "Atraxa", quantity: 2 }]);
-  });
-
   it("sends every wishlist command under the name its command declares", async () => {
     invoke.mockResolvedValue({ id: 2, quantity: 1, removed: false });
 

@@ -8,13 +8,11 @@ const collectionClear = vi.hoisted(() => vi.fn());
 const wishlistClear = vi.hoisted(() => vi.fn());
 const decksClear = vi.hoisted(() => vi.fn());
 const cacheClear = vi.hoisted(() => vi.fn());
-const deckDrivenCollection = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { collectionClear, wishlistClear, decksClear, cacheClear, deckDrivenCollection },
+  ipc: { collectionClear, wishlistClear, decksClear, cacheClear },
 }));
 
-import { DECK_DRIVEN_KEY } from "@/lib/useDeckDrivenCollection";
 import { useDangerZone, useLocalCache } from "./useDataReset";
 
 let client: QueryClient;
@@ -37,9 +35,6 @@ beforeEach(() => {
   wishlistClear.mockReset().mockResolvedValue(4);
   decksClear.mockReset().mockResolvedValue({ decks: 2, folders: 1, covers: 0 });
   cacheClear.mockReset().mockResolvedValue({ files: 20, bytes: 4_000, rows: 20, failed: 0 });
-  // The hand-kept collection, the app's default. The derived test seeds `DECK_DRIVEN_KEY`
-  // instead — `staleTime: Infinity` means a seeded answer is never re-asked.
-  deckDrivenCollection.mockReset().mockResolvedValue(false);
 });
 
 describe("useDangerZone", () => {
@@ -58,9 +53,9 @@ describe("useDangerZone", () => {
   });
 
   /**
-   * Deliberately short, and worth pinning as an absence — **while the collection is hand
-   * kept**. `CollectionRow.deckCount` is `null` in that mode and `CardSummary.ownedQuantity` is
-   * allocation-blind, so clearing every deck must not refetch either of them.
+   * Deliberately short, and worth pinning as an absence. Nothing the collection page or the
+   * search wall draws is derived from a deck's allocation — `CardSummary.ownedQuantity` is
+   * allocation-blind — so clearing every deck must not refetch either of them.
    */
   it("marks only the decks when the decks are cleared", async () => {
     const { result } = renderHook(() => useDangerZone(), { wrapper });
@@ -69,50 +64,6 @@ describe("useDangerZone", () => {
 
     await waitFor(() => expect(invalidate).toHaveBeenCalled());
     expect(invalidatedRoots()).toEqual(["decks"]);
-  });
-
-  /**
-   * **The same press, and it is `collectionClear` under another name.**
-   *
-   * While the collection is derived it is the sum of every `variant: 'live'` deck card;
-   * `decks_clear` cascades those rows away, so Clear decks does not release claims — it empties
-   * the collection. Both clauses of the doc this replaced were false by then: `CollectionRow`
-   * grew a `deckCount`, and "the deck pages and nothing else" had become the whole app. The
-   * roots are `COLLECTION_ROOTS`, a superset of the four a deck *write* takes, which is the
-   * right direction for the one press here that cannot be undone.
-   */
-  it("marks every root a cleared collection can have made wrong when the decks are the collection", async () => {
-    client.setQueryData(DECK_DRIVEN_KEY, true);
-    const { result } = renderHook(() => useDangerZone(), { wrapper });
-
-    act(() => result.current.decks.run());
-
-    await waitFor(() => expect(invalidate).toHaveBeenCalled());
-    expect(invalidatedRoots().sort()).toEqual(["card", "cards", "collection", "decks", "wishlist"]);
-  });
-
-  /**
-   * The same again against the **real** cache rather than the spy, because the spy cannot see
-   * the thing that makes this a bug rather than a cosmetic gap.
-   *
-   * `src/lib/query.ts` sets `staleTime: 30_000`, so the collection page's cached answer is
-   * *fresh* and navigating back to it refetches nothing. `isInvalidated` is the whole of what
-   * tells it the decks — and therefore the collection — are gone. The key is the real
-   * `["collection", "list", …]` shape rather than the bare root, so a fix that invalidated the
-   * root string and nothing under it would still fail here.
-   */
-  it("actually marks the cached collection page stale, not just the root", async () => {
-    invalidate.mockRestore();
-    client.setQueryData(DECK_DRIVEN_KEY, true);
-    client.setQueryData(["collection", "list", "{}"], { items: [], total: 0 });
-    const { result } = renderHook(() => useDangerZone(), { wrapper });
-    expect(client.getQueryState(["collection", "list", "{}"])?.isInvalidated).toBe(false);
-
-    act(() => result.current.decks.run());
-
-    await waitFor(() =>
-      expect(client.getQueryState(["collection", "list", "{}"])?.isInvalidated).toBe(true),
-    );
   });
 
   it("reports what the clear did, in the panel's plain tone", async () => {

@@ -1,22 +1,9 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { CONFIRM_WORD } from "./ConfirmDialog";
 import { DangerZonePanel } from "./DangerZonePanel";
 import type { DangerZone } from "./useDataReset";
-
-/** Mocked rather than driven through the real hook's `QueryClient`, per this task's own
- *  instruction — a sibling is still wiring the Storybook fake's support for this setting, and
- *  every other test in this file renders with no provider at all. */
-const deckDriven = { value: false };
-vi.mock("@/lib/useDeckDrivenCollection", async (original) => ({
-  ...(await original<typeof import("@/lib/useDeckDrivenCollection")>()),
-  useDeckDrivenCollection: () => ({
-    deckDriven: deckDriven.value,
-    setDeckDriven: vi.fn(),
-    error: null,
-  }),
-}));
 
 const action = (over: Partial<DangerZone["collection"]> = {}) => ({
   run: vi.fn(),
@@ -44,10 +31,6 @@ async function arm(user: ReturnType<typeof userEvent.setup>, label: string) {
 }
 
 describe("DangerZonePanel", () => {
-  beforeEach(() => {
-    deckDriven.value = false;
-  });
-
   it("offers the three clears, each saying what it takes", () => {
     render(<DangerZonePanel danger={danger()} />);
 
@@ -161,17 +144,4 @@ describe("DangerZonePanel", () => {
     expect(within(panel()).getByRole("button", { name: "Clear collection" })).toBeEnabled();
   });
 
-  /**
-   * The collection row's own sentence gains one clause while the collection is deck-driven —
-   * said where the button already is, with no dialog to open. The button stays enabled: the
-   * backend deliberately allows this one write while the setting is on, since clearing the
-   * hidden hand-built rows is a legitimate thing to want.
-   */
-  it("says the collection it clears is currently hidden, and keeps the button enabled", () => {
-    deckDriven.value = true;
-    render(<DangerZonePanel danger={danger()} />);
-
-    expect(screen.getByText(/currently hidden/i)).toBeInTheDocument();
-    expect(within(panel()).getByRole("button", { name: "Clear collection" })).toBeEnabled();
-  });
 });

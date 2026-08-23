@@ -1,6 +1,5 @@
 import { CachePanel } from "@/features/settings/CachePanel";
 import { DangerZonePanel } from "@/features/settings/DangerZonePanel";
-import { DeckDrivenPanel } from "@/features/settings/DeckDrivenPanel";
 import { ErrorLogPanel } from "@/features/settings/ErrorLogPanel";
 import { HiddenTagsPanel } from "@/features/settings/HiddenTagsPanel";
 import { MarketplacePanel } from "@/features/settings/MarketplacePanel";
@@ -8,7 +7,6 @@ import { UpdatePanel } from "@/features/settings/UpdatePanel";
 import { useDangerZone, useLocalCache } from "@/features/settings/useDataReset";
 import { useHiddenTags } from "@/features/settings/useHiddenTags";
 import type { Update } from "@/lib/useUpdate";
-import { useDeckDrivenCollection } from "@/lib/useDeckDrivenCollection";
 import { useErrorLog } from "@/lib/useErrorLog";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { useReleaseHistory } from "@/lib/useReleaseHistory";
@@ -20,11 +18,10 @@ import { useReleaseHistory } from "@/lib/useReleaseHistory";
  * for the part that is genuinely still missing, rather than hiding panels that exist.
  *
  * **Ordered by what a press costs**, which is the one rule about this page's shape: updates,
- * prices, the deck-driven switch and errors first — the switch is up there because it changes
- * where a list is *read from* and deletes nothing, so it is free to try and free to put back;
- * then the cache, which throws away bytes the app fetches again; then the three clears that
- * cannot be taken back, alone at the bottom in their own region. See `DangerZonePanel` for why
- * that distance is load-bearing rather than tidy.
+ * prices and errors first, since none of them throws anything away; then the cache, which
+ * throws away bytes the app fetches again; then the three clears that cannot be taken back,
+ * alone at the bottom in their own region. See `DangerZonePanel` for why that distance is
+ * load-bearing rather than tidy.
  *
  * `useLocalCache` and `useDangerZone` are hooked up here for the error log's reason — nothing
  * else in the window writes to those tables, so there is no second caller to race.
@@ -55,24 +52,12 @@ export function SettingsPage({ update }: { update: Update }) {
   const cache = useLocalCache();
   const danger = useDangerZone();
   const hidden = useHiddenTags();
-  // Hooked up here for the marketplace's reason rather than the error log's: several surfaces
-  // read this flag — the collection page, its header, the wall's owned counts — and every one of
-  // them is reading the *same* TanStack Query entry at `staleTime: Infinity`, so a second caller
-  // opens no second channel. There is nothing to race, and the write goes through the one
-  // mutation whichever surface asked for it.
-  const deckDriven = useDeckDrivenCollection();
 
   return (
     <div className="mx-auto max-w-2xl space-y-8 py-2">
       <UpdatePanel update={update} history={history} />
 
       <MarketplacePanel marketplace={marketplace} />
-
-      {/* Below the marketplace and above the undo, by the page's cost ordering: this one changes
-          where a list is read from and deletes nothing, so it is free to try and free to put
-          back — which is why it belongs up here among the settings rather than anywhere near the
-          three clears at the foot. */}
-      <DeckDrivenPanel deckDriven={deckDriven} />
 
       {/* Above the error log rather than below it, because this is the page's only *undo*: the
           rail tells a reader who has just hidden a tag that Settings is where it comes back, and
