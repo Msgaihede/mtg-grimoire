@@ -108,10 +108,15 @@ deliberately**: no screenshots are stored.
   the deck twice rather than transcribing the crate's four `Op` primitives, deliberately: a step's
   whole job is "make the deck look like this again", the crate needs ops because SQL has no other
   way to say it, and a second transcription would be a second implementation to keep in step.
-  **The known gap is the fake's own and predates this**: the five card writes record no history
-  row here, so Storybook's history drawer has never listed a card add and — consistently — Undo
-  does not offer to take one back. Closing it means giving those five a `record(…)` call, which
-  changes what the *history* stories draw and belongs with them.
+  **The known gap is the fake's own and predates this**: the five card writes (`deck_add_card`,
+  `deck_set_card_quantity`, `deck_move_card`, `deck_swap_printing`, `deck_category_clear`) record
+  no history row here, so Storybook's history drawer does not list a card added from *search* and
+  — consistently — Undo does not offer to take one back. Closing it means giving those five a
+  `record(…)` call, which changes what the *history* stories draw and belongs with them.
+  **`collection_to_deck` and `deck_to_collection` are outside that five and record as of
+  2026-08-23**, when the Collection Search tab gave the first of them a caller; both are on
+  `NO_UNDO_STEP` because a step could restore the `deck_cards` half and would leave the copies
+  where they went.
 - **A world belongs to a story, not to the module** — a docs page mounts every story on it at
   once, which the canvas hides. `.storybook/fake/scope.ts` owns the four ways the global pointer
   is kept right; adding an entry point to the fake means asking which of the four covers it.

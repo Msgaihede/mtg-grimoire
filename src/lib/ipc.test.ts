@@ -223,6 +223,67 @@ describe("ipc argument names match the Rust command signatures", () => {
     });
   });
 
+  /**
+   * **`allocation`'s two words, on the wire.**
+   *
+   * This field has existed since schema v25 and had **no sender at all** until the deck builder's
+   * Collection Search tab landed (2026-08-23), which is exactly why it is pinned here: the
+   * TypeScript union is a fact about `ipc.ts` and nothing checks it against
+   * `collection::Allocation`, whose `rename_all = "camelCase"` is what actually decides the two
+   * strings. A third spelling — `"unAllocated"`, `"free"` — is a serde failure at runtime and a
+   * type error nowhere, and the symptom is a list that answers the *unfiltered* question, which
+   * looks like a working panel.
+   *
+   * Both ends, because `"all"` is genuinely sent rather than left off: it is one end of a control
+   * the reader can see, and the payload says which end it is at.
+   */
+  it("carries the collection list's allocation, in both of its spellings", async () => {
+    invoke.mockResolvedValue({ items: [], total: 0 });
+
+    await ipc.collectionList({ allocation: "unallocated", limit: 60, offset: 0 });
+    expect(invoke).toHaveBeenCalledWith("collection_list", {
+      query: { allocation: "unallocated", limit: 60, offset: 0 },
+    });
+
+    await ipc.collectionList({ allocation: "all", limit: 60, offset: 0 });
+    expect(invoke).toHaveBeenCalledWith("collection_list", {
+      query: { allocation: "all", limit: 60, offset: 0 },
+    });
+  });
+
+  /**
+   * **The folder a bulk import files into, and the default that keeps every other caller
+   * unchanged.**
+   *
+   * `commit_import` hard-coded `folder_id: None` until 2026-08-23, so ticking "Add cards to
+   * collection" on a **deck** import landed the copies at the root: the deck went on reading
+   * *missing* on every line, and every other deck could still claim them. The field is on the
+   * wire as `folderId` — Tauri matches arguments by name and `#[serde(rename_all)]` does not
+   * apply to command parameters, so `folder_id` here would deserialize to `None` and reinstate
+   * exactly the bug, silently and with no type error anywhere.
+   *
+   * Both ends are pinned because the **absence** is a product decision of its own: a file says
+   * nothing about a reader's filing, so the plain collection import must go on sending `null`.
+   */
+  it("carries the import's folder, and sends null when nobody names one", async () => {
+    invoke.mockResolvedValue({ added: 1, updated: 0, removed: 0 });
+    const items = [{ cardId: "c1", quantity: 1, finish: "nonfoil" as const }];
+
+    await ipc.collectionImportCommit(items, "add");
+    expect(invoke).toHaveBeenCalledWith("collection_import_commit", {
+      items,
+      mode: "add",
+      folderId: null,
+    });
+
+    await ipc.collectionImportCommit(items, "add", 7);
+    expect(invoke).toHaveBeenCalledWith("collection_import_commit", {
+      items,
+      mode: "add",
+      folderId: 7,
+    });
+  });
+
   it("sends every wishlist command under the name its command declares", async () => {
     invoke.mockResolvedValue({ id: 2, quantity: 1, removed: false });
 
@@ -1256,18 +1317,33 @@ describe("the collection folder wrappers name the commands `collection_folders.r
    * the same word — so neither follows the `collection_*`/`deck_*` family above, and a mirror
    * that "corrected" them would fail only at runtime.
    *
-   * `collectionToDeck` has no caller in `src/` yet (its one caller is the deck builder's
-   * Collection Search tab), which is exactly why its argument names are pinned here: nothing
-   * else would notice a typo until the day something calls it.
+   * `collectionToDeck`'s one caller is the deck builder's Collection Search tab
+   * (`features/decks/useCollectionSearch.ts`, 2026-08-23). It had **none** when these names were
+   * pinned, which was the reason to pin them: nothing else would have noticed a typo until the
+   * day something called it, and by then the four names are load-bearing in a write.
    */
   it("names the two deck-boundary moves without a prefix", async () => {
     invoke.mockResolvedValue({ entryId: 9, fromDeck: null, quantity: 2 });
 
-    await ipc.collectionToDeck(7, 3, 11, 2);
+    await ipc.collectionToDeck(7, 3, { id: 11 }, 2);
     expect(invoke).toHaveBeenCalledWith("collection_to_deck", {
       entryId: 7,
       deckId: 3,
       categoryId: 11,
+      categoryName: null,
+      quantity: 2,
+    });
+
+    // The other arm of {@link DeckPile}: a name the backend finds or creates through
+    // `category_for_name`, which is the one write that marks an invented pile `origin: "auto"`.
+    // **The two fields are exclusive on the wire and the union is what enforces it** — Rust
+    // refuses a payload carrying both in words, and no caller here can build one.
+    await ipc.collectionToDeck(7, 3, { name: "Ramp" }, 2);
+    expect(invoke).toHaveBeenCalledWith("collection_to_deck", {
+      entryId: 7,
+      deckId: 3,
+      categoryId: null,
+      categoryName: "Ramp",
       quantity: 2,
     });
 

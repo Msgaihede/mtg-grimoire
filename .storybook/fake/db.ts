@@ -5604,6 +5604,12 @@ const NO_REMOVED_FOLDER = "There is no Recently removed folder to file these int
  *  from deck A's folder onto deck A would otherwise write a second `deck_cards` row against
  *  copies the group already holds, and the list would say two where the folder says one. */
 const ALREADY_HERE = "Those copies are already in this deck.";
+/** `collection_alloc::BOTH_PILES`. The id and the name are alternatives there rather than a
+ *  preference — `deck_add_card` lets the id win because a drag carries both, and nothing sends
+ *  both to this write, so both arriving means a caller has lost track of which it meant. In Rust
+ *  it is refused by `Pile::from_args`, the one place two nullable wire fields become the enum
+ *  the move takes. */
+const BOTH_PILES = "A card goes in one pile: point at one or name one, not both.";
 /** `collection_folders::USER_KIND` — `schema::COLLECTION_FOLDER_KINDS[0]`, what every write in
  *  that module demands and what `collection_folder_create` writes. Spelled rather than
  *  defaulted, `deck_categories.origin`'s rule: a default is a decision nobody can see at the
@@ -6302,14 +6308,40 @@ function userCollectionFolder(db: FakeDb, id: number): FakeCollectionFolder {
  * It stays a helper of its own rather than becoming a call site of {@link userCollectionFolder}
  * for one reason, and it is the same reason the crate keeps two functions: `null` is legal here
  * and is not a folder at all, where every caller of that one is naming a row.
+ *
+ * **`kinds` is the crate's parameter of the same name**, and the widening it exists for is
+ * `collection::IMPORT_FOLDERS`: a **deck** import files its copies into that deck's own group,
+ * because the one press wrote the decklist too. Everything else keeps
+ * {@link COLLECTION_READER_FOLDERS} — the reader's own drawers and nothing else.
  */
-function collectionFolderNamed(db: FakeDb, folderId: number | null): number | null {
+function collectionFolderNamed(
+  db: FakeDb,
+  folderId: number | null,
+  kinds: readonly string[] = COLLECTION_READER_FOLDERS,
+): number | null {
   if (folderId === null) return null;
   // Gone before not-yours, which is `user_folder`'s ordering: a folder that is not there cannot
   // be the app's.
-  userCollectionFolder(db, folderId);
+  const folder = collectionFolderById(db, folderId);
+  if (!folder) throw refuse(FOLDER_GONE);
+  if (!kinds.includes(folder.kind)) throw refuse(FOLDER_NOT_YOURS);
   return folderId;
 }
+
+/** What an ordinary add may file into — `collection::READER_FOLDERS`. */
+const COLLECTION_READER_FOLDERS: readonly string[] = [COLLECTION_USER_KIND];
+
+/**
+ * …and what a deck import may — `collection::IMPORT_FOLDERS`, the one place in the crate that
+ * fence is wider than the reader's own drawers.
+ *
+ * `removed` stays out of it on both sides: `Recently removed` is where copies go when they
+ * *leave* a deck, and a file naming it would be an import that arrives already discarded.
+ */
+const COLLECTION_IMPORT_FOLDERS: readonly string[] = [
+  COLLECTION_USER_KIND,
+  COLLECTION_DECK_KIND,
+];
 
 /**
  * `collection_folders::refile_entry` — move one entry onto `folderId`, folding it into whatever
@@ -6479,6 +6511,13 @@ function sourceDeck(db: FakeDb, folderId: number | null): FakeDeck | undefined {
  * a disagreement this write did not cause.
  *
  * Zero deletes, `deck_set_card_quantity`'s rule: a category slot holding no copies holds nothing.
+ *
+ * **One history row per `deckCards` row decremented, in `deck_set_card_quantity`'s two shapes.**
+ * This deck's own log is the only place its loss can be looked up afterwards — `fromDeck` says it
+ * once, in a sentence that dies with the dialog — and it said nothing until 2026-08-23. A summary
+ * row is not available: the walk can span two piles of one deck, so there is no single category
+ * to name and no total that describes one slot. Each row instead gets exactly what the stepper
+ * writes for the same edit, so `auditText.ts` needs no new arm.
  */
 function takeFromDeckList(
   db: FakeDb,
@@ -6499,13 +6538,116 @@ function takeFromDeckList(
     .sort((a, b) => a.id - b.id);
   for (const row of rows) {
     if (left === 0) break;
-    const take = Math.min(row.quantity, left);
-    if (take === row.quantity) {
+    const held = row.quantity;
+    const take = Math.min(held, left);
+    if (take === held) {
       db.deckCards = db.deckCards.filter((dc) => dc !== row);
     } else {
       row.quantity -= take;
     }
+    // The row's **own** stored name, not the source collection row's card: this deck's history
+    // is about the line this deck was carrying.
+    const category = categoryNameOf(db, row.categoryId);
+    record(
+      db,
+      deckId,
+      LIVE,
+      take === held ? "remove" : "quantity",
+      { id: cardId, name: row.name },
+      take === held
+        ? { category, quantity: take, reason: null }
+        : { category, from: held, to: held - take },
+      -take,
+    );
     left -= take;
+  }
+}
+
+/**
+ * `deck::release_group_copies` — give back the copies this deck's group holds for one card, up
+ * to `quantity` of them, by filing them into `Recently removed`.
+ *
+ * **The crate's one copy of that walk, and here it is one too.** `deck_to_collection` spelled
+ * this backing query and this greedy loop inline for the single-card cut while
+ * `deck_category_clear` and `deck_category_delete` released nothing at all — so the fake had one
+ * implementation where the crate has one function with three callers, and the two writes that
+ * empty a whole pile left every copy behind them filed under a deck that no longer lists it.
+ * Both now call this, through {@link releasePileCopies}.
+ *
+ * **Matched on the oracle card, exact printing and finish first**, which is the crate's fix for a
+ * stranding rather than a nicety: `deck_swap_printing` and `deck_set_card_finish` rewrite a deck
+ * row's identity and touch no collection table, so after "Use this printing" an exact-only match
+ * finds nothing and the copies stay filed under a deck that no longer lists them. A card whose
+ * printing has left `cards` reads `null` and falls back to the exact arm, which needs no `cards`
+ * row at all.
+ *
+ * **A deck with no group holds nothing rather than refusing**, and `Recently removed` is resolved
+ * only when there is something to file — so a store missing either folder still lets a pile be
+ * cleared and a card nobody owned be cut. **Rows are taken oldest first and there may be
+ * several**: one printing can sit in two categories of one deck while the group holds a single
+ * row for the grain. The take is **clamped** at what is actually there rather than refused,
+ * because a list and a group can legitimately disagree — an import writes a list without moving
+ * copies.
+ *
+ * **The `live` list only, and the caller is what enforces it** — the crate's rule verbatim. A
+ * theory row is a plan and a plan holds no cards ({@link THEORY_HOLDS_NOTHING}), so nothing in
+ * any folder backs one and this is never handed one.
+ *
+ * `moved` is what actually changed folder — `0` is a success, and is a deck card nobody owned
+ * going away. `landed` is the *last* row filed, which is where {@link MoveOutcome.entryId} comes
+ * from: one press can empty two group rows into the holding area, and the holding area is one
+ * folder, so pointing at the last of them points at the pile.
+ */
+function releaseGroupCopies(
+  db: FakeDb,
+  deckId: number,
+  cardId: string,
+  finish: DeckFinish,
+  quantity: number,
+): { moved: number; landed: number | null } {
+  const nothing = { moved: 0, landed: null };
+  if (quantity <= 0) return nothing;
+  const group = deckGroup(db, deckId);
+  if (!group) return nothing;
+  // The deck row's `null` is the collection row's `'nonfoil'` — {@link collectionFinish}'s
+  // translation, read the other way.
+  const want = collectionFinish(finish);
+  const wantOracle = cardById(db, cardId)?.oracleId ?? null;
+  const rank = (e: FakeEntry): number => (e.cardId === cardId ? (e.finish === want ? 0 : 1) : 2);
+  const backing = db.collectionEntries
+    .filter((e) => {
+      if (e.folderId !== group.id) return false;
+      if (e.cardId === cardId) return true;
+      const oracle = cardById(db, e.cardId)?.oracleId ?? null;
+      return oracle !== null && oracle === wantOracle;
+    })
+    .sort((a, b) => rank(a) - rank(b) || a.id - b.id);
+  if (backing.length === 0) return nothing;
+  const removed = removedFolder(db);
+  let moved = 0;
+  let landed: number | null = null;
+  for (const entry of backing) {
+    if (moved === quantity) break;
+    const take = Math.min(entry.quantity, quantity - moved);
+    landed = moveCopies(db, entry.id, take, removed.id);
+    moved += take;
+  }
+  return { moved, landed };
+}
+
+/**
+ * The bulk half of {@link releaseGroupCopies}: every `live` row of a pile that is about to be
+ * deleted, released before anything goes.
+ *
+ * **Read and released before the delete**, the crate's ordering in both call sites and for its
+ * reason: the `deck_cards` rows are what say which printings and how many, and an edit three
+ * statements away must not be able to leave the release looking at an emptied pile. Oldest row
+ * first, so a printing filed in two categories gives its copies back in a defined order.
+ */
+function releasePileCopies(db: FakeDb, deckId: number, doomed: FakeDeckCard[]): void {
+  for (const dc of [...doomed].sort((a, b) => a.id - b.id)) {
+    if (dc.variant !== LIVE) continue;
+    releaseGroupCopies(db, deckId, dc.cardId, dc.finish, dc.quantity);
   }
 }
 
@@ -6801,7 +6943,11 @@ function cardGone(category: string): string {
  * into the row that already holds this grain. `collection_add` and `collection_import_commit`'s
  * `add` mode both write through here, so the grain's fold rule lives in one place.
  */
-function addEntry(db: FakeDb, input: EntryInput): EntryChange {
+function addEntry(
+  db: FakeDb,
+  input: EntryInput,
+  folders: readonly string[] = COLLECTION_READER_FOLDERS,
+): EntryChange {
   const finish = validFinish(input.finish);
   const condition = validCondition(input.condition);
   // Not `validQuantity`: *adding* zero copies is a no-op dressed as a write, and would
@@ -6810,7 +6956,7 @@ function addEntry(db: FakeDb, input: EntryInput): EntryChange {
   if (input.quantity <= 0) throw refuse(ZERO_ADD);
   const tradelist = validQuantity(input.tradelistQuantity ?? 0, "tradelist quantity");
   const grading = canonicalGrading(input.grading);
-  const folderId = collectionFolderNamed(db, input.folderId ?? null);
+  const folderId = collectionFolderNamed(db, input.folderId ?? null, folders);
   const card = requireCard(db, input.cardId);
 
   const row: FakeEntry = {
@@ -6888,13 +7034,17 @@ function addEntry(db: FakeDb, input: EntryInput): EntryChange {
  * own clamp (`min(existing, new quantity)`) rather than the additive cap, because a written
  * total is not a delta.
  */
-function setEntry(db: FakeDb, input: EntryInput): EntryChange {
+function setEntry(
+  db: FakeDb,
+  input: EntryInput,
+  folders: readonly string[] = COLLECTION_READER_FOLDERS,
+): EntryChange {
   const finish = validFinish(input.finish);
   const condition = validCondition(input.condition);
   validQuantity(input.quantity, "collection quantity");
   const tradelist = validQuantity(input.tradelistQuantity ?? 0, "tradelist quantity");
   const grading = canonicalGrading(input.grading);
-  const folderId = collectionFolderNamed(db, input.folderId ?? null);
+  const folderId = collectionFolderNamed(db, input.folderId ?? null, folders);
   const card = requireCard(db, input.cardId);
 
   const row: FakeEntry = {
@@ -7386,19 +7536,38 @@ export function writeHandlers(db: FakeDb) {
      *
      * {@link ALREADY_HERE} is refused rather than treated as a no-op: the press that produces it
      * would otherwise write a second `deck_cards` row against copies the group already holds.
+     *
+     * **`categoryId` and `categoryName` are alternatives and exactly one must arrive**
+     * (`collection_alloc::Pile`), which is where this parts company with {@link deck_add_card}
+     * one cabinet over: that one lets the id win when both are sent, because a drag genuinely
+     * carries both, and nothing sends both here. The name arm is what makes an owned add file a
+     * card the way every other add does — {@link categoryForName} is the one write that marks an
+     * invented pile `"auto"`, so it arrives with its first card and goes with its last, where
+     * `deck_category_create` would leave the reader an empty heading marked as theirs.
      */
     collection_to_deck: (args: {
       entryId: number;
       deckId: number;
-      categoryId: number;
+      categoryId?: number | null;
+      categoryName?: string | null;
       quantity: number;
     }): MoveOutcome => {
       refuseIfBusy(db);
       if (args.quantity <= 0) throw refuse(ZERO_MOVE);
+      const byId = args.categoryId ?? null;
+      const byName = args.categoryName ?? null;
+      if (byId !== null && byName !== null) throw refuse(BOTH_PILES);
+      if (byId === null && byName === null) throw refuse(NO_CATEGORY);
       // The deck fence first, so a stale editor's id answers `DECK_GONE` before there is an
       // orphan to worry about.
       const deck = requireDeck(db, args.deckId);
-      categoryOfDeck(db, args.deckId, args.categoryId);
+      // Its **name** as well as its id, because the history row below quotes the word rather
+      // than a number no reader can resolve — `deck::add_card`'s two arms record the same way.
+      // The name arm finds before it creates, so a pile the reader made stays theirs.
+      const category =
+        byId !== null
+          ? categoryOfDeck(db, args.deckId, byId)
+          : categoryForName(db, args.deckId, byName!);
       const group = deckGroup(db, args.deckId);
       if (!group) throw refuse(NO_DECK_GROUP);
 
@@ -7420,16 +7589,20 @@ export function writeHandlers(db: FakeDb) {
         takeFromDeckList(db, from.id, cardId, finish, args.quantity);
         from.updatedAt = stamp(db);
       }
-      const existing = deckCardAt(db, args.deckId, cardId, args.categoryId, LIVE, finish);
-      if (existing) {
+      // The row this press wrote, kept so the caller has something to point at — the landed
+      // glow's subject. **Read off the row rather than from `nextId`**, because the `existing`
+      // arm inserts nothing: a second filing of the same card into the same pile answers the
+      // *first* row's id, which is the crate's `RETURNING id` seen from here.
+      let landedCard = deckCardAt(db, args.deckId, cardId, category.id, LIVE, finish);
+      if (landedCard) {
         // `tagId` and `needsReview` are left alone: the row already there is the one the user
         // labelled.
-        existing.quantity += args.quantity;
+        landedCard.quantity += args.quantity;
       } else {
-        db.deckCards.push({
+        landedCard = {
           id: nextId(db.deckCards),
           deckId: args.deckId,
-          categoryId: args.categoryId,
+          categoryId: category.id,
           variant: LIVE,
           cardId,
           tagId: null,
@@ -7440,10 +7613,36 @@ export function writeHandlers(db: FakeDb) {
           lang: card.lang,
           finish,
           needsReview: null,
-        });
+        };
+        db.deckCards.push(landedCard);
       }
+      // **`deck::add_card`'s row, verbatim** — this command *is* an add, made from a card the
+      // reader already owns rather than from a search result, and a reader cannot see which
+      // command ran. So the kind, the payload's two keys and the positive `delta` are that
+      // write's and not a shape of their own, which is what lets `auditText.ts` word it with no
+      // new arm. The copies **added**, never the total the row landed on: the history is a list
+      // of changes and `delta` is what the day header adds up.
+      //
+      // The deck it came *out of* is deliberately not in this row: that deck's own log is where
+      // its loss belongs, and {@link takeFromDeckList} writes it there — one row per `deckCards`
+      // row it decremented, in the stepper's own shapes. Two logs describing one press from its
+      // two ends, neither a summary of the other.
+      record(
+        db,
+        args.deckId,
+        LIVE,
+        "add",
+        { id: cardId, name: card.name },
+        { category: category.name, quantity: args.quantity },
+        args.quantity,
+      );
       deck.updatedAt = stamp(db);
-      return { entryId: landed, fromDeck: from?.name ?? null, quantity: args.quantity };
+      return {
+        entryId: landed,
+        fromDeck: from?.name ?? null,
+        deckCardId: landedCard.id,
+        quantity: args.quantity,
+      };
     },
 
     /**
@@ -7472,55 +7671,53 @@ export function writeHandlers(db: FakeDb) {
       if (args.quantity > row.quantity) throw refuse(NOT_THAT_MANY);
       const deck = requireDeck(db, row.deckId);
 
-      // The deck row's `null` is the collection row's `'nonfoil'` — {@link normaliseFinish}'s
-      // translation, read the other way.
-      const entryFinish = collectionFinish(row.finish);
-      // **A deck with no group holds nothing rather than refusing.** Only the other direction
-      // needs somewhere to *put* copies; a reader must always be able to cut a card.
-      //
-      // **Matched on the oracle card, exact printing and finish first** —
-      // `deck::release_group_copies`, which the crate now calls from here rather than spelling
-      // this walk twice. `deck_swap_printing` and `deck_set_card_finish` rewrite the deck row's
-      // identity and touch no collection table, so an exact-only match finds nothing after a
-      // swap and the copies stay filed under a deck that no longer lists them. A card whose
-      // printing has left `cards` reads `null` and falls back to the exact arm, which needs no
-      // `cards` row at all.
-      const group = deckGroup(db, row.deckId);
-      const wantOracle = cardById(db, row.cardId)?.oracleId ?? null;
-      const rank = (e: FakeEntry): number =>
-        e.cardId === row.cardId ? (e.finish === entryFinish ? 0 : 1) : 2;
-      const backing = group
-        ? db.collectionEntries
-            .filter((e) => {
-              if (e.folderId !== group.id) return false;
-              if (e.cardId === row.cardId) return true;
-              const oracle = cardById(db, e.cardId)?.oracleId ?? null;
-              return oracle !== null && oracle === wantOracle;
-            })
-            .sort((a, b) => rank(a) - rank(b) || a.id - b.id)
-        : [];
+      // **{@link releaseGroupCopies}, and nothing else** — the crate's one walk over a group's
+      // rows, which this handler used to spell inline while the two pile writes spelled it
+      // nowhere. What the cut has that a cleared pile does not is exactly what follows: the
+      // `deck_cards` write and the `MoveOutcome` it answers.
+      const { moved, landed } = releaseGroupCopies(
+        db,
+        row.deckId,
+        row.cardId,
+        row.finish,
+        args.quantity,
+      );
 
-      // Resolved only when there is something to file, so a store missing the folder still lets a
-      // card nobody owned be cut.
-      let moved = 0;
-      let landed: number | null = null;
-      if (backing.length > 0) {
-        const removed = removedFolder(db);
-        for (const entry of backing) {
-          if (moved === args.quantity) break;
-          const take = Math.min(entry.quantity, args.quantity - moved);
-          landed = moveCopies(db, entry.id, take, removed.id);
-          moved += take;
-        }
-      }
-
-      if (args.quantity === row.quantity) {
+      const wholeRow = args.quantity === row.quantity;
+      const held = row.quantity;
+      if (wholeRow) {
         db.deckCards = db.deckCards.filter((dc) => dc !== row);
       } else {
         row.quantity -= args.quantity;
       }
+      // **`deck::set_card_quantity`'s row, verbatim** — this command *replaces* the stepper for a
+      // decrease on the live list, and a reader cannot see which one ran, so a deck's history has
+      // to read continuously across the change of command. `reason` stays `null`: that key is
+      // where a removal *for a stated reason* would go, and where the copies went is a standing
+      // fact about every cut on this list rather than something true of this row.
+      //
+      // **Recorded even when nothing moved.** A deck card nobody owned still left the deck, and
+      // the history is a record of the deck rather than of the collection — which is why `held`
+      // and `args.quantity` are what this quotes rather than `moved`.
+      record(
+        db,
+        row.deckId,
+        row.variant,
+        wholeRow ? "remove" : "quantity",
+        { id: row.cardId, name: row.name },
+        wholeRow
+          ? { category: categoryNameOf(db, row.categoryId), quantity: args.quantity, reason: null }
+          : {
+              category: categoryNameOf(db, row.categoryId),
+              from: held,
+              to: held - args.quantity,
+            },
+        -args.quantity,
+      );
       deck.updatedAt = stamp(db);
-      return { entryId: landed, fromDeck: null, quantity: moved };
+      // `deckCardId` is `null`: the caller handed the id in and still holds it, and a whole cut
+      // has deleted the row it named.
+      return { entryId: landed, fromDeck: null, deckCardId: null, quantity: moved };
     },
 
     /**
@@ -7538,11 +7735,20 @@ export function writeHandlers(db: FakeDb) {
     collection_import_commit: (args: {
       items: CollectionImportItem[];
       mode: TransferImportMode;
+      folderId?: number | null;
     }): ImportCommitOutcome => {
       refuseIfBusy(db);
       if (args.mode !== "add" && args.mode !== "set") {
         throw refuse(`\`${args.mode}\` is not an import mode. Use \`add\` or \`set\`.`);
       }
+      // Checked once, before anything is written, exactly as the crate checks it a line after
+      // the mode: a stale folder id is a sentence rather than a rollback. `addEntry`/`setEntry`
+      // ask again per item — that is their own door and it stays theirs.
+      const folderId = collectionFolderNamed(
+        db,
+        args.folderId ?? null,
+        COLLECTION_IMPORT_FOLDERS,
+      );
       const before = db.collectionEntries.length;
       const snapshot = db.collectionEntries.map((e) => ({ ...e }));
       let removed = 0;
@@ -7574,14 +7780,17 @@ export function writeHandlers(db: FakeDb) {
             misprint: item.misprint,
             grading: item.grading,
             notes: item.notes,
-            // Spelled rather than left off, exactly as the crate spells it: an import names no
-            // folder, and the one field that is part of the grain must not be a decision nobody
-            // can see at the call site. `tags` is deliberately not here — it is a set the reader
-            // curates on the row, and a file has nothing to say about it.
-            folderId: null,
+            // The whole file into one folder, and `null` — the root — is what every caller that
+            // names none still gets. **A file says nothing about a reader's filing**, which is
+            // why this is the command's argument rather than a column on the item: the plain
+            // collection import sends nothing and lands at the top level exactly as it always
+            // has, and only the **deck** arm names a destination, because that press wrote the
+            // decklist in the same breath. `tags` is deliberately not here — it is a set the
+            // reader curates on the row, and a file has nothing to say about it.
+            folderId,
           };
           if (args.mode === "add") {
-            addEntry(db, entry);
+            addEntry(db, entry, COLLECTION_IMPORT_FOLDERS);
             continue;
           }
           // **A `set` of 0 deletes the row**, `collection_set_quantity`'s reversal reached from
@@ -7590,7 +7799,7 @@ export function writeHandlers(db: FakeDb) {
           // the crate's upsert does, so a `set 0` for a printing the reader does not own counts
           // oddly and honestly: one added and one removed rather than nothing, because both
           // statements really ran.
-          const change = setEntry(db, entry);
+          const change = setEntry(db, entry, COLLECTION_IMPORT_FOLDERS);
           if (change.quantity === 0) {
             db.collectionEntries = db.collectionEntries.filter((e) => e.id !== change.id);
             removed += 1;
@@ -8486,6 +8695,11 @@ export function writeHandlers(db: FakeDb) {
      * **An empty pile writes nothing at all** — no `updatedAt` — where `deck_set_card_quantity`'s
      * zero arm above deliberately still moves it: that path commits a transaction whatever it
      * found, and this one returns before opening one.
+     *
+     * **And the copies come back**, through {@link releaseGroupCopies} — the same act
+     * `deck_to_collection` performs one card at a time, in bulk. The answer stays the count of
+     * `deck_cards` copies and never the copies that moved: the two differ wherever the group
+     * holds fewer than the list claims, and what the confirmation quoted is what left the deck.
      */
     deck_category_clear: (args: {
       deckId: number;
@@ -8503,6 +8717,13 @@ export function writeHandlers(db: FakeDb) {
       // Copies, not rows — two printings at 2 and 3 is the 5 the confirmation quoted.
       const cleared = doomed.reduce((copies, dc) => copies + dc.quantity, 0);
       if (cleared === 0) return 0;
+      // **The copies come back**, and this fake released none of them until 2026-08-23. A
+      // `deck_cards` row is an intention; a row in the deck's group is a card the reader
+      // physically owns, and clearing a pile does not stop them owning it. Left where they were
+      // the copies stay filed under a deck that has never heard of them — invisible, and
+      // unavailable to every other deck for ever. `theory` moves nothing, which
+      // {@link releasePileCopies} enforces per row: a plan holds no cards.
+      releasePileCopies(db, args.deckId, doomed);
       db.deckCards = db.deckCards.filter((dc) => !doomed.includes(dc));
       deck.updatedAt = stamp(db);
       return cleared;
@@ -9035,6 +9256,10 @@ export function writeHandlers(db: FakeDb) {
      * The card count in the history is taken **before** anything moves, in copies rather than
      * rows: two printings at 2 and 3 is 5 cards, which is what the dialog warned about and the
      * only part of a deleted category a reader cannot get back.
+     *
+     * **The copies behind the cascaded cards come back, and only in the `null` arm** — through
+     * {@link releaseGroupCopies}, the crate's one walk over a group's rows. The move arm releases
+     * nothing because those cards are still in this deck, one pile over.
      */
     deck_category_delete: (args: { id: number; moveToCategoryId: number | null }): void => {
       refuseIfBusy(db);
@@ -9049,6 +9274,14 @@ export function writeHandlers(db: FakeDb) {
       const deck = requireDeck(db, category.deckId);
       const held = db.deckCards.filter((dc) => dc.categoryId === category.id);
       const cards = held.reduce((n, dc) => n + dc.quantity, 0);
+      // **The copies the cascade is about to strand, released before anything moves** — and this
+      // fake released none of them until 2026-08-23. **Only the `null` arm**: the move arm
+      // re-files these cards into another pile of *this* deck, so the group is still exactly
+      // where their copies belong. It is fenced on the arm rather than left to the move's own
+      // delete having emptied the pile first, because that is an ordering an edit three
+      // statements away can undo without meaning to. `live` only —
+      // {@link releasePileCopies} skips a theory row, because no folder backs a plan.
+      if (args.moveToCategoryId === null) releasePileCopies(db, deck.id, held);
       if (args.moveToCategoryId !== null) {
         const target = args.moveToCategoryId;
         for (const dc of held) {
@@ -10193,6 +10426,16 @@ export function allHandlers(db: FakeDb) {
  *
  * `deck_set_view_state` is not here because it writes no history row either: looking at a deck
  * is not editing it, so the wrapper below files nothing for it without being told.
+ *
+ * **The two `collection_alloc` writes are the newest pair, and they are on this list by
+ * argument rather than by accident.** Each moves copies across the deck boundary, so a step
+ * could put the `deck_cards` half back and would leave the copies where they went — a deck
+ * claiming cards its own group no longer holds, told to a reader who pressed Ctrl+Z and watched
+ * the row reappear. `deck_undo`'s four primitives touch no collection table, so the half-step is
+ * the only step available and it is worse than none. `deck_to_collection` would also slip
+ * through the wrapper on its own — it carries a `deckCardId` rather than a `deckId`, so
+ * {@link deckOf} answers `undefined` for it — and naming it here is what stops that being the
+ * reason.
  */
 const NO_UNDO_STEP: ReadonlySet<string> = new Set([
   "deck_create",
@@ -10202,6 +10445,8 @@ const NO_UNDO_STEP: ReadonlySet<string> = new Set([
   "deck_folder_rename",
   "deck_folder_move",
   "deck_folder_delete",
+  "collection_to_deck",
+  "deck_to_collection",
 ]);
 
 /**
@@ -10225,6 +10470,12 @@ const NO_UNDO_STEP: ReadonlySet<string> = new Set([
  * history drawer has never listed a card add, and — consistently — its Undo button does not
  * offer to take one back. The app is unaffected; closing it means giving those five handlers a
  * `record(…)` call, which is a change to what the *history* stories draw and belongs with them.
+ *
+ * **`collection_to_deck` and `deck_to_collection` are outside that gap and always were.** They
+ * are not among the five, and closing the gap on the add side alone would have left the pair
+ * telling a reader a half-story — a Collection Search add in the drawer with the cut that
+ * reverses it missing — so both record, and both are on {@link NO_UNDO_STEP} above rather than
+ * relying on the wrapper finding no deck id.
  */
 function journalled<T extends Record<string, (args: never) => unknown>>(db: FakeDb, writes: T): T {
   const wrapped: Record<string, (args: never) => unknown> = {};

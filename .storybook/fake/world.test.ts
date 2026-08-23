@@ -646,9 +646,13 @@ describe("a story can read the world it was given", () => {
    *
    * Deck 1's group holds two foil Counterspells and one damaged Ragavan; the deck lists four
    * *nonfoil* of each, and reads owned 2 and 1 — **finish-blind and oracle-grained**, which is
-   * the half of the old allocator that survived it. Deck 2's group holds nothing at all, so
-   * every row of it reads 0 however many copies of that card the collection has: a Sol Ring in
-   * the binder is not a Sol Ring in the deck.
+   * the half of the old allocator that survived it.
+   *
+   * Deck 2's group holds **one** card, the Sol Ring the deck builder's Collection Search needs
+   * filed under a deck a story is not standing in — so its Sol Ring row reads 1 and every other
+   * row of that deck reads 0 however many copies of that card the collection has. That is the
+   * half worth keeping from the shape this used to assert: a Counterspell in deck 1's folder is
+   * not a Counterspell in deck 2, and a Lightning Bolt in the binder is in no deck at all.
    */
   it("reads what a deck owns out of the deck's own group", async () => {
     installWorld({ seed: "starter" });
@@ -662,9 +666,14 @@ describe("a story can read the world it was given", () => {
     expect(owned(draft, "Lightning Bolt")).toBe(0);
 
     const commander = await invoke<DeckDetail>("deck_get", { id: 2, variant: "live" });
-    expect(commander!.cards.every((c) => c.ownedQuantity === 0)).toBe(true);
-    // Including the two the collection really does hold a copy of — they are just not here.
-    expect(owned(commander, "Sol Ring")).toBe(0);
+    // The one copy its group holds, and the one row in the seed that answers non-zero for a
+    // deck other than deck 1.
+    expect(owned(commander, "Sol Ring")).toBe(1);
+    // And nothing else, including the Counterspell the collection really does hold a copy of —
+    // that copy is in deck 1's folder, so it is not here.
+    expect(commander!.cards.filter((c) => c.ownedQuantity !== 0).map((c) => c.name)).toEqual([
+      "Sol Ring",
+    ]);
     expect(owned(commander, "Counterspell")).toBe(0);
   });
 
@@ -685,10 +694,14 @@ describe("a story can read the world it was given", () => {
     // that moves it — so a seed whose two halves disagreed would be a folder tree labelled with
     // names the gallery stopped using.
     expect(groups.map((f) => f.name)).toEqual(db.decks.map((d) => d.name));
-    // Only deck 1's holds anything, and `Recently removed` starts empty: nothing has been cut.
+    // Deck 1's holds three copies and deck 2's holds one — **two non-empty groups, which the
+    // deck builder's Collection Search is what needs**: a story opened on deck 1 has to find a
+    // copy filed under a deck that is not deck 1 or the cross-deck confirmation has nothing to
+    // confirm. Decks 3 and 4 hold nothing, and `Recently removed` starts empty: nothing has been
+    // cut.
     const copiesIn = (folderId: number) =>
       db.collectionEntries.filter((e) => e.folderId === folderId).reduce((n, e) => n + e.quantity, 0);
-    expect(groups.map((f) => copiesIn(f.id))).toEqual([3, 0, 0, 0]);
+    expect(groups.map((f) => copiesIn(f.id))).toEqual([3, 1, 0, 0]);
     expect(copiesIn(removed[0].id)).toBe(0);
   });
 

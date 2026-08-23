@@ -620,6 +620,20 @@ export interface CardFilters {
   /** Colour identity, e.g. `"WU"`; `"C"` means colourless only. Subset semantics. */
   colors?: string;
   setCode?: string;
+  /**
+   * Narrow to every printing of one oracle card — the card, not the cardboard.
+   *
+   * **Declared here as well as on {@link SearchRequest}, because `filters::push_card_filters`
+   * emits it for all three lists.** The collection's and the wishlist's queries flatten
+   * `filters::CardFilters`, which has carried `oracle_id` since the field was added, so a
+   * collection list can be narrowed to one card server-side — which is what the deck builder's
+   * `own` add does before it hunts for a free copy. This mirror said the opposite in a doc
+   * comment for one PR, and a caller wanting the field had to declare a local type to reach it.
+   *
+   * The exact-card filter `text` is not: that is FTS **prefix** matching, so a name query
+   * answers other cards too.
+   */
+  oracleId?: string;
   sets?: string[];
   /** 0–7 match exactly, 8 means "8 or more". */
   manaValues?: number[];
@@ -641,8 +655,10 @@ export interface CardFilters {
    *
    * **Declared here as well as on the search, because `filters::push_card_filters` emits it for
    * all three lists** — the collection's and the wishlist's queries flatten this struct, so an
-   * owned-cards wall can be narrowed to a motif without a second filter path. `oracleId` above
-   * is the field that is deliberately *not* here, and the asymmetry is Rust's own.
+   * owned-cards wall can be narrowed to a motif without a second filter path. {@link oracleId}
+   * above is emitted for the same three and is here for the same reason; this comment claimed
+   * the opposite until 2026-08-23, and a mirror that says a field does not exist is a field
+   * nobody sends.
    *
    * **A tag is a claim only a card row can answer**, so unlike `setCode` there is no fallback to
    * the row's own columns: an orphaned collection entry fails every `include` and passes every
@@ -877,6 +893,14 @@ export interface CollectionQuery extends CardFilters {
    * omission — is every row. `"unallocated"` drops the rows filed in a **`deck`** folder and
    * nothing else: the root, a folder the reader made and `Recently removed` are all cards on
    * their desk, and only a copy a deck is holding is spoken for.
+   *
+   * **The deck builder's Collection Search tab is the one sender** (2026-08-23), and it sends
+   * the field on *every* request including `"all"` — the two words are the two ends of a control
+   * the reader can see, so the payload says which end it is at rather than leaning on the
+   * backend's default for one of them. Every other caller of `collection_list` still omits it and
+   * still gets every row. The two spellings are `collection::Allocation`'s under
+   * `rename_all = "camelCase"`; `src/lib/ipc.test.ts` pins them, because a third word here is a
+   * serde error at runtime and a type error nowhere.
    */
   allocation?: "all" | "unallocated";
   /** How to order the list, first column deciding. Empty or absent is name order. */
@@ -1582,6 +1606,22 @@ export interface CollectionFolderSummary {
 }
 
 /**
+ * Which pile a card is being filed into — `collection_alloc::Pile`, and the same choice
+ * `deckAddCard` spells as a `categoryId`/`categoryName` pair.
+ *
+ * **One of the two, and the type is what says so.** An id is a drop onto a column the reader
+ * pointed at; a name is the add path's "file it where this card belongs", found-or-created by
+ * the backend through `category_for_name` — which is the only write that marks an invented pile
+ * `origin: "auto"`, so it arrives with its first card and goes with its last. `deckAddCard` lets
+ * an id win when both arrive, because a drag genuinely carries both; nothing sends both here, so
+ * the command refuses that pair in words and this union makes it a type error before it can be
+ * sent. The `?: undefined` halves are what stop `{ id, name }` satisfying either member — a bare
+ * `{ id: number } | { name: string }` accepts an object carrying both, because excess-property
+ * checking against a union allows any property some member declares.
+ */
+export type DeckPile = { id: number; name?: undefined } | { name: string; id?: undefined };
+
+/**
  * What a move across the deck boundary did — `collection_alloc::MoveOutcome`.
  *
  * The two writes it answers are the **only** pair in the crate that moves a collection row into
@@ -1607,6 +1647,19 @@ export interface MoveOutcome {
    * the deck they came out of is the one the reader is looking at.
    */
   fromDeck: string | null;
+  /**
+   * The `deck_cards` row {@link ipc.collectionToDeck} wrote — the only thing a caller has to
+   * point at once the copies have landed.
+   *
+   * An owned add lands a row the editor has never seen, and the id is not derivable from the
+   * arguments either: the write folds into whatever pile already held the printing, so a second
+   * add of the same card into the same category answers the **first** row's id. Without it the
+   * landed glow has no subject and a press that worked reads as one that did nothing.
+   *
+   * **`null` from {@link ipc.deckToCollection}**, where the caller handed the id in and still
+   * holds it — and where a whole cut has deleted the row it named.
+   */
+  deckCardId: number | null;
   /**
    * How many copies actually **moved**, which is not always what was asked. Never more; less
    * wherever the deck list wanted more than the group held — a list and a group can disagree,
@@ -3417,9 +3470,25 @@ export const ipc = {
    * One transaction for a whole imported file, rather than one `collectionAdd` per line — a
    * 500-row CSV would otherwise be 500 transactions, and a failure halfway through would leave
    * a collection nobody can reason about. A refusal rolls the whole file back.
+   *
+   * **`folderId` files the whole file into one folder, and absent — the default — is the root.**
+   * A file says nothing about a reader's filing, so the collection's own import step sends
+   * nothing and lands every row at the top level exactly as it always has. The **deck** arm of
+   * the import dialog is the one caller that names a folder: it sends the group of the deck the
+   * same press just wrote a list into, so the decklist and the group agree the moment the dialog
+   * closes and the copies are out of every other deck's reach. Ticking that box while the copies
+   * stopped at the root left the deck reading *missing* on every line the reader had just said
+   * they own.
+   *
+   * `collection::IMPORT_FOLDERS` is the fence: the reader's own folders and a **deck** group.
+   * `Recently removed` and an id nothing answers to are refused in words, before anything is
+   * written.
    */
-  collectionImportCommit: (items: CollectionImportItem[], mode: TransferImportMode) =>
-    invoke<ImportCommitOutcome>("collection_import_commit", { items, mode }),
+  collectionImportCommit: (
+    items: CollectionImportItem[],
+    mode: TransferImportMode,
+    folderId: number | null = null,
+  ) => invoke<ImportCommitOutcome>("collection_import_commit", { items, mode, folderId }),
   /** Every folder there is, flat — {@link ipc.wishlistFolderList}'s rule verbatim, ported: the
    *  tree is the reader's to build from `parentId`, and no card id scopes it because a folder
    *  belongs to no card. **Unfiltered by kind**: a deck's folder and the removed-cards folder
@@ -3489,10 +3558,10 @@ export const ipc = {
    * `deck_cards` row that says the deck plays them — **one transaction**, so mid-move the copies
    * are in both places or in neither.
    *
-   * **Nothing in `src/` calls this yet, and that is deliberate rather than an oversight.** Its
-   * one caller is the deck builder's Collection Search tab, which is the next PR; the wrapper is
-   * here because {@link ipc.deckToCollection} beside it is the same pair and a mirror with one
-   * half missing is a mirror somebody completes from memory. Do not delete it as unused.
+   * **Its one caller is the deck builder's Collection Search tab**
+   * (`features/decks/useCollectionSearch.ts`), which landed on 2026-08-23. This note said
+   * "nothing in `src/` calls this yet" for one PR, while the wrapper existed only so that
+   * {@link ipc.deckToCollection} beside it was not a mirror with one half missing.
    *
    * **The copies may be coming out of another deck**, which is the case this command exists to
    * get right: the source row sits in that deck's group, so taking it decrements that deck's
@@ -3501,13 +3570,30 @@ export const ipc = {
    * confirms that before pressing, because the side effect lands on a deck the reader is not
    * looking at.
    *
+   * **The pile is a {@link DeckPile} — an id or a name, never both.** Naming one is what makes
+   * an owned add file a card the way every other add does: the backend resolves the word through
+   * `category_for_name`, inside the move's own transaction, so a pile it has to invent is marked
+   * `origin: "auto"` and goes with its last card. Resolving the name here instead — which is
+   * what this had to do while the command took only an id — went through
+   * {@link ipc.deckCategoryCreate} and left the reader an empty heading marked as *theirs*,
+   * which nothing but a manual delete removes.
+   *
    * Refused in words, never as a constraint failure: a quantity below one, more copies than the
    * row holds, a category belonging to another deck, a deck with no group, and copies already in
    * the deck they were pointed at (which would write a second `deck_cards` row against copies
    * the group already holds).
    */
-  collectionToDeck: (entryId: number, deckId: number, categoryId: number, quantity: number) =>
-    invoke<MoveOutcome>("collection_to_deck", { entryId, deckId, categoryId, quantity }),
+  collectionToDeck: (entryId: number, deckId: number, pile: DeckPile, quantity: number) =>
+    invoke<MoveOutcome>("collection_to_deck", {
+      entryId,
+      deckId,
+      // The command's two nullable fields, which is the shape `deckAddCard` sends and the shape
+      // an older build's `categoryId`-only payload already fits. Rust refuses both-at-once in
+      // words; {@link DeckPile} is what stops a caller here ever producing that call.
+      categoryId: "id" in pile ? pile.id : null,
+      categoryName: "id" in pile ? null : pile.name,
+      quantity,
+    }),
   /**
    * Cut `quantity` copies from a deck card and file whatever the deck's group holds for that
    * printing into `Recently removed` — the write that makes issue #209's holding area true.

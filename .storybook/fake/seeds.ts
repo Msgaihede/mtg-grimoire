@@ -357,17 +357,21 @@ function emptySeed(): FakeDb {
  * entries**, which is why `collection_summary`'s `totalCards` and `entries` disagree in every
  * story built on this seed — as they must, since a row at zero is still a row.
  *
- * **Four of the twelve sit in binders the reader named, two sit in deck 1's group, and six are
- * at the root.** Filing moves no copies and changes no total: `CollectionQuery.folderId` is
- * absent by default and means *every* folder, so every count above is what it always was and
- * every story that says nothing about folders sees the list it always saw.
+ * **Four of the twelve sit in binders the reader named, three sit in a deck's group — two in
+ * {@link DECK_1_GROUP} and one in {@link DECK_2_GROUP} — and five are at the root.** Filing moves
+ * no copies and changes no total: `CollectionQuery.folderId` is absent by default and means
+ * *every* folder, so every count above is what it always was and every story that says nothing
+ * about folders sees the list it always saw.
  *
- * **The two in {@link DECK_1_GROUP} are the ones schema v25 made different in kind.** A binder is
- * the reader's filing; a deck's group is *where the cards physically are*, so those three copies
+ * **The three in a deck's group are the ones schema v25 made different in kind.** A binder is
+ * the reader's filing; a deck's group is *where the cards physically are*, so those four copies
  * are spoken for — `allocation: "unallocated"` drops them, `deck_theory`'s spare count does not
- * see them, and `deck_to_collection` on deck 1's matching rows is what puts them back on the
- * desk. The other three decks hold nothing, which is the state a decklist typed out of a file
- * leaves behind and is just as much a shape a story has to draw.
+ * see them, and `deck_to_collection` on the matching deck rows is what puts them back on the
+ * desk. **Two groups rather than one is what the deck builder's Collection Search needed**: a
+ * story opened on deck 1 has to be able to find a copy filed under a deck that is not deck 1,
+ * or the cross-deck confirmation has nothing to confirm. Decks 3 and 4 still hold nothing, which
+ * is the state a decklist typed out of a file leaves behind and is just as much a shape a story
+ * has to draw.
  */
 function starterEntries(): FakeEntry[] {
   const next = ids();
@@ -400,9 +404,17 @@ function starterEntries(): FakeEntry[] {
     // Bolt is a Bolt.
     entry(next(), printing("mh2", "267"), "foil", "NM", 2, { folderId: DECK_1_GROUP }),
     // Two Sol Rings, and the pair is the fixture for "same card, different printing": the
-    // any-printing wish below is filled by both, the Commander deck's exact-printing rule
-    // prefers this one, and the row after it is the unpriced one.
-    entry(next(), printing("c21", "263"), "nonfoil", "LP", 1),
+    // any-printing wish below is filled by both — wherever either is filed, because
+    // `ownedAgainstWish` counts copies and not folders — and the row after it is the unpriced
+    // one.
+    //
+    // **In deck 2's group, and it is the only copy in this seed sitting in a deck the reader is
+    // not standing in.** Deck-editor stories open deck 1, so this is the one row its Collection
+    // Search can find filed under *another* deck — which is the only way a story can draw the
+    // cross-deck confirmation, the press that takes a card out of `Kenrith Two-Drops` and off
+    // its live list at the same time. Deck 1's own two rows draw the other answer from that
+    // same list ("Those copies are already in this deck"), so one seed carries both.
+    entry(next(), printing("c21", "263"), "nonfoil", "LP", 1, { folderId: DECK_2_GROUP }),
     // `sld 913` is foil-only and **every key of its prices blob is null** (measured
     // 2026-08-09), so this row is the collection's `unpricedUsd` branch: a card you own,
     // counted, worth nothing the app can quote. Filed in `Trade binder` with the proxy below,
@@ -476,10 +488,12 @@ function starterEntries(): FakeEntry[] {
  * seed without them could not draw the collection page's pinned section at all, and every
  * `collection_to_deck` in a story would answer "That deck has no folder to hold its cards."
  *
- * Only **deck 1's group holds anything** ({@link starterEntries}), and the three empty ones are
- * the point rather than a shortage: a deck whose cards were typed out of a decklist owns none of
- * them, which is the commoner state by far, and `Recently removed` starts empty because nothing
- * has been cut yet. Both shapes have to draw.
+ * **Deck 1's group holds two rows and deck 2's holds one** ({@link starterEntries}), while the
+ * two empty ones are the point rather than a shortage: a deck whose cards were typed out of a
+ * decklist owns none of them, which is the commoner state by far, and `Recently removed` starts
+ * empty because nothing has been cut yet. All three shapes have to draw — and the *second*
+ * non-empty group is what lets a Collection Search opened on one deck find a copy sitting in
+ * another, which is the whole of the cross-deck confirmation.
  *
  * `sortOrder` is 0 on all five — a deck's group is not something the reader ordered, and
  * `collection_folder_list` sorts by name within a parent anyway.
@@ -509,10 +523,16 @@ function starterCollectionFolders(decks: FakeDeck[]): FakeCollectionFolder[] {
   ];
 }
 
-/** Deck 1's group, and the one folder in this seed the *app* filed cards into. Named because
- *  {@link starterEntries} has to say where two of its rows are and a bare `4` is a number no
- *  reader can resolve. */
+/** Deck 1's group, and the folder in this seed the *app* filed the most cards into. Named
+ *  because {@link starterEntries} has to say where two of its rows are and a bare `4` is a
+ *  number no reader can resolve. */
 const DECK_1_GROUP = 4;
+
+/** Deck 2's group — `Kenrith Two-Drops`, and the second folder the app filed a card into. It
+ *  holds exactly one copy, and that copy is there for one reason: it is the only row a
+ *  Collection Search opened on deck 1 can find sitting in a deck the reader is *not* editing,
+ *  which is what the cross-deck confirmation is about. See {@link starterEntries}. */
+const DECK_2_GROUP = 5;
 
 /**
  * Three folders (schema v23), and each is a shape the wishlist page has to be able to draw.
@@ -665,10 +685,12 @@ function starterDecks(): FakeDeck[] {
       formatKey: "modern",
       description: "Sixty legal cards and no plan. The shell every Modern story is cut from.",
       coverCardId: printing("mh2", "138").id,
-      // **The deck whose group actually holds cards** — see {@link starterEntries}: three of the
-      // four `2x2` Bolts and the etched Swords sit in folder 4, this deck's group. So its Bolt
-      // row reads owned 3 of 4 and those copies are unavailable to every other deck, which is
-      // the whole of what exclusivity means since schema v25.
+      // **The deck whose group holds the most cards** — see {@link starterEntries}: two **foil**
+      // Counterspells (`mh2 267`) and one damaged Ragavan (`mh2 138`) sit in folder 4, this
+      // deck's group, against four *nonfoil* of each on the list. So the Counterspell row reads
+      // owned 2 of 4 off a copy in the other finish, which is `owned_by_oracle`'s "a Bolt is a
+      // Bolt" made visible, and those three copies are unavailable to every other deck — the
+      // whole of what exclusivity means since schema v25.
       archived: false,
       updatedAt: CLOCK_BASE - HOUR,
     }),
@@ -679,10 +701,17 @@ function starterDecks(): FakeDeck[] {
       description:
         "Every permanent in the 99 costs two or less. The commander is the one card that does not.",
       coverCardId: printing("eld", "303").id,
-      // **A deck whose group is empty**, and the commoner state by far: every card it lists was
-      // typed out of a decklist rather than moved off a shelf, so every row reads owned 0 and
-      // `deck_to_collection` on any of them files nothing into `Recently removed`. A seed where
-      // every deck held its cards could not draw that.
+      // **A deck whose group holds exactly one card**, and that is the whole of it: every other
+      // card it lists was typed out of a decklist rather than moved off a shelf, so every other
+      // row reads owned 0 and `deck_to_collection` on *those* rows files nothing into
+      // `Recently removed` — the deck card goes and nothing lands on the reader's desk, because
+      // there was never anything behind it. A seed where every deck held its cards could not
+      // draw that, and decks 3 and 4 still hold nothing at all.
+      //
+      // The one copy is the `c21 263` Sol Ring ({@link DECK_2_GROUP}), and it is here for a deck
+      // this deck's stories are not about: it is what a Collection Search opened on **deck 1**
+      // finds filed under another deck, so the confirmation that takes a card off *this* deck's
+      // list has something to take. Its own Sol Ring row therefore reads owned 1 of 1.
       archived: false,
       updatedAt: CLOCK_BASE - DAY,
     }),
