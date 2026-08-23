@@ -1015,10 +1015,9 @@ pub fn remove_entry(conn: &Connection, id: i64) -> Result<EntryChange, String> {
 /// lived in the reconciler until schema v24 made the third and the first possible in one release.
 ///
 /// **This is the only copy in the crate, and that is the point.** The reconciler and the folder
-/// tree each carried their own spelling of these five statements while v24 was being built. Two
-/// implementations of one rule disagree the first time either changes, and what this one guards
-/// is a built deck's claims (below), so both now call it and neither keeps a statement of its
-/// own.
+/// tree each carried their own spelling of these statements while v24 was being built. Two
+/// implementations of one rule disagree the first time either changes, so both now call it and
+/// neither keeps a statement of its own.
 ///
 /// **`pub(crate)` and taking a `&Connection` rather than a `&Transaction`**, so either caller's
 /// handle fits, and it commits nothing: whoever opened the transaction owns it.
@@ -1037,18 +1036,25 @@ pub fn remove_entry(conn: &Connection, id: i64) -> Result<EntryChange, String> {
 /// row's condition — the string one import used — and it cannot describe a condition it was
 /// never written beside. Both stay the survivor's, and the entry editor is where they change.
 ///
-/// # And the decks' claims move with it
+/// # And nothing else has to move
 ///
-/// `deck_allocations.collection_entry_id` is the only enforced foreign key pointed at a
-/// collection entry, `ON DELETE CASCADE` (schema v5) so that [`remove_entry`] takes the
-/// reservations with the row. **This delete must therefore leave nothing for the cascade to
-/// take**: the copies still exist and the deck still wants them. Claims on the folding row move
-/// to the survivor; where the deck already claims the survivor, the two claims fold first —
-/// their grain is one row per `(deck, entry)`, the same shape as the entries' own.
+/// **Sum into the survivor, delete the source — two statements**, and the delete owes no
+/// clean-up to anybody. Reading the source is not a third: it rides in the `UPDATE`'s own
+/// `FROM (SELECT … WHERE id = ?2)` subquery. *"Read the source, sum into the survivor, delete the
+/// source"* is the same code in three **steps**, which is a true sentence about a two-statement
+/// function and the other number a reader will meet — say **two**, as
+/// `collection_folders::merge_entry` and
+/// [collection-folders.md](../../docs/reference/collection-folders.md) both do.
 ///
-/// All three allocation statements seek through `idx_deck_allocations_entry`, and every
-/// statement here is inside the caller's transaction: an allocation is never briefly homeless,
-/// and a pass that fails takes the whole fold back with it.
+/// It stood at **five** while `deck_allocations.collection_entry_id` was an `ON DELETE CASCADE`
+/// pointed at this table: three of those statements repointed a built deck's claims off the
+/// folding row so the cascade could not strip them. Schema v25 took the table and those three
+/// with it. No enforced foreign key points at a collection entry any more, and **where a deck's
+/// copies are is now which folder they sit in** — a fact this fold cannot disturb, because the
+/// survivor is on the grain the source was landing on and the folder is the eleventh term of it.
+///
+/// Every statement is inside the caller's transaction, so a pass that fails takes the whole
+/// fold back with it.
 pub(crate) fn fold_entry(tx: &Connection, target: i64, source: i64) -> rusqlite::Result<()> {
     tx.execute(
         "UPDATE collection_entries AS t SET
@@ -1062,28 +1068,6 @@ pub(crate) fn fold_entry(tx: &Connection, target: i64, source: i64) -> rusqlite:
             updated_at = unixepoch()
           FROM (SELECT * FROM collection_entries WHERE id = ?2) AS s
           WHERE t.id = ?1",
-        params![target, source],
-    )?;
-    tx.execute(
-        "UPDATE deck_allocations AS t SET
-            quantity = t.quantity + s.quantity,
-            updated_at = unixepoch()
-          FROM (SELECT deck_id, quantity FROM deck_allocations
-                 WHERE collection_entry_id = ?2) AS s
-          WHERE t.deck_id = s.deck_id AND t.collection_entry_id = ?1",
-        params![target, source],
-    )?;
-    tx.execute(
-        "DELETE FROM deck_allocations
-          WHERE collection_entry_id = ?2
-            AND EXISTS (SELECT 1 FROM deck_allocations t
-                         WHERE t.deck_id = deck_allocations.deck_id
-                           AND t.collection_entry_id = ?1)",
-        params![target, source],
-    )?;
-    tx.execute(
-        "UPDATE deck_allocations SET collection_entry_id = ?1, updated_at = unixepoch()
-          WHERE collection_entry_id = ?2",
         params![target, source],
     )?;
     tx.execute(
@@ -1179,11 +1163,10 @@ const MAX_LIMIT: u32 = 500;
 
 /// Whether the list is narrowed to copies that are still the reader's to do something with.
 ///
-/// **The vocabulary is about folders and nothing else.** `deck_allocations` is what "spoken for"
-/// means today, but a `deck` folder is what it will mean once the deck-driven collection lands
-/// (schema v24 created the kind; nothing writes one yet), and the two must not both be a filter
-/// on this query — a list that could disagree with itself about which copies a deck holds is
-/// worse than a list that cannot answer at all yet.
+/// **The vocabulary is about folders and nothing else**, and since schema v25 that is the whole
+/// of what "spoken for" means: a `deck` folder holds the copies its deck holds. There is no
+/// second answer to disagree with — the claim ledger that used to give one was dropped with that
+/// rung, which is why this filter is one `kind` lookup rather than a subtraction.
 ///
 /// `All` is what every caller written before folders existed gets, and is what an absent field
 /// means: a collection lists what its owner owns.
@@ -2026,8 +2009,22 @@ mod tests {
     /// One folder, straight into the table. `create_folder` is
     /// `collection_folders`' command and makes `user` rows only; a `deck` folder needs a deck
     /// to name — `collection_folders` CHECKs `(kind = 'deck') = (deck_id IS NOT NULL)` — so the
-    /// two cannot be seeded apart, and nothing in this PR writes either kind.
+    /// two cannot be seeded apart.
+    ///
+    /// **`removed` is found rather than made**, because schema v25's rung inserts it into every
+    /// database and the partial unique index on `kind` makes a second one impossible. A helper
+    /// that tried would fail with `UNIQUE constraint failed: collection_folders.kind`, which is
+    /// the migration working — there is exactly one holding area per database, by construction.
     fn folder(conn: &Connection, kind: &str, name: &str) -> i64 {
+        if kind == "removed" {
+            return conn
+                .query_row(
+                    "SELECT id FROM collection_folders WHERE kind = 'removed'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+        }
         let deck_id: Option<i64> = (kind == "deck").then(|| {
             conn.query_row(
                 "INSERT INTO decks (name, created_at, updated_at)

@@ -27,15 +27,14 @@
 //! and the label itself being made, renamed or deleted (`card_id` NULL, and an `action` verb —
 //! without one a delete would read as a labelling).
 //!
-//! **Two of these writes reallocate, and the rest deliberately do not.** `is_active` is what
-//! decides whether a card is allocated for at all ([`crate::deck::allocate_deck`]'s own doc),
-//! so [`set_category_active`] changes what this deck has reserved without touching a single
-//! card — and [`delete_category`] does too, by taking cards away or moving them somewhere with
-//! a different flag. Both call the allocator inside their own transaction, the way every card
-//! write in [`crate::deck`] does. A rename, a reorder and every tag write change what a pile
-//! is *called* and nothing about what is in it, so they claim exactly what they claimed
-//! before; running the allocator there would be a rebuild of every claim over a write that
-//! changed none of them.
+//! **No write here reallocates any more, and two of them used to.** `is_active` decided whether
+//! a card was allocated *for*, so [`set_category_active`] and [`delete_category`] each rebuilt
+//! this deck's claims inside their own transaction, the way every card write in
+//! [`crate::deck`] did. Schema v25 dropped `deck_allocations`: what a deck holds is where its
+//! collection rows physically sit, and switching a pile off changes what the deck *counts*
+//! without moving a single card. The rule the old note was making — that a rename and a reorder
+//! change what a pile is called and nothing about what is in it — now covers every write in the
+//! module.
 
 use crate::sync::{with_write, AppState};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -746,10 +745,10 @@ pub fn rename_category(conn: &Connection, id: i64, name: &str) -> Result<DeckCat
 /// Flip `is_active`. Every category answers to this, `commander` included — see
 /// [`DeckCategoryRow::is_active`]'s doc for why there is no kind check here at all.
 ///
-/// **Reallocates.** This is the one write in this module that changes what the deck has
-/// reserved without touching a card: `is_active` is the whole of what
-/// [`crate::deck::allocate_deck`] allocates *for*, so switching a category off hands its
-/// copies back to every other deck and switching one on claims them.
+/// **Reallocates nothing**, where until schema v25 it was the one write here that did:
+/// `is_active` was the whole of what the allocator allocated *for*, so switching a pile off
+/// handed its copies back to every other deck. A deck holds what sits in its group, and a
+/// switched-off pile is a pile the reader is not counting rather than cards they have put down.
 pub fn set_category_active(
     conn: &Connection,
     id: i64,
@@ -796,7 +795,6 @@ pub fn set_category_active(
             default_category_id: None,
         }],
     )?;
-    crate::deck::allocate_deck(&tx, deck_id)?;
     tx.commit().map_err(|e| e.to_string())?;
     read_category(conn, id, READBACK_VARIANT)?.ok_or_else(|| CATEGORY_GONE.to_owned())
 }
@@ -863,6 +861,21 @@ pub fn reorder_categories(
 /// the move and the delete as two round trips could lose the cards between them if the second
 /// one failed.
 ///
+/// **The copies behind the deleted cards come back, and only in the `None` arm.** A `deck_cards`
+/// row is an intention and the CASCADE is right to take it; a row in the deck's **group** is a
+/// card the reader physically owns, and deleting a pile does not stop them owning it. So every
+/// copy the group holds for a `live` row of this category is filed into `Recently removed`
+/// first, through [`crate::deck::release_group_copies`] — the same act
+/// [`crate::collection_alloc::deck_to_collection`] performs one card at a time. Left undone the
+/// copies stay filed under a deck that has never heard of them, invisible until the reader
+/// wonders why a card they own is unavailable to every deck they have.
+///
+/// The move arm moves nothing at all: those cards stay in this deck, one pile over, so the
+/// group is still the right place for the copies behind them. And the `theory` rows the CASCADE
+/// takes move nothing either, in either arm — a plan holds no cards
+/// ([`crate::collection_alloc::THEORY_HOLDS_NOTHING`]), so there is nothing in any folder behind
+/// one.
+///
 /// **It also puts the deck back on Auto when the pile it deletes was the deck's default**
 /// ([`crate::deck::AUTO_CATEGORY`]) — the clean-up an `ON DELETE SET NULL` would do for free on
 /// a nullable column, and `decks.default_category_id` is deliberately not one. The two sites
@@ -897,10 +910,13 @@ pub fn delete_category(
     }
     crate::deck::touch_deck(&tx, deck_id)?;
     // Counted **before** anything moves or cascades, and in copies rather than rows — two
-    // printings at 2 and 3 is 5 cards, which is what the confirm dialog warned about and the
-    // only part of a deleted category a reader cannot get back. Both variants, because the
-    // CASCADE takes both: a category is not variant-scoped, and a theory row filed here dies
-    // with it exactly as a live one does.
+    // printings at 2 and 3 is 5 cards, which is what the confirm dialog warned about. Both
+    // variants, because the CASCADE takes both: a category is not variant-scoped, and a theory
+    // row filed here dies with it exactly as a live one does.
+    //
+    // **This is a count of `deck_cards`, never of the copies that move.** The two can differ
+    // wherever the group holds fewer copies than the list claims, and what the dialog warns
+    // about is what leaves the deck.
     let cards: i64 = tx
         .query_row(
             "SELECT coalesce(sum(quantity), 0) FROM deck_cards WHERE category_id = ?1",
@@ -910,8 +926,13 @@ pub fn delete_category(
         .map_err(|e| e.to_string())?;
     // **The undo step's "before", and the single largest thing the audit log could not
     // describe.** That row records `{"action":"delete","name":"Ramp","cards":7}` — a *count* of
-    // what the CASCADE took, which its own comment calls "the only part of a deleted category a
-    // reader cannot get back". These are the cards themselves.
+    // what the CASCADE took, and a count cannot rebuild a pile. These are the cards themselves.
+    //
+    // **What it still cannot put back is the custody**, and that is worth knowing rather than
+    // rediscovering: the step restores `deck_cards`, while the copies behind them have gone to
+    // `Recently removed` and stay there. An undone delete gives the reader their list back with
+    // its owned counts at zero until they file the copies again — the same place a cut card
+    // leaves them, which has never been undoable either.
     //
     // Four cells, not two: **both variants of the deleted pile and both of the target**, because
     // the move arm folds on `DECK_CARD_GRAIN` into whatever the target already held. Without the
@@ -940,6 +961,31 @@ pub fn delete_category(
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
+    // **The copies the CASCADE is about to strand**, released before anything moves and inside
+    // this transaction, so a delete that fails half way has moved no card. Only the `None`
+    // arm: the move arm re-files these cards into another pile of the same deck, so the group
+    // is still exactly where their copies belong — and it is fenced here rather than left to
+    // the move's own DELETE having emptied the pile first, because that is an ordering an edit
+    // three statements away can undo without meaning to. `live` only: a theory row is a plan,
+    // and no folder backs one.
+    if move_to_category_id.is_none() {
+        let held: Vec<(String, Option<String>, i64)> = tx
+            .prepare(
+                "SELECT card_id, finish, quantity FROM deck_cards
+                  WHERE category_id = ?1 AND variant = ?2
+                  ORDER BY id",
+            )
+            .and_then(|mut s| {
+                s.query_map(params![id, crate::schema::DECK_VARIANTS[0]], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+                })?
+                .collect()
+            })
+            .map_err(|e| e.to_string())?;
+        for (card_id, finish, quantity) in held {
+            crate::deck::release_group_copies(&tx, deck_id, &card_id, finish.as_deref(), quantity)?;
+        }
+    }
     if let Some(target) = move_to_category_id {
         // `deck::move_card`'s INSERT … SELECT … ON CONFLICT shape verbatim, over categories
         // instead of zones. The `DO UPDATE` touches only `quantity`/`updated_at`: a row the
@@ -1037,11 +1083,6 @@ pub fn delete_category(
             },
         ],
     )?;
-    // Reallocates for [`set_category_active`]'s reason at one remove: the cards either left
-    // the deck with the category (the CASCADE) or landed under one whose `is_active` may
-    // differ from the one they came from. Either way this deck wants something different
-    // than it did a statement ago.
-    crate::deck::allocate_deck(&tx, deck_id)?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(())
 }
@@ -2094,6 +2135,59 @@ mod tests {
         .unwrap()
     }
 
+    /// The `collection_folders` row that stands for a deck — an INSERT rather than
+    /// [`crate::deck::create_deck`], because [`crate::schema::tests::deck`] writes the `decks`
+    /// row directly and every fixture in this module is built on it. Only the handful of tests
+    /// that are *about* custody need one, which is why it is not in the fixture.
+    fn group_for(conn: &Connection, deck_id: i64, name: &str) -> i64 {
+        conn.query_row(
+            "INSERT INTO collection_folders
+                 (parent_id, name, kind, deck_id, sort_order, created_at, updated_at)
+             VALUES (NULL, ?1, 'deck', ?2, 0, unixepoch(), unixepoch())
+             RETURNING id",
+            params![name, deck_id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// One collection row filed straight into a folder — what "this deck holds these copies"
+    /// means since schema v25.
+    fn file_into(conn: &Connection, folder: i64, card_id: &str, quantity: i64) -> i64 {
+        conn.query_row(
+            "INSERT INTO collection_entries
+                 (card_id, set_code, collector_number, lang, finish, condition, quantity,
+                  folder_id, created_at, updated_at)
+             VALUES (?1, 'lea', '161', 'en', 'nonfoil', 'NM', ?2, ?3, unixepoch(), unixepoch())
+             RETURNING id",
+            params![card_id, quantity, folder],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// Copies of one printing sitting in one folder, summed — a split leaves two rows where
+    /// there was one, and the question is how many *cards* are in a place.
+    fn folder_copies(conn: &Connection, folder: i64, card_id: &str) -> i64 {
+        conn.query_row(
+            "SELECT coalesce(sum(quantity), 0) FROM collection_entries
+              WHERE folder_id = ?1 AND card_id = ?2",
+            params![folder, card_id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// The one holding area `Recently removed`, which schema v25 creates exactly one of.
+    fn removed_group(conn: &Connection) -> i64 {
+        conn.query_row(
+            "SELECT id FROM collection_folders WHERE kind = 'removed'",
+            [],
+            |r| r.get(0),
+        )
+        .expect("every database past v25 has one `removed` folder")
+    }
+
     fn updated_at(conn: &Connection, deck_id: i64) -> i64 {
         conn.query_row(
             "SELECT updated_at FROM decks WHERE id = ?1",
@@ -2748,6 +2842,65 @@ mod tests {
     }
 
     // -- Rule 2: deck_category_delete's move-or-cascade ------------------------------------
+
+    /// **Deleting a category gives the copies behind its cards back.** The CASCADE takes the
+    /// `deck_cards` rows, which is right — an intention dies with the pile it was filed in — but
+    /// a row in the deck's **group** is a card the reader physically owns. Left where it was, it
+    /// would sit filed under a deck that has never heard of it: invisible on the collection page
+    /// under a folder for a pile that is gone, and unavailable to every other deck for ever.
+    ///
+    /// **The split is the half worth seeding.** The group holds one row for the grain, four
+    /// copies backing two piles, so deleting one may take three of them and no more.
+    ///
+    /// **And the theory row's copies are not a thing**, which is the second claim: a plan holds
+    /// no cards, so the 5 theory copies the CASCADE also takes put nothing on the desk.
+    #[test]
+    fn deleting_a_category_files_its_copies_into_recently_removed() {
+        let conn = conn();
+        let deck_id = deck(&conn, "Burn");
+        let group = group_for(&conn, deck_id, "Burn");
+        let doomed = category(&conn, deck_id, "main", "Ramp");
+        let kept = category(&conn, deck_id, "main", "Main deck");
+        crate::schema::tests::seed_card(&conn, "bolt-lea", "lea", "161");
+        deck_card(&conn, deck_id, "bolt-lea", doomed, 3);
+        deck_card(&conn, deck_id, "bolt-lea", kept, 1);
+        deck_card_variant(&conn, deck_id, "bolt-lea", doomed, "theory", 5);
+        file_into(&conn, group, "bolt-lea", 4);
+
+        delete_category(&conn, doomed, None).unwrap();
+
+        assert_eq!(
+            folder_copies(&conn, removed_group(&conn), "bolt-lea"),
+            3,
+            "the three the deleted pile was holding are on the reader's desk"
+        );
+        assert_eq!(
+            folder_copies(&conn, group, "bolt-lea"),
+            1,
+            "and the copy behind the pile that survived is still the deck's"
+        );
+    }
+
+    /// The move arm moves **no copies at all**, and that is not an omission: those cards are
+    /// still in this deck, one pile over, so the group is still exactly where the copies behind
+    /// them belong. Filing them into `Recently removed` here would take a deck's cards off its
+    /// own desk because the reader tidied their columns.
+    #[test]
+    fn deleting_a_category_that_moves_its_cards_leaves_every_copy_in_the_group() {
+        let conn = conn();
+        let deck_id = deck(&conn, "Burn");
+        let group = group_for(&conn, deck_id, "Burn");
+        let from = category(&conn, deck_id, "main", "Creatures");
+        let to = category(&conn, deck_id, "main", "Main deck");
+        crate::schema::tests::seed_card(&conn, "bolt-lea", "lea", "161");
+        deck_card(&conn, deck_id, "bolt-lea", from, 3);
+        file_into(&conn, group, "bolt-lea", 3);
+
+        delete_category(&conn, from, Some(to)).unwrap();
+
+        assert_eq!(folder_copies(&conn, group, "bolt-lea"), 3);
+        assert_eq!(folder_copies(&conn, removed_group(&conn), "bolt-lea"), 0);
+    }
 
     #[test]
     fn deck_category_delete_with_a_move_target_folds_cards_per_variant() {

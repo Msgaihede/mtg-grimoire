@@ -21,11 +21,12 @@
 //! `ON CONFLICT` rule verbatim, and it is what makes "nothing the user recorded is lost"
 //! a claim this module can actually keep.
 //!
-//! Three user tables now, `deck_cards` among them, and the deck tables are why that fold
-//! is the most dangerous statement in the module: `deck_allocations.collection_entry_id`
-//! is an enforced `ON DELETE CASCADE` reference, so a fold that deleted first would take a
-//! deck's claim on copies that still exist. [`fold_into_existing`] moves the claims before
-//! it deletes, in the same transaction — the cascade is left with nothing to take.
+//! Three user tables now, `deck_cards` among them, and that fold is still the only delete in
+//! the module: it is conditional on the fold having happened, which is the whole of what keeps
+//! "nothing the user recorded is lost" true. **Nothing hangs off the deleted row any more** —
+//! no enforced foreign key points at a collection entry since schema v25 dropped
+//! `deck_allocations`, and which deck holds a card is now which folder its row sits in, which
+//! is a grain term the fold matches on rather than a claim it has to carry across.
 //!
 //! **The collection half of [`apply`] is an ownership change**, and nothing here reaches an
 //! `AppState` to hang the search index's `owned` rebuild off — a sync is the one moment nobody
@@ -429,10 +430,9 @@ fn collision_target(
 ///
 /// # What moves
 ///
-/// [`crate::collection::fold_entry`] is the five statements, and what they carry is argued
-/// there: the quantities add, the five columns the user typed themselves are taken by the
-/// survivor only where it has none, `tags` and `condition_original` stay the survivor's, and
-/// the decks' claims move rather than cascading away with the deleted row.
+/// [`crate::collection::fold_entry`] is the statements, and what they carry is argued there:
+/// the quantities add, the five columns the user typed themselves are taken by the survivor
+/// only where it has none, and `tags` and `condition_original` stay the survivor's.
 ///
 /// **They moved to `collection.rs` when `update_entry` needed them too** (schema v24): an
 /// edit that lands on a taken grain is the same event as a repoint that lands on one, and the
@@ -735,18 +735,6 @@ mod tests {
              VALUES (?1,?2,?3,'lea','161','en','Lightning Bolt',?4,unixepoch(),unixepoch())
              RETURNING id",
             rusqlite::params![deck_id, category_id, card_id, quantity],
-            |r| r.get(0),
-        )
-        .unwrap()
-    }
-
-    /// One deck's claim on one collection entry.
-    fn allocate(conn: &Connection, deck_id: i64, entry_id: i64, quantity: i64) -> i64 {
-        conn.query_row(
-            "INSERT INTO deck_allocations
-                (deck_id, collection_entry_id, quantity, created_at, updated_at)
-             VALUES (?1,?2,?3,unixepoch(),unixepoch()) RETURNING id",
-            rusqlite::params![deck_id, entry_id, quantity],
             |r| r.get(0),
         )
         .unwrap()
@@ -1128,13 +1116,20 @@ mod tests {
     #[test]
     fn a_repointed_entry_folds_only_onto_an_entry_in_its_own_folder() {
         let mut conn = seeded();
-        conn.execute(
-            "INSERT INTO collection_folders
-                (id, parent_id, name, kind, deck_id, sort_order, created_at, updated_at)
-             VALUES (1, NULL, 'Binder', 'user', NULL, 0, unixepoch(), unixepoch())",
-            [],
-        )
-        .unwrap();
+        // **The id is taken rather than named.** It was a literal `1` until schema v25, which
+        // files `Recently removed` into every database as its rung's first statement — so the
+        // low ids belong to the app now, and naming one is a `UNIQUE constraint failed:
+        // collection_folders.id` in a test that is not about folders being created at all.
+        let binder: i64 = conn
+            .query_row(
+                "INSERT INTO collection_folders
+                    (parent_id, name, kind, deck_id, sort_order, created_at, updated_at)
+                 VALUES (NULL, 'Binder', 'user', NULL, 0, unixepoch(), unixepoch())
+                 RETURNING id",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         let filed = |card_id: &str, folder: Option<i64>, quantity: i64| -> i64 {
             conn.query_row(
                 "INSERT INTO collection_entries
@@ -1148,8 +1143,8 @@ mod tests {
             .unwrap()
         };
         let elsewhere = filed("new-id", None, 1);
-        let target = filed("new-id", Some(1), 2);
-        let source = filed("old-id", Some(1), 3);
+        let target = filed("new-id", Some(binder), 2);
+        let source = filed("old-id", Some(binder), 3);
 
         let stats = apply(
             &mut conn,
@@ -1651,125 +1646,6 @@ mod tests {
             .query_row("SELECT card_id FROM collection_entries", [], |r| r.get(0))
             .unwrap();
         assert_eq!(card, "old-id", "the repoint rolled back with the pass");
-    }
-
-    /// THE gate (plan-3 final review, I6): the fold is the app's only non-user delete, and
-    /// with `deck_allocations.collection_entry_id` ON DELETE CASCADE it would silently
-    /// destroy a deck's reservation on copies that still exist. The allocations move to the
-    /// fold survivor BEFORE the delete — so the CASCADE, which is right for `remove_entry`,
-    /// fires over nothing here.
-    #[test]
-    fn a_fold_moves_deck_allocations_to_the_surviving_entry_before_it_deletes() {
-        let mut conn = seeded();
-        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
-        let old = own(&conn, "old-id", "foil", 3);
-        let existing = own(&conn, "new-id", "foil", 2);
-        let deck = deck(&conn, "Burn");
-        allocate(&conn, deck, old, 3);
-
-        apply(
-            &mut conn,
-            &[migration("m1", "merge", "old-id", Some("new-id"))],
-        )
-        .unwrap();
-
-        let (entry, qty): (i64, i64) = conn
-            .query_row(
-                "SELECT collection_entry_id, quantity FROM deck_allocations",
-                [],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .unwrap();
-        assert_eq!(
-            (entry, qty),
-            (existing, 3),
-            "the claim survived the fold, on the survivor"
-        );
-    }
-
-    /// The collision case: the deck already holds a claim on the survivor. Two claims on
-    /// what is now one entry are one claim with both quantities — the same statement the
-    /// fold makes about the entries themselves.
-    #[test]
-    fn a_fold_merges_colliding_allocations_instead_of_violating_their_grain() {
-        let mut conn = seeded();
-        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
-        let old = own(&conn, "old-id", "foil", 2);
-        let existing = own(&conn, "new-id", "foil", 1);
-        let burn = deck(&conn, "Burn");
-        allocate(&conn, burn, old, 2);
-        allocate(&conn, burn, existing, 1);
-
-        apply(
-            &mut conn,
-            &[migration("m1", "merge", "old-id", Some("new-id"))],
-        )
-        .unwrap();
-
-        let rows: i64 = conn
-            .query_row("SELECT count(*) FROM deck_allocations", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(rows, 1, "one entry, one deck — one claim");
-        let (entry, qty): (i64, i64) = conn
-            .query_row(
-                "SELECT collection_entry_id, quantity FROM deck_allocations",
-                [],
-                |r| Ok((r.get(0)?, r.get(1)?)),
-            )
-            .unwrap();
-        assert_eq!(
-            (entry, qty),
-            (existing, 3),
-            "two plus one, on the row that survived"
-        );
-    }
-
-    /// The mixed case neither test above can see on its own, and the one the three
-    /// allocation statements were written for: deck A claims **both** the folding row and
-    /// the survivor, deck B claims only the folding row. A's two claims become one; B's
-    /// single claim moves across intact.
-    ///
-    /// This is the fence around a mis-correlated `EXISTS` in the middle statement — one
-    /// that asked "does *anyone* claim the survivor" rather than "does *this deck*" would
-    /// delete B's claim outright, and with `ON DELETE CASCADE` on the entry there would be
-    /// nothing left to notice it. Both existing tests have exactly one deck, so both would
-    /// keep passing.
-    #[test]
-    fn a_fold_merges_one_decks_colliding_claims_while_anothers_only_moves() {
-        let mut conn = seeded();
-        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
-        let old = own(&conn, "old-id", "foil", 5);
-        let existing = own(&conn, "new-id", "foil", 4);
-        let a = deck(&conn, "Burn");
-        let b = deck(&conn, "Storm");
-        allocate(&conn, a, old, 2);
-        allocate(&conn, a, existing, 1);
-        // Two, not three: A's two claims add up to three, and a B that also claimed three
-        // would make the two halves of the assertion below indistinguishable — a middle
-        // statement that summed B's claim into A's would land on the very same numbers.
-        allocate(&conn, b, old, 2);
-
-        apply(
-            &mut conn,
-            &[migration("m1", "merge", "old-id", Some("new-id"))],
-        )
-        .unwrap();
-
-        let claims: Vec<(i64, i64, i64)> = conn
-            .prepare(
-                "SELECT deck_id, collection_entry_id, quantity FROM deck_allocations
-                  ORDER BY deck_id",
-            )
-            .unwrap()
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
-            .unwrap()
-            .collect::<Result<_, _>>()
-            .unwrap();
-        assert_eq!(
-            claims,
-            vec![(a, existing, 3), (b, existing, 2)],
-            "A's two claims are one claim of three; B's two moved across untouched"
-        );
     }
 
     /// Deck rows are user rows: a merge repoints them, folding on the deck grain when the

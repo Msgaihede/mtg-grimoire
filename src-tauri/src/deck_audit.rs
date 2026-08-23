@@ -8,7 +8,7 @@
 //!   lies — and it lies in the one direction a reader cannot check, because the row it names
 //!   is not there to disagree with it. Every call site in [`crate::deck`] and
 //!   [`crate::deck_meta`] already holds a transaction; this joins it, the way
-//!   [`crate::deck::allocate_deck`] does.
+//!   [`crate::deck_undo::record_step`] does beside it.
 //! * **Rust records facts; TypeScript writes the sentence.** That is why [`payload`] is JSON
 //!   and why there is no `summary` column: a sentence is domain logic (CLAUDE.md's boundary),
 //!   it changes with the wording and with the reader's language, and a table that stored one
@@ -121,7 +121,8 @@ pub struct DeckAuditEntry {
 ///
 /// **Never opens a transaction of its own**, for the reason at the top of this file, and takes
 /// `&Connection` rather than `&Transaction` because `Transaction` derefs to it — so
-/// `record(&tx, …)` is the call at every site, exactly as `allocate_deck(&tx, …)` is.
+/// `record(&tx, …)` is the call at every site, exactly as `record_step(&tx, …)` is on the line
+/// after it.
 ///
 /// `card` is `(card_id, card_name)` or `None`: the two travel together or not at all, because
 /// a name with no id names nothing and an id with no name cannot be read once its printing
@@ -149,6 +150,11 @@ pub struct DeckAuditEntry {
 /// | `category` | `{ "action": "create\|rename\|delete\|activate\|deactivate\|reorder", "name": "Draw", "previousName": "Value", "cards": 7 }` |
 /// | `folder` | `{ "action": "move", "folder": "Commander › Legends" }` |
 /// | `deck` | `{ "field": "name\|format\|cover\|description\|notes\|built\|archived\|theory", "from": "…", "to": "…" }` |
+///
+/// **`built` is a value nothing writes any more and the renderer must keep reading.** Schema v25
+/// dropped `decks.is_built` — a deck no longer *claims* copies, it holds the ones filed in its
+/// group — so no new row carries it, and every row a reader wrote before the upgrade still does.
+/// The history is a record of what happened, not of what the app can do today.
 ///
 /// Two of those rows carry keys the brief's table did not, and both are additions rather than
 /// changes — a renderer written against the shapes above still reads every row it knew:
@@ -1112,7 +1118,7 @@ mod tests {
             &conn,
             id,
             &DeckPatch {
-                is_built: Some(true),
+                archived: Some(true),
                 ..Default::default()
             },
         )
@@ -1120,7 +1126,7 @@ mod tests {
         let (_, payload) = newest(&conn, id);
         assert_eq!(
             payload,
-            json!({ "field": "built", "from": false, "to": true })
+            json!({ "field": "archived", "from": false, "to": true })
         );
 
         crate::deck::update_deck(
@@ -1221,7 +1227,7 @@ mod tests {
             id,
             &DeckPatch {
                 name: Some("Burn v2".to_owned()),
-                is_built: Some(true),
+                archived: Some(true),
                 ..Default::default()
             },
         )
@@ -1238,7 +1244,7 @@ mod tests {
             .collect();
         assert_eq!(fields.len(), 2);
         assert!(fields.contains(&"name".to_owned()), "{fields:?}");
-        assert!(fields.contains(&"built".to_owned()), "{fields:?}");
+        assert!(fields.contains(&"archived".to_owned()), "{fields:?}");
     }
 
     #[test]

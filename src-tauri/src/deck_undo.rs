@@ -98,7 +98,6 @@ const DECK_FIELDS: &[&str] = &[
     "cover_image_path",
     "folder_id",
     "theory_enabled",
-    "is_built",
     "archived",
     "separate_x_group",
     "default_category_id",
@@ -110,11 +109,9 @@ const DECK_FIELDS: &[&str] = &[
 /// One `deck_cards` row, as a step carries it.
 ///
 /// **`id`, `created_at` and `updated_at` are deliberately not here.** A restored row is a new
-/// row: nothing in the schema points at `deck_cards.id` (`deck_allocations` holds
-/// `collection_entry_id`s, and the allocator is rebuilt from scratch at the end of every apply),
-/// so carrying the old id would buy nothing and would collide the first time an id had been
-/// reused. `created_at` would claim the row had been there all along, which is the one thing
-/// about it that is not true.
+/// row: nothing in the schema points at `deck_cards.id` at all, so carrying the old id would buy
+/// nothing and would collide the first time an id had been reused. `created_at` would claim the
+/// row had been there all along, which is the one thing about it that is not true.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CardRow {
@@ -703,9 +700,6 @@ fn sql_value(value: rusqlite::types::ValueRef<'_>) -> Value {
 
 /// Apply a list of ops, inside the caller's transaction.
 ///
-/// The caller runs [`crate::deck::allocate_deck`] afterwards, once, for the whole step — the
-/// same argument `import::commit_import` makes for a decklist: a rebuild per op would be N
-/// rebuilds of one deck's claims for one press.
 pub fn apply(tx: &Connection, deck_id: i64, ops: &[Op]) -> Result<(), String> {
     let mut remap = Remap::default();
     for op in ops {
@@ -1168,11 +1162,6 @@ fn apply_reversal(
         audit_id,
         if undoing { -entry.delta } else { entry.delta },
     )?;
-    // **Once, for the whole step**, and unconditionally: almost every reversal changes what the
-    // deck claims — a restored card wants copies again, a re-activated pile allocates for its
-    // cards — and working out which ones do not would be a second copy of the allocator's own
-    // rule for no saving worth having.
-    crate::deck::allocate_deck(&tx, deck_id)?;
     tx.commit().map_err(|e| e.to_string())
 }
 
@@ -1708,6 +1697,10 @@ mod tests {
             (
                 // **Two history rows, one step, one Ctrl+Z.** A cursor that could land between
                 // them would put half a settings form back.
+                //
+                // The second field is arbitrary and is only here to make the press two facts —
+                // it was `is_built` until schema v25 dropped that column, and `archived` says
+                // the same nothing in its place.
                 "deck_update (two fields at once)",
                 nothing,
                 |c, id| {
@@ -1716,7 +1709,7 @@ mod tests {
                         id,
                         &crate::deck::DeckPatch {
                             name: Some("Burn v2".to_owned()),
-                            is_built: Some(true),
+                            archived: Some(true),
                             ..Default::default()
                         },
                     )

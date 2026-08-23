@@ -71,6 +71,25 @@ use std::sync::Arc;
 /// `CHECK constraint failed: collection_folders`, which names the table and not the mistake.
 pub const FOLDER_NOT_YOURS: &str = "That folder is the app's own and is not yours to change.";
 
+/// What [`set_entry_folder`] says about the row it was **given**, when that row is sitting in a
+/// deck's group.
+///
+/// **A sibling of [`FOLDER_NOT_YOURS`] rather than a reuse of it, and the difference is which
+/// noun the sentence is about.** That one is about the *destination* — the reader tried to
+/// change a folder the app owns. This one is about the *source*, and the reader is not changing
+/// anything about the folder: they are taking a card out of it. "That folder is not yours to
+/// change" over a drag of a card the reader plainly owns names the wrong thing, and a refusal
+/// that names the wrong thing is worse than a generic one.
+///
+/// **It says what to do instead, because there is something to do.** Cutting the card from the
+/// deck is the sanctioned route out of a group — it is
+/// [`crate::collection_alloc::deck_to_collection`], it decrements the list in the same
+/// transaction, and it lands the copies in `Recently removed`, where this command can then move
+/// them wherever the reader likes. A silent drag would be a second route with none of that: the
+/// deck would go on listing a card whose copies have walked off.
+pub const ENTRY_IN_A_DECK: &str =
+    "Those copies are in a deck. Cut the card from the deck to get them back.";
+
 /// The kind a folder the reader made and named carries — [`crate::schema::COLLECTION_FOLDER_KINDS`]
 /// `[0]`, which is what every write in this module demands and what [`create_folder`] writes.
 ///
@@ -79,6 +98,14 @@ pub const FOLDER_NOT_YOURS: &str = "That folder is the app's own and is not your
 /// and answering it with a second `"user"` literal is how the two would come to disagree the day
 /// a fourth kind exists.
 pub(crate) const USER_KIND: &str = "user";
+
+/// And the kind that stands for a deck — [`crate::schema::COLLECTION_FOLDER_KINDS`]`[1]`, by
+/// index rather than by spelling so the word here and the word the CHECK allows cannot drift.
+///
+/// Read by exactly one thing in this module, [`set_entry_folder`]'s source fence, which is the
+/// one place a folder's kind decides something about the row *in* it rather than about the
+/// folder itself.
+const DECK_KIND: &str = crate::schema::COLLECTION_FOLDER_KINDS[1];
 
 /// How far [`move_folder`]'s cycle walk will climb before it calls the chain a cycle.
 ///
@@ -228,6 +255,13 @@ pub fn list_folders(conn: &Connection) -> Result<Vec<CollectionFolder>, String> 
 /// happily store an explicit one. A folder numbered 0 would be indistinguishable from the root
 /// on the grain, so every card in it would collide with the reader's unfiled copies of the same
 /// printing. Letting the database assign is the whole of the fence.
+///
+/// **The new folder goes after the last folder the *reader* made, and the app's own are not
+/// counted.** `Recently removed` is a root sibling at `sort_order` 0, so a bare
+/// `max(sort_order) + 1` over every sibling would start the reader's very first folder at 1 and
+/// leave the holding area sorting ahead of everything they ever name — an ordering nobody chose.
+/// The UI draws the app's folders in a pinned section of their own, so their numbers have no
+/// business in the reader's sequence, and the `kind` fence is what keeps the two apart.
 pub fn create_folder(
     conn: &Connection,
     parent_id: Option<i64>,
@@ -237,11 +271,14 @@ pub fn create_folder(
     if let Some(parent) = parent_id {
         user_folder(conn, parent)?;
     }
-    // `IS`, not `=`: `parent_id` is nullable (root), and `=` never matches a bound NULL.
+    // `IS`, not `=`: `parent_id` is nullable (root), and `=` never matches a bound NULL. And
+    // `kind = 'user'`, so the two folders the app owns are not part of the reader's counting —
+    // see the paragraph above.
     let next_order: i64 = conn
         .query_row(
-            "SELECT coalesce(max(sort_order), -1) + 1 FROM collection_folders WHERE parent_id IS ?1",
-            params![parent_id],
+            "SELECT coalesce(max(sort_order), -1) + 1 FROM collection_folders
+              WHERE parent_id IS ?1 AND kind = ?2",
+            params![parent_id, USER_KIND],
             |r| r.get(0),
         )
         .map_err(|e| e.to_string())?;
@@ -441,7 +478,27 @@ pub fn delete_folder(conn: &Connection, id: i64) -> Result<(), String> {
 /// something the app is responsible for — that a deck holds these copies, that these copies have
 /// left the collection — and a reader dragging a card into one would be asserting it without any
 /// of the writes that make it true. [`refile_entry`] carries no such fence, which is what lets
-/// the next PR's deck-driven writes file into exactly those folders.
+/// [`crate::collection_alloc`]'s two writes and [`crate::deck::delete_deck`] file into exactly
+/// those folders.
+///
+/// **The _source_ is fenced too, and only for `deck`** ([`ENTRY_IN_A_DECK`]). Filing a copy
+/// *out* of a deck's group by hand breaks the same invariant from the other end: the deck would
+/// go on listing a card whose copies have walked off, which is exactly what a category cascade
+/// used to do. The sanctioned way out of a group is to cut the card from the deck, which is
+/// [`crate::collection_alloc::deck_to_collection`] — it decrements the list in the same
+/// transaction and files the copies into `Recently removed`, where this command can then move
+/// them anywhere.
+///
+/// `removed` is deliberately **not** fenced as a source. Taking a card out of the holding area
+/// and filing it in a binder is the reader tidying up, and it is what that folder is for; the
+/// fence is against copies leaving a deck without the deck being told, not against copies moving
+/// at all.
+///
+/// **Two things must not gain this fence**, and both would break the feature outright:
+/// [`refile_entry`], which is the shared primitive every write out of a group calls, and
+/// `deck_to_collection`, which is the one that is *supposed* to do this. The distinction is not
+/// the table, it is who is asking: this command is the reader's own filing gesture, and a silent
+/// drag must not be a second, unrecorded route out of a deck.
 pub fn set_entry_folder(
     conn: &Connection,
     id: i64,
@@ -450,6 +507,23 @@ pub fn set_entry_folder(
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     if let Some(folder) = folder_id {
         user_folder(&tx, folder)?;
+    }
+    // `optional()`, and a `None` falls through on purpose: it is the root, an entry that is not
+    // there, or a folder that has gone between two reads. The first is the ordinary case and the
+    // other two are [`refile_entry`]'s [`GONE`] to answer — a second sentence for a missing row
+    // would be this command disagreeing with the one it delegates to.
+    let source_kind: Option<String> = tx
+        .query_row(
+            "SELECT f.kind FROM collection_entries e
+               JOIN collection_folders f ON f.id = e.folder_id
+              WHERE e.id = ?1",
+            params![id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    if source_kind.as_deref() == Some(DECK_KIND) {
+        return Err(ENTRY_IN_A_DECK.to_owned());
     }
     refile_entry(&tx, id, folder_id).and_then(|change| {
         tx.commit().map_err(|e| e.to_string())?;
@@ -605,15 +679,112 @@ pub(crate) fn refile_entry(
     })
 }
 
+/// Move exactly `quantity` copies of entry `id` into `dest`, answering the id of the row they
+/// landed in — [`refile_entry`] where only *part* of a row is going.
+///
+/// **The split is forward and the source row is the half that travels**, which is what lets the
+/// merge stay [`refile_entry`]'s:
+///
+/// 1. the source is stepped down to exactly the copies that are moving;
+/// 2. `refile_entry` files that row into `dest`, folding it into whatever holds the grain there;
+/// 3. the remainder is re-inserted into the folder the source has just left.
+///
+/// Step 3 is what forces this order. `idx_collection_grain` is unique on eleven terms including
+/// `coalesce(folder_id, 0)`, so a remainder row written *before* the move would collide with the
+/// source itself — the one row in that folder holding the grain. Once the source has gone the
+/// slot is free, and it is free whether the file was an `UPDATE` or a fold that deleted it.
+///
+/// **The remainder is copied off the row the copies landed in**, and where that was a fold it is
+/// the survivor's story rather than the source's. The eleven grain terms are identical by
+/// construction — a fold happens only on an exact grain match — and
+/// [`crate::collection::fold_entry`] has already coalesced the source's money columns into the
+/// survivor wherever the survivor had none. What can differ is `tags`, `notes` and
+/// `condition_original`, which that fold leaves the survivor's for its own stated reason.
+///
+/// `tradelist_quantity` is split rather than duplicated: the copies that move take
+/// `min(tradelist, quantity)` and the remainder keeps the rest, so the two halves sum to what
+/// the one row held. Duplicating it would put a card on the trade list twice by moving it.
+///
+/// **This is the crate's one copy of that rule, and there were two.**
+/// [`crate::collection_alloc`] wrote it first for the deck boundary's two commands, as a private
+/// `move_copies`; the category writes then needed the same split and could not reach a private
+/// item, so it was spelled again here. Two implementations of one rule disagree the first time
+/// either changes, and this rule moves the reader's cards — so the twin was deleted at fan-in and
+/// both of those commands call this. It belongs here, beside the merge it is built on and the
+/// fence-free refile it extends.
+pub(crate) fn take_copies(
+    tx: &Connection,
+    id: i64,
+    quantity: i64,
+    dest: Option<i64>,
+) -> Result<i64, String> {
+    let (folder_id, held, tradelist): (Option<i64>, i64, i64) = tx
+        .query_row(
+            "SELECT folder_id, quantity, tradelist_quantity FROM collection_entries WHERE id = ?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| GONE.to_owned())?;
+    if quantity > held {
+        return Err(crate::collection_alloc::NOT_THAT_MANY.to_owned());
+    }
+    let remainder = held - quantity;
+    let moved_trade = tradelist.min(quantity);
+    let kept_trade = tradelist - moved_trade;
+
+    if remainder > 0 {
+        tx.execute(
+            "UPDATE collection_entries
+                SET quantity = ?2, tradelist_quantity = ?3, updated_at = unixepoch()
+              WHERE id = ?1",
+            params![id, quantity, moved_trade],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
+    let landed = refile_entry(tx, id, dest)?.id;
+
+    if remainder > 0 {
+        tx.execute(
+            "INSERT INTO collection_entries
+                 (card_id, set_code, collector_number, lang, finish, condition,
+                  condition_original, quantity, tradelist_quantity, purchase_price,
+                  purchase_currency, acquired_at, acquisition_source, serial_number,
+                  altered, signed, proxy, misprint, grading, tags, notes, needs_review,
+                  folder_id, created_at, updated_at)
+             SELECT card_id, set_code, collector_number, lang, finish, condition,
+                    condition_original, ?2, ?3, purchase_price,
+                    purchase_currency, acquired_at, acquisition_source, serial_number,
+                    altered, signed, proxy, misprint, grading, tags, notes, needs_review,
+                    ?4, created_at, unixepoch()
+               FROM collection_entries WHERE id = ?1",
+            params![landed, remainder, kept_trade, folder_id],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(landed)
+}
+
 /// Fold `source` into `target` and delete it — this module's name for
 /// [`crate::collection::fold_entry`], which is the crate's **one** answer to "one collection row
 /// becomes another" and where every rule about what moves is argued.
 ///
-/// **It was a second copy of those five statements until fan-in.** Two implementations of one
-/// rule disagree the first time either changes, and this one guards a built deck's claims:
-/// `deck_allocations.collection_entry_id` is `ON DELETE CASCADE`, so a fold that deleted the
-/// source row outright would silently unbuild whatever deck had reserved from it. That is not a
-/// rule to hold in two places.
+/// **It was a second copy of those statements until fan-in.** Two implementations of one rule
+/// disagree the first time either changes, and what this one decides is what a reader keeps: the
+/// quantities that add, and the five receipt columns the survivor takes only where it has none.
+/// That is not a rule to hold in two places.
+///
+/// **It is _two_ statements, and this crate says two.** One `UPDATE` that sums the source into
+/// the survivor and one `DELETE` that removes the source. Reading the source is not a third: it
+/// rides in the `UPDATE`'s own `FROM (SELECT … WHERE id = ?2)` subquery. It stood at **five**
+/// while `deck_allocations.collection_entry_id` was an `ON DELETE CASCADE` pointed at
+/// `collection_entries` — three of them kept a built deck's claims alive across a merge — and
+/// schema v25 took the table and those three with it. *"Read the source, sum into the survivor,
+/// delete the source"* is the same code in three **steps**, which is a true sentence about a
+/// two-statement function and the other number a reader will meet. Say two; see
+/// [collection-folders.md](../../docs/reference/collection-folders.md).
 ///
 /// The wrapper stays because this module's callers are `Result<_, String>` throughout while
 /// `fold_entry` answers `rusqlite::Result` for the reconciler's sake — one `map_err` here rather
@@ -842,11 +1013,18 @@ mod tests {
         .unwrap()
     }
 
-    /// A folder the **app** owns, written straight into the table because no command in this PR
-    /// makes one — the deck-driven writes that do are the next PR's. `deck` needs a deck to
-    /// name: `collection_folders` CHECKs `(kind = 'deck') = (deck_id IS NOT NULL)`, so the two
-    /// cannot be seeded apart.
+    /// A folder the **app** owns. `deck` needs a deck to name: `collection_folders` CHECKs
+    /// `(kind = 'deck') = (deck_id IS NOT NULL)`, so the two cannot be seeded apart — and
+    /// nothing in *this* module makes either kind, which is what the fences below are about.
+    ///
+    /// **`removed` is found rather than made**, because schema v25 files it into every database
+    /// and the partial unique index on `kind` makes a second one impossible. A helper that
+    /// inserted would fail with `UNIQUE constraint failed: collection_folders.kind`, which is
+    /// the migration working: there is exactly one holding area per database, by construction.
     fn insert_system_folder(conn: &Connection, kind: &str, name: &str) -> i64 {
+        if kind == "removed" {
+            return removed_folder(conn);
+        }
         let deck_id: Option<i64> = (kind == "deck").then(|| {
             conn.query_row(
                 "INSERT INTO decks (name, created_at, updated_at)
@@ -865,6 +1043,29 @@ mod tests {
             |r| r.get(0),
         )
         .unwrap()
+    }
+
+    /// The one holding area schema v25 files into every database — the app's own row, and the
+    /// reason every count and every `sort_order` below starts one higher than it reads.
+    fn removed_folder(conn: &Connection) -> i64 {
+        conn.query_row(
+            "SELECT id FROM collection_folders WHERE kind = 'removed'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// The folders **the reader made**, in [`list_folders`]' order. What almost every assertion
+    /// below is actually about: `list_folders` answers the app's rows too, deliberately, and a
+    /// test that counted the whole list would be measuring the migration rather than the press
+    /// it just made.
+    fn user_folders(conn: &Connection) -> Vec<CollectionFolder> {
+        list_folders(conn)
+            .unwrap()
+            .into_iter()
+            .filter(|f| f.kind == "user")
+            .collect()
     }
 
     /// Where an entry is filed, straight from the column.
@@ -897,13 +1098,46 @@ mod tests {
         assert_eq!((binder.kind.as_str(), binder.deck_id), ("user", None));
 
         // `max + 1` **among siblings**, which is why the first child starts at 0 again rather
-        // than continuing the root's numbering.
+        // than continuing the root's numbering. The root's own numbering starts at 0 too, even
+        // though schema v25's holding area is a root sibling sitting at slot 0: the `max` is
+        // taken over `kind = 'user'` alone, so the app's folders are not in the reader's
+        // sequence at all. `a_folder_the_app_owns_is_not_part_of_the_readers_numbering` is what
+        // that fence is about.
         assert_eq!((binder.sort_order, trades.sort_order), (0, 1));
         assert_eq!((rares.sort_order, lands.sort_order), (0, 1));
 
         // Never an explicit id: `COLLECTION_GRAIN`'s `coalesce(folder_id, 0)` is only safe while
         // no folder can be 0, and SQLite guarantees that only for ids it assigns itself.
         assert!(binder.id > 0, "SQLite assigned it, and never 0");
+    }
+
+    /// **The app's own folders are not part of the reader's numbering, and nobody chose the
+    /// ordering that says they are.** `Recently removed` is a root sibling at `sort_order` 0 and
+    /// every deck's group is another, so a bare `max(sort_order) + 1` over all siblings started
+    /// the reader's *first* folder at 1 and left the holding area — and, on a database with
+    /// decks, every group — sorting ahead of everything they ever name. The UI draws the app's
+    /// folders in a pinned section of their own, so their numbers have no business here.
+    ///
+    /// Seeded with **two** app folders rather than one, and the group is given a high
+    /// `sort_order` deliberately: a fence written as `kind <> 'removed'` would pass with only
+    /// the holding area in the table, and a fence that merely skipped slot 0 would pass with
+    /// both at 0.
+    #[test]
+    fn a_folder_the_app_owns_is_not_part_of_the_readers_numbering() {
+        let conn = open();
+        let group = insert_system_folder(&conn, "deck", "Burn");
+        conn.execute(
+            "UPDATE collection_folders SET sort_order = 9 WHERE id = ?1",
+            params![group],
+        )
+        .unwrap();
+        // And the holding area is already there, at 0, from the migration.
+        assert_eq!(
+            create_folder(&conn, None, "Binder").unwrap().sort_order,
+            0,
+            "the reader's first folder is their first folder"
+        );
+        assert_eq!(create_folder(&conn, None, "Trades").unwrap().sort_order, 1);
     }
 
     #[test]
@@ -915,7 +1149,7 @@ mod tests {
             "the refusal names the problem"
         );
         assert!(
-            list_folders(&conn).unwrap().is_empty(),
+            user_folders(&conn).is_empty(),
             "and the refused create wrote nothing"
         );
     }
@@ -934,9 +1168,8 @@ mod tests {
             create_folder(&conn, Some(sys), "Rares").unwrap_err(),
             FOLDER_NOT_YOURS
         );
-        assert_eq!(
-            list_folders(&conn).unwrap().len(),
-            1,
+        assert!(
+            user_folders(&conn).is_empty(),
             "neither refused create wrote a folder"
         );
     }
@@ -1078,14 +1311,25 @@ mod tests {
         let b = create_folder(&conn, None, "B").unwrap();
         let child = create_folder(&conn, Some(a.id), "A's drawer").unwrap();
         // `B` reordered ahead of `A`, so the order proves `sort_order` rather than the ids
-        // happening to agree with it.
+        // happening to agree with it — and `A` put back to 0 so it **ties with its own child**,
+        // which is what makes the second key mean something. Both are written by hand rather
+        // than left to `create_folder`'s `max + 1`: schema v25's holding area is a root sibling
+        // and already holds slot 0, so the reader's first folder starts at 1 and the tie this
+        // test is named for would never occur.
         conn.execute(
             "UPDATE collection_folders SET sort_order = -1 WHERE id = ?1",
             params![b.id],
         )
         .unwrap();
+        conn.execute(
+            "UPDATE collection_folders SET sort_order = 0 WHERE id = ?1",
+            params![a.id],
+        )
+        .unwrap();
 
-        let rows = list_folders(&conn).unwrap();
+        // The reader's own, because `list_folders` answers the app's holding area too and this
+        // test is about the order of the folders somebody made.
+        let rows = user_folders(&conn);
 
         let order: Vec<i64> = rows.iter().map(|f| f.id).collect();
         assert_eq!(
@@ -1107,16 +1351,17 @@ mod tests {
         insert_system_folder(&conn, "removed", "Recently removed");
         let deck_folder = insert_system_folder(&conn, "deck", "Mono red");
 
-        let kinds: Vec<&str> = list_folders(&conn)
+        // **Sorted, because this test is about which rows list and not about their order** —
+        // `list_folders_reads_the_tree_shape_and_order` owns that question, and the seeded deck
+        // group is written straight into the table at `sort_order` 0 rather than through the
+        // command, so its position here would be an artefact of the fixture.
+        let mut kinds: Vec<String> = list_folders(&conn)
             .unwrap()
             .iter()
-            .map(|f| match f.kind.as_str() {
-                "user" => "user",
-                "deck" => "deck",
-                _ => "removed",
-            })
+            .map(|f| f.kind.clone())
             .collect();
-        assert_eq!(kinds, vec!["user", "removed", "deck"]);
+        kinds.sort();
+        assert_eq!(kinds, vec!["deck", "removed", "user"]);
         assert!(
             list_folders(&conn)
                 .unwrap()
@@ -1138,7 +1383,7 @@ mod tests {
 
         delete_folder(&conn, binder).unwrap();
 
-        let left: Vec<i64> = list_folders(&conn).unwrap().iter().map(|f| f.id).collect();
+        let left: Vec<i64> = user_folders(&conn).iter().map(|f| f.id).collect();
         assert_eq!(left, vec![elsewhere], "the sub-folder cascaded with it");
         // The cards are the reader's property and no filing decision throws one away.
         assert_eq!(folder_of(&conn, top), None, "surfaced at the root");
@@ -1181,7 +1426,7 @@ mod tests {
         assert_eq!(rows, 1, "two collided into one row");
         assert_eq!(qty, 2, "holding both lots of copies");
         assert!(
-            list_folders(&conn).unwrap().is_empty(),
+            user_folders(&conn).is_empty(),
             "and the folder really went -- the collision used to leave it standing"
         );
     }
@@ -1275,86 +1520,6 @@ mod tests {
         );
     }
 
-    /// **`deck_allocations.collection_entry_id` is `ON DELETE CASCADE`**, so a merge that simply
-    /// deleted the source row would take a built deck's reservations with it — copies that still
-    /// exist, in a deck that still wants them, unbuilt by a filing press. This is
-    /// `reconcile::fold_into_existing`'s guarantee, which the merge borrows its statements from.
-    #[test]
-    fn a_refile_carries_a_decks_claim_onto_the_row_it_merged_into() {
-        let conn = open();
-        let binder = create_folder(&conn, None, "Binder").unwrap();
-        let root = insert_entry(&conn, "bolt", None, 3);
-        let filed = insert_entry(&conn, "bolt", Some(binder.id), 2);
-        let deck: i64 = conn
-            .query_row(
-                "INSERT INTO decks (name, created_at, updated_at)
-                 VALUES ('Mono red', unixepoch(), unixepoch()) RETURNING id",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        conn.execute(
-            "INSERT INTO deck_allocations (deck_id, collection_entry_id, quantity,
-                                           created_at, updated_at)
-             VALUES (?1, ?2, 3, unixepoch(), unixepoch())",
-            params![deck, root],
-        )
-        .unwrap();
-
-        refile_entry(&conn, root, Some(binder.id)).unwrap();
-
-        let claims: Vec<(i64, i64)> = conn
-            .prepare("SELECT collection_entry_id, quantity FROM deck_allocations")
-            .unwrap()
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
-            .unwrap()
-            .collect::<rusqlite::Result<_>>()
-            .unwrap();
-        assert_eq!(
-            claims,
-            vec![(filed, 3)],
-            "the claim moved to the survivor rather than cascading away"
-        );
-    }
-
-    /// Both claims fold into one, because `deck_allocations`' grain is one row per
-    /// `(deck, entry)` — the same shape as the entries' own, and the reason the merge needs
-    /// three statements rather than one repoint.
-    #[test]
-    fn a_refile_folds_two_claims_the_same_deck_held_on_both_rows() {
-        let conn = open();
-        let binder = create_folder(&conn, None, "Binder").unwrap();
-        let root = insert_entry(&conn, "bolt", None, 3);
-        let filed = insert_entry(&conn, "bolt", Some(binder.id), 2);
-        let deck: i64 = conn
-            .query_row(
-                "INSERT INTO decks (name, created_at, updated_at)
-                 VALUES ('Mono red', unixepoch(), unixepoch()) RETURNING id",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        conn.execute(
-            "INSERT INTO deck_allocations (deck_id, collection_entry_id, quantity,
-                                           created_at, updated_at)
-             VALUES (?1, ?2, 3, unixepoch(), unixepoch()),
-                    (?1, ?3, 2, unixepoch(), unixepoch())",
-            params![deck, root, filed],
-        )
-        .unwrap();
-
-        refile_entry(&conn, root, Some(binder.id)).unwrap();
-
-        let claims: Vec<(i64, i64)> = conn
-            .prepare("SELECT collection_entry_id, quantity FROM deck_allocations")
-            .unwrap()
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
-            .unwrap()
-            .collect::<rusqlite::Result<_>>()
-            .unwrap();
-        assert_eq!(claims, vec![(filed, 5)], "one claim for all five copies");
-    }
-
     /// An `UPDATE` changing 0 rows cannot tell a missing row from a collision, which is why the
     /// grain read comes first and answers this.
     #[test]
@@ -1433,6 +1598,55 @@ mod tests {
         // reach the same folder through `refile_entry` and are not refused.
         refile_entry(&conn, id, Some(sys)).unwrap();
         assert_eq!(folder_of(&conn, id), Some(sys));
+    }
+
+    /// **The fence has a second end, and it took longer to notice.** Nothing may be filed
+    /// *into* a deck's group by hand — the test above — and nothing may be filed *out* of one
+    /// either. A copy walking out of a group leaves the deck listing a card whose copies are
+    /// gone, which is the very invariant a category cascade used to break from the other
+    /// direction. The frontend refuses the drag today; a command is one careless caller away
+    /// from being the only guard left.
+    ///
+    /// **The refusal names the source, not the folder** ([`ENTRY_IN_A_DECK`]): the reader is not
+    /// changing anything about the folder, they are taking a card out of it, and
+    /// [`FOLDER_NOT_YOURS`] over that press would name the wrong thing.
+    ///
+    /// Three things this must **not** fence, each asserted because getting any of them wrong
+    /// breaks the feature rather than a test: the root, `Recently removed` — taking a card out
+    /// of the holding area and filing it in a binder is what that folder is *for* — and
+    /// [`refile_entry`], the shared primitive every sanctioned way out of a group goes through.
+    #[test]
+    fn a_card_cannot_be_filed_out_of_a_deck_by_hand() {
+        let conn = open();
+        let group = insert_system_folder(&conn, "deck", "Mono red");
+        let removed = insert_system_folder(&conn, "removed", "Recently removed");
+        let binder = create_folder(&conn, None, "Binder").unwrap();
+        let id = insert_entry(&conn, "bolt", Some(group), 2);
+
+        assert_eq!(
+            set_entry_folder(&conn, id, Some(binder.id)).unwrap_err(),
+            ENTRY_IN_A_DECK
+        );
+        // The root is not a way around it: `None` is a destination like any other here.
+        assert_eq!(
+            set_entry_folder(&conn, id, None).unwrap_err(),
+            ENTRY_IN_A_DECK
+        );
+        assert_eq!(
+            folder_of(&conn, id),
+            Some(group),
+            "and neither wrote anything"
+        );
+
+        // The sanctioned way out — the primitive `deck_to_collection` and `delete_deck` call,
+        // which carries no fence and must never grow one.
+        refile_entry(&conn, id, Some(removed)).unwrap();
+        assert_eq!(folder_of(&conn, id), Some(removed));
+
+        // And out of the holding area by hand, which is the reader tidying up rather than a
+        // deck losing custody of anything.
+        set_entry_folder(&conn, id, Some(binder.id)).unwrap();
+        assert_eq!(folder_of(&conn, id), Some(binder.id));
     }
 
     #[test]

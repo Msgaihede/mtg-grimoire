@@ -4,8 +4,11 @@
 //! Schema v8 gave `deck_cards` a `variant` — `live` is what is sleeved up, `theory` is the
 //! plan — and widened [`DECK_CARD_GRAIN`](crate::schema::DECK_CARD_GRAIN) with it, so the two
 //! lists are the same table and never the same row. Everything that makes a deck *real* reads
-//! `live` and only `live`: the gallery's count, [`crate::deck::allocate_deck`]'s claims,
-//! [`crate::deck::missing_to_wishlist`]'s shopping list. A plan is not a deck the user has.
+//! `live` and only `live`: the gallery's count, [`crate::collection_alloc`]'s two moves across
+//! the deck boundary, [`crate::deck::missing_to_wishlist`]'s shopping list. A plan is not a deck
+//! the user has — and since schema v25 the sharpest statement of that is
+//! [`crate::collection_alloc::THEORY_HOLDS_NOTHING`], which refuses in words when a theory row
+//! is asked to give copies back.
 //!
 //! This module is the three things that are only true of the *pair*:
 //!
@@ -14,8 +17,10 @@
 //!   caller). The deck the reader has built **is the plan**; what is sleeved up is what they
 //!   have actually acquired, so the live list starts empty and fills as cards arrive. Copying
 //!   instead would claim, on the reader's behalf, that they already own a deck they have only
-//!   designed — and it would leave the allocator reserving collection copies for a list that is
-//!   now a plan, which is why [`move_live_into_theory`] makes its caller reallocate.
+//!   designed. **The copies themselves do not move**, and that is a real change of answer:
+//!   before schema v25 the move had to release what the live list had reserved, and a group is
+//!   custody rather than a reservation — the cards stay in the box with the deck's name on it,
+//!   because nobody unsleeved anything.
 //! * **The difference.** [`theory_diff`] answers what theory holds that live does not — **one
 //!   direction only**, because this is a shopping list rather than a reconciliation. What live
 //!   has and theory dropped is a cut the user already made; it needs no row. Each row also says
@@ -85,8 +90,8 @@ pub struct TheoryDiffRow {
     /// would have been one line priced at whichever of the two the first theory row happened
     /// to name.
     pub finish: Option<String>,
-    /// Copies of **this printing, in this finish**, the collection holds and **no built deck
-    /// has claimed**.
+    /// Copies of **this printing, in this finish**, the collection holds that **no deck's group
+    /// holds**.
     ///
     /// The number that turns "I need two more of these" into "and one of them is in the box
     /// already". It answers on exactly [`Grouped`]'s key, and the two cannot disagree: a line
@@ -95,16 +100,17 @@ pub struct TheoryDiffRow {
     /// `owned_spare` across rows — so any answer wider than the row's own identity counts one
     /// binder copy once per row that could have used it.
     ///
-    /// Built is the whole of the second test, and it is [`crate::deck::allocate_deck`]'s own
-    /// rule read from the other end: a deck on a table has its cards, a deck being planned is
-    /// planning with copies it may share with every other draft — so an unbuilt deck's claim
-    /// does not make a copy unavailable to this plan.
+    /// **Where the row sits is the whole of it** (schema v25, replacing "no *built* deck has
+    /// claimed"): a deck on a table has its cards, so a copy filed in a deck's group is not one
+    /// this plan can count on. Everywhere else is — the root, a folder the reader made, and
+    /// `Recently removed`, which exists precisely so a card that left a deck is available again.
+    /// [`OWNED_SPARE_SQL`] is the statement and argues the arms.
     ///
     /// **A display field, and never a term in an arithmetic.** It is deliberately *not* netted
     /// out of [`Self::quantity`] anywhere, least of all by [`missing_to_wishlist`]: `quantity`
-    /// has already subtracted the live list and this number has not — an unbuilt deck's own live
-    /// copies read as spare here, which is right for a person and wrong for a subtraction. It is
-    /// for a reader, beside a price.
+    /// has already subtracted the live list and this number has not — copies the reader has not
+    /// yet sleeved into *this* deck read as spare here, which is right for a person and wrong
+    /// for a subtraction. It is for a reader, beside a price.
     pub owned_spare: i64,
     /// How many of this row's [`Self::quantity`] the **live list already plays**, as a different
     /// printing or finish of the same oracle card — the copies that are an upgrade rather than a
@@ -218,14 +224,25 @@ fn diff_select(marketplace: crate::sorting::Marketplace) -> String {
     )
 }
 
-/// Copies of one **printing in one finish** the collection holds that no **built** deck has
-/// spoken for.
+/// Copies of one **printing in one finish** the collection holds that **no deck's group holds**.
 ///
-/// One statement rather than two so the subtraction cannot see two different moments of the
-/// collection. `min(a.quantity, e.quantity)` is [`crate::deck::allocate_deck`]'s clamp, per
-/// claim and not per total: a deck that reserved four copies of an entry the user has since
-/// stepped to one has one of them, and charging the plan for the other three would be charging
-/// it for copies that do not exist.
+/// **"Spare" is a fact about where a row sits, and schema v25 is what made it one.** This was
+/// the binder's copies *less what a built deck had claimed* — a subtraction over
+/// `deck_allocations`, clamped per claim because the ledger could out-claim a row the reader had
+/// since stepped down. There is no ledger: a deck holds the copies filed in its
+/// `collection_folders` row, so the question is one `kind` lookup and there is nothing left for
+/// a second moment of the collection to disagree with.
+///
+/// **The root, a folder the reader made and `Recently removed` are all spare; only a `deck`
+/// folder is not.** The `IS NULL` arm comes first because the root is where most copies are and
+/// is not a folder to look up — a `<> 'deck'` over a NULL id is NULL, which is not true, so the
+/// root would drop out of exactly the list that is mostly root.
+/// [`crate::collection::Allocation::Unallocated`] narrows the collection page by this same
+/// sentence, and the two are the same rule read from two ends.
+///
+/// `Recently removed` is on the spare side deliberately: a card that left a deck without leaving
+/// the database is back on the reader's desk, and the folder exists so they can put it somewhere
+/// else.
 ///
 /// **On exactly [`Grouped`]'s key, because the figure strip sums this field down the list.**
 /// It was per oracle card until 2026-08-20 — which stopped being defensible the moment a
@@ -243,15 +260,12 @@ fn diff_select(marketplace: crate::sorting::Marketplace) -> String {
 /// No `LEFT JOIN cards` and no orphan arm: `collection_entries.card_id` is the printing, so an
 /// entry whose card has left the corpus is matched by exactly the same equality as every other.
 ///
-const OWNED_SPARE_SQL: &str = "SELECT coalesce(sum(e.quantity), 0) -
-            coalesce((SELECT sum(min(a.quantity, e2.quantity))
-                        FROM deck_allocations a
-                        JOIN decks d ON d.id = a.deck_id
-                        JOIN collection_entries e2 ON e2.id = a.collection_entry_id
-                       WHERE d.is_built = 1 AND e2.card_id = ?1
-                         AND e2.finish = coalesce(?2, 'nonfoil')), 0)
+const OWNED_SPARE_SQL: &str = "SELECT coalesce(sum(e.quantity), 0)
        FROM collection_entries e
-      WHERE e.card_id = ?1 AND e.finish = coalesce(?2, 'nonfoil')";
+      WHERE e.card_id = ?1 AND e.finish = coalesce(?2, 'nonfoil')
+        AND (e.folder_id IS NULL
+             OR (SELECT f.kind FROM collection_folders f
+                  WHERE f.id = e.folder_id) <> 'deck')";
 
 /// Cards the **theory** list holds that **live** does not.
 ///
@@ -392,14 +406,15 @@ fn grouped_diff(
             continue;
         }
         grouped.row.quantity = short;
-        // Floored at zero: a collection stepped down under a built deck's stored claim can make
-        // the subtraction negative, and "you own −1 of these" is not a thing to tell anyone.
+        // No floor, and there was one until schema v25: the old statement *subtracted* a built
+        // deck's stored claims and a collection stepped down under one went negative. This one
+        // sums quantities off a column with `CHECK (quantity >= 0)`, so there is no arithmetic
+        // left that can produce a number with no reading.
         grouped.row.owned_spare = spare
             .query_row(params![grouped.row.card_id, grouped.row.finish], |r| {
                 r.get::<_, i64>(0)
             })
-            .map_err(|e| e.to_string())?
-            .max(0);
+            .map_err(|e| e.to_string())?;
         diff.push(grouped);
     }
 
@@ -436,7 +451,7 @@ fn grouped_diff(
 /// Copy the live list into the theory one, leaving whatever theory already holds alone.
 ///
 /// **Takes the caller's connection and opens no transaction**, exactly as
-/// [`crate::deck::allocate_deck`] does, because its caller [`copy_from_live`] pairs it with a
+/// [`crate::deck_audit::record`] does, because its caller [`copy_from_live`] pairs it with a
 /// `touch_deck` and a history row and the three are one fact: a copy that committed while the
 /// history rolled back is a change with no line against it.
 ///
@@ -450,8 +465,10 @@ fn grouped_diff(
 /// in this deck and a plan inherits it; the flag says the printing left the card database, which
 /// is as true of the copy as of the original.
 ///
-/// **Allocates nothing**, and must not: the allocator reserves collection copies for `live`
-/// only, so a theory list that claimed anything would take copies away from decks that are real.
+/// **Moves no cardboard**, and must not: it writes `deck_cards` rows and nothing else. Copies
+/// cross the deck boundary only through [`crate::collection_alloc`]'s two writes, which a plan
+/// cannot reach — so a seed that touched the collection would file a second set of copies the
+/// reader does not own into a group that already holds theirs.
 ///
 /// Answers the number of **rows** written, which is what `execute` counts. [`copy_from_live`]
 /// wants **copies** for its history and measures them itself with [`theory_copies`] — a row is
@@ -497,10 +514,12 @@ pub(crate) fn seed_from_live(tx: &Connection, deck_id: i64) -> Result<usize, Str
 /// not empty is the failure this line prevents — the columns are all still there, one tab
 /// across, and nothing on screen would say so.
 ///
-/// **It allocates nothing itself, and its caller must.** `deck_allocations` reserves collection
-/// copies for `live` only, so a deck whose live list has just been emptied is holding claims on
-/// copies it no longer wants; releasing them belongs in the same transaction as the move, and
-/// [`crate::deck::update_deck`] is where that transaction is.
+/// **It moves no collection row, and its caller owes none either** — reversed at schema v25,
+/// and worth stating rather than deleting because the old rule is the intuitive one. Claims were
+/// held for `live` only, so emptying the live list stranded every claim the deck held and
+/// [`crate::deck::update_deck`] had to reallocate in the same transaction. A group is custody:
+/// the copies are physically in the box with the deck's name on it, the plan moving does not
+/// unsleeve them, and `enabling_theory_leaves_the_copies_in_the_decks_group` pins it.
 ///
 /// Answers the number of **rows** moved, which is what `execute` counts — [`seed_from_live`]'s
 /// unit, and for its reason.
@@ -601,15 +620,17 @@ pub fn copy_from_live(conn: &Connection, deck_id: i64) -> Result<usize, String> 
 /// Everything the plan is short of, onto the wishlist. Returns how many wishes were touched.
 ///
 /// [`crate::deck::missing_to_wishlist`]'s twin, and the difference is what a plan is: what it
-/// wants is measured against the **live list** rather than against the allocator's claims, a
-/// theory row reserving nothing and so having no claims to measure.
+/// wants is measured against the **live list** rather than against the copies the deck's group
+/// holds, a plan holding no cardboard at all
+/// ([`crate::collection_alloc::THEORY_HOLDS_NOTHING`] is that refusal in words).
 ///
 /// **The wish is [`TheoryDiffRow::quantity`] and nothing is subtracted from it.** That is not an
 /// oversight and it was wrong once: subtracting [`TheoryDiffRow::owned_spare`] here counts the
 /// live list's copies **twice**, because `quantity` is already *wanted minus held* and
-/// `owned_spare` nets out only the claims of decks that are **built**. An unbuilt deck's own
-/// live copies are therefore spare by that definition, so live 2 / owned 2 / theory 3 asked for
-/// nothing while the user needed one — `missing_to_wishlist_does_not_count_the_live_list_twice`
+/// `owned_spare` nets out only what a deck's **group** holds. Copies the reader owns and has not
+/// filed into this deck are therefore spare by that definition, so live 2 / owned 2 / theory 3
+/// asked for nothing while the user needed one —
+/// `missing_to_wishlist_does_not_count_the_live_list_twice`
 /// is that arithmetic pinned. `owned_spare` is a **display** field: the diff row's way of saying
 /// "one of these is in the box already", for a person to read beside a price. It is not a term
 /// in this sum.
@@ -727,7 +748,8 @@ fn unfinished(e: tauri::Error) -> String {
 /// The editor read the other variant's whole deck for a while and that was removed on 2026-08-20,
 /// for two reasons worth keeping apart. One was a **duplicate rule** — it re-implemented the
 /// comparison this module owns, and disagreed with it. The other was **cost**: `deck_get` prices
-/// every row, joins categories and rolls up allocations, which is a great deal of work for a mark.
+/// every row, joins categories and rolls up what the deck's group holds, which is a great deal
+/// of work for a mark.
 /// This command answers neither a comparison nor a priced row: one indexed scan of `deck_cards`,
 /// two columns, no join to `cards` and no marketplace. `DeckEditor.test.tsx` pins the first
 /// reason from the frontend side — nothing may call `deck_get` for the list the reader is not on.
@@ -1004,43 +1026,40 @@ mod tests {
         assert_eq!(last_variant(&conn, id), THEORY);
     }
 
-    /// **The move releases what the live list had reserved, in the same transaction.** This is
-    /// the one a naive implementation gets wrong invisibly: `deck_allocations` carries no
-    /// variant and `allocate_deck` claims for `live` only, so a move that did not reallocate
-    /// would leave this deck holding four copies of a card it no longer lists — taken away from
-    /// every other deck, and released only at whatever unrelated write happened to touch this
-    /// one next.
+    /// **The move leaves the copies exactly where they physically are, and that reverses what
+    /// this test asserted until schema v25.** The old rule was a claim ledger held for `live`
+    /// only, so emptying the live list stranded every claim the deck held and the move had to
+    /// release them in the same transaction. A group is *custody*: the cards are in the box with
+    /// the deck's name on it, and re-planning a deck does not put them back in the binder,
+    /// because nobody unsleeved anything.
     ///
-    /// The deck is **built**, because that is what makes a claim visible to anybody else, and
-    /// the claim is asserted before the switch so the test can tell "released" from "never
-    /// made".
+    /// **The copies are asserted before the switch as well as after**, so the test can tell
+    /// "left alone" from "never there" — an implementation that filed nothing anywhere would
+    /// pass a one-sided assertion just as well.
     #[test]
-    fn enabling_theory_releases_the_copies_the_live_list_had_claimed() {
+    fn enabling_theory_leaves_the_copies_in_the_decks_group() {
         let conn = seeded();
         let id = deck(&conn, "Burn");
         let main = category(&conn, id, "Main deck");
         let entry = own(&conn, "bolt-lea", 4);
         add(&conn, id, "bolt-lea", main, LIVE, 4);
-        crate::deck::update_deck(
-            &conn,
-            id,
-            &DeckPatch {
-                is_built: Some(true),
-                ..Default::default()
-            },
-        )
-        .unwrap();
+        file_into(&conn, entry, Some(group_of(&conn, id)));
         assert_eq!(
-            allocations(&conn),
-            vec![(entry, 4)],
-            "the live list must really have claimed the copies"
+            copies_in(&conn, Some(group_of(&conn, id))),
+            vec![("bolt-lea".to_owned(), 4)],
+            "the deck must really hold the copies for the switch to have anything to lose"
         );
 
         set_theory(&conn, id, true);
 
         assert!(
-            allocations(&conn).is_empty(),
-            "a plan reserves nothing, and the live list is now empty"
+            cards_in(&conn, id, LIVE).is_empty(),
+            "the list really did move, so the switch did the thing this test is about"
+        );
+        assert_eq!(
+            copies_in(&conn, Some(group_of(&conn, id))),
+            vec![("bolt-lea".to_owned(), 4)],
+            "and the cardboard is still in the deck's box"
         );
     }
 
@@ -1298,40 +1317,129 @@ mod tests {
         );
     }
 
-    /// Rule 3. The binder's copies less what decks *on a table* have spoken for — an unbuilt
-    /// deck's claim leaves a copy available, because a deck being planned is planning with
-    /// cards it may share with every other draft.
+    /// The `collection_folders` row that stands for a deck. Every deck has one — schema v25
+    /// gave one to every deck that existed and `deck::create_deck` gives one to every deck made
+    /// since — and it is where "this deck holds these copies" is now recorded.
+    fn group_of(conn: &Connection, deck_id: i64) -> i64 {
+        conn.query_row(
+            "SELECT id FROM collection_folders WHERE deck_id = ?1",
+            params![deck_id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// The one holding area — `kind = 'removed'`, inserted by schema v25 into every database.
+    fn removed_folder(conn: &Connection) -> i64 {
+        conn.query_row(
+            "SELECT id FROM collection_folders WHERE kind = 'removed'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// One folder the reader made, at the root.
+    fn binder(conn: &Connection, name: &str) -> i64 {
+        crate::collection_folders::create_folder(conn, None, name)
+            .unwrap()
+            .id
+    }
+
+    /// File an owned row somewhere — the app's own write, so the merge rule is the app's.
+    fn file_into(conn: &Connection, entry: i64, folder: Option<i64>) {
+        crate::collection_folders::refile_entry(conn, entry, folder).unwrap();
+    }
+
+    /// The **cardboard** one folder holds, as `(printing, copies)` sorted by id — `None` is the
+    /// root. [`cards_in`]'s twin one table over: that one reads a deck's *list*, this reads the
+    /// copies that physically sit in a place, and since schema v25 the difference between the
+    /// two is the whole subject.
+    fn copies_in(conn: &Connection, folder: Option<i64>) -> Vec<(String, i64)> {
+        conn.prepare(
+            "SELECT card_id, sum(quantity) FROM collection_entries
+              WHERE coalesce(folder_id, 0) = coalesce(?1, 0)
+              GROUP BY card_id ORDER BY card_id",
+        )
+        .unwrap()
+        .query_map(params![folder], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+    }
+
+    /// **Rule 3, and schema v25 is what rewrote it.** "Spare" was *the binder's copies less
+    /// what a built deck had claimed*; a claim ledger no longer exists, and a deck holds the
+    /// copies that sit in its group. So spare is now **not in any deck's group** — one
+    /// `collection_folders.kind` lookup rather than a subtraction, and there is no second
+    /// answer left to disagree with it.
+    ///
+    /// The copies really do have to *move* for the deck to hold them: adding a card to another
+    /// deck's live list is not by itself a claim on anything, which is the half of this a
+    /// reader coming from the old rule will expect to be false.
     #[test]
-    fn owned_spare_is_what_no_built_deck_has_claimed() {
+    fn a_copy_in_a_deck_group_is_not_spare() {
         let conn = seeded();
         let id = deck(&conn, "Burn");
         let main = category(&conn, id, "Main deck");
-        own(&conn, "bolt-lea", 3);
+        let entry = own(&conn, "bolt-lea", 3);
         add(&conn, id, "bolt-lea", main, THEORY, 4);
 
         assert_eq!(
             theory_diff(&conn, id, ANY_MARKET).unwrap()[0].owned_spare,
             3,
-            "nothing is built, so every copy is spare"
+            "at the root, every copy is spare"
         );
 
-        // A second deck, sleeved up, taking two of them.
+        // A second deck sleeves them up: the copies leave the reader's desk and take up
+        // residence in that deck's group.
         let other = deck(&conn, "Other");
-        let other_main = category(&conn, other, "Main deck");
-        add(&conn, other, "bolt-lea", other_main, LIVE, 2);
-        crate::deck::update_deck(
-            &conn,
-            other,
-            &DeckPatch {
-                is_built: Some(true),
-                ..Default::default()
-            },
-        )
-        .unwrap();
+        file_into(&conn, entry, Some(group_of(&conn, other)));
 
         assert_eq!(
             theory_diff(&conn, id, ANY_MARKET).unwrap()[0].owned_spare,
-            1
+            0,
+            "a deck on a table has its cards, and this plan cannot count on them"
+        );
+
+        // And a copy bought afterwards lands at the root, where it is spare — so the answer is
+        // about *where each row sits* rather than about the printing being spoken for at all.
+        own(&conn, "bolt-lea", 1);
+        assert_eq!(
+            theory_diff(&conn, id, ANY_MARKET).unwrap()[0].owned_spare,
+            1,
+            "the new copy is spare and the sleeved ones are still not"
+        );
+    }
+
+    /// **The other three places a copy can sit are all spare**, and this is the half a naive
+    /// `folder_id IS NULL` would get wrong while passing every assertion above.
+    ///
+    /// A binder is filing the reader did, not a claim. `Recently removed` is on this side
+    /// deliberately and it is the sharper case: a card that left a deck without leaving the
+    /// database is *back on the desk*, and the folder exists precisely so the reader can put it
+    /// somewhere else — telling them a shopping-list line has no copies in the box while the
+    /// copies are sitting in the holding area would be the app hiding its own undo.
+    #[test]
+    fn a_copy_in_a_binder_or_recently_removed_is_still_spare() {
+        let conn = seeded();
+        let id = deck(&conn, "Burn");
+        let main = category(&conn, id, "Main deck");
+        let entry = own(&conn, "bolt-lea", 2);
+        add(&conn, id, "bolt-lea", main, THEORY, 4);
+
+        file_into(&conn, entry, Some(binder(&conn, "Long box")));
+        assert_eq!(
+            theory_diff(&conn, id, ANY_MARKET).unwrap()[0].owned_spare,
+            2,
+            "a binder is where the reader keeps cards, not a deck that is using them"
+        );
+
+        file_into(&conn, entry, Some(removed_folder(&conn)));
+        assert_eq!(
+            theory_diff(&conn, id, ANY_MARKET).unwrap()[0].owned_spare,
+            2,
+            "and a card put aside is a card on the desk"
         );
     }
 
@@ -1531,8 +1639,8 @@ mod tests {
     /// **The live list is subtracted once.** Netting `owned_spare` out of the wish as well is
     /// the bug this pins, and it hides from any fixture where the deck plays none of the card:
     /// [`TheoryDiffRow::quantity`] is already *wanted minus held*, while `owned_spare` nets out
-    /// only the claims of decks that are **built** — so an unbuilt deck's own live copies read
-    /// as spare and are charged against the wish a second time.
+    /// only what a deck's **group** holds — so copies the reader owns and has not filed into
+    /// this deck read as spare and are charged against the wish a second time.
     ///
     /// **Two cards, because the bug has two shapes and one fixture hides the other.** The Bolt
     /// (live 2, binder 2, plan 3) makes the subtraction negative, which the old code skipped
@@ -1553,8 +1661,8 @@ mod tests {
         add(&conn, id, "serra-lea", main, LIVE, 1);
         add(&conn, id, "serra-lea", main, THEORY, 5);
 
-        // The premise: the deck is not built, so nothing has *claimed* those copies and every
-        // one of them reads spare — which is right for a reader and is the whole trap for a
+        // The premise: the copies are at the root rather than in this deck's group, so every one
+        // of them reads spare — which is right for a reader and is the whole trap for a
         // subtraction, since `quantity` has already taken the live list off.
         let diff = theory_diff(&conn, id, ANY_MARKET).unwrap();
         assert_eq!((diff[0].quantity, diff[0].owned_spare), (1, 2));
@@ -1706,46 +1814,32 @@ mod tests {
         );
     }
 
-    /// Every reservation there is, as `(collection entry, copies)`, oldest first.
-    fn allocations(conn: &Connection) -> Vec<(i64, i64)> {
-        conn.prepare("SELECT collection_entry_id, quantity FROM deck_allocations ORDER BY id")
-            .unwrap()
-            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
-            .unwrap()
-            .collect::<Result<_, _>>()
-            .unwrap()
-    }
-
-    /// A plan reserves nothing. This is the rule every other module states and this one has
-    /// the sharpest way to break: seeding writes a pile of `theory` rows in one statement, and
-    /// an allocator run over them would take copies away from decks that are real.
+    /// **A plan moves no cardboard**, which is what this rule became at schema v25. It used to
+    /// read "a plan reserves nothing" against a claim ledger; there is no ledger, and the way a
+    /// plan could now go wrong is sharper — [`seed_from_live`] writes a pile of `theory` rows in
+    /// one statement, and any of that copying reaching the collection would file a second set of
+    /// copies the reader does not own into a group that already holds theirs.
     ///
-    /// **The fixture has to own the card and claim it live, or the test cannot fail.** The
-    /// first version of this compared an allocation count of 0 against an allocation count of
-    /// 0: nothing was copied, and nothing could have been claimed either way. Here the live
-    /// list really has reserved all four copies before the copy runs, so a plan that claimed
-    /// too would come out at eight — and the allocator is run again *afterwards*, over a
-    /// database that now holds both lists, because "an allocator run over them" is the
-    /// sentence this test is named for and the only way to make it is to run one.
+    /// **The deck has to really hold the copies, or the test cannot fail.** Eight owned against
+    /// four sleeved up, so a seed that duplicated the group's contents would come out at eight
+    /// in the box — a fixture with everything in the group already at its maximum could not tell
+    /// a doubling from a no-op.
     #[test]
-    fn seeding_the_plan_claims_no_collection_copy() {
+    fn seeding_the_plan_moves_no_collection_copy() {
         let conn = seeded();
         let id = deck(&conn, "Burn");
         let main = category(&conn, id, "Main deck");
-        // **Eight owned against a live list of four**, and the second number is what makes the
-        // test able to fail: with only four in the binder the clamp would hold the answer at
-        // four however many lists claimed it, and the doubling would be invisible.
-        let entry = own(&conn, "bolt-lea", 8);
-        // A card write runs the allocator, so this is a real reservation of four copies.
+        // Four sleeved up and four still in the binder. **The split is what makes a doubling
+        // visible**: a group already holding everything the reader owns reads the same whether
+        // the seed filed a second set or nothing at all. Filed first and topped up after,
+        // because `own` lands on the eleven-term grain — a second add at the root while the
+        // first row is still there is one row of eight, not two rows of four.
+        let sleeved = own(&conn, "bolt-lea", 4);
+        file_into(&conn, sleeved, Some(group_of(&conn, id)));
+        own(&conn, "bolt-lea", 4);
         add(&conn, id, "bolt-lea", main, LIVE, 4);
-        assert_eq!(
-            allocations(&conn),
-            vec![(entry, 4)],
-            "the live list must have claimed copies for there to be a doubling to catch"
-        );
 
         copy_from_live(&conn, id).unwrap();
-        crate::deck::allocate_deck(&conn, id).unwrap();
 
         assert_eq!(
             cards_in(&conn, id, THEORY),
@@ -1753,9 +1847,14 @@ mod tests {
             "the plan holds the same four copies"
         );
         assert_eq!(
-            allocations(&conn),
-            vec![(entry, 4)],
-            "and the deck still reserves four, not eight"
+            copies_in(&conn, Some(group_of(&conn, id))),
+            vec![("bolt-lea".to_owned(), 4)],
+            "and the box still holds four, not eight"
+        );
+        assert_eq!(
+            copies_in(&conn, None),
+            vec![("bolt-lea".to_owned(), 4)],
+            "the binder is untouched too — a plan is a list, and lists move no cardboard"
         );
     }
 
