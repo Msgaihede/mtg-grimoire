@@ -125,6 +125,8 @@ import type {
   CategoryOrigin,
   CollectionCleared,
   CollectionImportItem,
+  CollectionFolder,
+  CollectionFolderSummary,
   CollectionQuery,
   CollectionRow,
   CollectionSortKey,
@@ -235,6 +237,21 @@ export interface FakeEntry {
   misprint: boolean;
   grading: string | null;
   conditionOriginal: string | null;
+  /**
+   * The folder this copy is filed in, `null` for the **root of the collection** (schema v24).
+   *
+   * `null` is a real place rather than an absence — it is where every copy starts and the only
+   * place an unfiled one can be — so nothing here may read it as "unknown". {@link FakeWish}'s
+   * own `folderId` one table over, for its reasons.
+   *
+   * `ON DELETE SET NULL`: deleting a folder surfaces its cards at the root rather than taking
+   * them with it, the opposite direction from a folder's `parentId` cascade.
+   *
+   * **It is the eleventh term of {@link collectionGrain}**, which is what makes filing a
+   * decision and not a move: the same printing at the root and in `Binder` is two rows, so an
+   * add can never silently bump the row the reader put somewhere on purpose.
+   */
+  folderId: number | null;
   /** A JSON array of strings, never null — the column defaults to `[]`. */
   tags: string;
   notes: string | null;
@@ -305,6 +322,40 @@ export interface FakeWishlistFolder {
   /** The folder this one sits inside, `null` for the root. */
   parentId: number | null;
   name: string;
+  sortOrder: number;
+}
+
+/**
+ * One row of `collection_folders` (schema v24): the binder's own filing cabinet, flat.
+ *
+ * {@link FakeWishlistFolder}'s four columns **plus two**, and the two are what this cabinet has
+ * that neither of the other filing trees does: a folder here can belong to the **app** rather
+ * than to the reader.
+ *
+ * `kind` is one of `schema::COLLECTION_FOLDER_KINDS` — `user` is a drawer the reader made and
+ * named, `deck` is the one folder standing for a deck and carries {@link deckId}, and `removed`
+ * is the single folder copies go to when they leave the collection without leaving the database.
+ * **Nothing in this fake creates either of the latter two**, exactly as nothing in
+ * `collection_folders.rs` does; every write here refuses to touch one all the same, in words,
+ * through {@link FOLDER_NOT_YOURS}. A fence written after the thing it fences is a fence somebody
+ * has to remember to add — and a story could not otherwise draw a refusal the app really gives.
+ *
+ * The two cascades point the same opposite ways the wishlist's do: `parent_id` is
+ * `ON DELETE CASCADE` **on itself**, so deleting a cabinet takes its drawers, while
+ * `collection_entries.folder_id` is `ON DELETE SET NULL`, so the same press leaves the *cards*
+ * standing at the root. A folder is where a card was kept; the card is the reader's property.
+ */
+export interface FakeCollectionFolder {
+  id: number;
+  /** The folder this one sits inside, `null` for the root of the collection. */
+  parentId: number | null;
+  name: string;
+  /** `user`, `deck` or `removed`. A plain string rather than a union, `CollectionFolder.kind`'s
+   *  own reasoning: a fourth kind is a migration rather than a type error. */
+  kind: string;
+  /** The deck a `deck` folder stands for, `null` on every other kind — the schema CHECKs the
+   *  pair, so the two can never be read apart. */
+  deckId: number | null;
   sortOrder: number;
 }
 
@@ -747,6 +798,10 @@ export interface FakeImageCache {
 export interface FakeDb {
   cards: FakeCard[];
   collectionEntries: FakeEntry[];
+  /** `collection_folders` — flat, and scoped to nothing: a folder belongs to no card, it files
+   *  them. `src/lib/folderTree.ts` is what turns these rows into a tree, and it is the same
+   *  builder the deck gallery and the wishlist use. */
+  collectionFolders: FakeCollectionFolder[];
   wishlistEntries: FakeWish[];
   /** `wishlist_folders` — flat, and scoped to nothing: a folder belongs to no wish, it files
    *  them. `src/lib/folderTree.ts` is what turns these rows into a tree. */
@@ -1153,6 +1208,7 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
   return {
     cards: CARDS,
     collectionEntries: [],
+    collectionFolders: [],
     wishlistEntries: [],
     wishlistFolders: [],
     decks: [],
@@ -2874,6 +2930,11 @@ function toCollectionRow(
   return {
     id: e.id,
     cardId: e.cardId,
+    folderId: e.folderId,
+    // Joined on for the reader, and `null` at the root — the root is not a folder and has no
+    // name. A **display string and never an identity**: two sibling folders may share one.
+    folderName:
+      e.folderId === null ? null : (collectionFolderById(db, e.folderId)?.name ?? null),
     // Every `cards`-derived field is nullable; the entry's own three never are.
     name: card?.name ?? null,
     oracleId: card?.oracleId ?? null,
@@ -2966,6 +3027,20 @@ function collectionScope(db: FakeDb, q: CollectionQuery): FakeEntry[] {
     if (!inList(e.condition, q.conditions, CONDITIONS)) return false;
     if (q.needsReview === true && e.needsReview === null) return false;
     if (q.needsReview === false && e.needsReview !== null) return false;
+    // **Absent and `null` are one state here, and that is not {@link wishlistScope}'s rule.**
+    // `CollectionQuery.folderId` is `Option<i64>` on the wire, where a JSON `null` deserializes
+    // to the same `None` an absent field does — so "every folder" is the only thing either can
+    // mean, and the fake must not be able to answer "the root and nothing else" when the app
+    // cannot be asked it. The wishlist needs a second field (`flatten`) for exactly this reason
+    // and the collection has not needed the third state yet.
+    if ((q.folderId ?? null) !== null && e.folderId !== q.folderId) return false;
+    // `"unallocated"` drops the copies a **deck** is holding and nothing else: the root, a
+    // folder the reader made and `Recently removed` are all cards on their desk. In this build
+    // nothing creates a `deck` folder, so this narrows nothing — which is the honest answer
+    // rather than a missing branch, and it is why the test for it seeds the folder by hand.
+    if (q.allocation === "unallocated" && e.folderId !== null) {
+      if (collectionFolderById(db, e.folderId)?.kind === "deck") return false;
+    }
     return true;
   });
 }
@@ -3100,6 +3175,21 @@ function wishlistScope(db: FakeDb, q: WishlistQuery): FakeWish[] {
  *  store through a value it was handed back. */
 function toWishlistFolder(f: FakeWishlistFolder): WishlistFolder {
   return { id: f.id, parentId: f.parentId, name: f.name, sortOrder: f.sortOrder };
+}
+
+/** `collection_folders::folder_row`, and a **copy** for {@link toWishlistFolder}'s reason.
+ *  `kind` and `deckId` are on the wire because the page has to draw a deck's folder and the
+ *  removed-cards folder differently from a binder the reader named — and because a row it may
+ *  not rename is a row whose menu should say so before the refusal does. */
+function toCollectionFolder(f: FakeCollectionFolder): CollectionFolder {
+  return {
+    id: f.id,
+    parentId: f.parentId,
+    name: f.name,
+    kind: f.kind,
+    deckId: f.deckId,
+    sortOrder: f.sortOrder,
+  };
 }
 
 /* ------------------------------------------------------------------ decks ------------- */
@@ -4716,6 +4806,62 @@ export function readHandlers(db: FakeDb) {
       };
     },
 
+    /**
+     * `collection_folders::list_folders` — every folder there is, flat, `ORDER BY sort_order,
+     * id`. No scoping of any kind: a folder belongs to no card, it files them.
+     *
+     * **And no filtering by kind.** A deck's folder and the removed-cards folder are places
+     * cards are, so a page that could not see them would draw a tree the collection does not
+     * have. Offering one as a *destination* is what filters on `kind`, and that is the picker's
+     * decision rather than this read's.
+     */
+    collection_folder_list: (): CollectionFolder[] =>
+      [...db.collectionFolders]
+        .sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id)
+        .map(toCollectionFolder),
+
+    /**
+     * `collection_folders::folder_summary` — the two numbers one folder tile is drawn from.
+     *
+     * **Direct per folder, never recursive**, which is the load-bearing half rather than a
+     * shortcut: `folderTree.ts` already sums a node's children on the way up, so a summary that
+     * recursed too would be a second, disagreeing implementation of arithmetic that is written
+     * and tested. A folder holding two full sub-folders and nothing of its own therefore answers
+     * **zero** here — in fact answers nothing at all — and the tile adds its children in before
+     * it draws.
+     *
+     * **One row per folder that holds at least one card directly** — the crate's `GROUP BY` over
+     * `WHERE folder_id IS NOT NULL` — so an empty folder is simply absent from this answer, and
+     * the root, which is not a folder, has no tile to draw. A page cannot build its tree from
+     * this; {@link collection_folder_list} is the census and this is a lookup layered onto it.
+     *
+     * `cards` is **copies** (`sum(quantity)`) rather than rows, which is the collection header's
+     * own arithmetic and its reason: a row stepped to zero is a real row here, so a tile counting
+     * rows would be wrong the first time somebody trades a playset away.
+     *
+     * `value` is **`null` and never `0`** when the marketplace prices nothing in the folder,
+     * which is where this parts company with the header's `coalesce(…, 0.0)`: a tile is a small
+     * number beside a name with no room for the header's "n unpriced" note, so a folder of cards
+     * the feed has never heard of would otherwise read as a folder worth nothing. `null` draws an
+     * em dash. A folder holding *some* priced copies answers the sum of those, exactly as
+     * `sum(quantity * price)` skips a NULL term.
+     */
+    collection_folder_summary: (args: {
+      marketplace?: MarketplaceId;
+    }): CollectionFolderSummary[] => {
+      const mp = marketplaceOf(args.marketplace);
+      const byFolder = new Map<number, CollectionFolderSummary>();
+      for (const e of db.collectionEntries) {
+        if (e.folderId === null) continue;
+        const row = byFolder.get(e.folderId) ?? { folderId: e.folderId, cards: 0, value: null };
+        row.cards += e.quantity;
+        const unit = finishPriceAt(db, cardById(db, e.cardId), e.finish, mp);
+        if (unit !== null) row.value = (row.value ?? 0) + e.quantity * unit;
+        byFolder.set(e.folderId, row);
+      }
+      return [...byFolder.values()].sort((a, b) => a.folderId - b.folderId);
+    },
+
     /** `wishlist_folders::list_folders` — every folder there is, flat, `ORDER BY sort_order,
      *  id`. No scoping of any kind: a folder belongs to no wish, it files them, and building
      *  the tree from `parentId` is `src/lib/folderTree.ts`'s job rather than this one's. */
@@ -5492,11 +5638,6 @@ const SAME_FINISH = "That is already this finish.";
 /** `deck::FINISH_NOT_SOLD`. Read off `cards.finishes`, so it is also what a printing that has
  *  left the corpus answers — its finish list went with it. */
 const FINISH_NOT_SOLD = "That printing is not sold in that finish.";
-/** `collection::friendly` — the one database error that is a user's problem rather than a
- *  bug, in the app's voice rather than the index's name. */
-const GRAIN_TAKEN =
-  "You already have an entry for that printing at that finish and condition — change its " +
-  "quantity instead, or give this one a different condition.";
 /** `deck::NO_CATEGORY`. The id and the name are alternatives — an id is a drop onto a column
  *  the user pointed at, a name is the add path's "file it where this card belongs" — but a
  *  card has to land *somewhere*, and `deck_cards.category_id` is NOT NULL. */
@@ -5538,6 +5679,22 @@ const CARD_NOT_IN_CATEGORY = "That card is not in this deck's category any more.
  *  SQLite's recursive cascade would walk forever the day one of them is deleted. */
 const FOLDER_GONE = "That folder is not there any more.";
 const FOLDER_CYCLE = "A folder cannot be moved inside itself.";
+/**
+ * `collection_folders::FOLDER_NOT_YOURS` — what every write to the *collection's* cabinet says
+ * about a folder that is the **app's** rather than the reader's: the one folder standing for a
+ * deck, or the single `removed` folder.
+ *
+ * Local to that module rather than shared with the other two, and it is here for the same reason
+ * it is there: `deck_folders` and `wishlist_folders` carry no `kind` column at all, so there is
+ * no sentence in either to reach for. Said in words rather than left to the schema, which could
+ * not say it anyway — nothing in the DDL says who may *edit* a row.
+ */
+const FOLDER_NOT_YOURS = "That folder is the app's own and is not yours to change.";
+/** `collection_folders::USER_KIND` — `schema::COLLECTION_FOLDER_KINDS[0]`, what every write in
+ *  that module demands and what `collection_folder_create` writes. Spelled rather than
+ *  defaulted, `deck_categories.origin`'s rule: a default is a decision nobody can see at the
+ *  call site. */
+const COLLECTION_USER_KIND = "user";
 /**
  * `wishlist_folders::MAX_FOLDER_DEPTH` — how far {@link wishlist_folder_move}'s cycle walk will
  * climb before it calls the chain a cycle.
@@ -5880,9 +6037,18 @@ function canonicalGrading(grading: string | undefined): string | null {
   );
 }
 
-/** `schema::COLLECTION_GRAIN` as a key. The `coalesce(…, '')`s are load-bearing there and
- *  are `?? ""` here: NULLs in a UNIQUE index are distinct, so a nullable term left bare
- *  would stop enforcing anything the moment it was empty. */
+/**
+ * `schema::COLLECTION_GRAIN` as a key. The `coalesce(…, '')`s are load-bearing there and
+ * are `?? ""` here: NULLs in a UNIQUE index are distinct, so a nullable term left bare
+ * would stop enforcing anything the moment it was empty.
+ *
+ * **The eleventh term arrived with schema v24** and is what makes filing a *decision* rather
+ * than a move: the same printing at the root and in `Binder` is two rows, so an add can never
+ * silently bump the row the reader filed on purpose. `?? 0` is the crate's
+ * `coalesce(folder_id, 0)`, and it is safe only because `collection_folders.id` is a rowid
+ * SQLite assigns and never hands out as 0 — a folder numbered 0 would be indistinguishable from
+ * the root here, and every card in it would collide with the reader's unfiled copies.
+ */
 function collectionGrain(e: FakeEntry): string {
   return JSON.stringify([
     e.cardId,
@@ -5895,6 +6061,7 @@ function collectionGrain(e: FakeEntry): string {
     e.misprint,
     e.serialNumber ?? "",
     e.grading ?? "",
+    e.folderId ?? 0,
   ]);
 }
 
@@ -6135,6 +6302,131 @@ function nextWishFolderOrder(db: FakeDb, parentId: number | null): number {
   return db.wishlistFolders
     .filter((f) => f.parentId === parentId)
     .reduce((n, f) => Math.max(n, f.sortOrder + 1), 0);
+}
+
+function collectionFolderById(db: FakeDb, id: number): FakeCollectionFolder | undefined {
+  return db.collectionFolders.find((f) => f.id === id);
+}
+
+/** {@link nextFolderOrder} over the third filing tree, `max + 1` **among siblings** for the
+ *  same reason: the first child of a folder starts at 0 again rather than continuing the
+ *  root's numbering. */
+function nextCollectionFolderOrder(db: FakeDb, parentId: number | null): number {
+  return db.collectionFolders
+    .filter((f) => f.parentId === parentId)
+    .reduce((n, f) => Math.max(n, f.sortOrder + 1), 0);
+}
+
+/**
+ * `collection_folders::user_folder` — the folder `id` names, refused in words unless it is one
+ * the **reader** owns.
+ *
+ * One helper for both halves of every write, because the two questions are always asked together
+ * and always in this order: a folder that is not there cannot be the app's, and an id nothing
+ * answers to is {@link FOLDER_GONE} whichever side of a move it was on.
+ */
+function userCollectionFolder(db: FakeDb, id: number): FakeCollectionFolder {
+  const folder = collectionFolderById(db, id);
+  if (!folder) throw refuse(FOLDER_GONE);
+  if (folder.kind !== COLLECTION_USER_KIND) throw refuse(FOLDER_NOT_YOURS);
+  return folder;
+}
+
+/**
+ * `collection::folder_named` — the folder an **add** names, refused in words unless it is there.
+ * `null` is the root and is always a destination: there is no row to look up, so the fence must
+ * not reach it.
+ *
+ * **Existence only, and deliberately no kind check**, which is what makes it a second helper
+ * rather than a call to {@link userCollectionFolder}: the crate splits the same two questions the
+ * same way. `collection_set_folder` is where a *reader* is stopped from filing into the app's own
+ * cabinet, and an add is fenced only against an id nothing answers to — which in the app is a real
+ * foreign key, so an unchecked one fails with `FOREIGN KEY constraint failed`, a sentence about a
+ * constraint, and only while `PRAGMA foreign_keys` happens to be on. The reader who deleted a
+ * folder in one pane and pressed "Add to" in another meets one wording either way.
+ */
+function collectionFolderNamed(db: FakeDb, folderId: number | null): number | null {
+  if (folderId !== null && !collectionFolderById(db, folderId)) throw refuse(FOLDER_GONE);
+  return folderId;
+}
+
+/**
+ * `collection_folders::refile_entry` — move one entry onto `folderId`, folding it into whatever
+ * already holds that grain.
+ *
+ * **No fence and no kind check**, exactly as the crate's has none: `collection_set_folder` is
+ * where a reader is stopped from filing into the app's own folders, and this function is what
+ * the next PR's deck-driven writes will call *past* that fence.
+ *
+ * The merge itself is {@link foldEntry}, which this shares with `collection_update` and with
+ * {@link collection_folder_delete}'s un-filing pass — a second copy of that rule is how they
+ * would come to disagree about what a duplicate row is, quietly and each right on its own screen.
+ */
+function refileEntry(db: FakeDb, id: number, folderId: number | null): EntryChange {
+  const row = db.collectionEntries.find((e) => e.id === id);
+  if (!row) throw refuse(ENTRY_GONE);
+  const key = collectionGrain({ ...row, folderId });
+  const target = db.collectionEntries.find((e) => e.id !== row.id && collectionGrain(e) === key);
+  if (target) return foldEntry(db, target, row);
+  row.folderId = folderId;
+  row.updatedAt = stamp(db);
+  return { id: row.id, quantity: row.quantity, removed: false };
+}
+
+/**
+ * `collection::fold_entry` — fold `source` into `target` and delete it, with no opinion at all
+ * about *why* the two are one row.
+ *
+ * **One function because the crate has one**, and it grew a second caller in the same release
+ * that gave it its first: {@link refileEntry}, where a card was filed into a folder that already
+ * holds its printing, and {@link writeHandlers}' `collection_update`, where a reader edited a row
+ * onto a grain another row holds. Two copies of this rule is how the two would come to disagree
+ * about what folding *is* — and they would disagree quietly, each one right on its own screen.
+ *
+ * **What moves**: the quantities add, and the five columns the reader typed themselves — what
+ * they paid, in what currency, when, where from, and their note — are taken by the survivor
+ * **only where it has none**. That is `addEntry`'s `ON CONFLICT` rule verbatim: the survivor's own
+ * answers are not up for revision, but a fold that dropped the other row's would be a receipt
+ * destroyed to settle a collision the reader did not cause. Inverting either coalesce would
+ * replace a note about the row that is staying with one about a row that no longer exists.
+ *
+ * `tags` and `conditionOriginal` are deliberately absent, exactly as they are from `addEntry`'s
+ * `DO UPDATE`: a tag set is the reader's to curate per row, and `conditionOriginal` is the
+ * provenance of *this* row's condition — it cannot describe a condition it was never written
+ * beside. Both stay the survivor's.
+ *
+ * **The tradelist clamp is this fake's and costs nothing.** The crate sums the two without one,
+ * and cannot need it: every write here and there keeps a row's tradelist at or below its
+ * quantity, so the sum of two tradelists is already at or below the sum of two quantities. It is
+ * kept because every other write in this file spells the invariant out at the point it could be
+ * broken.
+ *
+ * **`deck_allocations` is where this fake is simpler than the crate and gets it for free.** The
+ * crate moves the folding row's deck claims onto the survivor and folds two claims of one deck
+ * together, because `deck_allocations.collection_entry_id` cascades and this delete would
+ * otherwise quietly unbuild a deck. There is no allocations table here (simplification 2):
+ * `allocate` works a deck's claims out at read time from its own cards, so nothing points at an
+ * entry id and nothing has to be moved.
+ *
+ * **`removed` stays `false`** over a row that really was deleted: the field means "the reader owns
+ * none of it", which is what `collection_remove` and a stepper taken to zero mean, and here the
+ * copies are emphatically still in the collection. What the caller must not ignore is the **id** —
+ * it names the survivor, which is not always the id that was sent in.
+ */
+function foldEntry(db: FakeDb, target: FakeEntry, source: FakeEntry): EntryChange {
+  target.quantity += source.quantity;
+  target.tradelistQuantity = Math.min(
+    target.tradelistQuantity + source.tradelistQuantity,
+    target.quantity,
+  );
+  target.purchasePrice = target.purchasePrice ?? source.purchasePrice;
+  target.purchaseCurrency = target.purchaseCurrency ?? source.purchaseCurrency;
+  target.acquiredAt = target.acquiredAt ?? source.acquiredAt;
+  target.acquisitionSource = target.acquisitionSource ?? source.acquisitionSource;
+  target.notes = target.notes ?? source.notes;
+  target.updatedAt = stamp(db);
+  db.collectionEntries = db.collectionEntries.filter((e) => e.id !== source.id);
+  return { id: target.id, quantity: target.quantity, removed: false };
 }
 
 /**
@@ -6420,6 +6712,7 @@ function addEntry(db: FakeDb, input: EntryInput): EntryChange {
   if (input.quantity <= 0) throw refuse(ZERO_ADD);
   const tradelist = validQuantity(input.tradelistQuantity ?? 0, "tradelist quantity");
   const grading = canonicalGrading(input.grading);
+  const folderId = collectionFolderNamed(db, input.folderId ?? null);
   const card = requireCard(db, input.cardId);
 
   const row: FakeEntry = {
@@ -6447,6 +6740,16 @@ function addEntry(db: FakeDb, input: EntryInput): EntryChange {
     misprint: input.misprint ?? false,
     grading,
     conditionOriginal: input.conditionOriginal ?? null,
+    // **Where the reader pointed, and the root when they pointed nowhere** — never hard-coded,
+    // which it was for exactly as long as `EntryInput` had no such field. `folderId` is
+    // {@link collectionGrain}'s eleventh term since schema v24, and that is what makes
+    // "Add to → Binder" an *add* rather than a move: the same printing at the root and in a
+    // folder is two rows, so an add can never quietly relocate the copies filed last week.
+    // It is written by this statement rather than by a follow-up `collection_set_folder`,
+    // because the column deciding *which* row a fold lands on has to be set before the fold is
+    // resolved. A fake that filed every add at the root instead would have disagreed with the
+    // app about the one press this whole cabinet exists for.
+    folderId,
     // The column's own `DEFAULT '[]'`: a tags string is never null.
     tags: input.tags ?? "[]",
     notes: input.notes ?? null,
@@ -6493,6 +6796,7 @@ function setEntry(db: FakeDb, input: EntryInput): EntryChange {
   validQuantity(input.quantity, "collection quantity");
   const tradelist = validQuantity(input.tradelistQuantity ?? 0, "tradelist quantity");
   const grading = canonicalGrading(input.grading);
+  const folderId = collectionFolderNamed(db, input.folderId ?? null);
   const card = requireCard(db, input.cardId);
 
   const row: FakeEntry = {
@@ -6516,6 +6820,13 @@ function setEntry(db: FakeDb, input: EntryInput): EntryChange {
     misprint: input.misprint ?? false,
     grading,
     conditionOriginal: input.conditionOriginal ?? null,
+    // Read exactly as {@link addEntry} reads it, and for its reason — `set_entry` is that
+    // statement with one clause changed, not a statement with a different grain. Its only
+    // caller sends nothing, which is a fact about the *caller*: an import names no folder
+    // (`CollectionImportItem` has no channel for one on either side of the wire), so a `set`
+    // still only ever lands on — or writes — an unfiled row. Hard-coding that here would be the
+    // same decision made twice, in the place where it is not being made.
+    folderId,
     tags: input.tags ?? "[]",
     notes: input.notes ?? null,
     needsReview: null,
@@ -6648,25 +6959,75 @@ export function writeHandlers(db: FakeDb) {
       return addEntry(db, args.entry);
     },
 
-    /** `collection::set_quantity` — the stepper. **Zero keeps the row**, with its condition,
-     *  its purchase price and its acquisition story. Deleting is `collection_remove` and only
-     *  ever `collection_remove`. */
+    /**
+     * `collection::set_quantity` — the stepper. **Zero removes the row**, and the row's whole
+     * story with it.
+     *
+     * This reverses the ruling this fake was written under — "zero keeps the row, deleting is
+     * `collection_remove` and only ever `collection_remove`" — and it was the reader's own call
+     * at schema v24. A collection is what somebody *has*; a row saying they have none of a
+     * printing says nothing, and every list, count and total in the app carried a special case
+     * to describe it. The stepper taken to zero now means what it looks like it means.
+     *
+     * **What that costs is exactly what the old rule was preserving**, and it is worth naming
+     * rather than discovering: the row's `condition` and `conditionOriginal`, the purchase price
+     * and currency, `acquiredAt`, the acquisition source, the notes and the tags all go with it.
+     * A reader who trades a playset away and buys it back next year retypes every one of them.
+     *
+     * `collection_remove` is therefore no longer the only door out — but it is still the only
+     * **unconditional** one: an id that resolves to nothing is a success there and
+     * {@link ENTRY_GONE} here, because an adjustment to a row that is not there could not do what
+     * it was asked. `collection_update` is the other deliberate exception and keeps a row at
+     * zero, because nothing typed into an edit form beside seven other fields should delete the
+     * row being edited.
+     */
     collection_set_quantity: (args: { id: number; quantity: number }): EntryChange => {
       refuseIfBusy(db);
       validQuantity(args.quantity, "collection quantity");
       const row = db.collectionEntries.find((e) => e.id === args.id);
       if (!row) throw refuse(ENTRY_GONE);
+      if (args.quantity === 0) {
+        db.collectionEntries = db.collectionEntries.filter((e) => e.id !== row.id);
+        return { id: row.id, quantity: 0, removed: true };
+      }
       row.quantity = args.quantity;
-      // At zero copies there is nothing to offer.
+      // A tradelist bigger than the pile it is drawn from is not a promise anyone can keep.
       row.tradelistQuantity = Math.min(row.tradelistQuantity, args.quantity);
       row.updatedAt = stamp(db);
       return { id: row.id, quantity: row.quantity, removed: false };
     },
 
-    /** `collection::update_entry`. Absent fields are left alone (`coalesce(?n, column)`),
-     *  which is what makes this usable from a form that only sends what it changed — and a
-     *  `quantity` of zero is applied like any other, because nothing typed into an edit form
-     *  should delete the row being edited. */
+    /**
+     * `collection::update_entry`. Absent fields are left alone (`coalesce(?n, column)`), which is
+     * what makes this usable from a form that only sends what it changed — and a `quantity` of
+     * zero is applied like any other and **keeps the row**, because nothing typed into an edit
+     * form beside seven other fields should delete the row being edited. That is the one place
+     * left in this table where zero keeps a row, and the asymmetry with `collection_set_quantity`
+     * is deliberate.
+     *
+     * # An edit onto a grain the collection already holds folds into it
+     *
+     * Eight of the patch's fields are grain columns, so a reader can ask a row to become a row
+     * they already have — the same LP copy edited to NM when an NM row is already there. **That
+     * answered a refusal until schema v24** ("You already have an entry for that printing at that
+     * finish and condition — change its quantity instead"), which named the way out and left the
+     * reader to walk it. It was already the odd one out: `collection_set_folder` merges rather
+     * than refusing when a card is filed into a folder that holds its printing, and
+     * `wishlist_set_folder` and `wishlist_set_printing` have merged since schema v23. An edit is
+     * the same fact from the third side — the reader has said these two rows are one row — so it
+     * is answered the same way, by {@link foldEntry}.
+     *
+     * **The answer therefore names a row the caller did not pass in**, which is what
+     * `EntryChange.id` is for and what the collection table has to follow: the row the reader was
+     * editing is gone. The sentence that used to be refused here is deleted rather than left
+     * standing beside a state nothing can reach — a user-facing message for an impossible case is
+     * a half-deleted rule, and the next reader of it would have had to work out which half.
+     *
+     * **The patch's non-grain half is applied to the source *before* the fold**, so a reader who
+     * corrects the condition and the quantity in one press folds the quantity they typed rather
+     * than the one the row had. The grain half is applied to nothing at all: the surviving row
+     * already carries every value it names, which is precisely why the two collided.
+     */
     collection_update: (args: { id: number; patch: EntryPatch }): EntryChange => {
       refuseIfBusy(db);
       const patch = args.patch;
@@ -6704,24 +7065,205 @@ export function writeHandlers(db: FakeDb) {
         notes: patch.notes ?? row.notes,
         updatedAt: stamp(db),
       };
-      // The one edit that cannot just be applied — SQLite would answer "UNIQUE constraint
-      // failed: index 'idx_collection_grain'", which names an implementation detail and no
-      // way forward. `collection::friendly` is the app talking instead.
       const key = collectionGrain(next);
-      if (db.collectionEntries.some((e) => e.id !== row.id && collectionGrain(e) === key)) {
-        throw refuse(GRAIN_TAKEN);
+      const target = db.collectionEntries.find(
+        (e) => e.id !== row.id && collectionGrain(e) === key,
+      );
+      if (target) {
+        // The non-grain half onto the row that is about to fold — everything the reader typed
+        // that is *not* what made the two rows one. The crate spells this as the same UPDATE run
+        // a second time with its eight grain holes bound to NULL; here it is the same nine
+        // fields, taken off `next` so the `coalesce`-with-the-old-value rule is written once.
+        Object.assign(row, {
+          conditionOriginal: next.conditionOriginal,
+          quantity: next.quantity,
+          tradelistQuantity: next.tradelistQuantity,
+          purchasePrice: next.purchasePrice,
+          purchaseCurrency: next.purchaseCurrency,
+          acquiredAt: next.acquiredAt,
+          acquisitionSource: next.acquisitionSource,
+          tags: next.tags,
+          notes: next.notes,
+        });
+        return foldEntry(db, target, row);
       }
       Object.assign(row, next);
       return { id: row.id, quantity: row.quantity, removed: false };
     },
 
-    /** `collection::remove_entry` — the **only** thing in the collection that deletes. An id
-     *  that resolves to nothing is a success: a delete that finds nothing already has what it
-     *  wanted, and telling a stale list otherwise is an error dialog over a success. */
+    /** `collection::remove_entry` — the **unconditional** delete, where a stepper taken to zero
+     *  ({@link collection_set_quantity}) and a fold ({@link foldEntry}) are the two conditional
+     *  ones. It was the only delete in this table until schema v24, and which of the three a
+     *  stale id reaches is worth knowing: an id that resolves to nothing is a success *here*,
+     *  because a delete that finds nothing already has what it wanted and telling a stale list
+     *  otherwise is an error dialog over a success. */
     collection_remove: (args: { id: number }): EntryChange => {
       refuseIfBusy(db);
       db.collectionEntries = db.collectionEntries.filter((e) => e.id !== args.id);
       return { id: args.id, quantity: 0, removed: true };
+    },
+
+    /**
+     * `collection_folders::create_folder` — at the root with `parentId: null`, or inside another.
+     *
+     * **No uniqueness rule on the name**, mirroring the DDL exactly as the other two cabinets do:
+     * `collection_folders` carries no unique index on `(parent_id, name)`, so two sibling folders
+     * may share one.
+     *
+     * **Always a `user` folder, and the kind is written rather than defaulted.** Nothing here
+     * makes a `deck` folder or the `removed` one — that is a later PR's — and the parent is
+     * fenced through {@link userCollectionFolder}, so a drawer cannot be filed inside the app's
+     * own cabinet either.
+     *
+     * **The id is never supplied**, and that is a fence rather than a habit: {@link
+     * collectionGrain}'s `?? 0` for the root is safe only while no folder can *be* 0.
+     */
+    collection_folder_create: (args: {
+      parentId: number | null;
+      name: string;
+    }): CollectionFolder => {
+      refuseIfBusy(db);
+      const name = validMetaName(args.name, "A folder");
+      if (args.parentId !== null) userCollectionFolder(db, args.parentId);
+      const folder: FakeCollectionFolder = {
+        id: nextId(db.collectionFolders),
+        parentId: args.parentId,
+        name,
+        kind: COLLECTION_USER_KIND,
+        deckId: null,
+        sortOrder: nextCollectionFolderOrder(db, args.parentId),
+      };
+      db.collectionFolders.push(folder);
+      return toCollectionFolder(folder);
+    },
+
+    /** `collection_folders::rename_folder` — a folder the reader made. A deck's folder is named
+     *  after its deck and the removed-cards folder after what it is for, so neither is
+     *  {@link FOLDER_NOT_YOURS} by accident. */
+    collection_folder_rename: (args: { id: number; name: string }): CollectionFolder => {
+      refuseIfBusy(db);
+      const name = validMetaName(args.name, "A folder");
+      const folder = userCollectionFolder(db, args.id);
+      folder.name = name;
+      return toCollectionFolder(folder);
+    },
+
+    /**
+     * `collection_folders::move_folder` — re-parent a folder, or with `parentId: null` move it
+     * back to the root.
+     *
+     * **Refuses a cycle**, by walking `parentId` upward from the *proposed* parent: if that walk
+     * ever meets `id` — immediately, when `parentId` names `id` itself — it refuses rather than
+     * writing a loop `parent_id`'s own `ON DELETE CASCADE` would walk forever the day one of them
+     * is deleted. The walk is bounded by {@link MAX_FOLDER_DEPTH}, which is not about depth.
+     *
+     * **Both ends are fenced in words before anything is walked, and the subject comes first** —
+     * the crate's order rather than `wishlist_folder_move`'s, and it is the order that can answer
+     * {@link FOLDER_NOT_YOURS}: a folder the app owns is refused whether or not the parent it was
+     * aimed at exists. The cycle walk cannot stand in for either check, since
+     * `collectionFolderById(...)?.parentId ?? null` reads an id no folder has as "already at the
+     * root" and lets it straight through.
+     */
+    collection_folder_move: (args: {
+      id: number;
+      parentId: number | null;
+    }): CollectionFolder => {
+      refuseIfBusy(db);
+      const folder = userCollectionFolder(db, args.id);
+      if (args.parentId !== null) {
+        userCollectionFolder(db, args.parentId);
+        let cursor: number | null = args.parentId;
+        for (let hops = 0; cursor !== null; hops += 1) {
+          if (cursor === args.id) throw refuse(FOLDER_CYCLE);
+          // Out of budget: the only thing a chain that long can be is a loop.
+          if (hops >= MAX_FOLDER_DEPTH) throw refuse(FOLDER_CYCLE);
+          cursor = collectionFolderById(db, cursor)?.parentId ?? null;
+        }
+      }
+      folder.parentId = args.parentId;
+      return toCollectionFolder(folder);
+    },
+
+    /**
+     * `collection_folders::delete_folder`. **Its cards are not deleted** —
+     * `collection_entries.folder_id` is `ON DELETE SET NULL`, so they surface at the root, filed
+     * nowhere and otherwise exactly as they were. **Sub-folders do go with it**, `parent_id`
+     * being `ON DELETE CASCADE` on itself. An id that resolves to nothing is a success; a folder
+     * the **app** owns is the one id that is not.
+     *
+     * **The un-filing goes through {@link refileEntry} and that is not a nicety** — it is the
+     * whole reason the crate stopped leaving this press to the `SET NULL`. `folderId` is the
+     * eleventh term of {@link collectionGrain}, so re-filing a sub-tree at the root rewrites the
+     * grain of every row in it, and two shapes then land on a grain that is already taken:
+     *
+     * - a filed row and an **unfiled** row for the same printing, which is the state every
+     *   writer that cannot name a folder produces — a quick add from the search, an import;
+     * - two rows in **different sub-folders** of the one being deleted, which collide with each
+     *   other the moment both reach the root and need no root row at all.
+     *
+     * One row at a time, lowest id first, is what answers the second shape as well as the first:
+     * the first row to reach the root becomes the row the next one merges into. The crate
+     * collects the sub-tree with `ORDER BY e.id` for exactly that.
+     */
+    collection_folder_delete: (args: { id: number }): void => {
+      refuseIfBusy(db);
+      const folder = collectionFolderById(db, args.id);
+      // Not {@link userCollectionFolder}: an id that is not there is a **success** here, so the
+      // two halves of that helper come apart. Only a folder that exists and is the app's is
+      // refused.
+      if (folder && folder.kind !== COLLECTION_USER_KIND) throw refuse(FOLDER_NOT_YOURS);
+      const doomed = new Set<number>([args.id]);
+      // The cascade is recursive, so it is walked to a fixed point rather than one level deep.
+      // Nothing filters on `kind`: the CASCADE does not, so a walk that did would leave those
+      // folders' cards to `SET NULL` and the very collision this exists to answer.
+      for (let grew = true; grew; ) {
+        grew = false;
+        for (const f of db.collectionFolders) {
+          if (f.parentId !== null && doomed.has(f.parentId) && !doomed.has(f.id)) {
+            doomed.add(f.id);
+            grew = true;
+          }
+        }
+      }
+      // Ids rather than rows, taken before anything moves: a merge replaces
+      // `db.collectionEntries` with a filtered copy, so a held reference is a row that is no
+      // longer in the store.
+      const filed = db.collectionEntries
+        .filter((e) => e.folderId !== null && doomed.has(e.folderId))
+        .map((e) => e.id)
+        .sort((a, b) => a - b);
+      for (const id of filed) {
+        // Unreachable: a merge only ever deletes the row it was given, so no id here can go
+        // before its turn. Guarded because the alternative is a `TypeError` in a story.
+        if (!db.collectionEntries.some((e) => e.id === id)) continue;
+        refileEntry(db, id, null);
+      }
+      db.collectionFolders = db.collectionFolders.filter((f) => !doomed.has(f.id));
+    },
+
+    /**
+     * `collection_folders::set_entry_folder` — "Move to …", and "Move to the collection".
+     *
+     * `folderId: null` is the **root of the collection**, a real destination rather than an
+     * omission: it is where every copy starts and the only place an unfiled row can be.
+     *
+     * **A command of its own, because filing is not adding.** `folderId` is the eleventh term of
+     * {@link collectionGrain}, which is what makes "Add to \<binder\>" an *add*: the same
+     * printing filed in two places is two rows, so an add can never silently move a row the
+     * reader filed last week. The cost of that guarantee is exactly this command.
+     *
+     * **A move onto a taken grain merges rather than failing** — {@link refileEntry}'s rule — so
+     * the `id` this answers is not always the `id` it was given.
+     *
+     * **The destination is fenced in words, and the kind half of that fence is this cabinet's
+     * own**: nothing may be filed into a `deck` folder or the `removed` one by hand. Those two
+     * say something the app is responsible for, and a reader dragging a card into one would be
+     * asserting it without any of the writes that make it true.
+     */
+    collection_set_folder: (args: { id: number; folderId: number | null }): EntryChange => {
+      refuseIfBusy(db);
+      if (args.folderId !== null) userCollectionFolder(db, args.folderId);
+      return refileEntry(db, args.id, args.folderId);
     },
 
     /**
@@ -6732,8 +7274,9 @@ export function writeHandlers(db: FakeDb) {
      * and restored if anything throws, which is this fake's stand-in for it.
      *
      * `added`/`updated` are counted by row-count before and after, exactly as the backend
-     * does: a hand-written lookup on the ten-column grain here would be a second copy of
-     * `collectionGrain`'s own definition.
+     * does: a hand-written lookup on the eleven-column grain here would be a second copy of
+     * {@link collectionGrain}'s own definition. `removed` is counted rather than derived,
+     * because a row deleted by a `set 0` has already left the count the other two are read from.
      */
     collection_import_commit: (args: {
       items: CollectionImportItem[];
@@ -6745,8 +7288,17 @@ export function writeHandlers(db: FakeDb) {
       }
       const before = db.collectionEntries.length;
       const snapshot = db.collectionEntries.map((e) => ({ ...e }));
+      let removed = 0;
       try {
         for (const item of args.items) {
+          // **Ten fields, and the six grain columns are not among them** — `altered`, `signed`,
+          // `proxy`, `misprint`, `serialNumber` and `grading` are left at `addEntry`'s defaults
+          // because `CollectionImportItem` has no slot for them, on this wire or the crate's.
+          // That is `collection::commit_import` copied faithfully rather than a shortcut here,
+          // and it is why a re-import cannot land on the reader's altered row.
+          // `destinations/collection.ts` now folds on the full grain and *sends* all six; when
+          // `CollectionImportItem` and the crate's struct carry them, this map is where the fake
+          // catches up. See `docs/reference/import-export.md`.
           const entry: EntryInput = {
             cardId: item.cardId,
             finish: item.finish,
@@ -6761,16 +7313,26 @@ export function writeHandlers(db: FakeDb) {
           };
           if (args.mode === "add") {
             addEntry(db, entry);
-          } else {
-            setEntry(db, entry);
+            continue;
+          }
+          // **A `set` of 0 deletes the row**, `collection_set_quantity`'s reversal reached from
+          // the file rather than from the stepper, and `wishlist_import_commit` has done the
+          // same one table over since schema v23. `setEntry` writes the total first, exactly as
+          // the crate's upsert does, so a `set 0` for a printing the reader does not own counts
+          // oddly and honestly: one added and one removed rather than nothing, because both
+          // statements really ran.
+          const change = setEntry(db, entry);
+          if (change.quantity === 0) {
+            db.collectionEntries = db.collectionEntries.filter((e) => e.id !== change.id);
+            removed += 1;
           }
         }
       } catch (e) {
         db.collectionEntries = snapshot;
         throw e;
       }
-      const added = db.collectionEntries.length - before;
-      return { added, updated: args.items.length - added, removed: 0 };
+      const added = db.collectionEntries.length - before + removed;
+      return { added, updated: args.items.length - added - removed, removed };
     },
 
     /** `wishlist::add_wish`. */
@@ -8584,6 +9146,12 @@ export function writeHandlers(db: FakeDb) {
      * rows. So the number reported is the claims that *were* standing — one per live deck row
      * whose card the reader owned — which is what the Rust counts before its `DELETE` and what
      * the panel's sentence is about.
+     *
+     * **The folders go with it** (schema v24), `wishlist_clear`'s half one table over and for
+     * the same reason: `collection_entries.folder_id` is `ON DELETE SET NULL`, so emptying the
+     * entries alone would hand the reader an empty filing cabinet to take apart one drawer at a
+     * time, every tile drawing zeroes. The reported count stays the count of **cards** — it is
+     * what they are being told they threw away.
      */
     collection_clear: (): CollectionCleared => {
       refuseIfBusy(db);
@@ -8593,6 +9161,7 @@ export function writeHandlers(db: FakeDb) {
       ).length;
       const entries = db.collectionEntries.length;
       db.collectionEntries = [];
+      db.collectionFolders = [];
       return { entries, allocations };
     },
 
