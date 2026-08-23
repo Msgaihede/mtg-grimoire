@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, render, renderHook, screen, waitFor, within } from "@testing-library/react";
+import { act, render, renderHook, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
@@ -94,7 +94,6 @@ function deps(over: Partial<CardMenuDeps> = {}): CardMenuDeps {
     // over, which is every one of them except the deck editor and the modal itself.
     openAllPrintings: vi.fn(),
     DeckTargetSubmenu: () => null,
-    deckDriven: false,
     ...over,
   };
 }
@@ -274,29 +273,6 @@ describe("buildCardMenu", () => {
     const addTo = find(buildCardMenu(target, deps({ addToCollection })), "Add to") as MenuSubmenu;
     (find(addTo.items, "Collection") as MenuAction).onSelect();
     expect(addToCollection).toHaveBeenCalledWith(target, "foil");
-  });
-
-  /**
-   * While the collection is deck-driven, the backend refuses this write outright — so the row
-   * is greyed and named with the reason rather than offered and left to round-trip into a
-   * refusal after the menu has already closed. One disabled action, whatever the printing's
-   * finish count: a submenu of choices that would all fail is not a kinder refusal.
-   */
-  it("greys Add to Collection and never calls the write while the collection is deck-driven", () => {
-    const addToCollection = vi.fn();
-    const target = { ...BOLT, finishes: '["nonfoil","foil"]' };
-    const addTo = find(
-      buildCardMenu(target, deps({ addToCollection, deckDriven: true })),
-      "Add to",
-    ) as MenuSubmenu;
-    const collection = find(addTo.items, "Collection") as MenuAction;
-
-    expect(collection.kind).toBe("action");
-    expect(collection.disabled).toBe(true);
-    expect(collection.reason).toMatch(/driven by your decks/i);
-
-    collection.onSelect();
-    expect(addToCollection).not.toHaveBeenCalled();
   });
 
   it("treats a null finishes column as nonfoil rather than as no finishes at all", () => {
@@ -865,20 +841,20 @@ describe("the deck picker inside the real cascade", () => {
 });
 
 /* ------------------------------------------------------------------------------------------ *
- * The Collection row, deck-driven
+ * The Collection row, in the real cascade
  * ------------------------------------------------------------------------------------------ */
 
-describe("the Collection row while the collection is deck-driven", () => {
-  function DeckDrivenSurface({ deckDriven }: { deckDriven: boolean }) {
+describe("the Collection row", () => {
+  function Surface() {
     const { menu } = useContextMenu();
-    const items = buildCardMenu(BOLT, deps({ deckDriven }));
+    const items = buildCardMenu(BOLT, deps());
     return <button onContextMenu={menu(() => items)}>target</button>;
   }
 
-  function openMenu(deckDriven: boolean) {
+  function openMenu() {
     render(
       <ContextMenuProvider>
-        <DeckDrivenSurface deckDriven={deckDriven} />
+        <Surface />
       </ContextMenuProvider>,
     );
     screen
@@ -886,20 +862,13 @@ describe("the Collection row while the collection is deck-driven", () => {
       .dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
   }
 
-  it("greys the row and names the reason, in the real cascade", async () => {
-    openMenu(true);
-    await userEvent.click(await screen.findByRole("menuitem", { name: "Add to" }));
-
-    // A greyed row's accessible name carries its reason, so an exact match on "Collection"
-    // reads as "the row is missing" -- match with a regex instead.
-    const row = await screen.findByRole("menuitem", { name: /Collection/ });
-    expect(row).toHaveAttribute("aria-disabled", "true");
-    expect(row).not.toHaveAttribute("disabled");
-    expect(within(row).getByText(/driven by your decks/i)).toBeInTheDocument();
-  });
-
-  it("leaves the row live when the collection is hand-kept", async () => {
-    openMenu(false);
+  /**
+   * The exact name is the assertion, not a regex over it: a greyed row's accessible name carries
+   * its reason appended, so `{ name: "Collection" }` is what proves the row is live rather than
+   * merely present.
+   */
+  it("is live, drawn through the real cascade", async () => {
+    openMenu();
     await userEvent.click(await screen.findByRole("menuitem", { name: "Add to" }));
 
     const row = await screen.findByRole("menuitem", { name: "Collection" });

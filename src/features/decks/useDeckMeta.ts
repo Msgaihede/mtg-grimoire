@@ -9,7 +9,6 @@ import {
   type GlobalTag,
   type TagColor,
 } from "@/lib/ipc";
-import { useDeckWriteRoots } from "@/lib/useDeckDrivenCollection";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { autoCategoryFor, UNCATEGORIZED } from "./autoCategory";
 import { DEFAULT_CATEGORY_NAME, DEFAULT_VARIANT, opened } from "./useDeck";
@@ -159,18 +158,9 @@ export function useDeckMeta(deckId: number | null, variant: DeckVariant = DEFAUL
    * refusal here is either a busy database or a deck, category or tag that another surface has
    * deleted — and the second must not leave a panel drawing a column that is gone. Two
    * definitions of that rule would be two places to keep it.
-   *
-   * **While the collection is derived it is not the whole root but the whole of what the reader
-   * owns** — {@link useDeckWriteRoots}, additively. The two reallocating writes are the reason
-   * and they are the same two: `setCategoryActive` and `deleteCategory` decide whether a pile's
-   * cards are claimed at all, and in the derived mode a claim is not an attribution of an owned
-   * copy, it *is* the owned copy. Switching a fifteen-card pile off empties fifteen rows out of
-   * the collection page without a single card being touched, and `staleTime: 30_000` means
-   * nothing on that page finds out by being navigated to.
    */
-  const writeRoots = useDeckWriteRoots();
   const invalidate = () => {
-    for (const queryKey of writeRoots) void queryClient.invalidateQueries({ queryKey });
+    void queryClient.invalidateQueries({ queryKey: ["decks"] });
   };
   const writes = { onSuccess: invalidate, onError: invalidate };
 

@@ -21,7 +21,6 @@ const deckSwapPrinting = vi.hoisted(() => vi.fn());
 const deckCardSetTag = vi.hoisted(() => vi.fn());
 const oracleTagsForPrintings = vi.hoisted(() => vi.fn());
 const deckSetViewState = vi.hoisted(() => vi.fn());
-const deckDrivenCollection = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -35,11 +34,9 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckCardSetTag,
     oracleTagsForPrintings,
     deckSetViewState,
-    deckDrivenCollection,
   },
 }));
 
-import { DECK_DRIVEN_KEY } from "@/lib/useDeckDrivenCollection";
 import { useDeck, useSwapFromPane } from "./useDeck";
 
 const DECK: DeckRow = {
@@ -192,10 +189,6 @@ beforeEach(() => {
   // the tags say so themselves.
   oracleTagsForPrintings.mockReset().mockResolvedValue([]);
   deckSetViewState.mockReset().mockResolvedValue(undefined);
-  // The hand-kept collection, which is the app's default and what every test above is about.
-  // The derived ones seed `DECK_DRIVEN_KEY` instead — `staleTime: Infinity` means a seeded
-  // answer is never re-asked, so the seed wins over this without having to re-mock it.
-  deckDrivenCollection.mockReset().mockResolvedValue(false);
 });
 
 /**
@@ -994,37 +987,31 @@ describe("useSwapFromPane", () => {
 });
 
 /**
- * A deck write is a collection write while the collection is derived, and these are the
- * assertions that say so.
+ * **A deck write takes `["decks"]` and nothing wider, and this is the test that keeps it that
+ * way.**
  *
- * The Rust half of this shipped meticulously — fifteen commands routed through
- * `with_write_owned_if_derived` — and none of it reached the frontend: every mutation in this
- * file invalidated `["decks"]` and nothing else. With `staleTime: 30_000` that is not a cosmetic
- * gap. Two copies added in the editor and the Collection page opened inside the next thirty
- * seconds showed the old count; the deck editor's own docked search panel, whose `OwnedBadge` is
- * drawn from `["cards", "search"]` a few hundred pixels away, kept its pre-add number
- * **indefinitely**, because a mounted query with no invalidation has no refetch trigger at all.
+ * A deck write moves `deck_allocations` and never once touches `collection_entries`, so the
+ * deck root is owed and the other three are not. The three that stay fresh are the ones that
+ * provably cannot have moved: `CardSummary`'s owned count is allocation-blind, and a wish's
+ * `ownedQuantity` is summed straight from `collection_entries`. Firing them would be three
+ * refetches per press of the stepper that can only ever answer what is already on screen.
  */
-describe("useDeck while the collection is deck driven", () => {
-  it("marks the whole of what the reader owns stale when a card is added", async () => {
-    client.setQueryData(DECK_DRIVEN_KEY, true);
+describe("useDeck invalidation", () => {
+  it("marks only the decks stale when a card is added", async () => {
     seedOwned(client);
     const { result } = renderHook(() => useDeck(4), { wrapper });
     await waitFor(() => expect(result.current.deck).toEqual(DECK));
-    // Fresh, all four — which is the whole point. Without the fix they stay this way.
+    // Fresh, all four — so the assertion below is about what the write marked, not about the
+    // state the mount left behind.
     expect(staleRoots(client)).toEqual([]);
 
     await result.current.addCard.mutateAsync({ cardId: "p1", categoryId: MAIN.id, quantity: 2 });
 
-    await waitFor(() =>
-      expect(staleRoots(client)).toEqual(["cards", "collection", "decks", "wishlist"]),
-    );
+    await waitFor(() => expect(staleRoots(client)).toEqual(["decks"]));
   });
 
-  /** The stepper, which is the one a reader presses over and over — and the one that reads back
-   *  as "62" on a page the deck beside it says holds 64. */
-  it("marks them stale when the stepper moves a quantity", async () => {
-    client.setQueryData(DECK_DRIVEN_KEY, true);
+  /** The stepper, which is the one a reader presses over and over. */
+  it("marks only the decks stale when the stepper moves a quantity", async () => {
     seedOwned(client);
     const { result } = renderHook(() => useDeck(4), { wrapper });
     await waitFor(() => expect(result.current.deck).toEqual(DECK));
@@ -1035,28 +1022,6 @@ describe("useDeck while the collection is deck driven", () => {
       finish: null,
       quantity: 3,
     });
-
-    await waitFor(() =>
-      expect(staleRoots(client)).toEqual(["cards", "collection", "decks", "wishlist"]),
-    );
-  });
-
-  /**
-   * **The gate is additive, and this is the test that keeps it that way.**
-   *
-   * In the hand-kept mode a deck write still moves `deck_allocations`, so `["decks"]` was
-   * already the minimum there rather than the maximum — a conditional that *replaced* the deck
-   * root with the derived list would break every deck surface in the ordinary mode in order to
-   * fix the other one. The three that stay fresh are the ones that provably cannot have moved:
-   * `CollectionRow.deckCount` is `null` unless the collection is derived, and `CardSummary`'s
-   * owned count is allocation-blind.
-   */
-  it("marks only the decks stale while the collection is hand kept", async () => {
-    seedOwned(client);
-    const { result } = renderHook(() => useDeck(4), { wrapper });
-    await waitFor(() => expect(result.current.deck).toEqual(DECK));
-
-    await result.current.addCard.mutateAsync({ cardId: "p1", categoryId: MAIN.id, quantity: 2 });
 
     await waitFor(() => expect(staleRoots(client)).toEqual(["decks"]));
   });

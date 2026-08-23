@@ -10,7 +10,6 @@ const deckUpdate = vi.hoisted(() => vi.fn());
 const deckDelete = vi.hoisted(() => vi.fn());
 const deckDuplicate = vi.hoisted(() => vi.fn());
 const deckSetFolder = vi.hoisted(() => vi.fn());
-const deckDrivenCollection = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -20,11 +19,9 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckDelete,
     deckDuplicate,
     deckSetFolder,
-    deckDrivenCollection,
   },
 }));
 
-import { DECK_DRIVEN_KEY } from "@/lib/useDeckDrivenCollection";
 import { useDecks } from "./useDecks";
 
 const BURN: DeckRow = {
@@ -72,7 +69,6 @@ beforeEach(() => {
   deckDelete.mockReset().mockResolvedValue(undefined);
   deckDuplicate.mockReset().mockResolvedValue({ ...BURN, id: 5, name: "Burn (copy)" });
   deckSetFolder.mockReset().mockResolvedValue({ ...BURN, folderId: 1 });
-  deckDrivenCollection.mockReset().mockResolvedValue(false);
 });
 
 /**
@@ -101,15 +97,12 @@ const staleRoots = (c: QueryClient): string[] =>
     .sort();
 
 /**
- * "`allocate_deck` never touches `collection_entries`" is still true here and has stopped being
- * sufficient, which is the whole shape of this setting: nothing in this file writes the
- * collection table, it is that the collection table has stopped being where the collection comes
- * from. Deleting a deck cascades away every `deck_cards` row in it, and in the derived mode those
- * rows *were* the collection.
+ * `allocate_deck` writes `deck_allocations` and never once touches `collection_entries`, so the
+ * three other ownership roots are provably unmoved by anything in this file and firing them
+ * would be three refetches that can only answer what is already on screen.
  */
-describe("useDecks while the collection is deck driven", () => {
-  it("marks the whole of what the reader owns stale when a deck is deleted", async () => {
-    client.setQueryData(DECK_DRIVEN_KEY, true);
+describe("useDecks invalidation", () => {
+  it("marks only the decks stale when a deck is deleted", async () => {
     seedOwned(client);
     const { result } = renderHook(() => useDecks(), { wrapper });
     await waitFor(() => expect(result.current.decks).toEqual([BURN]));
@@ -117,21 +110,6 @@ describe("useDecks while the collection is deck driven", () => {
     // this is about what the write marks, not about what the mount did.
     seedOwned(client);
     expect(staleRoots(client)).toEqual([]);
-
-    await result.current.remove.mutateAsync(4);
-
-    await waitFor(() =>
-      expect(staleRoots(client)).toEqual(["cards", "collection", "decks", "wishlist"]),
-    );
-  });
-
-  /** Additively — `["decks"]` is the floor in both modes, because all five writes move the
-   *  gallery whether or not the collection is derived from it. */
-  it("marks only the decks stale while the collection is hand kept", async () => {
-    seedOwned(client);
-    const { result } = renderHook(() => useDecks(), { wrapper });
-    await waitFor(() => expect(result.current.decks).toEqual([BURN]));
-    seedOwned(client);
 
     await result.current.remove.mutateAsync(4);
 
