@@ -223,6 +223,15 @@ shared_cell` walks both into two databases and compares them column by column.
   `ON CONFLICT` target must match verbatim. The `coalesce(…, '')`s are load-bearing: NULLs in
   a UNIQUE index are distinct. `grading` enters identity as **raw text**, so it is only ever
   written through the one fixed-field struct that owns its key order.
+- **"Does the reader own this?" is `collection_source`, and four fragments plus one write
+  wrapper is all that module owns.** `owns_printing`/`copies_of_printing`/`copies_of_oracle`/
+  `owned_rowids` are correlated SQL a caller splices into its own statement; `with_write_owned`
+  is `sync::with_write` plus the facet index's `owned` rebuild, on success only. **Three
+  statements name `collection_entries` themselves and are the sites to check whenever that
+  table's shape moves**: `collection::from_sql`, which reads the entries as its `FROM` rather
+  than asking a question about them, and `wishlist::OWNED_SQL` and
+  `deck_theory::OWNED_SPARE_SQL`, which narrow by **finish** — something no fragment there does,
+  and the second subtracts `deck_allocations` as well.
 - **`reset.rs` holds the only writes in the crate with no subject, and they belong there.**
   `collection_clear`, `wishlist_clear`, `decks_clear` and `cache_clear` name a *table* rather
   than a row: none takes an id and none can be scoped. Filing one beside the reads of its table

@@ -16,14 +16,7 @@ import { cn } from "@/lib/utils";
 const BUTTON =
   "grid place-items-center rounded-md border border-border text-dim hover:text-text " +
   `${PRESS} ` +
-  "disabled:opacity-40 disabled:hover:text-dim disabled:active:scale-100 " +
-  // The same three responses again for the *other* way this control goes out of reach. A
-  // stepper at its floor is `disabled` (above) because it has nothing left to do and no reason
-  // to hold a tab stop; a stepper the whole surface has fenced off is `aria-disabled`, because
-  // the reason is in its accessible name and a reader has to be able to reach it to hear it.
-  // Two spellings of one appearance, and Tailwind emits no rule for a class it cannot read as
-  // text — hence written out rather than built from the line above.
-  "aria-disabled:opacity-40 aria-disabled:hover:text-dim aria-disabled:active:scale-100";
+  "disabled:opacity-40 disabled:hover:text-dim disabled:active:scale-100";
 
 /**
  * The same buttons drawn **over a card's illustration** rather than on a panel.
@@ -75,7 +68,6 @@ export function QuantityStepper({
   focus = "outside",
   orientation = "horizontal",
   tone = "panel",
-  disabledReason,
 }: {
   value: number;
   onChange: (next: number) => void;
@@ -137,25 +129,6 @@ export function QuantityStepper({
   /** What the control is drawn over. `art` for a stepper laid on a card's illustration — see
    *  {@link BUTTON_OVER_ART}. */
   tone?: "panel" | "art";
-  /**
-   * Why this quantity cannot be changed here — a clause, appended to each control's own name.
-   *
-   * Absent is the ordinary stepper and changes nothing. Present makes all three controls inert:
-   * the two buttons refuse the press, the field goes `readOnly`, and every one of them carries
-   * `aria-disabled` with the clause on the end of its accessible name — `"Increase Quantity of
-   * Lightning Bolt (Foil) — Your collection is driven by your decks"`.
-   *
-   * **`aria-disabled` rather than the attribute, which is the reverse of what the floor and the
-   * ceiling take**, and the difference is what there is to say. A button at `min` is out of
-   * things to do, and a reader loses nothing by tabbing past it; a stepper fenced off by a
-   * setting has a *reason*, and a `disabled` control is out of the tab order and cannot be
-   * asked for it. That is `src/CLAUDE.md`'s rule, and this prop is the only thing in this file
-   * that meets its condition.
-   *
-   * The field is `readOnly` rather than `disabled` for the same reason, and is readable either
-   * way: a quantity somebody else decides is still the number the reader came here to see.
-   */
-  disabledReason?: string;
 }) {
   const vertical = orientation === "vertical";
   /**
@@ -210,15 +183,6 @@ export function QuantityStepper({
   const ring = focus === "inset" ? FOCUS_INSET : FOCUS;
   const button = cn(BUTTON, tone === "art" && BUTTON_OVER_ART, ring, box);
   const clamp = (n: number) => Math.min(max, Math.max(min, n));
-  const inert = disabledReason !== undefined;
-  /**
-   * The clause on the end of a control's own name, or the name unchanged.
-   *
-   * An em dash rather than a full stop and a second sentence: this is read *as part of* one
-   * name, immediately after the thing being named, and a capitalised sentence in the middle of
-   * an accessible name is the wrong register.
-   */
-  const named = (name: string) => (inert ? `${name} — ${disabledReason}` : name);
 
   /**
    * What is in the box while it is being typed in, or `null` when the box is simply the
@@ -263,16 +227,9 @@ export function QuantityStepper({
   const decrease = (
     <button
       type="button"
-      aria-label={named(`Decrease ${label}`)}
-      // Never both spellings at once: `aria-disabled` is here so the reason stays reachable,
-      // and adding the attribute on top would take the control out of the tab order and hide
-      // the very sentence it was set for.
-      disabled={!inert && value <= min}
-      aria-disabled={inert || undefined}
-      // Refused here as well as said in the attribute — `aria-disabled` is a statement to
-      // assistive tech and stops no click on its own.
+      aria-label={`Decrease ${label}`}
+      disabled={value <= min}
       onClick={() => {
-        if (inert) return;
         onChange(clamp(value - 1));
       }}
       className={button}
@@ -284,11 +241,9 @@ export function QuantityStepper({
   const increase = (
     <button
       type="button"
-      aria-label={named(`Increase ${label}`)}
-      disabled={!inert && value >= max}
-      aria-disabled={inert || undefined}
+      aria-label={`Increase ${label}`}
+      disabled={value >= max}
       onClick={() => {
-        if (inert) return;
         onChange(clamp(value + 1));
       }}
       className={button}
@@ -303,16 +258,11 @@ export function QuantityStepper({
       transition={TRANSITION.fast}
       type="number"
       inputMode="numeric"
-      aria-label={named(label)}
+      aria-label={label}
       value={draft ?? value}
       min={min}
       max={max}
-      readOnly={inert}
-      aria-disabled={inert || undefined}
       onChange={(e) => {
-        // `readOnly` already stops the keyboard; this is what stops a `fireEvent.change` and
-        // anything else that writes the value without going through one.
-        if (inert) return;
         const raw = e.target.value;
         const typed = Number.parseInt(raw, 10);
         // An empty box is a box being typed in, not a zero: it is kept as typed and
@@ -332,9 +282,6 @@ export function QuantityStepper({
       className={cn(
         "rounded-md border border-border bg-surface text-center font-mono tabular-nums",
         NO_NATIVE_STEPS,
-        // The same 40% the two buttons take, so the three read as one control that is out of
-        // reach rather than a live box between two dead ones.
-        inert && "opacity-40",
         ring,
         field,
       )}

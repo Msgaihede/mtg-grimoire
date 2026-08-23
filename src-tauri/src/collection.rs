@@ -797,11 +797,14 @@ pub struct CollectionRow {
     pub type_line: Option<String>,
     pub layout: Option<String>,
     pub finish: String,
-    /// What state the copy is in — `None` when the collection is derived from the decks,
-    /// because a deck card has nowhere to record one.
+    /// What state the copy is in — `e.condition`, straight off the entry.
     ///
-    /// **Not the column's `'NM'` default.** A default is a fact the reader never stated, and
-    /// this field reaches their exported file through `fromCollectionRow`.
+    /// **`Option` over a column that is `TEXT NOT NULL DEFAULT 'NM'`** (`schema.rs`), so no row
+    /// this query can build is ever `None`. The nullability is a fence around the wire rather
+    /// than a state to expect, and narrowing it is a decision about what an export writes for a
+    /// copy whose grade the reader never stated — this field reaches their file through
+    /// `fromCollectionRow`, and a defaulted grade there would be the app filling one in on
+    /// their behalf.
     pub condition: Option<String>,
     pub quantity: i64,
     pub tradelist_quantity: i64,

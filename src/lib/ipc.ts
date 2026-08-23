@@ -839,12 +839,13 @@ export interface CollectionRow {
   layout: string | null;
   finish: string;
   /**
-   * What state the copy is in, and **`null` when the collection is derived from the decks** —
-   * a deck card has nowhere to record a condition.
+   * What state the copy is in — `collection_entries.condition`, straight off the entry.
    *
-   * Not the column's `NM` default, which would be a fact nobody stated: this field reaches the
-   * reader's exported file through `fromCollectionRow`, and `NM` on every derived row would be
-   * this app writing a grade into their CSV on their behalf.
+   * **`| null` over a column that is `TEXT NOT NULL DEFAULT 'NM'`**, so no row the backend can
+   * build carries one. The nullability is a fence around the wire rather than a state to
+   * expect, and narrowing it is a decision about what an export writes for a copy whose grade
+   * the reader never stated — this field reaches their CSV through `fromCollectionRow`, and a
+   * defaulted grade there would be this app filling one in on their behalf.
    */
   condition: string | null;
   quantity: number;

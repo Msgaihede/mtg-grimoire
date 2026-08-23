@@ -1,9 +1,24 @@
 //! Where "what does the reader own" is read from.
 //!
 //! One rule — **a card the reader owns is a row in `collection_entries`** — presented as the
-//! four fragments the crate's readers actually ask for. Every query that asks about ownership
-//! builds its SQL through one of the functions here rather than naming the table, so there is
-//! exactly one place the rule lives and exactly one place a future variant would go.
+//! four correlated fragments the crate's readers actually ask for, plus the one write wrapper
+//! that rebuilds the facet index after a write that can move ownership.
+//!
+//! **What it owns is those five things, not every mention of the table.** Three statements
+//! elsewhere name `collection_entries` themselves, each because it asks a question no fragment
+//! here answers — so a change to the table's *shape* has to reach this file **and** all three
+//! of them:
+//!
+//! - [`crate::collection`]'s `from_sql` — the collection page, its count and its summary read
+//!   the entries as their `FROM`, with the printing LEFT-JOINed on. Not a correlated
+//!   subquery about ownership; the rows themselves.
+//! - [`crate::wishlist`]'s `OWNED_SQL` — how much of a wish is already filled, narrowed by
+//!   **finish**, which none of the fragments here does.
+//! - [`crate::deck_theory`]'s `OWNED_SPARE_SQL` — copies no built deck has claimed, so it has
+//!   to subtract `deck_allocations` and narrow by finish in the same statement.
+//!
+//! Each of the three binds its own aliases and does not go through the paragraph below.
+//! `src-tauri/CLAUDE.md` carries the short form of this rule.
 //!
 //! **The `conn` argument is vestigial, and it is kept on purpose.** These four took a
 //! connection while the source was switchable and read a stored flag off it; nothing branches
