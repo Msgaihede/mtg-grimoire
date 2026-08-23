@@ -52,17 +52,6 @@ const oracleTagsForPrintings = vi.hoisted(() => vi.fn());
 // rejection about a missing Tauri runtime.
 const importResolve = vi.hoisted(() => vi.fn());
 const collectionImportCommit = vi.hoisted(() => vi.fn());
-/**
- * The deck-driven setting, and the per-row deck names the derived Actions column asks for on
- * hover.
- *
- * `deckDrivenCollection` is answered in every test rather than only in the derived ones: the
- * hook reads it on mount from every render of this page, and an unmocked command is an
- * exception inside a `queryFn` — which lands as `deckDriven: false`, the right answer for the
- * wrong reason and one that would mask a hook that had stopped being called at all.
- */
-const deckDrivenCollection = vi.hoisted(() => vi.fn());
-const collectionRowDecks = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -82,8 +71,6 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     oracleTagsForPrintings,
     importResolve,
     collectionImportCommit,
-    deckDrivenCollection,
-    collectionRowDecks,
   },
 }));
 
@@ -126,19 +113,7 @@ const BOLT: CollectionRow = {
   notes: null,
   needsReview: null,
   updatedAt: 1_800_000_000,
-  // A hand-kept row: `null` is what the collection says when it is not derived from the decks.
-  deckCount: null,
 };
-
-/**
- * The same printing as it comes back when the collection is the sum of the decks.
- *
- * Three fields differ and each is the backend's, not a convenience: `condition` is `null`
- * because a deck card has nowhere to record one, `deckCount` is how many decks these copies
- * are spread across, and the quantity is their sum. Everything else about a derived row is the
- * printing, which is the same printing.
- */
-const DERIVED: CollectionRow = { ...BOLT, condition: null, quantity: 5, deckCount: 3 };
 
 /** The one printing `import_resolve` answers with for the import test below — everything the
  *  collection's planner does not read filled in as nothing, `DeckEditor.test.tsx`'s own
@@ -317,13 +292,6 @@ beforeEach(() => {
   // between tests, since `importDefaults` lives in the store rather than in this component.
   importResolve.mockReset().mockResolvedValue([{ index: 0, matched: SOL_RING, hintMissed: false }]);
   collectionImportCommit.mockReset().mockResolvedValue({ added: 1, updated: 0, removed: 0 });
-  // The hand-kept collection unless a test says otherwise — the app's own floor, and what
-  // every assertion in this file outside the derived block below is about.
-  deckDrivenCollection.mockReset().mockResolvedValue(false);
-  collectionRowDecks.mockReset().mockResolvedValue([
-    { deckId: 1, deckName: "Burn", quantity: 3 },
-    { deckId: 2, deckName: "Boros Aggro", quantity: 2 },
-  ]);
   useAppStore.setState({
     collectionView: "table",
     selectedCardId: null,
@@ -1156,209 +1124,6 @@ describe("CollectionPage", () => {
  * a tile is a card the reader may hold in two of them. That difference is what the two writes
  * below are about; the panel's own markup is `ContextMenu.test.tsx`'s subject.
  */
-/**
- * The page when the collection is the sum of the reader's decks.
- *
- * Every case here is about something the page must draw *differently*, and the ones worth
- * naming are the two that are easy to get backwards: a cell branches on the **row** it was
- * handed and never on the setting, while a **column header** and a filter chip branch on the
- * setting, because those are statements about the whole list.
- */
-describe("the deck-driven collection", () => {
-  /** Flipped on before the page mounts, so the first list request already carries the mode. */
-  beforeEach(() => {
-    deckDrivenCollection.mockResolvedValue(true);
-    collectionList.mockResolvedValue(page([DERIVED]));
-    collectionSummary.mockResolvedValue(summary({ totalCards: 5, uniqueCards: 1 }));
-  });
-
-  /**
-   * Every number on the page changes meaning under this setting and none of the controls says
-   * so, so the page says it — and says where to undo it, because a reader who did not expect
-   * this needs a way back that is not a hunt through Settings.
-   *
-   * A **button** and not a link: this app has no router, so there is nothing for an `<a>` to
-   * point at. The assertion is by role for exactly that reason — it is the one that would go
-   * red if somebody "tidied" it into an `<a href>` that navigates nowhere.
-   */
-  it("says the collection is coming from the decks, and where the setting is", async () => {
-    wrap(<CollectionPage />);
-
-    expect(await screen.findByText(/sum of the cards in your decks/i)).toBeInTheDocument();
-    // The half a reader cannot deduce, and the difference between two very different totals.
-    expect(screen.getByText(/theory lists are left out/i)).toBeInTheDocument();
-    const toSettings = screen.getByRole("button", { name: /change this in settings/i });
-
-    await userEvent.click(toSettings);
-
-    expect(useAppStore.getState().activeView).toBe("settings");
-  });
-
-  /** And it is not drawn over a hand-kept collection, which would be a sentence about a mode
-   *  the reader is not in. */
-  it("says nothing about decks when the collection is the reader's own", async () => {
-    deckDrivenCollection.mockResolvedValue(false);
-    wrap(<CollectionPage />);
-    await screen.findByText("Lightning Bolt");
-
-    expect(screen.queryByText(/sum of the cards in your decks/i)).not.toBeInTheDocument();
-  });
-
-  /**
-   * The Condition chips are gone rather than greyed.
-   *
-   * Every derived row's condition is `NULL`, so each of the five chips could only ever return
-   * an empty table — there is no "press it later" to say, which is what every other
-   * out-of-reach control in this app is greyed in order to say.
-   */
-  it("hides the condition filter, because a deck card has no condition", async () => {
-    wrap(<CollectionPage />);
-    await screen.findByText("Lightning Bolt");
-
-    expect(screen.queryByRole("group", { name: "Condition" })).not.toBeInTheDocument();
-    // The finish chips beside them stay: a derived row does carry a finish.
-    expect(screen.getByRole("group", { name: "Finish" })).toBeInTheDocument();
-  });
-
-  /**
-   * The header drops the half of its name nothing under it can fill.
-   *
-   * `^Finish$` and not `/finish/i`: the old header contains the new one, so a loose match
-   * passes against the string this case exists to catch.
-   */
-  it("shortens the finish column's header when there is no condition in it", async () => {
-    wrap(<CollectionPage />);
-
-    expect(await screen.findByRole("columnheader", { name: /^Finish$/ })).toBeInTheDocument();
-    expect(
-      screen.queryByRole("columnheader", { name: /Finish · condition/ }),
-    ).not.toBeInTheDocument();
-  });
-
-  /**
-   * And the cell drops the separator with it — tested through the **row**, not the setting.
-   *
-   * `Foil ·` under a header reading only `Finish` promises a second field the column no longer
-   * has. The dangling middle dot is what this asserts is gone.
-   */
-  it("draws the finish alone in a cell whose row states no condition", async () => {
-    wrap(<CollectionPage />);
-    const row = (await screen.findByText("Lightning Bolt")).closest('[role="row"]') as HTMLElement;
-
-    expect(within(row).getByText("Foil")).toBeInTheDocument();
-    expect(within(row).queryByText(/Foil ·/)).not.toBeInTheDocument();
-  });
-
-  /**
-   * The Actions column answers a question instead of offering an action.
-   *
-   * A derived row cannot be removed — the copies are in the decks — so the removal is gone
-   * and the deck count stands where it was. Both halves are asserted: a page that merely
-   * stopped drawing the button would pass the first line alone.
-   */
-  it("draws the deck count where the delete button was", async () => {
-    wrap(<CollectionPage />);
-
-    expect(await screen.findByText("3 decks")).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /remove/i })).not.toBeInTheDocument();
-    // And the footnote under the table stops explaining a removal nobody may make.
-    expect(screen.getByText(/removed in the deck that holds them/i)).toBeInTheDocument();
-  });
-
-  /** A reader with one deck must not be told "1 decks". */
-  it("says one deck in the singular", async () => {
-    collectionList.mockResolvedValue(page([{ ...DERIVED, deckCount: 1 }]));
-    wrap(<CollectionPage />);
-
-    expect(await screen.findByText("1 deck")).toBeInTheDocument();
-  });
-
-  /**
-   * Which decks, on hover — and not before.
-   *
-   * The count rides along with the row and is free; the names are a query each, so a 100-row
-   * page must not carry several hundred of them. That the command has **not** been called
-   * before the pointer arrives is therefore half the case.
-   */
-  it("asks which decks only once the pointer rests on the count", async () => {
-    wrap(<CollectionPage />);
-    const count = await screen.findByText("3 decks");
-    expect(collectionRowDecks).not.toHaveBeenCalled();
-
-    fireEvent.pointerEnter(count);
-
-    await waitFor(() => expect(document.getElementById(TOOLTIP_PANEL_ID)).not.toBeNull(), {
-      timeout: TOOLTIP_OPEN_MS + 1000,
-    });
-    const panel = document.getElementById(TOOLTIP_PANEL_ID) as HTMLElement;
-    await waitFor(() => expect(panel).toHaveTextContent("3 × Burn"));
-    expect(panel).toHaveTextContent("2 × Boros Aggro");
-    // The row's own spelling, straight through: `"nonfoil"` is the collection's word and the
-    // deck table's `NULL` is coalesced at the backend's end, so nothing here translates it.
-    expect(collectionRowDecks).toHaveBeenCalledWith("c1", "foil", "en");
-  });
-
-  /**
-   * The stepper is greyed with its reason rather than removed.
-   *
-   * `aria-disabled` and never the attribute: the reason is the point, and a `disabled` button
-   * is out of the tab order and cannot be asked for it (`src/CLAUDE.md`). Both halves are
-   * asserted, because the attribute alone is a statement to assistive tech and stops no click.
-   */
-  it("puts the quantity stepper out of reach with its reason", async () => {
-    wrap(<CollectionPage />);
-    const plus = await screen.findByRole("button", {
-      name: /increase quantity of lightning bolt.*driven by your decks/i,
-    });
-
-    expect(plus).toHaveAttribute("aria-disabled", "true");
-    expect(plus).not.toBeDisabled();
-    await userEvent.click(plus);
-
-    expect(collectionSetQuantity).not.toHaveBeenCalled();
-  });
-
-  /**
-   * An empty derived collection is not an empty collection.
-   *
-   * The hand-kept sentence tells the reader to add a card from search or import a file —
-   * advice that, here, would put a row somewhere this view is not looking, so they would
-   * follow it and watch the page stay empty.
-   */
-  it("says there are no decks yet rather than nothing added", async () => {
-    collectionList.mockResolvedValue(page([]));
-    collectionSummary.mockResolvedValue(summary());
-    wrap(<CollectionPage />);
-
-    expect(await screen.findByText(/you have no decks yet/i)).toBeInTheDocument();
-    expect(screen.queryByText(/import a collection file/i)).not.toBeInTheDocument();
-  });
-
-  /**
-   * The mode is in the query key, and this is the case that pins it.
-   *
-   * The two modes are two different sets of rows over the same filters, so a key that spelled
-   * them the same way would serve the page cached for the other one — against local SQLite,
-   * instantly, with nothing on screen to notice. A page mounted hand-kept and then flipped is
-   * how that would happen, so that is what is driven: the assertion is that a **new request**
-   * went out, not merely that the rows changed.
-   */
-  it("re-asks the backend when the setting flips under a loaded page", async () => {
-    deckDrivenCollection.mockResolvedValue(false);
-    const { client } = wrap(<CollectionPage />);
-    await screen.findByText("Lightning Bolt");
-    const asked = collectionList.mock.calls.length;
-
-    // Through the cache the hook reads, which is what the settings panel's own optimistic
-    // write does — rather than through a second render of a page that is already mounted.
-    act(() => {
-      client.setQueryData(["deckDrivenCollection"], true);
-    });
-
-    await waitFor(() => expect(collectionList.mock.calls.length).toBeGreaterThan(asked));
-  });
-});
-
 describe("the card menu", () => {
   it("opens on a right-click of a row, without opening the card", async () => {
     wrap(<CollectionPage />);

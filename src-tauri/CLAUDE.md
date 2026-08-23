@@ -223,6 +223,15 @@ shared_cell` walks both into two databases and compares them column by column.
   `ON CONFLICT` target must match verbatim. The `coalesce(…, '')`s are load-bearing: NULLs in
   a UNIQUE index are distinct. `grading` enters identity as **raw text**, so it is only ever
   written through the one fixed-field struct that owns its key order.
+- **"Does the reader own this?" is `collection_source`, and four fragments plus one write
+  wrapper is all that module owns.** `owns_printing`/`copies_of_printing`/`copies_of_oracle`/
+  `owned_rowids` are correlated SQL a caller splices into its own statement; `with_write_owned`
+  is `sync::with_write` plus the facet index's `owned` rebuild, on success only. **Three
+  statements name `collection_entries` themselves and are the sites to check whenever that
+  table's shape moves**: `collection::from_sql`, which reads the entries as its `FROM` rather
+  than asking a question about them, and `wishlist::OWNED_SQL` and
+  `deck_theory::OWNED_SPARE_SQL`, which narrow by **finish** — something no fragment there does,
+  and the second subtracts `deck_allocations` as well.
 - **`reset.rs` holds the only writes in the crate with no subject, and they belong there.**
   `collection_clear`, `wishlist_clear`, `decks_clear` and `cache_clear` name a *table* rather
   than a row: none takes an id and none can be scoped. Filing one beside the reads of its table
@@ -231,26 +240,6 @@ shared_cell` walks both into two databases and compares them column by column.
   `deck_audit` and `deck_undo` are per-deck and cascade away with the decks they describe, so a
   wipe has nowhere to be recorded. The confirmation is the **webview's** and the commands take
   no `confirm` argument — a fence passed as a parameter is a fence a caller can forget.
-- **Any query that asks what the reader _owns_ builds its SQL through `collection_source`, never
-  by naming `collection_entries`.** The collection has two sources since 2026-08-22 — the table,
-  or the sum of every `deck_cards` row whose `variant` is `live` — and `deck_driven::stored` is
-  the bit that picks. One predicate, `collection_source::LIVE`, is the whole rule, and it is
-  presented in **two shapes** because the readers ask two shapes of question: `rows(conn, alias)`
-  is a grouped `FROM` fragment for the two commands that list whole rows, and `owns_printing` /
-  `copies_of_printing` / `copies_of_oracle` / `owned_rowids` are direct correlated reads for the
-  ones that ask about one card from inside a subquery over 116 k. **Do not hand a correlated
-  reader the grouped shape** — that recomputes the whole deck sum once per candidate row.
-  Two readers (`wishlist::owned_sql`, `deck_theory::owned_spare_sql`) build their own two arms
-  from `LIVE` because they narrow by **finish**, which no shared builder does; a new one that
-  needs a term nobody else needs joins them rather than widening a builder. `deck_cards.finish`
-  is NULL for the regular copy and the collection spells it `nonfoil`, so **every derived arm
-  that touches finish carries `coalesce(dc.finish, 'nonfoil')`** — the same expression the
-  grouped shape groups by, and a mismatch reads as zero owned with nothing failing.
-  A **write** that can move `deck_cards.quantity`, `.variant` or `.card_id` goes through
-  `collection_source::with_write_owned_if_derived`, not bare `sync::with_write`: the search
-  index's `owned` dimension moves with a deck edit while the setting is on. The whole rule, the
-  seven readers, the five refusals and what a derived row cannot carry:
-  [deck-driven-collection.md](../docs/reference/deck-driven-collection.md).
 - **Quantity 0 keeps the collection row** — the condition, purchase price, tags and
   acquisition story survive the day the user owns none of the card. Deleting is
   `remove_entry` and only ever `remove_entry`. The wishlist is the opposite by table CHECK

@@ -1,6 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ipc, type DeckInput, type DeckPatch, type DeckRow } from "@/lib/ipc";
-import { useDeckWriteRoots } from "@/lib/useDeckDrivenCollection";
 
 /** Stable identity for "no decks yet" — the gallery's `useMemo`s key off this array. */
 const NONE: readonly DeckRow[] = [];
@@ -32,22 +31,14 @@ export function useDecks() {
    * `DeckCard.ownedQuantity` in the open detail is attributed from. Only the queries actually
    * mounted pay for a refetch, and at most two of these are ever on screen.
    *
-   * **In the hand-kept mode the collection and the wishlist are deliberately left alone**:
-   * `allocate_deck` writes `deck_allocations` and never once touches `collection_entries` —
-   * spec §6's non-destructive model is exactly that sentence — so neither list can have moved.
+   * **The collection and the wishlist are deliberately left alone**: `allocate_deck` writes
+   * `deck_allocations` and never once touches `collection_entries` — spec §6's non-destructive
+   * model is exactly that sentence — so neither list can have moved.
    *
-   * **While the collection is derived that sentence is still true and no longer sufficient**,
-   * which is the whole shape of this setting. Nothing here writes `collection_entries` either;
-   * it is that `collection_entries` has stopped being where the collection comes from. Deleting
-   * a deck deletes every `deck_cards` row in it, and in that mode those rows *were* the
-   * collection — so `remove` empties the collection page of everything that deck held, and
-   * `duplicate` doubles it. {@link useDeckWriteRoots} is the list and the gate, and it is
-   * additive: `["decks"]` is in both arms, because the five writes here move the gallery in
-   * either mode.
+   * `["decks"]` alone, then, because the five writes here move the gallery and nothing else.
    */
-  const writeRoots = useDeckWriteRoots();
   const invalidate = () => {
-    for (const queryKey of writeRoots) void queryClient.invalidateQueries({ queryKey });
+    void queryClient.invalidateQueries({ queryKey: ["decks"] });
   };
 
   /**

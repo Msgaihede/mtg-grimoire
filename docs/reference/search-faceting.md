@@ -246,7 +246,7 @@ using it.
   `sync::note_database` (`Source::Database`, `Kind::Io`, operations `index_build` and
   `index_owned_refresh`), keeping the `eprintln!` beside it for a dev
   console. It takes the **write** lock, which is only safe because both call sites hold
-  nothing: `spawn_build` is on its own thread, and `collection::with_write_owned` releases
+  nothing: `spawn_build` is on its own thread, and `collection_source::with_write_owned` releases
   its guard _before_ calling `invalidate_owned`. The "build superseded" message stays an
   `eprintln!` and is deliberately **not** recorded — it is an expected interleaving, not a
   failure, and whatever superseded it owes a rebuild of its own.

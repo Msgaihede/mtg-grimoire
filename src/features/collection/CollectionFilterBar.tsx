@@ -131,30 +131,18 @@ export function CollectionFilterBar({ collection }: { collection: Collection }) 
 
         {/* The grades as they are printed on every listing the cards came from. Spelled out
             in the accessible name and the tooltip, because `DMG` is vocabulary and five
-            spelled-out grades are 400px of chrome above the table they filter.
-
-            **Gone entirely while the collection is derived, rather than greyed.** Every other
-            out-of-reach control in this app stays and says why, because there is something to
-            say — press it later, or change the thing stopping you. There is nothing to say
-            here: a deck card has nowhere to record a condition, so every derived row's is
-            `NULL` and each of these five chips could only ever return an empty table. A chip
-            whose only honest hint is "this can never match anything" is chrome. The other
-            half of this is in `useCollection`, which stops sending the filter and stops
-            counting it on the Reset all badge — or the reader would be told one filter is on
-            with nothing on the row to turn off. */}
-        {!collection.deckDriven && (
-          <div role="group" aria-label="Condition" className="flex gap-1">
-            {CONDITIONS.map((c) => (
-              <ToggleChip
-                key={c}
-                label={c}
-                hint={CONDITION_LABEL[c].toLowerCase()}
-                pressed={collection.conditions.includes(c)}
-                onClick={() => collection.toggleCondition(c)}
-              />
-            ))}
-          </div>
-        )}
+            spelled-out grades are 400px of chrome above the table they filter. */}
+        <div role="group" aria-label="Condition" className="flex gap-1">
+          {CONDITIONS.map((c) => (
+            <ToggleChip
+              key={c}
+              label={c}
+              hint={CONDITION_LABEL[c].toLowerCase()}
+              pressed={collection.conditions.includes(c)}
+              onClick={() => collection.toggleCondition(c)}
+            />
+          ))}
+        </div>
 
         {/* Three-way, like the wishlist's twin and the search's Owned: the chip's *label* is
             what says which state is on, because an unpressed chip cannot mean "not flagged"

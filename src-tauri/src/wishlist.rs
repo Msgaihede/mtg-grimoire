@@ -223,46 +223,20 @@ const MAX_LIMIT: u32 = 500;
 /// [`crate::collection::set_quantity`]) contributes nothing: this figure is copies held,
 /// not entries recorded, and a wish is satisfied by copies.
 ///
-/// **Two arms, because what the reader owns is switchable** — [`crate::deck_driven`] answers
-/// the table or the live deck lists, and a shopping list has to be filled by whichever one
-/// the reader is keeping. **Both arms narrow by finish and neither by condition**, and the
-/// derived arm has to translate: `deck_cards.finish` is NULL for the regular copy while
-/// `wishlist_entries.preferred_finish` spells it `nonfoil`, so binding the deck's NULL
-/// straight through would make every regular wish read zero owned.
+/// **It narrows by finish and never by condition.**
 ///
-/// **`pub(crate)` for one reader outside this module**, and the switchability above is exactly
-/// why it must be shared rather than copied: `wishlist_folders::folder_summary` sums
+/// **`pub(crate)` for one reader outside this module**: `wishlist_folders::folder_summary` sums
 /// `max(0, quantity - owned)` per folder, so a folder's subtotal and the page header's total have
-/// to be one piece of arithmetic — and a second spelling would go on counting the *table* on a
-/// database where the reader has switched to deck-driven, putting a wrong number on every folder
-/// card while the header beside it read right. It takes a `Connection` for that reason and not
-/// merely for tidiness. The alias `w` this expression assumes is part of the contract, so anything
-/// reading it aliases `wishlist_entries` the same way.
-pub(crate) fn owned_sql(conn: &Connection) -> String {
-    if !crate::deck_driven::stored(conn) {
-        return "coalesce((
+/// to be one piece of arithmetic and a second spelling would be a second thing to keep in step.
+/// The alias `w` this expression assumes is part of the contract, so anything reading it aliases
+/// `wishlist_entries` the same way.
+pub(crate) const OWNED_SQL: &str = "coalesce((
         SELECT sum(ce.quantity) FROM collection_entries ce
          WHERE (w.card_id IS NOT NULL AND ce.card_id = w.card_id
                 AND (w.preferred_finish IS NULL OR ce.finish = w.preferred_finish))
             OR (w.card_id IS NULL AND ce.card_id IN
                     (SELECT id FROM cards WHERE oracle_id = w.oracle_id)
-                AND (w.preferred_finish IS NULL OR ce.finish = w.preferred_finish))), 0)"
-            .to_owned();
-    }
-    format!(
-        "coalesce((
-        SELECT sum(dc.quantity) FROM deck_cards dc
-         WHERE {LIVE}
-           AND ((w.card_id IS NOT NULL AND dc.card_id = w.card_id
-                 AND (w.preferred_finish IS NULL
-                      OR coalesce(dc.finish, 'nonfoil') = w.preferred_finish))
-             OR (w.card_id IS NULL AND dc.card_id IN
-                     (SELECT id FROM cards WHERE oracle_id = w.oracle_id)
-                 AND (w.preferred_finish IS NULL
-                      OR coalesce(dc.finish, 'nonfoil') = w.preferred_finish)))), 0)",
-        LIVE = crate::collection_source::LIVE
-    )
-}
+                AND (w.preferred_finish IS NULL OR ce.finish = w.preferred_finish))), 0)";
 
 /// The columns the wishlist's headers can sort on, plus the two the filter bar's select
 /// offers that have no column to press.
@@ -834,10 +808,10 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
             Box::new(escape_like(text)),
         );
     }
-    // Built once for the whole statement build: the filter below and the `owned_quantity`
+    // Named once for the whole statement build: the filter below and the `owned_quantity`
     // column further down have to be the same expression, or a list could hide a row whose
     // own badge says it is still short.
-    let owned = owned_sql(conn);
+    let owned = OWNED_SQL;
     match q.fulfilled {
         Some(true) => p.wheres.push(format!("{owned} >= w.quantity")),
         Some(false) => p.wheres.push(format!("{owned} < w.quantity")),
@@ -1625,133 +1599,6 @@ mod tests {
             4,
             "no preference counts both finishes"
         );
-    }
-
-    /// [`seeded`]'s two Bolt printings, plus one deck: `bolt-lea` sleeved up two regular and
-    /// one foil, `bolt-2ed` only planned for. Nothing is entered by hand, so every figure
-    /// below is the decks' or nothing.
-    fn deck_driven_wishlist_db() -> Connection {
-        let conn = seeded();
-        conn.execute_batch(
-            "INSERT INTO decks (id, name, created_at, updated_at) VALUES (1,'Atraxa',0,0);
-             INSERT INTO deck_categories (id, deck_id, name, kind, is_active, sort_order,
-                                          created_at, updated_at)
-                  VALUES (10,1,'Burn','main',1,0,0,0);
-             INSERT INTO deck_cards (deck_id, category_id, variant, card_id, set_code,
-                                     collector_number, lang, name, quantity, finish,
-                                     created_at, updated_at)
-                  VALUES (1,10,'live','bolt-lea','lea','161','en','Lightning Bolt',2,NULL,0,0),
-                         (1,10,'live','bolt-lea','lea','161','en','Lightning Bolt',1,'foil',0,0),
-                         (1,10,'theory','bolt-2ed','2ed','162','en','Lightning Bolt',4,NULL,0,0);",
-        )
-        .unwrap();
-        conn
-    }
-
-    /// One wish, and the id it was written under.
-    fn wish_for(
-        conn: &Connection,
-        card: Option<&str>,
-        oracle: Option<&str>,
-        finish: Option<&str>,
-    ) -> i64 {
-        add_wish(
-            conn,
-            &WishInput {
-                card_id: card.map(str::to_owned),
-                oracle_id: oracle.map(str::to_owned),
-                preferred_finish: finish.map(str::to_owned),
-                quantity: 1,
-                ..Default::default()
-            },
-        )
-        .unwrap()
-        .id
-    }
-
-    /// A wish is filled by copies the reader has — and while the setting is on, the copies
-    /// they have are the ones in their live decks. Finish still narrows; condition still
-    /// does not, because a wish has nowhere to name one.
-    ///
-    /// **The `nonfoil` row is the one that matters.** `deck_cards.finish` is NULL for the
-    /// regular copy while `wishlist_entries.preferred_finish` spells it `nonfoil`, so an arm
-    /// that bound the deck's NULL straight through would read `0` here and quietly leave
-    /// every ordinary wish on the shopping list forever.
-    #[test]
-    fn a_wish_is_filled_by_live_deck_copies_when_deck_driven() {
-        let conn = deck_driven_wishlist_db();
-        crate::deck_driven::store(&conn, true).unwrap();
-
-        let any_finish = wish_for(&conn, Some("bolt-lea"), None, None);
-        let foil = wish_for(&conn, Some("bolt-lea"), None, Some("foil"));
-        let nonfoil = wish_for(&conn, Some("bolt-lea"), None, Some("nonfoil"));
-        // The other arm of the subquery: no printing named, so every printing of the oracle
-        // card counts — and `bolt-2ed`'s four copies are theory, so they do not.
-        let any_printing = wish_for(&conn, None, Some("o1"), None);
-
-        let rows = list_wishes(&conn, &WishlistQuery::default()).unwrap();
-        let owned_of = |id: i64| {
-            rows.items
-                .iter()
-                .find(|r| r.id == id)
-                .unwrap()
-                .owned_quantity
-        };
-        assert_eq!(owned_of(any_finish), 3, "two regular and one foil");
-        assert_eq!(owned_of(foil), 1);
-        assert_eq!(
-            owned_of(nonfoil),
-            2,
-            "the NULL deck finish is the regular copy, not a finish that matches nothing"
-        );
-        assert_eq!(
-            owned_of(any_printing),
-            3,
-            "the planned printing is not held"
-        );
-
-        // The Fulfilled filter reads the same expression, so it has to agree with the badge.
-        let filled: Vec<i64> = list_wishes(
-            &conn,
-            &WishlistQuery {
-                fulfilled: Some(true),
-                ..Default::default()
-            },
-        )
-        .unwrap()
-        .items
-        .iter()
-        .map(|r| r.id)
-        .collect();
-        assert!(filled.contains(&nonfoil));
-        assert!(filled.contains(&foil));
-        assert!(filled.contains(&any_printing));
-    }
-
-    /// The same fixture with the setting **off**: the hand-kept table is empty however full
-    /// the decks are, so every wish is still missing. Without this a swap that read the
-    /// decks unconditionally would pass the test above.
-    #[test]
-    fn a_wish_still_reads_the_table_when_the_setting_is_off() {
-        let conn = deck_driven_wishlist_db();
-        let nonfoil = wish_for(&conn, Some("bolt-lea"), None, Some("nonfoil"));
-
-        let rows = list_wishes(&conn, &WishlistQuery::default()).unwrap();
-        assert_eq!(rows.items[0].owned_quantity, 0);
-
-        let missing: Vec<i64> = list_wishes(
-            &conn,
-            &WishlistQuery {
-                fulfilled: Some(false),
-                ..Default::default()
-            },
-        )
-        .unwrap()
-        .items
-        .iter()
-        .map(|r| r.id)
-        .collect();
-        assert_eq!(missing, vec![nonfoil]);
     }
 
     /// A wish is removed, never emptied: `quantity > 0` is the table's own CHECK, which is

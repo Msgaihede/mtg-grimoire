@@ -285,11 +285,6 @@ impl CardIndex {
     ///
     /// The join reads `cards`' primary-key index for the rowid and never the row, so the
     /// cost is one index probe per collection entry.
-    ///
-    /// **The statement is built rather than literal** — [`crate::collection_source::owned_rowids`]
-    /// decides which table it reads, so with the deck-driven collection on the probe is one
-    /// per live *deck row* instead of one per collection entry, and the dimension is the
-    /// decks' answer rather than the table's.
     pub fn rebuild_owned(&mut self, conn: &Connection) -> rusqlite::Result<()> {
         let mut owned = BitSet::new(self.capacity);
         let mut stmt = conn.prepare(&crate::collection_source::owned_rowids(conn))?;
@@ -484,58 +479,6 @@ mod tests {
                 "doc {d} was emitted with no slot in set_ord"
             );
         });
-    }
-
-    /// [`super::fixtures::seeded`]'s four printings, plus one deck holding two of them:
-    /// `1` sleeved up, `2` only planned for. Nothing is entered by hand, so the `owned`
-    /// dimension is empty until the setting is on.
-    fn deck_driven_index_db() -> Connection {
-        let conn = seeded();
-        conn.execute_batch(
-            "INSERT INTO decks (id, name, created_at, updated_at) VALUES (1,'Atraxa',0,0);
-             INSERT INTO deck_categories (id, deck_id, name, kind, is_active, sort_order,
-                                          created_at, updated_at)
-                  VALUES (10,1,'Ramp','main',1,0,0,0);
-             INSERT INTO deck_cards (deck_id, category_id, variant, card_id, set_code,
-                                     collector_number, lang, name, quantity, finish,
-                                     created_at, updated_at)
-                  VALUES (1,10,'live','1','lea','1','en','Lightning Bolt',2,NULL,0,0),
-                         (1,10,'live','1','lea','1','en','Lightning Bolt',1,'foil',0,0),
-                         (1,10,'theory','2','rav','1','en','Lightning Helix',3,NULL,0,0);",
-        )
-        .unwrap();
-        conn
-    }
-
-    /// The facet index's `owned` dimension follows the setting: with the collection derived
-    /// from the decks it is the live deck lists, **de-duplicated** — two rows of the same
-    /// printing are one bit, which is what `SELECT DISTINCT` is for.
-    #[test]
-    fn rebuild_owned_reads_the_decks_when_deck_driven() {
-        let conn = deck_driven_index_db();
-        crate::deck_driven::store(&conn, true).unwrap();
-        let mut index = CardIndex::build(&conn).unwrap();
-        index.rebuild_owned(&conn).unwrap();
-        assert_eq!(index.owned.count(), 1, "one live printing, one owned card");
-        assert!(index.owned.contains(doc(&conn, "1")));
-        assert!(
-            !index.owned.contains(doc(&conn, "2")),
-            "a theory row is a plan, not a card the reader has"
-        );
-    }
-
-    /// The same fixture with the setting **off** — the dimension is the hand-kept table,
-    /// which is empty however full the decks are. Without this a swap that read the decks
-    /// unconditionally would pass the test above.
-    #[test]
-    fn rebuild_owned_still_reads_the_table_when_the_setting_is_off() {
-        let conn = deck_driven_index_db();
-        let mut index = CardIndex::build(&conn).unwrap();
-        index.rebuild_owned(&conn).unwrap();
-        assert_eq!(index.owned.count(), 0);
-        own(&conn, "3", 1);
-        index.rebuild_owned(&conn).unwrap();
-        assert_eq!(index.owned.count(), 1, "the entry the reader typed in");
     }
 
     /// Colour identity is per letter, and the empty identity is its own bucket — `C` means

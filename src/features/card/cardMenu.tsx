@@ -59,7 +59,6 @@ import {
 } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
 import type { PaneDeckContext, PrintingsRequest } from "@/lib/store";
-import { DECK_DRIVEN_REASON } from "@/lib/useDeckDrivenCollection";
 import { sortOptions } from "@/lib/options";
 
 /**
@@ -162,21 +161,6 @@ export interface CardMenuDeps {
    */
   printingsOracleId?: string | null;
   DeckTargetSubmenu: ComponentType<{ target: CardMenuTarget; onDone: () => void }>;
-  /**
-   * Whether the collection is currently the sum of the reader's live decks — and therefore
-   * refuses every hand write, this one included.
-   *
-   * Read here rather than left to the write itself: `collectionItem` greys "Add to → Collection"
-   * and gives its reason (`DECK_DRIVEN_REASON`) rather than letting the row round-trip into a
-   * refusal after the menu has already closed, where there is nothing left on screen to report
-   * it to. The wishlist row is untouched — nothing about it writes the collection.
-   *
-   * **Optional, and absent means `false`** — every caller of `buildCardMenu` from before this
-   * field existed (a story, a fixture) still type-checks and still draws the row live, which is
-   * the right default: the hand-kept collection is the floor a read that has not answered yet
-   * also draws.
-   */
-  deckDriven?: boolean;
 }
 
 /**
@@ -255,7 +239,7 @@ export function buildCardMenu(target: CardMenuTarget, deps: CardMenuDeps): MenuI
       label: "Add to",
       Icon: Plus,
       items: [
-        collectionItem(target, deps.addToCollection, deps.deckDriven ?? false),
+        collectionItem(target, deps.addToCollection),
         wishlistItem(target, deps),
         // `lazy` and not `submenu`: the folder tree and the deck list are two queries, and a
         // right-click on a card in a wall of forty must not fire either of them.
@@ -373,23 +357,7 @@ function printingsItem(target: CardMenuTarget, deps: CardMenuDeps): MenuAction {
 function collectionItem(
   target: CardMenuTarget,
   addToCollection: (target: CardMenuTarget, finish: Finish) => void,
-  deckDriven: boolean,
 ): MenuItem {
-  // Greyed with the reason rather than offered and refused after the menu has already closed
-  // — the finish question below is moot while there is nowhere for the answer to go. One row
-  // whatever the printing's finish count, because a submenu of choices that all fail is not a
-  // kinder refusal than a single one.
-  if (deckDriven) {
-    return {
-      kind: "action",
-      id: "add-collection",
-      label: "Collection",
-      Icon: LibraryBig,
-      disabled: true,
-      reason: `— ${DECK_DRIVEN_REASON}`,
-      onSelect: () => {},
-    };
-  }
   const named = target.finish;
   if (named !== undefined) {
     return collectionRow(() => addToCollection(target, named));

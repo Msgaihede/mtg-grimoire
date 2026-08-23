@@ -17,7 +17,6 @@ const deckImportCommit = vi.hoisted(() => vi.fn());
 const importResolve = vi.hoisted(() => vi.fn());
 const importReadFile = vi.hoisted(() => vi.fn());
 const oracleTagsForPrintings = vi.hoisted(() => vi.fn());
-const deckDrivenCollection = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -27,11 +26,9 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     importResolve,
     importReadFile,
     oracleTagsForPrintings,
-    deckDrivenCollection,
   },
 }));
 
-import { DECK_DRIVEN_KEY } from "@/lib/useDeckDrivenCollection";
 import { useImport } from "./useImport";
 
 const MADE: DeckRow = {
@@ -93,7 +90,6 @@ beforeEach(() => {
   importResolve.mockReset().mockResolvedValue([]);
   importReadFile.mockReset().mockResolvedValue("");
   oracleTagsForPrintings.mockReset().mockResolvedValue([]);
-  deckDrivenCollection.mockReset().mockResolvedValue(false);
 });
 
 /** `useDeck.test.ts`'s helper and its reasoning — a `staleTime: 30_000` cache is *fresh*, so
@@ -115,17 +111,15 @@ const staleRoots = (c: QueryClient): string[] =>
     .sort();
 
 /**
- * The import commit is the largest single write in the app, and the one the review named twice.
+ * A deck import is a **deck** write, and the roots it fires say so.
  *
- * `deck_import_commit` takes a whole pasted decklist in one command, so a 300-line list adds 300
- * cards to a derived collection at once. The Rust side routes the command through
- * `with_write_owned_if_derived` deliberately; before this, `useImport` invalidated `["decks"]`
- * and every one of those cards arrived unannounced, because `src/lib/query.ts` sets
- * `staleTime: 30_000` and a cached Collection page does not refetch on being navigated to.
+ * `deck_import_commit` runs the allocator inside its own transaction, so every deck's
+ * `ownedQuantity` may have moved — and nothing about what the reader *owns* has. The collection,
+ * the wishlist and the search wall are allocation-blind, so firing their roots here would be
+ * three refetches per import that can only ever answer what is already on screen.
  */
-describe("useImport while the collection is deck driven", () => {
-  it("marks the whole of what the reader owns stale after a commit", async () => {
-    client.setQueryData(DECK_DRIVEN_KEY, true);
+describe("the roots an import commit fires", () => {
+  it("marks only the decks stale after a commit", async () => {
     seedOwned(client);
     const { result } = renderHook(() => useImport(), { wrapper });
     expect(staleRoots(client)).toEqual([]);
@@ -137,15 +131,12 @@ describe("useImport while the collection is deck driven", () => {
       items: ITEMS,
     });
 
-    await waitFor(() =>
-      expect(staleRoots(client)).toEqual(["cards", "collection", "decks", "wishlist"]),
-    );
+    await waitFor(() => expect(staleRoots(client)).toEqual(["decks"]));
   });
 
   /** A list committed as a **new** deck is the same write with a `deck_create` in front of it,
-   *  and it lands the same cards in the same collection. */
-  it("marks them stale after a list is imported as a new deck", async () => {
-    client.setQueryData(DECK_DRIVEN_KEY, true);
+   *  and it moves the same things. */
+  it("marks only the decks stale after a list is imported as a new deck", async () => {
     seedOwned(client);
     const { result } = renderHook(() => useImport(), { wrapper });
 
@@ -153,24 +144,6 @@ describe("useImport while the collection is deck driven", () => {
       name: "Selvala",
       formatKey: "commander",
       gameKey: "paper",
-      items: ITEMS,
-    });
-
-    await waitFor(() =>
-      expect(staleRoots(client)).toEqual(["cards", "collection", "decks", "wishlist"]),
-    );
-  });
-
-  /** Additively — `["decks"]` is the floor in both modes, and the two tests above it in this
-   *  file pin that the refusal path takes it too. */
-  it("marks only the decks stale while the collection is hand kept", async () => {
-    seedOwned(client);
-    const { result } = renderHook(() => useImport(), { wrapper });
-
-    await result.current.commit.mutateAsync({
-      deckId: 4,
-      variant: "live",
-      mode: "merge",
       items: ITEMS,
     });
 

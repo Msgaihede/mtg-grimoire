@@ -11,7 +11,6 @@ import {
   type DeckViewState,
 } from "@/lib/ipc";
 import { useAppStore, type PaneDeckContext } from "@/lib/store";
-import { useDeckWriteRoots } from "@/lib/useDeckDrivenCollection";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { autoCategoryFor } from "./autoCategory";
 
@@ -269,27 +268,15 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
    * whole `["decks"]` root, not this one detail: every `ownedQuantity` in the deck may have
    * moved, and the gallery tile's `cardCount` and `updatedAt` with them.
    *
-   * **And, while the collection is derived, everything else the reader owns** —
-   * {@link useDeckWriteRoots} is the list and the gate. A `variant: 'live'` row *is* a
-   * collection row in that mode, so adding two copies here adds two copies to the collection
-   * page, to the search wall's owned counts and to the have/want on the wishlist. Nothing
-   * mounts those queries afresh on a navigation (`src/lib/query.ts` sets `staleTime: 30_000`,
-   * so a cached answer is *fresh* and mounting it does not refetch), which makes invalidation
-   * the only thing that tells them. The worst case is the deck editor's own docked search
-   * panel: its `OwnedBadge` is drawn from `["cards", "search"]` a few hundred pixels from the
-   * card being added, and a mounted query with nothing to invalidate it has no refetch trigger
-   * at all — the two would disagree about one card indefinitely.
-   *
-   * **In the hand-kept mode the list is `["decks"]` alone, which is what it always was.** The
-   * gate is additive: a card write there moves `deck_allocations` and nothing else, and a wish's
-   * `ownedQuantity` is summed from `collection_entries` — true in that mode and, since the
-   * setting shipped, *only* in that mode, which is why the wishlist is now in the derived list.
-   * `missingToWishlist` still takes `["wishlist"]` in both, because it is the one command here
-   * that actually writes wishes.
+   * **And nothing wider than that.** A card write moves `deck_allocations`; it never touches
+   * `collection_entries`, so the collection page, the search wall's owned counts and the
+   * wishlist's have/want are all provably unmoved and firing their roots would be three
+   * refetches per press of the stepper that can only answer what is already on screen.
+   * `missingToWishlist` takes `["wishlist"]` on top, because it is the one command here that
+   * actually writes wishes.
    */
-  const writeRoots = useDeckWriteRoots();
   const invalidate = () => {
-    for (const queryKey of writeRoots) void queryClient.invalidateQueries({ queryKey });
+    void queryClient.invalidateQueries({ queryKey: ["decks"] });
   };
 
   /**
@@ -684,12 +671,8 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
    * Everything this deck is short of, onto the wishlist. Answers how many wishes were
    * touched.
    *
-   * The one write here that reaches outside decks **in either mode**, so it is the one that
-   * takes `["wishlist"]` with it unconditionally — and it takes `["decks"]` too, because it
-   * reallocates before it counts. While the collection is derived every write in this file
-   * reaches outside decks and {@link useDeckWriteRoots} already carries the wishlist; the two
-   * extra keys here are what the hand-kept mode is owed, and firing one twice is a no-op
-   * against a single invalidation pass.
+   * The one write here that reaches outside decks, so it is the one that takes `["wishlist"]`
+   * with it — and it takes `["decks"]` too, because it reallocates before it counts.
    *
    * And the **search**, which draws what this just changed. `missing_to_wishlist` writes
    * through `add_wish` with an `oracleId` and no printing — "any printing", because a

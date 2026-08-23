@@ -371,22 +371,18 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `DROP` it first, or the
   widening is a silent no-op on exactly the machines that need it. (v6 added `app_meta`; the
   paragraph below describes v5.)
-- **`app_meta` gained `deck_driven_collection` on 2026-08-22, and it needed no rung to do it** —
-  which is the whole point of a key/value table at schema v6. `"1"` / `"0"`, written by
-  `deck_driven::store` and read by `deck_driven::stored`; a missing row, a junk row and a row a
-  newer build wrote something else into all read **false**, the hand-kept collection the reader's
-  own rows are sitting in. It is the one key in this table that decides **what a query reads
-  from** rather than how something is drawn, and the rule it gates is
-  [deck-driven-collection.md](deck-driven-collection.md).
-  **The census is `grep -rn 'get_app_meta\|set_app_meta' src-tauri/src`, not a list here** — a
-  total written down in prose is a fact about a tree, and every open branch has a different one.
-  Grep the *calls* rather than the `K_*` constants: `maintenance.rs` names two of those and both
-  are `sync_meta` keys. What is worth knowing without grepping is the split: most of these rows are a
-  reader's *choice* (`marketplace`, `printing_group_by`, `nav_collapsed`, `card_zoom`,
-  `deck_search_open`, `deck_driven_collection`), one is a *memory* of what they last did
+- **`app_meta`'s census is `grep -rn 'get_app_meta\|set_app_meta' src-tauri/src`, not a list
+  here** — a total written down in prose is a fact about a tree, and every open branch has a
+  different one. Grep the *calls* rather than the `K_*` constants: `maintenance.rs` names two of
+  those and both are `sync_meta` keys. What is worth knowing without grepping is the split: most
+  of these rows are a reader's *choice* (`marketplace`, `printing_group_by`, `nav_collapsed`,
+  `card_zoom`, `deck_search_open`), one is a *memory* of what they last did
   (`last_deck_format`), and the rest are the app's own bookkeeping (the update check's three,
   `scryfall_penalty_until`). **None of them belongs in `sync_meta`** — a row in that one the sync
   did not write makes every later timing claim a fiction.
+  **`deck_driven_collection` is orphaned by this release**: the setting it held is gone while
+  `SCHEMA_VERSION` stays 23, so the row sits unread on every database that has one until the v24
+  rung deletes it.
 - **Schema is v23**, and `schema::SCHEMA_VERSION` is the answer — this line read **v18** for two
   whole rungs, because a prose-only edit routes to neither CI job and nothing goes red when a
   ladder entry rots.

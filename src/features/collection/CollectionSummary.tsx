@@ -37,19 +37,11 @@ import { formatPrice, pricesAsOf } from "@/lib/prices";
 export function CollectionSummaryHeader({
   summary,
   marketplace,
-  deckDriven = false,
 }: {
   summary: Summary | undefined;
   /** Which marketplace's prices this row totals: its currency writes the figure, its label is
    *  the as-of sentence. The figure itself was summed by the query. */
   marketplace: Marketplace;
-  /**
-   * Whether these figures are the sum of the reader's decks rather than of rows they added.
-   *
-   * One figure reads it — see the For trade one below. Defaulted, so every story and the
-   * hand-kept collection get the row unchanged.
-   */
-  deckDriven?: boolean;
 }) {
   const value = summary ? summary.value : null;
   const unpriced = summary ? summary.unpriced : 0;
@@ -65,15 +57,8 @@ export function CollectionSummaryHeader({
         title={pricesAsOf(marketplace)}
       />
       {/* Only when there is one: a permanent "For trade — 0" is a column of chrome that has
-          never once been the answer to anything.
-
-          **And never at all while the collection is derived.** A tradelist is a statement
-          about spare copies the reader made row by row, and a derived row is a deck's card:
-          there is nothing to mark as spare and the backend sums a hard zero. Drawn, it would
-          read as "you have nothing to trade" — a claim about their collection — rather than
-          "this view is not counting that". The `> 0` guard already hides it in practice; this
-          says so on purpose, so the figure cannot reappear if the aggregate ever changes. */}
-      {!deckDriven && summary && summary.tradelistCards > 0 && (
+          never once been the answer to anything. */}
+      {summary && summary.tradelistCards > 0 && (
         <Figure label="For trade" value={count(summary.tradelistCards)} />
       )}
     </FigureRow>

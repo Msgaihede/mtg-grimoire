@@ -19,7 +19,6 @@ const deckTagAll = vi.hoisted(() => vi.fn());
 const deckMoveCard = vi.hoisted(() => vi.fn());
 /** The one read `autoCategorise` makes that is not a deck command: what these cards *do*. */
 const oracleTagsForPrintings = vi.hoisted(() => vi.fn());
-const deckDrivenCollection = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -37,11 +36,9 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckTagAll,
     deckMoveCard,
     oracleTagsForPrintings,
-    deckDrivenCollection,
   },
 }));
 
-import { DECK_DRIVEN_KEY } from "@/lib/useDeckDrivenCollection";
 import { useDeckMeta } from "./useDeckMeta";
 
 function category(over: Partial<DeckCategory> & { id: number; name: string }): DeckCategory {
@@ -149,9 +146,6 @@ beforeEach(() => {
   // The shape of a database that has never ingested the taxonomy, which is the app's supported
   // floor: every card answers no slugs and the type line decides. A test about tags says so.
   oracleTagsForPrintings.mockReset().mockResolvedValue([]);
-  // The hand-kept collection, which is the app's default. The derived tests seed
-  // `DECK_DRIVEN_KEY` instead — `staleTime: Infinity` means the seed is never re-asked.
-  deckDrivenCollection.mockReset().mockResolvedValue(false);
 });
 
 /**
@@ -177,35 +171,16 @@ const staleRoots = (c: QueryClient): string[] =>
     .sort();
 
 /**
- * A category switch is a collection write while the collection is derived, and it is the write
- * in this file that has the reach.
- *
  * `setCategoryActive` and `deleteCategory` reallocate inside their own transaction — the switch
- * is what decides whether a pile's cards are claimed at all — and in the derived mode a claim is
- * not an attribution of an owned copy, it *is* the owned copy. Switching a pile off empties
- * every one of its rows out of the collection page without a single card being touched.
+ * is what decides whether a pile's cards are claimed at all — so the deck root is owed. Nothing
+ * here writes `collection_entries`, so the other three ownership roots are provably unmoved.
  */
-describe("useDeckMeta while the collection is deck driven", () => {
-  it("marks the whole of what the reader owns stale when a category is switched off", async () => {
-    client.setQueryData(DECK_DRIVEN_KEY, true);
+describe("useDeckMeta invalidation", () => {
+  it("marks only the decks stale when a category is switched off", async () => {
     seedOwned(client);
     const { result } = renderHook(() => useDeckMeta(4), { wrapper });
     await waitFor(() => expect(result.current.categories).toHaveLength(3));
     expect(staleRoots(client)).toEqual([]);
-
-    await result.current.setCategoryActive.mutateAsync({ id: 3, isActive: false });
-
-    await waitFor(() =>
-      expect(staleRoots(client)).toEqual(["cards", "collection", "decks", "wishlist"]),
-    );
-  });
-
-  /** Additively: `["decks"]` is the floor in both modes, because the switch moves
-   *  `deck_allocations` whether or not the collection is derived from it. */
-  it("marks only the decks stale while the collection is hand kept", async () => {
-    seedOwned(client);
-    const { result } = renderHook(() => useDeckMeta(4), { wrapper });
-    await waitFor(() => expect(result.current.categories).toHaveLength(3));
 
     await result.current.setCategoryActive.mutateAsync({ id: 3, isActive: false });
 

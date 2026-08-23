@@ -138,9 +138,6 @@ export function CollectionPage() {
   const collection = useCollection();
   const { query, summary, rows, total, marketplace } = collection;
   const view = useAppStore((s) => s.collectionView);
-  /** The mode note's way out. There is no router in this app — `store.ts` says outright that
-   *  it *is* what a router would provide — so the jump to Settings is a store write. */
-  const setActiveView = useAppStore((s) => s.setActiveView);
   const selectCard = useAppStore((s) => s.setSelectedCardId);
   const selectedCardId = useAppStore((s) => s.selectedCardId);
   const queryClient = useQueryClient();
@@ -285,49 +282,11 @@ export function CollectionPage() {
     },
   });
 
-  /**
-   * Whether this list is the sum of the reader's live decks.
-   *
-   * Read off the hook the two queries are keyed from rather than by calling
-   * `useDeckDrivenCollection` again here, so the page, the bar and the table cannot disagree
-   * about which mode they are drawing for the length of a render.
-   */
-  const deckDriven = collection.deckDriven;
-
-  /**
-   * Both writes refuse while **the row itself** is derived — the second half of the greying the
-   * table does, and the half that is load-bearing.
-   *
-   * **`row.deckCount !== null`, never the `deckDriven` flag.** `filterKey` folds the mode into
-   * the list query's key and that query uses `keepPreviousData`, so the render right after a
-   * flip to **off** can still be handed the previous mode's rows — ids that are `deck_cards.id`
-   * — with `deckDriven` already reading `false` and the Rust fence that would otherwise refuse
-   * the write already down. A flag-driven guard is wide open in exactly that frame; the row's
-   * own `deckCount` is never wrong about what the row is, which is the same argument
-   * `CollectionTable.tsx`'s finish cell makes for reading the row over the mode.
-   *
-   * The controls say `aria-disabled`, which is a statement to assistive tech and stops no
-   * click on its own; and the row's right-click menu, the keyboard, and anything else that
-   * reaches these callbacks never saw the attribute at all. `collection::set_quantity` refuses
-   * too and would answer with a sentence — but that sentence would arrive as
-   * "Could not change your collection", i.e. as a *failure*, over an optimistic patch that had
-   * already moved the number on screen and then moved it back. Returning here is the
-   * difference between "that control is not available" and "something went wrong".
-   */
   const onSetQuantity = useCallback(
-    (row: CollectionRow, quantity: number) => {
-      if (row.deckCount !== null) return;
-      setQuantity.mutate({ row, quantity });
-    },
+    (row: CollectionRow, quantity: number) => setQuantity.mutate({ row, quantity }),
     [setQuantity],
   );
-  const onRemove = useCallback(
-    (row: CollectionRow) => {
-      if (row.deckCount !== null) return;
-      remove.mutate(row);
-    },
-    [remove],
-  );
+  const onRemove = useCallback((row: CollectionRow) => remove.mutate(row), [remove]);
   const onNeedNextPage = useCallback(() => {
     if (query.hasNextPage && !query.isFetchingNextPage && !query.isFetchNextPageError) {
       void query.fetchNextPage();
@@ -451,11 +410,7 @@ export function CollectionPage() {
           header below says what this view is far better than a title would. */}
       <h2 className="sr-only">Collection</h2>
 
-      <CollectionSummaryHeader
-        summary={summary.data}
-        marketplace={marketplace}
-        deckDriven={deckDriven}
-      />
+      <CollectionSummaryHeader summary={summary.data} marketplace={marketplace} />
 
       {/* The region is mounted for the life of the view and the banner is swapped into it: a
           live region that appears together with its own text announces nothing, because there
@@ -493,33 +448,6 @@ export function CollectionPage() {
           </div>
         )}
       </div>
-
-      {/* **What this page is a list of, said before the list.** Every number on this screen
-          changes meaning under this setting — a count is copies in decks rather than copies
-          owned, a value is what the decks are worth — and none of the controls says so on its
-          own. Above the filter bar rather than beside the header, because it explains the
-          whole view and not one figure in it.
-
-          "Theory lists are left out" is the one thing a reader cannot deduce from the sentence
-          before it, and it is the difference between two very different totals for anybody who
-          builds a deck on paper first.
-
-          A `<button>` and not an `<a>`: there is no router in this app, so a link would have
-          nowhere to point — `useAppStore`'s own doc says the store is the whole of what one
-          would provide. It reads as a link and is announced as a button, which is what it is. */}
-      {deckDriven && (
-        <p className="-mt-2 text-sm text-dim">
-          Your collection is the sum of the cards in your decks. Theory lists are left out.{" "}
-          <button
-            type="button"
-            onClick={() => setActiveView("settings")}
-            className={cn("rounded-sm text-accent hover:underline", FOCUS)}
-          >
-            Change this in Settings
-          </button>
-          .
-        </p>
-      )}
 
       <div className="flex flex-wrap items-start gap-2">
         <div className="min-w-0 flex-1">
@@ -638,21 +566,14 @@ export function CollectionPage() {
                 rowMenu={rowMenu}
                 rowMenuKey={rowMenuKey}
                 marketplace={marketplace}
-                deckDriven={deckDriven}
               />
               {/* The one thing about this table a reader cannot see: removal is offered on a
                   row at zero and nowhere else, so a mis-added four-copy row would only ever
                   be got rid of by accident. Said once, under the table, at the end of the
                   line the removal itself lives on — not per row, where forty copies of a
-                  sentence about a rare action would be louder than the rows.
-
-                  A derived list gets the other sentence, in the same place: there is no
-                  removal to explain, and the question the column *does* answer — which decks
-                  these copies are in — is one hover away and nothing else on screen says so. */}
+                  sentence about a rare action would be louder than the rows. */}
               <p className="text-right text-[0.7rem] text-dim">
-                {deckDriven
-                  ? "Copies are removed in the deck that holds them. Hover a deck count to see which."
-                  : "To remove an entry, set its copies to zero."}
+                To remove an entry, set its copies to zero.
               </p>
             </>
           ))}
@@ -697,7 +618,7 @@ export function CollectionPage() {
 
 /** The one line that says what the list area is currently showing, or nothing at all. */
 function statusOf(collection: Collection, failure: string | null): string {
-  const { query, rows, activeCount, deckDriven } = collection;
+  const { query, rows, activeCount } = collection;
 
   if (rows.length === 0) {
     if (failure) return failure;
@@ -705,16 +626,8 @@ function statusOf(collection: Collection, failure: string | null): string {
     // Nothing filtered and nothing there: this is a statement about the collection, not
     // about the query. "No cards match" would blame the reader for a table nobody has put
     // anything in yet, and say nothing about how to.
-    //
-    // **And in the derived mode the advice would be wrong as well as unhelpful**: adding a
-    // card from search or importing a file puts a row somewhere this view is not looking, so
-    // the reader would follow the instruction and watch the page stay empty. The empty
-    // collection and the empty *reason* for it are one sentence, because the cause is not
-    // "nothing added" — it is that there are no decks to add up.
     if (activeCount === 0) {
-      return deckDriven
-        ? "Your collection is driven by your decks, and you have no decks yet."
-        : "Nothing here yet. Add cards from search, or import a collection file.";
+      return "Nothing here yet. Add cards from search, or import a collection file.";
     }
     return "No cards in your collection match these filters.";
   }

@@ -166,7 +166,6 @@ import type {
   PrintingTags,
   ReleaseInfo,
   ReleaseNote,
-  RowDeck,
   SearchRequest,
   SearchSortKey,
   SetSummary,
@@ -877,25 +876,6 @@ export interface FakeDb {
    */
   deckSearchOpen: boolean;
   /**
-   * `app_meta.deck_driven_collection` — whether the collection is the sum of the reader's
-   * **live** deck lists rather than a hand-kept table.
-   *
-   * The seventh row of the same key/value table and the **third** of the three booleans. A
-   * plain `boolean`, {@link FakeDb.navCollapsed}'s shape for that field's reason and not by
-   * imitation: `deck_driven_collection` is infallible at the far end — a missing row, a junk
-   * row and an unreadable one all answer `false`, the hand-kept collection the reader's rows
-   * are still sitting in — so a `boolean | null` here would be a third state the backend
-   * cannot produce.
-   *
-   * **What it switches is a *source*, not a shape.** `collection_source::rows` swaps the table
-   * for a `GROUP BY` over `deck_cards` and every caller's `WHERE` is untouched; here
-   * {@link liveDeckCopies} is that group and {@link collectionSource} is the swap. Nothing is
-   * deleted when it goes on — {@link FakeDb.collectionEntries} stays exactly as it was and
-   * comes back the moment it goes off, which is why the five collection writes *refuse* while
-   * it is on rather than writing somewhere the reader cannot see.
-   */
-  deckDrivenCollection: boolean;
-  /**
    * `marketplace_prices` — the table that made a third and fourth marketplace possible.
    *
    * Keyed `(marketplace, cardId, finish)` and **not** a column on `cards`, for the schema's own
@@ -1219,11 +1199,6 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // `true` for an editor nobody has told, so every deck story that says nothing about the
     // search column is standing in the column the app ships open.
     deckSearchOpen: true,
-    // The seventh, and the third boolean: a hand-kept collection, which is where a reader who
-    // has never touched this switch keeps their cards. `false` is what the backend answers for
-    // the row never having been written and for its holding something unreadable alike, so
-    // there is no third state for `null` to stand in — see {@link FakeDb.deckDrivenCollection}.
-    deckDrivenCollection: false,
     // Empty here and filled by a seed, exactly as the card corpus is: a downloaded feed is a
     // table with rows in it, and "no rows" is the honest state of an install that has never
     // chosen Card Kingdom. `starterSeed` fills both from the corpus.
@@ -2665,19 +2640,9 @@ function cardById(db: FakeDb, id: string | null): FakeCard | null {
  * `sum(e.quantity)` over *this printing*: finish-blind, condition-blind, and `0` rather than
  * null because "you own none of these" is a fact.
  *
- * **`collection_source::copies_of_printing`, which is the direct shape of the same rule
- * {@link liveDeckCopies} is the grouped shape of.** Spelled over `deckCards` rather than by
- * folding the groups, exactly as the crate spells it: this is read once per candidate row in a
- * search over the corpus, and re-grouping every live deck list per row is the cost the crate's
- * two-shapes split exists to avoid. Finish-blind and language-blind on both sides, so the two
- * agree.
+ * **`collection_source::copies_of_printing`.**
  */
 function ownedOfPrinting(db: FakeDb, cardId: string): number {
-  if (db.deckDrivenCollection) {
-    return db.deckCards
-      .filter((dc) => isLiveCopy(dc) && dc.cardId === cardId)
-      .reduce((n, dc) => n + dc.quantity, 0);
-  }
   return db.collectionEntries
     .filter((e) => e.cardId === cardId)
     .reduce((n, e) => n + e.quantity, 0);
@@ -2899,22 +2864,12 @@ function toPrinting(db: FakeDb, c: FakeCard, mp: MarketplaceId): Printing {
   };
 }
 
-/**
- * `collection::ENTRY_SELECT`'s row.
- *
- * **`deckCount` is the one field the caller decides**, because it is the one fact that belongs
- * to the *source* rather than to the entry: a hand-kept row has no answer and a derived one
- * carries it in the aggregate its quantity was summed by. `condition` follows it for the same
- * reason from the other end — a derived row has no condition to state, and the caller nulls it
- * by passing a `deckCount`, which is the only way a row can have come from
- * {@link liveDeckCopies}.
- */
+/** `collection::ENTRY_SELECT`'s row. */
 function toCollectionRow(
   db: FakeDb,
   e: FakeEntry,
   card: FakeCard | null,
   mp: MarketplaceId,
-  deckCount: number | null = null,
 ): CollectionRow {
   return {
     id: e.id,
@@ -2931,10 +2886,7 @@ function toCollectionRow(
     typeLine: card?.typeLine ?? null,
     layout: card?.layout ?? null,
     finish: e.finish,
-    // `NULL AS condition` on the derived source, and the column's own value otherwise. Not the
-    // `'NM'` default a derived row is stored with: a default written into an export is a fact
-    // the reader never stated, which is `collection_source::rows`' own sentence.
-    condition: deckCount === null ? e.condition : null,
+    condition: e.condition,
     quantity: e.quantity,
     tradelistQuantity: e.tradelistQuantity,
     unitPrice: finishPriceAt(db, card, e.finish, mp),
@@ -2958,29 +2910,7 @@ function toCollectionRow(
     // Also from the card, and the fixtures carry real Scryfall blobs — so the Arena export
     // filter answers over the corpus rather than over a hand-written yes/no.
     legalities: card?.legalities ?? null,
-    // `null` unless the row came out of {@link liveDeckCopies}, in which case the caller —
-    // `collection_list`, the only handler that returns whole rows — passes the count the group
-    // already carries. The hand-kept table has no such fact: there is no deck aggregate for a
-    // number to come out of, and `null` is what says so rather than a zero that would read as
-    // "in no deck".
-    deckCount,
   };
-}
-
-/* ------------------------------------------------- the collection's two sources ------- */
-
-/**
- * `collection_source::LIVE`, in this file's terms — **the whole rule, once.**
- *
- * A card the reader owns is a card in a `live` deck list. No category join and no `isActive`
- * test: an inactive Maybeboard is a statement about how the *deck* is read, not about whether
- * the cards are in the reader's hands, and this is the one place in the fake that deliberately
- * departs from {@link allocate}'s rule. No `archived` test either — archiving is filing, not
- * disassembling. And no `theoryEnabled` test, because none is needed: a deck with no plan keeps
- * every row `live`, so "a deck without a plan counts in full" falls out of the predicate.
- */
-function isLiveCopy(dc: FakeDeckCard): boolean {
-  return dc.variant === LIVE;
 }
 
 /**
@@ -2988,7 +2918,7 @@ function isLiveCopy(dc: FakeDeckCard): boolean {
  *
  * `deck_cards.finish` is `null` for it — the crate normalises `"nonfoil"` away at the command
  * boundary and a CHECK makes any other path an error — while `collection_entries.finish` says
- * `nonfoil`. **Every derived read goes through this, the grouping key included.** Binding the
+ * `nonfoil`. **Every read that crosses between the two goes through this** — binding the
  * `null` straight through would make every regular line read zero, which is the one failure
  * that looks like an empty collection rather than like a bug.
  */
@@ -2996,150 +2926,13 @@ function collectionFinish(finish: DeckFinish): FakeEntry["finish"] {
   return finish ?? "nonfoil";
 }
 
-/** `(card_id, coalesce(finish,'nonfoil'), lang)` — the grain the derived source groups by, and
- *  the three arguments `collection_row_decks` is asked with. */
-function liveKey(cardId: string, finish: FakeEntry["finish"], lang: string): string {
-  return `${cardId}${finish}${lang}`;
-}
-
-/** One group of {@link liveDeckCopies}: the synthetic collection row, and the two facts about
- *  the decks behind it that only a derived row has. */
-interface LiveCopyGroup {
-  /** The row itself, in {@link FakeEntry}'s shape so that every scope, sort, filter and DTO
-   *  builder downstream is untouched — `collection_source::rows`' whole trick. */
-  entry: FakeEntry;
-  /** `count(DISTINCT dc.deck_id)`. Free: it rides along in the aggregate the quantity is
-   *  summed by, which is why it is on the page and the names are not. */
-  deckCount: number;
-  /** One line per deck, name-ordered — {@link readHandlers.collection_row_decks}'s answer,
-   *  computed here so the tooltip and the count cannot disagree. */
-  decks: RowDeck[];
-}
-
-/**
- * `collection_source::rows` — the reader's live deck lists, grouped into collection rows.
- *
- * **The one place the derived collection is computed, and every consumer calls it.** Five
- * hand-written sums would drift exactly the way the crate's own `the_two_shapes_agree_on_the_
- * same_database` exists to stop, so `collectionSource`, `ownedOfPrinting`, `ownedAgainstWish`,
- * `ownsPrinting`, `ownedSpare` and `collection_row_decks` all read this or the predicate above
- * it and nothing else.
- *
- * **What a derived row cannot carry**, and why each constant is the value it is:
- *
- * * `condition: "NM"` is the column's default, not a fact — but {@link FakeEntry.condition} is
- *   not nullable while `CollectionRow.condition` is, so the row stores the default and
- *   {@link toCollectionRow}'s caller nulls it on the way out. That split is this fake's, and
- *   the reason is the crate's: `NULL AS condition` in a query has no equivalent in a `FakeEntry`
- *   whose type says a stored row always has one. The **observable** answer is the crate's —
- *   `null`, because a default written into an export is a fact the reader never stated.
- * * `tradelistQuantity: 0`, `altered`/`signed`/`proxy`/`misprint` false, `tags: "[]"`, and
- *   every purchase, acquisition, grading and serial field `null`: `deck_cards` supplies
- *   `card_id`, `finish` and `lang` and nothing else the collection grain names.
- * * `id` is `min(dc.id)` — unique per group because the groups partition disjoint sets of rows,
- *   which is all a React key needs. **It is not a `collectionEntries.id`**, and that is exactly
- *   why the five collection writes refuse while this is on: they address rows by primary key,
- *   and the reader's hidden hand-built rows are still in the store.
- * * `needsReview` is `max(dc.needs_review)` — byte order over the non-null sentences, `null`
- *   when every contributing row is clean.
- * * `updatedAt` is the **deck's**, maxed over the decks contributing, and it is this fake's one
- *   departure from `rows()`: the crate reads `max(dc.updated_at)` and {@link FakeDeckCard} has
- *   no such column (simplification 8 keeps timestamps on the tables that sort by them). The
- *   deck's own stamp is the nearest true thing and moves for the same edits.
- */
-function liveDeckCopies(db: FakeDb): Map<string, LiveCopyGroup> {
-  const groups = new Map<string, LiveCopyGroup>();
-  // Id order, so `min(dc.id)` is the first row seen and the denormalised three come off it —
-  // SQLite picks a bare column from an arbitrary row of the group, and the lowest id is the
-  // one choice that does not depend on how `deckCards` was seeded.
-  for (const dc of [...db.deckCards].filter(isLiveCopy).sort((a, b) => a.id - b.id)) {
-    const finish = collectionFinish(dc.finish);
-    const key = liveKey(dc.cardId, finish, dc.lang);
-    const deck = db.decks.find((d) => d.id === dc.deckId);
-    const found = groups.get(key);
-    if (!found) {
-      groups.set(key, {
-        entry: {
-          id: dc.id,
-          cardId: dc.cardId,
-          finish,
-          condition: "NM",
-          quantity: dc.quantity,
-          tradelistQuantity: 0,
-          lang: dc.lang,
-          setCode: dc.setCode,
-          collectorNumber: dc.collectorNumber,
-          purchasePrice: null,
-          purchaseCurrency: null,
-          acquiredAt: null,
-          acquisitionSource: null,
-          serialNumber: null,
-          altered: false,
-          signed: false,
-          proxy: false,
-          misprint: false,
-          grading: null,
-          conditionOriginal: null,
-          tags: "[]",
-          notes: null,
-          needsReview: dc.needsReview,
-          updatedAt: deck?.updatedAt ?? 0,
-        },
-        deckCount: 1,
-        decks: [{ deckId: dc.deckId, deckName: deck?.name ?? "", quantity: dc.quantity }],
-      });
-      continue;
-    }
-    found.entry.quantity += dc.quantity;
-    // `max(dc.needs_review)`: byte order over the sentences that are there, NULLs ignored.
-    if (dc.needsReview !== null) {
-      const held = found.entry.needsReview;
-      if (held === null || cmp(dc.needsReview, held) > 0) found.entry.needsReview = dc.needsReview;
-    }
-    found.entry.updatedAt = Math.max(found.entry.updatedAt, deck?.updatedAt ?? 0);
-    const line = found.decks.find((d) => d.deckId === dc.deckId);
-    if (line) {
-      line.quantity += dc.quantity;
-    } else {
-      found.decks.push({ deckId: dc.deckId, deckName: deck?.name ?? "", quantity: dc.quantity });
-      found.deckCount += 1;
-    }
-  }
-  // `ORDER BY d.name COLLATE NOCASE ASC, d.id ASC` — the tooltip reads the way the Decks page
-  // does, with the id as the tiebreak two decks of one name need.
-  for (const group of groups.values()) {
-    group.decks.sort(
-      (a, b) => cmp(a.deckName.toLowerCase(), b.deckName.toLowerCase()) || a.deckId - b.deckId,
-    );
-  }
-  return groups;
-}
-
-/**
- * Which rows "the collection" is — the table, or {@link liveDeckCopies}' groups.
- *
- * `collection_source::rows(conn, alias)`'s grouped shape: the same field names either way, so
- * {@link collectionScope}'s filters, {@link collectionOrder}'s keys and
- * {@link toCollectionRow} are untouched by the switch. That is the whole reason this fake
- * stores rows — a fake that stored `CollectionRow`s would have had to write the derived list
- * a second time.
- */
-function collectionSource(db: FakeDb): FakeEntry[] {
-  if (!db.deckDrivenCollection) return db.collectionEntries;
-  return [...liveDeckCopies(db).values()].map((g) => g.entry);
-}
-
 /**
  * `collection_source::owns_printing` — does the reader own this printing at all?
  *
- * An **entry**, not a copy, on the hand-kept side: a row emptied to zero is a row the
- * collection keeps and this question counts it. The derived side has no such row — a
- * `deck_cards` row cannot be at zero — so "exists" and "has copies" are one answer there.
+ * An **entry**, not a copy: a row emptied to zero is a row the collection keeps and this
+ * question counts it.
  */
 function ownsPrinting(db: FakeDb, cardId: string): boolean {
-  if (db.deckDrivenCollection) {
-    return db.deckCards.some((dc) => isLiveCopy(dc) && dc.cardId === cardId);
-  }
   return db.collectionEntries.some((e) => e.cardId === cardId);
 }
 
@@ -3151,11 +2944,6 @@ function ownsPrinting(db: FakeDb, cardId: string): boolean {
 const FINISHES: FakeEntry["finish"][] = ["nonfoil", "foil", "etched"];
 const CONDITIONS: FakeEntry["condition"][] = ["NM", "LP", "MP", "HP", "DMG"];
 
-/** Stands in for the derived source's `NULL AS condition` in an `inList` call — guaranteed
- *  outside {@link CONDITIONS}, so it can never be the value a valid, non-empty filter is
- *  looking for. See {@link collectionScope}'s condition term for why that is the point. */
-const NEVER_A_CONDITION = "";
-
 function inList(value: string, picked: string[] | undefined, allowed: string[]): boolean {
   if (!picked) return true;
   const values = picked.filter((v) => allowed.includes(v));
@@ -3166,9 +2954,7 @@ function inList(value: string, picked: string[] | undefined, allowed: string[]):
  *  a header taken over different rows than the list is a header describing another screen. */
 function collectionScope(db: FakeDb, q: CollectionQuery): FakeEntry[] {
   const text = nonblank(q.text);
-  // {@link collectionSource} and not the table: the swap is the `FROM`, and every term below it
-  // is written once and means the same thing over either source.
-  return collectionSource(db).filter((e) => {
+  return db.collectionEntries.filter((e) => {
     const card = cardById(db, e.cardId);
     // A text filter is a statement about a card, so it narrows to rows that still have one.
     if (text !== null && !cardMatchesText(card, text)) return false;
@@ -3177,20 +2963,7 @@ function collectionScope(db: FakeDb, q: CollectionQuery): FakeEntry[] {
       return false;
     }
     if (!inList(e.finish, q.finishes, FINISHES)) return false;
-    // The stored `"NM"` is `collection_source::rows`' own filler value while derived, never a
-    // fact the reader stated ({@link toCollectionRow} nulls it on the way out) — the crate's
-    // source projects `NULL AS condition` there, and `push_in_list` turns a non-empty filter
-    // into `e.condition IN (…)`, which **`NULL IN (…)` never satisfies, for any value asked
-    // for**. Matching the stored default instead — the bug this replaced — answered `["NM"]`
-    // with every row rather than the crate's zero. `NEVER_A_CONDITION` stands in for that NULL:
-    // it is outside {@link CONDITIONS}, so `inList` drops it from a valid, non-empty filter's
-    // matches exactly as SQLite drops NULL, while an absent or wholly-invalid filter still
-    // takes the `!picked` / `values.length === 0` branch and passes every row, agreeing with
-    // `push_in_list` skipping the predicate entirely in that case. Unreachable through the UI
-    // today (`useCollection.ts:207` drops the filter while derived), but exactly the
-    // fake-vs-crate drift `.storybook/CLAUDE.md` exists to prevent.
-    const condition = db.deckDrivenCollection ? NEVER_A_CONDITION : e.condition;
-    if (!inList(condition, q.conditions, CONDITIONS)) return false;
+    if (!inList(e.condition, q.conditions, CONDITIONS)) return false;
     if (q.needsReview === true && e.needsReview === null) return false;
     if (q.needsReview === false && e.needsReview !== null) return false;
     return true;
@@ -3223,20 +2996,13 @@ function wishCard(db: FakeDb, w: Pick<FakeWish, "cardId" | "oracleId">): FakeCar
  * nothing: a wish is filled by copies, not by paperwork.
  */
 function ownedAgainstWish(db: FakeDb, w: FakeWish): number {
-  // `wishlist::owned_sql`'s two arms. Every term of the wish narrows either one identically;
-  // the derived arm's only extra work is {@link collectionFinish}, because binding
-  // `deck_cards.finish`'s NULL straight through would make every regular wish read zero owned.
+  // `wishlist::owned_sql`. Every term of the wish narrows it.
   const matches = (cardId: string, finish: FakeEntry["finish"]): boolean => {
     if (w.preferredFinish !== null && finish !== w.preferredFinish) return false;
     if (w.cardId !== null) return cardId === w.cardId;
     if (w.oracleId === null) return false;
     return db.cards.some((c) => c.id === cardId && c.oracleId === w.oracleId);
   };
-  if (db.deckDrivenCollection) {
-    return db.deckCards
-      .filter((dc) => isLiveCopy(dc) && matches(dc.cardId, collectionFinish(dc.finish)))
-      .reduce((n, dc) => n + dc.quantity, 0);
-  }
   return db.collectionEntries
     .filter((e) => matches(e.cardId, e.finish))
     .reduce((n, e) => n + e.quantity, 0);
@@ -4890,50 +4656,14 @@ export function readHandlers(db: FakeDb) {
       const rows = collectionScope(db, q);
       const limit = pageLimit(q.limit, LIST_DEFAULT_LIMIT, LIST_MAX_LIMIT);
       const sorted = [...rows].sort(collectionOrder(db, rows, q.sort, mp));
-      // **The only handler that returns whole rows, so the only one that carries `deckCount`.**
-      // Computed once for the page rather than per row: it is the same aggregate the quantities
-      // were summed by, and `null` throughout while the collection is hand kept.
-      const groups = db.deckDrivenCollection ? liveDeckCopies(db) : null;
       return {
         items: sorted
           .slice(q.offset, q.offset + limit)
-          .map((e) =>
-            toCollectionRow(
-              db,
-              e,
-              cardById(db, e.cardId),
-              mp,
-              groups?.get(liveKey(e.cardId, e.finish, e.lang))?.deckCount ?? null,
-            ),
-          ),
+          .map((e) => toCollectionRow(db, e, cardById(db, e.cardId), mp)),
         // Counted in full: a collection is thousands of rows, not the 116 k the search caps.
         total: rows.length,
       };
     },
-
-    /**
-     * `collection_decks::row_decks` — the decks holding one collection row's copies.
-     *
-     * The one question a derived row creates and nothing else answers: the Collection page's
-     * Actions column loses its delete button while the setting is on, and this fills it. Asked
-     * **lazily, per row, on hover**, which is why it is a command of its own rather than a
-     * field: a 100-row page would otherwise carry several hundred deck names nobody looks at,
-     * while the count the reader actually reads is free in the aggregate above.
-     *
-     * **`finish` arrives in the collection's spelling and is translated back** — the same
-     * {@link collectionFinish} the derived source groups by, for the same reason, and a
-     * mismatch here would silently empty the tooltip on every regular row while the count above
-     * it read three.
-     *
-     * **Not fenced on the flag, because the crate's query is not.** `row_decks` asks
-     * `deck_cards` unconditionally, so a hand-kept world with decks in it answers the decks
-     * rather than an empty list — a fake that returned `[]` there would be inventing an
-     * emptiness the backend does not have. What is true of a hand-kept collection is that
-     * nothing *asks*: `deckCount` is null, so no tooltip opens.
-     */
-    collection_row_decks: (args: { cardId: string; finish: string; lang: string }): RowDeck[] =>
-      liveDeckCopies(db).get(liveKey(args.cardId, args.finish as FakeEntry["finish"], args.lang))
-        ?.decks ?? [],
 
     /**
      * `collection::summarise`, over the *same* rows the list is showing.
@@ -4945,12 +4675,8 @@ export function readHandlers(db: FakeDb) {
      * leave the fake answering a shape the app no longer reads. Catching that drift is the
      * whole reason the stories go through `ipc.ts` instead of past it.
      *
-     * **It follows the collection's source without a line about it**, which is
-     * {@link collectionScope}'s doing and the point of swapping the rows rather than the
-     * handlers: over a derived collection `tradelistCards` is 0 and `needsReview` counts the
-     * deck rows carrying a sentence, both because that is what the rows say. Only `unpriced`
-     * changes character — it counts copies with no price *for their finish*, and a derived row's
-     * finish is the deck card's, so a foil pile and a regular one are still two figures.
+     * **It takes {@link collectionScope}'s rows and nothing else**, which is what makes a
+     * header describing a different screen than the list under it impossible here.
      */
     collection_summary: (args: { query: CollectionQuery }): CollectionSummary => {
       const mp = marketplaceOf(args.query.marketplace);
@@ -5077,22 +4803,12 @@ export function readHandlers(db: FakeDb) {
         .sort(deckReadOrder(db));
       // The allocator reads `live` and nothing else, so a theory read has no claim to hand
       // out — see simplification 2 in this file's header for the one case where the app can
-      // answer otherwise.
-      //
-      // **Derived: a live row is covered by its own copies**, true by construction since the
-      // collection *is* the sum of these very rows. No pool, no walk, no shortfall — and it
-      // takes the inactive category with it, which is where this mode departs from
-      // {@link allocate}'s rule on purpose (`deck::attribute_owned`'s `deck_driven` arm). It
-      // takes the orphan with it too: `deck_driven` is tested before the oracle id, so a row
-      // whose printing has left `cards` still owns its own copies. The theory fence stays, for
-      // a second reason on top of the ledger one — a theory row is a card the reader has said
-      // they do **not** have yet.
+      // answer otherwise. A theory row is also a card the reader has said they do **not** have
+      // yet, which is the second reason on top of the ledger one.
       const owned =
         variant !== LIVE
           ? new Map<number, number>()
-          : db.deckDrivenCollection
-            ? new Map(rows.map((dc) => [dc.id, dc.quantity]))
-            : attributeOwned(db, rows, allocate(db, deck.id));
+          : attributeOwned(db, rows, allocate(db, deck.id));
       const cards = rows
         // The join on `deck_categories` is inner, so a row whose category is gone is not a
         // row: `flatMap` is what drops one, and nothing in this fake can produce it.
@@ -5487,25 +5203,6 @@ export function readHandlers(db: FakeDb) {
     deck_search_open: (): boolean => db.deckSearchOpen,
 
     /**
-     * `deck_driven::deck_driven_collection` — is the collection the sum of the reader's live
-     * decks?
-     *
-     * The seventh `app_meta` setting and the **third** with nothing to decide, for every one of
-     * `nav_collapsed`'s reasons: the Rust folds a missing row, a hand-edited one and an
-     * unreadable one alike into `false` before the value crosses the IPC boundary, so the
-     * stored boolean is the answer.
-     *
-     * **What makes this one different is what it is read *for*.** Its two neighbours are asked
-     * once, at launch, so that a shell or a column opens in the state it was left in. This one
-     * decides what the Collection page is a *list of* and whether the writes on it are offered
-     * at all, so it is asked wherever those are drawn — and a story seeded on it opens on a
-     * derived collection with no delete buttons rather than on the reader's hidden rows.
-     *
-     * A read, so it answers through a sync like every other one here — the write below does not.
-     */
-    deck_driven_collection: (): boolean => db.deckDrivenCollection,
-
-    /**
      * `marketplace_feed::status` — one row per **feed-backed** marketplace, whether or not it
      * has ever been fetched.
      *
@@ -5777,21 +5474,7 @@ const BUSY = "The card database is busy finishing a sync. Try that again in a mo
 const CACHE_SYNCING = "a card update is running — clear the cache once it has finished";
 /** `collection::GONE` — what an *adjustment* says when the row it names is not there. */
 const ENTRY_GONE = "That collection entry is not there any more.";
-/**
- * `collection::DECK_DRIVEN` — what every collection write answers while the collection is
- * derived from the decks.
- *
- * **A fence, not a courtesy.** A derived row's `id` is a `deckCards.id`
- * ({@link liveDeckCopies}), the reader's hand-built rows are still in the store, and
- * `collection_set_quantity` and `collection_remove` address rows by id — so a call that got
- * through carrying a derived id would rewrite or delete a row the reader cannot currently see.
- * Greying the buttons is the second fence; this is the first, and it is the one a story can
- * still reach by pressing a control that should not have been live.
- */
-const DECK_DRIVEN =
-  "Your collection is driven by your decks. Turn the setting off in Settings to edit it by " +
-  "hand.";
-/** `wishlist::set_wish_quantity`'s twin of the above. */
+/** `wishlist::set_wish_quantity`'s twin of {@link ENTRY_GONE}. */
 const WISH_GONE = "That wishlist entry is not there any more.";
 /** `deck::GONE`. */
 const DECK_GONE = "That deck is not there any more.";
@@ -6050,23 +5733,6 @@ function refuse(message: string): Error {
 
 function refuseIfBusy(db: FakeDb): void {
   if (db.fault === "busy") throw refuse(BUSY);
-}
-
-/**
- * {@link DECK_DRIVEN}'s fence, on the five collection writes and nowhere else.
- *
- * **Second, after {@link refuseIfBusy}**, which is the order the crate has rather than a
- * preference: the write connection is taken by `sync::with_write` before `add_entry` is
- * entered at all, so a reader who is mid-sync *and* deck-driven is told about the sync. The
- * one they can do something about is the one they get.
- *
- * On the five handlers rather than inside {@link addEntry}/{@link setEntry}, which is also the
- * crate's shape: `set_entry` there carries no fence of its own because `commit_import` — its
- * only caller — opens with one, and putting it on the commands is what makes the list of
- * refusing commands readable in one place.
- */
-function refuseIfDeckDriven(db: FakeDb): void {
-  if (db.deckDrivenCollection) throw refuse(DECK_DRIVEN);
 }
 
 /** `collection::valid_quantity`. **Zero is allowed here** — what zero *means* is each
@@ -6557,25 +6223,6 @@ function theoryCopies(db: FakeDb, deckId: number): number {
  */
 function ownedSpare(db: FakeDb, cardId: string, finish: DeckFinish): number {
   const want = collectionFinish(finish);
-  // **The derived arm has no allocator in it**, because there is no ledger to read: under a
-  // deck-driven collection `allocate` describes a world the reader left. "Copies a built deck
-  // is using" becomes exactly that — a sum over the built decks' own live rows — and `isBuilt`
-  // keeps the job it has always had: a card in an unbuilt deck's live list is still available
-  // to a plan, and one in a sleeved-up deck is not. `deck_theory::owned_spare_sql`.
-  if (db.deckDrivenCollection) {
-    const copies = (only: (deckId: number) => boolean) =>
-      db.deckCards
-        .filter(
-          (dc) =>
-            isLiveCopy(dc) &&
-            dc.cardId === cardId &&
-            collectionFinish(dc.finish) === want &&
-            only(dc.deckId),
-        )
-        .reduce((n, dc) => n + dc.quantity, 0);
-    const built = new Set(db.decks.filter((d) => d.isBuilt).map((d) => d.id));
-    return Math.max(0, copies(() => true) - copies((id) => built.has(id)));
-  }
   const mine = (e: FakeEntry) => e.cardId === cardId && e.finish === want;
   const held = db.collectionEntries.filter(mine).reduce((n, e) => n + e.quantity, 0);
   const claimed = db.decks
@@ -6998,7 +6645,6 @@ export function writeHandlers(db: FakeDb) {
      *  grain. */
     collection_add: (args: { entry: EntryInput }): EntryChange => {
       refuseIfBusy(db);
-      refuseIfDeckDriven(db);
       return addEntry(db, args.entry);
     },
 
@@ -7007,7 +6653,6 @@ export function writeHandlers(db: FakeDb) {
      *  ever `collection_remove`. */
     collection_set_quantity: (args: { id: number; quantity: number }): EntryChange => {
       refuseIfBusy(db);
-      refuseIfDeckDriven(db);
       validQuantity(args.quantity, "collection quantity");
       const row = db.collectionEntries.find((e) => e.id === args.id);
       if (!row) throw refuse(ENTRY_GONE);
@@ -7024,7 +6669,6 @@ export function writeHandlers(db: FakeDb) {
      *  should delete the row being edited. */
     collection_update: (args: { id: number; patch: EntryPatch }): EntryChange => {
       refuseIfBusy(db);
-      refuseIfDeckDriven(db);
       const patch = args.patch;
       if (patch.finish !== undefined) validFinish(patch.finish);
       if (patch.condition !== undefined) validCondition(patch.condition);
@@ -7076,7 +6720,6 @@ export function writeHandlers(db: FakeDb) {
      *  wanted, and telling a stale list otherwise is an error dialog over a success. */
     collection_remove: (args: { id: number }): EntryChange => {
       refuseIfBusy(db);
-      refuseIfDeckDriven(db);
       db.collectionEntries = db.collectionEntries.filter((e) => e.id !== args.id);
       return { id: args.id, quantity: 0, removed: true };
     },
@@ -7097,9 +6740,6 @@ export function writeHandlers(db: FakeDb) {
       mode: TransferImportMode;
     }): ImportCommitOutcome => {
       refuseIfBusy(db);
-      // Before the snapshot rather than inside the loop, which is the crate's own order: a
-      // refusal that has already begun a write is a rollback the reader pays for.
-      refuseIfDeckDriven(db);
       if (args.mode !== "add" && args.mode !== "set") {
         throw refuse(`\`${args.mode}\` is not an import mode. Use \`add\` or \`set\`.`);
       }
@@ -9152,32 +8792,6 @@ export function writeHandlers(db: FakeDb) {
     set_deck_search_open: (args: { open: boolean }): void => {
       refuseIfBusy(db);
       db.deckSearchOpen = args.open;
-    },
-
-    /**
-     * `deck_driven::set_deck_driven_collection` — remember whether the collection is the sum of
-     * the reader's live decks.
-     *
-     * The **third** write here with nothing but `busy` to refuse, and the two paragraphs above
-     * are the whole argument: a `boolean` off the IPC boundary has no junk state, so a
-     * validation would invent a refusal the backend does not make.
-     *
-     * **What is not the same is who hears the refusal.** Its two neighbours answer `BUSY` into a
-     * caller that swallows it and keeps the reader's choice; this flag decides what the
-     * Collection page is a *list of*, so `@/lib/useDeckDrivenCollection` rolls the switch back
-     * and shows the sentence. That is a decision on the app's side rather than a difference in
-     * the command — this handler answers exactly what `set_nav_collapsed` does — and it is why
-     * the `busy` fault is worth a story here in a way it is not there.
-     *
-     * The crate writes through `collection_source::with_write_owned` rather than bare
-     * `with_write`, because flipping this bit changes which cards are owned without touching
-     * either table and the search's `owned` facet is stale the instant it lands. Invisible
-     * here: {@link readHandlers.facet_cards} counts from the rows on every call, so there is no
-     * index to invalidate — which is the one thing about this write a story cannot show.
-     */
-    set_deck_driven_collection: (args: { enabled: boolean }): void => {
-      refuseIfBusy(db);
-      db.deckDrivenCollection = args.enabled;
     },
 
     /**
