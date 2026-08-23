@@ -513,17 +513,49 @@ reader is being told about.
 
 ## What driving the shipped window found
 
-**Nothing yet — the live pass has not run.** This section is deliberately empty rather than
-filled with figures nobody measured. `wishlist-folders.md`'s equivalent section is what it should
-look like, and its lead finding is the one to go looking for first: a wish filed into a folder
-vanished until reload, on all three routes, because a plain move invalidated nothing.
+One CDP pass over `3036e18`, on **Windows**, `tauri dev` (**debug**), at 1920×1080, against a
+worktree database carrying the full 116,700-card corpus. Every claim below was read out of the
+running window or out of SQLite beside it, not derived.
 
-The pass is `live-ui-verification.md`'s contract, and two harness facts from the previous PR's pass
-apply here: the collection page is a **div/grid table**, so query `[role=row]` and `[role=gridcell]`
-rather than `tbody tr`; and `cdp.mjs` has no right-click, so a synthetic
-`MouseEvent('contextmenu', { bubbles, clientX, clientY, button: 2 })` on `[data-grid-index]` is
-what opens the card menu, with submenus needing `pointerenter` + `mouseover` + `focus()` +
-`click()` together.
+**The lead finding is the one this section exists for, and the suite could not see it.** Stepping
+a one-copy row to zero deleted it in SQLite and **left it on screen as a ghost** — the header read
+`Cards 0` beside a list still showing the row, and pressing `+` on it answered "that row is gone".
+`setQuantity`'s handler ignored `change.removed`, and `settle()` deliberately skips re-reading the
+list, so nothing ever took the row away. It is the reversal of §"Zero deletes the row" biting at
+the one place that did not follow it.
+
+**The unit tests could not have caught it, and that is the part worth remembering.**
+`CollectionPage.test.tsx` mocked `{ quantity: 0, removed: false }` — *a response the backend has
+been unable to produce since v24*. A mock that encodes a state the system no longer has is not a
+weak test, it is a test asserting the opposite of the truth, and it will stay green forever. The
+fix reads `change.removed` and drops the row; `ZeroDeletesTheRow` in `CollectionPage.stories.tsx`
+now pins it against the fake, where the mock cannot lie.
+
+**Everything else measured clean, first time:**
+
+| Checked | Read back |
+| --- | --- |
+| `+ New folder` → `Create folder` | `Binder A folder, 0 cards` |
+| `Add to → Collection → Nonfoil → Binder A` | `collection_entries.folder_id = 1`, **not** the root — the nested add of [#215](https://github.com/Msgaihede/mtg-grimoire/issues/215) working end to end, menu → ipc → Rust → SQLite |
+| The folder card after that add | `Binder A folder, 1 card, $0.32` — `folder_summary` live |
+| The row's trailing cell | `Binder A` (the `Actions` → `Folder` column) |
+| Stepping to zero, after the fix | row leaves the list, header `0`, folder card back to `0 cards`, no `role="alert"` |
+| The delete confirmation | *"Delete "Binder A"? Its cards move back to your collection; folders inside it are deleted."* — **both halves said out loud**, which is the whole point: "and everything in it" would be wrong about the half that matters |
+| After confirming | `collection_folders` empty, and the card **survives at `folder_id = NULL`** — SET NULL doing its job |
+
+**The finish branch composes above the folder branch, as designed** — `Add to → Collection` is a
+submenu of finishes, and each finish is itself a submenu of `Collection` (the root, first) then the
+folders. Three levels for a two-finish card, which is the cost of not asking two questions at once.
+
+Three harness facts, two inherited and one new. The collection page is a **div/grid table**, so
+query `[role=row]` and `[role=gridcell]`, never `tbody tr` — `document.querySelectorAll('table')`
+answers `0` on a page plainly showing one. `cdp.mjs` has no right-click, so a synthetic
+`MouseEvent('contextmenu', { bubbles, clientX, clientY, button: 2 })` on `[data-grid-index]` opens
+the card menu, and each submenu needs `pointerenter` + `mouseover` + `focus()` + `click()`
+together. **New: the folder-name field is controlled, so assigning `.value` writes a character
+React never sees** — go through
+`Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set` and then dispatch
+`input`, or `Create folder` stays disabled over a box that visibly contains a name.
 
 ## Deliberately out of scope
 
