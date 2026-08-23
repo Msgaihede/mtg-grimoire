@@ -98,12 +98,18 @@ export function useCollectionFolders() {
    * the definition rather than on a call site.
    *
    * A refusal here is a busy database, a folder another surface has already deleted, or one of
-   * this cabinet's own three refusals in words; the middle one must not leave a tree drawing a
-   * node that is gone.
+   * the cabinet's **four** refusals in words; the middle one must not leave a tree drawing a node
+   * that is gone. The four are `FOLDER_GONE`, `FOLDER_CYCLE` and `FOLDER_NOT_YOURS` — which are
+   * the ones these four writes can raise — plus `ENTRY_IN_A_DECK`, which belongs to
+   * `set_entry_folder` and reaches {@link useSetCollectionFolder} below rather than this hook.
+   * It is the newest and the odd one out: the other three are about a **folder**, and that one is
+   * about the **row** being filed, refusing to let a copy walk out of a deck's group by hand.
    *
    * Nothing outside `["collection"]` moves. A folder write files copies rather than counting
-   * them: no quantity changes, so no wish's `ownedQuantity`, no search row's owned badge and no
-   * deck's claims are any different afterwards.
+   * them: no quantity changes, so no wish's `ownedQuantity` and no search row's owned badge can
+   * be different afterwards. Nor any deck's owned count, which since schema v25 is the sum over
+   * that deck's *own* group: all four of these writes are fenced to `user` folders, so none of
+   * them can reach a deck's group or put one inside a folder that is about to be deleted.
    */
   const invalidate = () => void queryClient.invalidateQueries({ queryKey: ["collection"] });
   const writes = { onSuccess: invalidate, onError: invalidate };
@@ -184,7 +190,9 @@ export interface SetCollectionFolderHandlers {
  * There were two for a while, the drag's and the card menu's, with different settle sets and a
  * comment on the page claiming there was one. Two implementations of one write disagree the first
  * time either changes, and these already had: the menu's took `["decks"]` and the drag's did not,
- * so the same gesture left a built deck's claims stale or fresh depending on which hand made it.
+ * so the same gesture left a deck's owned count stale or fresh depending on which hand made it.
+ * Since schema v25 that half is not optional — filing a copy is *how* a card enters or leaves a
+ * deck, so a settle set without `["decks"]` is an editor still drawing cards it no longer holds.
  * The hook is the settle set plus the two hooks a surface needs to draw its own refusal, and
  * nothing else.
  *
@@ -236,10 +244,12 @@ export function useSetCollectionFolder({ onMutate, onError }: SetCollectionFolde
       void queryClient.invalidateQueries({ queryKey: ["collection"] });
       // **And every deck, which is the half the drag's own mutation was missing.** A move changes
       // no quantity, so no wish's `ownedQuantity` and no search row's owned badge can be
-      // different afterwards — but the destination may already hold this printing at this grain,
-      // in which case the backend *merges*: one row is deleted and the deck claims on it are
-      // carried onto the survivor. A deck holding a `collection_entry_id` that no longer exists
-      // would draw a claim it has just lost.
+      // different afterwards — but since schema v25 a deck owns exactly the copies filed in its
+      // own group, and only the *destination* of this write is fenced (`set_entry_folder` refuses
+      // a `deck` folder and the `removed` one by hand). The source is not: a copy dragged out of a
+      // deck's group to the root or into a binder is a copy that deck has just lost. The merge
+      // moves a sum too — the destination may already hold this printing at this grain, in which
+      // case the backend deletes one row and adds its copies to the survivor.
       void queryClient.invalidateQueries({ queryKey: ["decks"] });
     },
   });

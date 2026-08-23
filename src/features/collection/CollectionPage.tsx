@@ -45,6 +45,7 @@ import { CollectionFolderCard, type CollectionFolderTotals } from "./CollectionF
 import { CollectionSummaryHeader } from "./CollectionSummary";
 import { CollectionTable } from "./CollectionTable";
 import type { CollectionDrag } from "./collectionDrag";
+import { PinnedFolders, pinnedFolders } from "./PinnedFolders";
 import { useCollection, type Collection } from "./useCollection";
 import { useCollectionFolders, useSetCollectionFolder } from "./useCollectionFolders";
 
@@ -407,11 +408,12 @@ export function CollectionPage() {
     // than merely marked — only *active* queries refetch, and while this view is on screen
     // the search is unmounted, so from here the cost is a stale mark and nothing else.
     void queryClient.invalidateQueries({ queryKey: ["cards", "search"] });
-    // And every deck. A deck's claims are read back as `min(claim, entry.quantity)`, so a
-    // copy stepped away from under a built deck changes what that deck says it owns — and
-    // what its "missing to wishlist" button would buy — without the deck being touched at
-    // all. The claims themselves are left stale on purpose: they are recomputed by the next
-    // deck card write, and a read is not the place to discover that the world moved.
+    // And every deck. Since schema v25 a deck owns what its own group physically holds, summed
+    // per oracle id, so the row this stepper just changed *is* a deck's arithmetic if it is
+    // filed in a deck group — and is spare for every theory list if it is not. Either way what
+    // that deck says it owns, and the shortfall its "missing to wishlist" button would buy,
+    // moved without the deck being touched at all. There is nothing left to recompute: the
+    // number is read off the folder at read time rather than kept in a claim table.
     void queryClient.invalidateQueries({ queryKey: ["decks"] });
   }, [queryClient]);
 
@@ -611,18 +613,41 @@ export function CollectionPage() {
    * `collection_folders.kind` is one of three: `user`, the `deck` folder that stands for a deck,
    * and the single `removed` one. Only the first is a drawer the reader arranged, so only the
    * first belongs in the nestable tree they drag between and rename. **The other two render as a
-   * separate pinned flat section with no rename or delete affordance — and in this PR that
-   * section is always empty**, because nothing yet creates either kind (spec §5, PR 3). So there
-   * is no heading here and no empty band under the breadcrumb: an empty section is a promise
-   * about a feature that has not shipped.
+   * separate pinned flat section** — {@link PinnedFolders}, which carries the whole argument for
+   * why it is locked and why neither kind takes a drop. Schema v25 creates them, so that section
+   * is real from this PR on; it was drawn empty for one PR and rendered nothing at all, because
+   * an empty heading is a promise about a feature that has not shipped.
    *
    * The filter is on the *tree's* input alone. {@link trailOf} and `folderNameOf` below read the
-   * whole list, so a copy that somehow sits in an app-owned folder is still named honestly by the
-   * table's Folder column rather than reading as unfiled.
+   * whole list, so a copy that sits in an app-owned folder is still named honestly by the table's
+   * Folder column rather than reading as unfiled — and the breadcrumb can still walk a reader out
+   * of a deck group they have opened.
    */
   const userFolders = useMemo(
     () => folders.folders.filter((folder) => folder.kind === "user"),
     [folders.folders],
+  );
+
+  /** The other two kinds, split and ordered for the pinned section. */
+  const pinned = useMemo(() => pinnedFolders(folders.folders), [folders.folders]);
+
+  /**
+   * The figures one pinned entry draws.
+   *
+   * **The summary row directly, never {@link subtotalsOf}**: that map is built by walking the
+   * reader's tree, and these folders are deliberately not in it. Nothing can nest under a deck
+   * group or under `Recently removed` — no command writes a `parent_id` naming one — so the
+   * direct count *is* the recursive count here, and there is nothing to add up.
+   *
+   * `isPending` is the same window the wall above draws an em dash across, and for the same
+   * reason: a `Map.get` miss means "empty" once the summary has answered and "not counted yet"
+   * before it has, and `0 cards` over a deck holding sixty is a wrong number rather than a
+   * spinner.
+   */
+  const pinnedTotals = useCallback(
+    (folder: CollectionFolder): CollectionFolderTotals | null =>
+      folders.summaryQuery.isPending ? null : (folders.summary.get(folder.id) ?? NO_CARDS),
+    [folders.summaryQuery.isPending, folders.summary],
   );
 
   /**
@@ -808,13 +833,53 @@ export function CollectionPage() {
     [menu, menuKey, menuClick, open, folders.rename, folders.move, folders.remove],
   );
 
+  /** The reader's own drawers and the app's deck groups, as sets, for the two fences in
+   *  {@link canFile}. A `Set` because that question is asked once per target per drag frame. */
+  const userFolderIds = useMemo(
+    () => new Set(userFolders.map((folder) => folder.id)),
+    [userFolders],
+  );
+  const deckGroupIds = useMemo(
+    () => new Set(pinned.decks.map((folder) => folder.id)),
+    [pinned.decks],
+  );
+
   /**
    * Where a copy in the air may be let go — asked per target, because the answer differs per
    * target: the folder a row is already filed in refuses it and draws no ring at all, rather than
    * a ring that would write nothing and bump `updated_at`. `dropWrite`'s rule about a card dropped
    * back in its own column, one screen over.
+   *
+   * **Both of the other two clauses are about the deck boundary, and the drag is the only gesture
+   * that can reach it by accident.**
+   *
+   * *The destination must be the root or a folder the reader made.* That is not this page's rule
+   * but `collection_folders::set_entry_folder`'s: it calls `user_folder` on the destination and
+   * refuses a deck group or `Recently removed` in words. **No gesture on this page reaches it
+   * today** and that is deliberate: `PinnedFolders` registers no drop target, and the only
+   * breadcrumb segment that could name a pinned folder is the last one, which is never a target.
+   * It is the fence rather than the affordance — the thing that keeps the invariant local the day
+   * somebody makes a pinned entry droppable "because the ring looked missing". A mutation check
+   * confirmed the reachability: removing this clause fails nothing, where removing either of the
+   * other two fails exactly one test each.
+   *
+   * *The source must not be a deck group.* This one has no backend fence, and that is exactly why
+   * it is written down: the destination would be a perfectly legal user folder, so
+   * `collection_set_folder` would happily move the copy **out of the deck's custody without
+   * touching `deck_cards`** — the mirror image of the bug the paragraph above prevents, and worse,
+   * because the deck would go on listing a card whose copies have walked off. Copies leave a deck
+   * through `deck_to_collection`, which decrements the list in the same transaction. `Recently
+   * removed` is deliberately not in this set: dragging *out* of the holding area is the whole of
+   * what #209 asked for.
    */
-  const canFile = useCallback((drag: CollectionDrag, to: number | null) => drag.folderId !== to, []);
+  const canFile = useCallback(
+    (drag: CollectionDrag, to: number | null) => {
+      if (drag.folderId === to) return false;
+      if (to !== null && !userFolderIds.has(to)) return false;
+      return drag.folderId === null || !deckGroupIds.has(drag.folderId);
+    },
+    [userFolderIds, deckGroupIds],
+  );
   const fileCard = useCallback(
     (drag: CollectionDrag, to: number | null) =>
       setFolder.mutate({ entryId: drag.entryId, folderId: to }),
@@ -843,8 +908,31 @@ export function CollectionPage() {
   // The cabinet is drawn only where there is one. In a collection nobody has filed, a lone inert
   // "Collection" under a ribbon that already says Collection is the subheading this page's own
   // `sr-only` heading exists to avoid.
-  const hasFolders = userFolders.length > 0;
+  //
+  // **`|| folderId !== null` is what keeps a reader from being stranded**, and it arrived with the
+  // pinned section: a reader who has made no folders of their own can still be *inside* one, by
+  // pressing a deck group or `Recently removed`, and the breadcrumb is the only way back out.
+  // Without this clause the trail was gated on a list that folder is deliberately not in, so
+  // opening a deck group closed the door behind them.
+  const hasFolders = userFolders.length > 0 || folderId !== null;
+  /** Whether *this level* holds drawers of its own. The status line's question, and it stays the
+   *  reader's own children — the refile wall below is not this level's content. */
   const filed = childFolders.length > 0;
+  /** Standing in the holding area, which is the one level whose wall is not its own children. */
+  const inRemoved = pinned.removed !== null && folderId === pinned.removed.id;
+  /**
+   * The folders drawn over the cards at this level.
+   *
+   * **Inside `Recently removed` it is the reader's own top level rather than nothing**, and that
+   * substitution *is* #209's feature. Nothing nests under the holding area, so its own children
+   * are always empty — and a reader standing in a pile of copies that just left a deck, with no
+   * drop target on screen, can sort them back only through the row menu. The wall puts their
+   * binders under the pointer, so the sort is the drag it should have been.
+   *
+   * Not done for a **deck group**, whose cards may not be dragged out at all ({@link canFile}): a
+   * wall of drawers that every ring refuses would be an invitation to a gesture that does nothing.
+   */
+  const wall = inRemoved ? nodes : childFolders;
 
   /**
    * What the export dialog's two sentences have to say about where the reader is standing.
@@ -1034,7 +1122,19 @@ export function CollectionPage() {
           </div>
         )}
 
-        {filed && (
+        {/* The sentence the substitution above needs, and only where it is doing something: a wall
+            of the reader's own binders drawn over a pile of copies that just left a deck is not
+            self-explaining, and the gesture it is inviting is one a reader has no reason to guess
+            at. Not drawn in a drawer of their own, where the wall is that drawer's contents — and
+            not over an *empty* holding area, where it would be inviting a drag of nothing beside a
+            line already saying there is nothing here. */}
+        {inRemoved && wall.length > 0 && !empty && (
+          <p className="shrink-0 text-xs text-dim">
+            Drag a card onto a folder to file it back into your collection.
+          </p>
+        )}
+
+        {wall.length > 0 && (
           // **The scroller is what makes the cabinet a band rather than the page.** A reader with
           // twenty drawers must not lose the wall to them, so the row of cards is bounded and
           // scrolls inside itself.
@@ -1052,7 +1152,7 @@ export function CollectionPage() {
               aria-label="Folders"
               className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-2"
             >
-              {childFolders.map((node) => (
+              {wall.map((node) => (
                 <CollectionFolderCard
                   key={node.folder.id}
                   node={node}
@@ -1083,6 +1183,21 @@ export function CollectionPage() {
             </ul>
           </div>
         )}
+
+        {/* **Under the reader's own cabinet, and drawn at every level.** The wall above is what
+            the reader arranged and is the thing they came to this page for; this is the app's own
+            record of where the rest of their copies are, and it belongs beside that rather than
+            above it. Drawn at every level because *pinned* is the word the spec uses and it is
+            what makes `Recently removed` reachable from three drawers down — see the component
+            for the whole of what pinned, flat and locked each cost. */}
+        <PinnedFolders
+          decks={pinned.decks}
+          removed={pinned.removed}
+          totals={pinnedTotals}
+          currency={marketplace.currency}
+          openFolderId={folderId}
+          onOpen={collection.openFolder}
+        />
 
         {/* One live region, mounted for the life of the view: a region that appears together
             with its text announces nothing, because there was no change for a screen reader
