@@ -380,12 +380,45 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   (`last_deck_format`), and the rest are the app's own bookkeeping (the update check's three,
   `scryfall_penalty_until`). **None of them belongs in `sync_meta`** — a row in that one the sync
   did not write makes every later timing claim a fiction.
-  **`deck_driven_collection` is orphaned by this release**: the setting it held is gone while
-  `SCHEMA_VERSION` stays 23, so the row sits unread on every database that has one until the v24
-  rung deletes it.
-- **Schema is v23**, and `schema::SCHEMA_VERSION` is the answer — this line read **v18** for two
+  **`deck_driven_collection` is orphaned and stays orphaned through v24**: the setting it held is
+  gone, and the row sits unread on every database that has one. v24 was expected to delete it and
+  deliberately does not — that rung creates the collection's folders and files nothing, and the
+  `app_meta` sweep travels with the rest of the allocator's removal at **v25**. A key nothing
+  reads costs a row; deleting it in the rung that also has to keep the allocator working would
+  have been the only statement in v24 that was not about folders.
+- **Schema is v24**, and `schema::SCHEMA_VERSION` is the answer — this line read **v18** for two
   whole rungs, because a prose-only edit routes to neither CI job and nothing goes red when a
   ladder entry rots.
+  **v24 gives the collection the wishlist's filing cabinet** — `collection_folders` (nesting on
+  `parent_id … ON DELETE CASCADE`), `collection_entries.folder_id`
+  (`… ON DELETE SET NULL`), `idx_collection_folder`, and a **rebuilt** `idx_collection_grain`
+  carrying `coalesce(folder_id, 0)` as its **eleventh** term.
+  [Issue #215](https://github.com/Msgaihede/mtg-grimoire/issues/215); the design is
+  [the collection-folders spec](../superpowers/specs/2026-08-23-collection-folders-design.md) and
+  what shipped is [collection-folders.md](collection-folders.md).
+  Every trap v23 paid for is live again and is not re-argued here: the index is **rebuilt rather
+  than widened** (no `ALTER INDEX`, and the `DROP` first or the widening is a silent no-op on
+  exactly the machines that already carry the narrow one), the `ADD COLUMN` is **probed for**
+  through `pragma_table_info('collection_entries')` rather than guarded, and there is **no
+  backfill** — NULL is the root, so the upgrade is invisible until the reader makes their first
+  folder.
+  **Three things about this rung are its own.**
+  It carries **two columns and two partial unique indexes that nothing writes yet** — `kind`
+  (`user|deck|removed`) and `deck_id`, with `idx_collection_folder_removed` and
+  `idx_collection_folder_deck` — because the spec's single rung could not ship: it dropped
+  `deck_allocations`, which is still the app's only source of owned/missing until v25 replaces it.
+  Creating the unused columns here is what lets **v25** be inserts, a backfill and drops with no
+  `ALTER TABLE` at all.
+  It has a **third `ON DELETE` action**, which neither of the other two cabinets has:
+  `collection_folders.deck_id` CASCADEs onto `decks`, because a folder that *stands for* a deck has
+  no meaning once that deck is gone — the opposite of what the folder's contents get.
+  And **one of its statements is not additive**, which is the one to read twice before rewinding
+  anything: `DELETE FROM collection_entries WHERE quantity = 0` — the rung paying for a state that
+  stops being reachable. A stored zero was a placeholder for a printing the reader owns none of,
+  and with a folder in the grain it is indistinguishable from a row somebody filed and emptied. It
+  is the one thing here a rewind cannot give back, and it reverses a rule this repo had written
+  down: the row's condition, purchase price, acquisition story, notes and tags go with it.
+  `CHECK (quantity >= 0)` stays — a stepper still passes through zero within a session.
   **v23 gives the wishlist the deck gallery's filing cabinet** — `wishlist_folders` (nesting on
   `parent_id … ON DELETE CASCADE`), `wishlist_entries.folder_id`
   (`… ON DELETE SET NULL`), `idx_wishlist_folder`, and a **rebuilt** `idx_wishlist_grain`
@@ -660,7 +693,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   to a new **`v12_database`**, v14 to **`v13_database`**, v15 to **`v14_database`**, v16 to
   **`v15_database`**, v17 to **`v16_database`**, v18 to **`v17_database`**, v19 to
   **`v18_database`**, v20 to **`v19_database`**, v21 to **`v20_database`**, v22 to
-  **`v21_database`** and v23 to **`v22_database`**. The fixtures it
+  **`v21_database`**, v23 to **`v22_database`** and v24 to **`v23_database`**. The fixtures it
   passes stay exactly where they are, each pinned to
   a literal because each proves something only a database genuinely _at_ that version can —
   `v11_database` to 11, so the step that adds the view-state columns has a database it can
@@ -675,7 +708,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   **A rewind fixture may only undo the steps _above_ where it claims to sit — and it owes a line
   for every one of them whose DDL is not idempotent.** Every rewind fixture —
   `v9_database`, `v10_database`, `v11_database`, `v12_database`, `v13_database`, `v14_database`,
-  `v15_database`, `v16_database`, `v17_database`, `v18_database`, `v19_database` — is built the
+  `v15_database`, `v16_database`, `v17_database`, `v18_database`, `v19_database`, `v20_database`,
+  `v21_database`, `v22_database`, `v23_database` — is built the
   same way, because
   only version 1's DDL is frozen and there is no way to _build_ a later database forwards:
   migrate to head, undo by hand, renumber. `migrate` then reads `user_version` once and walks
@@ -703,9 +737,11 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `v9_database` at all.
   **The per-rung fixture counts that used to be written out here are gone on purpose.** They read
   "all six below it" and "the five below that" against a fixture set that has grown twice since,
-  and a count is a fact about a *tree*: `grep -c "{UNDO_V23}" src-tauri/src/schema.rs` is the
+  and a count is a fact about a *tree*: `grep -c "{UNDO_V24}" src-tauri/src/schema.rs` is the
   census of how many fixtures the newest rung reaches, and it answers for the tree you are
-  actually in. **v21 is a rebuild rather than an `ADD COLUMN`, and it still needs a line in every
+  actually in. (The constant in that command moves with the ladder — it named `UNDO_V23` until v24
+  landed — and the whole point of writing a command rather than a number is that only the command
+  needed changing.) **v21 is a rebuild rather than an `ADD COLUMN`, and it still needs a line in every
   fixture**: `UNDO_V21` drops `deck_tags` and recreates the per-deck shape v8 built, because
   `ALTER TABLE … DROP COLUMN` refuses a column an index names and the shape changed both ways.
   **v22 is the only rung with no `UNDO_V22` at all, and that is a fact about the rung rather
@@ -720,7 +756,9 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   now `the_v21_fixture_still_receives_the_v22_backfill`'s to assert:
   `the_head_minus_one_fixture_really_sits_one_step_below_head` moved up to `v22_database` with
   the title, and its second half is back to asking what head-minus-one **lacks**, which v23 gave
-  it something to be again (`wishlist_folders`).
+  it something to be again (`wishlist_folders`). It has since moved on to `v23_database`, and
+  what that one lacks is `collection_folders` — the assertion is written against
+  `SCHEMA_VERSION - 1` precisely so the title travels without anybody renumbering a fixture.
   **`UNDO_V23` is deliberately a partial rewind**, and the half it cannot do is the half worth
   knowing: it drops `wishlist_folders` and `idx_wishlist_folder` and leaves
   `wishlist_entries.folder_id` standing, because SQLite refuses `DROP COLUMN` on a column an
@@ -728,7 +766,21 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   the column could go would rebuild an index *narrower* than the rows beneath it were written
   on. So every fixture below head re-enters the v23 step carrying the column, which is what the
   step's `pragma_table_info` probe is for and what
-  `migrating_a_v22_wishlist_files_every_existing_wish_at_the_root` drives on purpose. **One named `UNDO_V…` constant per rung that writes shape** is the shape that
+  `migrating_a_v22_wishlist_files_every_existing_wish_at_the_root` drives on purpose.
+  **`UNDO_V24` is the same partial rewind one table over, and its reason is a different one worth
+  reading.** SQLite would in fact allow `collection_entries.folder_id` to go, once
+  `idx_collection_grain` and `idx_collection_folder` were dropped first. What a **shared** rewind
+  may not do is the statement after that: putting the ten-column index back means building a
+  *narrower* unique index over rows written on the eleven-column grain, which is a constraint
+  failure the moment two of them differ only by folder — inside somebody else's fixture. So every
+  fixture beneath head re-enters the v24 step carrying the column, exactly as they do v23's.
+  The one fixture that goes on to **write** entries pays the full rewind instead: `schema_at_23`
+  drops both indexes, then the column, then the table, then rebuilds the ten-column index as a
+  literal. It has to, and not for the `DROP COLUMN`'s sake — `libsqlite3-sys` builds the
+  amalgamation with `SQLITE_DEFAULT_FOREIGN_KEYS=1`, so a surviving `folder_id` whose `REFERENCES`
+  names a table `UNDO_V24` took away answers `no such table: main.collection_folders` at the very
+  next insert. **`UNDO_V24` runs before `UNDO_V23`**, newest-first, which is that constant's own
+  stated rule. **One named `UNDO_V…` constant per rung that writes shape** is the shape that
   keeps this
   cheap: v13 and v14 have each been renumbered since they were written, and the rename was the
   whole of what it cost. (`v10_database` drops them for a different reason: a fixture claiming to

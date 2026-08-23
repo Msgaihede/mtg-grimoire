@@ -212,51 +212,66 @@ grammar the rest of the file uses. `extra` on `ParsedLine` carries every recogni
 the collection's `planCollectionImport` is what reads `condition`, `purchasePrice`,
 `purchaseCurrency`, `acquiredAt`, `acquisitionSource` and `notes` out of it.
 
-**Not every collection export field round-trips through import, and the honest description is
-worse than "six flags are dropped": the re-imported row is a *different row* from the one
-exported, not the same row missing some flags.** `Altered`, `Signed`, `Proxy`, `Misprint`, `Serial
-number` and `Grading` are six of the ten columns in `COLLECTION_GRAIN`
+### The narrow fold — **fixed 2026-08-23**, and kept here because the shape is instructive
+
+**Every collection export field now round-trips through import.** `Altered`, `Signed`, `Proxy`,
+`Misprint`, `Serial number` and `Grading` are six of the **eleven** columns in `COLLECTION_GRAIN`
 (`card_id, finish, condition, lang, altered, signed, proxy, misprint,
-coalesce(serial_number, ''), coalesce(grading, '')`, `schema.rs:226-227`; the six flag/identity
-columns themselves are declared on the `collection_entries` table at `schema.rs:704-712`) — they
-are part of what *identifies* a collection row, not decoration on one. `CollectionImportItem` —
-the wire shape both `src/lib/ipc.ts` and `src-tauri/src/collection.rs` agree on — carries
-`cardId`, `quantity`, `finish`, `condition`, `conditionOriginal`, `purchasePrice`,
-`purchaseCurrency`, `acquiredAt`, `acquisitionSource` and `notes`, and nothing else. `altered`,
-`signed`, `proxy`, `misprint`, `serialNumber` and `grading` are all exportable —
-`SURFACE_FIELDS.collection` carries all six — but `planCollectionImport` never reads them out of
-a CSV's `extra`, and there is no slot for them on the wire even if it did.
+coalesce(serial_number, ''), coalesce(grading, ''), coalesce(folder_id, 0)` — the eleventh joined
+at schema v24, see [collection-folders.md](collection-folders.md)) — they are part of what
+*identifies* a collection row, not decoration on one, and `planCollectionImport` reads all six out
+of a CSV's `extra`, `CollectionImportItem` carries all six on the wire, and `commit_import` writes
+them rather than defaulting them.
 
-Three facts compose into a net effect worse than a dropped column:
+**The fold key is every grain term the importer can vary, and the two it omits it omits for a
+reason.** `lang` is a function of `cardId` — `add_entry` copies it, `set_code` and
+`collector_number` off `cards` at write time and never takes them from the file — so two items
+sharing a `cardId` can never disagree about it. `folder_id` is always the root, because an imported
+file says nothing about this reader's filing. Neither can separate two items that the other nine
+terms fold together, which is what makes leaving them out exact rather than a second narrow key.
 
-1. `destinations/collection.ts:94` folds the planner's items on `cardId, finish, condition` alone
-   — narrower than the ten-column grain — so two exported rows that differ only in, say, `Altered`
-   fold into **one** importer item, its quantity the sum of both.
-2. `collection.rs:485-491` hard-codes all six to their defaults (`false`/`NULL`) on every import,
-   whatever the file said, so that one item always targets the all-defaults grain.
-3. `ON CONFLICT(COLLECTION_GRAIN)` can therefore never match the original altered/signed/proxied/
-   misprinted/serialized/graded row — its grain isn't the all-defaults one — so the import writes
-   or updates a **second, all-defaults entry beside it** rather than restoring the row that was
-   exported.
+**What it was, until the collection's folders shipped.** The honest description was worse than
+"six flags are dropped": the re-imported row was a *different row* from the one exported, not the
+same row missing some flags. Three facts composed into it:
+
+1. `destinations/collection.ts` folded the planner's items on `cardId, finish, condition` alone —
+   narrower than the grain — so two exported rows differing only in, say, `Altered` folded into
+   **one** importer item, its quantity the sum of both.
+2. `commit_import` hard-coded all six to their defaults (`false`/`NULL`) on every import, whatever
+   the file said, so that one item always targeted the all-defaults grain.
+3. `ON CONFLICT(COLLECTION_GRAIN)` could therefore never match the original altered/signed/
+   proxied/misprinted/serialized/graded row — its grain was not the all-defaults one — so the
+   import wrote or updated a **second, all-defaults entry beside it** rather than restoring the
+   row that was exported.
 
 Worked through: a collection holding 2 altered and 3 unaltered copies of the same NM nonfoil
-printing (two grain-distinct rows, 5 copies total) exports as two CSV rows and reimports as one
-folded item of quantity 5, always landing on the unaltered grain. In `set` mode that **overwrites**
-the unaltered row's quantity from 3 to 5, leaving the altered row's 2 untouched — 7 copies where
-there were 5. In `add` mode the unaltered row's quantity accumulates instead, 3 + 5 = 8, for 10
-copies total. Both are **measured**, not estimated: importing a CSV with every collection column
-filled in and then exporting it straight back out showed `no,no,no,no` for Altered/Signed/Proxy/
-Misprint on a row the import file never mentioned those columns for at all, which is the same
-mechanism seen from the single-row side.
+printing (two grain-distinct rows, 5 copies total) exported as two CSV rows and reimported as one
+folded item of quantity 5, always landing on the unaltered grain. In `set` mode that
+**overwrote** the unaltered row's quantity from 3 to 5, leaving the altered row's 2 untouched — 7
+copies where there were 5. In `add` mode the unaltered row's quantity accumulated instead,
+3 + 5 = 8, for 10 copies total. Both were **measured**, not estimated: importing a CSV with every
+collection column filled in and exporting it straight back out showed `no,no,no,no` for
+Altered/Signed/Proxy/Misprint on a row the import file never mentioned those columns for at all,
+which is the same mechanism seen from the single-row side.
 
-**This is latent, not live.** No shipped frontend surface writes any of the six today — a sweep of
-`src/**` for `altered:`/`signed:`/`proxy:`/`misprint:`/`serialNumber:`/`grading:` outside tests,
-stories, `lib/ipc.ts` and `features/transfer` itself finds zero writers — so every collection row a
-reader can currently create has every one of the six at its default already, `ON CONFLICT` always
-lands on the one row that could exist, and today's round trip is faithful. The trap arrives with
-the first surface that lets a reader set one of the six — a collection-entry editor, most likely —
-after which an import can silently multiply that reader's collection rather than merely losing a
-flag on it.
+**This page called it "latent, not live" for as long as no shipped surface wrote any of the six** —
+a sweep of `src/**` for `altered:`/`signed:`/`proxy:`/`misprint:`/`serialNumber:`/`grading:`
+outside tests, stories, `lib/ipc.ts` and `features/transfer` itself found zero writers, so every
+row a reader could create had all six at their defaults, `ON CONFLICT` always landed on the one row
+that could exist, and the round trip was faithful. The note said the trap would arrive with the
+first surface that let a reader set one of the six.
+
+**What actually made it live was the eleventh grain term, not a new editor.** Once `folder_id`
+joined `COLLECTION_GRAIN` at schema v24, an import into a deck's group — the "add cards to
+collection" toggle the folder work is building towards — targets a grain the reader's own filed row
+does not hold, and the same second-row-beside-it failure follows without anybody ever ticking
+"Altered". So it was fixed in the branch that shipped the folders (2026-08-23): the fold key is the
+full grain and the commit carries the six columns.
+
+**The lesson is the one worth keeping.** A defect that is unreachable today is a defect with a
+*trigger*, and the trigger is rarely the surface you predicted — this one was a schema change three
+releases away that had nothing to do with flags. "Latent" is a note about the present tense, and it
+expires without warning.
 
 ## The four import destinations
 
@@ -267,7 +282,7 @@ one per surface plus the deck's "start a new one":
 | --- | --- | --- | --- |
 | `deck` (existing) | `merge` / `replace` | `deck_id, variant, category_id, card_id, coalesce(finish,'')` (`schema::DECK_CARD_GRAIN`) | `replace` clears one **variant** first, named before it does; the mode radio says how many cards that would cost |
 | `newDeck` | `merge` only | same grain, on the deck just created | No mode radios at all — there is nothing to replace one line after `deck_create`, and `merge` is the mode that cannot clear anything if that ever stops being true |
-| `collection` | `add` / `set` | `cardId, finish, condition` (the importer's own fold key, `destinations/collection.ts`) — narrower than the storage grain, `card_id, finish, condition, lang, altered, signed, proxy, misprint, coalesce(serial_number,''), coalesce(grading,'')` (`schema::COLLECTION_GRAIN`) | No `replace`: the deck's version would empty a multi-thousand-row collection from a 40-line paste with the file that caused it looking ordinary |
+| `collection` | `add` / `set` | Every term of the storage grain (`schema::COLLECTION_GRAIN` — `card_id, finish, condition, lang, altered, signed, proxy, misprint, coalesce(serial_number,''), coalesce(grading,''), coalesce(folder_id, 0)`) the importer can vary, so nine of the eleven. `lang` follows `cardId` and `folder_id` is always the root. It was `cardId, finish, condition` alone until 2026-08-23 — see the fold section above for what that cost | No `replace`: the deck's version would empty a multi-thousand-row collection from a 40-line paste with the file that caused it looking ordinary |
 | `wishlist` | `add` / `set` | `oracleId, cardId, finish` (`destinations/wishlist.ts`) — the storage grain is `coalesce(oracle_id,''), coalesce(card_id,''), coalesce(preferred_finish,''), coalesce(folder_id,0)` (`schema::WISHLIST_GRAIN`) | `wishlist_set_quantity(id, 0)` **deletes** the wish — a wish for nothing is not a wish (`CHECK (quantity > 0)`) — but an import can never reach it: `parse.ts` refuses a quantity below 1 before a plan is even built (`:460`, `:671`), so `set` through this dialog never carries a 0 |
 
 **Every one of the four commits in one transaction for the whole file** — `deck_import_commit`,
