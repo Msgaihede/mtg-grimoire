@@ -1402,6 +1402,9 @@ describe("the card menu", () => {
         finish: "foil",
         condition: "NM",
         quantity: 1,
+        // The root: this reader has no collection folders, so the finish submenu asserted
+        // above is the whole of the cascade and no folder was ever named (v24).
+        folderId: null,
       }),
     );
   });
