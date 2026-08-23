@@ -13,7 +13,6 @@ import { RarityGem } from "@/components/RarityGem";
 import { VirtualTable, type TableColumn } from "@/components/table/VirtualTable";
 import { useTooltip, type TooltipBinder } from "@/components/tooltip/useTooltip";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
-import { DeckCountCell } from "@/features/collection/DeckCountCell";
 import { cardDraggable } from "@/features/decks/dnd";
 import { CONDITION_LABEL, type Condition } from "@/lib/conditions";
 import { finishLabel, isFinish } from "@/lib/finish";
@@ -24,7 +23,6 @@ import type { Marketplace } from "@/lib/marketplace";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
 import type { SortSpec } from "@/lib/sort";
 import { useAppStore } from "@/lib/store";
-import { DECK_DRIVEN_REASON } from "@/lib/useDeckDrivenCollection";
 import { cn } from "@/lib/utils";
 
 /** The band a flagged row grows by, to say what the reconciler found. */
@@ -50,10 +48,10 @@ function conditionLabel(raw: string): string {
 /**
  * Which copy a row is about, for the accessible name of a control that acts on it.
  *
- * `Foil, NM` where the reader stated a grade and `Foil` where they did not — **a derived row
- * has no condition**, a deck card having nowhere to record one, and interpolating that `null`
- * straight into a template literal reads out as the word "null" beside the finish. The em dash
- * the cell draws is no better here: a dash is a gap on screen and noise in a sentence.
+ * `Foil, NM` where the reader stated a grade and `Foil` where they did not — interpolating a
+ * `null` condition straight into a template literal reads out as the word "null" beside the
+ * finish. The em dash the cell draws is no better here: a dash is a gap on screen and noise
+ * in a sentence.
  */
 function copyLabel(row: CollectionRow): string {
   const finish = finishLabel(row.finish);
@@ -84,7 +82,6 @@ function columnsFor(
   onRemove: (row: CollectionRow) => void,
   marketplace: Marketplace,
   tip: TooltipBinder,
-  deckDriven: boolean,
 ): TableColumn<CollectionRow>[] {
   const asOf = pricesAsOf(marketplace);
   const currency = marketplace.currency;
@@ -179,31 +176,17 @@ function columnsFor(
     {
       key: "finish",
       width: "5.5rem",
-      /**
-       * **The header reads the mode; the cell reads the data.** This one is a statement about
-       * what the column *is* — a derived collection has no condition to put in it at all, so
-       * naming one in a header over 400 rows that can never carry one is the header lying —
-       * and the flag is the only thing that knows that. A *cell* branching the same way would
-       * be a different claim: that a row it was handed has no grade because of a setting,
-       * rather than because the row says so.
-       */
-      header: deckDriven ? "Finish" : "Finish · condition",
+      header: "Finish · condition",
       sortable: true,
       // The one header longer than its column at a narrow width. The accessible name is the
-      // full string either way; the tooltip is for the reader who can see it is cut. Nothing
-      // to say once the mode has shortened it to one word that fits.
-      headerTitle: deckDriven ? undefined : "Finish · condition",
+      // full string either way; the tooltip is for the reader who can see it is cut.
+      headerTitle: "Finish · condition",
       cellClassName: "truncate text-xs text-dim",
       cell: (row) => {
         const condition = row.condition;
-        /* **A derived row states no grade** — a deck card has nowhere to record one, and the
-          column's `NM` default would be a fact nobody stated. So the separator goes with it:
-          `Nonfoil · —` under a header that says only `Finish` promises a second field the
-          column no longer has, and a dangling middle dot reads as a rendering fault.
-
-          **The test is `row.condition === null`, never the mode flag.** The DTO is the fact
-          about *this row*; a cell that read the flag could contradict the data it was handed —
-          a hand-kept row drawn during the render after the setting flipped, or the reverse. */
+        /* A row with no grade draws the finish alone, and the separator goes with it: a
+          dangling middle dot before nothing reads as a rendering fault. The test is the DTO's
+          own `null`, which is the fact about *this row*. */
         if (condition === null) return <>{finishLabel(row.finish)}</>;
         return (
           <>
@@ -242,24 +225,6 @@ function columnsFor(
           min={0}
           label={`Quantity of ${row.name ?? row.cardId} (${copyLabel(row)})`}
           onChange={(next) => onSetQuantity(row, next)}
-          /**
-           * Out of reach while **this row** is derived, and it says why rather than simply
-           * not working. This number is the sum of what the decks hold: the place to change it
-           * is the deck, and a stepper that silently swallowed a press would look broken.
-           *
-           * Greyed rather than removed, and `aria-disabled` rather than `disabled`, because
-           * the reason is the point — both are `src/CLAUDE.md`'s rule and the prop's own doc
-           * carries the argument.
-           *
-           * **`row.deckCount !== null`, never the `deckDriven` flag** — the same rule the
-           * finish cell states above, and for the same reason: `filterKey` folds the mode into
-           * the list query's key and the query uses `keepPreviousData`, so the render right
-           * after a flip to **off** can still be handed the previous mode's rows — `deck_cards`
-           * ids, `deckDriven === false` — while the Rust fence that refuses the write is
-           * already down. A flag-driven stepper would be enabled in exactly that frame; the
-           * row's own `deckCount` is never wrong about what the row is.
-           */
-          disabledReason={row.deckCount !== null ? DECK_DRIVEN_REASON : undefined}
         />
       ),
     },
@@ -312,15 +277,9 @@ function columnsFor(
     },
     {
       key: "actions",
-      /**
-       * 2rem holds an icon button; `4.5rem` holds the words `11 decks` at 0.7rem, which is what
-       * this column carries instead while the collection is derived. The 2.5rem comes off the
-       * name, the only flexing column — and only in the mode where the removal it was sized for
-       * cannot be offered at all.
-       */
-      width: deckDriven ? "4.5rem" : "2rem",
-      // The removal column — and, while the collection is derived, the deck count that stands
-      // where removal was. Nothing to show, and a header a screen reader still needs: an
+      // 2rem holds an icon button, and nothing wider ever goes in this column.
+      width: "2rem",
+      // The removal column. Nothing to show, and a header a screen reader still needs: an
       // unnamed column is announced as "column 6" for every row.
       header: "Actions",
       srOnlyHeader: true,
@@ -331,41 +290,22 @@ function columnsFor(
       // the only thing in the app that does. On a row that still holds cards it would be a
       // one-click way to lose the lot from a list that scrolls under the pointer.
       cell: (row) =>
-        /**
-         * **Two different columns behind one heading, and the row is what decides which.**
-         *
-         * A derived row cannot be removed at all: the copies are in the decks, and the decks
-         * are where they go. That leaves this 2rem column blank on every row — so it answers
-         * the one question a derived row raises instead, which is which decks the copies are
-         * in. `DeckCountCell` draws nothing on a row with no count, so the column is still
-         * empty in the case where it has nothing to say.
-         *
-         * **`row.deckCount !== null`, never `deckDriven`** — the stepper's own comment states
-         * the reason once; this is the other control it applies to. Reading the flag here would
-         * offer the Remove button on a stale derived row the instant the mode flips off, which
-         * is a `deck_cards.id` reaching `collection_remove` for a hidden hand-kept row it was
-         * never about.
-         */
-        row.deckCount !== null ? (
-          <DeckCountCell row={row} />
-        ) : (
-          row.quantity === 0 && (
-            <button
-              type="button"
-              onClick={() => onRemove(row)}
-              aria-label={`Remove ${row.name ?? row.cardId} (${copyLabel(row)}) from your collection`}
-              {...tip("Remove from your collection", { describes: false })}
-              className={cn(
-                REVEAL_ON_HOVER,
-                "grid size-6 place-items-center rounded-md border border-border text-dim",
-                "transition-colors duration-150 hover:border-destructive/60 hover:text-destructive",
-                FOCUS,
-                "motion-reduce:transition-none",
-              )}
-            >
-              <Trash2 className="size-3.5" aria-hidden="true" />
-            </button>
-          )
+        row.quantity === 0 && (
+          <button
+            type="button"
+            onClick={() => onRemove(row)}
+            aria-label={`Remove ${row.name ?? row.cardId} (${copyLabel(row)}) from your collection`}
+            {...tip("Remove from your collection", { describes: false })}
+            className={cn(
+              REVEAL_ON_HOVER,
+              "grid size-6 place-items-center rounded-md border border-border text-dim",
+              "transition-colors duration-150 hover:border-destructive/60 hover:text-destructive",
+              FOCUS,
+              "motion-reduce:transition-none",
+            )}
+          >
+            <Trash2 className="size-3.5" aria-hidden="true" />
+          </button>
         ),
     },
   ];
@@ -439,7 +379,6 @@ export function CollectionTable({
   rowMenu,
   rowMenuKey,
   marketplace,
-  deckDriven = false,
 }: {
   rows: CollectionRow[];
   /** Rows matching the filters, not rows loaded — what assistive tech is told the list is. */
@@ -471,20 +410,6 @@ export function CollectionTable({
   /** Which marketplace the Value column quotes. Passed rather than read here so the table and
    *  the header above it cannot disagree about what they are pricing in. */
   marketplace: Marketplace;
-  /**
-   * Whether these rows are the sum of the reader's decks rather than entries they added.
-   *
-   * Two columns read it, and both are statements about the *column* rather than about a row:
-   * the finish header drops the half of its name nothing under it can fill, and the actions
-   * column answers "which decks" where it would otherwise offer a removal nobody may make.
-   * Everything a **cell** decides is decided from the row — `condition`, `deckCount` — for
-   * the reason the finish cell states at its own site.
-   *
-   * A prop rather than a hook call, and the same trade `marketplace` above makes: the page
-   * reads it once and the table cannot disagree with the note drawn over it. Defaulted, so
-   * every story and every other consumer of this table gets the hand-kept collection.
-   */
-  deckDriven?: boolean;
 }) {
   // Opening a card is a store write and nothing else — `App` owns the pane, so the list
   // never has to know whether one is open, only which card is in it.
@@ -495,7 +420,7 @@ export function CollectionTable({
   return (
     <VirtualTable
       rows={rows}
-      columns={columnsFor(onSetQuantity, onRemove, marketplace, tip, deckDriven)}
+      columns={columnsFor(onSetQuantity, onRemove, marketplace, tip)}
       label="Your collection"
       // A collection total is counted in full, so there is no unknown-count case here.
       total={total}

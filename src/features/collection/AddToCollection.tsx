@@ -9,7 +9,6 @@ import { FINISH_LABEL, type Finish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError } from "@/lib/ipc";
 import { PRESS } from "@/lib/motion";
-import { DECK_DRIVEN_REASON, useDeckDrivenCollection } from "@/lib/useDeckDrivenCollection";
 import { cn } from "@/lib/utils";
 
 /** The printing a quick-add is about. Every surface that shows a card can build one. */
@@ -130,12 +129,6 @@ function AddForm({
   const [anyPrinting, setAnyPrinting] = useState(false);
   const [done, setDone] = useState<Report | null>(null);
   const queryClient = useQueryClient();
-  const { deckDriven } = useDeckDrivenCollection();
-
-  // While the collection is driven by the reader's decks, the backend refuses every write to
-  // it — so the arm of this popup that would make one is inert rather than left to round-trip
-  // into a refusal. The wishlist arm is untouched: nothing about it writes the collection.
-  const collectionBlocked = mode === "collection" && deckDriven;
 
   const add = useMutation({
     mutationFn: () =>
@@ -312,26 +305,15 @@ function AddForm({
           />
           <button
             type="button"
-            onClick={() => {
-              // Presentation (aria-disabled below) says why; this is what actually stops the
-              // write — greying a control is not the same thing as fencing its handler.
-              if (collectionBlocked) return;
-              add.mutate();
-            }}
+            onClick={() => add.mutate()}
             disabled={add.isPending}
-            aria-disabled={collectionBlocked || undefined}
             // The visible word is the verb; the name says where it goes, and starts with
             // the visible word so the button is still addressable by voice (WCAG 2.5.3).
-            // Blocked, it also says *why*, appended to that same name — `aria-disabled` and
-            // never the `disabled` attribute, so a reader sweeping the popup with a screen
-            // reader still finds the reason rather than a button that has left the tab order.
-            aria-label={
-              collectionBlocked ? `Add to ${mode} — ${DECK_DRIVEN_REASON}` : `Add to ${mode}`
-            }
+            aria-label={`Add to ${mode}`}
             className={cn(
               "h-7 rounded-md border border-accent px-3 text-xs text-accent",
               "transition-colors duration-150 hover:bg-accent hover:text-accent-foreground",
-              "disabled:opacity-50 aria-disabled:opacity-50 motion-reduce:transition-none",
+              "disabled:opacity-50 motion-reduce:transition-none",
               FOCUS,
             )}
           >

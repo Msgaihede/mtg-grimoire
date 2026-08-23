@@ -12,7 +12,6 @@ import { CONDITIONS, type Condition } from "@/lib/conditions";
 import { FINISHES, type Finish } from "@/lib/finish";
 import { ipc, type CollectionQuery, type CollectionSortKey } from "@/lib/ipc";
 import { applySort, type SortDir, type SortSpec } from "@/lib/sort";
-import { useDeckDrivenCollection } from "@/lib/useDeckDrivenCollection";
 import { useMarketplace } from "@/lib/useMarketplace";
 
 /**
@@ -151,18 +150,6 @@ export function useCollection() {
   // Which marketplace this list quotes — an input to both queries below, and part of both
   // keys: it decides what a Value cell contains, not merely how it is written.
   const { marketplace } = useMarketplace();
-  /**
-   * Whether these rows are the sum of the reader's decks rather than what they added by hand.
-   *
-   * Read *here*, in the hook both queries are built from, because it is not a display choice
-   * the page can make on its own: it decides which rows the backend answers with, so a page
-   * that flipped it without moving the key would be served the other mode's cached rows —
-   * against local SQLite, instantly, with nothing on screen to notice. See {@link filterKey}.
-   *
-   * Handed back out so the page, its filter bar and its table all read one value rather than
-   * calling the hook three times and drifting for a render.
-   */
-  const { deckDriven } = useDeckDrivenCollection();
   const [text, setText] = useState("");
   const [format, setFormat] = useState("");
   const [colors, setColors] = useState<readonly ColorKey[]>([]);
@@ -193,21 +180,8 @@ export function useCollection() {
   const manaParam = manaValues.length > 0 ? [...manaValues].sort((a, b) => a - b) : undefined;
   const finishParam =
     finishes.length > 0 ? FINISHES.filter((f) => finishes.includes(f)) : undefined;
-  /**
-   * Dropped entirely while the collection is derived, and that is a correctness fix rather
-   * than a tidy-up: **every derived row's condition is `NULL`**, a deck card having nowhere to
-   * record one, so this filter can only ever match zero rows there. Left on the wire, a grade
-   * the reader picked before they flipped the setting would empty the page from a chip that is
-   * no longer drawn — an empty list with nothing on screen responsible for it.
-   *
-   * One expression covers all three consequences, which is why it is done here rather than at
-   * each of them: the request stops carrying it, {@link filterKey}'s segment goes blank with
-   * it, and `activeCount` below stops counting a filter nobody can see or clear.
-   */
   const conditionParam =
-    !deckDriven && conditions.length > 0
-      ? CONDITIONS.filter((c) => conditions.includes(c))
-      : undefined;
+    conditions.length > 0 ? CONDITIONS.filter((c) => conditions.includes(c)) : undefined;
 
   const filters: Omit<CollectionQuery, "limit" | "offset" | "sort"> = {
     // Blank strings are dropped rather than sent: the backend reads them as unset anyway,
@@ -268,13 +242,6 @@ export function useCollection() {
     // sets, so a key that spelled both `""` would serve the complement from the other's cache.
     needsReview === undefined ? "" : needsReview ? "review" : "clear",
     marketplace.id,
-    // **The mode, and it has to be in here rather than beside the list key.** The two modes
-    // are two different sets of rows over the same filters — one the reader's own entries,
-    // one the sum of their decks — so a key that spelled both the same way would serve the
-    // page cached for the other one the moment the setting was flipped, and the header's nine
-    // aggregates with it. Both queries below are built from this array, which is why one
-    // segment moves the table and the figures above it together.
-    deckDriven ? "decks" : "",
   ];
 
   // `["collection", …]` on both, so the one `invalidateQueries({ queryKey: ["collection"] })`
@@ -377,12 +344,7 @@ export function useCollection() {
       manaValues,
       manaX,
       finishes,
-      // `conditionParam`'s reason, from the counting end: while the chips are not drawn, a
-      // grade still held in state is a filter the reader can neither see nor clear, and a
-      // Reset all badge reading 1 over a row of chips that are all off is a control counting
-      // something invisible. `?? []` rather than a second `deckDriven` test, so the two can
-      // never disagree about what was sent.
-      conditions: conditionParam ?? [],
+      conditions,
       needsReview,
     }),
     /** Clear every filter at once, including the search box. The sort is not a filter and
@@ -404,15 +366,6 @@ export function useCollection() {
      * two queries this is part of the key of.
      */
     marketplace,
-    /**
-     * Whether this list is the sum of the reader's live decks rather than rows they added.
-     *
-     * The page draws its mode note and its empty state from this, the filter bar hides the
-     * Condition chips by it, and the table shortens one column header. **Nothing branches a
-     * *row* on it** — a row's own `condition` and `deckCount` are the facts about the data it
-     * was handed, and a cell that read this flag instead could disagree with them.
-     */
-    deckDriven,
     /**
      * Every filter as one object, without the paging — what a request for "the whole filtered
      * list" needs and a request for "the page on screen" does not. `useExportScope`'s sweep is
