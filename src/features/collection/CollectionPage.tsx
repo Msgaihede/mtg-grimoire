@@ -863,14 +863,17 @@ export function CollectionPage() {
    * confirmed the reachability: removing this clause fails nothing, where removing either of the
    * other two fails exactly one test each.
    *
-   * *The source must not be a deck group.* This one has no backend fence, and that is exactly why
-   * it is written down: the destination would be a perfectly legal user folder, so
-   * `collection_set_folder` would happily move the copy **out of the deck's custody without
-   * touching `deck_cards`** — the mirror image of the bug the paragraph above prevents, and worse,
-   * because the deck would go on listing a card whose copies have walked off. Copies leave a deck
-   * through `deck_to_collection`, which decrements the list in the same transaction. `Recently
-   * removed` is deliberately not in this set: dragging *out* of the holding area is the whole of
-   * what #209 asked for.
+   * *The source must not be a deck group.* **`set_entry_folder` fences this end too**
+   * (`ENTRY_IN_A_DECK`, a sibling of `FOLDER_NOT_YOURS` rather than a reuse of it — that one is
+   * about the destination folder, this one about the row), so what this clause buys is the
+   * refusal *before* the drop rather than a sentence after it. The reason both ends exist is
+   * unchanged and is why neither may be dropped: the destination would be a perfectly legal user
+   * folder, so an unfenced `collection_set_folder` would move the copy **out of the deck's
+   * custody without touching `deck_cards`** — the mirror image of the bug the paragraph above
+   * prevents, and worse, because the deck would go on listing a card whose copies have walked
+   * off. Copies leave a deck through `deck_to_collection`, which decrements the list in the same
+   * transaction. `Recently removed` is deliberately not in this set, at either end: dragging
+   * *out* of the holding area is the whole of what #209 asked for.
    */
   const canFile = useCallback(
     (drag: CollectionDrag, to: number | null) => {

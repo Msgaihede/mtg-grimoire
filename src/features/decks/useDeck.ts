@@ -329,10 +329,20 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
    * the shape PR 2 shipped a ghost row for: the collection's list, its summary, both folder
    * cards and the folder tree are all now wrong, and the deck root reaches none of them.
    *
-   * **Called only when the outcome says copies actually moved.** A deck card nobody owned
-   * answers `quantity: 0` and `entryId: null` — nothing in any folder was behind it, so nothing
-   * in the collection changed and a refetch could only re-answer what is on screen. The
+   * **Two writes here call it, and each is as precise as its own answer allows.**
+   *
+   * The **cut** is called only when the outcome says copies actually moved: a deck card nobody
+   * owned answers `quantity: 0` and `entryId: null` — nothing in any folder was behind it, so
+   * nothing in the collection changed and a refetch could only re-answer what is on screen. The
    * arguments that went in cannot tell the two apart; only {@link MoveOutcome} can.
+   *
+   * The **clear** ({@link clearCategory}) is the second, and it cannot be that precise:
+   * `deck_category_clear` answers how many `deck_cards` rows it emptied, never how many copies
+   * moved, so a pile of cards the reader never owned reads the same as one they did. What it can
+   * say is when nothing moved *for certain* — a `theory` clear (a plan holds no cards, and the
+   * backend's release is fenced on `live`) and a clear that emptied no rows at all — and it is
+   * gated on both. The remaining over-fire is one refetch against a ghost row, which is the
+   * right way round.
    */
   const invalidateCollection = () => {
     void queryClient.invalidateQueries({ queryKey: ["collection"] });
@@ -585,10 +595,16 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
    *
    * **One command, not a `setQuantity(…, 0)` per row**, and the reason is the one that made
    * `deck_import_commit` a command: the rows are all in hand here, so the loop would compile —
-   * and it would be one transaction, one allocator run and one `["decks"]` invalidation *per
-   * card*, with the deck re-read forty times while the reader watches. It would also be forty
-   * history rows for one press, and any one of them could be refused halfway leaving the pile
-   * half-empty with no way to say so.
+   * and it would be one transaction and one `["decks"]` invalidation *per card*, with the deck
+   * re-read forty times while the reader watches. It would also be forty history rows for one
+   * press, and any one of them could be refused halfway leaving the pile half-empty with no way
+   * to say so.
+   *
+   * **On the live list it is a collection write too**, and the second one in this file:
+   * `deck::clear_category` releases every `live` row's backing copies into `Recently removed`
+   * before the `DELETE`, through the same walk the cut goes through. See
+   * {@link invalidateCollection} for what it costs to miss that, and for why the two gates below
+   * are the whole of what this press can honestly say.
    *
    * **No optimistic patch**, unlike the stepper beside it. The stepper is optimistic because it
    * is *held down* — a controlled control read back from the cache mid-press sends the same
@@ -601,12 +617,17 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
    */
   const clearCategory = useMutation({
     mutationFn: (categoryId: number) => ipc.deckCategoryClear(opened(id), categoryId, variant),
-    onSuccess: invalidate,
+    onSuccess: (cleared) => {
+      invalidate();
+      if (variant === "live" && cleared > 0) invalidateCollection();
+    },
   });
 
-  /** Move every copy from one category to another. A claim released or made even though
-   *  nothing was added or removed — an inactive category reserves nothing — so it invalidates
-   *  like the rest. */
+  /** Move every copy from one category to another. It moves no copy out of the deck's group —
+   *  the cards are still in this deck, one pile over — but a pile can be switched off, and an
+   *  inactive pile is handed nothing from that group, so every `ownedQuantity` in the deck can
+   *  move even though nothing was added or removed. `["decks"]` like the rest, and nothing
+   *  wider. */
   const moveCard = useMutation({
     mutationFn: ({
       cardId,
@@ -736,9 +757,11 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
    * worth the beat it saves: the row keeps saying what the last read said until the next one
    * lands.
    *
-   * `["decks"]` like every card write, for the same reason: `allocate_deck` runs inside the
-   * swap's transaction, and the allocator takes the exact printing first — so the copies this
-   * deck reserves can change even though its counts did not.
+   * `["decks"]` like every card write, and nothing wider: since schema v25 a swap rewrites the
+   * `deck_cards` row's `card_id` and touches no collection table at all, so no copy moves and
+   * no folder changes. What *can* change is the number this deck shows — owned/missing is
+   * matched by oracle id, so it is the same answer for both printings, and a fold onto a
+   * printing the pile already held moves two rows into one.
    *
    * **And `["decks"]` again when it is refused, which no other write here does.** The reason is
    * where this one is pressed: the control is on the card pane's printings rows, and the pane

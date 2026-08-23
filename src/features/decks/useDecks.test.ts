@@ -96,12 +96,15 @@ const staleRoots = (c: QueryClient): string[] =>
     .sort();
 
 /**
- * `allocate_deck` writes `deck_allocations` and never once touches `collection_entries`, so the
- * three other ownership roots are provably unmoved by anything in this file and firing them
- * would be three refetches that can only answer what is already on screen.
+ * **Since schema v25 four of these five writes move `collection_folders` rows**, so the
+ * collection root is not optional: `deck_create` and `deck_duplicate` insert the deck's group,
+ * a rename renames it, and `deck_delete` files every copy the group held into `Recently removed`
+ * and drops the folder. The wishlist and the card search are still provably unmoved — no
+ * quantity changes and no printing is added or dropped — so firing those would be refetches
+ * that can only answer what is already on screen.
  */
 describe("useDecks invalidation", () => {
-  it("marks only the decks stale when a deck is deleted", async () => {
+  it("marks the decks and the collection stale when a deck is deleted", async () => {
     seedOwned(client);
     const { result } = renderHook(() => useDecks(), { wrapper });
     await waitFor(() => expect(result.current.decks).toEqual([BURN]));
@@ -112,7 +115,7 @@ describe("useDecks invalidation", () => {
 
     await result.current.remove.mutateAsync(4);
 
-    await waitFor(() => expect(staleRoots(client)).toEqual(["decks"]));
+    await waitFor(() => expect(staleRoots(client)).toEqual(["collection", "decks"]));
   });
 });
 
@@ -158,18 +161,46 @@ describe("useDecks", () => {
   });
 
   /**
-   * A deck write moves no card between a binder and a shelf: `allocate_deck` writes
-   * `deck_allocations` and never once touches `collection_entries` (spec §6's
-   * non-destructive model). So the collection and the wishlist are left alone rather than
-   * refetched — the discipline the quick-add already applies in the other direction.
+   * **The four writes that move a `collection_folders` row say so**, which is the gap this file
+   * carried from schema v25 until 2026-08-23: `deck_create` and `deck_duplicate` insert the
+   * deck's group, `deck_delete` files every copy it held into `Recently removed` and drops the
+   * folder, and a rename renames it. The collection page's tree, its list, its summary and both
+   * folder cards are all wrong afterwards, and `["decks"]` reaches none of them.
    */
-  it("leaves the collection and the wishlist alone", async () => {
+  it("refreshes the collection after the four writes that move a folder", async () => {
+    const { result } = renderHook(() => useDecks(), { wrapper });
+    await waitFor(() => expect(result.current.decks).toEqual([BURN]));
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    for (const write of [
+      () => result.current.create.mutateAsync({ name: "Burn", formatKey: "modern" }),
+      () => result.current.remove.mutateAsync(4),
+      () => result.current.duplicate.mutateAsync(4),
+      () => result.current.update.mutateAsync({ id: 4, patch: { name: "Burn II" } }),
+    ]) {
+      invalidate.mockClear();
+      await write();
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ["collection"] });
+    }
+  });
+
+  /**
+   * And the two that do not, which is the half worth pinning as an absence. A deck's **group**
+   * is renamed by a rename and by nothing else, so a patch that names no `name` — archiving,
+   * a cover, a format — moves nothing in any folder; and `deck_set_folder` files the deck into
+   * a `deck_folders` row, which is the gallery's tree and not the collection's. The wishlist is
+   * untouched by all five: no wish's `ownedQuantity` can move without a quantity moving.
+   */
+  it("leaves the collection alone for a patch that is not a rename, and the wishlist always", async () => {
     const { result } = renderHook(() => useDecks(), { wrapper });
     await waitFor(() => expect(result.current.decks).toEqual([BURN]));
     const invalidate = vi.spyOn(client, "invalidateQueries");
 
     await result.current.update.mutateAsync({ id: 4, patch: { archived: true } });
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["collection"] });
 
+    invalidate.mockClear();
+    await result.current.setFolder.mutateAsync({ id: 4, folderId: 1 });
     expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["collection"] });
     expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["wishlist"] });
   });

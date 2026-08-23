@@ -334,6 +334,40 @@ describe("useDeck", () => {
     expect(deckSetCardQuantity).not.toHaveBeenCalled();
   });
 
+  /**
+   * **A clear of the live list moves collection rows**, which is the second write in this file
+   * that does — `deck::clear_category` releases every `live` row's backing copies into `Recently
+   * removed` before the `DELETE`, through the same walk the cut uses. So it takes the
+   * collection's root, exactly as the cut does, and for the ghost-row reason written on
+   * `invalidateCollection`.
+   */
+  it("marks the collection stale when a live pile is cleared", async () => {
+    seedOwned(client);
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+    seedOwned(client);
+    expect(staleRoots(client)).toEqual([]);
+
+    await result.current.clearCategory.mutateAsync(MAIN.id);
+
+    await waitFor(() => expect(staleRoots(client)).toEqual(["collection", "decks"]));
+  });
+
+  /**
+   * And a **theory** clear does not, which is the absence worth pinning: a plan holds no cards,
+   * so the backend's release is fenced on `variant == 'live'` and nothing in any folder moves.
+   */
+  it("leaves the collection alone when a theory pile is cleared", async () => {
+    seedOwned(client);
+    const { result } = renderHook(() => useDeck(4, "theory"), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+    seedOwned(client);
+
+    await result.current.clearCategory.mutateAsync(MAIN.id);
+
+    await waitFor(() => expect(staleRoots(client)).toEqual(["decks"]));
+  });
+
   /** A deck the gallery has not refreshed since another view deleted it. `null` is the
    *  answer, not an error — and it is `deck: null` rather than a hook that throws. */
   it("answers with nothing for a deck that is gone", async () => {

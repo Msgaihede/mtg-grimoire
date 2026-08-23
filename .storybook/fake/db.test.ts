@@ -3449,6 +3449,49 @@ describe("moving copies across the deck boundary", () => {
   });
 
   /**
+   * **A cut reaches the copies when the list names another printing**, which is the state
+   * `deck_swap_printing` leaves behind — it rewrites the deck row's `cardId` and touches no
+   * collection table — and the state schema v25's conversion writes wholesale, because the old
+   * allocator matched candidates by **oracle id**. Matched on the exact printing alone the cut
+   * moves nothing: the deck card goes and the copies stay filed under a deck that no longer
+   * lists them. `deck::release_group_copies` matches the oracle card, which is
+   * `owned_by_oracle`'s "a Bolt is a Bolt" read from the other end.
+   */
+  it("cuts through to another printing of the same card in the group", () => {
+    const db = boundary({
+      collectionEntries: [entry({ id: 1, cardId: BOLT.id, quantity: 2, folderId: groupId(1) })],
+      deckCards: [deckCard({ id: 1, cardId: BOLT_2X2.id, categoryKind: "main", quantity: 2 })],
+    });
+
+    const out = writeHandlers(db).deck_to_collection({ deckCardId: 1, quantity: 2 });
+
+    expect(out.quantity).toBe(2);
+    expect(copiesIn(db, REMOVED_FOLDER)).toBe(2);
+    expect(copiesIn(db, groupId(1))).toBe(0);
+  });
+
+  /**
+   * And the fallback is a fallback: where the group holds the very printing the list names, that
+   * is the row that leaves and the reader's other copy stays where they put it. This is what
+   * keeps every cut of a card nobody ever swapped exactly what it was.
+   */
+  it("takes the exact printing before another of the same card", () => {
+    const db = boundary({
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT.id, quantity: 1, folderId: groupId(1) }),
+        entry({ id: 2, cardId: BOLT_2X2.id, quantity: 1, folderId: groupId(1) }),
+      ],
+      deckCards: [deckCard({ id: 1, cardId: BOLT_2X2.id, categoryKind: "main", quantity: 1 })],
+    });
+
+    writeHandlers(db).deck_to_collection({ deckCardId: 1, quantity: 1 });
+
+    const inRemoved = db.collectionEntries.filter((e) => e.folderId === REMOVED_FOLDER);
+    expect(inRemoved.map((e) => e.cardId)).toEqual([BOLT_2X2.id]);
+    expect(copiesIn(db, groupId(1))).toBe(1);
+  });
+
+  /**
    * Added from search as "I need to buy this". There is no backing copy, so nothing lands on the
    * reader's desk — and this is the whole reason no per-deck-card provenance flag is needed: the
    * group **is** the provenance record.
@@ -6882,6 +6925,15 @@ describe("the four clears", () => {
     expect(db.deckAudit).toHaveLength(0);
     // A deck is not the collection's owner. The reader still owns every card.
     expect(db.collectionEntries).toHaveLength(entries);
+    // **And the groups go with the decks, while the copies in them go to `Recently removed`**
+    // — `delete_deck`'s destination, which this agrees with deliberately: a wiped deck's cards
+    // are exactly cards taken out of a deck. `collection_folders.deck_id` CASCADEs, so leaving
+    // the groups standing would draw a collection tree full of folders for decks that are gone.
+    expect(db.collectionFolders.filter((f) => f.kind === "deck")).toHaveLength(0);
+    const removed = db.collectionFolders.find((f) => f.kind === "removed")!;
+    expect(db.collectionEntries.filter((e) => e.folderId === removed.id).length).toBeGreaterThan(
+      0,
+    );
   });
 
   it("reports what the cache freed, and answers zero the second time", () => {

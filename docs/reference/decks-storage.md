@@ -361,8 +361,14 @@ preferred_finish`'s nullability one table over.
   **The run list is not replaced by a shorter run list; it is replaced by nothing.** There is no
   derived table to keep in step, so no write "runs the allocator" and none can forget to. What
   moves a row *across* the deck boundary is exactly the pair in `collection_alloc.rs` —
-  `collection_to_deck` and `deck_to_collection` — plus `delete_deck`, which re-files a group's
-  cards into `Recently removed`. Everything else that changes the number is an ordinary
+  `collection_to_deck` and `deck_to_collection` — plus the four bulk presses that empty a group
+  the reader is throwing away, every one of them into `Recently removed`: `delete_deck`,
+  `deck_meta::delete_category`'s cascade arm, `deck::clear_category`, and Settings'
+  `reset::clear_decks`. The three that release *one card at a time* share
+  `deck::release_group_copies`, the crate's one walk over a group's rows, which matches on the
+  oracle card with the exact printing first; the two that empty a whole folder — `delete_deck`
+  and `clear_decks` — walk the sub-tree and re-file every row through `refile_entry`, the
+  `delete_folder` rule reused. Everything else that changes the number is an ordinary
   collection write landing on a row that happens to be filed in a group (a stepper, an edit, the
   reconciler's fold), and it is answered at the next read because the next read is a `sum()`.
   **No deck write changes what a deck owns as a side effect any more**, which is the debugging

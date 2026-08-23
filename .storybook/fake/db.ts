@@ -7477,14 +7477,27 @@ export function writeHandlers(db: FakeDb) {
       const entryFinish = collectionFinish(row.finish);
       // **A deck with no group holds nothing rather than refusing.** Only the other direction
       // needs somewhere to *put* copies; a reader must always be able to cut a card.
+      //
+      // **Matched on the oracle card, exact printing and finish first** —
+      // `deck::release_group_copies`, which the crate now calls from here rather than spelling
+      // this walk twice. `deck_swap_printing` and `deck_set_card_finish` rewrite the deck row's
+      // identity and touch no collection table, so an exact-only match finds nothing after a
+      // swap and the copies stay filed under a deck that no longer lists them. A card whose
+      // printing has left `cards` reads `null` and falls back to the exact arm, which needs no
+      // `cards` row at all.
       const group = deckGroup(db, row.deckId);
+      const wantOracle = cardById(db, row.cardId)?.oracleId ?? null;
+      const rank = (e: FakeEntry): number =>
+        e.cardId === row.cardId ? (e.finish === entryFinish ? 0 : 1) : 2;
       const backing = group
         ? db.collectionEntries
-            .filter(
-              (e) =>
-                e.folderId === group.id && e.cardId === row.cardId && e.finish === entryFinish,
-            )
-            .sort((a, b) => a.id - b.id)
+            .filter((e) => {
+              if (e.folderId !== group.id) return false;
+              if (e.cardId === row.cardId) return true;
+              const oracle = cardById(db, e.cardId)?.oracleId ?? null;
+              return oracle !== null && oracle === wantOracle;
+            })
+            .sort((a, b) => rank(a) - rank(b) || a.id - b.id)
         : [];
 
       // Resolved only when there is something to file, so a store missing the folder still lets a
@@ -9501,12 +9514,34 @@ export function writeHandlers(db: FakeDb) {
      *
      * `covers` counts the decks showing a custom picture, which is what has a file in the app.
      * A `card_art` deck has none, so counting decks would report pictures that were never there.
+     *
+     * **The copies in every deck's group go to `Recently removed`, and the groups go with the
+     * decks** — `deck_delete`'s destination, agreed with deliberately: a wiped deck's cards are
+     * exactly cards taken out of a deck, and the holding area is the one folder whose whole
+     * meaning is that. The crate refiles them **by hand and before the `DELETE`**, because
+     * `collection_entries.folder_id`'s `ON DELETE SET NULL` would rewrite the eleventh term of
+     * the grain with nothing saying what it will land on; `collection_folders.deck_id` CASCADEs,
+     * so the groups themselves are the deck's and go. One at a time, through the same merge, for
+     * `delete_folder`'s reason: two decks' groups can hold one grain, and the holding area may
+     * already hold it from a cut last week.
      */
     decks_clear: (): DecksCleared => {
       refuseIfBusy(db);
       const decks = db.decks.length;
       const folders = db.deckFolders.length;
       const covers = db.decks.filter((d) => d.coverKind === COVER_CUSTOM).length;
+      const groups = db.collectionFolders.filter((f) => f.kind === COLLECTION_DECK_KIND);
+      if (groups.length > 0) {
+        const groupIds = new Set(groups.map((f) => f.id));
+        const waiting = db.collectionEntries.filter(
+          (e) => e.folderId !== null && groupIds.has(e.folderId),
+        );
+        if (waiting.length > 0) {
+          const removed = removedFolder(db);
+          for (const entry of waiting) refileEntry(db, entry.id, removed.id);
+        }
+        db.collectionFolders = db.collectionFolders.filter((f) => !groupIds.has(f.id));
+      }
       db.decks = [];
       db.deckFolders = [];
       db.deckCards = [];

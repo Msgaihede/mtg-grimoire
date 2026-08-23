@@ -462,8 +462,15 @@ pub fn tag_name_key(name: &str) -> String {
 /// and `theory`, what it is being built toward. CHECK-constrained on `deck_cards.variant`
 /// and `deck_audit.variant`, and part of [`DECK_CARD_GRAIN`] — the reason a change tried out
 /// in Theory is a different row from the Live one it is being tried against, never a draft
-/// that could silently overwrite it. `deck::allocate_deck` reserves collection copies for
-/// `live` only: a theory list is a plan, and a plan claims nothing.
+/// that could silently overwrite it.
+///
+/// **A theory list is a plan, and a plan holds no cards.** That sentence used to read
+/// *"`deck::allocate_deck` reserves collection copies for `live` only"*, naming a function
+/// schema v25 deleted along with the ledger it wrote. Nothing reserves anything now: a deck
+/// holds a card because a `collection_entries` row sits in that deck's group, and the two
+/// places that draw the conclusion for `theory` say so themselves — `deck::attribute_owned`
+/// zeroes every theory row explicitly, and
+/// [`crate::collection_alloc::THEORY_HOLDS_NOTHING`] refuses to move copies for one.
 pub const DECK_VARIANTS: [&str; 2] = ["live", "theory"];
 
 /// Where a card can be played, as Scryfall spells it — the vocabulary of `cards.games` and,
@@ -2482,13 +2489,18 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             // The source can already be gone: an earlier claim on the same row may have taken
             // every copy, and a row holding nothing is deleted rather than left at zero (v24's
             // rule). `.optional()` rather than an unwrap, because that is a normal outcome.
-            let held: Option<i64> = tx
+            //
+            // `tradelist_quantity` is read here with the quantity because the split has to
+            // divide it — see the two clamps below.
+            let source: Option<(i64, i64)> = tx
                 .query_row(
-                    "SELECT quantity FROM collection_entries WHERE id = ?1",
+                    "SELECT quantity, tradelist_quantity FROM collection_entries WHERE id = ?1",
                     params![entry_id],
-                    |r| r.get(0),
+                    |r| Ok((r.get(0)?, r.get(1)?)),
                 )
                 .optional()?;
+            let held = source.map(|(q, _)| q);
+            let offered = source.map_or(0, |(_, t)| t);
             // **The clamp, and it is not optional.** The old ledger could out-claim a row that
             // was later stepped down — nothing refused it, because `deck::owned_by_oracle`
             // applied `min(a.quantity, e.quantity)` at *read* time and the stored overclaim
@@ -2498,6 +2510,27 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             if take == 0 {
                 continue;
             }
+            // **The trade list is split, never copied**, and this is the second clamp the rung
+            // owes. `tradelist_quantity` says how many of *these* copies are offered for trade;
+            // carrying the number verbatim onto the placement and leaving the source's alone
+            // would make a row of 4 offered 2, split in half, into two rows of 2 **each**
+            // offering 2 — the reader promising four copies they do not have, with both halves
+            // holding `tradelist > quantity`. Nothing in the database refuses that: there is no
+            // CHECK tying the two columns, so it would commit in silence, and a rung is
+            // one-shot. Every writer that runs afterwards clamps against exactly this invariant
+            // — [`crate::collection::add_entry`], `set_quantity`, `update_entry` and
+            // [`crate::collection_folders::take_copies`], whose doc says it in one line:
+            // *"Duplicating it would put a card on the trade list twice by moving it."*
+            //
+            // The arithmetic is `take_copies`' own: the copies that travel take
+            // `min(offered, take)` and the remainder keeps what is left. **Each half is then
+            // clamped to its own quantity a second time**, which matters only for a database
+            // that already held `tradelist > quantity` — nothing this crate writes can, but a
+            // hand-edited row can, and a conversion that carried such a row forward would
+            // manufacture the very state it is here to avoid. Both clamps can only leave the
+            // total where it was or take it down; neither can grow it.
+            let moved_trade = offered.min(take);
+            let kept_trade = (offered - moved_trade).min(held.unwrap_or(0) - take);
             let folder: i64 = tx.query_row(
                 "SELECT id FROM collection_folders WHERE deck_id = ?1",
                 params![deck_id],
@@ -2513,6 +2546,14 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             // `ON CONFLICT` rather than a plain insert because two claims on one entry from
             // **one** deck are one placement (two decks are two placements, which the folder
             // term keeps apart). It is the eleven-term grain v24 built, verbatim.
+            //
+            // **The `DO UPDATE` sums the trade list beside the quantity**, for the same reason
+            // [`crate::collection::fold_entry`] does: two rows that merge are one pile, and
+            // what each was offering is still offered. Leaving that column at the survivor's
+            // value would quietly *drop* the arriving row's promise, which is the safe
+            // direction but not the true one — and the sum cannot break the invariant either
+            // way, since each side arrives already clamped to its own quantity and the
+            // quantities sum in the same statement.
             tx.execute(
                 "INSERT INTO collection_entries
                      (card_id, set_code, collector_number, lang, finish, condition,
@@ -2521,7 +2562,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
                       altered, signed, proxy, misprint, grading, tags, notes, needs_review,
                       folder_id, created_at, updated_at)
                  SELECT card_id, set_code, collector_number, lang, finish, condition,
-                        condition_original, ?2, tradelist_quantity, purchase_price,
+                        condition_original, ?2, ?4, purchase_price,
                         purchase_currency, acquired_at, acquisition_source, serial_number,
                         altered, signed, proxy, misprint, grading, tags, notes, needs_review,
                         ?3, created_at, unixepoch()
@@ -2530,18 +2571,23 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
                               misprint, coalesce(serial_number, ''), coalesce(grading, ''),
                               coalesce(folder_id, 0))
                  DO UPDATE SET quantity = quantity + excluded.quantity,
+                               tradelist_quantity = tradelist_quantity
+                                                    + excluded.tradelist_quantity,
                                updated_at = unixepoch()",
-                params![entry_id, take, folder],
+                params![entry_id, take, folder, moved_trade],
             )?;
-            // And the source loses exactly what left it — never more, never less. It is
-            // deleted at zero rather than left standing empty, for v24's reason: with the
-            // folder in the grain, a row holding no copies is indistinguishable from a row
-            // somebody filed and emptied.
+            // And the source loses exactly what left it — never more, never less — including
+            // the share of its trade list that travelled. It is deleted at zero rather than
+            // left standing empty, for v24's reason: with the folder in the grain, a row
+            // holding no copies is indistinguishable from a row somebody filed and emptied.
+            // (The `DELETE` below takes the trade list with it, so a row emptied of copies
+            // cannot leave a promise standing.)
             tx.execute(
                 "UPDATE collection_entries
-                    SET quantity = quantity - ?2, updated_at = unixepoch()
+                    SET quantity = quantity - ?2, tradelist_quantity = ?3,
+                        updated_at = unixepoch()
                   WHERE id = ?1",
-                params![entry_id, take],
+                params![entry_id, take, kept_trade],
             )?;
             tx.execute(
                 "DELETE FROM collection_entries WHERE id = ?1 AND quantity = 0",
@@ -8609,6 +8655,22 @@ pub(crate) mod tests {
         .unwrap()
     }
 
+    /// The same row with copies **on the trade list** — [`seed_entry`] plus the one column a
+    /// split can silently duplicate, since no `CHECK` ties `tradelist_quantity` to `quantity`
+    /// and nothing would go red if it did.
+    fn seed_entry_traded(conn: &Connection, card_id: &str, quantity: i64, tradelist: i64) -> i64 {
+        conn.query_row(
+            "INSERT INTO collection_entries
+                (card_id,set_code,collector_number,lang,finish,condition,quantity,
+                 tradelist_quantity,created_at,updated_at)
+             VALUES (?1,'lea','161','en','nonfoil','NM',?2,?3,unixepoch(),unixepoch())
+             RETURNING id",
+            rusqlite::params![card_id, quantity, tradelist],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
     /// The same row with a story on it — the columns a split must carry onto the placement
     /// rather than handing the deck a bare row.
     fn seed_entry_full(
@@ -8734,6 +8796,53 @@ pub(crate) mod tests {
             })
             .unwrap();
         assert_eq!(total, 1, "one copy in, one copy out");
+    }
+
+    /// The trade list is a **promise about copies**, so a split divides it and can never copy
+    /// it — [`crate::collection_folders::take_copies`]' rule, which the rung has to spell for
+    /// itself because it splits rows before that function's table shape exists to be called.
+    ///
+    /// **Nothing in the database would catch the other answer.** There is no CHECK tying
+    /// `tradelist_quantity` to `quantity`, so a placement and a remainder that each claim the
+    /// whole trade list is a state the rung can commit silently — and every writer that comes
+    /// afterwards (`add_entry`, `set_quantity`, `update_entry`, `take_copies`) clamps against
+    /// exactly that invariant, so the upgrade would be the one thing in the crate that breaks
+    /// it. **A rung is one-shot**: it would be wrong on every database that ever upgrades.
+    #[test]
+    fn v25_splits_the_tradelist_rather_than_duplicating_it() {
+        let conn = Connection::open_in_memory().unwrap();
+        schema_at_24(&conn);
+        let deck = seed_deck(&conn, "Mono-Red");
+        // Four copies, three of them offered for trade; the deck claims two of the four.
+        let entry = seed_entry_traded(&conn, "bolt", 4, 3);
+        seed_allocation(&conn, deck, entry, 2);
+
+        migrate(&conn).unwrap();
+
+        let rows: Vec<(i64, i64)> = {
+            let mut stmt = conn
+                .prepare("SELECT quantity, tradelist_quantity FROM collection_entries ORDER BY id")
+                .unwrap();
+            let read = stmt
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap();
+            read
+        };
+        assert_eq!(rows.len(), 2, "the row splits: a placement and a remainder");
+        for (quantity, tradelist) in &rows {
+            assert!(
+                tradelist <= quantity,
+                "a trade list bigger than the pile it is drawn from is not a promise: \
+                 {tradelist} of {quantity}"
+            );
+        }
+        let offered: i64 = rows.iter().map(|(_, t)| t).sum();
+        assert_eq!(
+            offered, 3,
+            "the promise is divided between the halves, never handed to both"
+        );
     }
 
     /// A split must not hand the deck a bare row.

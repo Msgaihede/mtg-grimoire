@@ -145,14 +145,15 @@ export function useDeckMeta(deckId: number | null, variant: DeckVariant = DEFAUL
 
   /**
    * The whole `["decks"]` root, from every write here — `useDeck`'s rule, and it is load-bearing
-   * for two of these in particular.
+   * for `setCategoryActive` in particular.
    *
-   * `setCategoryActive` and `deleteCategory` **reallocate** inside their own transaction: the
-   * switch is what decides whether a card is claimed at all, so flipping it changes what this
-   * deck has reserved without touching a single card, and every other deck's `ownedQuantity`
-   * can move with it. The rest (a rename, a reorder, every tag write) change what a pile is
-   * *called* and nothing about what is in it — they take the same root anyway, because the
-   * editor's columns are drawn from a category list this just rewrote.
+   * `setCategoryActive` changes what the deck **counts**: an inactive pile counts toward nothing
+   * and is handed no copies from the deck's group, so flipping the switch moves every
+   * `ownedQuantity` in the deck without touching a single card. The rest (a rename, a reorder,
+   * every tag write) change what a pile is *called* and nothing about what is in it — they take
+   * the same root anyway, because the editor's columns are drawn from a category list this just
+   * rewrote. (This paragraph said the two of them **reallocate**; schema v25 deleted the
+   * allocator, and what a deck owns is now a sum over the rows filed in its group.)
    *
    * **On error as well as on success**, on the definition rather than on a call site. Every
    * refusal here is either a busy database or a deck, category or tag that another surface has
@@ -163,6 +164,28 @@ export function useDeckMeta(deckId: number | null, variant: DeckVariant = DEFAUL
     void queryClient.invalidateQueries({ queryKey: ["decks"] });
   };
   const writes = { onSuccess: invalidate, onError: invalidate };
+
+  /**
+   * The collection's root as well — for the one write here that moves a collection row.
+   *
+   * Deleting a pile **with no destination** cascades its `deck_cards` rows away, and the copies
+   * the deck's group was holding behind the `live` ones are filed into `Recently removed` in the
+   * same transaction (`deck_meta::delete_category`'s cascade arm, through
+   * `deck::release_group_copies`). That is a row leaving one folder and often *merging into
+   * another and being deleted*, so the collection's list, its summary, both folder cards and the
+   * folder tree are all wrong afterwards and the deck root reaches none of them —
+   * `useDeck.invalidateCollection`'s argument, at the second site that needs it. And marking is
+   * not enough on its own: `lib/query.ts` caches 30 s, so a mounted observer that is merely
+   * stale never refetches.
+   *
+   * **The move arm takes it not at all, and that absence is the rule rather than a saving.**
+   * Those cards are still in this deck, one pile over, so the group is still exactly where their
+   * copies belong and nothing in any folder moved — which is why the backend releases nothing
+   * there either.
+   */
+  const invalidateCollection = () => {
+    void queryClient.invalidateQueries({ queryKey: ["collection"] });
+  };
 
   /** A new pile: always `kind: "main"`, always active, appended after the deck's last one.
    *  Refused when the deck already has that name — the grain is `(deckId, name)`. */
@@ -179,7 +202,9 @@ export function useDeckMeta(deckId: number | null, variant: DeckVariant = DEFAUL
   });
 
   /** Switch a pile on or off — `isActive`, which is the whole of "counts toward nothing".
-   *  Allowed on every kind including the Commander, and it reallocates. */
+   *  Allowed on every kind including the Commander. **It moves no card and no copy**: what it
+   *  changes is which rows are handed anything out of the deck's group, so every
+   *  `ownedQuantity` in the deck can move while `collection_entries` stands exactly still. */
   const setCategoryActive = useMutation({
     mutationFn: ({ id, isActive }: { id: number; isActive: boolean }) =>
       ipc.deckCategorySetActive(id, isActive),
@@ -199,11 +224,23 @@ export function useDeckMeta(deckId: number | null, variant: DeckVariant = DEFAUL
    * **`moveToCategoryId: null` is the destructive half** — the cards go with the category, by
    * cascade — and it is one command rather than two so a caller cannot lose them between a move
    * and a delete that failed. A confirm dialog owes the reader that difference in words.
+   *
+   * **That half is also a collection write**, which is why this is the one mutation here that
+   * does not take `writes` whole: see {@link invalidateCollection}. The copies are never
+   * destroyed — they are filed into `Recently removed`, which is what the confirmation's
+   * `go with it` wording promises — and `undo` puts the list back and not the custody.
    */
   const deleteCategory = useMutation({
     mutationFn: ({ id, moveToCategoryId }: { id: number; moveToCategoryId: number | null }) =>
       ipc.deckCategoryDelete(id, moveToCategoryId),
-    ...writes,
+    onSuccess: (_result, { moveToCategoryId }) => {
+      invalidate();
+      if (moveToCategoryId === null) invalidateCollection();
+    },
+    onError: (_error, { moveToCategoryId }) => {
+      invalidate();
+      if (moveToCategoryId === null) invalidateCollection();
+    },
   });
 
   /**

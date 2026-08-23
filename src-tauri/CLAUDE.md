@@ -297,12 +297,18 @@ shared_cell` walks both into two databases and compares them column by column.
   **Two writes in `deck.rs`/`deck_meta.rs` do the second of those in bulk and are not a third
   route**: `deck_meta::delete_category`'s cascade arm and `deck::clear_category` take a whole pile
   of `deck_cards` rows out at once, so the copies behind their `live` rows have to be released the
-  same way — both go through `deck::release_group_copies`, which is `deck_to_collection`'s second
-  half without the deck-card write, inheriting its four rules verbatim (absent group means "holds
+  same way — both go through `deck::release_group_copies`, and **so does `deck_to_collection`
+  itself**: that walk is the crate's one copy, and the cut is it plus the `deck_cards` write, the
+  history row and the `MoveOutcome`. Four rules it holds (absent group means "holds
   nothing", oldest row first, clamped at what the group holds, `Recently removed` resolved only
-  when there is something to file). `delete_category`'s **move** arm releases nothing: those cards
-  are still in this deck, one pile over. `deck::delete_deck` is the third such site and files the
-  whole group.
+  when there is something to file), and a fifth that was a bug while it existed twice: **it
+  matches on the oracle card, exact printing and finish first and any other printing of the same
+  `cards.oracle_id` after**. `swap_printing` and `set_card_finish` rewrite a deck row's identity
+  and touch no collection table, and the v25 conversion files printings the deck does not list,
+  so an exact-only match strands copies under a deck that no longer lists them. It is
+  `owned_by_oracle`'s "a Bolt is a Bolt" read from the other end. `delete_category`'s **move** arm
+  releases nothing: those cards are still in this deck, one pile over. `deck::delete_deck` is the
+  third such site and files the whole group.
   Six rules hold it together, each with a test:
   - **A deck group is not a drop target**, because a card reaches one only through
     `collection_to_deck`. A bare drag would go through `collection_set_folder`, which knows
@@ -336,8 +342,12 @@ shared_cell` walks both into two databases and compares them column by column.
     half would put the list back while the copies stayed in `Recently removed` — a deck claiming
     copies its group no longer holds, with the reader believing Ctrl+Z had worked. Half an undo is
     worse than none. The absence is visible because the Undo button's name **is** the change it
-    would reverse, so it goes on naming the press before the cut; and the complete way back is
-    `collection_to_deck`, one drag out of `Recently removed`, which restores both halves at once.
+    would reverse, so it goes on naming the press before the cut — **which means a cut does not
+    advance the undo cursor and the previous step stays the one Ctrl+Z will take**, so pressing
+    it after a cut reverses the *older* change rather than the cut or nothing. The complete way
+    back is `collection_to_deck`, which restores both halves at once, and **nothing calls it in
+    this release**: until the Collection Search tab lands the way back is two presses, add the
+    card again and re-file its copies out of `Recently removed` by hand.
     `deck::clear_category` reached the same conclusion for the same reason and does file a step,
     because its `deck_cards` half is a whole pile no stepper can rebuild.
   Every refusal is a **sentence** rather than a `CHECK` or a foreign-key failure —

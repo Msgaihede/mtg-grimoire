@@ -21,6 +21,10 @@
 //!   either changes, so there is one, beside the merge it is built on. The refile underneath has
 //!   no kind fence precisely so these writes can file into a `deck` folder and the `removed`
 //!   one, which [`crate::collection_folders::set_entry_folder`] refuses by hand.
+//!   **And the *walk* over a group's rows is [`crate::deck::release_group_copies`]', for the
+//!   same reason and at a cost already paid once**: [`deck_to_collection`] spelled its own copy
+//!   of that query and that loop, and both copies matched the exact printing — so the fix for a
+//!   swapped printing's stranded copies had to be made twice or it would have been made once.
 //! * **Taking a copy out of another deck's group decrements that deck's *live* list too.**
 //!   The copies are custody, not a reservation, so a deck that loses them loses the card. It
 //!   is reported in [`MoveOutcome::from_deck`] because the side effect lands on a deck the
@@ -88,8 +92,6 @@ pub const ALREADY_HERE: &str = "Those copies are already in this deck.";
 
 /// `COLLECTION_FOLDER_KINDS[1]` — the one folder that stands for a deck.
 const DECK_KIND: &str = crate::schema::COLLECTION_FOLDER_KINDS[1];
-/// `COLLECTION_FOLDER_KINDS[2]` — the single holding area, of which there is exactly one.
-const REMOVED_KIND: &str = crate::schema::COLLECTION_FOLDER_KINDS[2];
 /// What is actually sleeved up — `DECK_VARIANTS[0]`, [`crate::deck`]'s discipline.
 const LIVE: &str = crate::schema::DECK_VARIANTS[0];
 /// What the deck is being built toward, and the one variant these writes refuse.
@@ -153,18 +155,6 @@ fn deck_group(conn: &Connection, deck_id: i64) -> Result<Option<i64>, String> {
     )
     .optional()
     .map_err(|e| e.to_string())
-}
-
-/// The one holding area, or [`NO_REMOVED_FOLDER`].
-fn removed_folder(conn: &Connection) -> Result<i64, String> {
-    conn.query_row(
-        "SELECT id FROM collection_folders WHERE kind = ?1",
-        params![REMOVED_KIND],
-        |r| r.get(0),
-    )
-    .optional()
-    .map_err(|e| e.to_string())?
-    .ok_or_else(|| NO_REMOVED_FOLDER.to_owned())
 }
 
 /// The deck whose group a folder is, if it is one.
@@ -407,10 +397,21 @@ pub fn collection_to_deck(
 /// **What makes the absence visible.** The Undo button's name *is* the change it would reverse
 /// ("Undo — Removed 2 × Lightning Bolt"), read from [`crate::deck_undo::next_undo`], so a cut
 /// that files no step leaves the button naming the press *before* it and never offers one it
-/// cannot deliver. And the way back is a better one than Ctrl+Z: the copies are sitting in
-/// `Recently removed` — the sentence at the foot of the deck says so — and dragging them onto
-/// the deck is [`collection_to_deck`], which restores **both** halves in one press. The cost,
-/// stated plainly, is that a cut cannot be reversed from the keyboard; the card is never lost.
+/// cannot deliver.
+///
+/// **And the consequence, said plainly, because the button's name is only visible to somebody
+/// reading it: a cut does not advance the undo cursor, so the previous step remains the one
+/// Ctrl+Z will take.** Cutting a card and pressing Ctrl+Z reverses the *older* change — the
+/// rename, the add, the pile move before it — rather than the cut and rather than nothing. The
+/// label is honest about that the whole time; a keyboard user who never looks at it is who this
+/// sentence is for.
+///
+/// The complete way back is [`collection_to_deck`], which restores **both** halves in one press
+/// — but **nothing calls it in this release**: a deck group is deliberately not a drop target,
+/// so there is no gesture that puts a cut card back where it was until the Collection Search tab
+/// lands. Until then the way back is two presses, add the card again and re-file its copies out
+/// of `Recently removed` by hand. The cost, stated plainly, is that a cut cannot be reversed
+/// from the keyboard; the card is never lost.
 ///
 /// The same reasoning, reached first: [`crate::deck::clear_category`] restores the list and not
 /// the custody. It differs only in having a `deck_cards` half worth a step on its own — a
@@ -464,43 +465,22 @@ pub fn deck_to_collection(
         return Err(NOT_THAT_MANY.to_owned());
     }
 
-    // The deck row's `NULL` is the collection row's `'nonfoil'` — the translation
-    // [`crate::deck::normalise_finish`] makes in the other direction.
-    let entry_finish = finish.as_deref().unwrap_or(crate::schema::FINISHES[0]);
-    // **A deck with no group holds nothing rather than refusing.** Only the other direction
-    // needs somewhere to put copies; a reader must always be able to cut a card.
-    let backing: Vec<(i64, i64)> = match deck_group(&tx, deck_id)? {
-        Some(group) => tx
-            .prepare(
-                "SELECT id, quantity FROM collection_entries
-                  WHERE folder_id = ?1 AND card_id = ?2 AND finish = ?3
-                  ORDER BY id",
-            )
-            .and_then(|mut s| {
-                s.query_map(params![group, card_id, entry_finish], |r| {
-                    Ok((r.get(0)?, r.get(1)?))
-                })?
-                .collect()
-            })
-            .map_err(|e| e.to_string())?,
-        None => Vec::new(),
-    };
-
-    // Resolved only when there is something to file, so a database missing the folder still
-    // lets a card nobody owned be cut.
-    let mut moved = 0i64;
-    let mut landed = None;
-    if !backing.is_empty() {
-        let removed = removed_folder(&tx)?;
-        for (id, group_held) in backing {
-            if moved == quantity {
-                break;
-            }
-            let take = group_held.min(quantity - moved);
-            landed = Some(take_copies(&tx, id, take, Some(removed))?);
-            moved += take;
-        }
-    }
+    // **The move is [`crate::deck::release_group_copies`]' and is not written a second time
+    // here.** Finding this deck's group, reading the rows behind the card, taking them oldest
+    // first and filing them into `Recently removed` is one rule about the reader's cards, and
+    // this function spelled its own copy of it beside the bulk one until fan-in — including the
+    // exact-printing match that turned out to be *wrong*, which is what a second copy costs: a
+    // fix has to be made twice or it is made once. What is left here is the half that is
+    // genuinely this command's — the `deck_cards` write, the history row, and the
+    // [`MoveOutcome`] a caller draws a sentence from.
+    //
+    // Everything that walk decides is argued there: the oracle-card fallback that reaches a
+    // swapped printing's copies, the missing group that holds nothing rather than refusing, the
+    // clamp at what the group actually has, and the holding area resolved only when there is
+    // something to file — so a database missing that folder still lets a card nobody owned be
+    // cut.
+    let crate::deck::Released { moved, landed } =
+        crate::deck::release_group_copies(&tx, deck_id, &card_id, finish.as_deref(), quantity)?;
 
     let whole_row = quantity == held;
     if whole_row {
@@ -707,9 +687,17 @@ mod tests {
         .unwrap()
     }
 
-    /// Copies in the holding area.
+    /// Copies in the holding area. Read by kind rather than through a helper of the module's
+    /// own: resolving `Recently removed` is [`crate::deck::release_group_copies`]' now, and the
+    /// twin that used to sit here went with the loop it served.
     fn removed_copies(conn: &Connection, card_id: &str) -> i64 {
-        let removed = removed_folder(conn).unwrap();
+        let removed: i64 = conn
+            .query_row(
+                "SELECT id FROM collection_folders WHERE kind = ?1",
+                params![crate::schema::COLLECTION_FOLDER_KINDS[2]],
+                |r| r.get(0),
+            )
+            .expect("every database past v25 has one `removed` folder");
         folder_copies(conn, Some(removed), card_id)
     }
 
@@ -819,6 +807,73 @@ mod tests {
         deck_to_collection(&conn, dc, 1).unwrap();
         assert_eq!(removed_copies(&conn, "bolt"), 1);
         assert_eq!(deck_copies(&conn, deck, "bolt"), 0);
+    }
+
+    /// A second printing of the **same** oracle card — [`seed_card`] with the oracle id copied
+    /// off the first, because that helper derives one per printing (`'o-' || id`) and "a Bolt
+    /// is a Bolt" is a question two rows sharing an oracle id are the only way to ask.
+    fn seed_reprint(conn: &Connection, id: &str, of: &str) {
+        seed_card(conn, id, "m10", "146");
+        conn.execute(
+            "UPDATE cards SET oracle_id = (SELECT oracle_id FROM cards WHERE id = ?2)
+              WHERE id = ?1",
+            params![id, of],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_cut_reaches_the_copies_when_the_list_names_another_printing() {
+        // The state "Use this printing" leaves behind — `deck_swap_printing` rewrites the deck
+        // row's `card_id` and touches no collection table — and the state the v25 conversion
+        // writes wholesale, because the old allocator matched candidates by **oracle id**: a
+        // claim on an M10 Bolt for a deck that lists the Alpha one becomes exactly this.
+        //
+        // Matched on the exact printing alone, the cut moves nothing: the deck card goes and
+        // the copies stay filed under a deck that no longer lists them — invisible, and
+        // unavailable to every other deck.
+        let (conn, deck, cat) = fixture();
+        seed_reprint(&conn, "bolt-m10", "bolt");
+        let group = deck_group(&conn, deck).unwrap();
+        seed_entry(&conn, "bolt", 2, group);
+        let dc = add_variant_card(&conn, deck, cat, "live", "bolt-m10", 2);
+
+        let out = deck_to_collection(&conn, dc, 2).unwrap();
+
+        assert_eq!(
+            out.quantity, 2,
+            "a Bolt is a Bolt — `owned_by_oracle`'s rule"
+        );
+        assert_eq!(removed_copies(&conn, "bolt"), 2);
+        assert_eq!(
+            group_copies(&conn, deck, "bolt"),
+            0,
+            "nothing is left stranded in a group whose deck no longer lists it"
+        );
+    }
+
+    #[test]
+    fn a_cut_takes_the_exact_printing_before_another_of_the_same_card() {
+        // The fallback is a fallback: where the group holds the very printing the list names,
+        // that is the row that leaves, and the reader's other copy stays where they put it.
+        // This is what keeps the common case — every cut of a card nobody ever swapped —
+        // byte-for-byte what it was before the oracle arm existed.
+        let (conn, deck, cat) = fixture();
+        seed_reprint(&conn, "bolt-m10", "bolt");
+        let group = deck_group(&conn, deck).unwrap();
+        seed_entry(&conn, "bolt", 1, group);
+        seed_entry(&conn, "bolt-m10", 1, group);
+        let dc = add_variant_card(&conn, deck, cat, "live", "bolt-m10", 1);
+
+        deck_to_collection(&conn, dc, 1).unwrap();
+
+        assert_eq!(
+            removed_copies(&conn, "bolt-m10"),
+            1,
+            "the printing it names"
+        );
+        assert_eq!(removed_copies(&conn, "bolt"), 0);
+        assert_eq!(group_copies(&conn, deck, "bolt"), 1, "the other one stays");
     }
 
     #[test]

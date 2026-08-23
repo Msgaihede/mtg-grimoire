@@ -245,11 +245,20 @@ export function useSetCollectionFolder({ onMutate, onError }: SetCollectionFolde
       // **And every deck, which is the half the drag's own mutation was missing.** A move changes
       // no quantity, so no wish's `ownedQuantity` and no search row's owned badge can be
       // different afterwards — but since schema v25 a deck owns exactly the copies filed in its
-      // own group, and only the *destination* of this write is fenced (`set_entry_folder` refuses
-      // a `deck` folder and the `removed` one by hand). The source is not: a copy dragged out of a
-      // deck's group to the root or into a binder is a copy that deck has just lost. The merge
-      // moves a sum too — the destination may already hold this printing at this grain, in which
-      // case the backend deletes one row and adds its copies to the survivor.
+      // own group, and this is the write that files copies.
+      //
+      // **Both ends are fenced now, which is newer than the sentence that stood here** (it read
+      // *"only the destination of this write is fenced … The source is not"*).
+      // `set_entry_folder` refuses a `deck` or `removed` **destination** (`FOLDER_NOT_YOURS`) and,
+      // since fan-in, a row whose **source** is a `deck` folder (`ENTRY_IN_A_DECK` — a sibling
+      // sentence rather than a reuse: that one is about the folder, this one about the row). So
+      // the case this key was added for — a copy dragged out of a group, leaving the deck listing
+      // a card whose copies have walked off — is a refusal rather than a silent loss of custody.
+      // **The key stays, and deliberately**: a refusal settles here too, and what the fences
+      // protect is an invariant rather than this callback, so the day one of them is relaxed the
+      // editor must not be the last thing to hear about it. `refile_entry` underneath carries no
+      // fence at all, which is exactly what lets `collection_alloc`'s two writes and
+      // `delete_deck` file into those folders.
       void queryClient.invalidateQueries({ queryKey: ["decks"] });
     },
   });

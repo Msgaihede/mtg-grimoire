@@ -269,10 +269,14 @@ type Story = StoryObj<typeof meta>;
  * header says "Modern decks need at least 60 cards", and a "Cards 75" next to that sentence
  * would be two numbers for one question.
  *
- * The 1/4 on Counterspell is what a built deck elsewhere costs this one. Two foil Counterspells
- * are in the binder; the built Kenrith deck has claimed one, so this deck can reach exactly one
- * of the four it wants — measured, and the number moves to 2 the moment that deck stops being
- * built.
+ * The **2/4** on Counterspell is what custody looks like: since schema v25 a deck owns exactly
+ * the copies filed in its own collection group, so the number is a sum over this deck's folder
+ * and nothing else. The seed files two Counterspells into it, this deck wants four, and the
+ * other two are wherever the reader put them. **It moves when the copies do** — dragging one out
+ * of the group takes it to 1, and no write to any other deck can change it, which is the whole
+ * of what replaced the reservation this paragraph used to describe (*"the built Kenrith deck has
+ * claimed one … the number moves to 2 the moment that deck stops being built"* — there is no
+ * allocator, no claim and no `is_built`).
  */
 export const Modern60: Story = {
   args: { deckId: 1 },

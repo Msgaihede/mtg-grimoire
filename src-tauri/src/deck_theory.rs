@@ -260,12 +260,22 @@ fn diff_select(marketplace: crate::sorting::Marketplace) -> String {
 /// No `LEFT JOIN cards` and no orphan arm: `collection_entries.card_id` is the printing, so an
 /// entry whose card has left the corpus is matched by exactly the same equality as every other.
 ///
-const OWNED_SPARE_SQL: &str = "SELECT coalesce(sum(e.quantity), 0)
+/// **The kind is interpolated from [`crate::schema::COLLECTION_FOLDER_KINDS`]`[1]` rather than
+/// typed**, which is why this is a `LazyLock<String>` and not a `const`. It read `'deck'` as a
+/// literal, and a literal here is not the migration ladder's kind of literal: a rung is history
+/// and must not move when a constant does, while this is a **live read** that has to mean
+/// whatever the DDL's `CHECK` means today. The `format!` is spent once per process.
+static OWNED_SPARE_SQL: std::sync::LazyLock<String> = std::sync::LazyLock::new(|| {
+    format!(
+        "SELECT coalesce(sum(e.quantity), 0)
        FROM collection_entries e
       WHERE e.card_id = ?1 AND e.finish = coalesce(?2, 'nonfoil')
         AND (e.folder_id IS NULL
              OR (SELECT f.kind FROM collection_folders f
-                  WHERE f.id = e.folder_id) <> 'deck')";
+                  WHERE f.id = e.folder_id) <> '{}')",
+        crate::schema::COLLECTION_FOLDER_KINDS[1]
+    )
+});
 
 /// Cards the **theory** list holds that **live** does not.
 ///
@@ -387,7 +397,7 @@ fn grouped_diff(
         }
     }
 
-    let mut spare = conn.prepare(OWNED_SPARE_SQL).map_err(|e| e.to_string())?;
+    let mut spare = conn.prepare(&OWNED_SPARE_SQL).map_err(|e| e.to_string())?;
     let mut diff = Vec::new();
     // What the **exact** lines have already spoken for, per oracle card. Accumulated over every
     // group, including the ones that drop out just below: a plan the deck answers card for card

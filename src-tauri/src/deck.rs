@@ -851,21 +851,67 @@ fn removed_group(conn: &Connection) -> Result<Option<i64>, String> {
     .map_err(|e| e.to_string())
 }
 
-/// Give back the copies this deck's group holds for one printing — up to `quantity` of them —
-/// by filing them into `Recently removed`. Answers how many actually moved.
+/// What [`release_group_copies`] did.
 ///
-/// **[`crate::collection_alloc::deck_to_collection`]'s second half, in bulk and without the
-/// deck-card write.** That command cuts *one* deck card and returns its backing copies; this is
-/// what a press that takes a whole pile out at once needs — `deck_meta::delete_category`'s
-/// cascade and [`clear_category`] — where the `deck_cards` rows are going by a route of their
-/// own and only the copies are left to place. Called inside the caller's transaction, like
-/// [`crate::deck_audit::record`] and for its reason: a rolled-back clear must not have moved a
-/// card.
+/// Two facts and not one, because its two callers want different halves.
+/// [`crate::deck_meta::delete_category`] and [`clear_category`] are counting copies for a
+/// sentence and read `moved`; [`crate::collection_alloc::deck_to_collection`] answers a
+/// [`crate::collection_alloc::MoveOutcome`] whose `entry_id` is where the copies **landed**, so
+/// the reader can be sent to look at them.
+///
+/// `landed` is `None` when nothing moved, and is the *last* row filed when several did — one
+/// press can empty two group rows into the holding area, and the holding area is one folder, so
+/// pointing at the last of them points at the pile.
+pub(crate) struct Released {
+    /// Copies that actually changed folder. `0` is a success — see [`release_group_copies`].
+    pub moved: i64,
+    /// The `collection_entries` row the last of them landed in, after any merge.
+    pub landed: Option<i64>,
+}
+
+/// Give back the copies this deck's group holds for one card — up to `quantity` of them — by
+/// filing them into `Recently removed`.
+///
+/// **This is the crate's one copy of that walk, and there were two.**
+/// [`crate::collection_alloc::deck_to_collection`] spelled the same backing query and the same
+/// greedy loop inline for the single-card cut, and this one was written for the presses that
+/// take a whole pile out at once — `deck_meta::delete_category`'s cascade and
+/// [`clear_category`], where the `deck_cards` rows are going by a route of their own and only
+/// the copies are left to place. Two implementations of one rule disagree the first time either
+/// changes, and this rule decides where a reader's cards are: the cut now calls this and adds
+/// the deck-card write and the history row, which is the whole of what it ever had extra.
+/// Called inside the caller's transaction, like [`crate::deck_audit::record`] and for its
+/// reason: a rolled-back clear must not have moved a card.
 ///
 /// **The live list only, and the caller is what enforces it.** A theory row is a plan and a plan
 /// holds no cards ([`crate::collection_alloc::THEORY_HOLDS_NOTHING`]), so nothing in any folder
-/// backs one; this function is never handed one and does not test for it, because the two call
-/// sites already know which list they are emptying.
+/// backs one; this function is never handed one and does not test for it, because the call sites
+/// already know which list they are emptying.
+///
+/// # It matches on the **oracle card**, not on the printing, and that is the fix for a stranding
+///
+/// The obvious query — this printing, this finish — is the one this function had, and it strands
+/// copies. `deck_swap_printing` and `set_card_finish` rewrite a `deck_cards` row's identity and
+/// touch no collection table, so after "Use this printing" the group still holds the *old*
+/// printing's row: an exact match then finds nothing, the deck card goes away and the copies
+/// stay filed under a deck that no longer lists them — invisible on the collection page, and
+/// unavailable to every other deck. **It is not hypothetical for an upgraded reader either**:
+/// the allocator schema v25 replaced matched candidates by oracle id, so the conversion
+/// routinely files a printing the deck does not list.
+///
+/// So the arms are, in order: the **exact printing and finish** first, then any other row in
+/// this group holding the same `cards.oracle_id`. That is [`owned_by_oracle`]'s rule — "a Bolt
+/// is a Bolt", the behaviour this feature kept deliberately — read from the other end: a deck
+/// that *counts* an Alpha Bolt toward an M10 line has to be able to give that copy back. The
+/// ordering is what keeps the common case byte-for-byte what it was: where the group holds the
+/// very printing the list names, that is the row that leaves.
+///
+/// **`LEFT JOIN cards`, so an orphan is still releasable.** `cards` is dropped and recreated on
+/// every sync and a collection row's `card_id` is a soft reference; an INNER join would make a
+/// row whose printing has left the corpus unreleasable — including by the exact match, which
+/// needs no `cards` row at all. When the *deck's* card is the orphan the sub-select answers
+/// NULL, the oracle arm is NULL rather than true, and the query degrades to exactly the exact
+/// match it used to be.
 ///
 /// **Rows are taken oldest first and there may be several**, [`crate::collection_alloc`]'s rule
 /// verbatim: one printing can sit in two categories of one deck while the group holds a single
@@ -877,31 +923,42 @@ fn removed_group(conn: &Connection) -> Result<Option<i64>, String> {
 /// **A deck card with no backing copies just goes away**, which is the answer
 /// [issue #209](https://github.com/Msgaihede/mtg-grimoire/issues/209) could not find: a card
 /// added from search is an intention to buy, the reader never owned it, and nothing lands on
-/// their desk. `0` is that, and is not a failure.
+/// their desk. A `moved` of `0` is that, and is not a failure.
 pub(crate) fn release_group_copies(
     tx: &Connection,
     deck_id: i64,
     card_id: &str,
     finish: Option<&str>,
     quantity: i64,
-) -> Result<i64, String> {
+) -> Result<Released, String> {
+    let nothing = Released {
+        moved: 0,
+        landed: None,
+    };
     if quantity <= 0 {
-        return Ok(0);
+        return Ok(nothing);
     }
     // **A deck with no group holds nothing rather than refusing** — `deck_to_collection`'s own
     // asymmetry: only the other direction *needs* somewhere to put copies, and a reader must
-    // always be able to empty a pile.
+    // always be able to empty a pile or cut a card.
     let Some(group) = deck_group(tx, deck_id)? else {
-        return Ok(0);
+        return Ok(nothing);
     };
     // The deck row's `NULL` is the collection row's `'nonfoil'` — [`normalise_finish`]'s
     // translation, read the other way.
     let entry_finish = finish.unwrap_or(crate::schema::FINISHES[0]);
     let backing: Vec<(i64, i64)> = tx
         .prepare(
-            "SELECT id, quantity FROM collection_entries
-              WHERE folder_id = ?1 AND card_id = ?2 AND finish = ?3
-              ORDER BY id",
+            "SELECT e.id, e.quantity
+               FROM collection_entries e
+               LEFT JOIN cards c ON c.id = e.card_id
+              WHERE e.folder_id = ?1
+                AND (e.card_id = ?2
+                     OR c.oracle_id = (SELECT oracle_id FROM cards WHERE id = ?2))
+              ORDER BY CASE WHEN e.card_id = ?2 AND e.finish = ?3 THEN 0
+                            WHEN e.card_id = ?2 THEN 1
+                            ELSE 2 END,
+                       e.id",
         )
         .and_then(|mut s| {
             s.query_map(params![group, card_id, entry_finish], |r| {
@@ -911,22 +968,28 @@ pub(crate) fn release_group_copies(
         })
         .map_err(|e| e.to_string())?;
     if backing.is_empty() {
-        return Ok(0);
+        return Ok(nothing);
     }
     // Resolved only when there is something to file, so a hand-edited database missing the
     // folder still lets a pile of cards nobody owned be cleared.
     let removed =
         removed_group(tx)?.ok_or_else(|| crate::collection_alloc::NO_REMOVED_FOLDER.to_owned())?;
     let mut moved = 0i64;
+    let mut landed = None;
     for (id, held) in backing {
         if moved == quantity {
             break;
         }
         let take = held.min(quantity - moved);
-        crate::collection_folders::take_copies(tx, id, take, Some(removed))?;
+        landed = Some(crate::collection_folders::take_copies(
+            tx,
+            id,
+            take,
+            Some(removed),
+        )?);
         moved += take;
     }
-    Ok(moved)
+    Ok(Released { moved, landed })
 }
 
 /// Give a deck the group that holds its copies, named after it.
@@ -1646,11 +1709,13 @@ const NO_MODE: &str = "A remembered view mode cannot be blank.";
 ///   open is not one, and a drawer that said "switched to Theory" between two real edits would
 ///   be worse than one that said nothing. It is the seventh deliberate exception to
 ///   [`crate::deck_audit`]'s one-row rule, listed there with the other six.
-/// * **It does not reallocate.** Nothing here changes what the deck lists, so nothing changes
-///   what it reserves — and the allocator runs on one named list of writes and nothing else,
-///   which this must not quietly join. (`src-tauri/CLAUDE.md` has the list; it deliberately no
-///   longer carries a count, because the one it carried went stale when `clear_category`
-///   landed.)
+/// * **It moves no collection row.** Nothing here changes what the deck lists, so nothing
+///   changes what it holds — and since schema v25 there is no list of writes to join: what a
+///   deck owns is a sum over the rows filed in its group ([`owned_by_oracle`]), so nothing is
+///   derived and no write can forget to rebuild it. This bullet named "the allocator" and
+///   pointed at a list in `src-tauri/CLAUDE.md` that the same rung deleted. What is left to
+///   say is the narrower fact: reading a deck may not file a card into or out of its group,
+///   and this does not.
 ///
 /// A deck id that resolves to nothing is [`GONE`], like every other deck write: a stale editor
 /// deserves the sentence rather than a write that silently lands nowhere.
@@ -3675,8 +3740,11 @@ fn attribute_owned(rows: &mut [DeckCardRow], owned_by_oracle: &HashMap<String, i
 /// an orphan has neither. It is already carrying a `needs_review` sentence that says so.
 ///
 /// **Records no history**, and it is the one card-adjacent command that does not: nothing about
-/// the deck changed. It writes the wishlist and it rewrites this deck's claims, and neither is
-/// a change to what the deck plays — the drawer would be reporting a shopping trip as an edit.
+/// the deck changed. It writes the wishlist and it reads this deck — and neither is a change to
+/// what the deck plays, so the drawer would be reporting a shopping trip as an edit. (This read
+/// *"it rewrites this deck's claims"* four lines under the paragraph saying nothing is
+/// reallocated; there are no claims to rewrite since schema v25, and this command writes no
+/// deck table at all.)
 pub fn missing_to_wishlist(conn: &Connection, deck_id: i64) -> Result<usize, String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     // The default marketplace, and it costs nothing to be wrong about: this reads names,

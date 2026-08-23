@@ -477,6 +477,13 @@ table at all. Three things follow:
   cannot deliver. The copies are in `Recently removed`, and the standing sentence at the foot of the
   deck (`CUT_CARDS_NOTE`) says so.
 
+  **Say the consequence plainly, because the button's name is only visible to somebody reading
+  it: a cut does not advance the undo cursor, so the previous step remains the one Ctrl+Z will
+  take.** Cut a card and press Ctrl+Z and the *older* change is reversed — the rename, the add,
+  the pile move before it — not the cut, and not nothing. The label is honest about that the whole
+  time; a keyboard user who never looks at it is the one this sentence is for. It is not a
+  keystroke that fails, it is a keystroke that succeeds at something else.
+
   **The cost, stated plainly, and it is larger in this release than it will be in the next.** A cut
   cannot be reversed from the keyboard at all. `collection_to_deck` is the write that restores
   **both** halves in one press — but *nothing calls it yet*, and a deck group is deliberately not a
@@ -528,12 +535,28 @@ feature's central invariant broken quietly: **a copy in a deck's group is backed
 that deck.**
 
 So both writes release the copies first, in their own transaction and before anything is deleted,
-through `deck::release_group_copies` — `deck_to_collection`'s second half without the deck-card
-write, since the rows are already going by a route of their own. Four things it inherits verbatim
-from that command: the deck's group is looked up and an absent one means "holds nothing" rather
-than a refusal; rows are taken **oldest first**; the take is **clamped** at what the group actually
+through `deck::release_group_copies`. **That function is the crate's one copy of the walk and
+`deck_to_collection` calls it too** — the single-card cut spelled the same backing query and the
+same greedy loop inline until this round, and what the cut has that this does not is only the
+`deck_cards` write, the history row and the `MoveOutcome` it answers. Four rules the one copy
+holds: the deck's group is looked up and an absent one means "holds nothing" rather than a
+refusal; rows are taken **oldest first**; the take is **clamped** at what the group actually
 holds, because a list and a group can legitimately disagree; and `Recently removed` is resolved
 only when there is something to file, so a hand-edited database still lets a pile be cleared.
+
+**It matches on the oracle card, not on the printing, and that was a stranding bug while the walk
+existed twice.** `deck_swap_printing` and `deck_set_card_finish` rewrite a `deck_cards` row's
+identity and touch no collection table, so after "Use this printing" the group goes on holding the
+*old* printing's row. Matched exactly, the release then found nothing: the deck card went away and
+the copies stayed filed under a deck that no longer listed them. Upgraded readers meet it without
+pressing anything, because the allocator v25 replaced matched candidates by oracle id and the
+conversion faithfully files a printing the deck does not list. The arms are the exact printing and
+finish **first**, then any other row in the group holding the same `cards.oracle_id` — which is
+`owned_by_oracle`'s "a Bolt is a Bolt" read from the other end, since a deck that *counts* an
+Alpha Bolt toward an M10 line has to be able to give that copy back. The ordering is what keeps
+every cut of a card nobody ever swapped exactly what it was. The join to `cards` is a `LEFT JOIN`
+so a row whose printing has left the corpus is still releasable by the exact arm, and a deck card
+that is itself an orphan degrades to exactly that arm.
 
 Three scopes are decisions rather than details:
 
@@ -969,7 +992,7 @@ React never sees** — go through
 | `src-tauri/src/collection_folders.rs` | The seven commands, `set_entry_folder` and its two fences, `refile_entry`, `take_copies` (the split), `merge_entry`, `folder_summary`, `FOLDER_NOT_YOURS`, `ENTRY_IN_A_DECK` |
 | `src-tauri/src/collection_alloc.rs` | `collection_to_deck` and `deck_to_collection` — the only pair that moves a row across the deck boundary — `take_from_deck_list`, `MoveOutcome`, the cut's history row and the argument for its missing undo step, and the seven refusal sentences |
 | `src-tauri/src/collection.rs` | The grain's other ten terms, `set_quantity`'s zero-delete, `update_entry`'s merge, `fold_entry`, `EntryChange`, `ENTRY_FINISH`, `Allocation` |
-| `src-tauri/src/deck.rs` | `owned_by_oracle` and `attribute_owned` — owned/missing as a sum over the group — `delete_deck`, which re-files into `Recently removed`, and `release_group_copies`, which `clear_category` and `deck_meta::delete_category` share |
+| `src-tauri/src/deck.rs` | `owned_by_oracle` and `attribute_owned` — owned/missing as a sum over the group — `delete_deck`, which re-files into `Recently removed`, and `release_group_copies`, the crate's one walk over a group's rows — oracle-matched, exact printing first — which `clear_category`, `deck_meta::delete_category` and `deck_to_collection` all share |
 | `src-tauri/src/reset.rs` | `clear_collection` — entries, then folders |
 | `src-tauri/src/reconcile.rs` | `fold_into_existing`, which calls `fold_entry` as `merge_entry` does, and `collision_target`, the crate's other eleven-term probe |
 | `src/lib/folderTree.ts` | `buildFolderTree` and friends, shared with the deck gallery and the wishlist, **unchanged** |

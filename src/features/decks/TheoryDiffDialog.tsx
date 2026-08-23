@@ -190,7 +190,10 @@ function useTheoryDiff(deckId: number, marketplace: MarketplaceId) {
    * nothing draws.
    *
    * **Not `["decks"]`**, unlike its live twin: `deck_theory_missing_to_wishlist` writes wishes
-   * and commits, with no `allocate_deck` anywhere in it. Nothing about the deck moved.
+   * and commits, and touches no deck table and no collection folder. Nothing about the deck
+   * moved. (This named `allocate_deck`, which schema v25 deleted; the absence it was pointing
+   * at is now the plainer one — a deck holds what is filed in its group, and this write files
+   * nothing.)
    */
   const bought = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: ["wishlist"] });

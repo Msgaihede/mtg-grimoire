@@ -63,14 +63,23 @@ const COLLECTION_ROOTS = [["collection"], ["cards"], ["card"], ["decks"], ["wish
 const WISHLIST_ROOTS = [["wishlist"], ["cards"], ["card"]];
 
 /**
- * Only the decks.
+ * The decks, and the collection with them.
  *
- * Deliberately short, and it is the one worth stating: a deck holds an allocation *against* a
- * collection row, and nothing the collection page or the search wall draws is derived from it.
- * `CardSummary.ownedQuantity` is finish-blind and allocation-blind by design. So the claims all
- * being released changes what the deck pages say and nothing else.
+ * **The second root is schema v25's, and the sentence it replaces is now false.** This read
+ * *"a deck holds an allocation against a collection row, and nothing the collection page or the
+ * search wall draws is derived from it"* — true while a claim ledger stood beside the cards.
+ * Since v25 a deck's group **is** a `collection_folders` row: `clear_decks` cascades every one
+ * of them away and files the copies they were holding into `Recently removed` first, so the
+ * folder tree, both folder cards, the summary and the list are all describing a world that is
+ * gone. `lib/query.ts` caches 30 s, so leaving that root out is a ghost row rather than a slow
+ * refresh.
+ *
+ * **The two card roots stay out, and that absence is still worth stating.** A copy that changes
+ * folder is a copy the reader still owns — no quantity moves, and `CardSummary.ownedQuantity`
+ * is a sum over quantities, finish-blind and folder-blind — so neither the search wall nor the
+ * wishlist can read differently afterwards.
  */
-const DECK_ROOTS = [["decks"]];
+const DECK_ROOTS = [["decks"], ["collection"]];
 
 /**
  * The three irreversible clears, and the one sentence they share.

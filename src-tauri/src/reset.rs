@@ -42,7 +42,7 @@
 //! so emptying them would leave every price an em dash until the reader noticed and pressed
 //! something. That is a different promise from "self-healing" and is not this button's.
 
-use rusqlite::Connection;
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use std::fs;
 use std::path::Path;
@@ -273,10 +273,22 @@ pub fn clear_wishlist(conn: &Connection) -> Result<i64, String> {
 ///
 /// **The group goes and the cards in it do not**, which is the one place this command reaches
 /// the collection at all. `collection_folders.deck_id` CASCADEs because a folder that *stands
-/// for* a deck has no meaning once the deck is gone, while `collection_entries.folder_id` is
-/// `ON DELETE SET NULL` — so every copy surfaces at the root. A press about decks may not
-/// destroy a card the reader owns, and `clearing_the_decks_leaves_the_collection_owning_its_cards`
-/// is that promise pinned.
+/// for* a deck has no meaning once the deck is gone. A press about decks may not destroy a card
+/// the reader owns, and `clearing_the_decks_leaves_the_collection_owning_its_cards` is that
+/// promise pinned.
+///
+/// **They go to `Recently removed`, which is [`crate::deck::delete_deck`]'s destination, and the
+/// two agree deliberately.** This command let them surface at the root by
+/// `collection_entries.folder_id`'s `ON DELETE SET NULL` until 2026-08-23, and nothing said which
+/// press did which — so the same act, "take every card out of this deck", put copies in two
+/// different places depending on whether the reader pressed Delete forty times or pressed Clear
+/// once. A wipe is not a *different* act from a delete; it is the same one at scale. `Recently
+/// removed` is also the more recoverable answer: at the root the copies are indistinguishable
+/// from cards the reader filed there on purpose, while the holding area is the one folder whose
+/// whole meaning is "these just came out of a deck". The `SET NULL` stays underneath as the
+/// backstop it is everywhere else — it rewrites the eleventh term of
+/// [`crate::schema::COLLECTION_GRAIN`] with nothing saying what it will land on, which is why the
+/// refile above is the mechanism.
 ///
 /// **`deck_tags` is the exception and is swept by name.** It lost its `deck_id` in schema v21
 /// and is not a deck's any more, so no cascade reaches it — see the statement's own comment for
@@ -292,6 +304,58 @@ pub fn clear_wishlist(conn: &Connection) -> Result<i64, String> {
 /// starting; the rows still go, and the pictures they pointed at are inert.
 pub fn clear_decks(conn: &Connection, covers: Option<&Path>) -> Result<DecksCleared, String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    // **Every deck group's copies go to `Recently removed`, by hand and before the `DELETE`** —
+    // [`crate::deck::delete_deck`]'s destination and its loop, borrowed rather than re-argued.
+    // See this function's doc for why the two must not differ.
+    //
+    // The recursive half is `delete_folder`'s, for its reason: no command can nest a folder
+    // under a group today, so on every real database this finds exactly the groups themselves —
+    // it is here because the *DDL* allows what those commands refuse, and the day one permits it
+    // the alternative is a sub-tree's worth of cards scattered to the root by `SET NULL`.
+    // `ORDER BY e.id` so the row a merge folds into is a fact about the table and not about the
+    // planner.
+    let filed: Vec<i64> = {
+        let mut stmt = tx
+            .prepare(
+                "WITH RECURSIVE doomed(id) AS (
+                     SELECT id FROM collection_folders WHERE kind = ?1
+                     UNION
+                     SELECT f.id FROM collection_folders f JOIN doomed d ON f.parent_id = d.id
+                 )
+                 SELECT e.id FROM collection_entries e
+                  WHERE e.folder_id IN (SELECT id FROM doomed)
+                  ORDER BY e.id",
+            )
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![crate::schema::COLLECTION_FOLDER_KINDS[1]], |r| {
+                r.get(0)
+            })
+            .map_err(|e| e.to_string())?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| e.to_string())?
+    };
+    if !filed.is_empty() {
+        // **The destination is looked up rather than assumed**, `delete_deck`'s handling
+        // verbatim: schema v25 creates exactly one `removed` folder and a partial unique index
+        // makes a second impossible, so `None` here is a database somebody has edited by hand —
+        // and the honest answer to that is the root, which is where the `SET NULL` below would
+        // have put these rows anyway. A refusal would be a wipe the reader can never complete.
+        let removed: Option<i64> = tx
+            .query_row(
+                "SELECT id FROM collection_folders WHERE kind = ?1",
+                params![crate::schema::COLLECTION_FOLDER_KINDS[2]],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        // One at a time, through the merge: two decks' groups can hold the same grain, and the
+        // holding area may already hold it from a cut last week. Left to the cascade's SET NULL
+        // that is `UNIQUE constraint failed: index 'idx_collection_grain'`.
+        for entry in filed {
+            crate::collection_folders::refile_entry(&tx, entry, removed)?;
+        }
+    }
     let decks = tx
         .execute("DELETE FROM decks", [])
         .map_err(|e| e.to_string())?;
@@ -779,9 +843,18 @@ mod tests {
             )
             .unwrap();
         assert_eq!(quantity, 4, "the copies are the reader's, and all of them");
+        let removed: i64 = conn
+            .query_row(
+                "SELECT id FROM collection_folders WHERE kind = 'removed'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
         assert_eq!(
-            folder, None,
-            "and they surface at the root rather than going with the box"
+            folder,
+            Some(removed),
+            "and they wait in `Recently removed` — the same destination `delete_deck` uses, \
+             because a wiped deck's cards are exactly cards taken out of a deck"
         );
     }
 

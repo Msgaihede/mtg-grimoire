@@ -2384,29 +2384,36 @@ export interface DeckCard {
    */
   unitPrice: number | null;
   /**
-   * Copies of this oracle card the allocator **secured for this deck**, attributed to this
-   * row in the read's own order and clamped to what each collection entry still holds.
+   * Copies of this oracle card **this deck physically holds**, attributed to this row in the
+   * read's own order.
    *
-   * The only one of this file's four `ownedQuantity` fields that is not a count of what the
-   * user has: {@link CardSummary.ownedQuantity} is every copy of one printing,
-   * {@link ImportMatch.ownedQuantity} is that same count taken per decklist line,
-   * {@link WishRow.ownedQuantity} is the copies that fill one wish, and this one is a *claim* —
-   * oracle-grained (a Bolt is a Bolt), finish-blind, condition-blind.
+   * **A sum over the rows filed in the deck's own collection group, and no longer a claim.**
+   * Schema v25 deleted `deck_allocations` and the allocator with it: a card is in a deck
+   * because its `collection_entries` row sits in that deck's `kind = 'deck'` folder, so this
+   * is `owned_by_oracle` — `sum(quantity)` per `cards.oracle_id` over that one folder — spent
+   * down the rows by `attribute_owned`. There is nothing to clamp any more and nothing that
+   * can be out of date, which is what the old `min(claim, row)` existed for.
+   *
+   * The only one of this file's four `ownedQuantity` fields that is about **custody** rather
+   * than about the reader's shelves as a whole: {@link CardSummary.ownedQuantity} is every
+   * copy of one printing, {@link ImportMatch.ownedQuantity} is that same count taken per
+   * decklist line, {@link WishRow.ownedQuantity} is the copies that fill one wish, and this
+   * one is what is in *this box* — oracle-grained (a Bolt is a Bolt), finish-blind,
+   * condition-blind.
    *
    * Three things it will not do, all by design:
    *
-   * * a row whose `categoryActive` is `false` always reads `0`, because the allocator claims
-   *   nothing for an inactive category — so no "owned" badge belongs on that pile at all;
-   * * a `theory` row always reads `0` too: **the allocator claims for the `live` variant
-   *   only**, and a plan reserves nothing. `deck_allocations` carries no variant column at
-   *   all — there is nothing on a claim that says which list it came from, because only one
-   *   list ever makes them — which is why the *read* is what filters, and why a mirror of
-   *   this field that assumed a claim could be theory-scoped would be describing a column
-   *   that does not exist;
-   * * across **several built decks** these numbers are not guaranteed to add up to what the
-   *   collection holds. A deck's claims are recomputed when *that deck* is written to, so
-   *   two built decks sharing a card can each carry a claim made when the other's was
-   *   different. Read as "what this deck reserved", never as an inventory.
+   * * a row whose `categoryActive` is `false` always reads `0`, because a switched-off pile is
+   *   handed nothing out of the group — so no "owned" badge belongs on that pile at all;
+   * * a `theory` row always reads `0` too: a plan holds no cards, and `attribute_owned` zeroes
+   *   every theory row **explicitly** rather than by luck. A group is not scoped to a variant
+   *   — it holds what the deck physically has, whichever list is on screen — so the
+   *   conclusion is drawn in the read rather than left to a table's shape;
+   * * across several decks these numbers **cannot** double-count, which reverses what this
+   *   said. Two decks sharing a card each carried their own claim once, and the claims could
+   *   overlap; a copy now sits in exactly one folder, so it counts for exactly one deck. What
+   *   is left is the honest cost of custody: this is **as accurate as the reader's filing** —
+   *   an unfiled collection reads as a deck full of red until they drag.
    */
   ownedQuantity: number;
 }
@@ -4023,16 +4030,16 @@ export const ipc = {
    * **copies** it removed.
    *
    * One command rather than a `deckSetCardQuantity(…, 0)` per row, and the arithmetic is
-   * `deckImportCommit`'s: a loop over a forty-card pile is forty transactions, forty allocator
-   * runs and forty invalidations. This is one of each.
+   * `deckImportCommit`'s: a loop over a forty-card pile is forty transactions, forty history
+   * rows and forty invalidations. This is one of each.
    *
    * **This variant only**, which is the opposite of `deckCategoryDelete` — that takes the live
    * list and the theory list together, because `deck_cards.category_id` cascades and a category
    * is not variant-scoped. A clear leaves the pile standing, so what it empties is the list the
    * reader is looking at, and the confirmation says so.
    *
-   * An empty pile answers `0` and writes nothing at all: no history row, no `updated_at`, no
-   * allocator run.
+   * An empty pile answers `0` and writes nothing at all: no history row, no `updated_at`, and
+   * not one collection row moved.
    */
   deckCategoryClear: (deckId: number, categoryId: number, variant: DeckVariant) =>
     invoke<number>("deck_category_clear", { deckId, categoryId, variant }),
