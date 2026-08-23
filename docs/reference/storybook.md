@@ -49,7 +49,7 @@ it says `tags: ["autodocs"]`.
   **allocation** on `DeckCard`. A fake that stored DTOs would make all three agree, and teach
   a reader a model the app does not have.
 - **Seeds and faults are state, not response stubs**: `parameters: { fake: { seed, fault } }`,
-  seeds `empty`/`starter`/`needsReview`/`large`/`deckDriven`, **seventeen** faults — `busy`/`syncing`/
+  seeds `empty`/`starter`/`needsReview`/`large`, **seventeen** faults — `busy`/`syncing`/
   `syncError`/`imageFailures`/`gone`/`indexCold`/`deckMeta`/`updateAvailable`/`updateError`/
   `errorLog`/`feedFetchError`/`oracleTagsMissing`/`oracleTagsFetchError`/`artTagsMissing`/
   `artTagsFetchError`/`imageUrisMissing`/
