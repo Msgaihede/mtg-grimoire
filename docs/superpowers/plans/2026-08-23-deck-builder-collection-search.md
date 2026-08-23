@@ -41,9 +41,16 @@ Six buckets in two waves.
 | Wave | Bucket | Files |
 | --- | --- | --- |
 | 1 | **A — the tab shell** | `src/features/decks/DeckSearchPanel.tsx` (+ test, stories) |
-| 2 | **B — Collection Search** | `src/features/decks/CollectionSearchTab.tsx` (new, + test, stories), `useCollectionSearch.ts` (new) |
-| 2 | **C — the own/need toggle** | `src/features/decks/NormalSearchAdd.ts` (new), `DeckEditor.tsx`, `useDeck.ts` |
-| 2 | **D — the import option** | `src/features/transfer/import/destinations/DeckPreview.tsx`, `NewDeckPreview.tsx`, `useImport.ts` |
+| 2 | **B — Collection Search** | `src/features/decks/CollectionSearchTab.tsx` (new, + test, stories), `useCollectionSearch.ts` (new), **`src/lib/ipc.ts` + `ipc.test.ts`** |
+| 2 | **C — the own/need toggle** | `src/features/decks/NormalSearchAdd.ts` (new), `DeckEditor.tsx`, `useDeck.ts` (+ their tests) |
+| 2 | **D — the import option** | `src/features/transfer/import/destinations/DeckPreview.tsx`, `NewDeckPreview.tsx`, `useImport.ts`, **`destination.ts`, `destinations/collection.ts` + its test** |
+
+**A pre-flight sweep on 2026-08-23 found three of those files owned by nobody**, which is the shape of every defect on this feature so far — four unowned files in PR 1, and in PR 3 two files (`useDecks.ts`, `useDeckMeta.ts`) that were **not in the branch diff at all**, hiding both a stale rule and a missing invalidation. They are assigned above:
+
+- **`src/lib/ipc.ts`** → Bucket B. `collectionToDeck` and `MoveOutcome` already exist there, but Collection Search is their first consumer and the `allocation` query field has never been sent by anything.
+- **`destination.ts` and `destinations/collection.ts`** → Bucket D. `planCollectionImport` lives in the latter and Task 4 calls it a second time; if its signature needs an argument, that is Bucket D's to change and nobody else's.
+
+`src/features/collection/CollectionPage.test.tsx` and `src/features/search/CardGrid.test.tsx` also mention these symbols, but only as fixtures. **Leave them; if either goes red it is a fan-in fix, not a bucket's.**
 | 2 | **E — Rust: the history row** | `src-tauri/src/collection_alloc.rs` |
 | 2 | **F — the fake and docs** | `.storybook/fake/db.ts`, `docs/reference/{collection-folders,import-export}.md`, `src/features/decks/CLAUDE.md` |
 
