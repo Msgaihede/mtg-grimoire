@@ -380,15 +380,37 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   (`last_deck_format`), and the rest are the app's own bookkeeping (the update check's three,
   `scryfall_penalty_until`). **None of them belongs in `sync_meta`** — a row in that one the sync
   did not write makes every later timing claim a fiction.
-  **`deck_driven_collection` is orphaned and stays orphaned through v24**: the setting it held is
-  gone, and the row sits unread on every database that has one. v24 was expected to delete it and
-  deliberately does not — that rung creates the collection's folders and files nothing, and the
-  `app_meta` sweep travels with the rest of the allocator's removal at **v25**. A key nothing
-  reads costs a row; deleting it in the rung that also has to keep the allocator working would
-  have been the only statement in v24 that was not about folders.
-- **Schema is v24**, and `schema::SCHEMA_VERSION` is the answer — this line read **v18** for two
+  **`deck_driven_collection` was orphaned from the day its setting was removed and stayed
+  orphaned through v24** — the row sat unread on every database that had one. v24 was expected to
+  delete it and deliberately did not: that rung creates the collection's folders and files
+  nothing, and deleting the key in the rung that also had to keep the allocator working would have
+  been its only statement that was not about folders. **v25 sweeps it**, in the same
+  `execute_batch` that drops `deck_allocations` and `decks.is_built`, because that rung is what
+  answers the question the switch was asking — the decks *are* where the cards are now.
+- **Schema is v25**, and `schema::SCHEMA_VERSION` is the answer — this line read **v18** for two
   whole rungs, because a prose-only edit routes to neither CI job and nothing goes red when a
   ladder entry rots.
+  **v25 makes the collection's folders the physical ledger of where every card sits.** It inserts
+  the single `Recently removed` folder and one `deck` folder per deck (**archived decks
+  included** — archiving is a flag and an archived deck still holds its cards), converts every
+  `deck_allocations` row into a placement in the owning deck's group, and only then drops
+  `deck_allocations`, `decks.is_built` and the `app_meta` row above. **Order is the whole of its
+  correctness**: dropping the ledger before reading it destroys the only copy of what is being
+  converted. The conversion is in **Rust rather than SQL, because it splits rows** — one statement
+  cannot both create the placement and reduce the row it came from — takes `min(claim, row)`
+  because the old ledger could out-claim a row later stepped down, walks claims **ascending by
+  `id`** (first-claim-first-served, since a claim could overlap and a placement cannot), and
+  carries **every provenance column** onto the placement so a deck's copies keep their condition,
+  price and acquisition story. What shipped is
+  [collection-folders.md](collection-folders.md); the deck side is
+  [decks-storage.md](decks-storage.md).
+  **It is the first rung on this ladder that takes something away**, which is why `UNDO_V25` has
+  to put a table *back* and why its tests start from a real v24 database (`v24_database`) rather
+  than a fresh install — a fresh install has no claims to convert. `DROP TABLE` takes
+  `idx_deck_allocations_grain` and `idx_deck_allocations_entry` with it, so neither is named; and
+  `ALTER TABLE decks DROP COLUMN is_built` was only safe because nothing indexes that column,
+  SQLite refusing `DROP COLUMN` on an indexed one — a failure that would have landed at a real
+  reader's first upgrade and in no test starting from a fresh database.
   **v24 gives the collection the wishlist's filing cabinet** — `collection_folders` (nesting on
   `parent_id … ON DELETE CASCADE`), `collection_entries.folder_id`
   (`… ON DELETE SET NULL`), `idx_collection_folder`, and a **rebuilt** `idx_collection_grain`
@@ -406,9 +428,10 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   It carries **two columns and two partial unique indexes that nothing writes yet** — `kind`
   (`user|deck|removed`) and `deck_id`, with `idx_collection_folder_removed` and
   `idx_collection_folder_deck` — because the spec's single rung could not ship: it dropped
-  `deck_allocations`, which is still the app's only source of owned/missing until v25 replaces it.
-  Creating the unused columns here is what lets **v25** be inserts, a backfill and drops with no
-  `ALTER TABLE` at all.
+  `deck_allocations`, which was the app's only source of owned/missing until v25 replaced it.
+  Creating the unused columns there is what let **v25** be inserts, a conversion and drops with no
+  `ALTER TABLE` at all, and the partial index on `kind` is what makes v25's single `removed`
+  insert also the assertion that there is exactly one.
   It has a **third `ON DELETE` action**, which neither of the other two cabinets has:
   `collection_folders.deck_id` CASCADEs onto `decks`, because a folder that *stands for* a deck has
   no meaning once that deck is gone — the opposite of what the folder's contents get.
@@ -693,7 +716,10 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   to a new **`v12_database`**, v14 to **`v13_database`**, v15 to **`v14_database`**, v16 to
   **`v15_database`**, v17 to **`v16_database`**, v18 to **`v17_database`**, v19 to
   **`v18_database`**, v20 to **`v19_database`**, v21 to **`v20_database`**, v22 to
-  **`v21_database`**, v23 to **`v22_database`** and v24 to **`v23_database`**. The fixtures it
+  **`v21_database`**, v23 to **`v22_database`**, v24 to **`v23_database`** and v25 to
+  **`v24_database`** — the first one that has to be a *rewind* rather than a hand-written old
+  schema, because v25 is the first rung that takes a table away and a fresh install has no claims
+  to convert. The fixtures it
   passes stay exactly where they are, each pinned to
   a literal because each proves something only a database genuinely _at_ that version can —
   `v11_database` to 11, so the step that adds the view-state columns has a database it can
@@ -737,10 +763,10 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `v9_database` at all.
   **The per-rung fixture counts that used to be written out here are gone on purpose.** They read
   "all six below it" and "the five below that" against a fixture set that has grown twice since,
-  and a count is a fact about a *tree*: `grep -c "{UNDO_V24}" src-tauri/src/schema.rs` is the
+  and a count is a fact about a *tree*: `grep -c "{UNDO_V25}" src-tauri/src/schema.rs` is the
   census of how many fixtures the newest rung reaches, and it answers for the tree you are
   actually in. (The constant in that command moves with the ladder — it named `UNDO_V23` until v24
-  landed — and the whole point of writing a command rather than a number is that only the command
+  landed, and `UNDO_V24` until v25 did — and the whole point of writing a command rather than a number is that only the command
   needed changing.) **v21 is a rebuild rather than an `ADD COLUMN`, and it still needs a line in every
   fixture**: `UNDO_V21` drops `deck_tags` and recreates the per-deck shape v8 built, because
   `ALTER TABLE … DROP COLUMN` refuses a column an index names and the shape changed both ways.
@@ -780,7 +806,19 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   amalgamation with `SQLITE_DEFAULT_FOREIGN_KEYS=1`, so a surviving `folder_id` whose `REFERENCES`
   names a table `UNDO_V24` took away answers `no such table: main.collection_folders` at the very
   next insert. **`UNDO_V24` runs before `UNDO_V23`**, newest-first, which is that constant's own
-  stated rule. **One named `UNDO_V…` constant per rung that writes shape** is the shape that
+  stated rule.
+  **`UNDO_V25` is the awkward one, because v25 is the first rung on the ladder that *takes* a
+  table.** Every rewind before it undoes an addition; this one has to put `deck_allocations`
+  (v8's DDL verbatim, both indexes included), `decks.is_built` and the `app_meta` row back before
+  it can delete the two folder kinds the rung inserted. It is **unskippable for `UNDO_V13`'s loud
+  reason**: neither drop is idempotent in either direction, so a fixture that walked to head and
+  forgot this line does not mislabel itself quietly — it dies at
+  `no such table: main.deck_allocations` on the way back up. **The `ALTER` is the one statement
+  that cannot be guarded**: `ADD COLUMN` has no `IF NOT EXISTS` and always appends, so `is_built`
+  comes back at the *end* of `decks` — harmless only because v25 drops it again on the way up,
+  which keeps `every_version_ends_with_the_same_schema_as_a_fresh_install` comparing two tables
+  that have both lost it. And it **runs before `UNDO_V24`** for a load-bearing reason rather than
+  a tidy one: its `DELETE` names a table `UNDO_V24` drops. **One named `UNDO_V…` constant per rung that writes shape** is the shape that
   keeps this
   cheap: v13 and v14 have each been renumbered since they were written, and the rename was the
   whole of what it cost. (`v10_database` drops them for a different reason: a fixture claiming to
@@ -788,8 +826,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   _too far_ fails the same way from the other direction: a head database rewound two versions
   re-runs v8's deck rebuild over v8-shaped tables and dies on a duplicate column — a failure no
   real upgrade can produce.
-- v5 added the four deck tables (`decks`, `deck_cards`, `deck_allocations`
-  and the seeded `format_specs`) and two `cards` columns, `power`/`toughness` — CR 903.3
+- v5 added the four deck tables (`decks`, `deck_cards`, `deck_allocations` — **dropped again at
+  v25** — and the seeded `format_specs`) and two `cards` columns, `power`/`toughness` — CR 903.3
   (2026) makes a commander out of a Vehicle or Spacecraft _with a P/T box_, and that is
   unanswerable without them. Its backfill reads `raw` through `schema::json_raw` exactly as
   v3's `artist` did, so it could only recover the **1 510 of 116 590** rows that keep a

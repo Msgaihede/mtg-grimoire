@@ -15,9 +15,9 @@ or a number to compare a new measurement against.
 | [image-cache.md](image-cache.md) | Cache layout, concurrency, placeholders, the `/cover/` route | [`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) |
 | [search-faceting.md](search-faceting.md) | The in-memory index, and why faceting fails open | [`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) |
 | [in-app-updates.md](in-app-updates.md) | Why the portable swap is hand-written | [`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) |
-| [decks-storage.md](decks-storage.md) | Deck tables, the card commands, the allocator, the audit log, the decklist import | [`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) |
+| [decks-storage.md](decks-storage.md) | Deck tables, the card commands, how owned/missing is answered, the audit log, the decklist import | [`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) |
 | [wishlist-folders.md](wishlist-folders.md) | The wishlist's cabinet (v23) — the two folder tables, the four-term grain, the merge rule, the root-add duplicate and the `elsewhere` mark | [`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) |
-| [collection-folders.md](collection-folders.md) | The collection's cabinet (v24) — the split rung, the eleventh grain term, the merge's five statements, and what a zero quantity now costs | [`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) |
+| [collection-folders.md](collection-folders.md) | The collection's cabinet (v24–v25) — the eleventh grain term, the deck groups and `Recently removed` that made it the ledger of where every card sits, the conversion that filled them, and what a zero quantity now costs | [`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) |
 | [import-export.md](import-export.md) | The seven formats, the field registry, the fold rule, the four import destinations | [`src/features/transfer/CLAUDE.md`](../../src/features/transfer/CLAUDE.md) |
 | [decks-live-findings.md](decks-live-findings.md) | What driving the shipped window found — **including the bugs still open** | [`src/features/decks/CLAUDE.md`](../../src/features/decks/CLAUDE.md) |
 | [tags-live-findings.md](tags-live-findings.md) | The Tags page in the shipped window — the art ingest timed, both performance gates settled, **and what is still open** | [`src/CLAUDE.md`](../../src/CLAUDE.md) |

@@ -45,9 +45,10 @@ it says `tags: ["autodocs"]`.
   the components against a second, agreeing copy of a contract nobody had checked.
 - **The fake stores table rows and derives DTOs** (`fake/db.ts`), because **`ownedQuantity`
   means three different things on three DTOs**: every copy of one printing and finish-blind on
-  `CardSummary`; the copies filling one wish and finish-**aware** on `WishRow`; a deck's
-  **allocation** on `DeckCard`. A fake that stored DTOs would make all three agree, and teach
-  a reader a model the app does not have.
+  `CardSummary`; the copies filling one wish and finish-**aware** on `WishRow`; and on `DeckCard`
+  the copies **in that deck's own group**, oracle-grained (a claim from the allocator until schema
+  v25 deleted it). A fake that stored DTOs would make all three agree, and teach a reader a model
+  the app does not have.
 - **Seeds and faults are state, not response stubs**: `parameters: { fake: { seed, fault } }`,
   seeds `empty`/`starter`/`needsReview`/`large`, **seventeen** faults — `busy`/`syncing`/
   `syncError`/`imageFailures`/`gone`/`indexCold`/`deckMeta`/`updateAvailable`/`updateError`/

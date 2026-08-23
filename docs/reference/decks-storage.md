@@ -1,15 +1,23 @@
-# Decks: storage, commands, allocator, audit
+# Decks: storage, commands, owned/missing, audit
 
 Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every figure keeps the date and the build it was taken on.
 
 - **Enforced foreign keys exist only _between user tables_, never against `cards.id`** — a
   declared `REFERENCES cards(id)` aborts every sync, because `swap_staging` drops the table.
   The `ON DELETE` action is chosen per delete-site, not fixed once. **CASCADE** on
-  `deck_cards.deck_id`, `deck_cards.category_id`, `deck_allocations.deck_id`,
-  `deck_allocations.collection_entry_id`, `deck_categories.deck_id`, `deck_audit.deck_id`,
+  `deck_cards.deck_id`, `deck_cards.category_id`, `deck_categories.deck_id`, `deck_audit.deck_id`,
   `deck_undo.audit_id`, `deck_undo.deck_id` and `deck_folders.parent_id`: a deleted deck's
-  cards and reservations, a deleted category's cards, a reversal for a history row that is
+  cards, a deleted category's cards, a reversal for a history row that is
   gone, and a deleted folder's sub-folders have nowhere else to be.
+  **`deck_allocations.deck_id` and `deck_allocations.collection_entry_id` left that list at
+  schema v25, with their table**, and the replacement is on both lists rather than on this one: a
+  deck no longer *claims* copies somebody else's row holds, the copies sit in that deck's group.
+  So deleting a deck takes the group with it (`collection_folders.deck_id`, CASCADE) while the
+  cards surface elsewhere (`collection_entries.folder_id`, SET NULL) — the whole difference
+  between a claim and custody, written as two `ON DELETE` actions pointing opposite ways at one
+  press. `delete_deck` re-files those cards into `Recently removed` **by hand and before the
+  `DELETE`**, so the SET NULL is a backstop rather than the mechanism; see
+  [collection-folders.md](collection-folders.md).
   **`deck_tags.deck_id` was on that list until schema v21 and no longer exists**: a tag belongs
   to no deck, so deleting the deck where a label was first typed must not take it off the nine
   other decks wearing it. The one place that still clears the table is `reset::clear_decks`,
@@ -17,18 +25,20 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   **SET NULL** on exactly two of the deck side's — `decks.folder_id` (a folder is a filing
   decision; the decks in it are the user's work, not the folder's to take down) and
   `deck_cards.tag_id` (deleting a tag must never delete a card). **The schema's own total is
-  three since v23**, and the third is not a deck's: `wishlist_entries.folder_id` repeats
-  `decks.folder_id` exactly, one list over, because the wishlist got the same filing cabinet
-  (`wishlist_folders.parent_id` joined the CASCADE list in the same rung).
+  four since v24**, and neither of the other two is a deck's: `wishlist_entries.folder_id` (v23)
+  and `collection_entries.folder_id` (v24) each repeat `decks.folder_id` exactly, one list over,
+  because both of those got the same filing cabinet — and `wishlist_folders.parent_id` and
+  `collection_folders.parent_id` joined the CASCADE list in the same two rungs.
   `schema.rs`'s module doc carries the whole-schema list and is the copy of record; this
   bullet is the deck slice of it, and both want checking against the DDL rather than trusting
-  either copy. CASCADE is also right at the app's one **non-user**
-  delete: `reconcile::fold_into_existing` repoints every allocation onto the surviving entry
-  _before_ the DELETE, so that cascade fires over nothing.
+  either copy. **The app's one non-user delete no longer has anything to repoint**:
+  `reconcile::fold_into_existing` calls `collection::fold_entry`, which since v25 is a sum and a
+  delete with no clean-up owed to anybody, because no enforced foreign key points at
+  `collection_entries` any more.
 - **`reset::decks_clear` is the one delete-site that clears `deck_folders` too, and it needs a
   second statement to do it** (added 2026-08-20 with the Settings page's danger zone).
   `DELETE FROM decks` takes `deck_cards`, `deck_categories`, `deck_audit`,
-  `deck_undo` and `deck_allocations` by cascade — but `decks.folder_id` is SET NULL for the
+  `deck_undo` and every deck's `collection_folders` group by cascade — but `decks.folder_id` is SET NULL for the
   reason above, so a wipe that stopped there hands the reader an empty folder tree to delete by
   hand, and **`deck_tags` needs a statement of its own since schema v21** for the reason one
   bullet up: nothing cascades onto it any more, and a reader who has just deleted every deck they
@@ -39,12 +49,30 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   seam `set_cover_image` documents, a commit that failed after the bytes landed. The sweep runs
   **after the commit**, because the other order costs a deck whose cover vanished for a
   transaction that rolled back.
-- **`reset::collection_clear` is the largest cascade in the app**, and the number it reports is
-  counted *before* the DELETE for the reason that sounds obvious and is easy to get wrong: after
-  it, `deck_allocations` is empty whether it held ten rows or none, so counting afterwards would
-  report 0 in exactly the case the reader cares about. It goes through
-  `collection_source::with_write_owned` — the only caller of that helper outside `collection.rs` —
-  because the facet index's `owned` bitset is built from `collection_entries`.
+  **Since v25 this is also the one place this command reaches the collection**, and it reaches it
+  by cascade alone: each deck's `collection_folders` group goes with its deck, and every copy that
+  was in one surfaces at the **root** — not in `Recently removed`, which is `delete_deck`'s
+  destination and deliberately not this one's, because after this press there are no decks for a
+  card to have "recently left". A press about decks may not destroy a card the reader owns, and
+  `clearing_the_decks_leaves_the_collection_owning_its_cards` is that promise pinned.
+- **`reset::collection_clear` is four statements, and the last two are what stop it being
+  unrecoverable.** Entries, then folders — the second needed by hand because
+  `collection_entries.folder_id` is SET NULL and a wipe that stopped at the entries hands the
+  reader an empty filing cabinet to take apart one drawer at a time. **Then `Recently removed` and
+  one group per surviving deck are rebuilt in the same transaction**, archived decks included:
+  since v25 those rows are not the reader's filing but *where the app puts cards*, both
+  `collection_alloc` writes look their destination up by `deck_id` and by `kind` and refuse in
+  words when it is not there — so a database swept bare is one where **no deck can ever hold a
+  card again and nothing can be put aside**, permanently, because those rows are made by a
+  migration and a machine at head never runs one again. Nothing self-repairs and nothing goes red.
+  It goes through `collection_source::with_write_owned` — the only caller of that helper outside
+  `collection.rs` — because the facet index's `owned` bitset is built from `collection_entries`.
+  **`CollectionCleared` no longer carries `allocations`**: that field was the number nobody could
+  predict, because `deck_allocations.collection_entry_id` cascaded from the entries and every
+  deck's reservation went with the collection. There is no such field and no such cascade — a
+  deck's cards are `deck_cards` rows and they stay, because a deck is a list of cards and not a
+  list of *your* cards. The number answered is still the count of **cards**, never a folder, and
+  the rebuilt rows are not in it either: they are the cabinet, not what was in it.
 - **Schema v8 replaced the zone with a category the user owns.** `deck_cards.category_id`
   points at a `deck_categories` row they name, reorder, switch off and delete; the fixed word
   survives only as that row's **`kind`** — `main | side | commander | companion | maybe`,
@@ -98,13 +126,13 @@ preferred_finish`'s nullability one table over.
     `cards.finishes`.
   - **Two things did not change and both look as though they should have.** `engine.ts` counts
     copies by card **name** and sums across rows, so a foil row and a plain row are two copies of
-    one card; and `allocate_deck` matches on oracle id and has always ignored finish, condition
-    and language, so a foil row reserves whatever copy is free. Making a foil deck row reserve a
-    foil collection copy is a different feature with its own answer to "what happens when you own
-    three regular and play one foil".
+    one card; and owned/missing matches on **oracle id** and has always ignored finish, condition
+    and language, so a foil row is answered by whatever copies of that card the deck's group
+    holds. Making a foil deck row want a foil copy specifically is a different feature with its
+    own answer to "what happens when you own three regular and play one foil".
 - **`is_active = 0` is the whole of what `maybe` used to mean.** An inactive category counts
-  toward nothing — not size, not copies, not legality — and `allocate_deck` claims no copy for
-  it. The Maybeboard is not a special case in five files any more; it is one seeded row with
+  toward nothing — not size, not copies, not legality — and `attribute_owned` hands it no copies
+  from the group. The Maybeboard is not a special case in five files any more; it is one seeded row with
   the flag off, and a category of the user's own that they switch off behaves identically.
   **Nothing anywhere may branch on the kind being `maybe`** — that was measured: the old shape
   looked correct and was wrong the first time a user deactivated a pile of their own. **There is no
@@ -122,11 +150,17 @@ preferred_finish`'s nullability one table over.
   version, not the smaller one: an _active_ Maybeboard was then inside the format's card pool
   and inside the binder's reservations but outside the size, so a second Sol Ring in it raised
   a singleton error under a figure that still read 100.
-- **`allocate_deck` claims for the `live` variant only** — a plan reserves nothing. And
-  **`deck_allocations` carries no variant column**, which is the trap: a `theory` read walks
-  the _live_ deck's stored claims, so `attribute_owned` filters `variant == LIVE` explicitly.
-  Without that filter a plan is handed the copies the sleeved deck reserved, and it type-checks
-  perfectly (`the_allocator_claims_nothing_for_the_theory_variant`).
+- **A plan holds nothing, so `attribute_owned` zeroes every `theory` row** — and the test
+  `variant != LIVE` is now true *by construction* rather than because a table lacked a column,
+  which is worth saying plainly because it reads like a leftover. It used to be a fence around
+  `deck_allocations` carrying no variant: a `theory` read walked the *live* deck's stored claims,
+  and without the filter a plan was handed the copies the sleeved deck had reserved. A **group is
+  not scoped to a variant either**, so `owned_by_oracle` still answers the whole deck's copies;
+  what changed is that the map is a fact about where cards *are* rather than a ledger of what was
+  reserved. The conclusion is the same one, still drawn explicitly here rather than left to a
+  table's shape, and still pinned by `the_allocator_claims_nothing_for_the_theory_variant`. The
+  same fact is why `collection_alloc::deck_to_collection` refuses a theory row outright
+  (`THEORY_HOLDS_NOTHING`) instead of moving zero copies and reporting success.
 - **Switching the theory list on _moves_ the live deck into it. It does not copy it.** The deck
   the reader has built **is the plan**, so it becomes the theory list — and `live`, what is
   actually sleeved up, **starts empty** and fills as they acquire the cards. The guard is the one
@@ -134,10 +168,14 @@ preferred_finish`'s nullability one table over.
   because a plan the reader has already started is not something a re-press of the switch may
   pour the live deck over. Two things ride along in the same transaction. The deck's
   `last_variant` becomes `theory`, so the reader lands where their deck now is rather than on a
-  blank page they did not empty. And the move **reallocates**: `deck_allocations` claims
-  collection copies for `live` only, so cards that have just left the live list must release the
-  copies they were holding — otherwise a deck with nothing sleeved up goes on reserving a binder
-  it no longer plays from, and every other deck reads the shortage. **The rule this inverts was a
+  blank page they did not empty. **And the move reallocates nothing, where until schema v25 it
+  had to.** Claims were held for `live` only, so cards that had just left the live list had to
+  release the copies they were holding, or a deck with nothing sleeved up went on reserving a
+  binder it no longer played from and every other deck read the shortage. There is no ledger and
+  no release: the copies are in the deck's group and **the move does not touch a
+  `collection_entries` row at all**, which is the honest reading of what happened — the reader
+  reclassified their list, they did not take the cards out of the sleeves. `deck_to_collection`
+  is the press that does that, one card at a time and out loud. **The rule this inverts was a
   seeding copy** — live was left alone and theory filled from it, on the reasoning that an empty
   theory list beside a full live one is not a blank page but reads as data loss. That got the
   right danger and the wrong half: nothing is ever deleted here, both lists being the same table,
@@ -201,7 +239,7 @@ preferred_finish`'s nullability one table over.
   does not move `updated_at`, because pushing a deck to the top of a gallery sorted by "most
   recently touched" for the crime of somebody looking at its Theory tab is a lie about what
   happened; it writes **no `deck_audit` row**, because the history holds changes to the deck and
-  which tab was open is not one; and it **reallocates nothing**. An unknown deck id is refused by
+  which tab was open is not one; and it **moves no card and no copy**. An unknown deck id is refused by
   name (`GONE`) rather than passed over silently — the editor is exactly where a deck deleted in
   another window is discovered.
 - **`last_variant` is validated in Rust and the other two are not, which is the boundary rather
@@ -226,11 +264,14 @@ preferred_finish`'s nullability one table over.
   that rule, and the two would part company silently. A category's _and a tag's_ `card_count` do
   read the variant asked for; threading it into `list_categories` and not `list_tags` is exactly
   how they came to disagree once.
-- Category and tag writes live in **`deck_meta.rs`**, and **two of them reallocate**:
-  `set_category_active` (the flag is the whole of what the allocator allocates _for_) and
-  `delete_category` (the cards leave, or land under a category with a different flag). A
-  rename, a reorder and every tag write change what a pile is _called_ and claim exactly what
-  they claimed before.
+- Category and tag writes live in **`deck_meta.rs`**, and **none of them reallocates any more —
+  two of them used to.** `is_active` decided whether a card was allocated *for*, so
+  `set_category_active` and `delete_category` each rebuilt the deck's claims inside their own
+  transaction, the way every card write in `deck.rs` did. Schema v25 dropped `deck_allocations`:
+  what a deck holds is where its collection rows physically sit, and switching a pile off changes
+  what the deck **counts** without moving a single card. The rule the old note was making — that
+  a rename and a reorder change what a pile is _called_ and nothing about what is in it — now
+  covers every write in the module.
 - **`format_specs` is data, not code.** All 23 Scryfall legality keys plus `casual`/`limited`,
   seeded by `INSERT OR REPLACE` in the migration, with `restricted_semantic`
   (`max_one` | `banned_as_commander` — TRAP A, never inferred from the key), `commander_rule`,
@@ -270,23 +311,62 @@ preferred_finish`'s nullability one table over.
   on everything but the foil-only case it was written for.
   A deck-write readback with no marketplace of its own quotes `marketplace::stored(conn)`,
   so renaming a category does not answer a Cardmarket reader in dollars.
-- **Owned is an allocation, never a decrement.** `deck::allocate_deck` deletes and rebuilds a
-  deck's rows inside the caller's transaction, greedily and deterministically: `KIND_PRIORITY`
-  (`commander, main, side, companion, maybe` — a tie-break preference only, since `is_active`
-  decides what is allocated for) then row id, and within a card, exact printing, then real
-  copies, then oldest entry. It runs on **a card write, the Built toggle, `missing_to_wishlist`,
-  `set_category_active`, `delete_category`, `commit_import` or the theory list being switched
-  on** — those seven and nothing else,
-  which is worth knowing while debugging, because pressing "Send missing to wishlist" or
-  switching a pile off rebuilds a deck's allocations as a side effect. The theory move is the
-  seventh and the least obvious of them: it empties `live`, and a claim held for a card that is
-  no longer sleeved up is a copy no other deck can see. The import is the one
-  that runs it for **many** cards at once and still only once, which is the whole reason
-  `deck_import_commit` is a command rather than a loop over `deck_add_card`. A **built** deck's claims are subtracted from
-  what other decks can see. The
-  read clamps with `min(allocation, entry.quantity)`, so stepping a collection row down is
-  honest immediately — but **growing the collection does not re-run the allocator**, so a deck
-  reads the new copies only after its next allocator run. Known, named, and Plan 6's to close.
+- **Owned is where the copies sit, and there is no allocator** (schema v25). `deck_allocations`,
+  `allocate_deck`, `allocate_every_deck`, `kind_rank`, `Candidate` and `decks.is_built` are all
+  deleted. What replaced them is one statement:
+
+  ```sql
+  SELECT c.oracle_id, sum(e.quantity)
+    FROM collection_entries e
+    JOIN collection_folders f ON f.id = e.folder_id
+    JOIN cards c ON c.id = e.card_id
+   WHERE f.deck_id = ?1 AND c.oracle_id IS NOT NULL
+   GROUP BY c.oracle_id
+  ```
+
+  `deck::owned_by_oracle` — **`sum(quantity)` over the deck's own group, keyed by oracle id** —
+  and `attribute_owned` hands that map out along `read_deck_cards`' `ORDER BY`, which is the
+  read's order and never a caller's, so the number a row shows cannot depend on how a view chose
+  to display the list. **Matched by oracle id, not by printing**, so a Bolt is still a Bolt: an
+  Alpha copy in the group answers an M10 row in the list, which is what a reader means by "I have
+  that card". Two kinds of row are passed over rather than served last, and the shape is
+  unchanged from the allocator's day even though the reason for each has moved — a row in an
+  **inactive** category (a switched-off pile counts toward nothing anywhere, so letting it take
+  from the pool would move copies onto a scratchpad) and a row in the **theory** list (a plan
+  reserves nothing).
+
+  **The cost is honest and worth stating: owned/missing is now exactly as accurate as the
+  reader's filing.** The allocator guessed for them — it swept every collection row a deck's
+  oracle ids matched and reserved greedily, so a card in the binder counted as "in the deck"
+  whether or not the reader had ever sleeved it up. Now a copy counts for a deck when it is
+  *in that deck's group*, and a reader who has not filed their cards sees a deck full of red.
+  That is the trade the release makes: a number that is wrong in a way nobody can see, exchanged
+  for a number that is exactly the reader's own filing and can be corrected by dragging.
+
+  Three failure modes went with the allocator, and each was real:
+
+  - **Two decks could both count the same copy**, because a claim was a reservation and drafts
+    all planned against the same shared binder. A placement is custody, one row sits in one
+    folder, and `collection_to_deck` decrements the *other* deck's live list when it takes a copy
+    out of its group.
+  - **The stored claim could out-count the row it claimed.** Nothing refused it: the read clamped
+    with `min(allocation, entry.quantity)`, so a collection row stepped down under a claim was
+    honest on screen while the ledger kept a number that was not. v25's conversion clamps that
+    overclaim away for good.
+  - **Growing the collection did not re-run the allocator**, so a deck read new copies only after
+    its next allocator run — a bug this page carried as "known, named, and Plan 6's to close",
+    which is now closed by there being nothing to re-run. A `sum()` over the group is current at
+    every read.
+
+  **The run list is not replaced by a shorter run list; it is replaced by nothing.** There is no
+  derived table to keep in step, so no write "runs the allocator" and none can forget to. What
+  moves a row *across* the deck boundary is exactly the pair in `collection_alloc.rs` —
+  `collection_to_deck` and `deck_to_collection` — plus `delete_deck`, which re-files a group's
+  cards into `Recently removed`. Everything else that changes the number is an ordinary
+  collection write landing on a row that happens to be filed in a group (a stepper, an edit, the
+  reconciler's fold), and it is answered at the next read because the next read is a `sum()`.
+  **No deck write changes what a deck owns as a side effect any more**, which is the debugging
+  property the old run list was trying to give and could not.
 - Deck cards ride **`images::prewarm_keys`' UNION** (one arm, `grid` only, like the collection
   and wishlist arms) and the reconciler's **three-table sweep**
   (`collection_entries`, `wishlist_entries`, `deck_cards`).
@@ -375,7 +455,9 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
   - **Three commands**: `deck_undo_state(deckId, redoId)` — the two `DeckAuditEntry`s the buttons
     name themselves from, the redo half answered only for the id the caller hands in —
     and `deck_undo_apply` / `deck_redo_apply`, which check the id against the cursor rather than
-    trusting it and end with **one** `allocate_deck` run.
+    trusting it. **They ended with one `allocate_deck` run until schema v25 and now end with
+    nothing**: what a deck owns is where its collection rows sit, and putting a `deck_cards` row
+    back does not move a card.
   - **Four things are deliberately out of reach, and each has a reason rather than a gap.**
     `deck_create`/`deck_duplicate`/`deck_delete` are gallery writes with no editor open, and
     undoing "this deck was born" means deleting the deck the reader is standing in.
@@ -418,9 +500,12 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
   the cards printing `{X}` under a heading of their own. Per deck rather than per user for
   `theory_enabled`'s reason: it is a statement about how _this_ list is read, so two decks may
   disagree and a copy must not. It rides `DeckPatch`, `DeckRow`, `DeckBefore` and `DECK_SELECT`,
-  and **`duplicate_deck` carries it across** while `is_built` and `archived` still reset — what
+  and **`duplicate_deck` carries it across** while `archived` still resets — what
   describes the deck comes over, what state the deck is _in_ does not, and a copy that read
-  differently from its original would be a surprise nobody asked for. Rust stores it and does
+  differently from its original would be a surprise nobody asked for. (`is_built` was the other
+  half of that sentence until schema v25 deleted the column; a copy also gets an **empty
+  group** — its own `collection_folders` row, holding nothing — because the original's copies are
+  physical cards and a duplicate is a draft, not a second set of them.) Rust stores it and does
   nothing else with it: which cards fall in the group, what it is called and where it sorts are
   `grouping.ts`'s, which is the crate's facts/conclusions boundary rather than an accident of
   where it was easier to write. **Two positional traps, both silent when got wrong.** The column
@@ -554,10 +639,11 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
 - **`deck_category_clear(deckId, categoryId, variant)` empties one pile of one list, and exists
   for `deck_import_commit`'s reason** (added 2026-08-15, behind a category heading's right-click
   `Clear stack…`). The frontend holds every row of the pile, so a `deck_set_card_quantity(…, 0)`
-  per row would work — and would be a transaction, an `allocate_deck` and a `["decks"]`
+  per row would work — and would be a transaction and a `["decks"]`
   invalidation **per card**, plus one history line each for a press the reader made once, plus a
   refusal halfway leaving the pile half-empty with nothing able to say so. One statement, one
-  allocator run, one row.
+  transaction, one history row. (It was "one allocator run" as well until schema v25; the
+  arithmetic that made this a command survives the allocator that first motivated it.)
   - **Variant-scoped, which is the exact reverse of `deck_category_delete`.** That command
     cascades through both lists because `deck_cards.category_id` is `ON DELETE CASCADE` and a
     category is not per-variant; a clear leaves the pile standing, so what it empties is the list
@@ -566,7 +652,7 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
     over- or understate a destructive press.
   - **It answers the copies it removed**, counted before the `DELETE` and in copies rather than
     rows, which is what the confirmation quoted and what `delta` means in the history.
-  - **An empty pile writes nothing at all**: no `touch_deck`, no audit row, no allocator run. The
+  - **An empty pile writes nothing at all**: no `touch_deck` and no audit row. The
     same choice `set_card_quantity`'s zero arm makes and states — a `remove` row of zero copies is
     a history of a change that never happened — and it keeps a menu opened on an empty column from
     moving the deck's `updated_at`. The UI greys the row in that state; the early return is the
@@ -576,14 +662,17 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
     "Removed 7 × a card", which is a sentence about a card the row has not got. It is
     `deck_import_commit`'s replace row one shelf over, which carries `{ import: { cleared } }`
     instead, and the two are deliberately different shapes because they are different events.
-- **`deck_import_commit(deckId, variant, mode, items)` is the other bulk card command, and it
-  exists for the allocator.** Looping `deck_add_card` from the frontend would be correct in
-  every other respect and would run `allocate_deck` **once per line** — a hundred rebuilds of a
-  deck's claims for one import. It runs it once, at the end, over the finished deck. "Once" is
-  invisible in the result (the allocator is delete-and-rebuild, so N runs and one run leave
-  identical rows), so `the_allocator_runs_once_for_the_whole_import` counts row changes through
-  SQLite's `total_changes` instead: **43** for one run over 20 owned cards against **423** for
-  one run per item, both measured 2026-08-12. Everything else is `add_card`'s shape held to
+- **`deck_import_commit(deckId, variant, mode, items)` is the other bulk card command. It existed
+  for the allocator and outlives it.** Looping `deck_add_card` from the frontend would have run
+  `allocate_deck` **once per line** — a hundred rebuilds of a deck's claims for one import, each
+  deleting and re-deriving every row the last one wrote — and this command ran it once, at the
+  end, over the finished deck. That was measured, by a test called
+  `the_allocator_runs_once_for_the_whole_import` that went with the allocator: it counted row
+  changes through SQLite's `total_changes` at **43** for one run over 20 owned cards against
+  **423** for one run per item, both on 2026-08-12. **Schema v25 dropped the allocator,
+  and the reason that survives it is one transaction**: a hundred `add_card` calls are a hundred
+  transactions, so a list refused on line 90 leaves 89 cards in the deck and a history of 89
+  edits nobody made. Everything else is `add_card`'s shape held to
   deliberately — the same variant and `touch_deck` fences, the same `DECK_CARD_GRAIN`
   `ON CONFLICT` fold (so a list naming a card twice is one row with the sum), the same
   `category_for_name` find-or-create (so a `Sideboard` section lands on the seeded `side` row
@@ -604,9 +693,10 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
   name is memoised for the list, every export in scope writes the same bracket on every card of a
   category, and a list disagreeing with itself has no better answer available. And **the write goes
   straight to the column** rather than through `deck_meta::set_category_active`, which opens a
-  transaction of its own, records a history row and reallocates — all three already
-  `commit_import`'s, whose whole reason for existing is that the allocator runs **once**, at the
-  end, over the finished deck. `#[serde(default)]` keeps every caller written before the field
+  transaction of its own and records a history row — both already `commit_import`'s, whose whole
+  reason for existing is that the import is **one** transaction over the finished deck. (That
+  call reallocated too, until schema v25 took the allocator; the other two reasons are what the
+  rule now stands on.) `#[serde(default)]` keeps every caller written before the field
   deserialising, and absent means the ordinary counted pile an import has always made. Rust records
   the flag and concludes nothing from it: which lines carry it is `parse.ts`'s reading of the
   bracket's **first** entry, carried to the item by `plan.ts`.
@@ -806,7 +896,7 @@ Halfling`, the one non-legendary creature among its 56 creatures, was correctly 
   `WHERE`/`ORDER BY` text; the collection was empty, so `owned_quantity` was 0 on every row and
   the language term was the only key that could move). **Position is the whole decision**: behind
   `owned_quantity`, because a Japanese copy you own is still a copy you own and a deck that
-  preferred an English printing you have not got would claim nothing from the binder; ahead of
+  preferred an English printing you have not got would match nothing in the binder; ahead of
   the date, because "newest" is a tie-break for which printing looks current and is exactly the
   key that produced those five. `cards.lang` is `TEXT NOT NULL` holding Scryfall's codes (`en`,
   `es`, `ja`, … 19 in the corpus, 0 NULL), so the predicate is a plain equality and never a
@@ -843,7 +933,7 @@ Halfling`, the one non-legendary creature among its 56 creatures, was correctly 
   promise the answer before the press.
 - **A write to what is _in_ a deck goes through a `useDeck` mutation, and `DeckEditor`'s
   `newestWrite([...])` takes every one of them but `rememberView`** — update (the rename, the
-  cover, the Built toggle and the `Split X` chip, all four of which are the same deck-row write
+  cover, the format and the `Split X` chip, all of which are the same deck-row write
   and therefore not four mutations), add-card, set-quantity, move, set-tag,
   missing-to-wishlist, swap-printing — **and the `useDeckMeta` writes a right-click can now
   reach**, which are the tag create and a category's rename, switch and delete. Read the array
@@ -855,8 +945,8 @@ Halfling`, the one non-legendary creature among its 56 creatures, was correctly 
   mutation**: the tray's drop and the stepper's zero are both `setQuantity(…, 0)`, because zero
   removes a deck row. The deck _row_ is a different hook — the gallery's `useDecks` owns create,
   update, remove and duplicate, and `useDeck.update` is that same `deck_update` narrowed to the
-  open deck, which is how the Built toggle is one of the six. A refused write re-reads the deck
-  through whichever of the six answered last, so a sibling's GONE is what turns the columns
+  open deck, which is how a header chip is one of them. A refused write re-reads the deck
+  through whichever of them answered last, so a sibling's GONE is what turns the columns
   into the gone paragraph. Two surfaces outside the editor
   borrow a mutation whole rather than defining one — `useSwapFromPane` (the card pane) and
   `useSidebarDrops` (the sidebar's Decks entry) — and **the refusal rule lives on the single
