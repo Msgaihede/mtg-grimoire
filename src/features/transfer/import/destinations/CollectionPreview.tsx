@@ -16,7 +16,6 @@ import { plural } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError, type DeckFinish, type TransferImportMode } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
-import { DECK_DRIVEN_REASON, useDeckDrivenCollection } from "@/lib/useDeckDrivenCollection";
 import { cn } from "@/lib/utils";
 import type { DestinationPreviewProps, ImportDestination, ImportModeOption } from "../destination";
 import { CommitBar, useImportCommit } from "../shared/CommitBar";
@@ -46,7 +45,6 @@ export function CollectionPreview({
   const defaults = useAppStore((s) => s.importDefaults);
   const setDefaults = useAppStore((s) => s.setImportDefaults);
   const [mode, setMode] = useState("add");
-  const { deckDriven } = useDeckDrivenCollection();
 
   const plan = useMemo(
     () => planCollectionImport(list, resolved, defaults),
@@ -65,10 +63,7 @@ export function CollectionPreview({
   );
 
   const runImport = () => {
-    // Refused at the picker already (`ImportDialog`'s radios and its Preview button), so this
-    // is the backstop rather than the fence: the reader could only reach here if the setting
-    // turned on mid-session, with this preview still open from before it did.
-    if (plan.items.length === 0 || deckDriven) return;
+    if (plan.items.length === 0) return;
     commit.mutate(undefined, {
       onSuccess: (outcome) => onDone(`${outcome.added} added, ${outcome.updated} updated.`),
     });
@@ -158,15 +153,11 @@ export function CollectionPreview({
         label="Import"
         pendingLabel="Importing…"
         pending={commit.isPending}
-        disabled={plan.items.length === 0 || deckDriven}
+        disabled={plan.items.length === 0}
         message={
-          deckDriven
-            ? DECK_DRIVEN_REASON
-            : commit.error === null
-              ? ""
-              : `Could not import the list — ${ipcError(commit.error)}`
+          commit.error === null ? "" : `Could not import the list — ${ipcError(commit.error)}`
         }
-        failed={deckDriven || commit.error !== null}
+        failed={commit.error !== null}
         onBack={onBack}
       />
     </form>

@@ -45,19 +45,6 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 const pickFile = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: pickFile }));
 
-/** Whether the collection is deck-driven, for the destination-refusal tests near the end of
- *  this file. Mocked rather than driven through the real hook's `QueryClient`, per this task's
- *  own instruction — a sibling is still wiring the Storybook fake's support for this setting. */
-const deckDriven = { value: false };
-vi.mock("@/lib/useDeckDrivenCollection", async (original) => ({
-  ...(await original<typeof import("@/lib/useDeckDrivenCollection")>()),
-  useDeckDrivenCollection: () => ({
-    deckDriven: deckDriven.value,
-    setDeckDriven: vi.fn(),
-    error: null,
-  }),
-}));
-
 import type { ImportDestination } from "./destination";
 import { collectionDestination } from "./destinations/CollectionPreview";
 import type { DeckImportInto } from "./destinations/DeckPreview";
@@ -380,7 +367,6 @@ beforeEach(() => {
   onDismiss.mockReset();
   onClose.mockReset();
   onImported.mockReset();
-  deckDriven.value = false;
 });
 
 describe("the import dialog", () => {
@@ -1024,18 +1010,14 @@ describe("the import dialog", () => {
     );
     expect(screen.getByLabelText("Decklist")).toHaveValue("");
   });
-});
 
-/**
- * Refused at the picker, rather than after a whole plan has been built — the collection is the
- * only destination that ever refuses, since the backend's fence is on collection writes alone.
- */
-describe("the picker while the collection is deck-driven", () => {
-  beforeEach(() => {
-    deckDriven.value = true;
-  });
-
-  it("greys the collection radio and names the reason, leaving the other destination live", async () => {
+  /**
+   * **The collection is an ordinary destination, and this is the only thing that says so.** It
+   * used to be the one entry that could refuse — greyed, with its reason folded into its own
+   * accessible name — so a radio that renders plain and takes the press is exactly the seam
+   * this change opens. Two destinations because one draws no radios at all.
+   */
+  it("lets the reader choose the collection when there is more than one destination", async () => {
     wrap(
       <ImportDialog
         destinations={[wishlistDestination, collectionDestination]}
@@ -1047,45 +1029,14 @@ describe("the picker while the collection is deck-driven", () => {
     );
     await panel();
 
-    // A greyed control's accessible name carries its reason, so an exact match on the label
-    // reads as "the control is missing" -- match with a regex instead.
-    const collection = screen.getByRole("radio", { name: /collection.*driven by your decks/i });
-    expect(collection).toHaveAttribute("aria-disabled", "true");
+    const collection = screen.getByRole("radio", { name: "Import into your collection" });
+    expect(collection).toBeEnabled();
+    expect(collection).not.toHaveAttribute("aria-disabled");
     expect(collection).not.toBeChecked();
 
-    // The other destination is untouched: nothing about a wishlist import writes the
-    // collection.
-    const wishlist = screen.getByRole("radio", { name: "Import into your wishlist" });
-    expect(wishlist).not.toHaveAttribute("aria-disabled");
-    expect(wishlist).toBeChecked();
-  });
+    await userEvent.click(collection);
 
-  /**
-   * **`CollectionPage` mounts this dialog with the collection as its one destination**, which
-   * draws no radios at all — "a choice between one thing is not a choice." So the refusal has
-   * to reach the Preview button on the source step too, or the collection's own bulk-import
-   * button would be the one write surface in the app this task left standing.
-   */
-  it("refuses to preview a bulk import with no destination to switch to", async () => {
-    wrap(
-      <ImportDialog
-        destinations={[collectionDestination]}
-        open
-        onDismiss={onDismiss}
-        onClose={onClose}
-        onDone={vi.fn()}
-      />,
-    );
-    await panel();
-
-    await userEvent.click(await screen.findByLabelText("Decklist"));
-    await userEvent.paste("1 Sol Ring");
-
-    const go = screen.getByRole("button", { name: /preview.*driven by your decks/i });
-    expect(go).toHaveAttribute("aria-disabled", "true");
-
-    await userEvent.click(go);
-
-    expect(importResolve).not.toHaveBeenCalled();
+    expect(collection).toBeChecked();
+    expect(screen.getByRole("radio", { name: "Import into your wishlist" })).not.toBeChecked();
   });
 });

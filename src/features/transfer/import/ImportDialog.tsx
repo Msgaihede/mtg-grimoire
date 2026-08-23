@@ -5,7 +5,6 @@ import { plural } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
 import { ipcError, type ImportResolveLine } from "@/lib/ipc";
 import { statusLine } from "@/lib/motion";
-import { DECK_DRIVEN_REASON, useDeckDrivenCollection } from "@/lib/useDeckDrivenCollection";
 import { cn } from "@/lib/utils";
 import { Dialog } from "@/components/Dialog";
 import type { ImportDestination } from "./destination";
@@ -175,7 +174,6 @@ function ImportBody({
 }) {
   const id = useId();
   const listRef = useRef<HTMLTextAreaElement>(null);
-  const { deckDriven } = useDeckDrivenCollection();
 
   const [text, setText] = useState("");
   const [step, setStep] = useState<Step>("source");
@@ -187,12 +185,6 @@ function ImportBody({
   const { resolve, readFile } = useImport();
 
   const parsed = useMemo(() => parseDecklist(text), [text]);
-
-  // While the collection is deck-driven, the backend refuses every write to it — including a
-  // bulk import. Refused here, at the picker, rather than after `import_resolve` and a whole
-  // plan have been built: a reader pasting three hundred lines into a destination that cannot
-  // take them is owed that news before the round trip, not after it.
-  const collectionBlocked = destination?.key === "collection" && deckDriven;
 
   // The caret starts in the box the reader has to fill, which is `CreateDeckDialog`'s rule and
   // this dialog's whole first step. A stray Enter in a textarea is a newline, not a submit.
@@ -269,9 +261,6 @@ function ImportBody({
     <form
       onSubmit={(e) => {
         e.preventDefault();
-        // Presentation (`aria-disabled` below) says why; this is what actually stops the
-        // round trip to `import_resolve`.
-        if (collectionBlocked) return;
         if (parsed.lines.length > 0) preview();
       }}
       className="flex min-h-0 flex-1 flex-col"
@@ -346,37 +335,19 @@ function ImportBody({
         {destinations.length > 1 && (
           <fieldset className="space-y-1.5">
             <legend className="mb-1 text-xs text-dim">Where these cards go</legend>
-            {destinations.map((option, index) => {
-              // Only the collection destination refuses — a deck, a new deck and the wishlist
-              // all still take a bulk import while the collection is deck-driven.
-              const blocked = option.key === "collection" && deckDriven;
-              return (
-                <label key={option.key} className="flex items-baseline gap-2 text-sm">
-                  <input
-                    type="radio"
-                    name={`${id}-destination`}
-                    value={option.key}
-                    checked={index === chosen}
-                    onChange={() => {
-                      if (blocked) return;
-                      onChoose(index);
-                    }}
-                    // `aria-disabled`, never the `disabled` attribute, so the row stays
-                    // reachable and its reason stays readable. The name is overridden rather
-                    // than appended beside it, since the wrapping `<label>`'s own text is what
-                    // an unblocked radio is named by.
-                    aria-disabled={blocked || undefined}
-                    aria-label={
-                      blocked
-                        ? `Import into ${option.label} — ${DECK_DRIVEN_REASON}`
-                        : undefined
-                    }
-                    className="accent-accent aria-disabled:opacity-50"
-                  />
-                  Import into {option.label}
-                </label>
-              );
-            })}
+            {destinations.map((option, index) => (
+              <label key={option.key} className="flex items-baseline gap-2 text-sm">
+                <input
+                  type="radio"
+                  name={`${id}-destination`}
+                  value={option.key}
+                  checked={index === chosen}
+                  onChange={() => onChoose(index)}
+                  className="accent-accent"
+                />
+                Import into {option.label}
+              </label>
+            ))}
           </fieldset>
         )}
 
@@ -397,13 +368,7 @@ function ImportBody({
         <button
           type="submit"
           disabled={parsed.lines.length === 0 || resolve.isPending}
-          aria-disabled={collectionBlocked || undefined}
-          aria-label={collectionBlocked ? `Preview — ${DECK_DRIVEN_REASON}` : undefined}
-          className={cn(
-            PRIMARY,
-            "aria-disabled:opacity-40 aria-disabled:hover:bg-transparent aria-disabled:hover:text-accent",
-            FOCUS,
-          )}
+          className={cn(PRIMARY, FOCUS)}
         >
           {resolve.isPending ? "Reading…" : "Preview"}
         </button>
