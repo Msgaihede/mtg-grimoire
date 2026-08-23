@@ -25,19 +25,27 @@
 //!   same reason and at a cost already paid once**: [`deck_to_collection`] spelled its own copy
 //!   of that query and that loop, and both copies matched the exact printing — so the fix for a
 //!   swapped printing's stranded copies had to be made twice or it would have been made once.
-//! * **Taking a copy out of another deck's group decrements that deck's *live* list too.**
-//!   The copies are custody, not a reservation, so a deck that loses them loses the card. It
-//!   is reported in [`MoveOutcome::from_deck`] because the side effect lands on a deck the
-//!   reader is not looking at, and the UI confirms it before pressing.
+//! * **Taking a copy out of another deck's group decrements that deck's *live* list too, and
+//!   records it in that deck's history.** The copies are custody, not a reservation, so a deck
+//!   that loses them loses the card. It is reported in [`MoveOutcome::from_deck`] because the
+//!   side effect lands on a deck the reader is not looking at, and the UI confirms it before
+//!   pressing — but a sentence in a dialog is gone the moment it closes, and the *only* place
+//!   that deck's own loss can be looked up afterwards is its own log. One row per `deck_cards`
+//!   row decremented; [`take_from_deck_list`] argues why that granularity rather than a summary.
 //! * **A deck card with no backing copies just goes away.** It was added from search as "I
 //!   need to buy this", the reader never owned it, so nothing lands on their desk. That is
 //!   also the answer [issue #209](https://github.com/Msgaihede/mtg-grimoire/issues/209) could
 //!   not find: no per-deck-card provenance flag is needed, because the group **is** the
 //!   provenance record.
-//! * **A cut writes the history [`crate::deck::set_card_quantity`] would have, and no undo
-//!   step.** The command it replaced wrote both; routing a live decrease here took both away,
-//!   and the history is not optional. The step is — see [`deck_to_collection`], which argues it
-//!   at length.
+//! * **Both writes record the history the deck command they stand in for would have, and
+//!   neither files an undo step.** A cut writes [`crate::deck::set_card_quantity`]'s row and a
+//!   filing writes [`crate::deck::add_card`]'s — same kinds, same payload shapes, same signed
+//!   deltas — so a deck's log reads continuously across a change of command the reader cannot
+//!   see, and the two directions read as one pair in the drawer rather than as two features.
+//!   The history is not optional. **The step is, and neither absence is an oversight**: a step
+//!   could carry only the `deck_cards` half, leaving the copies where they went, and each
+//!   function argues its own case at length. The way out of either mistake is one recorded press
+//!   in the other direction.
 //!
 //! Both are one transaction, for the reason every fold in this crate is one: mid-move the
 //! copies are in both places or in neither.
@@ -90,6 +98,16 @@ pub const NO_REMOVED_FOLDER: &str = "There is no Recently removed folder to file
 /// one.
 pub const ALREADY_HERE: &str = "Those copies are already in this deck.";
 
+/// What [`Pile::from_args`] says when a caller sends a category id **and** a category name.
+///
+/// Refused rather than resolved by preference — [`crate::deck::add_card`] lets the id win, and
+/// that is right there, where a drag carries an id and a computed name rides along beside it in
+/// the same payload. Nothing sends both here: the one caller picks one or the other from a
+/// `categoryId ?? name` it has already narrowed, so both arriving means a caller has lost track
+/// of which it meant, and quietly reading one of them is how it goes on believing the other was
+/// read. [`Pile`] is why this is the only place the question can be asked at all.
+pub const BOTH_PILES: &str = "A card goes in one pile: point at one or name one, not both.";
+
 /// `COLLECTION_FOLDER_KINDS[1]` — the one folder that stands for a deck.
 const DECK_KIND: &str = crate::schema::COLLECTION_FOLDER_KINDS[1];
 /// What is actually sleeved up — `DECK_VARIANTS[0]`, [`crate::deck`]'s discipline.
@@ -109,6 +127,17 @@ pub struct MoveOutcome {
     /// from **after** the fact as well as before it. Never set by [`deck_to_collection`],
     /// where the deck they came out of is the one the reader is looking at.
     pub from_deck: Option<String>,
+    /// The `deck_cards` row [`collection_to_deck`] wrote, which is the only thing the caller has
+    /// to point at.
+    ///
+    /// An owned add lands a row the editor has never seen and cannot compute the id of — the
+    /// `ON CONFLICT` arm merges into whatever pile already held the printing, so it is not
+    /// derivable from the arguments either. Without it the landed glow has no subject and the
+    /// add reads as a press that did nothing.
+    ///
+    /// **`None` from [`deck_to_collection`]**, where the caller handed the id in and still holds
+    /// it — and where the row may not exist any more, a whole cut being a delete.
+    pub deck_card_id: Option<i64>,
     /// How many copies actually moved. Never more than was asked; less only where the deck
     /// list wanted more than the group held.
     pub quantity: i64,
@@ -125,6 +154,51 @@ struct Source {
     card_id: String,
     finish: String,
     quantity: i64,
+}
+
+/// Which pile the copies are going into — **an id or a name, and never both**.
+///
+/// [`crate::deck::add_card`] spells this as two `Option`s and lets the id win when both arrive.
+/// That is the right shape *there*: a drop onto a column carries an id while the add path's
+/// computed name rides along in the same payload, so both is the ordinary case. Here it is not —
+/// the caller has already chosen — so the two are alternatives, and an enum is what makes
+/// "both" something [`collection_to_deck`] cannot be handed rather than something it has to
+/// remember to refuse. The refusal exists once, at [`Pile::from_args`], which is the one place
+/// the wire's two nullable fields become this.
+///
+/// `Copy`, so the command below can build one and hand it to a closure without a clone: it is a
+/// number or a borrowed string.
+#[derive(Debug, Clone, Copy)]
+pub enum Pile<'a> {
+    /// A pile the caller pointed at — the id arm, which every caller before the owned add used.
+    /// Fenced against this deck, because `deck_cards.category_id`'s foreign key only asks that
+    /// the category exist and says nothing about whose it is.
+    Id(i64),
+    /// A pile the caller named, resolved through [`crate::deck_meta::category_for_name`] —
+    /// found where the deck has it, and **created with `origin = 'auto'`** where it does not.
+    ///
+    /// That word is the whole reason this arm exists. A pile the reader made draws for as long
+    /// as it exists; a pile the app made arrives with its first card and goes with its last. The
+    /// owned add had no way to say "file this under Ramp", so TypeScript resolved the name for
+    /// it through `deck_category_create` — the command behind the reader's own "New category"
+    /// button, which writes `'user'` — and left an empty heading nothing but a manual delete
+    /// could remove.
+    Name(&'a str),
+}
+
+impl<'a> Pile<'a> {
+    /// The wire's two nullable fields, as the one thing they are allowed to mean.
+    ///
+    /// Neither answers [`crate::deck::NO_CATEGORY`] verbatim — two commands asked the same
+    /// question answer it with the same sentence — and both answers [`BOTH_PILES`].
+    pub fn from_args(id: Option<i64>, name: Option<&'a str>) -> Result<Self, String> {
+        match (id, name) {
+            (Some(id), None) => Ok(Pile::Id(id)),
+            (None, Some(name)) => Ok(Pile::Name(name)),
+            (Some(_), Some(_)) => Err(BOTH_PILES.to_owned()),
+            (None, None) => Err(crate::deck::NO_CATEGORY.to_owned()),
+        }
+    }
 }
 
 /// Read one collection row, or [`crate::collection::GONE`].
@@ -190,6 +264,33 @@ fn source_deck(conn: &Connection, folder_id: Option<i64>) -> Result<Option<(i64,
 ///
 /// Zero deletes, `deck_cards.quantity`'s `CHECK (quantity > 0)` and
 /// [`crate::deck::set_card_quantity`]'s rule: a category slot holding no copies holds nothing.
+///
+/// # One history row per `deck_cards` row, in [`crate::deck::set_card_quantity`]'s two shapes
+///
+/// **This deck's log is the only place its own loss can be recorded, and it was silent.** The
+/// press happens on a deck the reader is not looking at, so [`MoveOutcome::from_deck`] tells
+/// them once, in a sentence that is gone the moment the dialog closes — and then they open Deck
+/// A a week later and the card is simply not there, with nothing in its history saying so. The
+/// deck the copies went *to* records an `add`, but a log is per deck: nothing in Deck A's drawer
+/// can reach it.
+///
+/// **N rows for N piles, and deliberately not one summary row.** This walk takes copies off
+/// however many `deck_cards` rows the printing sits on — one card can be in two categories of
+/// one deck and nothing says which of them the copies were "in" — so there is no single row the
+/// stepper would have written. A summary would have to name one category out of several and
+/// quote a total spanning piles, which is a granularity this write does not have and
+/// `auditText.ts` has no arm for. Each row instead gets exactly what
+/// [`crate::deck::set_card_quantity`] writes for the same edit: a `remove` where the whole slot
+/// goes, a `quantity` where part of it does, `delta` negative in both, and the **row's own**
+/// stored card name so the line still reads once the printing has left `cards`.
+///
+/// The category rides from a `LEFT JOIN`, [`deck_to_collection`]'s reason: `category_id` is a
+/// real foreign key, so a NULL is a database edited by hand, and losing a reader's copies over a
+/// missing pile name would be the history deciding whether a card may leave a deck.
+///
+/// **No undo step**, which is this module's rule twice over: the move is
+/// [`collection_to_deck`]'s and files none in the deck the reader *is* looking at, so filing one
+/// in a deck they are not would offer Ctrl+Z a press they never made on this screen.
 fn take_from_deck_list(
     tx: &Connection,
     deck_id: i64,
@@ -197,23 +298,24 @@ fn take_from_deck_list(
     finish: Option<&str>,
     quantity: i64,
 ) -> Result<(), String> {
-    let rows: Vec<(i64, i64)> = tx
+    let rows: Vec<(i64, i64, String, Option<String>)> = tx
         .prepare(
-            "SELECT id, quantity FROM deck_cards
-              WHERE deck_id = ?1 AND variant = ?2 AND card_id = ?3
-                AND coalesce(finish, '') = coalesce(?4, '')
-              ORDER BY id",
+            "SELECT d.id, d.quantity, d.name, c.name FROM deck_cards d
+               LEFT JOIN deck_categories c ON c.id = d.category_id
+              WHERE d.deck_id = ?1 AND d.variant = ?2 AND d.card_id = ?3
+                AND coalesce(d.finish, '') = coalesce(?4, '')
+              ORDER BY d.id",
         )
         .and_then(|mut s| {
             s.query_map(params![deck_id, LIVE, card_id, finish], |r| {
-                Ok((r.get(0)?, r.get(1)?))
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
             })?
             .collect()
         })
         .map_err(|e| e.to_string())?;
 
     let mut left = quantity;
-    for (id, held) in rows {
+    for (id, held, name, category) in rows {
         if left == 0 {
             break;
         }
@@ -228,6 +330,29 @@ fn take_from_deck_list(
             )
         }
         .map_err(|e| e.to_string())?;
+        // Inside the caller's transaction, [`crate::deck_audit`]'s first rule: a history row for
+        // a move that rolled back is worse than no row at all. The id it answers is discarded,
+        // which is the call shape of every site in this module — none of them files a reversal.
+        let (kind, payload) = if take == held {
+            (
+                crate::deck_audit::REMOVE,
+                json!({ "category": category, "quantity": take, "reason": null }),
+            )
+        } else {
+            (
+                crate::deck_audit::QUANTITY,
+                json!({ "category": category, "from": held, "to": held - take }),
+            )
+        };
+        crate::deck_audit::record(
+            tx,
+            deck_id,
+            LIVE,
+            kind,
+            Some((card_id, &name)),
+            &payload,
+            -take,
+        )?;
         left -= take;
     }
     Ok(())
@@ -241,6 +366,15 @@ fn take_from_deck_list(
 /// table rather than the mistake — and `PRAGMA foreign_keys` is per-connection, so on a
 /// connection that has it off some of them would not surface at all.
 ///
+/// **The pile is a [`Pile`], which is either an id or a name.** The name arm resolves through
+/// [`crate::deck_meta::category_for_name`] exactly as [`crate::deck::add_card`]'s does, inside
+/// this move's own transaction, so a pile the app has to invent is recorded `origin = 'auto'`
+/// and goes with its last card. Without it an owned add had to make the pile from TypeScript
+/// through `deck_category_create` — the reader's own "New category" write, `'user'` — and left
+/// an empty heading in their deck for ever. That is not a shape a caller can work around: the
+/// two commands that already resolve a name each write a card as well, and this is the write
+/// that has to place the copies.
+///
 /// **The copies may be coming out of another deck**, which is the case this function exists to
 /// get right: the source row sits in that deck's group, so taking it decrements that deck's
 /// live list by the same quantity and reports its name in [`MoveOutcome::from_deck`]. The UI
@@ -250,17 +384,52 @@ fn take_from_deck_list(
 /// One transaction, for the reason every fold in this crate is one: mid-move the copies are in
 /// both places or in neither.
 ///
-/// **This one writes no `deck_audit` row yet, and its sibling does.** The asymmetry is not a
-/// decision — it is the same hole [`deck_to_collection`] had, wanting the same answer (the `add`
-/// row [`crate::deck::add_card`] writes) — and it is left because nothing calls this command
-/// from the window: putting a card *into* a deck from the collection is the Collection Search
-/// tab's press, which has not landed. A cut can be made today and needs its history today; an
-/// add cannot be made at all.
+/// # The history is [`crate::deck::add_card`]'s, verbatim
+///
+/// Filing copies into a deck **is** a quick add that happens to bring the cards with it, so the
+/// row is the one that command would have written and not a new shape: an `add` with
+/// `{ category, quantity }`, `delta` positive, the card's stored name so the line still reads
+/// once the printing has left `cards`. `auditText.ts` needs no new arm, and the two directions
+/// read as one pair in the drawer — this row and [`deck_to_collection`]'s — rather than as two
+/// features, which is what a reader scrolling a day's changes actually sees.
+///
+/// **The quantity recorded is the copies that moved, never the total the row landed on.** The
+/// `ON CONFLICT` arm below takes a category already holding the printing from 2 to 3; `delta` is
+/// what the day header adds up, so recording 3 would count the first two copies a second time.
+///
+/// This was deferred once, on the grounds that nothing called the command from the window. That
+/// deferral has expired: the Collection Search tab is the press, and a deck write that leaves no
+/// history is a hole in the deck's own record — the reader opens the drawer and the card is
+/// simply *there*, with nothing saying how.
+///
+/// # There is deliberately no undo step, for [`deck_to_collection`]'s reason
+///
+/// A filing changes **two** rows in two tables: the `deck_cards` row, and a `collection_entries`
+/// row that has moved into this deck's group. [`crate::deck_undo`] can express the first and only
+/// the first — a step names cells of `deck_cards` and restores rows, and its four primitives
+/// touch no collection table at all. A step carrying that half alone would take the card off the
+/// list and leave the copies in the group, so the deck would *hold* copies its own list no longer
+/// claims — invisible to every other deck, and to the reader who pressed Ctrl+Z and watched the
+/// row disappear. Half an undo is worse than none, because the state it leaves is one the reader
+/// has been given a reason to trust.
+///
+/// **Teaching the journal the other half is not available either**, and for the sharper of the
+/// two reasons this file gives: [`take_copies`] files the copies through the merge, so the source
+/// row may have been *folded into* whatever the group already held and no longer exists to
+/// restore. Putting them back is a quantity moved between two folders — a command run backwards,
+/// which is the one design that journal rejects.
+///
+/// **The asymmetry genuinely does not bite on this side, and that is why the absence is cheaper
+/// here than it is on a cut.** A reader who files the wrong card just cuts it: one press, fully
+/// recorded, and the copies land in `Recently removed` rather than nowhere. So this is a decision
+/// and not an oversight — nothing is missing that a reader cannot reach in a single gesture.
+/// `filing_a_card_into_a_deck_files_no_undo_step` is what holds it: adding the half-step moves
+/// the cursor, and that case goes red.
 pub fn collection_to_deck(
     conn: &Connection,
     entry_id: i64,
     deck_id: i64,
-    category_id: i64,
+    pile: Pile<'_>,
     quantity: i64,
 ) -> Result<MoveOutcome, String> {
     if quantity <= 0 {
@@ -270,20 +439,40 @@ pub fn collection_to_deck(
     // Doubles as the deck fence: it answers `deck::GONE` for an id with no row, one statement
     // before there is an orphan to worry about. [`crate::deck::touch_deck`]'s own argument.
     crate::deck::touch_deck(&tx, deck_id)?;
-    // "Gone" and "not yours" are different things to tell a stale editor —
-    // [`crate::deck::category_of_deck`]'s two sentences, which is private to that module.
-    let owner: i64 = tx
-        .query_row(
-            "SELECT deck_id FROM deck_categories WHERE id = ?1",
-            params![category_id],
-            |r| r.get(0),
-        )
-        .optional()
-        .map_err(|e| e.to_string())?
-        .ok_or_else(|| crate::deck_meta::CATEGORY_GONE.to_owned())?;
-    if owner != deck_id {
-        return Err(crate::deck_meta::CATEGORY_WRONG_DECK.to_owned());
-    }
+    // **Inside the transaction, because the name arm *writes***: a pile nobody has made yet is
+    // made here, and it must not survive a move that fails after it —
+    // [`crate::deck::add_card`]'s discipline, and `a_refused_filing_by_name_leaves_no_pile_
+    // behind` is the pin. Both arms answer the category's **name** as well as its id, for that
+    // function's other reason: the history row below names the pile the card went into, and a
+    // number nobody chose says nothing.
+    //
+    // The id arm gets the name free from a fence it has to run anyway — "gone" and "not yours"
+    // are different things to tell a stale editor, [`crate::deck::category_of_deck`]'s two
+    // sentences, which is private to that module. Reading it here rather than after the write is
+    // [`crate::deck::set_card_quantity`]'s discipline, which [`deck_to_collection`] copies one
+    // function down. The name arm trims the caller's string the way `category_for_name` did
+    // before storing it, so the two arms record the same word for the same pile.
+    let (category_id, category): (i64, String) = match pile {
+        Pile::Id(category_id) => {
+            let (owner, name): (i64, String) = tx
+                .query_row(
+                    "SELECT deck_id, name FROM deck_categories WHERE id = ?1",
+                    params![category_id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| crate::deck_meta::CATEGORY_GONE.to_owned())?;
+            if owner != deck_id {
+                return Err(crate::deck_meta::CATEGORY_WRONG_DECK.to_owned());
+            }
+            (category_id, name)
+        }
+        Pile::Name(name) => (
+            crate::deck_meta::category_for_name(&tx, deck_id, name)?,
+            name.trim().to_owned(),
+        ),
+    };
     let group = deck_group(&tx, deck_id)?.ok_or_else(|| NO_DECK_GROUP.to_owned())?;
 
     let source = source_of(&tx, entry_id)?;
@@ -310,35 +499,62 @@ pub fn collection_to_deck(
     // The conflict target is `DECK_CARD_GRAIN` verbatim — the same text the unique index was
     // created from, [`crate::deck::add_card`]'s discipline. `tag_id` and `needs_review` are
     // left alone: the row already there is the one the user labelled.
-    tx.execute(
-        &format!(
-            "INSERT INTO deck_cards
-                 (deck_id, category_id, variant, card_id, set_code, collector_number, lang,
-                  name, finish, quantity, created_at, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, unixepoch(), unixepoch())
-             ON CONFLICT({grain}) DO UPDATE SET
-                 quantity = deck_cards.quantity + excluded.quantity,
-                 updated_at = unixepoch()",
-            grain = crate::schema::DECK_CARD_GRAIN
-        ),
-        params![
-            deck_id,
-            category_id,
-            LIVE,
-            source.card_id,
-            set_code,
-            collector_number,
-            lang,
-            name,
-            finish,
-            quantity
-        ],
-    )
-    .map_err(|e| e.to_string())?;
+    //
+    // **`RETURNING id` rather than `last_insert_rowid`**, and that is the whole of why the id is
+    // read here at all: the `DO UPDATE` arm inserts nothing, so the rowid function would answer
+    // whichever statement wrote last — [`take_copies`]', a paragraph above — and the caller's
+    // glow would land on a row this press never touched.
+    let deck_card_id: i64 = tx
+        .query_row(
+            &format!(
+                "INSERT INTO deck_cards
+                     (deck_id, category_id, variant, card_id, set_code, collector_number, lang,
+                      name, finish, quantity, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, unixepoch(), unixepoch())
+                 ON CONFLICT({grain}) DO UPDATE SET
+                     quantity = deck_cards.quantity + excluded.quantity,
+                     updated_at = unixepoch()
+                 RETURNING id",
+                grain = crate::schema::DECK_CARD_GRAIN
+            ),
+            params![
+                deck_id,
+                category_id,
+                LIVE,
+                source.card_id,
+                set_code,
+                collector_number,
+                lang,
+                name,
+                finish,
+                quantity
+            ],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+
+    // The row [`crate::deck::add_card`] writes for the same change, copied rather than
+    // approximated — see this function's doc. `quantity` is the copies that **moved**, never the
+    // total the `ON CONFLICT` arm landed the row on, because `delta` is what the day header adds
+    // up. Inside this transaction, which is the whole of [`crate::deck_audit`]'s first rule: a
+    // history row for a move that rolled back is worse than no row at all.
+    //
+    // The id [`crate::deck_audit::record`] answers is discarded, which is the call shape of
+    // every site that files no reversal: there is no [`crate::deck_undo`] step to key on it.
+    crate::deck_audit::record(
+        &tx,
+        deck_id,
+        LIVE,
+        crate::deck_audit::ADD,
+        Some((&source.card_id, &name)),
+        &json!({ "category": category, "quantity": quantity }),
+        quantity,
+    )?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(MoveOutcome {
         entry_id: Some(landed),
         from_deck: from.map(|(_, name)| name),
+        deck_card_id: Some(deck_card_id),
         quantity,
     })
 }
@@ -406,12 +622,13 @@ pub fn collection_to_deck(
 /// label is honest about that the whole time; a keyboard user who never looks at it is who this
 /// sentence is for.
 ///
-/// The complete way back is [`collection_to_deck`], which restores **both** halves in one press
-/// — but **nothing calls it in this release**: a deck group is deliberately not a drop target,
-/// so there is no gesture that puts a cut card back where it was until the Collection Search tab
-/// lands. Until then the way back is two presses, add the card again and re-file its copies out
-/// of `Recently removed` by hand. The cost, stated plainly, is that a cut cannot be reversed
-/// from the keyboard; the card is never lost.
+/// The complete way back is [`collection_to_deck`], and **the Collection Search tab is what
+/// calls it** — landed 2026-08-23, which is what this paragraph waited for. A deck group is
+/// still deliberately not a drop target; the gesture is a search over the reader's own copies
+/// and a press, and it restores **both** halves at once. `Recently removed` is where a cut card
+/// is found, so putting one back is that search, filtered to the holding area, rather than the
+/// two hand presses this said. The cost that remains is the one this section is about: a cut is
+/// not reversed by Ctrl+Z, because it files no step. The card is never lost.
 ///
 /// The same reasoning, reached first: [`crate::deck::clear_category`] restores the list and not
 /// the custody. It differs only in having a `deck_cards` half worth a step on its own — a
@@ -531,6 +748,9 @@ pub fn deck_to_collection(
     Ok(MoveOutcome {
         entry_id: landed,
         from_deck: None,
+        // The caller handed the id in and still holds it — and a whole cut has deleted the row,
+        // so answering it back would be pointing at something that is not there.
+        deck_card_id: None,
         quantity: moved,
     })
 }
@@ -544,7 +764,9 @@ pub fn deck_to_collection(
 /// the crate. The alternative was the `add_entry`/`collection_add` split every other cabinet
 /// uses, which would have meant two words for one write in a module that has only two.
 pub mod commands {
-    use super::{collection_to_deck as to_deck, deck_to_collection as to_collection, MoveOutcome};
+    use super::{
+        collection_to_deck as to_deck, deck_to_collection as to_collection, MoveOutcome, Pile,
+    };
     use crate::sync::AppState;
     use std::sync::Arc;
 
@@ -552,18 +774,27 @@ pub mod commands {
     /// a row between folders and can delete one by folding it, and the facet index's `owned`
     /// dimension is built by counting rows. Every deck command in the crate carries a comment
     /// saying this pair would be the exception.
+    ///
+    /// **`category_id` and `category_name` are alternatives and exactly one must arrive** —
+    /// [`Pile::from_args`] is the whole of that rule and the only place it can be asked, because
+    /// [`Pile`] cannot hold both. Two nullable wire fields rather than one tagged value so that
+    /// a caller sending `categoryId` alone — every caller written before the name arm existed —
+    /// is unchanged: an absent field deserialises to `None`.
     #[tauri::command]
     pub async fn collection_to_deck(
         state: tauri::State<'_, Arc<AppState>>,
         entry_id: i64,
         deck_id: i64,
-        category_id: i64,
+        category_id: Option<i64>,
+        category_name: Option<String>,
         quantity: i64,
     ) -> Result<MoveOutcome, String> {
         let state = state.inner().clone();
         tauri::async_runtime::spawn_blocking(move || {
+            // Before the lock is taken: a caller bug is not worth waiting on a busy database for.
+            let pile = Pile::from_args(category_id, category_name.as_deref())?;
             crate::collection_source::with_write_owned(&state, |c| {
-                to_deck(c, entry_id, deck_id, category_id, quantity)
+                to_deck(c, entry_id, deck_id, pile, quantity)
             })
         })
         .await
@@ -772,7 +1003,7 @@ mod tests {
     fn a_card_taken_from_the_binder_leaves_the_binder() {
         let (conn, deck, cat) = fixture();
         let entry = seed_entry(&conn, "bolt", 4, None);
-        collection_to_deck(&conn, entry, deck, cat, 1).unwrap();
+        collection_to_deck(&conn, entry, deck, Pile::Id(cat), 1).unwrap();
         assert_eq!(root_copies(&conn, "bolt"), 3);
         assert_eq!(group_copies(&conn, deck, "bolt"), 1);
         assert_eq!(deck_copies(&conn, deck, "bolt"), 1);
@@ -785,9 +1016,9 @@ mod tests {
         let (conn, a, cat_a) = fixture();
         let (b, cat_b) = second_deck(&conn);
         let entry = seed_entry(&conn, "bolt", 1, None);
-        collection_to_deck(&conn, entry, a, cat_a, 1).unwrap();
+        collection_to_deck(&conn, entry, a, Pile::Id(cat_a), 1).unwrap();
         let filed = group_entry(&conn, a, "bolt");
-        let out = collection_to_deck(&conn, filed, b, cat_b, 1).unwrap();
+        let out = collection_to_deck(&conn, filed, b, Pile::Id(cat_b), 1).unwrap();
         assert_eq!(out.from_deck.as_deref(), Some("Deck A"));
         assert_eq!(
             deck_copies(&conn, a, "bolt"),
@@ -802,7 +1033,7 @@ mod tests {
     fn a_card_cut_from_a_deck_lands_in_recently_removed() {
         let (conn, deck, cat) = fixture();
         let entry = seed_entry(&conn, "bolt", 1, None);
-        collection_to_deck(&conn, entry, deck, cat, 1).unwrap();
+        collection_to_deck(&conn, entry, deck, Pile::Id(cat), 1).unwrap();
         let dc = deck_card(&conn, deck, "bolt");
         deck_to_collection(&conn, dc, 1).unwrap();
         assert_eq!(removed_copies(&conn, "bolt"), 1);
@@ -926,11 +1157,20 @@ mod tests {
     }
 
     /// A deck holding four copies it actually owns, plus the id of the deck card.
+    ///
+    /// **The history the setup wrote is cleared**, which it did not have to be while
+    /// [`collection_to_deck`] recorded nothing. Filing copies in is a deck write and leaves an
+    /// `add` row of its own now — the case below named for that row is what pins it — so leaving
+    /// it standing would make every cut case here assert against a row its own press did not
+    /// write. `deck_audit`'s own sweep clears between cases for the same reason. Nothing
+    /// cascades: this write files no undo step, so there is no journal row keyed on the ids
+    /// being deleted.
     fn cut_fixture() -> (Connection, i64, i64, i64) {
         let (conn, deck, cat) = fixture();
         let entry = seed_entry(&conn, "bolt", 4, None);
-        collection_to_deck(&conn, entry, deck, cat, 4).unwrap();
+        collection_to_deck(&conn, entry, deck, Pile::Id(cat), 4).unwrap();
         let dc = deck_card(&conn, deck, "bolt");
+        conn.execute("DELETE FROM deck_audit", []).unwrap();
         (conn, deck, cat, dc)
     }
 
@@ -1042,12 +1282,328 @@ mod tests {
         );
     }
 
+    /// The root row for a printing — the half [`take_copies`] leaves behind, which carries a
+    /// **new** id: the source row is the half that travels, so the id a caller filed with is in
+    /// the group afterwards and answers [`ALREADY_HERE`] if it is filed again.
+    fn root_entry(conn: &Connection, card_id: &str) -> i64 {
+        conn.query_row(
+            "SELECT id FROM collection_entries WHERE card_id = ?1 AND folder_id IS NULL",
+            params![card_id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn filing_a_card_into_a_deck_records_the_add_a_quick_add_would_have() {
+        // The other half of the pair `cutting_a_whole_row_records_the_remove_a_stepper_would_
+        // have` pins. Filing copies into a deck is a deck write, and a deck write that records
+        // nothing leaves the reader opening the history drawer to find the card simply *there*
+        // with nothing saying how it arrived.
+        let (conn, deck, cat) = fixture();
+        let entry = seed_entry(&conn, "bolt", 4, None);
+        collection_to_deck(&conn, entry, deck, Pile::Id(cat), 2).unwrap();
+        assert_eq!(
+            history(&conn, deck),
+            vec![(
+                crate::deck_audit::ADD.to_owned(),
+                Some("Lightning Bolt".to_owned()),
+                json!({ "category": "Main deck", "quantity": 2 }),
+                2,
+            )]
+        );
+    }
+
+    #[test]
+    fn a_second_filing_records_the_copies_added_and_not_the_total() {
+        // [`crate::deck::add_card`]'s rule, and the one the `ON CONFLICT` arm makes easy to get
+        // wrong: the row lands on 3, and the history is a list of *changes* — the day header
+        // adds `delta` up, so recording the total would count the first two copies twice.
+        let (conn, deck, cat) = fixture();
+        let entry = seed_entry(&conn, "bolt", 4, None);
+        collection_to_deck(&conn, entry, deck, Pile::Id(cat), 2).unwrap();
+        collection_to_deck(&conn, root_entry(&conn, "bolt"), deck, Pile::Id(cat), 1).unwrap();
+
+        assert_eq!(
+            deck_copies(&conn, deck, "bolt"),
+            3,
+            "the row landed on three"
+        );
+        let rows = history(&conn, deck);
+        assert_eq!(rows.len(), 2, "one row per press");
+        assert_eq!(
+            rows[1],
+            (
+                crate::deck_audit::ADD.to_owned(),
+                Some("Lightning Bolt".to_owned()),
+                json!({ "category": "Main deck", "quantity": 1 }),
+                1,
+            )
+        );
+    }
+
+    /// **The source deck's own history, which was a hole this pair of commands opened.**
+    ///
+    /// Taking a copy out of another deck decrements *that* deck's live list — the whole of
+    /// [`MoveOutcome::from_deck`] — and until this test it recorded nothing there. The reader
+    /// opens Deck A's history drawer and the card is simply gone, with the only record of where
+    /// it went sitting in a different deck's log.
+    ///
+    /// **One row per `deck_cards` row decremented, in [`crate::deck::set_card_quantity`]'s two
+    /// shapes.** [`take_from_deck_list`] walks N rows across N piles, so there is no single row
+    /// "the stepper would have written" — a summary row would have to name one category out of
+    /// several and invent a granularity the write does not have. N rows for N piles is the honest
+    /// answer, and it is the shape the drawer already knows how to word.
+    ///
+    /// The seed puts one printing in **two** piles precisely because that is the case a single
+    /// row cannot describe: the first is taken whole and the second in part, so both of the
+    /// stepper's arms are on screen in one press.
+    #[test]
+    fn taking_a_copy_from_another_deck_records_the_loss_in_that_decks_history() {
+        let (conn, a, cat_a) = fixture();
+        let side = crate::schema::tests::category(&conn, a, "main", "Sideboard");
+        let (b, cat_b) = second_deck(&conn);
+        let group = deck_group(&conn, a).unwrap();
+        // Deck A lists the Bolt in two piles and its group holds the four copies behind them.
+        add_variant_card(&conn, a, cat_a, LIVE, "bolt", 2);
+        add_variant_card(&conn, a, side, LIVE, "bolt", 2);
+        let filed = seed_entry(&conn, "bolt", 4, group);
+
+        collection_to_deck(&conn, filed, b, Pile::Id(cat_b), 3).unwrap();
+
+        assert_eq!(
+            deck_copies(&conn, a, "bolt"),
+            1,
+            "three of four left deck A"
+        );
+        assert_eq!(
+            history(&conn, a),
+            vec![
+                (
+                    crate::deck_audit::REMOVE.to_owned(),
+                    Some("Lightning Bolt".to_owned()),
+                    json!({ "category": "Main deck", "quantity": 2, "reason": null }),
+                    -2,
+                ),
+                (
+                    crate::deck_audit::QUANTITY.to_owned(),
+                    Some("Lightning Bolt".to_owned()),
+                    json!({ "category": "Sideboard", "from": 2, "to": 1 }),
+                    -1,
+                ),
+            ],
+            "the pile taken whole and the pile taken in part, each in the stepper's own shape"
+        );
+        // The deck the copies went *to* keeps its own single `add` — the two logs describe the
+        // same press from the two ends and neither is the other's summary.
+        assert_eq!(history(&conn, b).len(), 1);
+    }
+
+    /// **A move out of another deck files no undo step there either**, which is the same
+    /// decision as [`deck_to_collection`]'s and the sharper version of it: the reader is not
+    /// even looking at that deck, so a cursor moved in it would offer a reversal for a press
+    /// they never made on the screen they are on.
+    #[test]
+    fn taking_a_copy_from_another_deck_files_no_step_in_that_deck() {
+        let (conn, a, cat_a) = fixture();
+        let (b, cat_b) = second_deck(&conn);
+        let group = deck_group(&conn, a).unwrap();
+        add_variant_card(&conn, a, cat_a, LIVE, "bolt", 1);
+        let filed = seed_entry(&conn, "bolt", 1, group);
+
+        collection_to_deck(&conn, filed, b, Pile::Id(cat_b), 1).unwrap();
+
+        assert_eq!(steps(&conn, a), 0);
+        assert_eq!(steps(&conn, b), 0);
+    }
+
+    /// **The `deck_cards` row the filing wrote, answered back**, because the caller has nothing
+    /// else to point at: an owned add lands a row the editor has never seen, and without its id
+    /// there is no row to glow.
+    ///
+    /// The `ON CONFLICT` arm is the half worth pinning — a second filing into the same pile
+    /// **updates** rather than inserts, so `last_insert_rowid` would answer the previous
+    /// statement's id and the glow would land on whatever row happened to be written last.
+    #[test]
+    fn a_filing_answers_the_deck_card_it_wrote_through_both_arms() {
+        let (conn, deck, cat) = fixture();
+        let entry = seed_entry(&conn, "bolt", 4, None);
+
+        let first = collection_to_deck(&conn, entry, deck, Pile::Id(cat), 2).unwrap();
+        assert_eq!(
+            first.deck_card_id,
+            Some(deck_card(&conn, deck, "bolt")),
+            "the row the insert made"
+        );
+
+        let again =
+            collection_to_deck(&conn, root_entry(&conn, "bolt"), deck, Pile::Id(cat), 1).unwrap();
+        assert_eq!(
+            again.deck_card_id, first.deck_card_id,
+            "and the same row the second time, through the `ON CONFLICT` arm"
+        );
+    }
+
+    #[test]
+    fn a_cut_answers_no_deck_card_because_its_caller_already_holds_one() {
+        let (conn, deck, cat) = fixture();
+        let entry = seed_entry(&conn, "bolt", 1, None);
+        collection_to_deck(&conn, entry, deck, Pile::Id(cat), 1).unwrap();
+        let dc = deck_card(&conn, deck, "bolt");
+        assert_eq!(deck_to_collection(&conn, dc, 1).unwrap().deck_card_id, None);
+    }
+
+    #[test]
+    fn a_refused_filing_records_nothing() {
+        // [`crate::deck_audit::record`] joins the caller's transaction, so a refusal takes the
+        // row with it — `a_refused_cut_records_nothing` from the other direction. `touch_deck`
+        // has already written by the time this refusal is reached, so the rollback is real.
+        let (conn, deck, cat) = fixture();
+        let entry = seed_entry(&conn, "bolt", 1, None);
+        let err = collection_to_deck(&conn, entry, deck, Pile::Id(cat), 2).unwrap_err();
+        assert_eq!(err, NOT_THAT_MANY);
+        assert_eq!(history(&conn, deck), vec![]);
+    }
+
+    #[test]
+    fn filing_a_card_into_a_deck_files_no_undo_step() {
+        // **The deliberate absence, pinned** — [`collection_to_deck`]'s doc argues it. The move
+        // changes a `collection_entries` row as well as a `deck_cards` one, and
+        // [`crate::deck_undo`] can express only the second; a step carrying that half alone
+        // would take the card off the list and leave the copies in the deck's group, so the
+        // deck would hold copies its own list no longer claims.
+        //
+        // This test is what stops the half-fix: put a `record_cells` beside the audit row and
+        // the cursor moves, and this goes red.
+        let (conn, deck, cat) = fixture();
+        crate::deck::add_card(&conn, deck, "bolt", Some(cat), None, "live", None, 1).unwrap();
+        let before = crate::deck_undo::next_undo(&conn, deck).unwrap();
+        assert!(
+            before.is_some(),
+            "the quick add filed one, or this case proves nothing"
+        );
+        let filed = steps(&conn, deck);
+
+        let entry = seed_entry(&conn, "bolt", 2, None);
+        collection_to_deck(&conn, entry, deck, Pile::Id(cat), 2).unwrap();
+
+        assert_eq!(steps(&conn, deck), filed, "a filing files no reversal");
+        assert_eq!(
+            crate::deck_undo::next_undo(&conn, deck).unwrap(),
+            before,
+            "and the cursor still points at the change before it"
+        );
+        assert_eq!(
+            history(&conn, deck).len(),
+            2,
+            "while the history carries both presses"
+        );
+    }
+
+    /// What a pile says about who made it, and `None` where the deck has no such pile.
+    fn origin_of(conn: &Connection, deck: i64, name: &str) -> Option<String> {
+        conn.query_row(
+            "SELECT origin FROM deck_categories WHERE deck_id = ?1 AND name = ?2",
+            params![deck, name],
+            |r| r.get(0),
+        )
+        .optional()
+        .unwrap()
+    }
+
+    #[test]
+    fn filing_into_a_pile_the_deck_does_not_have_makes_an_app_made_one() {
+        // **The defect this arm exists for.** The owned add had no way to name a pile, so
+        // TypeScript resolved the name itself through `deck_category_create` — which writes
+        // `'user'`, the reader's own answer — and a `Ramp` nobody asked for went on drawing an
+        // empty heading for ever. `category_for_name` is the write that records `'auto'`, and it
+        // is reachable only from inside a command that also writes the card.
+        let (conn, deck, _cat) = fixture();
+        let entry = seed_entry(&conn, "bolt", 1, None);
+
+        collection_to_deck(&conn, entry, deck, Pile::Name("Ramp"), 1).unwrap();
+
+        assert_eq!(
+            origin_of(&conn, deck, "Ramp").as_deref(),
+            Some("auto"),
+            "a pile the app had to invent goes with its last card"
+        );
+        assert_eq!(deck_copies(&conn, deck, "bolt"), 1);
+    }
+
+    #[test]
+    fn filing_by_name_into_a_pile_the_reader_made_leaves_it_theirs() {
+        // `category_for_name` finds before it creates, which is the half that keeps a reader's
+        // own "Ramp" drawing for as long as it exists even once the app files cards into it.
+        let (conn, deck, _cat) = fixture();
+        let mine = crate::deck_meta::create_category(&conn, deck, "Ramp").unwrap();
+        let entry = seed_entry(&conn, "bolt", 1, None);
+
+        collection_to_deck(&conn, entry, deck, Pile::Name("Ramp"), 1).unwrap();
+
+        assert_eq!(
+            origin_of(&conn, deck, "Ramp").as_deref(),
+            Some("user"),
+            "a pile the reader made stays theirs"
+        );
+        let piles: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM deck_categories WHERE deck_id = ?1 AND name = 'Ramp'",
+                params![deck],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(piles, 1, "found rather than made a second time");
+        let filed: i64 = conn
+            .query_row(
+                "SELECT category_id FROM deck_cards WHERE deck_id = ?1 AND card_id = 'bolt'",
+                params![deck],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(filed, mine.id);
+    }
+
+    #[test]
+    fn naming_a_pile_and_pointing_at_one_is_refused() {
+        // Both is a caller bug, and preferring one silently is how a caller goes on believing the
+        // other was read. The core cannot express it at all — this is the one conversion.
+        assert_eq!(
+            Pile::from_args(Some(7), Some("Ramp")).unwrap_err(),
+            BOTH_PILES
+        );
+    }
+
+    #[test]
+    fn naming_no_pile_at_all_is_refused() {
+        // [`crate::deck::add_card`]'s sentence verbatim: two commands answering the same question
+        // answer it the same way.
+        assert_eq!(
+            Pile::from_args(None, None).unwrap_err(),
+            crate::deck::NO_CATEGORY
+        );
+    }
+
+    #[test]
+    fn a_refused_filing_by_name_leaves_no_pile_behind() {
+        // The create is inside the move's own transaction — `deck::add_card`'s discipline — so a
+        // refusal that lands after it takes the invented pile with it. Without that, a reader who
+        // asked for more copies than they own would be left with an empty column they never made.
+        let (conn, deck, _cat) = fixture();
+        let entry = seed_entry(&conn, "bolt", 1, None);
+
+        let err = collection_to_deck(&conn, entry, deck, Pile::Name("Ramp"), 2).unwrap_err();
+
+        assert_eq!(err, NOT_THAT_MANY);
+        assert_eq!(origin_of(&conn, deck, "Ramp"), None);
+    }
+
     #[test]
     fn a_copy_in_a_deck_group_is_not_available_to_another_deck() {
         // Exclusivity, which is the whole point: it is a fact about where the row sits, not a sum.
         let (conn, a, cat_a) = fixture();
         let entry = seed_entry(&conn, "bolt", 1, None);
-        collection_to_deck(&conn, entry, a, cat_a, 1).unwrap();
+        collection_to_deck(&conn, entry, a, Pile::Id(cat_a), 1).unwrap();
         let free = unallocated_copies(&conn, "bolt");
         assert_eq!(free, 0, "the only copy is spoken for");
     }
