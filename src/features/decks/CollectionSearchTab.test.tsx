@@ -132,7 +132,12 @@ const ALREADY_HERE = row({ id: 4, folderId: THIS_GROUP.id, folderName: THIS_GROU
 
 beforeEach(() => {
   collectionList.mockReset().mockResolvedValue({ items: [LOOSE], total: 1 });
-  collectionToDeck.mockReset().mockResolvedValue({ entryId: 9, fromDeck: null, quantity: 1 });
+  collectionToDeck
+    .mockReset()
+    // `deckCardId` is the `deck_cards` row the move landed on, which `collection_to_deck`
+    // always answers — a mock that omitted it would encode a backend answer that cannot
+    // happen.
+    .mockResolvedValue({ entryId: 9, fromDeck: null, deckCardId: 41, quantity: 1 });
   collectionFolderList.mockReset().mockResolvedValue([THIS_GROUP, OTHER_GROUP, BINDER]);
   getMarketplace.mockReset().mockResolvedValue("tcgplayer");
   marketplaceFeedStatus.mockReset().mockResolvedValue([]);
@@ -289,7 +294,12 @@ describe("CollectionSearchTab", () => {
    */
   it("says which deck the copies came out of", async () => {
     collectionList.mockResolvedValue({ items: [SPOKEN_FOR], total: 1 });
-    collectionToDeck.mockResolvedValue({ entryId: 9, fromDeck: "Mono-Red Aggro", quantity: 1 });
+    collectionToDeck.mockResolvedValue({
+      entryId: 9,
+      fromDeck: "Mono-Red Aggro",
+      deckCardId: 41,
+      quantity: 1,
+    });
     tab();
     await userEvent.click(await screen.findByRole("button", { name: /^Add Lightning Bolt/ }));
     await userEvent.click(screen.getByRole("button", { name: "Move it here" }));

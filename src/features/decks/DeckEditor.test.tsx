@@ -701,7 +701,11 @@ beforeEach(() => {
   deckUpdate.mockReset().mockResolvedValue(DECK);
   deckSetCardQuantity.mockReset().mockResolvedValue({ id: 1, quantity: 0, removed: true });
   // What a cut gave back: the row in `Recently removed` the copies landed in, and how many.
-  deckToCollection.mockReset().mockResolvedValue({ entryId: 21, fromDeck: null, quantity: 1 });
+  // `deckCardId` is `null` from this direction by design — the caller handed the id in, and a
+  // whole cut has deleted the row it named.
+  deckToCollection
+    .mockReset()
+    .mockResolvedValue({ entryId: 21, fromDeck: null, deckCardId: null, quantity: 1 });
   deckMoveCard.mockReset().mockResolvedValue(undefined);
   deckAddCard.mockReset().mockResolvedValue({ id: 9, quantity: 1, removed: false });
   deckMissingToWishlist.mockReset().mockResolvedValue(3);
@@ -736,7 +740,13 @@ beforeEach(() => {
    */
   cardDetail.mockReset().mockRejectedValue(new Error("card_detail is not stubbed in this test"));
   collectionList.mockReset().mockResolvedValue({ items: [], total: 0 });
-  collectionToDeck.mockReset().mockResolvedValue({ entryId: 77, fromDeck: null, quantity: 1 });
+  // **Both ids, and they are different rows.** `entryId` is the collection row the copies
+  // landed in; `deckCardId` is the `deck_cards` row the move wrote, which is what the editor
+  // glows for five seconds. A mock without it answers `undefined` and the owned add reads as a
+  // press that did nothing — an impossible backend answer, since this command always names one.
+  collectionToDeck
+    .mockReset()
+    .mockResolvedValue({ entryId: 77, fromDeck: null, deckCardId: 55, quantity: 1 });
   oracleTagsForPrintings.mockReset().mockResolvedValue([]);
   // The whole list back, which is what `deck_category_reorder` answers. Nothing here reads it —
   // the desk shows the order it sent and the query refetch is what settles it — so the value is
@@ -1923,6 +1933,53 @@ describe("DeckEditor", () => {
       await screen.findByRole("button", { name: "Add Goblin Guide to Creature" }),
     );
 
+    const landed = await waitFor(() => {
+      const marks = document.querySelectorAll(`[${LANDED_ATTR}]`);
+      expect(marks).toHaveLength(1);
+      return marks[0];
+    });
+    expect(landed.closest(`[${CARD_BODY_ATTR}]`)?.textContent).toContain("Goblin Guide");
+  });
+
+  /**
+   * **And the same mark for an *owned* add, which is a different command answering a different
+   * shape.** This is the end of the wire `MoveOutcome.deckCardId` exists for.
+   *
+   * An owned add is `collection_to_deck`, and that command answers about the **collection** row
+   * it moved — so for one PR `useDeck`'s owned arm handed back `NO_DECK_ROW`, the editor's guard
+   * refused it, and a press that had worked drew nothing. The `deck_cards` row is not derivable
+   * from the arguments either (the write folds into whatever pile already held the printing, so
+   * a second add answers the *first* row's id), which is why Rust reads it back through
+   * `RETURNING id` and why nothing here could compute it instead.
+   *
+   * The mark is the whole reason the id is carried: the add is made in the docked panel and the
+   * card lands somewhere in a deck the reader is not looking at. `55` is the row the mocked move
+   * names, and the deck reads back with that row in it — the same tie the `need` test above makes.
+   */
+  it("marks the row an owned add landed in", async () => {
+    searchCards.mockResolvedValue({
+      items: [found("Goblin Guide")],
+      total: 1,
+      totalIsCapped: false,
+    });
+    cardDetail.mockResolvedValue(detailOf("Goblin Guide"));
+
+    await open();
+    await userEvent.click(await addMode("Cards I own"));
+    deckGet.mockResolvedValue(
+      detail({}, [
+        bolt(),
+        { ...card({ name: "Goblin Guide", typeLine: "Creature — Goblin" }), id: 55 },
+      ]),
+    );
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Add Goblin Guide to Creature" }),
+    );
+
+    // The owned command ran, not the plain one — otherwise this would be the test above.
+    await waitFor(() => expect(collectionToDeck).toHaveBeenCalled());
+    expect(deckAddCard).not.toHaveBeenCalled();
     const landed = await waitFor(() => {
       const marks = document.querySelectorAll(`[${LANDED_ATTR}]`);
       expect(marks).toHaveLength(1);

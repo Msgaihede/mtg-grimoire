@@ -3590,8 +3590,15 @@ export const ipc = {
       // The command's two nullable fields, which is the shape `deckAddCard` sends and the shape
       // an older build's `categoryId`-only payload already fits. Rust refuses both-at-once in
       // words; {@link DeckPile} is what stops a caller here ever producing that call.
-      categoryId: "id" in pile ? pile.id : null,
-      categoryName: "id" in pile ? null : pile.name,
+      //
+      // **The value, never `"id" in pile`.** Both members of the union *declare* `id`, one of
+      // them as `?: undefined`, so `{ name: "Ramp", id: undefined }` — legal, and what a caller
+      // spreading a partial object produces — satisfies the name member and still answers the
+      // presence test true. That sends `categoryId: undefined, categoryName: null`, which
+      // deserialises to two `None`s and is refused as `NO_CATEGORY`: a filing by name that
+      // reports "a card goes in a pile" instead of going in one.
+      categoryId: pile.id !== undefined ? pile.id : null,
+      categoryName: pile.id !== undefined ? null : pile.name,
       quantity,
     }),
   /**

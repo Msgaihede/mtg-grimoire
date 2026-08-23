@@ -7564,85 +7564,110 @@ export function writeHandlers(db: FakeDb) {
       // Its **name** as well as its id, because the history row below quotes the word rather
       // than a number no reader can resolve — `deck::add_card`'s two arms record the same way.
       // The name arm finds before it creates, so a pile the reader made stays theirs.
+      //
+      // **It is resolved before the refusals below**, because the history row names the pile —
+      // and in the crate that is free, the create being inside the move's own transaction
+      // (`a_refused_filing_by_name_leaves_no_pile_behind`). There is no transaction here, so the
+      // one write it may have made is undone by hand: the row count is read *first*, so
+      // `invented` is the pile `categoryForName` had to **create** and never one it found, and
+      // `rollback` takes it back out on the way past every refusal after this point. Without it
+      // the fake shows a state the backend cannot produce — an empty column a reader never made,
+      // standing after a press that failed — which is the class of defect this feature has
+      // already shipped once.
+      const piles = db.deckCategories.length;
       const category =
         byId !== null
           ? categoryOfDeck(db, args.deckId, byId)
           : categoryForName(db, args.deckId, byName!);
-      const group = deckGroup(db, args.deckId);
-      if (!group) throw refuse(NO_DECK_GROUP);
-
-      const source = db.collectionEntries.find((e) => e.id === args.entryId);
-      if (!source) throw refuse(ENTRY_GONE);
-      if (args.quantity > source.quantity) throw refuse(NOT_THAT_MANY);
-      if (source.folderId === group.id) throw refuse(ALREADY_HERE);
-      // Read before anything moves: the card is what a deck row remembers, and the name is the
-      // half a collection row does not carry.
-      const card = requireCard(db, source.cardId);
-      // `'nonfoil'` is `null` on a deck row and never stored — {@link normaliseFinish} is the one
-      // place that translation happens.
-      const finish = normaliseFinish(source.finish);
-      const from = sourceDeck(db, source.folderId);
-      const cardId = source.cardId;
-
-      const landed = moveCopies(db, args.entryId, args.quantity, group.id);
-      if (from) {
-        takeFromDeckList(db, from.id, cardId, finish, args.quantity);
-        from.updatedAt = stamp(db);
-      }
-      // The row this press wrote, kept so the caller has something to point at — the landed
-      // glow's subject. **Read off the row rather than from `nextId`**, because the `existing`
-      // arm inserts nothing: a second filing of the same card into the same pile answers the
-      // *first* row's id, which is the crate's `RETURNING id` seen from here.
-      let landedCard = deckCardAt(db, args.deckId, cardId, category.id, LIVE, finish);
-      if (landedCard) {
-        // `tagId` and `needsReview` are left alone: the row already there is the one the user
-        // labelled.
-        landedCard.quantity += args.quantity;
-      } else {
-        landedCard = {
-          id: nextId(db.deckCards),
-          deckId: args.deckId,
-          categoryId: category.id,
-          variant: LIVE,
-          cardId,
-          tagId: null,
-          quantity: args.quantity,
-          name: card.name,
-          setCode: card.setCode,
-          collectorNumber: card.collectorNumber,
-          lang: card.lang,
-          finish,
-          needsReview: null,
-        };
-        db.deckCards.push(landedCard);
-      }
-      // **`deck::add_card`'s row, verbatim** — this command *is* an add, made from a card the
-      // reader already owns rather than from a search result, and a reader cannot see which
-      // command ran. So the kind, the payload's two keys and the positive `delta` are that
-      // write's and not a shape of their own, which is what lets `auditText.ts` word it with no
-      // new arm. The copies **added**, never the total the row landed on: the history is a list
-      // of changes and `delta` is what the day header adds up.
-      //
-      // The deck it came *out of* is deliberately not in this row: that deck's own log is where
-      // its loss belongs, and {@link takeFromDeckList} writes it there — one row per `deckCards`
-      // row it decremented, in the stepper's own shapes. Two logs describing one press from its
-      // two ends, neither a summary of the other.
-      record(
-        db,
-        args.deckId,
-        LIVE,
-        "add",
-        { id: cardId, name: card.name },
-        { category: category.name, quantity: args.quantity },
-        args.quantity,
-      );
-      deck.updatedAt = stamp(db);
-      return {
-        entryId: landed,
-        fromDeck: from?.name ?? null,
-        deckCardId: landedCard.id,
-        quantity: args.quantity,
+      const invented = db.deckCategories.length > piles ? category : null;
+      const rollback = () => {
+        if (invented === null) return;
+        const at = db.deckCategories.indexOf(invented);
+        if (at !== -1) db.deckCategories.splice(at, 1);
       };
+      try {
+        const group = deckGroup(db, args.deckId);
+        if (!group) throw refuse(NO_DECK_GROUP);
+
+        const source = db.collectionEntries.find((e) => e.id === args.entryId);
+        if (!source) throw refuse(ENTRY_GONE);
+        if (args.quantity > source.quantity) throw refuse(NOT_THAT_MANY);
+        if (source.folderId === group.id) throw refuse(ALREADY_HERE);
+        // Read before anything moves: the card is what a deck row remembers, and the name is the
+        // half a collection row does not carry.
+        const card = requireCard(db, source.cardId);
+        // `'nonfoil'` is `null` on a deck row and never stored — {@link normaliseFinish} is the one
+        // place that translation happens.
+        const finish = normaliseFinish(source.finish);
+        const from = sourceDeck(db, source.folderId);
+        const cardId = source.cardId;
+
+        const landed = moveCopies(db, args.entryId, args.quantity, group.id);
+        if (from) {
+          takeFromDeckList(db, from.id, cardId, finish, args.quantity);
+          from.updatedAt = stamp(db);
+        }
+        // The row this press wrote, kept so the caller has something to point at — the landed
+        // glow's subject. **Read off the row rather than from `nextId`**, because the `existing`
+        // arm inserts nothing: a second filing of the same card into the same pile answers the
+        // *first* row's id, which is the crate's `RETURNING id` seen from here.
+        let landedCard = deckCardAt(db, args.deckId, cardId, category.id, LIVE, finish);
+        if (landedCard) {
+          // `tagId` and `needsReview` are left alone: the row already there is the one the user
+          // labelled.
+          landedCard.quantity += args.quantity;
+        } else {
+          landedCard = {
+            id: nextId(db.deckCards),
+            deckId: args.deckId,
+            categoryId: category.id,
+            variant: LIVE,
+            cardId,
+            tagId: null,
+            quantity: args.quantity,
+            name: card.name,
+            setCode: card.setCode,
+            collectorNumber: card.collectorNumber,
+            lang: card.lang,
+            finish,
+            needsReview: null,
+          };
+          db.deckCards.push(landedCard);
+        }
+        // **`deck::add_card`'s row, verbatim** — this command *is* an add, made from a card the
+        // reader already owns rather than from a search result, and a reader cannot see which
+        // command ran. So the kind, the payload's two keys and the positive `delta` are that
+        // write's and not a shape of their own, which is what lets `auditText.ts` word it with no
+        // new arm. The copies **added**, never the total the row landed on: the history is a list
+        // of changes and `delta` is what the day header adds up.
+        //
+        // The deck it came *out of* is deliberately not in this row: that deck's own log is where
+        // its loss belongs, and {@link takeFromDeckList} writes it there — one row per `deckCards`
+        // row it decremented, in the stepper's own shapes. Two logs describing one press from its
+        // two ends, neither a summary of the other.
+        record(
+          db,
+          args.deckId,
+          LIVE,
+          "add",
+          { id: cardId, name: card.name },
+          { category: category.name, quantity: args.quantity },
+          args.quantity,
+        );
+        deck.updatedAt = stamp(db);
+        return {
+          entryId: landed,
+          fromDeck: from?.name ?? null,
+          deckCardId: landedCard.id,
+          quantity: args.quantity,
+        };
+      } catch (refusal) {
+        // The crate's transaction, reached from here: everything above rolls back together, and
+        // the only thing this handler has written by the time a refusal can be thrown is the
+        // pile the name arm invented.
+        rollback();
+        throw refusal;
+      }
     },
 
     /**

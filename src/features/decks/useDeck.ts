@@ -12,6 +12,7 @@ import {
   type DeckViewState,
   type MoveOutcome,
 } from "@/lib/ipc";
+import { OWNED_WRITE_KEYS } from "@/lib/query";
 import { useAppStore, type PaneDeckContext } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { autoCategoryFor } from "./autoCategory";
@@ -331,7 +332,10 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
    * the shape PR 2 shipped a ghost row for: the collection's list, its summary, both folder
    * cards and the folder tree are all now wrong, and the deck root reaches none of them.
    *
-   * **Two writes here call it, and each is as precise as its own answer allows.**
+   * **Two writes here call it, and each is as precise as its own answer allows.** Both only
+   * *move* a row between folders, so the total the reader owns cannot have changed — which is
+   * what makes this narrower than {@link invalidateOwnedWrite} below rather than a smaller
+   * version of it.
    *
    * The **cut** is called only when the outcome says copies actually moved: a deck card nobody
    * owned answers `quantity: 0` and `entryId: null` — nothing in any folder was behind it, so
@@ -348,6 +352,32 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
    */
   const invalidateCollection = () => {
     void queryClient.invalidateQueries({ queryKey: ["collection"] });
+  };
+
+  /**
+   * All four roots — for the **`own` add**, the one write here that can put a copy in the
+   * reader's collection that was not there before.
+   *
+   * {@link invalidateCollection} above is not enough for it, and the difference is the arm that
+   * *records* a copy. {@link addOwnedCopies} looks for a free copy first and moves it — a row
+   * changing folder, which no total is a function of — but a reader who owns the card and has
+   * never written it down gets `collection_add`, and that **creates a row**. So
+   * `CardSummary.ownedQuantity` moves from 0 to N on the very tile the press was made on, and
+   * the wishlist's owned progress with it. {@link OWNED_WRITE_KEYS} is the set that write moves
+   * and it is shared with the import's owned half, which makes exactly the same change from the
+   * other side of the app.
+   *
+   * **Fired on both arms rather than only on the recording one**, because the mutation's answer
+   * does not say which arm ran — and over-firing costs one refetch that re-answers what is on
+   * screen, where under-firing costs a number that stays wrong for `query.ts`'s 30 s.
+   *
+   * **And on refusal as well as on success**, which is the half that is easy to leave out: the
+   * arm is two commands, so `collection_add` can land and `collection_to_deck` can then fail —
+   * the split this file's doc calls the harmless half — leaving a new binder row behind a
+   * rejected mutation. `["decks"]` alone would refetch the one root that write did not touch.
+   */
+  const invalidateOwnedWrite = () => {
+    for (const queryKey of OWNED_WRITE_KEYS) void queryClient.invalidateQueries({ queryKey });
   };
 
   /**
@@ -446,10 +476,17 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
     const entryId =
       free?.id ?? (await ipc.collectionAdd({ cardId, finish: finish ?? "nonfoil", quantity })).id;
     const outcome = await ipc.collectionToDeck(entryId, deckId, target, quantity);
-    // **The outcome's number, never the argument** — what moved is what the deck now holds. The
-    // id is {@link NO_DECK_ROW}: this write answers about the collection row and never about the
-    // deck row, so there is nothing for the editor to point the reader at.
-    return { id: NO_DECK_ROW, quantity: outcome.quantity, removed: false };
+    // **The outcome's numbers, never the arguments** — what moved is what the deck now holds,
+    // and {@link MoveOutcome.deckCardId} is the `deck_cards` row the move landed on. Neither is
+    // derivable from what went in: the write folds into whatever pile already held the printing,
+    // so a second add of the same card answers the *first* row's id, which is why Rust reads it
+    // back through `RETURNING id` rather than through `last_insert_rowid`. Handing it on is what
+    // makes an owned add glow the card it added, exactly as every other add in this editor does.
+    //
+    // {@link NO_DECK_ROW} is the floor and not the answer: the field is nullable on the wire
+    // (`deck_to_collection` answers `null` there by design), while `EntryChange.id` is a number
+    // the editor arms a five-second timer against. A caller must still test it.
+    return { id: outcome.deckCardId ?? NO_DECK_ROW, quantity: outcome.quantity, removed: false };
   };
 
   /**
@@ -573,17 +610,18 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
       }
       return ipc.deckAddCard(deckId, cardId, categoryId, categoryName, variant, finish, quantity);
     },
-    onSuccess: (_change, { owned }) => {
-      invalidate();
-      // **The collection's root as well, for the one arm that files a row somewhere else.** An
-      // `own` add takes a row out of the binder and puts it in a deck's group — a row leaving one
-      // folder and often merging into another and being deleted, which is exactly the shape
-      // {@link invalidateCollection} was written for. It over-fires on the two arms that fall
-      // back to the ordinary add (a theory list, a printing the database does not have), which
-      // costs one refetch answering what is already on screen and is the right way round.
-      if (owned === true) invalidateCollection();
-    },
-    onError: invalidate,
+    // **{@link invalidateOwnedWrite} for the `own` arm and {@link invalidate} for every other
+    // add**, on success and on refusal alike. An `own` add takes a row out of the binder and
+    // puts it in a deck's group — or *records* one that was never written down — so all four
+    // owned roots moved; a plain add writes `deck_cards` and nothing else, and firing the wider
+    // set there would be three refetches per press that can only re-answer what is on screen.
+    // The wider set contains `["decks"]`, so the owned arm is not missing the deck root.
+    //
+    // It over-fires on the two arms that fall back to the ordinary add (a theory list, a
+    // printing the database does not have), which costs refetches answering what is already
+    // there and is the right way round.
+    onSuccess: (_change, { owned }) => (owned === true ? invalidateOwnedWrite() : invalidate()),
+    onError: (_error, { owned }) => (owned === true ? invalidateOwnedWrite() : invalidate()),
   });
 
   /**

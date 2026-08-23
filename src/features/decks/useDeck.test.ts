@@ -193,8 +193,11 @@ beforeEach(() => {
   deckAddCard.mockReset().mockResolvedValue({ id: 9, quantity: 4, removed: false });
   deckSetCardQuantity.mockReset().mockResolvedValue({ id: 9, quantity: 3, removed: false });
   // A cut that really did give a copy back — the destination row, the deck it came out of
-  // (never set by this direction), and what actually moved.
-  deckToCollection.mockReset().mockResolvedValue({ entryId: 21, fromDeck: null, quantity: 1 });
+  // (never set by this direction), the deck row (never set by this direction either: the caller
+  // handed the id in and a whole cut has deleted it), and what actually moved.
+  deckToCollection
+    .mockReset()
+    .mockResolvedValue({ entryId: 21, fromDeck: null, deckCardId: null, quantity: 1 });
   // The copies it removed — this command answers a number, not a row.
   deckCategoryClear.mockReset().mockResolvedValue(4);
   deckMoveCard.mockReset().mockResolvedValue(undefined);
@@ -211,7 +214,12 @@ beforeEach(() => {
   cardDetail.mockReset().mockResolvedValue({ id: "p2", oracleId: "o2", name: "Sol Ring" });
   collectionList.mockReset().mockResolvedValue({ items: [], total: 0 });
   collectionAdd.mockReset().mockResolvedValue({ id: 77, quantity: 1, removed: false });
-  collectionToDeck.mockReset().mockResolvedValue({ entryId: 77, fromDeck: null, quantity: 1 });
+  // The two ids are deliberately different numbers: `entryId` is the **collection** row the
+  // copies landed in and `deckCardId` is the **deck** row the write folded them onto, and a
+  // caller that handed one back for the other would pass a test where they were equal.
+  collectionToDeck
+    .mockReset()
+    .mockResolvedValue({ entryId: 77, fromDeck: null, deckCardId: 55, quantity: 1 });
   deckCategoryCreate
     .mockReset()
     .mockResolvedValue({ id: 31, deckId: 4, name: "Ramp", kind: "main" });
@@ -968,12 +976,16 @@ describe("useDeck", () => {
   });
 
   /**
-   * **The collection's root as well**, and this is the second write in this file that has to
-   * take it: a row has left the binder and been filed into a deck's group, which is exactly the
-   * shape that shipped a ghost row once already. The list, the summary, both folder cards and
-   * the folder tree are all wrong without it, and the deck root reaches none of them.
+   * **All four roots, which is `OWNED_WRITE_KEYS` and the same set the import's owned half
+   * fires.** A row has left the binder and been filed into a deck's group — the shape that
+   * shipped a ghost row once already — and, when the reader owns no free copy, `collection_add`
+   * *records* one, so `CardSummary.ownedQuantity` moves from 0 to N on the very tile the press
+   * was made on. The collection's list and summary, the search wall's owned badge and the
+   * wishlist's owned progress each answer a question this press changed the answer to, and
+   * `lib/query.ts` caches 30 s — a root left out is a screen that keeps saying the old number
+   * rather than one that refreshes late.
    */
-  it("tells the collection to re-read after an owned add", async () => {
+  it("tells all four owned roots to re-read after an owned add", async () => {
     const { result } = renderHook(() => useDeck(4), { wrapper });
     await waitFor(() => expect(result.current.deck).toEqual(DECK));
     seedOwned(client);
@@ -985,7 +997,35 @@ describe("useDeck", () => {
       owned: true,
     });
 
-    await waitFor(() => expect(staleRoots(client)).toContain("collection"));
+    await waitFor(() =>
+      expect(staleRoots(client)).toEqual(["cards", "collection", "decks", "wishlist"]),
+    );
+  });
+
+  /**
+   * **And the same four when it is refused**, which is the half that is easiest to leave narrow.
+   * The owned arm is two writes: `collection_add` can land and `collection_to_deck` can then
+   * fail — the split the doc calls "the harmless half" — leaving a new binder row behind a
+   * rejected mutation. `["decks"]` alone would refetch the one root that write did not touch.
+   */
+  it("tells all four owned roots to re-read when an owned add is refused", async () => {
+    collectionToDeck.mockRejectedValue("The database is busy with a sync — try again.");
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+    seedOwned(client);
+
+    await expect(
+      result.current.addCard.mutateAsync({
+        cardId: "p2",
+        categoryId: SIDE.id,
+        quantity: 1,
+        owned: true,
+      }),
+    ).rejects.toBeTruthy();
+
+    await waitFor(() =>
+      expect(staleRoots(client)).toEqual(["cards", "collection", "decks", "wishlist"]),
+    );
   });
 
   /** And a plain add still does not — owned/missing is a sum over rows this write provably
@@ -1003,11 +1043,45 @@ describe("useDeck", () => {
   });
 
   /**
-   * `collection_to_deck` answers about the **collection** row it wrote and never about the deck
-   * row, so an own add has no `deck_cards.id` to hand back — {@link NO_DECK_ROW} is what it says
-   * instead, and `DeckEditor` tests it before pointing the reader at anything.
+   * **The `deck_cards` row the move landed on, so an owned add glows the card it added exactly
+   * as an ordinary add does.** `MoveOutcome.deckCardId` is read back through `RETURNING id`
+   * precisely because it is not derivable from the arguments — the write folds into whatever
+   * pile already held the printing — and the id it answers is a *different* row from the
+   * collection row in `entryId`, which is what this asserts.
    */
-  it("answers no deck row for an owned add", async () => {
+  it("answers the deck row an owned add landed on", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    const change = await result.current.addCard.mutateAsync({
+      cardId: "p2",
+      categoryId: SIDE.id,
+      quantity: 1,
+      owned: true,
+    });
+
+    expect(change.id).toBe(55);
+    expect(change.id).not.toBe(NO_DECK_ROW);
+    // What actually moved, which is the outcome's number and never the argument.
+    expect(change.quantity).toBe(1);
+  });
+
+  /**
+   * And {@link NO_DECK_ROW} is what is left when the backend names no row.
+   *
+   * `MoveOutcome.deckCardId` is `number | null` on the wire — `deck_to_collection` answers
+   * `null` there by design — so the owned arm has to have an answer for a `null` that is not
+   * `null`: `EntryChange.id` is a number, and `DeckEditor` arms a five-second timer against it.
+   * The sentinel is a number no row can have, and the editor tests for it before pointing the
+   * reader at anything.
+   */
+  it("falls back to no deck row when the move names none", async () => {
+    collectionToDeck.mockResolvedValue({
+      entryId: 77,
+      fromDeck: null,
+      deckCardId: null,
+      quantity: 1,
+    });
     const { result } = renderHook(() => useDeck(4), { wrapper });
     await waitFor(() => expect(result.current.deck).toEqual(DECK));
 
@@ -1019,8 +1093,6 @@ describe("useDeck", () => {
     });
 
     expect(change.id).toBe(NO_DECK_ROW);
-    // What actually moved, which is the outcome's number and never the argument.
-    expect(change.quantity).toBe(1);
   });
 
   /**
@@ -1261,7 +1333,12 @@ describe("useDeck", () => {
    * `quantity: 0` and `entryId: null`. The arguments that went in are identical either way.
    */
   it("leaves the collection alone when the cut gave nothing back", async () => {
-    deckToCollection.mockResolvedValue({ entryId: null, fromDeck: null, quantity: 0 });
+    deckToCollection.mockResolvedValue({
+      entryId: null,
+      fromDeck: null,
+      deckCardId: null,
+      quantity: 0,
+    });
     const { result } = renderHook(() => useDeck(4), { wrapper });
     await waitFor(() => expect(result.current.cards).toEqual([BOLT]));
     seedOwned(client);

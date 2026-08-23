@@ -116,7 +116,11 @@ deliberately**: no screenshots are stored.
   **`collection_to_deck` and `deck_to_collection` are outside that five and record as of
   2026-08-23**, when the Collection Search tab gave the first of them a caller; both are on
   `NO_UNDO_STEP` because a step could restore the `deck_cards` half and would leave the copies
-  where they went.
+  where they went. **`collection_to_deck` also rolls back the pile its name arm invented when a
+  later refusal fires** — the crate gets that free from the transaction the create sits in
+  (`a_refused_filing_by_name_leaves_no_pile_behind`), and a fake with no transaction has to undo
+  the write by hand or it shows an empty column standing after a press that failed: a state the
+  backend cannot produce, which is the class of defect this feature has already shipped once.
 - **A world belongs to a story, not to the module** — a docs page mounts every story on it at
   once, which the canvas hides. `.storybook/fake/scope.ts` owns the four ways the global pointer
   is kept right; adding an entry point to the fake means asking which of the four covers it.

@@ -17,10 +17,14 @@
 //! * **Every deck write records exactly one row per change it made.** A write that silently
 //!   records nothing is precisely the bug this table exists to prevent, so the rule is a rule
 //!   and not a preference — `every_deck_write_leaves_exactly_one_audit_row` drives each command
-//!   once and counts. Two commands make more than one change in a call and so owe more than one
-//!   row, each pinned by a test of its own: [`crate::deck::update_deck`] records one row per
-//!   changed **field**, and [`crate::import::commit_import`] in `replace` mode records the
-//!   `remove` and the `add` it did — opposite deltas, which one signed row cannot carry.
+//!   once and counts. **Three** commands make more than one change in a call and so owe more
+//!   than one row, each pinned by a test of its own: [`crate::deck::update_deck`] records one
+//!   row per changed **field**; [`crate::import::commit_import`] in `replace` mode records the
+//!   `remove` and the `add` it did — opposite deltas, which one signed row cannot carry; and
+//!   [`crate::collection_alloc::collection_to_deck`], when the copies come out of **another**
+//!   deck, records its own `add` plus one `remove`/`quantity` row per `deck_cards` row it
+//!   decremented in the deck that lost them — rows in two different decks' histories, because a
+//!   log is per deck and nothing in the donor's drawer can reach the target's.
 //!   **Seven** writes deliberately record nothing, and each says why on its own doc:
 //!   [`crate::deck::delete_deck`] (the row would CASCADE away with the deck it describes);
 //!   [`crate::deck::set_view_state`] (the history holds changes to the deck, and which tab was
@@ -366,6 +370,23 @@ mod tests {
         .unwrap()
     }
 
+    /// One owned copy, filed where it is told — the fixture the two [`crate::collection_alloc`]
+    /// cases need, because those two writes move *cards* and every other command here moves only
+    /// a list. `create_deck` gives every deck its collection group, so the folder half of the
+    /// fixture is already there and only the copies are missing.
+    fn seed_entry(conn: &Connection, card_id: &str, quantity: i64, folder: Option<i64>) -> i64 {
+        conn.query_row(
+            "INSERT INTO collection_entries
+                 (card_id, set_code, collector_number, lang, finish, condition, quantity,
+                  folder_id, created_at, updated_at)
+             VALUES (?1, 'lea', '161', 'en', 'nonfoil', 'NM', ?2, ?3, unixepoch(), unixepoch())
+             RETURNING id",
+            params![card_id, quantity, folder],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
     /// Every history row this deck has, newest first — [`list`] with the cap it ships with.
     fn history(conn: &Connection, deck_id: i64) -> Vec<DeckAuditEntry> {
         list(conn, deck_id, MAX_LIMIT).unwrap()
@@ -401,19 +422,28 @@ mod tests {
     /// (a double-record is a history that counts a change twice) and, far more importantly, no
     /// fewer.
     ///
-    /// Written as a list of closures rather than as **twenty-five** tests because the claim is
+    /// Written as a list of closures rather than as **twenty-eight** tests because the claim is
     /// about the *set* of commands: a new deck write that records nothing fails here the moment
     /// its line is added, and forgetting to add the line is the only way to slip past — which
     /// is cheaper to notice in review than a missing test file. **Count the list, never a
     /// remembered number**; it has been written down wrong twice.
     ///
-    /// **Every case owes one row but one**, so the count rides in the case rather than in the
+    /// **Every case owes one row but two**, so the count rides in the case rather than in the
     /// assertion. `deck_import_commit` in `replace` mode had two *effects* — it cleared a
     /// variant and it filled it — with opposite deltas, and one signed row cannot carry both;
-    /// it owes a `remove` and an `add`. That is the same reading of "exactly one" that
-    /// `a_patch_that_changes_two_fields_records_both` already pins for `deck_update`: the rule
-    /// is one row per **change**, not per call. Its `merge` sibling is here beside it precisely
-    /// so the pair shows where the split falls.
+    /// it owes a `remove` and an `add`. `collection_to_deck` out of another deck is the second,
+    /// and its two rows land in two *different* decks' histories: the target's `add`, and the
+    /// donor's `remove` for the copies its list stopped claiming. That is the same reading of
+    /// "exactly one" that `a_patch_that_changes_two_fields_records_both` already pins for
+    /// `deck_update`: the rule is one row per **change**, not per call. Each has a sibling here
+    /// beside it — `merge`, and the same command off the reader's own desk — precisely so the
+    /// pair shows where the split falls.
+    ///
+    /// **[`crate::collection_alloc`]'s two commands are driven here since 2026-08-23**, and
+    /// their absence is what this sweep is a cautionary tale about: both write history, both
+    /// were added while the list stayed at twenty-five, and the rows they owe were held by that
+    /// module's own tests rather than by the sweep whose whole job is to be structural. A
+    /// command that moves cards is still a deck write.
     #[test]
     fn every_deck_write_leaves_exactly_one_audit_row() {
         let conn = seeded();
@@ -772,6 +802,85 @@ mod tests {
                         &[imported("serra-lea", 4, "Main deck")],
                     )
                     .unwrap();
+                }),
+            ),
+            (
+                // **A write from the other cabinet, and the reason the sweep had to reach into
+                // it.** `collection_to_deck` is an add that brings the cardboard with it: the
+                // copies leave a folder and the deck starts playing them, so it owes
+                // [`crate::deck::add_card`]'s row and nothing here would have noticed its
+                // absence. Copies off the reader's own desk, so one deck changes and one row is
+                // owed.
+                "collection_to_deck",
+                1,
+                Box::new(|| {
+                    let entry = seed_entry(&conn, "bolt-lea", 2, None);
+                    clear(&conn);
+                    crate::collection_alloc::collection_to_deck(
+                        &conn,
+                        entry,
+                        id,
+                        crate::collection_alloc::Pile::Id(main),
+                        2,
+                    )
+                    .unwrap();
+                }),
+            ),
+            (
+                // The **second** case in this list that owes more than one row, and the only one
+                // whose rows land in two different decks' histories. Copies taken out of another
+                // deck's group come off that deck's live list too, and its own log is the only
+                // place its loss can be recorded — one row per `deck_cards` row decremented,
+                // `take_from_deck_list`'s rule. One donor row here, so: the target's `add` and
+                // the donor's `remove`.
+                "collection_to_deck (out of another deck)",
+                2,
+                Box::new(|| {
+                    let donor = deck(&conn, "Donor");
+                    let donor_main = category(&conn, donor, "Main deck");
+                    let entry = seed_entry(&conn, "bolt-lea", 2, None);
+                    let parked = crate::collection_alloc::collection_to_deck(
+                        &conn,
+                        entry,
+                        donor,
+                        crate::collection_alloc::Pile::Id(donor_main),
+                        2,
+                    )
+                    .unwrap()
+                    .entry_id
+                    .expect("copies that moved land in a row");
+                    clear(&conn);
+                    crate::collection_alloc::collection_to_deck(
+                        &conn,
+                        parked,
+                        id,
+                        crate::collection_alloc::Pile::Id(main),
+                        2,
+                    )
+                    .unwrap();
+                }),
+            ),
+            (
+                // The way back, and it **replaces** `deck_set_card_quantity` for a decrease on
+                // the live list rather than joining it — so a deck's log would skip exactly the
+                // press a reader goes looking for if this one recorded nothing. A whole cut, so
+                // the row it owes is the `remove` the stepper would have written.
+                "deck_to_collection",
+                1,
+                Box::new(|| {
+                    let entry = seed_entry(&conn, "serra-lea", 1, None);
+                    let landed = crate::collection_alloc::collection_to_deck(
+                        &conn,
+                        entry,
+                        id,
+                        crate::collection_alloc::Pile::Id(side),
+                        1,
+                    )
+                    .unwrap()
+                    .deck_card_id
+                    .expect("the move names the deck row it wrote");
+                    clear(&conn);
+                    crate::collection_alloc::deck_to_collection(&conn, landed, 1).unwrap();
                 }),
             ),
         ];

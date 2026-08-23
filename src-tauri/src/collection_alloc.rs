@@ -220,17 +220,6 @@ fn source_of(conn: &Connection, entry_id: i64) -> Result<Source, String> {
     .ok_or_else(|| crate::collection::GONE.to_owned())
 }
 
-/// The folder that stands for a deck, if it has one.
-fn deck_group(conn: &Connection, deck_id: i64) -> Result<Option<i64>, String> {
-    conn.query_row(
-        "SELECT id FROM collection_folders WHERE deck_id = ?1 AND kind = ?2",
-        params![deck_id, DECK_KIND],
-        |r| r.get(0),
-    )
-    .optional()
-    .map_err(|e| e.to_string())
-}
-
 /// The deck whose group a folder is, if it is one.
 ///
 /// `None` for the root, for a binder the reader named and for `Recently removed` — all three
@@ -473,7 +462,7 @@ pub fn collection_to_deck(
             name.trim().to_owned(),
         ),
     };
-    let group = deck_group(&tx, deck_id)?.ok_or_else(|| NO_DECK_GROUP.to_owned())?;
+    let group = crate::deck::deck_group(&tx, deck_id)?.ok_or_else(|| NO_DECK_GROUP.to_owned())?;
 
     let source = source_of(&tx, entry_id)?;
     if quantity > source.quantity {
@@ -902,13 +891,13 @@ mod tests {
 
     /// Copies sitting in a deck's group.
     fn group_copies(conn: &Connection, deck: i64, card_id: &str) -> i64 {
-        let group = deck_group(conn, deck).unwrap();
+        let group = crate::deck::deck_group(conn, deck).unwrap();
         folder_copies(conn, group, card_id)
     }
 
     /// The collection row in a deck's group, which is where a refile lands the copies.
     fn group_entry(conn: &Connection, deck: i64, card_id: &str) -> i64 {
-        let group = deck_group(conn, deck).unwrap();
+        let group = crate::deck::deck_group(conn, deck).unwrap();
         conn.query_row(
             "SELECT id FROM collection_entries
               WHERE card_id = ?1 AND folder_id = ?2",
@@ -1065,7 +1054,7 @@ mod tests {
         // unavailable to every other deck.
         let (conn, deck, cat) = fixture();
         seed_reprint(&conn, "bolt-m10", "bolt");
-        let group = deck_group(&conn, deck).unwrap();
+        let group = crate::deck::deck_group(&conn, deck).unwrap();
         seed_entry(&conn, "bolt", 2, group);
         let dc = add_variant_card(&conn, deck, cat, "live", "bolt-m10", 2);
 
@@ -1091,7 +1080,7 @@ mod tests {
         // byte-for-byte what it was before the oracle arm existed.
         let (conn, deck, cat) = fixture();
         seed_reprint(&conn, "bolt-m10", "bolt");
-        let group = deck_group(&conn, deck).unwrap();
+        let group = crate::deck::deck_group(&conn, deck).unwrap();
         seed_entry(&conn, "bolt", 1, group);
         seed_entry(&conn, "bolt-m10", 1, group);
         let dc = add_variant_card(&conn, deck, cat, "live", "bolt-m10", 1);
@@ -1363,7 +1352,7 @@ mod tests {
         let (conn, a, cat_a) = fixture();
         let side = crate::schema::tests::category(&conn, a, "main", "Sideboard");
         let (b, cat_b) = second_deck(&conn);
-        let group = deck_group(&conn, a).unwrap();
+        let group = crate::deck::deck_group(&conn, a).unwrap();
         // Deck A lists the Bolt in two piles and its group holds the four copies behind them.
         add_variant_card(&conn, a, cat_a, LIVE, "bolt", 2);
         add_variant_card(&conn, a, side, LIVE, "bolt", 2);
@@ -1407,7 +1396,7 @@ mod tests {
     fn taking_a_copy_from_another_deck_files_no_step_in_that_deck() {
         let (conn, a, cat_a) = fixture();
         let (b, cat_b) = second_deck(&conn);
-        let group = deck_group(&conn, a).unwrap();
+        let group = crate::deck::deck_group(&conn, a).unwrap();
         add_variant_card(&conn, a, cat_a, LIVE, "bolt", 1);
         let filed = seed_entry(&conn, "bolt", 1, group);
 

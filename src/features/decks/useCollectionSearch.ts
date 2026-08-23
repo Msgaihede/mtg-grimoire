@@ -269,17 +269,13 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
     /** Rows matching the filters, counted in full. `0` until the first page answers. */
     total: query.data?.pages[0]?.total ?? 0,
     move,
-    /**
-     * Identity of the current list, for anything that has to notice "this is a different list
-     * now". Derived from the key itself rather than rebuilt from the same fields, so the two
-     * cannot drift.
-     */
-    listKeyString: JSON.stringify(listKey),
   };
 }
 
 /** What a press with no deck behind it is refused with. Unreachable from the editor, which
- *  always has a deck — it is the fence for a story or a test mounting the tab bare. */
-export const NO_DECK = "There is no deck to add to";
+ *  always has a deck — it is the fence for a story or a test mounting the tab bare. **Not
+ *  exported**: nothing outside this file has ever read it, and an export nothing imports is a
+ *  sentence the next reader goes looking for a second copy of. */
+const NO_DECK = "There is no deck to add to";
 
 export type CollectionSearch = ReturnType<typeof useCollectionSearch>;

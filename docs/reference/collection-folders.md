@@ -514,6 +514,14 @@ The undo step stays absent, and here the asymmetry genuinely does not bite: a re
 wrong card cuts it, which is one press and fully recorded. Both directions are therefore on the
 fake's `NO_UNDO_STEP` too, so a story cannot quietly grow a step the crate does not write.
 
+**Both commands are in `deck_audit`'s crate-wide sweep as of 2026-08-23**
+(`every_deck_write_leaves_exactly_one_audit_row`, 28 cases). They were not for two PRs, which is
+the whole cautionary tale: the sweep exists to catch "a new deck write records nothing", these two
+*are* deck writes, and their rows were held only by `collection_alloc`'s own tests — so the sweep
+that is supposed to be structural would have gone green through their removal. The cross-deck case
+is the second in that list to owe **two** rows, and the only one whose rows land in two different
+decks' histories.
+
 ### Collection Search, and the first caller `collection_to_deck` ever had
 
 **Shipped 2026-08-23, spec §7.2.** The deck builder's docked search column has two tabs —

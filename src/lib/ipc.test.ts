@@ -1355,6 +1355,32 @@ describe("the collection folder wrappers name the commands `collection_folders.r
   });
 
   /**
+   * **The pile is read by its `id`'s *value*, never by the key being present.**
+   *
+   * Both members of {@link DeckPile} declare `id` — the name arm as `?: undefined`, which is the
+   * whole trick that stops `{ id, name }` satisfying either — so `{ name: "Ramp", id: undefined }`
+   * is a legal `DeckPile` that an `"id" in pile` test calls the id arm. That sends
+   * `categoryId: undefined, categoryName: null`, both of which deserialise to `None`, and
+   * `Pile::from_args` answers `NO_CATEGORY`: a filing by name refused for naming no pile.
+   *
+   * No caller writes it today — both build object literals — which is exactly why it is pinned
+   * here rather than left to the day one spreads a partial object into the argument.
+   */
+  it("reads the pile by the id's value, not by the key being there", async () => {
+    invoke.mockResolvedValue({ entryId: 9, fromDeck: null, deckCardId: 4, quantity: 1 });
+
+    await ipc.collectionToDeck(7, 3, { name: "Ramp", id: undefined }, 1);
+
+    expect(invoke).toHaveBeenCalledWith("collection_to_deck", {
+      entryId: 7,
+      deckId: 3,
+      categoryId: null,
+      categoryName: "Ramp",
+      quantity: 1,
+    });
+  });
+
+  /**
    * **What moved is the answer, never the argument.** A deck card nobody owned reports `0` and
    * `entryId: null` rather than failing — the group is the record of which cards the reader
    * actually has behind a list — and a caller that quoted its own `quantity` would tell them

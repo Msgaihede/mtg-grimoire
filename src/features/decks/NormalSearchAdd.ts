@@ -132,19 +132,19 @@ export interface FreeCopy {
 }
 
 /**
- * The `EntryChange.id` an **own** add answers with, and it names nothing.
+ * The `EntryChange.id` an **own** add answers with when the write named no deck row — a number
+ * no row can have, and the floor rather than the ordinary answer.
  *
- * `collection_to_deck` writes the `deck_cards` row and then answers about the **collection** row.
- * Every other add in this editor answers `deck_cards.id`, which is what `useRecentAdds` points the
- * reader at for five seconds, so an own add has no row to point at and says so with a number no
- * row can have. **A caller must test it** rather than pass it on; `DeckEditor` does, at `onAdded`.
+ * `collection_to_deck` answers **both** ids: `entryId`, the collection row the copies landed in,
+ * and `deckCardId`, the `deck_cards` row it wrote. `useDeck`'s owned arm hands the second one on
+ * (`outcome.deckCardId ?? NO_DECK_ROW`), so an own add glows the card it added exactly as every
+ * other add in this editor does — `useRecentAdds` points the reader at that row for five seconds.
  *
- * **The Rust half of the fix has landed and this arm has not been wired to it** (2026-08-23):
- * `MoveOutcome` carries `deckCardId` now — the row the write landed on, read back through
- * `RETURNING id` so that the `ON CONFLICT` arm answers the row it merged into rather than
- * whatever statement wrote last — and `useDeck`'s owned arm still answers this constant. Passing
- * it through is the whole of what is left, and it is a change to what the editor draws (a landed
- * glow where there is none today) rather than to what it writes.
+ * **It is still nullable on the wire, which is why this constant is still here.** `MoveOutcome`
+ * is one type for two commands and `deck_to_collection` answers `null` there by design — the
+ * caller handed the id in and a whole cut has deleted the row — while `EntryChange.id` is a
+ * number the editor arms a timer against. So `null` becomes this, and **a caller must test it**
+ * rather than pass it on; `DeckEditor` does, at both `onSuccess` and `onAdded`.
  */
 export const NO_DECK_ROW = 0;
 

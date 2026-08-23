@@ -27,6 +27,7 @@ import {
   type ImportResolveRow,
   type PrintingTags,
 } from "@/lib/ipc";
+import { OWNED_WRITE_KEYS } from "@/lib/query";
 import { DEFAULT_VARIANT } from "@/features/decks/useDeck";
 
 /**
@@ -91,23 +92,6 @@ export interface DeckImportResult {
    *  never asked for. */
   ownRefusal: string | null;
 }
-
-/**
- * The four keys a write to `collection_entries` moves, beside `["decks"]`.
- *
- * **The union of the deck import's own root and the collection import's set, and it is the set
- * verbatim** — `CollectionPreview` passes exactly these to `useImportCommit` for exactly this
- * command. `src/lib/query.ts` caches 30 s, so a root left out here is a *stale screen* rather
- * than a slow one: the collection's own list and summary, the wishlist's owned-progress and the
- * search wall's owned badges each answer a question these copies just changed the answer to, and
- * an open deck reads the copies filed in no group as spare.
- */
-const OWNED_WRITE_KEYS: readonly QueryKey[] = [
-  ["collection"],
-  ["wishlist"],
-  ["cards", "search"],
-  ["decks"],
-];
 
 /**
  * `collection_alloc::NO_DECK_GROUP`, reached from this side.

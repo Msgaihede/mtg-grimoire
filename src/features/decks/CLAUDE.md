@@ -879,9 +879,11 @@ price | type`). An **inactive category stays its own group in all three grouping
   out of cards you have, so a search of everything ever printed is the thing one press away rather
   than the thing in front of you — and until this landed there was no way to search a collection
   from a deck at all. `TABS`, `DEFAULT_DECK_SEARCH_TAB` and `DECK_SEARCH_TAB_KEY` are in
-  `DeckSearchPanel.tsx`; the body of each tab is its own component (`CollectionPanel`,
+  `DeckSearchPanel.tsx`; the body of each tab is its own component (`CollectionSearchTab`,
   `OpenPanel`) for the reason `OpenPanel` already existed — **a hook called from a branch is a
-  hook called conditionally**, and each tab has a data hook of its own.
+  hook called conditionally**, and each tab has a data hook of its own. There was a
+  `CollectionPanel` wrapper between the branch and the tab for one PR; it called no hook and
+  forwarded four props unchanged, so the argument above never applied to it and it is gone.
   - **`aria-pressed` over a `.map`, deliberately not `role="tab"`** — the same shape as the
     editor's Theory/Live switch, and for the same reason: that role brings an arrow-key contract
     this app implements nowhere else, so claiming it would be a promise the strip does not keep.

@@ -3496,6 +3496,51 @@ describe("moving copies across the deck boundary", () => {
     ).toThrow(/no folder to hold its cards/);
   });
 
+  /**
+   * **A refused filing by name leaves no pile behind** —
+   * `collection_alloc::a_refused_filing_by_name_leaves_no_pile_behind`, mirrored.
+   *
+   * The name arm has to be resolved *before* the refusals below it, because the history row this
+   * write files names the pile the card went into. In the crate that is free: the create is
+   * inside the move's own transaction, so a refusal that lands after it takes the invented pile
+   * with it. The fake has no transaction, so it has to undo the one write by hand — and without
+   * that it shows a state the backend cannot produce, which is the class of defect this feature
+   * has already shipped once.
+   *
+   * Driven through `NOT_THAT_MANY`, the refusal a reader actually meets: they asked for more
+   * copies than the row holds and would otherwise be left with an empty column they never made.
+   */
+  it("leaves no pile behind when a filing by name is refused", () => {
+    const db = boundary();
+    const before = db.deckCategories.length;
+
+    expect(() =>
+      writeHandlers(db).collection_to_deck({
+        entryId: 1,
+        deckId: 1,
+        categoryName: "Ramp",
+        quantity: 99,
+      }),
+    ).toThrow(/that many/);
+
+    expect(db.deckCategories.some((c) => c.deckId === 1 && c.name === "Ramp")).toBe(false);
+    expect(db.deckCategories).toHaveLength(before);
+  });
+
+  /** And the pile the reader already had is **not** swept up with it: the name arm finds before
+   *  it creates, so a refusal after a *find* has nothing to undo. */
+  it("keeps a pile the reader made when a filing by name is refused", () => {
+    const db = boundary();
+    const w = writeHandlers(db);
+    const mine = w.deck_category_create({ deckId: 1, name: "Ramp" });
+
+    expect(() =>
+      w.collection_to_deck({ entryId: 1, deckId: 1, categoryName: "Ramp", quantity: 99 }),
+    ).toThrow(/that many/);
+
+    expect(db.deckCategories.find((c) => c.id === mine.id)).toBeDefined();
+  });
+
   it("files what the deck's group held into Recently removed when the card is cut", () => {
     const db = boundary();
     const w = writeHandlers(db);

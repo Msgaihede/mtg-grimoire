@@ -482,5 +482,8 @@ deck-specific rules this feature reads or reaches into — categories, validatio
 The "Add cards to collection" box is three files of that tree: `destinations/DeckPreview.tsx`
 (`OwnCopies`, `OWN_COPIES_HINT`, and the outcome line), `destinations/NewDeckPreview.tsx` (which
 imports that same component rather than drawing a second), and `useImport.ts` (`OwnedCopies`,
-`ownCopies`, `OWNED_WRITE_KEYS`). Where those copies end up is
+`ownCopies`). `OWNED_WRITE_KEYS` — the four query roots such a write moves — moved to
+`src/lib/query.ts` on 2026-08-23, because the deck builder's own `own` add makes the same change
+from the other side of the app and the two had drifted to two different invalidations. Where those
+copies end up is
 [collection-folders.md](collection-folders.md)'s subject, not this page's.

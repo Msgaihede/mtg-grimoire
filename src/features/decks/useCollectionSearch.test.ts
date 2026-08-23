@@ -122,7 +122,11 @@ beforeEach(() => {
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   collectionList.mockReset().mockResolvedValue({ items: [BOLT], total: 1 });
-  collectionToDeck.mockReset().mockResolvedValue({ entryId: 5, fromDeck: null, quantity: 1 });
+  // `deckCardId` is the `deck_cards` row the move landed on — always named by this command,
+  // so a mock that omitted it would encode an answer the backend cannot give.
+  collectionToDeck
+    .mockReset()
+    .mockResolvedValue({ entryId: 5, fromDeck: null, deckCardId: 41, quantity: 1 });
   collectionFolderList.mockReset().mockResolvedValue(FOLDERS);
   getMarketplace.mockReset().mockResolvedValue("tcgplayer");
   marketplaceFeedStatus.mockReset().mockResolvedValue([]);

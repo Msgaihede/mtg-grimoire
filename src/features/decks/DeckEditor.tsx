@@ -1798,9 +1798,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           ? { cardId, typeLine: typeLine ?? null, quantity: 1, owned }
           : { cardId, categoryId, quantity: 1, owned },
         // **`change.id` is not always a row.** An owned add is `collection_to_deck`, which
-        // answers about the *collection* row it wrote and never about the deck one, so there is
-        // nothing to point the reader at — {@link NO_DECK_ROW} is what it says instead, and
-        // marking it would arm a five-second timer against a row id no card has.
+        // names the `deck_cards` row it wrote and is glowed like any other add — but its answer
+        // is nullable (`MoveOutcome` serves the cut as well, where the row may be gone), and a
+        // `null` arrives here as {@link NO_DECK_ROW}. Marking that would arm a five-second timer
+        // against a row id no card has, so it is tested rather than passed on.
         { onSuccess: (change) => change.id !== NO_DECK_ROW && markLanded(change.id) },
       ),
     [writeAdd, markLanded],

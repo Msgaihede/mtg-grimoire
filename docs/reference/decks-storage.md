@@ -389,15 +389,22 @@ folder|deck`, `schema::AUDIT_KINDS`), `variant`, a soft `card_id`/`card_name`, a
   called _inside the caller's already-open transaction_, which is what makes
   `a_recorded_change_that_rolls_back_leaves_no_history` and `a_refused_write_leaves_no_history_
 behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_row` drives
-  **25** cases, each carrying the number of rows it owes (count the list in `deck_audit.rs`,
-  never a remembered number — it has been written down wrong twice). "Exactly one" is per
-  _change_, not per call, and **two** commands make more than one change in a call:
+  **28** cases, each carrying the number of rows it owes (count the list in `deck_audit.rs`,
+  never a remembered number — it has been written down wrong twice). It reached 28 on 2026-08-23
+  by taking in `collection_alloc`'s two commands, which had been writing history under it for two
+  PRs while the list stayed at 25: a sweep that exists to catch "a new deck write records nothing"
+  cannot skip the writes that move cards. "Exactly one" is per _change_, not per call, and
+  **three** commands make more than one change in a call:
   **`deck_update` records one row per changed field**
   (`record_deck_edit`, pinned by `a_patch_that_changes_two_fields_records_both`), and it
-  satisfies that test only because every one of its cases changes exactly one field; and
+  satisfies that test only because every one of its cases changes exactly one field;
   **`deck_import_commit` in `replace` mode records two** — a `remove` for what it cleared and
-  an `add` for what it imported, which one signed `delta` cannot be both of. Its `merge` mode
-  records one. Both use the existing `add`/`remove` kinds with an `import`-keyed payload, so
+  an `add` for what it imported, which one signed `delta` cannot be both of, while its `merge`
+  mode records one; and **`collection_to_deck` records two when the copies come out of another
+  deck** — its own `add`, plus one `remove`/`quantity` row per `deck_cards` row it decremented in
+  the deck that lost them (`take_from_deck_list`). Those two land in two _different_ decks'
+  histories, because a log is per deck and nothing in the donor's drawer can reach the target's.
+  All of them use the existing `add`/`remove`/`quantity` kinds, so
   there is no tenth `AUDIT_KINDS` value and no migration. The only
   command is the read, `deck_audit_list(deckId, limit)`, and its limit is `clamp(1, 500)` —
   **the low end is load-bearing, because SQLite reads a negative `LIMIT` as no limit at all.**

@@ -710,8 +710,29 @@ export function DeckSearchPanel({
               Switching therefore throws the other tab's state away, exactly as a collapse does:
               a press is a decision, and a reader who goes back to the wall is starting a search
               rather than resuming one. */}
+          {/* **Four props where `OpenPanel` takes seven, and each absence is a fact about this
+              write rather than an oversight** — a prop nothing reads is a prop lint refuses, so
+              the ones that cannot be read are not accepted:
+
+              - **`add`** is `useDeck.addCard`, which is `deck_add_card` — it writes a deck row and
+                moves no copies. Putting a card the reader *owns* into a deck is
+                `collection_to_deck`, a different command with a different address, and sending
+                both would put the card in the deck twice.
+              - **`onAdded`** carries the `deck_cards` row a write landed in, which is what the
+                editor glows for five seconds. `MoveOutcome.deckCardId` *is* that row and this tab
+                could hand it back — what it has instead is a status line of its own, which says
+                the thing this press has that an ordinary add does not: which deck the copies came
+                out of. Naming the donor is the report; a glow is not.
+              - **`cardMenu` / `cardMenuKey`** are `(card: CardSummary) => …`, and this list draws
+                `CollectionRow`s. A collection row's own menu is the collection page's
+                (`Move to → folder`), and building a fake `CardSummary` to reach a menu written for
+                a different object is how one surface starts offering rows that mean nothing where
+                they are drawn.
+              - **`mode` / `onMode`** are the own/need question, and a row of this list has already
+                answered it: the copy is in the reader's binder, which is what "I own this" *means*.
+                That is why {@link AddModeStrip} is drawn on the other tab only. */}
           {tab === "collection" ? (
-            <CollectionPanel
+            <CollectionSearchTab
               categories={categories}
               deckId={deckId}
               targetCategoryId={targetCategoryId}
@@ -845,55 +866,6 @@ function AddModeStrip({ mode, onMode }: { mode: AddMode; onMode: (mode: AddMode)
         </button>
       ))}
     </div>
-  );
-}
-
-/**
- * The collection tab's body — **the reader's own binder, and the first caller `collection_to_deck`
- * has ever had**.
- *
- * It is a component rather than a branch inside {@link DeckSearchPanel} for the reason
- * {@link OpenPanel} is one, and the reason is the only thing about this file that must not be
- * tidied: `useCollectionSearch` — `collection_list` with this column's filters, an allocation and
- * the write — has to be **called from something that mounts with this tab**. Hoisting it into the
- * root would run a `collection_list` for every reader browsing the wider search and for every deck
- * opened with the column shut, which is the exact cost `OpenPanel` exists to have removed.
- *
- * **Four props where `OpenPanel` takes seven, and each absence is a fact about this write rather
- * than an oversight** — a prop nothing reads is a prop lint refuses, so the ones that cannot be
- * read are not accepted:
- *
- * - **`add`** is `useDeck.addCard`, which is `deck_add_card` — it writes a deck row and moves no
- *   copies. Putting a card the reader *owns* into a deck is `collection_to_deck`, a different
- *   command with a different address, and sending both would put the card in the deck twice.
- * - **`onAdded`** carries `EntryChange.id`, the **`deck_cards`** row the write landed in, which is
- *   what the editor marks as freshly landed. `MoveOutcome` answers no such id — its `entryId` is
- *   the **collection** row the copies ended up in — so there is nothing here to hand back. What
- *   this tab says instead it says on its own status line, naming the deck the copies came out of.
- * - **`cardMenu` / `cardMenuKey`** are `(card: CardSummary) => …`, and this list draws
- *   `CollectionRow`s. A collection row's own menu is the collection page's (`Move to → folder`),
- *   and building a fake `CardSummary` to reach a menu written for a different object is how one
- *   surface starts offering rows that mean nothing where they are drawn.
- * - **`mode` / `onMode`** are the own/need question, and a row of this list has already answered
- *   it: the copy is in the reader's binder, which is what "I own this" *means*. That is why
- *   {@link AddModeStrip} is drawn on the other tab only.
- *
- * A fragment for `OpenPanel`'s reason: whatever is drawn here is a flex child of the panel's own
- * column, not a box in the middle of it.
- */
-function CollectionPanel({
-  categories,
-  deckId,
-  targetCategoryId,
-  defaultFormat,
-}: Pick<DeckSearchPanelProps, "categories" | "deckId" | "targetCategoryId" | "defaultFormat">) {
-  return (
-    <CollectionSearchTab
-      categories={categories}
-      deckId={deckId}
-      targetCategoryId={targetCategoryId}
-      defaultFormat={defaultFormat}
-    />
   );
 }
 

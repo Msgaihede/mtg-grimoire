@@ -207,7 +207,11 @@ beforeEach(() => {
   deckSearchOpen.mockReset().mockResolvedValue(true);
   setDeckSearchOpen.mockReset().mockResolvedValue(undefined);
   collectionList.mockReset().mockResolvedValue({ items: [OWNED_BOLT], total: 1 });
-  collectionToDeck.mockReset().mockResolvedValue({ entryId: 9, fromDeck: null, quantity: 1 });
+  // `deckCardId` is the `deck_cards` row the move landed on — always named by this command,
+  // so a mock that omitted it would encode an answer the backend cannot give.
+  collectionToDeck
+    .mockReset()
+    .mockResolvedValue({ entryId: 9, fromDeck: null, deckCardId: 41, quantity: 1 });
   collectionFolderList.mockReset().mockResolvedValue([]);
   getMarketplace.mockReset().mockResolvedValue("tcgplayer");
   marketplaceFeedStatus.mockReset().mockResolvedValue([]);

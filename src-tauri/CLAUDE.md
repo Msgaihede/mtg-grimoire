@@ -354,9 +354,13 @@ shared_cell` walks both into two databases and compares them column by column.
     would reverse, so it goes on naming the press before the cut — **which means a cut does not
     advance the undo cursor and the previous step stays the one Ctrl+Z will take**, so pressing
     it after a cut reverses the *older* change rather than the cut or nothing. The complete way
-    back is `collection_to_deck`, which restores both halves at once, and **nothing calls it in
-    this release**: until the Collection Search tab lands the way back is two presses, add the
-    card again and re-file its copies out of `Recently removed` by hand.
+    back is `collection_to_deck`, which restores both halves at once, and **the deck builder's
+    Collection Search tab is what calls it** (2026-08-23,
+    `src/features/decks/useCollectionSearch.ts`): the cut copies are sitting in
+    `Recently removed`, that tab lists them, and its Add button is the one press that files them
+    back into the deck's group and writes the `deck_cards` row again. Until that tab landed the
+    command had no caller at all and the way back was two presses done by hand — so a note here
+    saying nothing calls it is now a note telling the next agent the feature does not exist.
     `deck::clear_category` reached the same conclusion for the same reason and does file a step,
     because its `deck_cards` half is a whole pile no stepper can rebuild.
   Every refusal is a **sentence** rather than a `CHECK` or a foreign-key failure —
