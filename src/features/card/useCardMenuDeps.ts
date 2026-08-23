@@ -17,6 +17,7 @@
  */
 import { useCallback, useMemo, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useCollectionFolderList } from "@/features/collection/useCollectionFolders";
 import { useWishlistFolderList } from "@/features/wishlist/useWishlistFolders";
 import type { Finish } from "@/lib/finish";
 import { ipc, ipcError } from "@/lib/ipc";
@@ -40,7 +41,8 @@ export interface CardMenuWiring {
   /** One object for the whole page. Hand it to `buildCardMenu` with each row's own target. */
   deps: CardMenuDeps;
   /**
-   * What the last refused **collection or wishlist** add said, as a whole sentence, or `null`.
+   * What the last refused **collection or wishlist** write said, as a whole sentence, or `null` —
+   * either add, and the folder move.
    *
    * **The page must draw this.** Every write a card menu starts is begun by a panel that is
    * already closing, so there is nothing left on screen for a refusal to be reported to and no
@@ -78,6 +80,28 @@ export function useCardMenuDeps(): CardMenuWiring {
    */
   const { folders: wishlistFolders } = useWishlistFolderList();
 
+  /**
+   * The collection's own folders, so "Add to → Collection" and "Move to" can offer them.
+   *
+   * One query per page mount for `wishlistFolders`' reason, and it is what keeps both of those
+   * rows plain `submenu`s rather than `lazy` ones: the list is in hand before the menu is built,
+   * so a right-click reaches nothing.
+   *
+   * **`useCollectionFolderList` and not `useCollectionFolders`**, the same split as the wishlist's
+   * one cabinet over and for the identical reason: the full hook also runs
+   * `collection_folder_summary`, a `GROUP BY` over every entry carrying a marketplace price
+   * expression, for the counts and subtotals a folder *card* draws — and not one of the surfaces
+   * that build this object draws a folder card. Its four folder writes are left behind too: a menu
+   * that could rename a folder would be a second surface deciding what a folder is.
+   *
+   * **This file kept a private copy of that hook until the folder branches merged**, because the
+   * bucket that wrote the menu could not write into `features/collection/`. The two were always
+   * one cache entry — same `["collection", "folders"]` key, so TanStack served both from one round
+   * trip — which is exactly why the duplication was worth removing rather than tolerating: what a
+   * second `useQuery` on one key costs is not a fetch, it is a second place for the key to drift.
+   */
+  const { folders: collectionFolders } = useCollectionFolderList();
+
   /** The sentence a refused collection or wishlist add left behind. */
   const [refusal, setRefusal] = useState<string | null>(null);
 
@@ -90,8 +114,25 @@ export function useCardMenuDeps(): CardMenuWiring {
    * the search results, which draw `ownedQuantity` on every row and every tile.
    */
   const collectionAdd = useMutation({
-    mutationFn: ({ cardId, finish }: { cardId: string; finish: Finish }) =>
-      ipc.collectionAdd({ cardId, finish, condition: MENU_CONDITION, quantity: 1 }),
+    mutationFn: ({
+      cardId,
+      finish,
+      folderId,
+    }: {
+      cardId: string;
+      finish: Finish;
+      folderId: number | null;
+    }) =>
+      ipc.collectionAdd({
+        cardId,
+        finish,
+        condition: MENU_CONDITION,
+        quantity: 1,
+        // Where the reader pointed, and `null` for the root — never omitted. `folder_id` is the
+        // eleventh term of the storage grain, so a folder the caller failed to pass is not a
+        // copy filed in the wrong drawer but a *second row* at the root for the same printing.
+        folderId,
+      }),
     // **Cleared when the next add starts, not when one succeeds**, which is what every other
     // banner on these pages does — each is derived from the *latest* mutation's state, so
     // a new write supersedes the last one's complaint. Cleared only on success, a refusal would
@@ -139,18 +180,53 @@ export function useCardMenuDeps(): CardMenuWiring {
     onError: (error) => setRefusal(`Could not add to your wishlist — ${ipcError(error)}`),
   });
 
-  // `mutate` is stable for the life of the observer, which is what lets the two callbacks below
+  /**
+   * One row the reader already owns, filed somewhere else — the menu's half of the collection
+   * page's drag.
+   *
+   * **Two keys, and `["decks"]` is the one worth arguing.** Nothing about a move changes how many
+   * copies of a printing the reader owns, so no wish's `ownedQuantity` and no search row's badge
+   * can move — but the destination may already hold the same printing at the same grain, in which
+   * case the backend **merges**: one row is deleted and any deck claims on it are carried onto the
+   * survivor. A deck reading a `collection_entry_id` that no longer exists would draw a claim it
+   * has just lost, so the deck reads go with the collection's.
+   *
+   * **No optimism, deliberately.** A merge means the row this was called with may not exist
+   * afterwards, so there is no local edit that could be right — the answer has to come from the
+   * backend.
+   */
+  const setFolder = useMutation({
+    mutationFn: ({ entryId, folderId }: { entryId: number; folderId: number | null }) =>
+      ipc.collectionSetFolder(entryId, folderId),
+    // Superseded on the next write, exactly as the two adds are, and clearing the same sentence.
+    onMutate: () => setRefusal(null),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["collection"] });
+      void queryClient.invalidateQueries({ queryKey: ["decks"] });
+    },
+    onError: (error) => setRefusal(`Could not move that card — ${ipcError(error)}`),
+  });
+
+  // `mutate` is stable for the life of the observer, which is what lets the three callbacks below
   // — and therefore `deps` — hold still across a render of a wall of forty tiles.
   const addCopy = collectionAdd.mutate;
   const addWish = wishlistAdd.mutate;
+  const moveCopy = setFolder.mutate;
 
   const addToCollection = useCallback(
-    (target: CardMenuTarget, finish: Finish) => addCopy({ cardId: target.cardId, finish }),
+    (target: CardMenuTarget, finish: Finish, folderId: number | null) =>
+      addCopy({ cardId: target.cardId, finish, folderId }),
     [addCopy],
   );
   const addToWishlist = useCallback(
     (target: CardMenuTarget, folderId: number | null) => addWish({ target, folderId }),
     [addWish],
+  );
+  /** The **entry** id rather than a target, because this is the one write here that is about a
+   *  row the reader owns instead of a piece of cardboard — see `CardMenuTarget.entryId`. */
+  const moveToFolder = useCallback(
+    (entryId: number, folderId: number | null) => moveCopy({ entryId, folderId }),
+    [moveCopy],
   );
 
   const deps = useMemo<CardMenuDeps>(
@@ -163,6 +239,14 @@ export function useCardMenuDeps(): CardMenuWiring {
       // once something is, so this memo holds still across a render of a wall of forty tiles for
       // the same reason the two callbacks above do.
       wishlistFolders,
+      // The collection's cabinet, on the same terms and with one difference worth naming: this
+      // list carries the folders the **app** owns as well as the reader's, and the menu filters
+      // them out of its destination lists. Handing over the whole list is what keeps that one
+      // decision in one place.
+      collectionFolders,
+      // The write behind "Move to". Given on every surface, and the *item* is what is fenced —
+      // a target with no `entryId` cannot name a row, so the row is never built.
+      moveToFolder,
       // **No `printingsDeck` and no `printingsOracleId`, and both absences are the point.** This
       // is the object every *plain* card surface takes — the search walls, the collection, the
       // wishlist, the card pane — and not one of them is a row of an open deck or a list of one
@@ -178,7 +262,15 @@ export function useCardMenuDeps(): CardMenuWiring {
       // exists to prevent.
       DeckTargetSubmenu,
     }),
-    [marketplace, addToCollection, addToWishlist, wishlistFolders, openAllPrintings],
+    [
+      marketplace,
+      addToCollection,
+      addToWishlist,
+      moveToFolder,
+      wishlistFolders,
+      collectionFolders,
+      openAllPrintings,
+    ],
   );
 
   return { deps, error: refusal };

@@ -7,10 +7,17 @@ import { useContextMenu } from "@/components/menu/useContextMenu";
 import type { MenuAction, MenuItem, MenuSubmenu } from "@/components/menu/types";
 import { copyText } from "@/lib/clipboard";
 import { openExternal } from "@/lib/externalLinks";
-import { ipc, type DeckFolder, type DeckRow, type WishlistFolder } from "@/lib/ipc";
+import {
+  ipc,
+  type CollectionFolder,
+  type DeckFolder,
+  type DeckRow,
+  type WishlistFolder,
+} from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
 import {
   buildCardMenu,
+  buildCollectionTargetItems,
   buildDeckTargetItems,
   buildWishlistTargetItems,
   CardToDeckProvider,
@@ -80,6 +87,21 @@ const wishFolder = (
   sortOrder = 0,
 ): WishlistFolder => ({ id, parentId, name, sortOrder });
 
+/**
+ * One collection folder, the reader's own unless a test says otherwise.
+ *
+ * `kind` last and defaulted, because it is the field this cabinet has that the other two do not
+ * and only the filter tests care what it is — every other test here is about a drawer somebody
+ * made and named.
+ */
+const binder = (
+  id: number,
+  name: string,
+  parentId: number | null = null,
+  sortOrder = 0,
+  kind = "user",
+): CollectionFolder => ({ id, parentId, name, kind, deckId: null, sortOrder });
+
 /** Everything the menu needs that is not the card, with every write a spy. A surface's real
  *  deps are its own; this is the shape, so a test can name the one it is about. */
 function deps(over: Partial<CardMenuDeps> = {}): CardMenuDeps {
@@ -90,6 +112,9 @@ function deps(over: Partial<CardMenuDeps> = {}): CardMenuDeps {
     // A wishlist that files nothing, which is every reader who has never made a folder and the
     // case each of these tests was already asserting before folders existed.
     wishlistFolders: [],
+    // The same, one cabinet over — and `moveToFolder` left out, because a surface that hands
+    // over no `entryId` has no row to move and every one of these targets is a card.
+    collectionFolders: [],
     // No `printingsDeck` and no `printingsOracleId`: the shape a *plain* card surface hands
     // over, which is every one of them except the deck editor and the modal itself.
     openAllPrintings: vi.fn(),
@@ -256,7 +281,10 @@ describe("buildCardMenu", () => {
     const collection = find(addTo.items, "Collection");
     expect(collection.kind).toBe("action");
     (collection as MenuAction).onSelect();
-    expect(addToCollection).toHaveBeenCalledWith(BOLT, "nonfoil");
+    // `null` is the root of the collection, spelled out rather than defaulted: the folder is
+    // part of the row's storage grain, so a destination the caller did not choose is a second
+    // row rather than a wrong drawer.
+    expect(addToCollection).toHaveBeenCalledWith(BOLT, "nonfoil", null);
   });
 
   it("offers a finish submenu when the printing has more than one and the surface named none", () => {
@@ -272,7 +300,7 @@ describe("buildCardMenu", () => {
     const target: CardMenuTarget = { ...BOLT, finishes: '["nonfoil","foil"]', finish: "foil" };
     const addTo = find(buildCardMenu(target, deps({ addToCollection })), "Add to") as MenuSubmenu;
     (find(addTo.items, "Collection") as MenuAction).onSelect();
-    expect(addToCollection).toHaveBeenCalledWith(target, "foil");
+    expect(addToCollection).toHaveBeenCalledWith(target, "foil", null);
   });
 
   it("treats a null finishes column as nonfoil rather than as no finishes at all", () => {
@@ -281,7 +309,7 @@ describe("buildCardMenu", () => {
     const target = { ...BOLT, finishes: null };
     const addTo = find(buildCardMenu(target, deps({ addToCollection })), "Add to") as MenuSubmenu;
     (find(addTo.items, "Collection") as MenuAction).onSelect();
-    expect(addToCollection).toHaveBeenCalledWith(target, "nonfoil");
+    expect(addToCollection).toHaveBeenCalledWith(target, "nonfoil", null);
   });
 
   it("wishes for the exact printing", () => {
@@ -318,6 +346,92 @@ describe("buildCardMenu", () => {
     const deck = find(addTo.items, "Deck");
     // Lazy, so the folder tree and the deck list are fetched on expand and never on open.
     expect(deck.kind).toBe("lazy");
+  });
+
+  it("opens the collection into a picker once there are folders to file into", () => {
+    const addToCollection = vi.fn();
+    const addTo = find(
+      buildCardMenu(BOLT, deps({ addToCollection, collectionFolders: [binder(1, "Binder")] })),
+      "Add to",
+    ) as MenuSubmenu;
+    const collection = find(addTo.items, "Collection") as MenuSubmenu;
+    // `submenu` rather than `lazy`, the wishlist's rule: the folder list is one small query the
+    // page already holds, so there is nothing for a right-click to fire.
+    expect(collection.kind).toBe("submenu");
+    expect(labels(collection.items)).toEqual(["Collection", "Binder"]);
+
+    (collection.items[2] as MenuAction).onSelect();
+    expect(addToCollection).toHaveBeenCalledWith(BOLT, "nonfoil", 1);
+  });
+
+  /**
+   * The two questions compose rather than flattening: which piece of cardboard, then which
+   * drawer. A flat list would be `finishes × folders` rows and would grow with every folder.
+   */
+  it("asks for the finish first and the folder second when the printing has two", () => {
+    const addToCollection = vi.fn();
+    const target = { ...BOLT, finishes: '["nonfoil","foil"]' };
+    const addTo = find(
+      buildCardMenu(target, deps({ addToCollection, collectionFolders: [binder(1, "Binder")] })),
+      "Add to",
+    ) as MenuSubmenu;
+    const collection = find(addTo.items, "Collection") as MenuSubmenu;
+    expect(labels(collection.items)).toEqual(["Nonfoil", "Foil"]);
+
+    const foil = find(collection.items, "Foil") as MenuSubmenu;
+    expect(foil.kind).toBe("submenu");
+    expect(labels(foil.items)).toEqual(["Collection", "Binder"]);
+    (foil.items[2] as MenuAction).onSelect();
+    expect(addToCollection).toHaveBeenCalledWith(target, "foil", 1);
+  });
+
+  /**
+   * A copy already in the binder is moved, never added — a second add would be a second row,
+   * because the folder is part of the storage grain.
+   */
+  it("offers Move to for a row the surface can name, and files it where the reader points", () => {
+    const moveToFolder = vi.fn();
+    const items = buildCardMenu(
+      { ...BOLT, entryId: 42 },
+      deps({ moveToFolder, collectionFolders: [binder(1, "Binder")] }),
+    );
+    const move = find(items, "Move to") as MenuSubmenu;
+    expect(labels(move.items)).toEqual(["Collection", "Binder"]);
+
+    (move.items[2] as MenuAction).onSelect();
+    expect(moveToFolder).toHaveBeenCalledWith(42, 1);
+    // The root is a destination and not an omission — the only way back out of a folder.
+    (move.items[0] as MenuAction).onSelect();
+    expect(moveToFolder).toHaveBeenCalledWith(42, null);
+  });
+
+  /**
+   * The three absences that leave the row out — and **out rather than greyed**, because it is
+   * missing from every card of a surface that has no rows, so it reads as a fact about the
+   * surface rather than about the card. `find` throws on a missing label, so each assertion is
+   * on the label list.
+   */
+  it("leaves Move to out where the surface can name no row", () => {
+    const items = buildCardMenu(
+      BOLT,
+      deps({ moveToFolder: vi.fn(), collectionFolders: [binder(1, "Binder")] }),
+    );
+    expect(labels(items)).not.toContain("Move to");
+  });
+
+  it("leaves Move to out where the surface wired no write", () => {
+    const items = buildCardMenu(
+      { ...BOLT, entryId: 42 },
+      deps({ collectionFolders: [binder(1, "Binder")] }),
+    );
+    expect(labels(items)).not.toContain("Move to");
+  });
+
+  it("leaves Move to out for a reader who has made no folder", () => {
+    // With no cabinet the only destination is the root, which is where every unfiled copy
+    // already is — the whole row would be a press that does nothing.
+    const items = buildCardMenu({ ...BOLT, entryId: 42 }, deps({ moveToFolder: vi.fn() }));
+    expect(labels(items)).not.toContain("Move to");
   });
 });
 
@@ -484,6 +598,88 @@ describe("buildWishlistTargetItems", () => {
       vi.fn(),
     );
     expect(labels(items)).toEqual(["Wishlist", "Zoo", "Alpha"]);
+  });
+});
+
+describe("buildCollectionTargetItems", () => {
+  it("offers the root first, then the folders", () => {
+    const items = buildCollectionTargetItems([binder(1, "Binder")], vi.fn());
+    expect(items.map((i) => ("label" in i ? i.label : i.kind))).toEqual([
+      "Collection",
+      "separator",
+      "Binder",
+    ]);
+  });
+
+  it("offers a folder with nothing in it", () => {
+    // Unlike `deckLevel`, which drops an empty folder: a folder there is a container of
+    // destinations, and here it IS the destination -- an empty drawer is where the next card
+    // goes, and is what a reader makes a folder for.
+    expect(buildCollectionTargetItems([binder(1, "Empty")], vi.fn())).toHaveLength(3);
+  });
+
+  it("draws a folder with children as a submenu whose first row is the folder itself", () => {
+    const items = buildCollectionTargetItems([binder(1, "Binder"), binder(2, "Rares", 1)], vi.fn());
+    const outer = items.find((i) => "label" in i && i.label === "Binder");
+    expect(outer?.kind).toBe("submenu");
+    // Its own row first, so a parent folder is always pickable -- otherwise "Binder" would be
+    // the one folder in the cabinet a card cannot be filed into.
+    expect((outer as MenuSubmenu).items.map((i) => ("label" in i ? i.label : i.kind))).toEqual([
+      "Binder",
+      "separator",
+      "Rares",
+    ]);
+  });
+
+  it("passes the folder id to the chooser, and null for the root", () => {
+    const choose = vi.fn();
+    const items = buildCollectionTargetItems([binder(1, "Binder")], choose);
+    (items[0] as MenuAction).onSelect();
+    expect(choose).toHaveBeenCalledWith(null);
+    (items[2] as MenuAction).onSelect();
+    expect(choose).toHaveBeenCalledWith(1);
+  });
+
+  it("keeps the reader's own folder order rather than the alphabet", () => {
+    const items = buildCollectionTargetItems(
+      [binder(2, "Zoo", null, 0), binder(1, "Alpha", null, 1)],
+      vi.fn(),
+    );
+    expect(labels(items)).toEqual(["Collection", "Zoo", "Alpha"]);
+  });
+
+  /**
+   * The one thing this cabinet has that the other two do not. A deck's folder and the
+   * removed-cards folder are places cards **are** — so the list command answers them and a page
+   * draws them — but filing into one by hand asserts something the app is responsible for, and
+   * `collection_set_folder` refuses both in words. A menu whose rows are refusals teaches
+   * nothing.
+   */
+  it("offers only the folders the reader made", () => {
+    const items = buildCollectionTargetItems(
+      [
+        binder(1, "Binder"),
+        binder(2, "Mono red", null, 1, "deck"),
+        binder(3, "Recently removed", null, 2, "removed"),
+      ],
+      vi.fn(),
+    );
+    expect(labels(items)).toEqual(["Collection", "Binder"]);
+  });
+
+  /**
+   * A state `create_folder` refuses to write — a folder the reader made inside one the app owns
+   * — so this pins what the picker does with a database that somehow holds one. The kind filter
+   * runs **before** the tree is built, so the child's parent is simply not in the list and
+   * `buildFolderTree`'s standing rule applies: resolve towards the **root**, never towards
+   * nothing. Dropping it would hide a real folder with nothing anywhere pointing at it.
+   */
+  it("files a folder whose parent the filter removed at the root", () => {
+    const items = buildCollectionTargetItems(
+      [binder(1, "Mono red", null, 0, "deck"), binder(2, "Sideboard", 1)],
+      vi.fn(),
+    );
+    expect(labels(items)).toEqual(["Collection", "Sideboard"]);
   });
 });
 

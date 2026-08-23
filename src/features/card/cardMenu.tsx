@@ -29,6 +29,7 @@ import {
   Copy,
   ExternalLink,
   Folder,
+  FolderInput,
   Heart,
   Image as ImageIcon,
   Images,
@@ -39,9 +40,10 @@ import {
 import { MenuRows } from "@/components/menu/ContextMenu";
 import type { MenuAction, MenuItem } from "@/components/menu/types";
 // From `@/lib/folderTree` rather than through `@/features/decks/folders`, which re-exports it:
-// this file builds two trees now, and the wishlist's cabinet has nothing to do with the deck
-// gallery's. The arithmetic is one implementation because `DeckFolder` and `WishlistFolder`
-// answer the same flat shape, and the module it lives in is the one that says so.
+// this file builds three trees now, and neither the wishlist's cabinet nor the collection's has
+// anything to do with the deck gallery's. The arithmetic is one implementation because
+// `DeckFolder`, `WishlistFolder` and `CollectionFolder` all answer the same flat shape, and the
+// module it lives in is the one that says so.
 import { buildFolderTree, type FolderNode } from "@/lib/folderTree";
 import { DEFAULT_VARIANT, useDeck } from "@/features/decks/useDeck";
 import { useDeckFolders } from "@/features/decks/useDeckFolders";
@@ -52,6 +54,7 @@ import { FINISH_LABEL, parseFinishes, type Finish } from "@/lib/finish";
 import {
   ipc,
   ipcError,
+  type CollectionFolder,
   type DeckFolder,
   type DeckRow,
   type DeckVariant,
@@ -80,6 +83,21 @@ export interface CardMenuTarget {
   /** Only where the surface names one — a collection row, a wishlist row with a preference. */
   finish?: Finish;
   /**
+   * The `collection_entries` row this target **is**, where the surface has one.
+   *
+   * Set by the collection's **table**, whose row is exactly one entry, and by nothing else — a
+   * search tile, a deck card and a printings row are all pieces of cardboard rather than copies
+   * the reader owns, and the collection's own *wall* collapses several entries of one printing
+   * into one tile, so it has no single id to name either.
+   *
+   * **It is what "Move to" is fenced on**, and the fence is an absence rather than a greyed row:
+   * that item is missing from every card of every surface that is not the collection's table, so
+   * it reads as a property of the surface rather than of the card — the categories menu's
+   * argument for leaving Delete off a predefined zone, and the opposite of "View all printings",
+   * which is present on every surface and therefore greys.
+   */
+  entryId?: number;
+  /**
    * The card's own `type_line` — the **fallback** half of `autoCategoryFor`, exactly as the four
    * drag sources carry it.
    *
@@ -103,7 +121,47 @@ export interface CardMenuTarget {
 /** Everything the card menu needs that is not the card. Built once per surface, not per row. */
 export interface CardMenuDeps {
   marketplace: Marketplace;
-  addToCollection: (target: CardMenuTarget, finish: Finish) => void;
+  /**
+   * One copy of this printing, in that finish, filed where the reader pointed — `null` is the
+   * root of the collection.
+   *
+   * **The destination is an argument rather than a default**, {@link addToWishlist}'s rule and
+   * the same grain argument one table over: `folder_id` is the eleventh term of
+   * `COLLECTION_GRAIN`, so the same printing added to two folders is two rows and a folder the
+   * caller failed to pass writes a **second row at the root** rather than filing anything.
+   */
+  addToCollection: (target: CardMenuTarget, finish: Finish, folderId: number | null) => void;
+  /**
+   * Move a copy the reader already owns into a folder — `null` is the root of the collection,
+   * a real destination and not an omission.
+   *
+   * **Optional, because it is the one write here that needs a row rather than a card.** Only a
+   * surface that can name a `collection_entries` id ({@link CardMenuTarget.entryId}) can offer
+   * it, so a surface with no rows leaves both out and the item is simply not built.
+   *
+   * The backend **merges** rather than refusing when the destination already holds the same
+   * printing at the same grain, so the id it answers is not always the id it was given — which
+   * is why nothing here holds on to one.
+   */
+  moveToFolder?: (entryId: number, folderId: number | null) => void;
+  /**
+   * The collection's filing cabinet, flat, as the host page already holds it.
+   *
+   * **A value and not a query**, {@link wishlistFolders}' shape and for its reason: every host
+   * subscribes once through `useCardMenuDeps`, so the rows are in hand before a reader
+   * right-clicks anything and both folder rows stay plain `submenu`s rather than `lazy` ones.
+   *
+   * **Handed over whole and filtered here**, which is deliberate: this list carries the folders
+   * the *app* owns as well as the reader's — the one standing for a deck, and `Recently removed`
+   * — because a page has to draw them. Neither is ever offered as a **destination**: copies reach
+   * those through the app's own writes, and the backend refuses a hand-filing into one in words.
+   * `buildCollectionTargetItems` is where that filter lives, so a second caller cannot forget it.
+   *
+   * Optional, and empty is the ordinary answer — a collection that files nothing, and a hook
+   * whose first read has not landed, are the same array here. Neither is an error, and the rows a
+   * reader gets are the ones they had before folders existed.
+   */
+  collectionFolders?: readonly CollectionFolder[];
   /**
    * A wish for this printing, filed where the reader pointed — `null` is the root wishlist.
    *
@@ -239,14 +297,25 @@ export function buildCardMenu(target: CardMenuTarget, deps: CardMenuDeps): MenuI
       label: "Add to",
       Icon: Plus,
       items: [
-        collectionItem(target, deps.addToCollection),
+        collectionItem(target, deps),
         wishlistItem(target, deps),
         // `lazy` and not `submenu`: the folder tree and the deck list are two queries, and a
         // right-click on a card in a wall of forty must not fire either of them.
         { kind: "lazy", id: "add-deck", label: "Deck", Icon: Layers, Content: DeckPicker },
       ],
     },
+    // Directly under "Add to" and with no rule between them: both are filing, and the pair reads
+    // as one question — where does this card go — asked of a card the reader does not have yet
+    // and of one they do. Absent entirely on every surface that cannot name a row; see
+    // {@link CardMenuTarget.entryId} for why that is an absence rather than a greyed row.
+    ...toItems(moveItem(target, deps)),
   ];
+}
+
+/** One optional row, as a list to spread. A `null` item is a row the surface cannot offer at
+ *  all, which is not the same as a row it offers greyed. */
+function toItems(item: MenuItem | null): MenuItem[] {
+  return item === null ? [] : [item];
 }
 
 /**
@@ -354,34 +423,94 @@ function printingsItem(target: CardMenuTarget, deps: CardMenuDeps): MenuAction {
  * Nonfoil" over a picker whose whole job is to be read at a glance. `src/CLAUDE.md` states the
  * test the exemptions are granted by; it deliberately keeps no list of them.
  */
-function collectionItem(
-  target: CardMenuTarget,
-  addToCollection: (target: CardMenuTarget, finish: Finish) => void,
-): MenuItem {
+function collectionItem(target: CardMenuTarget, deps: CardMenuDeps): MenuItem {
+  const folders = userFolders(deps.collectionFolders);
+  const { addToCollection } = deps;
+  // A finish the surface named is the whole list: it is what that row **is**, and offering the
+  // printing's other two would be asking a question the surface has already answered.
   const named = target.finish;
-  if (named !== undefined) {
-    return collectionRow(() => addToCollection(target, named));
-  }
-  const choices = finishChoices(target.finishes);
+  const choices = named !== undefined ? [named] : finishChoices(target.finishes);
+
   if (choices.length === 1) {
-    return collectionRow(() => addToCollection(target, choices[0]));
+    const finish = choices[0];
+    if (folders.length === 0) {
+      return collectionRow(() => addToCollection(target, finish, null));
+    }
+    return {
+      kind: "submenu",
+      id: "add-collection",
+      label: "Collection",
+      Icon: LibraryBig,
+      items: buildCollectionTargetItems(folders, (folderId) =>
+        addToCollection(target, finish, folderId),
+      ),
+    };
   }
+  /**
+   * **Finish first, then folder** — the two questions compose rather than flattening into one
+   * list, because they are about different things: which piece of cardboard the reader is
+   * recording, and which drawer they keep it in. A flat "Nonfoil → Binder" list would be
+   * `finishes × folders` rows, and the count multiplies with every folder the reader makes.
+   */
   return {
     kind: "submenu",
     id: "add-collection",
     label: "Collection",
     Icon: LibraryBig,
-    items: choices.map((finish) => ({
-      kind: "action",
-      id: `add-collection-${finish}`,
-      label: FINISH_LABEL[finish],
-      onSelect: () => addToCollection(target, finish),
-    })),
+    items: choices.map((finish) =>
+      finishBranch(finish, folders, (folderId) => addToCollection(target, finish, folderId)),
+    ),
   };
+}
+
+/** One finish of the picker above: a press where the collection files nothing, and the folder
+ *  tree where it does. */
+function finishBranch(
+  finish: Finish,
+  folders: readonly CollectionFolder[],
+  choose: (folderId: number | null) => void,
+): MenuItem {
+  const row = { id: `add-collection-${finish}`, label: FINISH_LABEL[finish] } as const;
+  if (folders.length === 0) {
+    return { kind: "action", ...row, onSelect: () => choose(null) };
+  }
+  return { kind: "submenu", ...row, items: buildCollectionTargetItems(folders, choose) };
 }
 
 function collectionRow(onSelect: () => void): MenuAction {
   return { kind: "action", id: "add-collection", label: "Collection", Icon: LibraryBig, onSelect };
+}
+
+/**
+ * "Move to" — the same cabinet as "Add to → Collection", asked of a copy the reader already has.
+ *
+ * **Three things have to be true for it to exist at all**, and each absence means the same
+ * thing: the surface has no row to move ({@link CardMenuTarget.entryId}), the surface wired no
+ * write ({@link CardMenuDeps.moveToFolder}), or the reader has made no folder. The last is the
+ * wishlist row's rule read from the other end — with no cabinet the only destination is the root,
+ * which is where every unfiled copy already is, so the whole item would be a press that does
+ * nothing.
+ *
+ * **It is a `submenu` and never a `lazy` row** for {@link wishlistItem}'s reason: the folder list
+ * is one command the host page already ran, so there is nothing for a right-click to fire.
+ *
+ * **The folder the copy is already in is offered like any other and is not marked.** A move onto
+ * it writes the row back where it is, which is a no-op the reader cannot see — and marking it
+ * would mean every collection surface handing this file a `folderId` it has no other use for,
+ * for a fence the backend does not need.
+ */
+function moveItem(target: CardMenuTarget, deps: CardMenuDeps): MenuItem | null {
+  const { entryId } = target;
+  const move = deps.moveToFolder;
+  const folders = userFolders(deps.collectionFolders);
+  if (entryId === undefined || move === undefined || folders.length === 0) return null;
+  return {
+    kind: "submenu",
+    id: "move-to",
+    label: "Move to",
+    Icon: FolderInput,
+    items: buildCollectionTargetItems(folders, (folderId) => move(entryId, folderId)),
+  };
 }
 
 /**
@@ -832,6 +961,119 @@ function wishlistLevel(
         { ...here, id: `wishlist-folder-${id}-here` },
         { kind: "separator", id: `wishlist-folder-${id}-sep` },
         ...wishlistLevel(node.children, choose),
+      ],
+    };
+  });
+}
+
+/* ------------------------------------------------------------------------------------------ *
+ * The collection's cabinet
+ * ------------------------------------------------------------------------------------------ */
+
+/**
+ * The kind of folder the reader made and named — `schema::COLLECTION_FOLDER_KINDS[0]`, and the
+ * only kind anything in this file offers as a destination.
+ *
+ * The other two say something the **app** is responsible for: that a deck holds these copies,
+ * that these copies have left the collection. A reader filing a card into one by hand would be
+ * asserting that without any of the writes that make it true, so `collection_set_folder` refuses
+ * both in words — and a menu whose rows are refusals is a menu that teaches nothing.
+ */
+const USER_FOLDER_KIND = "user";
+
+/** The reader's own drawers, out of a list that also carries the app's. Absent is empty: a page
+ *  that has not answered yet and a collection that files nothing are the same array here. */
+function userFolders(folders: readonly CollectionFolder[] | undefined): readonly CollectionFolder[] {
+  return (folders ?? []).filter((folder) => folder.kind === USER_FOLDER_KIND);
+}
+
+/**
+ * The collection as a menu: the root, a rule, and the folders filed under it.
+ *
+ * **{@link buildWishlistTargetItems} ported, both divergences included**, because the two
+ * cabinets answer the same question — where does this card go — and a picker that behaved one
+ * way on the wishlist and another on the collection would read as a bug in whichever the reader
+ * met second. Written out rather than shared with it: the two differ in their root row, in every
+ * id, and in the kind filter below, and a generic taking three of those as parameters would be
+ * harder to read than either copy.
+ *
+ * **Two callers, one shape** — "Add to → Collection" and "Move to". An add and a move are
+ * different writes over the same destination list, and the list is exactly this either way.
+ *
+ * **The root goes first and is never omitted.** `NULL` is where every copy lands unless somebody
+ * says otherwise, so it is the answer a reader wants most often and the one that must not move
+ * when they make their fourth folder. The separator under it says what the indent would if this
+ * were a page: everything below is filing.
+ *
+ * **Only the reader's own folders are offered** — see {@link USER_FOLDER_KIND}. The filter is
+ * here rather than at the call sites so that a third caller cannot forget it.
+ *
+ * Folders keep `buildFolderTree`'s order — `sortOrder`, then name, then id — and go through no
+ * `sortOptions`: a folder tree is an arrangement the reader made, one of the two kinds of list
+ * `src/lib/options.ts` exempts, and listing their drawers one way on the collection page and
+ * another in this picker reads as a bug because it is one.
+ *
+ * **Members are deliberately not passed** — `buildFolderTree(folders, [])`. The node counts come
+ * back zero and nothing here reads one: a folder is a *destination*, and how many copies are
+ * already in it has no bearing on whether the fortieth may go there.
+ */
+export function buildCollectionTargetItems(
+  folders: readonly CollectionFolder[],
+  choose: (folderId: number | null) => void,
+): MenuItem[] {
+  return [
+    {
+      kind: "action",
+      id: "collection-root",
+      label: "Collection",
+      // `LibraryBig`, not `Folder`: the root is the collection itself rather than a drawer in
+      // it, and it wears the same glyph as the row this picker hangs off.
+      Icon: LibraryBig,
+      onSelect: () => choose(null),
+    },
+    { kind: "separator", id: "collection-sep-root" },
+    ...collectionLevel(buildFolderTree(userFolders(folders), []), choose),
+  ];
+}
+
+function collectionLevel(
+  nodes: readonly FolderNode<CollectionFolder>[],
+  choose: (folderId: number | null) => void,
+): MenuItem[] {
+  return nodes.map((node): MenuItem => {
+    const { id, name } = node.folder;
+    const here = {
+      kind: "action",
+      id: `collection-folder-${id}`,
+      label: name,
+      Icon: Folder,
+      onSelect: () => choose(id),
+    } as const;
+    /**
+     * **An empty folder is still offered, and this is where `deckLevel` does the opposite.**
+     * There a folder is a *container of destinations* — a drawer holding no deck and no drawer
+     * with a deck in it opens onto an empty panel, so it is dropped. Here the folder **is** the
+     * destination: an empty drawer is where the next card goes, and it is what a reader makes a
+     * folder *for*. Dropping it would leave a folder made an hour ago reachable only from the
+     * collection page.
+     */
+    if (node.children.length === 0) return here;
+    /**
+     * A folder with children draws **its own row first**, then a rule, then them — so a parent is
+     * always pickable. `deckLevel`'s submenu holds decks and sub-folders, two different kinds of
+     * thing, and the folder itself is not one of them; here the parent and its children are all
+     * destinations of the same kind, and a submenu offering only the children would make
+     * "Binder" the one folder in the cabinet a card cannot be filed into.
+     */
+    return {
+      kind: "submenu",
+      id: `collection-folder-${id}`,
+      label: name,
+      Icon: Folder,
+      items: [
+        { ...here, id: `collection-folder-${id}-here` },
+        { kind: "separator", id: `collection-folder-${id}-sep` },
+        ...collectionLevel(node.children, choose),
       ],
     };
   });

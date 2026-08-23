@@ -181,11 +181,14 @@ export interface SearchRequest {
    * `true` narrows to printings the collection has an entry for, `false` to those it does
    * not.
    *
-   * **An entry, not a copy.** A row emptied to zero is a row the collection keeps, and this
-   * filter counts it as owned — so a card whose only entry sits at zero passes `owned: true`
+   * **An entry, not a copy.** A card whose only entry holds no copies passes `owned: true`
    * while its {@link CardSummary.ownedQuantity} reads `0`, and does *not* appear under
    * `owned: false`. The wishlist's `fulfilled` filter is the one that counts copies, because
    * a wish is filled by copies rather than by paperwork.
+   *
+   * Rare since schema v24 — `collectionSetQuantity` deletes at zero now — but the rule is
+   * about what this filter asks rather than about what the collection happens to store, and
+   * `collectionUpdate` still keeps the row it is editing.
    */
   owned?: boolean;
   /**
@@ -671,6 +674,16 @@ export interface EntryInput {
   /** Copies to add. Never `0`: adding nothing would conjure a row out of a card the user
    *  never said they had. Zero is a state a row is *moved* to, by `collectionSetQuantity`. */
   quantity: number;
+  /**
+   * Where a menu add files it. Absent — and `null` — is the root of the collection: nothing has
+   * to be filed for the collection to work, and this is the field that keeps that true for a
+   * reader who has never made a folder.
+   *
+   * It is part of the row's **storage grain** ({@link CollectionRow.folderId}), exactly the way
+   * {@link WishInput.folderId} is one table over: adding the same printing to two folders is two
+   * rows, never one row that moves. Moving one is {@link ipc.collectionSetFolder} and only that.
+   */
+  folderId?: number | null;
   /** Defaults to `NM` — what an unmarked card is assumed to be. */
   condition?: Condition;
   /** What the user's file called that condition, kept because the normalisation is lossy. */
@@ -728,10 +741,13 @@ export interface EntryPatch {
  * What a write did.
  *
  * `removed` is the difference between "you now have zero" and "that row is gone", which the
- * list has to know to drop it — and the two tables answer it differently on the same input:
- * `collectionSetQuantity(id, 0)` keeps the row (it still holds a condition, a purchase price
- * and an acquisition story), while `wishlistSetQuantity(id, 0)` deletes it, because a wish
- * for none of something is not a wish.
+ * list has to know to drop it. **Both tables now answer it the same way on the same input**:
+ * `collectionSetQuantity(id, 0)` and `wishlistSetQuantity(id, 0)` each delete and each report
+ * `removed: true`. The wishlist has always been that way — a wish for none of something is not
+ * a wish — and the collection joined it at schema v24, because with the folder in the grain a
+ * row holding no copies cannot be told from a row somebody filed and emptied. `collectionUpdate`
+ * is the one write left that answers `removed: false` at a quantity of zero, and deliberately:
+ * an edit form sends eight fields at once and must not delete the row being edited.
  */
 export interface EntryChange {
   id: number;
@@ -762,6 +778,37 @@ export interface CollectionImportItem {
   finish: Finish;
   condition?: Condition;
   conditionOriginal?: string;
+  /**
+   * The six grain columns beyond the printing, its finish and its grade —
+   * {@link EntryInput}'s spelling and its optionality, deliberately, because they say the same
+   * thing about the same row and a line of a file must be able to state everything a quick-add
+   * can.
+   *
+   * **They are here because the fold *is* the grain, and it was not.** A planner folding its
+   * lines on `(cardId, finish, condition)` while `idx_collection_grain` is eleven columns wide is
+   * wrong in two directions at once: two lines differing only in `signed` collapse into one
+   * before the write ever sees them, and — because `commit_import` had nothing to read for these
+   * six and hard-coded the defaults — a re-import could never land on a reader's altered or
+   * graded row. It wrote a second all-defaults entry beside it instead of adding to it, which is
+   * the half that costs the reader something: the copy they described is still there, and now it
+   * has an anonymous twin.
+   *
+   * **Absent is not `false` reaching the wire.** It means the file carried no such column, which
+   * the backend reads as the plain unmarked copy. That is why the four flags are optional rather
+   * than required: almost every import is a text file with three columns in it, and requiring
+   * them would make every caller write four `false`s in order to say nothing.
+   */
+  altered?: boolean;
+  signed?: boolean;
+  proxy?: boolean;
+  misprint?: boolean;
+  serialNumber?: string;
+  /** `{"company":"PSA","grade":"10","cert":"12345678"}` as JSON text — {@link EntryInput.grading}
+   *  verbatim, including that the backend re-serialises it into canonical key order and
+   *  **refuses** an unknown key rather than dropping it. Two spellings of one slab would
+   *  otherwise be two rows at the storage grain, which is the whole reason this field belongs in
+   *  the fold above. */
+  grading?: string;
   purchasePrice?: number;
   purchaseCurrency?: string;
   acquiredAt?: string;
@@ -770,14 +817,28 @@ export interface CollectionImportItem {
 }
 
 /**
- * What a bulk import did. `removed` is the wishlist's alone — a `set` of 0 deletes a wish and
- * leaves a zero-quantity collection row — and it is `0` here rather than absent, so one shape
- * covers both commands.
+ * What a bulk import did.
+ *
+ * **`removed` is populated by both commands since schema v24.** It was the wishlist's alone while
+ * a `set` of 0 left a zero-quantity collection row standing; the collection now deletes that row
+ * too, inside the same transaction, and counts it here. One shape still covers both commands, and
+ * `0` rather than absent still means "nothing was removed" rather than "this command cannot say".
+ *
+ * A caller that treats a non-zero `removed` as proof the file was a wishlist import is reading the
+ * old rule. What the number costs is the same on both tables and is worth stating: the deleted
+ * collection row takes its `condition`, `conditionOriginal`, purchase price and currency,
+ * acquired-at, acquisition source, notes and tags with it — the acquisition story the old
+ * zero-keeps behaviour existed to preserve.
+ *
+ * One line can also count in **two** of these at once: a `set` of 0 for a printing the reader does
+ * not own inserts the row and then deletes it, so it reads one `added` and one `removed`. Both
+ * numbers describe statements that really ran.
  */
 export interface ImportCommitOutcome {
   added: number;
   updated: number;
-  /** The wishlist's alone: a `set` of 0 deletes a wish. Always 0 from the collection. */
+  /** Rows deleted: every wish `set` to 0, and — since schema v24 — every collection row `set` to
+   *  0 as well, with everything recorded on it. */
   removed: number;
 }
 
@@ -796,6 +857,25 @@ export interface CollectionQuery extends CardFilters {
    *  are dealt with, so it is a real filter and reaches the wire as `false` rather than being
    *  dropped the way a blank string is. Absent asks nothing. */
   needsReview?: boolean;
+  /**
+   * Which folder the list is being read at. Absent — and `null`, which deserializes to the same
+   * `Option::None` — is **every folder**, which is what the collection has always answered.
+   *
+   * **That is not {@link WishlistQuery.folderId}'s meaning and the difference is deliberate**:
+   * there `null` is the root list and {@link WishlistQuery.flatten} is the third state, because
+   * the wishlist page navigates *into* a folder. Nothing here needs "the root and nothing else"
+   * yet, so the field carries two states rather than inventing a sentinel for a third.
+   */
+  folderId?: number | null;
+  /**
+   * Whether copies a deck has taken off the desk are part of the answer.
+   *
+   * `"all"` — the default, and what every caller written before folders existed sends by
+   * omission — is every row. `"unallocated"` drops the rows filed in a **`deck`** folder and
+   * nothing else: the root, a folder the reader made and `Recently removed` are all cards on
+   * their desk, and only a copy a deck is holding is spoken for.
+   */
+  allocation?: "all" | "unallocated";
   /** How to order the list, first column deciding. Empty or absent is name order. */
   sort?: SortSpec<CollectionSortKey>;
   /** Which marketplace every price is quoted from, and therefore what the `value` and `price`
@@ -817,6 +897,28 @@ export interface CollectionQuery extends CardFilters {
 export interface CollectionRow {
   id: number;
   cardId: string;
+  /**
+   * The {@link CollectionFolder} this copy is filed in, or `null` for the root of the collection
+   * — `collection_entries.folder_id`, answered on every row rather than made optional, because a
+   * copy is always filed *somewhere* and the backend always knows where. {@link WishRow.folderId}
+   * one table over, for its reasons.
+   *
+   * The same printing filed in two folders is **two rows** here with two different values of this
+   * field, never one row that moved: `folder_id` is the eleventh term of
+   * `schema::COLLECTION_GRAIN`, which is what makes "Add to → \<binder\>" an add and moving
+   * between folders an act of its own ({@link ipc.collectionSetFolder}).
+   */
+  folderId: number | null;
+  /**
+   * That folder's name, joined on for the reader — `null` at the root, and `null` for a folder
+   * that has left the cabinet between the two reads.
+   *
+   * On the row rather than looked up from {@link ipc.collectionFolderList} because a table cell
+   * has to draw it per row: the alternative is every collection surface holding the folder list
+   * and building the same map. **It is a display string and never an identity** —
+   * {@link folderId} is what a write names, and two sibling folders may share a name.
+   */
+  folderName: string | null;
   name: string | null;
   /**
    * The oracle card this printing is of — read off `cards.oracle_id`, never denormalised
@@ -839,15 +941,17 @@ export interface CollectionRow {
   layout: string | null;
   finish: string;
   /**
-   * What state the copy is in — `collection_entries.condition`, straight off the entry.
+   * What state the copy is in — `collection_entries.condition`, straight off the entry, and
+   * always one of {@link Condition}.
    *
-   * **`| null` over a column that is `TEXT NOT NULL DEFAULT 'NM'`**, so no row the backend can
-   * build carries one. The nullability is a fence around the wire rather than a state to
-   * expect, and narrowing it is a decision about what an export writes for a copy whose grade
-   * the reader never stated — this field reaches their CSV through `fromCollectionRow`, and a
-   * defaulted grade there would be this app filling one in on their behalf.
+   * **Not `| null`, because the column is `TEXT NOT NULL DEFAULT 'NM'`** and no backend write
+   * can leave it unset — an absent condition becomes `NM` before the insert. It carried `| null`
+   * for three releases as a fence around the wire, which cost every reader of the row a branch
+   * that could not be reached. The reader who never stated a grade is not represented by a
+   * missing `condition`; they are represented by `conditionOriginal` being `null`, which is the
+   * field that records what their file actually said.
    */
-  condition: string | null;
+  condition: string;
   quantity: number;
   tradelistQuantity: number;
   /**
@@ -916,10 +1020,10 @@ export interface CollectionPage {
 
 /** The aggregate header, over the same filters as the list it captions. */
 export interface CollectionSummary {
-  /** Copies, not rows: a row emptied to zero contributes 0. */
+  /** Copies, not rows: a row holding none contributes 0. */
   totalCards: number;
-  /** Distinct printings **recorded**, not distinct printings currently held — a row taken to
-   *  zero is still on the screen this number captions. */
+  /** Distinct printings **recorded**, not distinct printings currently held — a row holding no
+   *  copies is still on the screen this number captions. */
   uniqueCards: number;
   entries: number;
   tradelistCards: number;
@@ -1394,6 +1498,84 @@ export interface WishlistFolderSummary {
    *  own version of the page header's unpriced note, so a dashed card whose total looks low
    *  can say why. */
   unpriced: number;
+}
+
+/**
+ * One folder of the **collection's** own filing cabinet — `collection_folders`, schema v24, and
+ * the third table to answer {@link DeckFolder}'s flat-rows-with-a-parent-id shape.
+ *
+ * **Flat rows; the tree is the reader's to build from `parentId`**, and `collection_folder_list`
+ * takes no argument because a folder belongs to no card: it files them. `null` **is** the root,
+ * so a reader who has never made a folder sees the collection they saw before the upgrade.
+ *
+ * # The one field the other two cabinets do not have
+ *
+ * **A folder here can belong to the app rather than to the reader**, which is what {@link kind}
+ * says. Only a `user` folder is the reader's to rename, move, delete or file a card into by hand
+ * — every write in `collection_folders.rs` refuses the other two in words, `FOLDER_NOT_YOURS` —
+ * so a surface offering folders as *destinations* filters on that word rather than listing what
+ * it was handed.
+ *
+ * The two cascades point the same opposite ways the wishlist's do:
+ * `collection_folders.parent_id` is `ON DELETE CASCADE` **on itself**, so deleting a folder takes
+ * its sub-folders with it, while `collection_entries.folder_id` is `ON DELETE SET NULL` — the
+ * cards inside surface at the root, filed nowhere and in particular **not deleted**. A folder is
+ * a filing decision the reader made about copies they own, never a second collection a card can
+ * be lost inside.
+ */
+export interface CollectionFolder {
+  id: number;
+  /** The folder this one sits inside, or `null` for the root of the collection. */
+  parentId: number | null;
+  name: string;
+  /**
+   * Who the folder belongs to — one of `schema::COLLECTION_FOLDER_KINDS`.
+   *
+   * `"user"` is a drawer the reader made and named. `"deck"` is the one folder standing for a
+   * deck, and carries {@link deckId}. `"removed"` is the single folder copies go to when they
+   * leave the collection without leaving the database. **Nothing creates either of the latter
+   * two by hand**, and every folder write refuses to touch one — which is why a picker offers
+   * `"user"` and only `"user"`.
+   *
+   * A plain `string` rather than a union, deliberately: Rust stores the word, a fourth kind is a
+   * migration rather than a type error, and a reader that compares and falls through keeps
+   * working the day there is one.
+   */
+  kind: string;
+  /** The deck a `"deck"` folder stands for, and `null` on every other kind — the schema CHECKs
+   *  that pair, so the two can never be read apart. */
+  deckId: number | null;
+  sortOrder: number;
+}
+
+/**
+ * The two numbers one collection folder tile draws — `collection_folder_summary`'s row.
+ *
+ * **Direct per folder, never recursive**, {@link WishlistFolderSummary}'s rule and its warning:
+ * a folder holding two sub-folders of six cards each and none of its own reads as **empty**
+ * here, which is correct for this row and wrong for a tile. `buildFolderTree` sums a node's
+ * children on the way up, and that arithmetic is deliberately not repeated in SQL.
+ *
+ * **A folder holding nothing produces no row at all**, so a page cannot build its tree from
+ * this: {@link ipc.collectionFolderList} is the census and this is a lookup layered onto it.
+ */
+export interface CollectionFolderSummary {
+  folderId: number;
+  /** **Copies** filed directly in this folder, not rows — `sum(quantity)`, so a row holding none
+   *  contributes nothing. Rare since schema v24, because `collectionSetQuantity` deletes at zero
+   *  and only `collectionUpdate` still writes such a row, but summing is the right arithmetic
+   *  either way and counting rows would never have been. */
+  cards: number;
+  /**
+   * What those copies are worth at the query's marketplace.
+   *
+   * **`null` rather than `0` when the marketplace prices nothing in the folder**, which is where
+   * this parts company with the page header's `coalesce(…, 0.0)`: a tile is a small number
+   * beside a name with no room for the header's "n unpriced" note, so a folder of cards the feed
+   * has never heard of would otherwise read as a folder worth nothing. `null` draws an em dash,
+   * which is this app's answer for a price it does not have.
+   */
+  value: number | null;
 }
 
 /**
@@ -3175,9 +3357,15 @@ export const ipc = {
   /** Add copies. The same printing, finish and condition twice is one row with a bigger
    *  number — the backend upserts on the grain. */
   collectionAdd: (entry: EntryInput) => invoke<EntryChange>("collection_add", { entry }),
-  /** An absolute quantity. `0` keeps the row — with its condition, its purchase price and
-   *  its acquisition story — and says so in `removed: false`. Deleting is `collectionRemove`
-   *  and only ever `collectionRemove`. */
+  /** An absolute quantity. `0` **deletes** the row since schema v24 and says so in
+   *  `removed: true`. **Name what that costs**, because keeping it was the whole of the old rule:
+   *  the row's `condition`, `conditionOriginal`, purchase price and currency, acquired-at,
+   *  acquisition source, notes and tags go with it. The folder grain made it unavoidable — a row
+   *  holding no copies cannot be told from a row somebody filed and emptied — and
+   *  {@link ipc.collectionUpdate} is where a reader who wants that record kept steps the quantity
+   *  instead. A second press on the same id is refused as gone, which is the asymmetry with
+   *  `collectionRemove`: that one is the unconditional delete and a stale id there is a
+   *  success. */
   collectionSetQuantity: (id: number, quantity: number) =>
     invoke<EntryChange>("collection_set_quantity", { id, quantity }),
   collectionUpdate: (id: number, patch: EntryPatch) =>
@@ -3194,9 +3382,75 @@ export const ipc = {
    */
   collectionImportCommit: (items: CollectionImportItem[], mode: TransferImportMode) =>
     invoke<ImportCommitOutcome>("collection_import_commit", { items, mode }),
+  /** Every folder there is, flat — {@link ipc.wishlistFolderList}'s rule verbatim, ported: the
+   *  tree is the reader's to build from `parentId`, and no card id scopes it because a folder
+   *  belongs to no card. **Unfiltered by kind**: a deck's folder and the removed-cards folder
+   *  are places cards are, so a page that could not see them would draw a tree the collection
+   *  does not have. Offering one as a *destination* is what filters on
+   *  {@link CollectionFolder.kind}. */
+  collectionFolderList: () => invoke<CollectionFolder[]>("collection_folder_list"),
+  /** A new folder, at the root with `parentId: null` or inside another one. Always a `user`
+   *  folder — nothing here makes the two the app owns — and a `parentId` naming one of those is
+   *  refused in words. */
+  collectionFolderCreate: (parentId: number | null, name: string) =>
+    invoke<CollectionFolder>("collection_folder_create", { parentId, name }),
+  /** Rename a folder the reader made. A deck's folder is named after its deck and the
+   *  removed-cards folder after what it is for, so neither is renameable. */
+  collectionFolderRename: (id: number, name: string) =>
+    invoke<CollectionFolder>("collection_folder_rename", { id, name }),
+  /**
+   * Re-parent a folder — `parentId: null` moves it back to the root.
+   *
+   * Refuses a move into itself or into one of its own descendants, {@link ipc.wishlistFolderMove}'s
+   * guard and for the same reason: `collection_folders.parent_id` is `ON DELETE CASCADE` **on
+   * itself**, so a cycle is a graph SQLite's recursive cascade would walk forever the day the
+   * folder is deleted.
+   */
+  collectionFolderMove: (id: number, parentId: number | null) =>
+    invoke<CollectionFolder>("collection_folder_move", { id, parentId }),
+  /**
+   * Delete a folder. **Its cards are not deleted** — they surface at the root, filed nowhere and
+   * otherwise exactly as they were, and the backend re-files them by hand before the row goes so
+   * two copies of one printing landing at the root merge instead of colliding on the grain.
+   * Sub-folders *do* go with it. An id that resolves to nothing is a success.
+   */
+  collectionFolderDelete: (id: number) => invoke<void>("collection_folder_delete", { id }),
+  /**
+   * Move one owned row into a folder — `folderId: null` is the root of the collection, a real
+   * destination and not an omission.
+   *
+   * **A command of its own, because filing is not adding**: `folder_id` is part of the storage
+   * grain ({@link CollectionRow.folderId}), so an add can never silently move a row the reader
+   * filed last week and moving one has to be something they say out loud.
+   *
+   * **Merges rather than fails on a collision**, {@link ipc.wishlistSetFolder}'s rule: moving a
+   * copy into a folder that already holds the same printing at the same grain sums the two
+   * quantities into the destination row, deletes the source, and answers the **destination's**
+   * id and quantity — so the `id` that comes back is not always the `id` that went in. Any deck
+   * claims on the row that folds move with it.
+   *
+   * **The destination is fenced**: a `deck` folder and the removed-cards folder are the app's own
+   * and are refused in words. Copies reach those through the app's own writes, never by hand.
+   */
+  collectionSetFolder: (id: number, folderId: number | null) =>
+    invoke<EntryChange>("collection_set_folder", { id, folderId }),
+  /**
+   * The two numbers each collection folder tile is drawn from, one
+   * {@link CollectionFolderSummary} per folder that holds at least one card — **direct per
+   * folder, never recursive**, and **no row at all for an empty folder**. Read that interface
+   * before drawing anything from this.
+   *
+   * Priced at the named marketplace, off the same `price_expr` the collection header's own total
+   * comes from, so a folder's figure and the whole collection's can never disagree about what one
+   * copy costs.
+   */
+  collectionFolderSummary: (marketplace: MarketplaceId) =>
+    invoke<CollectionFolderSummary[]>("collection_folder_summary", { marketplace }),
   wishlistAdd: (wish: WishInput) => invoke<EntryChange>("wishlist_add", { wish }),
-  /** An absolute quantity — and here `0` *removes* the row, because a wish holds nothing
-   *  worth keeping once it is emptied. The opposite of the collection's, on purpose. */
+  /** An absolute quantity — and `0` *removes* the row, because a wish holds nothing worth
+   *  keeping once it is emptied. This was the opposite of the collection's rule until schema
+   *  v24, when the collection joined it for a different reason: a wish has no acquisition story
+   *  to lose, while a collection row does and loses it anyway. Same answer, two arguments. */
   wishlistSetQuantity: (id: number, quantity: number) =>
     invoke<EntryChange>("wishlist_set_quantity", { id, quantity }),
   wishlistRemove: (id: number) => invoke<EntryChange>("wishlist_remove", { id }),
@@ -3666,7 +3920,8 @@ export const ipc = {
    * An absolute quantity — **the stepper's write**, and the one that works on a row whose
    * printing has left the card database.
    *
-   * `0` *removes* the row, the wishlist's asymmetry rather than the collection's: a category
+   * `0` *removes* the row, which is now what all three lists do — the collection's row survived a
+   * zero until schema v24 and no longer does — and here it needs no argument at all: a category
    * slot holds an intention and nothing else, and an intention stepped down to none of is
    * withdrawn. The answer then reads `removed: true` with `id: 0` when there was no row to
    * remove in the first place.
