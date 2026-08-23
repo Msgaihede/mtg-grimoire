@@ -5,6 +5,14 @@
 //! which connection — these *write*, so they take `AppState.db` with a bound rather than
 //! `db_read`, and a lock they cannot get is an answer rather than a wait.
 
+// The two sentences a folder an add cannot use gets, reached across rather than re-spelled —
+// `collection_folders`' own import of `FOLDER_GONE` makes the argument at length, and this is
+// the fifth write over a `folder_id` column to need it. `FOLDER_NOT_YOURS` and `USER_KIND` come
+// from that module for the sharper version of the same reason: it owns what a folder's `kind`
+// means and how the app says no to one of its own, and a second wording here would be a second
+// answer to one mistake.
+use crate::collection_folders::{FOLDER_NOT_YOURS, USER_KIND};
+use crate::deck_meta::FOLDER_GONE;
 use crate::schema::{COLLECTION_GRAIN, FINISHES};
 use crate::sync::AppState;
 use rusqlite::{params, Connection, OptionalExtension};
@@ -64,6 +72,29 @@ pub struct EntryInput {
     /// A JSON array of strings. `None` means the row keeps whatever it has.
     pub tags: Option<String>,
     pub notes: Option<String>,
+    /// Which folder the copies are filed in. `None` is the **root**, which is where every add
+    /// landed before schema v24 and where every add that names no folder still lands.
+    ///
+    /// **On the input rather than left to a follow-up `collection_set_folder`, because it is
+    /// part of the grain.** `coalesce(folder_id, 0)` is `COLLECTION_GRAIN`'s eleventh term, so
+    /// "Add to → Binder" and "Add to → Collection" are two different rows of the same printing —
+    /// an add that could not name a folder would land at the root and then have to be *moved*,
+    /// which is a merge into whatever the root already held followed by a move back out. The
+    /// column has to be written by the statement that decides the conflict target.
+    ///
+    /// Fenced in words against `collection_folders` ([`folder_named`]) rather than by the
+    /// foreign key, which is `crate::wishlist::WishInput::folder_id`'s argument on the same
+    /// field one table over: the key is per-connection (`PRAGMA foreign_keys`) and
+    /// `FOREIGN KEY constraint failed` names a constraint rather than the mistake.
+    ///
+    /// **The kind is fenced as well as the existence**, with
+    /// `collection_folders::set_entry_folder`'s wording and for its reason: an add that filed
+    /// into a `deck` or `removed` folder would be asserting something only the app can make
+    /// true. The menu the reader presses offers `kind == "user"` and nothing else, so a request
+    /// naming one of the app's folders is a stale client or a bug either way. The deck-driven
+    /// writes reach those folders through `collection_folders::refile_entry`, which is
+    /// deliberately unfenced and is the whole difference between the two doors.
+    pub folder_id: Option<i64>,
 }
 
 /// An edit to one existing row. Every field is optional: absent means "leave it".
@@ -197,11 +228,13 @@ fn canonical_grading(grading: Option<&str>) -> Result<Option<String>, String> {
 
 /// A quantity the database will accept, refused in words rather than as a CHECK failure.
 ///
-/// **Zero is allowed here, and keeps the row.** A stepper taken to zero leaves the entry
-/// with its condition, its purchase price, its tags and its acquisition story intact — the
-/// user still owns that story on the day they own none of the card. Deleting is
-/// [`remove_entry`] and only ever [`remove_entry`]; a negative number is not a quantity and
-/// must never be a back door to one.
+/// **Zero is allowed here, and what it then means is the caller's.** This function's whole
+/// rule is that a negative number is not a quantity and must never be a back door to one;
+/// zero is a state a row can legitimately be asked for, and the column's `CHECK` is `>= 0`
+/// so that it can. Which of the three answers it gets is decided at the write:
+/// [`set_quantity`] deletes the row (schema v24), [`update_entry`] keeps it — an edit form
+/// must not delete the row being edited — and [`remove_entry`] is the unconditional delete
+/// that takes no quantity at all.
 ///
 /// `what` names the field, so the one message serves every caller. The wishlist shares it
 /// (`crate::wishlist::set_wish_quantity`) for the *negative* half only — its zero is a
@@ -233,6 +266,49 @@ fn valid_condition(condition: Option<&str>) -> Result<&str, String> {
     })
 }
 
+/// The folder an add names, refused in words unless it is there **and is the reader's own**.
+/// `None` is the root and is always a destination — there is no row to look up, so the fence must
+/// not reach it.
+///
+/// `crate::wishlist::add_wish`'s check on the same field one table over, and the fourth write in
+/// the crate to make the same argument: `collection_entries.folder_id` **is** a real foreign key
+/// between two user tables, so an id nothing answers to does fail — with
+/// `FOREIGN KEY constraint failed`, a sentence about a constraint, and only while
+/// `PRAGMA foreign_keys` happens to be on, which is per-connection. The reader who deleted a
+/// folder in one pane and pressed "Add to" in another must meet the sentence they met in the
+/// deck gallery and on the wishlist. One mistake, one wording.
+///
+/// **The kind is checked too, which is `collection_folders`' own fence and its own wording**
+/// ([`crate::collection_folders::FOLDER_NOT_YOURS`], the constant the four writes in that module
+/// already answer with). A `deck` or `removed` folder is reached only through the dedicated
+/// deck-driven writes, and the card menu offers `kind == "user"` and nothing else — so a request
+/// naming one of the app's folders is a stale client or a bug, and honouring it would let an
+/// ordinary add assert something only the app can make true. `collection_folders::refile_entry`
+/// is deliberately unfenced and is the door those writes come through.
+///
+/// One statement for both halves, because they are one question — a folder that is not there
+/// cannot be the app's, which is `collection_folders::user_folder`'s ordering, and a NULL `kind`
+/// is unreachable (the column is `NOT NULL`, CHECKed against
+/// `schema::COLLECTION_FOLDER_KINDS`).
+fn folder_named(conn: &Connection, folder_id: Option<i64>) -> Result<(), String> {
+    let Some(folder) = folder_id else {
+        return Ok(());
+    };
+    let kind: Option<String> = conn
+        .query_row(
+            "SELECT kind FROM collection_folders WHERE id = ?1",
+            params![folder],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    match kind.as_deref() {
+        None => Err(FOLDER_GONE.to_owned()),
+        Some(USER_KIND) => Ok(()),
+        Some(_) => Err(FOLDER_NOT_YOURS.to_owned()),
+    }
+}
+
 /// The printing, as the entry will remember it.
 fn printing_of(conn: &Connection, card_id: &str) -> Result<(String, String, String), String> {
     conn.query_row(
@@ -246,6 +322,13 @@ fn printing_of(conn: &Connection, card_id: &str) -> Result<(String, String, Stri
 }
 
 /// Add copies, folding into the row that already holds this grain.
+///
+/// **The grain includes the folder since schema v24**, which is what makes "Add to → Binder" an
+/// *add* rather than a move: the same printing filed in two places is two rows, so an add can
+/// never quietly relocate copies the reader filed last week. [`EntryInput::folder_id`] is the
+/// field, `None` is the root, and the column has to be written by this statement rather than by
+/// a follow-up move — the conflict target is `COLLECTION_GRAIN` verbatim, so the column that
+/// decides which row is folded into must be set before the conflict is resolved.
 pub fn add_entry(conn: &Connection, input: &EntryInput) -> Result<EntryChange, String> {
     let finish = valid_finish(&input.finish)?;
     let condition = valid_condition(input.condition.as_deref())?;
@@ -257,6 +340,7 @@ pub fn add_entry(conn: &Connection, input: &EntryInput) -> Result<EntryChange, S
     }
     valid_quantity(input.tradelist_quantity, "tradelist quantity")?;
     let grading = canonical_grading(input.grading.as_deref())?;
+    folder_named(conn, input.folder_id)?;
     let (set_code, collector_number, lang) = printing_of(conn, &input.card_id)?;
 
     // The conflict target is `COLLECTION_GRAIN` verbatim — the same text the unique index
@@ -284,9 +368,9 @@ pub fn add_entry(conn: &Connection, input: &EntryInput) -> Result<EntryChange, S
             (card_id, set_code, collector_number, lang, finish, condition, condition_original,
              quantity, tradelist_quantity, purchase_price, purchase_currency, acquired_at,
              acquisition_source, serial_number, altered, signed, proxy, misprint, grading,
-             tags, notes, created_at, updated_at)
+             tags, notes, folder_id, created_at, updated_at)
          VALUES (?1,?2,?3,?4,?5,?6,?7,?8,min(?9,?8),?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,
-                 coalesce(?20,'[]'),?21, unixepoch(), unixepoch())
+                 coalesce(?20,'[]'),?21,?22, unixepoch(), unixepoch())
          ON CONFLICT({COLLECTION_GRAIN}) DO UPDATE SET
             quantity = collection_entries.quantity + excluded.quantity,
             tradelist_quantity =
@@ -327,10 +411,11 @@ pub fn add_entry(conn: &Connection, input: &EntryInput) -> Result<EntryChange, S
                 grading,
                 input.tags,
                 input.notes,
+                input.folder_id,
             ],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
-        .map_err(friendly)?;
+        .map_err(|e| e.to_string())?;
     Ok(EntryChange {
         id,
         quantity,
@@ -343,6 +428,25 @@ pub fn add_entry(conn: &Connection, input: &EntryInput) -> Result<EntryChange, S
 /// The condition is `Option` rather than defaulted here: an absent one means the file said
 /// nothing, and the **dialog** is where the reader chose what that becomes. Defaulting it in two
 /// places is how the preview and the write come to disagree.
+///
+/// # Six of these fields are the grain, and they were hard-coded until schema v24
+///
+/// `altered`, `signed`, `proxy`, `misprint`, `serial_number` and `grading` are terms of
+/// [`COLLECTION_GRAIN`], and [`commit_import`] used to write a default for every one of them.
+/// The consequence was not a lost flag: it was that a re-import could **never** land on a
+/// reader's altered or graded row, because the row it conflicted against was at a different
+/// grain. It wrote a second all-defaults entry beside the real one — quietly, on the one screen
+/// whose whole job is not to duplicate what the collection already records.
+///
+/// **`#[serde(default)]` on the six**, so a planner written before they existed still
+/// deserialises and an absent field still means the plain copy an import has always described.
+/// That is `crate::import::ImportItem::inactive`'s rule, for its reason.
+///
+/// `grading` rides as the **text the file carried** and is canonicalised by the write rather
+/// than here: [`Grading`] is the one struct that owns that column's key order, and
+/// [`canonical_grading`] — which [`add_entry`] and [`set_entry`] both call — is the one place it
+/// is parsed and re-serialised. A second spelling built anywhere else is the same physical card
+/// forking into a new row on every edit, with no constraint anywhere to catch it.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CollectionImportItem {
@@ -356,11 +460,25 @@ pub struct CollectionImportItem {
     pub acquired_at: Option<String>,
     pub acquisition_source: Option<String>,
     pub notes: Option<String>,
+    #[serde(default)]
+    pub serial_number: Option<String>,
+    #[serde(default)]
+    pub altered: bool,
+    #[serde(default)]
+    pub signed: bool,
+    #[serde(default)]
+    pub proxy: bool,
+    #[serde(default)]
+    pub misprint: bool,
+    /// `{"company":"PSA","grade":"9","cert":"12345678"}` as JSON text — see the type doc.
+    #[serde(default)]
+    pub grading: Option<String>,
 }
 
-/// What a bulk import did. `removed` is the wishlist's alone — a `set` of 0 deletes a wish and
-/// leaves a zero-quantity collection row — and it is 0 here rather than absent, so one shape
-/// covers both commands.
+/// What a bulk import did. **`removed` is both lists' since schema v24** — a `set` of 0 deletes
+/// a wish, and now deletes a collection row too ([`set_quantity`] is where that reversal is
+/// argued). It was the wishlist's alone and 0 here, and the one shape covering both commands is
+/// what made the change a count rather than a field.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ImportCommitOutcome {
@@ -386,6 +504,7 @@ fn set_entry(conn: &Connection, input: &EntryInput) -> Result<EntryChange, Strin
     valid_quantity(input.quantity, "collection quantity")?;
     valid_quantity(input.tradelist_quantity, "tradelist quantity")?;
     let grading = canonical_grading(input.grading.as_deref())?;
+    folder_named(conn, input.folder_id)?;
     let (set_code, collector_number, lang) = printing_of(conn, &input.card_id)?;
 
     // The conflict target is `COLLECTION_GRAIN` verbatim, exactly as [`add_entry`]'s is.
@@ -394,9 +513,9 @@ fn set_entry(conn: &Connection, input: &EntryInput) -> Result<EntryChange, Strin
             (card_id, set_code, collector_number, lang, finish, condition, condition_original,
              quantity, tradelist_quantity, purchase_price, purchase_currency, acquired_at,
              acquisition_source, serial_number, altered, signed, proxy, misprint, grading,
-             tags, notes, created_at, updated_at)
+             tags, notes, folder_id, created_at, updated_at)
          VALUES (?1,?2,?3,?4,?5,?6,?7,?8,min(?9,?8),?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,
-                 coalesce(?20,'[]'),?21, unixepoch(), unixepoch())
+                 coalesce(?20,'[]'),?21,?22, unixepoch(), unixepoch())
          ON CONFLICT({COLLECTION_GRAIN}) DO UPDATE SET
             quantity = excluded.quantity,
             tradelist_quantity =
@@ -436,10 +555,11 @@ fn set_entry(conn: &Connection, input: &EntryInput) -> Result<EntryChange, Strin
                 grading,
                 input.tags,
                 input.notes,
+                input.folder_id,
             ],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )
-        .map_err(friendly)?;
+        .map_err(|e| e.to_string())?;
     Ok(EntryChange {
         id,
         quantity,
@@ -452,9 +572,22 @@ fn set_entry(conn: &Connection, input: &EntryInput) -> Result<EntryChange, Strin
 /// a failure halfway through would leave a collection nobody can reason about.
 ///
 /// Added and updated are counted by the **row count before and after** rather than by a
-/// grain lookup per item. `COLLECTION_GRAIN` is ten columns and a hand-written `WHERE` matching
-/// it would be a second copy of the index's definition — the thing this module already warns
-/// against at the `ON CONFLICT` target.
+/// grain lookup per item. `COLLECTION_GRAIN` is eleven columns and a hand-written `WHERE`
+/// matching it would be a second copy of the index's definition — the thing this module already
+/// warns against at the `ON CONFLICT` target.
+///
+/// **A `set` of 0 removes the row**, which is [`set_quantity`]'s reversal reaching the importer:
+/// a file that says a printing is at zero is a file saying the reader does not own it. It is
+/// done *after* [`set_entry`] rather than inside it, so that command keeps one shape and the
+/// grain stays the upsert's to find — the row lands at zero and is then deleted by id, inside
+/// this transaction, which is the intermediate zero the column's `CHECK (quantity >= 0)` allows.
+///
+/// The arithmetic follows: `added` is the row-count delta **plus** what was removed, because a
+/// removal is a row that left for a reason that is not "it was never added". The one line this
+/// counts oddly is a `set 0` for a printing the reader does not own — the upsert inserts, the
+/// delete takes it away, and the outcome reads one added and one removed rather than nothing.
+/// Both numbers describe statements that really ran, and the cheaper answer would be a
+/// per-item `count(*)` over a table that can hold tens of thousands of rows.
 fn commit_import(
     conn: &Connection,
     items: &[CollectionImportItem],
@@ -472,6 +605,7 @@ fn commit_import(
         .map_err(|e| e.to_string())?;
 
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let mut removed = 0i64;
     for item in items {
         let input = EntryInput {
             card_id: item.card_id.clone(),
@@ -484,19 +618,33 @@ fn commit_import(
             purchase_currency: item.purchase_currency.clone(),
             acquired_at: item.acquired_at.clone(),
             acquisition_source: item.acquisition_source.clone(),
-            serial_number: None,
-            altered: false,
-            signed: false,
-            proxy: false,
-            misprint: false,
-            grading: None,
+            // The six grain columns, carried rather than defaulted. Hard-coded here until
+            // schema v24, which is why a re-import could not land on an altered or graded
+            // row — see [`CollectionImportItem`].
+            serial_number: item.serial_number.clone(),
+            altered: item.altered,
+            signed: item.signed,
+            proxy: item.proxy,
+            misprint: item.misprint,
+            grading: item.grading.clone(),
+            // Still `None`, and it is not one of the six: `tags` is a set the reader curates on
+            // the row and is deliberately absent from both writes' `DO UPDATE`, so a file has
+            // nothing to say about it.
             tags: None,
             notes: item.notes.clone(),
+            // Spelled rather than defaulted, `deck_categories.origin`'s rule: an import names
+            // no folder, and a `..Default::default()` here would be a decision nobody can see
+            // at the call site on the one field that is part of the grain.
+            folder_id: None,
         };
         if mode == "add" {
             add_entry(&tx, &input)?;
         } else {
-            set_entry(&tx, &input)?;
+            let change = set_entry(&tx, &input)?;
+            if change.quantity == 0 {
+                remove_entry(&tx, change.id)?;
+                removed += 1;
+            }
         }
     }
     tx.commit().map_err(|e| e.to_string())?;
@@ -504,29 +652,50 @@ fn commit_import(
     let after: i64 = conn
         .query_row("SELECT count(*) FROM collection_entries", [], |r| r.get(0))
         .map_err(|e| e.to_string())?;
-    let added = after - before;
+    let added = after - before + removed;
     Ok(ImportCommitOutcome {
         added,
-        updated: items.len() as i64 - added,
-        removed: 0,
+        updated: items.len() as i64 - added - removed,
+        removed,
     })
 }
 
-/// Set an absolute quantity. **Zero keeps the row.**
+/// Set an absolute quantity. **Zero removes the row**, and the row's whole story with it.
 ///
-/// The stepper in the collection table is what sends this, and taking it to zero is the
-/// user saying "I have none of these today", not "forget everything I recorded about
-/// them". The condition, the purchase price and currency, the acquisition date and source,
-/// the tags and the notes are all still true of the copies that were traded away, and are
-/// all still there when the next one turns up. Removal is [`remove_entry`], reached only by
-/// the explicit action, so a slip of a stepper can never lose a story that took years to
-/// accumulate.
+/// This is the reversal of the ruling `collection_entries`' schema comment was written under,
+/// and it was the reader's own call. A collection is what somebody *has*; a row saying they
+/// have none of a printing is a row that says nothing, and every list, count and total in the
+/// app carried a special case to describe it. So the stepper in the collection table taken to
+/// zero now means what it looks like it means.
 ///
-/// The consequence belongs to whatever reads this table: a zero row is a real row, so a
-/// "cards owned" figure that counts rows rather than summing quantity is wrong the first
-/// time somebody trades a playset away. See `collection_entries`' schema comment.
+/// **What that costs is exactly what the old rule was preserving**, and it is worth naming
+/// rather than discovering: the row's `condition` and `condition_original`, the purchase price
+/// and currency, `acquired_at`, the acquisition source, the notes and the tags all go. A reader
+/// who trades a playset away and buys it back next year retypes every one of them.
+///
+/// [`remove_entry`] is therefore no longer the only door out — but it is still the only one
+/// that is *unconditional*: an id that resolves to nothing is a success there and [`GONE`]
+/// here, because an adjustment to a row that is not there could not do what it was asked.
+///
+/// **`CHECK (quantity >= 0)` stays on the column** and is not a leftover: the guard is the
+/// command, and an intermediate zero inside a transaction — [`commit_import`]'s `set` mode
+/// writes one before deleting it — is still legal. [`update_entry`] is the other deliberate
+/// exception, and its own doc says why.
 pub fn set_quantity(conn: &Connection, id: i64, quantity: i64) -> Result<EntryChange, String> {
     valid_quantity(quantity, "collection quantity")?;
+    if quantity == 0 {
+        let gone = conn
+            .execute("DELETE FROM collection_entries WHERE id = ?1", params![id])
+            .map_err(|e| e.to_string())?;
+        if gone == 0 {
+            return Err(GONE.to_owned());
+        }
+        return Ok(EntryChange {
+            id,
+            quantity: 0,
+            removed: true,
+        });
+    }
     let changed = conn
         .execute(
             "UPDATE collection_entries
@@ -538,7 +707,7 @@ pub fn set_quantity(conn: &Connection, id: i64, quantity: i64) -> Result<EntryCh
               WHERE id = ?1",
             params![id, quantity],
         )
-        .map_err(friendly)?;
+        .map_err(|e| e.to_string())?;
     if changed == 0 {
         return Err(GONE.to_owned());
     }
@@ -549,29 +718,20 @@ pub fn set_quantity(conn: &Connection, id: i64, quantity: i64) -> Result<EntryCh
     })
 }
 
-/// Apply an edit. Absent fields are left alone (`coalesce(?n, column)`), which is what
-/// makes this usable from a form that only sends what it changed.
+/// The edit, as one statement. Absent fields are left alone (`coalesce(?n, column)`), which is
+/// what makes it usable from a form that only sends what it changed.
 ///
-/// A `quantity` of zero is applied like any other, for the reason [`set_quantity`] gives:
-/// this is an edit form, and nothing a user types into a number field should delete the row
-/// they are editing.
-pub fn update_entry(conn: &Connection, id: i64, patch: &EntryPatch) -> Result<EntryChange, String> {
-    if let Some(f) = patch.finish.as_deref() {
-        valid_finish(f)?;
-    }
-    if let Some(c) = patch.condition.as_deref() {
-        valid_condition(Some(c))?;
-    }
-    if let Some(q) = patch.quantity {
-        valid_quantity(q, "collection quantity")?;
-    }
-    if let Some(t) = patch.tradelist_quantity {
-        valid_quantity(t, "tradelist quantity")?;
-    }
-    let grading = canonical_grading(patch.grading.as_deref())?;
-    let quantity: i64 = conn
-        .query_row(
-            "UPDATE collection_entries SET
+/// **`OR IGNORE`, and that is [`update_entry`]'s whole collision detector**: eight of the
+/// eighteen holes are grain columns, so an edit really can land on a row the collection already
+/// holds — and a plain `UPDATE` answers that as `UNIQUE constraint failed`, from inside a
+/// statement that has already decided nothing. Ignored, it changes no row and returns nothing,
+/// which is the same answer an id that is not there gives; telling the two apart is the caller's
+/// next question, and it is a cheaper one than unpicking an error string.
+///
+/// One constant because [`update_entry`] runs it **twice** on the folding path — once with every
+/// hole filled, and once with the eight grain holes bound to NULL, which is the same statement
+/// saying "leave the grain alone".
+const PATCH_SQL: &str = "UPDATE OR IGNORE collection_entries SET
                 finish = coalesce(?2, finish),
                 condition = coalesce(?3, condition),
                 condition_original = coalesce(?4, condition_original),
@@ -592,7 +752,60 @@ pub fn update_entry(conn: &Connection, id: i64, patch: &EntryPatch) -> Result<En
                 notes = coalesce(?18, notes),
                 updated_at = unixepoch()
              WHERE id = ?1
-             RETURNING quantity",
+             RETURNING quantity";
+
+/// Apply an edit. Absent fields are left alone — see [`PATCH_SQL`], which is the statement.
+///
+/// A `quantity` of zero is applied like any other and **keeps the row**, which is the one place
+/// left in this module where zero does. [`set_quantity`] deletes at zero because a stepper taken
+/// to zero says "I have none of these"; this is an edit form, and nothing a reader types into a
+/// number field beside seven other fields should delete the row they are editing. The
+/// asymmetry is deliberate and is the reason the column's `CHECK` is `>= 0`.
+///
+/// # An edit onto a grain the collection already holds folds into it
+///
+/// Eight of the patch's fields are grain columns, so a reader can ask a row to become a row they
+/// already have — the same LP copy edited to NM when an NM row is already there. That answered
+/// a refusal until schema v24 ("You already have an entry for that printing at that finish and
+/// condition — change its quantity instead"), which put the work back on the reader and was
+/// already the odd one out: `collection_folders::set_entry_folder` merges rather than refusing
+/// when a card is filed into a folder that holds its printing, and `reconcile` has folded a
+/// collided repoint since Plan 2. An edit is the same fact from the third side — the reader has
+/// said these two rows are one row — so it is answered the same way, by the same five statements
+/// ([`fold_entry`]).
+///
+/// **The answer therefore names a row the caller did not pass in.** That is what [`EntryChange`]
+/// carries an `id` for, and the collection table has to follow it: the row the reader was editing
+/// is gone.
+///
+/// **The patch's non-grain half is applied to the source *before* the fold**, so a reader who
+/// corrects the condition and the quantity in one press folds the quantity they typed rather
+/// than the one the row had. The grain half is applied to nothing at all — the surviving row
+/// already carries every value it names, which is precisely why the two collided.
+///
+/// **Why not `collection_folders::refile_entry`, which is the crate's other merge-on-taken-grain
+/// door**: that one probes for a target using the row's grain *as stored*, so it can express
+/// "this row moved onto a folder that is taken" and cannot express "this row was edited onto a
+/// grain that is taken" — the ten non-folder terms differ at the moment it would have to look.
+pub fn update_entry(conn: &Connection, id: i64, patch: &EntryPatch) -> Result<EntryChange, String> {
+    if let Some(f) = patch.finish.as_deref() {
+        valid_finish(f)?;
+    }
+    if let Some(c) = patch.condition.as_deref() {
+        valid_condition(Some(c))?;
+    }
+    if let Some(q) = patch.quantity {
+        valid_quantity(q, "collection quantity")?;
+    }
+    if let Some(t) = patch.tradelist_quantity {
+        valid_quantity(t, "tradelist quantity")?;
+    }
+    let grading = canonical_grading(patch.grading.as_deref())?;
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+
+    let applied: Option<i64> = tx
+        .query_row(
+            PATCH_SQL,
             params![
                 id,
                 patch.finish,
@@ -616,26 +829,118 @@ pub fn update_entry(conn: &Connection, id: i64, patch: &EntryPatch) -> Result<En
             |r| r.get(0),
         )
         .optional()
-        .map_err(friendly)?
-        .ok_or_else(|| GONE.to_owned())?;
+        .map_err(|e| e.to_string())?;
+    if let Some(quantity) = applied {
+        tx.commit().map_err(|e| e.to_string())?;
+        return Ok(EntryChange {
+            id,
+            quantity,
+            removed: false,
+        });
+    }
+
+    // Nothing changed, and `OR IGNORE` will not say which of the two reasons it was. The
+    // grain the edit *would have* landed on is the question that separates them: a row
+    // answering it is the row in the way, and no row answering it means there was nothing to
+    // edit. Ten of the eleven terms are `coalesce(<patch>, <the source's own>)` — the grain
+    // **after** the patch rather than before it, which is `reconcile::collision_target`'s rule
+    // and its reason. `card_id` and `lang` are properties of the printing and no patch reaches
+    // them; `folder_id` is `collection_folders`' to move and no patch reaches that either, so
+    // both are read straight off the source row. Spelled out rather than interpolated from
+    // `schema::COLLECTION_GRAIN` for that constant's own reason: it is a list of expressions
+    // over one row, and this compares the same list between two.
+    //
+    // At most one row can match, because these eleven terms *are* `idx_collection_grain`.
+    let target: Option<i64> = tx
+        .query_row(
+            "SELECT t.id FROM collection_entries t, collection_entries s
+              WHERE s.id = ?1 AND t.id <> s.id
+                AND t.card_id = s.card_id
+                AND t.lang = s.lang
+                AND t.finish = coalesce(?2, s.finish)
+                AND t.condition = coalesce(?3, s.condition)
+                AND t.altered = coalesce(?4, s.altered)
+                AND t.signed = coalesce(?5, s.signed)
+                AND t.proxy = coalesce(?6, s.proxy)
+                AND t.misprint = coalesce(?7, s.misprint)
+                AND coalesce(t.serial_number,'') = coalesce(?8, s.serial_number, '')
+                AND coalesce(t.grading,'') = coalesce(?9, s.grading, '')
+                AND coalesce(t.folder_id, 0) = coalesce(s.folder_id, 0)",
+            params![
+                id,
+                patch.finish,
+                patch.condition,
+                patch.altered,
+                patch.signed,
+                patch.proxy,
+                patch.misprint,
+                patch.serial_number,
+                grading,
+            ],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let Some(target) = target else {
+        return Err(GONE.to_owned());
+    };
+
+    // The same statement, with the eight grain holes bound to NULL: everything the reader
+    // typed that is *not* what made the two rows one, onto the row that is about to fold.
+    tx.query_row(
+        PATCH_SQL,
+        params![
+            id,
+            None::<String>,
+            None::<String>,
+            patch.condition_original,
+            patch.quantity,
+            patch.tradelist_quantity,
+            patch.purchase_price,
+            patch.purchase_currency,
+            patch.acquired_at,
+            patch.acquisition_source,
+            None::<String>,
+            None::<bool>,
+            None::<bool>,
+            None::<bool>,
+            None::<bool>,
+            None::<String>,
+            patch.tags,
+            patch.notes,
+        ],
+        |r| r.get::<_, i64>(0),
+    )
+    .map_err(|e| e.to_string())?;
+    fold_entry(&tx, target, id).map_err(|e| e.to_string())?;
+    let quantity: i64 = tx
+        .query_row(
+            "SELECT quantity FROM collection_entries WHERE id = ?1",
+            params![target],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())?;
     Ok(EntryChange {
-        id,
+        id: target,
         quantity,
         removed: false,
     })
 }
 
-/// Delete the row outright — the **only** thing in this module that deletes anything.
+/// Delete the row outright — the **unconditional** delete, where [`set_quantity`]'s zero and
+/// [`fold_entry`] are the two conditional ones.
 ///
-/// Deliberately asymmetric with [`set_quantity`] and [`update_entry`], which answer [`GONE`]
-/// for an id that resolves to nothing: an adjustment to a row that is not there could not do
-/// what it was asked, but a delete that finds nothing already has what it wanted. The caller
-/// that sends a stale id here is a list still holding a row something else removed, and
-/// telling it the row it wants gone is gone is not information — it is an error dialog over
-/// a success.
+/// (It was the only delete in this module until schema v24, and it is worth knowing which of
+/// the three a stale id reaches.) Deliberately asymmetric with [`set_quantity`] and
+/// [`update_entry`], which answer [`GONE`] for an id that resolves to nothing: an adjustment to
+/// a row that is not there could not do what it was asked, but a delete that finds nothing
+/// already has what it wanted. The caller that sends a stale id here is a list still holding a
+/// row something else removed, and telling it the row it wants gone is gone is not
+/// information — it is an error dialog over a success.
 pub fn remove_entry(conn: &Connection, id: i64) -> Result<EntryChange, String> {
     conn.execute("DELETE FROM collection_entries WHERE id = ?1", params![id])
-        .map_err(friendly)?;
+        .map_err(|e| e.to_string())?;
     Ok(EntryChange {
         id,
         quantity: 0,
@@ -643,19 +948,93 @@ pub fn remove_entry(conn: &Connection, id: i64) -> Result<EntryChange, String> {
     })
 }
 
-/// A database error in the app's own voice.
+/// Fold `source` into `target` and delete it — the crate's answer to "one collection row
+/// becomes another", with no opinion at all about *why* the two are one row.
 ///
-/// Only one of them is a user's problem rather than a bug: an edit that lands on a grain
-/// the collection already holds. SQLite says "UNIQUE constraint failed:
-/// index 'idx_collection_grain'", which names an implementation detail and no way forward.
-fn friendly(e: rusqlite::Error) -> String {
-    let text = e.to_string();
-    if text.contains("idx_collection_grain") {
-        return "You already have an entry for that printing at that finish and condition — \
-                change its quantity instead, or give this one a different condition."
-            .to_owned();
-    }
-    text
+/// Three callers ask that question three ways and share this answer:
+/// [`update_entry`], where the reader edited a row onto a grain another row holds;
+/// `reconcile::fold_into_existing`, where an upstream id merge repointed one onto another; and
+/// `collection_folders::merge_entry`, where a card was filed — by a drag, or by the re-filing a
+/// folder delete does one row at a time — into a folder that already holds its printing. It
+/// lived in the reconciler until schema v24 made the third and the first possible in one release.
+///
+/// **This is the only copy in the crate, and that is the point.** The reconciler and the folder
+/// tree each carried their own spelling of these five statements while v24 was being built. Two
+/// implementations of one rule disagree the first time either changes, and what this one guards
+/// is a built deck's claims (below), so both now call it and neither keeps a statement of its
+/// own.
+///
+/// **`pub(crate)` and taking a `&Connection` rather than a `&Transaction`**, so either caller's
+/// handle fits, and it commits nothing: whoever opened the transaction owns it.
+///
+/// # What moves
+///
+/// The quantities add, and the five columns the user typed themselves — what they paid, in what
+/// currency, when, where from, and their note — are taken by the survivor **only where it has
+/// none**. That is [`add_entry`]'s `ON CONFLICT` rule verbatim, and for the same reason: the
+/// survivor's own answers are not up for revision, but a fold that dropped the other row's is a
+/// receipt destroyed to resolve a collision the reader did not cause.
+///
+/// `tags` and `condition_original` are deliberately absent, exactly as they are from
+/// `add_entry`'s `DO UPDATE`. Tags are a set the user curates per row, and merging two sets is
+/// not something one statement should decide; `condition_original` is the provenance of *this*
+/// row's condition — the string one import used — and it cannot describe a condition it was
+/// never written beside. Both stay the survivor's, and the entry editor is where they change.
+///
+/// # And the decks' claims move with it
+///
+/// `deck_allocations.collection_entry_id` is the only enforced foreign key pointed at a
+/// collection entry, `ON DELETE CASCADE` (schema v5) so that [`remove_entry`] takes the
+/// reservations with the row. **This delete must therefore leave nothing for the cascade to
+/// take**: the copies still exist and the deck still wants them. Claims on the folding row move
+/// to the survivor; where the deck already claims the survivor, the two claims fold first —
+/// their grain is one row per `(deck, entry)`, the same shape as the entries' own.
+///
+/// All three allocation statements seek through `idx_deck_allocations_entry`, and every
+/// statement here is inside the caller's transaction: an allocation is never briefly homeless,
+/// and a pass that fails takes the whole fold back with it.
+pub(crate) fn fold_entry(tx: &Connection, target: i64, source: i64) -> rusqlite::Result<()> {
+    tx.execute(
+        "UPDATE collection_entries AS t SET
+            quantity = t.quantity + s.quantity,
+            tradelist_quantity = t.tradelist_quantity + s.tradelist_quantity,
+            purchase_price = coalesce(t.purchase_price, s.purchase_price),
+            purchase_currency = coalesce(t.purchase_currency, s.purchase_currency),
+            acquired_at = coalesce(t.acquired_at, s.acquired_at),
+            acquisition_source = coalesce(t.acquisition_source, s.acquisition_source),
+            notes = coalesce(t.notes, s.notes),
+            updated_at = unixepoch()
+          FROM (SELECT * FROM collection_entries WHERE id = ?2) AS s
+          WHERE t.id = ?1",
+        params![target, source],
+    )?;
+    tx.execute(
+        "UPDATE deck_allocations AS t SET
+            quantity = t.quantity + s.quantity,
+            updated_at = unixepoch()
+          FROM (SELECT deck_id, quantity FROM deck_allocations
+                 WHERE collection_entry_id = ?2) AS s
+          WHERE t.deck_id = s.deck_id AND t.collection_entry_id = ?1",
+        params![target, source],
+    )?;
+    tx.execute(
+        "DELETE FROM deck_allocations
+          WHERE collection_entry_id = ?2
+            AND EXISTS (SELECT 1 FROM deck_allocations t
+                         WHERE t.deck_id = deck_allocations.deck_id
+                           AND t.collection_entry_id = ?1)",
+        params![target, source],
+    )?;
+    tx.execute(
+        "UPDATE deck_allocations SET collection_entry_id = ?1, updated_at = unixepoch()
+          WHERE collection_entry_id = ?2",
+        params![target, source],
+    )?;
+    tx.execute(
+        "DELETE FROM collection_entries WHERE id = ?1",
+        params![source],
+    )?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -742,6 +1121,28 @@ pub const ENTRY_FINISH: &str = "e.finish";
 const DEFAULT_LIMIT: u32 = 100;
 const MAX_LIMIT: u32 = 500;
 
+/// Whether the list is narrowed to copies that are still the reader's to do something with.
+///
+/// **The vocabulary is about folders and nothing else.** `deck_allocations` is what "spoken for"
+/// means today, but a `deck` folder is what it will mean once the deck-driven collection lands
+/// (schema v24 created the kind; nothing writes one yet), and the two must not both be a filter
+/// on this query — a list that could disagree with itself about which copies a deck holds is
+/// worse than a list that cannot answer at all yet.
+///
+/// `All` is what every caller written before folders existed gets, and is what an absent field
+/// means: a collection lists what its owner owns.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Allocation {
+    /// Every row, wherever it is filed. Today's behaviour, and the default.
+    All,
+    /// Everything except the copies a deck holds — the root, every folder the reader made, and
+    /// `Recently removed`, because all three are cards on the reader's desk. `removed` is on
+    /// this side deliberately: a card that left the collection without leaving the database is
+    /// not a card a deck is using, and the folder exists so the reader can put it back.
+    Unallocated,
+}
+
 /// A collection list, as the UI asks for it.
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -754,6 +1155,24 @@ pub struct CollectionQuery {
     pub conditions: Option<Vec<String>>,
     /// `Some(true)` narrows to the rows a Scryfall migration or a vanished printing flagged.
     pub needs_review: Option<bool>,
+    /// One folder's direct members, or — absent — **every folder there is**.
+    ///
+    /// **The opposite convention to [`crate::wishlist::WishlistQuery::folder_id`]**, where
+    /// `None` is the root and a second `all_folders` flag says "do not filter". That shape is
+    /// the better one and this is not it, for one reason: this field is being added to a query
+    /// that has always answered the whole collection, and every caller — the table, the export's
+    /// paged sweep, the summary header — must keep getting exactly what it got. A `None` that
+    /// meant the root would silently narrow all of them on the day it landed. The cost is that
+    /// "the root, and only the root" is not expressible here yet; the collection page draws a
+    /// tree rather than one folder at a time, so nothing asks the question.
+    ///
+    /// Direct members only — a folder's page lists what is filed *in* it, never what is filed in
+    /// the folders inside it, which is `collection_folders::folder_summary`'s rule and
+    /// `folderTree.ts`'s job.
+    pub folder_id: Option<i64>,
+    /// Whether to leave out the copies a deck holds. Absent is [`Allocation::All`], which is
+    /// what every caller written before folders existed asked for without saying so.
+    pub allocation: Option<Allocation>,
     /// How to order the list: columns in priority order, the first deciding and the rest
     /// breaking its ties. Empty or absent is name order. Keys outside [`COLLECTION_SORTS`]
     /// are dropped, never interpolated.
@@ -797,15 +1216,18 @@ pub struct CollectionRow {
     pub type_line: Option<String>,
     pub layout: Option<String>,
     pub finish: String,
-    /// What state the copy is in — `e.condition`, straight off the entry.
+    /// What state the copy is in — `e.condition`, straight off the entry, and always one of
+    /// [`CONDITIONS`].
     ///
-    /// **`Option` over a column that is `TEXT NOT NULL DEFAULT 'NM'`** (`schema.rs`), so no row
-    /// this query can build is ever `None`. The nullability is a fence around the wire rather
-    /// than a state to expect, and narrowing it is a decision about what an export writes for a
-    /// copy whose grade the reader never stated — this field reaches their file through
-    /// `fromCollectionRow`, and a defaulted grade there would be the app filling one in on
-    /// their behalf.
-    pub condition: Option<String>,
+    /// **Not `Option`, because the column is `TEXT NOT NULL DEFAULT 'NM'`** (`schema.rs`) and no
+    /// write in the crate can leave it unset: `valid_condition` turns an absent one into
+    /// `DEFAULT_CONDITION` before either insert, and no patch can clear it. It was `Option` for
+    /// three releases as a fence around the wire, which cost every reader of the row a branch
+    /// that could not be reached and a `null` the export layer had to decide about. The reader
+    /// who never stated a grade is not represented by a missing `condition`; they are
+    /// represented by `condition_original` being `None`, which is the column that records what a
+    /// file actually said.
+    pub condition: String,
     pub quantity: i64,
     pub tradelist_quantity: i64,
     /// Per copy, per finish, at the marketplace the query named. `None` when that marketplace
@@ -849,6 +1271,23 @@ pub struct CollectionRow {
     /// ([`crate::legalities`]), and a copy of them in TypeScript would be a second place for
     /// the frozen order to drift. Key *names* are Scryfall's public vocabulary and cannot.
     pub legalities: Option<String>,
+    /// Which folder this row is filed in, `None` for the root — the eleventh term of
+    /// [`COLLECTION_GRAIN`] since schema v24, and the reason two rows for one printing at one
+    /// finish and condition can both be real.
+    ///
+    /// The table needs it to draw the row's filing menu with its own folder already ticked, and
+    /// a drag needs it to tell a move from a drop that changes nothing.
+    pub folder_id: Option<i64>,
+    /// That folder's name, or `None` at the root — a correlated lookup rather than a second
+    /// join, for the reason [`from_sql`] gives about widening the one `FROM`.
+    ///
+    /// **On the row rather than resolved on the page from `collection_folder_list`**, because a
+    /// row and its folder have to be *one* answer: the list is paged and the census is a
+    /// separate command, so a folder created, renamed or deleted between the two would print a
+    /// row under a name the cabinet no longer has. `None` means the root and never "a folder
+    /// whose name I could not find" — `collection_entries.folder_id` is a real foreign key, so
+    /// the id and the name arrive together or not at all.
+    pub folder_name: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -864,13 +1303,15 @@ pub struct CollectionPage {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CollectionSummary {
-    /// Copies, not rows. A row emptied to zero (see [`set_quantity`]) contributes 0 here —
-    /// which is the whole reason this sums `quantity` rather than counting rows.
+    /// Copies, not rows. A row holding none contributes 0 here — which is the whole reason
+    /// this sums `quantity` rather than counting rows. Rare since schema v24, because
+    /// [`set_quantity`] deletes at zero and only [`update_entry`] still writes one, but the
+    /// sum is the right arithmetic whether or not such a row exists this week.
     pub total_cards: i64,
-    /// Distinct printings **recorded**, not distinct printings currently held: a row taken
-    /// to zero still names a card the user has an entry for, and it is still on the screen
+    /// Distinct printings **recorded**, not distinct printings currently held: a row holding
+    /// no copies still names a card the user has an entry for, and it is still on the screen
     /// this number captions. Counting only what has copies today would make the header
-    /// disagree with the list under it every time a playset is traded away.
+    /// disagree with the list under it.
     pub unique_cards: i64,
     pub entries: i64,
     pub tradelist_cards: i64,
@@ -942,6 +1383,22 @@ fn scope(q: &CollectionQuery) -> crate::filters::Predicates {
         Some(true) => p.wheres.push("e.needs_review IS NOT NULL".to_owned()),
         Some(false) => p.wheres.push("e.needs_review IS NULL".to_owned()),
         None => {}
+    }
+    if let Some(folder) = q.folder_id {
+        p.push("e.folder_id = ?".to_owned(), Box::new(folder));
+    }
+    // A correlated lookup rather than a join, for [`from_sql`]'s reason: the page, the count
+    // and the summary all read that one `FROM`, and widening it for a filter two of them do not
+    // use is how a total comes to describe different rows than the list above it. `IS NULL`
+    // first because the root is where most copies are and is not a folder to look up — a
+    // `<> 'deck'` over a NULL id is NULL, which is not true, so the root would drop out of the
+    // very list that is mostly root.
+    if q.allocation == Some(Allocation::Unallocated) {
+        p.wheres.push(
+            "(e.folder_id IS NULL
+              OR (SELECT f.kind FROM collection_folders f WHERE f.id = e.folder_id) <> 'deck')"
+                .to_owned(),
+        );
     }
     p
 }
@@ -1094,7 +1551,8 @@ pub fn list_entries(conn: &Connection, q: &CollectionQuery) -> Result<Collection
                 e.purchase_price, e.purchase_currency, e.acquired_at, e.acquisition_source,
                 e.serial_number, e.altered, e.signed, e.proxy, e.misprint, e.grading,
                 e.tags, e.notes, e.needs_review, e.updated_at, c.oracle_id, c.promo_types,
-                c.legalities
+                c.legalities, e.folder_id,
+                (SELECT f.name FROM collection_folders f WHERE f.id = e.folder_id)
          FROM {from} WHERE {where_sql} ORDER BY {order} LIMIT ? OFFSET ?",
         price = crate::sorting::price_expr(q.marketplace, ENTRY_FINISH),
         order = crate::sorting::order_by(
@@ -1153,6 +1611,14 @@ pub fn list_entries(conn: &Connection, q: &CollectionQuery) -> Result<Collection
                     promo_types: r.get(31)?,
                     // 32, appended for the third time and for the same reason.
                     legalities: r.get(32)?,
+                    // 33 and 34, appended for the fourth and fifth. The rule this file has
+                    // followed three times over is worth stating: **every new column goes on
+                    // the end**, never at its logical place beside its neighbours, because an
+                    // insertion shifts every `r.get(N)` below it and the compiler cannot see
+                    // it — `oracle_id`, `promo_types` and `legalities` are all nullable TEXT,
+                    // so two of them swapping would still hand back a plausible string.
+                    folder_id: r.get(33)?,
+                    folder_name: r.get(34)?,
                 })
             },
         )
@@ -1369,7 +1835,9 @@ mod tests {
         assert_eq!(of("bolt-jp").legalities, None);
     }
 
-    /// One line of a bulk import, in the shape [`commit_import`]'s tests use it.
+    /// One line of a bulk import, in the shape [`commit_import`]'s tests use it — the plain
+    /// copy, which is what an absent field means on the wire and what every line of a file
+    /// that says nothing about slabs or alterations describes.
     fn item(card_id: &str, quantity: i64, finish: &str) -> CollectionImportItem {
         CollectionImportItem {
             card_id: card_id.to_owned(),
@@ -1382,7 +1850,106 @@ mod tests {
             acquired_at: None,
             acquisition_source: None,
             notes: None,
+            serial_number: None,
+            altered: false,
+            signed: false,
+            proxy: false,
+            misprint: false,
+            grading: None,
         }
+    }
+
+    /// **An import line carries the six grain columns it used to have written for it.**
+    ///
+    /// `commit_import` hard-coded `altered`, `signed`, `proxy`, `misprint`, `serial_number` and
+    /// `grading` until schema v24, and the damage was not a dropped flag: an altered copy and a
+    /// plain one are two rows of `COLLECTION_GRAIN`, so a file describing the altered one landed
+    /// on the *plain* grain every time. A reader re-importing their own export got a second
+    /// all-defaults row beside the row they already had, quietly, on the one screen whose whole
+    /// job is not to duplicate what the collection already records.
+    ///
+    /// One altered line and one plain line for the same printing is the cheapest seed where the
+    /// two answers differ: two rows if the column is carried, one folded row of two copies if it
+    /// is not. The graded half is the same statement through the column that enters identity as
+    /// **raw text** — [`canonical_grading`] is what makes `{"grade":10,"company":"PSA"}` and
+    /// `{"company":"PSA","grade":"10"}` one row rather than two, and it runs inside the write
+    /// rather than in the planner, so this proves the text reached it at all.
+    #[test]
+    fn an_import_line_lands_on_its_own_grain_rather_than_on_the_plain_one() {
+        let conn = seeded();
+        let altered = CollectionImportItem {
+            altered: true,
+            ..item("card-1", 2, "nonfoil")
+        };
+        let graded = CollectionImportItem {
+            grading: Some(r#"{"grade":10,"company":"PSA"}"#.to_owned()),
+            ..item("card-1", 1, "nonfoil")
+        };
+
+        let out = commit_import(
+            &conn,
+            &[item("card-1", 3, "nonfoil"), altered, graded],
+            "add",
+        )
+        .unwrap();
+
+        assert_eq!(
+            (out.added, out.updated, out.removed),
+            (3, 0, 0),
+            "three lines, three grains, three rows"
+        );
+        let rows: Vec<(i64, bool, Option<String>)> = conn
+            .prepare(
+                "SELECT quantity, altered, grading FROM collection_entries
+                  WHERE card_id = 'card-1' ORDER BY id",
+            )
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(
+            rows,
+            vec![
+                (3, false, None),
+                (2, true, None),
+                // Canonical, and in the struct's declaration order — not the order the file
+                // spelled it in, which is the whole of why `grading` goes through `Grading`.
+                (
+                    1,
+                    false,
+                    Some(r#"{"company":"PSA","grade":"10"}"#.to_owned())
+                ),
+            ],
+            "the plain copy, the altered one and the slab are three rows"
+        );
+
+        // The other half of the fix: re-importing the same three lines now folds onto the rows
+        // it made, which is what a hard-coded default could never do.
+        let again = commit_import(
+            &conn,
+            &[
+                item("card-1", 1, "nonfoil"),
+                CollectionImportItem {
+                    altered: true,
+                    ..item("card-1", 1, "nonfoil")
+                },
+            ],
+            "add",
+        )
+        .unwrap();
+        assert_eq!((again.added, again.updated), (0, 2));
+        assert_eq!(entry_count(&conn), 3, "and made no fourth row");
+
+        // Imports name no folder: a file says nothing about this reader's filing.
+        let filed: Vec<Option<i64>> = conn
+            .prepare("SELECT folder_id FROM collection_entries")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert!(filed.iter().all(Option::is_none), "every row at the root");
     }
 
     /// The one row a grain names, read back for the assertion.
@@ -1398,6 +1965,276 @@ mod tests {
     fn entry_count(conn: &Connection) -> i64 {
         conn.query_row("SELECT count(*) FROM collection_entries", [], |r| r.get(0))
             .unwrap()
+    }
+
+    /// One folder, straight into the table. `create_folder` is
+    /// `collection_folders`' command and makes `user` rows only; a `deck` folder needs a deck
+    /// to name — `collection_folders` CHECKs `(kind = 'deck') = (deck_id IS NOT NULL)` — so the
+    /// two cannot be seeded apart, and nothing in this PR writes either kind.
+    fn folder(conn: &Connection, kind: &str, name: &str) -> i64 {
+        let deck_id: Option<i64> = (kind == "deck").then(|| {
+            conn.query_row(
+                "INSERT INTO decks (name, created_at, updated_at)
+                 VALUES ('Mono red', unixepoch(), unixepoch()) RETURNING id",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        });
+        conn.query_row(
+            "INSERT INTO collection_folders
+                (parent_id, name, kind, deck_id, sort_order, created_at, updated_at)
+             VALUES (NULL, ?1, ?2, ?3, 0, unixepoch(), unixepoch())
+             RETURNING id",
+            params![name, kind, deck_id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// One owned row, filed where the test says. Written straight into the table because
+    /// `add_entry` cannot name a folder: filing is `collection_folders::set_entry_folder`'s act,
+    /// and these tests want a filed row rather than the press that files it. Every column
+    /// outside `folder_id` is held constant, so the folder **is** the grain as far as they are
+    /// concerned — which is the point.
+    fn filed_in(conn: &Connection, card_id: &str, folder_id: Option<i64>, quantity: i64) -> i64 {
+        conn.query_row(
+            "INSERT INTO collection_entries
+                (card_id, set_code, collector_number, lang, finish, condition, quantity,
+                 folder_id, created_at, updated_at)
+             VALUES (?1, 'lea', '161', 'en', 'nonfoil', 'NM', ?2, ?3, unixepoch(), unixepoch())
+             RETURNING id",
+            params![card_id, quantity, folder_id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// **Adding into a folder is an *add*, and the eleventh grain term is what makes it one.**
+    ///
+    /// `EntryInput` is `#[serde(default)]` and not `deny_unknown_fields`, so before this field
+    /// existed a page sending `folderId` on an add was answered by the field being **silently
+    /// dropped**: every "Add to → Collection → \<binder\>" landed at the root, folded into
+    /// whatever was already there, and reported success. Nothing raised, nothing logged, and
+    /// the copies appear to *move* out of the binder the reader was pointing at — which is
+    /// precisely the failure `COLLECTION_GRAIN`'s eleventh term exists to make impossible.
+    ///
+    /// Two rows for one printing at one finish, condition and language is therefore the whole
+    /// assertion; the second half is that a *second* add into the same folder still folds, so
+    /// the term narrows the grain rather than disabling the fold.
+    #[test]
+    fn adding_the_same_printing_into_a_folder_is_a_second_row() {
+        let conn = seeded();
+        let binder = folder(&conn, "user", "Binder");
+        let in_folder = |quantity: i64| EntryInput {
+            folder_id: Some(binder),
+            ..input("bolt-lea", "nonfoil", quantity)
+        };
+
+        let at_root = add_entry(&conn, &input("bolt-lea", "nonfoil", 2)).unwrap();
+        let filed = add_entry(&conn, &in_folder(3)).unwrap();
+
+        assert_ne!(
+            filed.id, at_root.id,
+            "the folder is part of the grain, so this is a row and not a fold"
+        );
+        assert_eq!(
+            filed.quantity, 3,
+            "and none of the root's copies came with it"
+        );
+        assert_eq!(entry_count(&conn), 2);
+        let where_they_are: Vec<(i64, Option<i64>, i64)> = conn
+            .prepare("SELECT id, folder_id, quantity FROM collection_entries ORDER BY id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(
+            where_they_are,
+            vec![(at_root.id, None, 2), (filed.id, Some(binder), 3)],
+            "the column is written, not defaulted to the root"
+        );
+
+        // The same press again is "one more of these", which is what the fold is for.
+        let again = add_entry(&conn, &in_folder(1)).unwrap();
+        assert_eq!(again.id, filed.id, "the second add folds into the first");
+        assert_eq!(again.quantity, 4);
+        assert_eq!(entry_count(&conn), 2);
+
+        // A folder that is not there is a sentence, not a constraint failure — and the refused
+        // add writes nothing.
+        assert_eq!(
+            add_entry(
+                &conn,
+                &EntryInput {
+                    folder_id: Some(404),
+                    ..input("bolt-lea", "nonfoil", 1)
+                },
+            )
+            .unwrap_err(),
+            FOLDER_GONE
+        );
+        assert_eq!(entry_count(&conn), 2);
+    }
+
+    /// **An add may not file into a folder the app owns**, and the two kinds it refuses are the
+    /// two nothing writes before v25: the folder standing for a deck, and `Recently removed`.
+    ///
+    /// The fence is `folder_named`'s and the wording is `collection_folders`', because the
+    /// mistake is that module's: a `deck` folder's contents are what a built deck is made of and
+    /// a `removed` one's are cards that left the collection, so an ordinary add landing in
+    /// either would be asserting something only the app can make true. Those folders are written
+    /// through `collection_folders::refile_entry`, which carries no such fence deliberately.
+    ///
+    /// **The pair is the assertion.** A check that only looked the folder up would pass a `deck`
+    /// id happily — it exists — which is exactly the shape the bug had, so the root and a `user`
+    /// folder are added into in the same test to prove the fence is about the *kind* and has not
+    /// closed the door on the reader's own binders. Nothing is written by either refusal.
+    #[test]
+    fn an_add_refuses_a_folder_the_app_owns_and_still_takes_the_readers_own() {
+        let conn = seeded();
+        let binder = folder(&conn, "user", "Binder");
+        let deck_folder = folder(&conn, "deck", "Mono red");
+        let removed = folder(&conn, "removed", "Recently removed");
+
+        let into = |id: i64| EntryInput {
+            folder_id: Some(id),
+            ..input("bolt-lea", "nonfoil", 1)
+        };
+        assert_eq!(
+            add_entry(&conn, &into(deck_folder)).unwrap_err(),
+            crate::collection_folders::FOLDER_NOT_YOURS
+        );
+        assert_eq!(
+            add_entry(&conn, &into(removed)).unwrap_err(),
+            crate::collection_folders::FOLDER_NOT_YOURS
+        );
+        assert_eq!(entry_count(&conn), 0, "a refused add writes nothing");
+
+        // …and the reader's own two destinations still answer.
+        add_entry(&conn, &into(binder)).unwrap();
+        add_entry(&conn, &input("bolt-lea", "nonfoil", 1)).unwrap();
+        assert_eq!(entry_count(&conn), 2);
+    }
+
+    /// **`Unallocated` is about deck folders and nothing else.** The root, a folder the reader
+    /// made and `Recently removed` are all cards on the reader's desk — the last one especially,
+    /// because a card that left the collection without leaving the database is not a card a deck
+    /// is using, and that folder exists so it can be put back.
+    ///
+    /// All four rows are the same printing at the same finish, condition and language, so they
+    /// are four rows only because `coalesce(folder_id, 0)` is the eleventh term of
+    /// `COLLECTION_GRAIN` — which makes the seed itself a check on schema v24.
+    #[test]
+    fn unallocated_excludes_only_deck_folders() {
+        let conn = seeded();
+        let user = folder(&conn, "user", "Binder");
+        let removed = folder(&conn, "removed", "Recently removed");
+        let deck = folder(&conn, "deck", "Mono red");
+        let at_root = filed_in(&conn, "bolt-lea", None, 1);
+        let in_binder = filed_in(&conn, "bolt-lea", Some(user), 1);
+        let put_aside = filed_in(&conn, "bolt-lea", Some(removed), 1);
+        let sleeved = filed_in(&conn, "bolt-lea", Some(deck), 1);
+
+        let list = |allocation: Option<Allocation>| -> Vec<i64> {
+            let page = list_entries(
+                &conn,
+                &CollectionQuery {
+                    allocation,
+                    limit: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            assert_eq!(
+                page.total,
+                page.items.len() as i64,
+                "the count agrees with the page it captions"
+            );
+            page.items.iter().map(|r| r.id).collect()
+        };
+
+        assert_eq!(
+            list(Some(Allocation::Unallocated)),
+            vec![at_root, in_binder, put_aside],
+            "only the deck folder's copies are spoken for"
+        );
+        assert!(!list(Some(Allocation::Unallocated)).contains(&sleeved));
+        // Both spellings of "do not filter", because an absent field is what every caller
+        // written before folders existed sends.
+        assert_eq!(
+            list(Some(Allocation::All)),
+            vec![at_root, in_binder, put_aside, sleeved]
+        );
+        assert_eq!(list(None), list(Some(Allocation::All)));
+
+        // The header describes the same rows as the list under it, which is `scope`'s whole
+        // reason for existing.
+        let narrowed = summarise(
+            &conn,
+            &CollectionQuery {
+                allocation: Some(Allocation::Unallocated),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!((narrowed.total_cards, narrowed.entries), (3, 3));
+    }
+
+    /// The folder rides on the row, and the row can be narrowed to one folder.
+    ///
+    /// **Both fields are appended at indices 33 and 34**, which is this mapper's standing rule
+    /// and the third time it has mattered: `oracle_id`, `promo_types` and `legalities` are all
+    /// nullable TEXT on the end, so a column inserted at its logical place instead would swap
+    /// two fields that each still held a plausible string. `folder_name` is asserted beside
+    /// `legalities` here for exactly that.
+    #[test]
+    fn a_collection_row_carries_the_folder_it_is_filed_in() {
+        let conn = seeded();
+        let binder = folder(&conn, "user", "Binder");
+        let at_root = filed_in(&conn, "bolt-lea", None, 2);
+        let in_binder = filed_in(&conn, "bolt-lea", Some(binder), 3);
+        conn.execute(
+            "UPDATE cards SET legalities = '{\"modern\":\"legal\"}' WHERE id = 'bolt-lea'",
+            [],
+        )
+        .unwrap();
+
+        let all = list_entries(
+            &conn,
+            &CollectionQuery {
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .items;
+        let of = |id: i64| all.iter().find(|r| r.id == id).unwrap();
+        assert_eq!(of(at_root).folder_id, None, "NULL is the root");
+        assert_eq!(of(at_root).folder_name, None, "and the root has no name");
+        assert_eq!(of(in_binder).folder_id, Some(binder));
+        assert_eq!(of(in_binder).folder_name.as_deref(), Some("Binder"));
+        // The nullable-TEXT neighbour an insertion above would have displaced.
+        assert_eq!(
+            of(in_binder).legalities.as_deref(),
+            Some(r#"{"modern":"legal"}"#)
+        );
+
+        let only_binder = list_entries(
+            &conn,
+            &CollectionQuery {
+                folder_id: Some(binder),
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(only_binder.total, 1);
+        assert_eq!(only_binder.items[0].id, in_binder);
+        // Absent is every folder there is, which is what every caller written before folders
+        // existed asked for — the opposite of `WishlistQuery`, and its own field says why.
+        assert_eq!(all.len(), 2);
     }
 
     /// The default query, priced somewhere other than the default.
@@ -1536,31 +2373,70 @@ mod tests {
         assert!(err.contains("no card"), "{err}");
     }
 
-    /// Zero is a real state, not a removal. A stepper taken to zero is "I have none of
-    /// these today" — the condition, the price paid, the tags and the story of where it
-    /// came from are all still true of the copies that were traded away, and are all still
-    /// there when the next one turns up. Only the explicit remove deletes.
+    /// **Zero is a removal, and it takes everything recorded on the row with it.**
+    ///
+    /// This test stood as `a_quantity_of_zero_keeps_the_row_and_everything_recorded_on_it` and
+    /// asserted the opposite: that a stepper taken to zero was "I have none of these today", and
+    /// that the condition, the price paid, the tags and the story of where the copies came from
+    /// were all still true and all still there when the next one turned up. That was a
+    /// deliberate ruling and it has been deliberately reversed, so the test is rewritten rather
+    /// than deleted — and it is rewritten around the same columns, because **they are the
+    /// price**. `condition`, `condition_original`, `purchase_price`, `purchase_currency`,
+    /// `acquired_at`, `acquisition_source`, `notes` and `tags` go with the row. Nothing recovers
+    /// them.
+    ///
+    /// [`update_entry`] is the one place zero still keeps the row, and the last third of this
+    /// test is that exception rather than an oversight: an edit form sends every field at once,
+    /// and nothing a reader types into a number field beside seven others should delete the row
+    /// they are editing.
     #[test]
-    fn a_quantity_of_zero_keeps_the_row_and_everything_recorded_on_it() {
+    fn a_quantity_of_zero_removes_the_row_and_everything_recorded_on_it() {
         let conn = seeded();
-        let added = add_entry(
-            &conn,
-            &EntryInput {
-                purchase_price: Some(12.5),
-                acquisition_source: Some("Local shop".into()),
-                tags: Some(r#"["cube"]"#.into()),
-                tradelist_quantity: 2,
-                ..input("bolt-lea", "nonfoil", 3)
-            },
-        )
-        .unwrap();
+        let recorded = || EntryInput {
+            purchase_price: Some(12.5),
+            acquisition_source: Some("Local shop".into()),
+            tags: Some(r#"["cube"]"#.into()),
+            tradelist_quantity: 2,
+            ..input("bolt-lea", "nonfoil", 3)
+        };
+        let added = add_entry(&conn, &recorded()).unwrap();
 
         let lowered = set_quantity(&conn, added.id, 1).unwrap();
         assert_eq!((lowered.quantity, lowered.removed), (1, false));
+        assert_eq!(entry_count(&conn), 1);
 
         let emptied = set_quantity(&conn, added.id, 0).unwrap();
-        assert_eq!((emptied.quantity, emptied.removed), (0, false));
 
+        assert_eq!(
+            (emptied.id, emptied.quantity, emptied.removed),
+            (added.id, 0, true),
+            "the answer says the row is gone, which is what a list has to know"
+        );
+        assert_eq!(
+            entry_count(&conn),
+            0,
+            "the row does not survive its own emptiness -- and the price paid, the source and \
+             the tags are gone with it"
+        );
+        // A second press on a row that has already gone is `GONE` and not a success: an
+        // adjustment to a row that is not there could not do what it was asked.
+        assert_eq!(set_quantity(&conn, added.id, 0).unwrap_err(), GONE);
+
+        // The edit form sends zero the same way and must never delete the row being edited.
+        let editing = add_entry(&conn, &recorded()).unwrap();
+        let kept = update_entry(
+            &conn,
+            editing.id,
+            &EntryPatch {
+                quantity: Some(0),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            (kept.id, kept.quantity, kept.removed),
+            (editing.id, 0, false)
+        );
         let (rows, qty, tradelist, price, source, tags): (i64, i64, i64, f64, String, String) =
             conn.query_row(
                 "SELECT count(*), quantity, tradelist_quantity, purchase_price,
@@ -1579,37 +2455,19 @@ mod tests {
                 },
             )
             .unwrap();
-        assert_eq!(rows, 1, "the row survives its own emptiness");
+        assert_eq!(rows, 1, "the edited row is still there");
         assert_eq!(qty, 0);
         assert_eq!(tradelist, 0, "nothing to offer from a pile of none");
         assert_eq!(
             (price, source.as_str(), tags.as_str()),
-            (12.5, "Local shop", r#"["cube"]"#)
+            (12.5, "Local shop", r#"["cube"]"#),
+            "and the whole story with it"
         );
 
-        // The edit form sends zero the same way, and an edit form must never delete the row
-        // being edited.
-        update_entry(
-            &conn,
-            added.id,
-            &EntryPatch {
-                quantity: Some(0),
-                ..Default::default()
-            },
-        )
-        .unwrap();
-        let still: i64 = conn
-            .query_row("SELECT count(*) FROM collection_entries", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(still, 1);
-
-        // And the one thing that does delete, does.
-        let gone = remove_entry(&conn, added.id).unwrap();
+        // The unconditional delete still does what it always did.
+        let gone = remove_entry(&conn, editing.id).unwrap();
         assert!(gone.removed);
-        let rows: i64 = conn
-            .query_row("SELECT count(*) FROM collection_entries", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(rows, 0);
+        assert_eq!(entry_count(&conn), 0);
     }
 
     /// Below zero is not a quantity at all, and must never be the back door to the deletion
@@ -1808,25 +2666,54 @@ mod tests {
         assert!(err.contains("not a quantity"), "{err}");
     }
 
-    /// Editing a row onto a grain that already exists is the one edit that cannot just be
-    /// applied. Answering with the constraint name would be the database talking; this is
-    /// the app talking, and it names the way out.
+    /// Editing a row onto a grain that already exists used to be the one edit that could not
+    /// just be applied — it answered "You already have an entry for that printing at that finish
+    /// and condition — change its quantity instead", which named the way out and left the reader
+    /// to walk it. It folds now, and that sentence is deleted rather than left standing beside a
+    /// state nothing can reach: a user-facing message for an impossible case is a half-deleted
+    /// rule, and the next reader of `friendly()` would have had to work out which half.
+    ///
+    /// This is [`an_edit_onto_a_taken_grain_merges_instead_of_refusing`] through the *finish*
+    /// rather than the condition, which is worth keeping: `finish` and `condition` are different
+    /// terms of the grain reached by different holes of the same statement, and the patch here
+    /// also carries a non-grain field — proving it lands on the folding row before it goes,
+    /// rather than being dropped along with it.
     #[test]
-    fn editing_a_row_onto_an_existing_grain_says_what_to_do_instead() {
+    fn editing_a_row_onto_an_existing_grain_folds_the_two_together() {
         let conn = seeded();
         let nonfoil = add_entry(&conn, &input("bolt-jp", "nonfoil", 1)).unwrap();
-        add_entry(&conn, &input("bolt-jp", "foil", 1)).unwrap();
+        let foil = add_entry(&conn, &input("bolt-jp", "foil", 1)).unwrap();
 
-        let err = update_entry(
+        let change = update_entry(
             &conn,
             nonfoil.id,
             &EntryPatch {
                 finish: Some("foil".into()),
+                quantity: Some(4),
+                notes: Some("the good one".into()),
                 ..Default::default()
             },
         )
-        .unwrap_err();
-        assert!(err.contains("already have"), "{err}");
+        .unwrap();
+
+        assert_eq!(change.id, foil.id, "the answer names the surviving row");
+        assert_eq!(
+            change.quantity, 5,
+            "the quantity the reader typed is what folded, not the one the row had"
+        );
+        assert_eq!(entry_count(&conn), 1);
+        let notes: Option<String> = conn
+            .query_row(
+                "SELECT notes FROM collection_entries WHERE id = ?1",
+                params![foil.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            notes.as_deref(),
+            Some("the good one"),
+            "the survivor had no note of its own, so it takes the folded row's"
+        );
     }
 
     /// `src/lib/ipc.ts` mirrors this by hand and nothing checks that the two still agree.
@@ -1898,7 +2785,8 @@ mod tests {
             "misprint": true,
             "grading": r#"{"company":"PSA","grade":10}"#,
             "tags": r#"["cube"]"#,
-            "notes": "the good one"
+            "notes": "the good one",
+            "folderId": 3
         });
         let EntryInput {
             card_id,
@@ -1919,6 +2807,7 @@ mod tests {
             grading,
             tags,
             notes,
+            folder_id,
         } = serde_json::from_value(payload).unwrap();
 
         assert_eq!(card_id, "bolt-jp");
@@ -1936,6 +2825,10 @@ mod tests {
         assert_eq!(grading.as_deref(), Some(r#"{"company":"PSA","grade":10}"#));
         assert_eq!(tags.as_deref(), Some(r#"["cube"]"#));
         assert_eq!(notes.as_deref(), Some("the good one"));
+        // The field the card menu sends on "Add to -> Collection -> <binder>". It is part of
+        // the grain, so a name that does not match here is not a cosmetic miss: the add lands
+        // at the root, folds into whatever is already there, and reports success.
+        assert_eq!(folder_id, Some(3));
     }
 
     /// The edit payload, pinned exactly as the add payload is and for a sharper reason: a
@@ -2364,21 +3257,30 @@ mod tests {
         assert_eq!(s.unpriced, 2);
     }
 
-    /// The zero-quantity ruling, fenced. A stepper taken to zero keeps the row (Task 5), and
-    /// every aggregate over this table therefore has to say *deliberately* what it does with
-    /// one. Three separate positions, each of which a plausible "tidy-up" would break, and
-    /// none of which any other test notices: a `WHERE e.quantity > 0` bolted onto the scope,
-    /// or a `count(*)` in place of `sum(e.quantity)`, or a `unique_cards` narrowed to what is
-    /// held today, all pass the rest of this module.
+    /// **The zero-quantity ruling, reversed — and what the reversal costs.**
     ///
-    /// * The row still **lists** — it is a real row, and it is where the user's condition,
-    ///   price paid, tags and acquisition story still live.
-    /// * `total_cards` is **copies**, so it drops by exactly the copies that left.
-    /// * `unique_cards` is printings **recorded**, not printings held, so it does not move:
-    ///   the row is still on the screen this number captions, and a header that stopped
-    ///   counting it would disagree with the list underneath it.
+    /// This test replaces `a_row_emptied_to_zero_still_lists_and_is_still_a_printing_the_
+    /// collection_knows`, which fenced the opposite rule and named three "tidy-ups" that
+    /// would have broken it: a `WHERE e.quantity > 0` bolted onto [`scope`], a `count(*)` in
+    /// place of `sum(e.quantity)`, and a `unique_cards` narrowed to what is held today. Those
+    /// three are no longer traps — a row at zero cannot reach a reader through this module at
+    /// all — and the test that guarded them is gone rather than quietly deleted, because the
+    /// decision it recorded was deliberate and has been deliberately reversed.
+    ///
+    /// **What the reversal costs is the whole of what the old rule was preserving**: the row's
+    /// `condition`, its `condition_original`, the purchase price and currency, `acquired_at`,
+    /// the acquisition source, the notes and the tags all go with it. A reader who trades a
+    /// playset away and buys it back next year retypes every one of them. That was the
+    /// argument for keeping the row, it is still true, and it was weighed and overruled: a
+    /// collection is what the reader *has*, a row saying they have none of something is a row
+    /// that says nothing, and every list, count and total in the app had to carry a special
+    /// case to describe it. [`remove_entry`] is no longer the only door out.
+    ///
+    /// `CHECK (quantity >= 0)` stays on the column, and that is not a leftover: the guard is
+    /// the command, and an intermediate zero inside a transaction — [`commit_import`]'s `set`
+    /// mode writes one before deleting it — is still legal SQL.
     #[test]
-    fn a_row_emptied_to_zero_still_lists_and_is_still_a_printing_the_collection_knows() {
+    fn a_quantity_taken_to_zero_removes_the_row() {
         let conn = seeded();
         let lea = add_entry(&conn, &input("bolt-lea", "nonfoil", 2)).unwrap();
         add_entry(&conn, &input("bolt-jp", "foil", 3)).unwrap();
@@ -2389,8 +3291,18 @@ mod tests {
             (5, 2, 2)
         );
 
-        set_quantity(&conn, lea.id, 0).unwrap();
-        let after = summarise(&conn, &CollectionQuery::default()).unwrap();
+        let change = set_quantity(&conn, lea.id, 0).unwrap();
+
+        assert!(change.removed, "no copies means the reader does not own it");
+        assert_eq!(change.quantity, 0);
+        let left: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM collection_entries WHERE id = ?1",
+                params![lea.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(left, 0, "and the row itself is gone, story and all");
 
         let page = list_entries(
             &conn,
@@ -2400,30 +3312,59 @@ mod tests {
             },
         )
         .unwrap();
-        assert_eq!(page.total, 2, "an emptied row is a row");
-        let emptied = page
-            .items
-            .iter()
-            .find(|r| r.id == lea.id)
-            .expect("the row the user emptied is still the row the user is looking at");
-        assert_eq!(emptied.quantity, 0);
+        assert_eq!(page.total, 1, "the emptied row is not a row");
+        assert!(page.items.iter().all(|r| r.id != lea.id));
 
-        assert_eq!(
-            after.total_cards, 3,
-            "copies, not rows — the two Alpha copies are gone"
-        );
-        assert_eq!(
-            after.unique_cards, 2,
-            "printings recorded, not printings held"
-        );
-        assert_eq!(after.entries, 2, "and the entry is still an entry");
-        // The value follows the copies, which is the same statement seen from the money
-        // side: an emptied row is worth nothing and is not unpriced.
+        // Every aggregate follows the row out rather than describing it — which is the half
+        // of the old ruling that needed three separate assertions and now needs none.
+        let after = summarise(&conn, &CollectionQuery::default()).unwrap();
+        assert_eq!(after.total_cards, 3, "the two Alpha copies are gone");
+        assert_eq!(after.unique_cards, 1, "and so is the printing they were");
+        assert_eq!(after.entries, 1);
         assert!(
             (after.value - 3.0 * 90.00).abs() < 0.005,
             "got {}",
             after.value
         );
+    }
+
+    /// **An edit that lands on a grain the collection already holds folds into it.**
+    ///
+    /// Until schema v24 this answered a refusal — "You already have an entry for that printing
+    /// at that finish and condition" — and the reader was told to go and edit the other row
+    /// themselves. `collection_folders::set_entry_folder` already merges rather than refusing
+    /// when a card is filed into a folder that holds its printing, and an edit is the same
+    /// fact from the other side: the reader has said these two rows are one row. The quantities
+    /// sum, the source goes, and the answer names the row that survived — which is *not* the
+    /// id the caller passed in, and is exactly why [`EntryChange`] carries an `id` at all.
+    #[test]
+    fn an_edit_onto_a_taken_grain_merges_instead_of_refusing() {
+        let conn = seeded();
+        let a = add_entry(&conn, &input("bolt-lea", "nonfoil", 2)).unwrap();
+        let b = add_entry(
+            &conn,
+            &EntryInput {
+                condition: Some("LP".into()),
+                ..input("bolt-lea", "nonfoil", 1)
+            },
+        )
+        .unwrap();
+        assert_ne!(a.id, b.id, "two conditions are two rows");
+
+        let change = update_entry(
+            &conn,
+            b.id,
+            &EntryPatch {
+                condition: Some("NM".into()),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(change.id, a.id, "the answer names the surviving row");
+        assert_eq!(change.quantity, 3, "and the quantities sum");
+        assert_eq!(entry_count(&conn), 1, "the edited row folded away");
+        assert_eq!(quantity_of(&conn, "bolt-lea", "nonfoil"), 3);
     }
 
     /// The set filter is the one card filter whose value the *entry* also carries, and it has
@@ -2980,7 +3921,7 @@ mod tests {
             type_line: Some("Instant".into()),
             layout: Some("normal".into()),
             finish: "nonfoil".into(),
-            condition: Some("NM".into()),
+            condition: "NM".into(),
             quantity: 4,
             tradelist_quantity: 1,
             unit_price: Some(400.5),
@@ -3002,6 +3943,8 @@ mod tests {
             // the pair the two fields exist to tell apart.
             promo_types: Some(r#"["surgefoil"]"#.into()),
             legalities: Some(r#"{"timeless":"legal","standard":"not_legal"}"#.into()),
+            folder_id: Some(3),
+            folder_name: Some("Trade binder".into()),
         })
         .unwrap();
 
@@ -3019,7 +3962,8 @@ mod tests {
                 "signed": true, "proxy": false, "misprint": false, "grading": null,
                 "tags": "[]", "notes": null, "needsReview": null,
                 "updatedAt": 1800000000, "promoTypes": "[\"surgefoil\"]",
-                "legalities": "{\"timeless\":\"legal\",\"standard\":\"not_legal\"}"
+                "legalities": "{\"timeless\":\"legal\",\"standard\":\"not_legal\"}",
+                "folderId": 3, "folderName": "Trade binder"
             })
         );
 

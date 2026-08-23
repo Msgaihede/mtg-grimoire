@@ -388,6 +388,16 @@ fn merge(
 /// language colliding with a target in another is matched on the target's language, not the
 /// source's — compare `s.lang` and the target is missed, which is the difference between
 /// folding a row and (before the guard in [`fold_into_existing`]) losing it.
+///
+/// **Every term is here, and the folder is the one that is easy to leave out.** It joined the
+/// grain at schema v24, and this query has to match the grain the `UPDATE OR IGNORE` above it
+/// collided on or the two disagree about what a duplicate is: that statement now fails only on
+/// a *same-folder* clash, while a ten-term target query happily answers a row filed somewhere
+/// else — so the fold would sum the reader's filed copies into a binder they were never in,
+/// delete the row that was there, and leave the row that actually blocked the repoint standing.
+/// A filing decision undone by an upstream tidy-up, with nothing red and nothing in
+/// `error_log`. [`fold_wish_into_existing`] makes the same argument one table over, where the
+/// stake is a shopping list; here it is cards that physically exist.
 fn collision_target(
     tx: &rusqlite::Transaction<'_>,
     source: i64,
@@ -402,7 +412,8 @@ fn collision_target(
             AND t.altered = s.altered AND t.signed = s.signed AND t.proxy = s.proxy
             AND t.misprint = s.misprint
             AND coalesce(t.serial_number,'') = coalesce(s.serial_number,'')
-            AND coalesce(t.grading,'') = coalesce(s.grading,'')",
+            AND coalesce(t.grading,'') = coalesce(s.grading,'')
+            AND coalesce(t.folder_id, 0) = coalesce(s.folder_id, 0)",
         params![source, new_id, new_lang],
         |r| r.get(0),
     )
@@ -418,23 +429,15 @@ fn collision_target(
 ///
 /// # What moves
 ///
-/// The quantities add, and the five columns the user typed themselves — what they paid,
-/// in what currency, when, where from, and their note — are taken by the survivor **only
-/// where it has none**. That is `collection::add_entry`'s `ON CONFLICT` rule verbatim, and
-/// for the same reason: the survivor's own answers are not up for revision, but a fold that
-/// dropped the other row's are a receipt destroyed to resolve a conflict upstream.
+/// [`crate::collection::fold_entry`] is the five statements, and what they carry is argued
+/// there: the quantities add, the five columns the user typed themselves are taken by the
+/// survivor only where it has none, `tags` and `condition_original` stay the survivor's, and
+/// the decks' claims move rather than cascading away with the deleted row.
 ///
-/// `tags` and `condition_original` are deliberately absent, exactly as they are from
-/// `add_entry`'s `DO UPDATE`. Tags are a set the user curates per row, and merging two sets
-/// is not something one statement should decide; `condition_original` is the provenance of
-/// *this* row's condition — the string one import used — and it cannot describe a condition
-/// it was never written beside. Both stay the survivor's, and the entry editor is where
-/// they change.
-///
-/// **And the decks' claims on the row move with it.** `deck_allocations` holds the only
-/// enforced foreign key pointed at a collection entry, `ON DELETE CASCADE`, so the delete
-/// below would take the user's reservations with it — copies that still exist, in a deck
-/// that still wants them. See the comment on the three statements.
+/// **They moved to `collection.rs` when `update_entry` needed them too** (schema v24): an
+/// edit that lands on a taken grain is the same event as a repoint that lands on one, and the
+/// module that owns `collection_entries` is where "one collection row becomes another" belongs.
+/// This function keeps the part that is the reconciler's — *which* row was in the way.
 fn fold_into_existing(
     tx: &rusqlite::Transaction<'_>,
     source: i64,
@@ -444,55 +447,7 @@ fn fold_into_existing(
     let Some(target) = collision_target(tx, source, new_id, new_lang)? else {
         return Ok(false);
     };
-    tx.execute(
-        "UPDATE collection_entries AS t SET
-            quantity = t.quantity + s.quantity,
-            tradelist_quantity = t.tradelist_quantity + s.tradelist_quantity,
-            purchase_price = coalesce(t.purchase_price, s.purchase_price),
-            purchase_currency = coalesce(t.purchase_currency, s.purchase_currency),
-            acquired_at = coalesce(t.acquired_at, s.acquired_at),
-            acquisition_source = coalesce(t.acquisition_source, s.acquisition_source),
-            notes = coalesce(t.notes, s.notes),
-            updated_at = unixepoch()
-          FROM (SELECT * FROM collection_entries WHERE id = ?2) AS s
-          WHERE t.id = ?1",
-        params![target, source],
-    )?;
-    // The FK treaty (schema v5): `deck_allocations.collection_entry_id` cascades on
-    // delete for `remove_entry`'s sake — so THIS delete, the app's only non-user one,
-    // must leave nothing for the cascade to take. Claims on the folding row move to the
-    // survivor; where the deck already claims the survivor, the two claims fold first
-    // (their grain is one row per (deck, entry), the same shape as the entries' own).
-    //
-    // All three statements seek through `idx_deck_allocations_entry`, and all three are
-    // inside the caller's transaction with the delete below: an allocation is never
-    // briefly homeless, and a pass that fails takes the repoint back with it.
-    tx.execute(
-        "UPDATE deck_allocations AS t SET
-            quantity = t.quantity + s.quantity,
-            updated_at = unixepoch()
-          FROM (SELECT deck_id, quantity FROM deck_allocations
-                 WHERE collection_entry_id = ?2) AS s
-          WHERE t.deck_id = s.deck_id AND t.collection_entry_id = ?1",
-        params![target, source],
-    )?;
-    tx.execute(
-        "DELETE FROM deck_allocations
-          WHERE collection_entry_id = ?2
-            AND EXISTS (SELECT 1 FROM deck_allocations t
-                         WHERE t.deck_id = deck_allocations.deck_id
-                           AND t.collection_entry_id = ?1)",
-        params![target, source],
-    )?;
-    tx.execute(
-        "UPDATE deck_allocations SET collection_entry_id = ?1, updated_at = unixepoch()
-          WHERE collection_entry_id = ?2",
-        params![target, source],
-    )?;
-    tx.execute(
-        "DELETE FROM collection_entries WHERE id = ?1",
-        params![source],
-    )?;
+    crate::collection::fold_entry(tx, target, source)?;
     Ok(true)
 }
 
@@ -1158,6 +1113,69 @@ mod tests {
             quantity_of(elsewhere),
             1,
             "and not into the wish at the root, which was never in the way"
+        );
+        assert_eq!(quantity_of(source), 0, "the folded row is gone");
+    }
+
+    /// **The eleventh term, on the collection's side of the fold.** Every other grain column
+    /// is identical between these three rows, so a [`collision_target`] spelling only the ten
+    /// terms `COLLECTION_GRAIN` carried before schema v24 answers the row in the *other*
+    /// folder — and the fold then sums the reader's filed copies into a binder they were never
+    /// in, deletes the row that was there, and leaves the row that actually blocked the
+    /// repoint standing. A filing decision undone by an upstream tidy-up, with nothing red and
+    /// nothing in `error_log`: `fold_wish_into_existing` one table over already spells the
+    /// term out, and this is the same trap on the table where a row is a card that exists.
+    #[test]
+    fn a_repointed_entry_folds_only_onto_an_entry_in_its_own_folder() {
+        let mut conn = seeded();
+        conn.execute(
+            "INSERT INTO collection_folders
+                (id, parent_id, name, kind, deck_id, sort_order, created_at, updated_at)
+             VALUES (1, NULL, 'Binder', 'user', NULL, 0, unixepoch(), unixepoch())",
+            [],
+        )
+        .unwrap();
+        let filed = |card_id: &str, folder: Option<i64>, quantity: i64| -> i64 {
+            conn.query_row(
+                "INSERT INTO collection_entries
+                    (card_id,set_code,collector_number,lang,finish,condition,quantity,folder_id,
+                     created_at,updated_at)
+                 VALUES (?1,'lea','161','en','nonfoil','NM',?3,?2,unixepoch(),unixepoch())
+                 RETURNING id",
+                rusqlite::params![card_id, folder, quantity],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        let elsewhere = filed("new-id", None, 1);
+        let target = filed("new-id", Some(1), 2);
+        let source = filed("old-id", Some(1), 3);
+
+        let stats = apply(
+            &mut conn,
+            &[migration("m1", "merge", "old-id", Some("new-id"))],
+        )
+        .unwrap();
+
+        assert_eq!((stats.repointed, stats.folded, stats.flagged), (0, 1, 0));
+        let quantity_of = |id: i64| -> i64 {
+            conn.query_row(
+                "SELECT coalesce(sum(quantity), 0) FROM collection_entries WHERE id = ?1",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            quantity_of(target),
+            5,
+            "the copies fold into the entry in the same folder, which is the row the \
+             repoint actually collided with"
+        );
+        assert_eq!(
+            quantity_of(elsewhere),
+            1,
+            "and not into the row at the root, which was never in the way"
         );
         assert_eq!(quantity_of(source), 0, "the folded row is gone");
     }

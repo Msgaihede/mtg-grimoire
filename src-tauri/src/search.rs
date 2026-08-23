@@ -84,14 +84,20 @@ pub struct SearchRequest {
     /// those it does not. Spec §7's owned/wishlist status filter, buildable at last now
     /// that the table exists.
     ///
-    /// **An entry, not a copy** — while the collection is the reader's own table. A row emptied
-    /// to zero is a row the collection keeps (see [`crate::collection::set_quantity`]), and this
-    /// filter counts it as owned: the same reading as `CollectionSummary::unique_cards`,
-    /// "printings recorded, not printings currently held". So a card whose only entry sits at
-    /// zero passes `owned: true` while its [`CardSummary::owned_quantity`] reads `0`, and does
+    /// **An entry, not a copy** — the same reading as `CollectionSummary::unique_cards`,
+    /// "printings recorded, not printings currently held". So a card whose only entry holds no
+    /// copies passes `owned: true` while its [`CardSummary::owned_quantity`] reads `0`, and does
     /// *not* appear under `owned: false`. Deliberate, and the one place it could surprise a
     /// reader is a "what am I missing" list, which is the wishlist's `fulfilled` filter — that
     /// one counts copies, because a wish is filled by copies rather than by paperwork.
+    ///
+    /// **That distinction narrowed at schema v24 and did not disappear.** It used to be the
+    /// everyday case: a row stepped to zero was a row the collection kept. Now
+    /// [`crate::collection::set_quantity`] deletes at zero and the v24 rung swept the stored
+    /// ones, so the two answers part company only on a row written some other way — an
+    /// `update_entry` patch, which still keeps the row it is editing, or direct SQL. The filter's
+    /// rule is unchanged and is a rule about *this* filter rather than about what the collection
+    /// happens to store, which is why it is worth keeping written down.
     pub owned: Option<bool>,
     /// How to order the page: columns in priority order, the first deciding and the rest
     /// breaking its ties. Empty or absent is the default — relevance when `text` is set,
@@ -3779,14 +3785,18 @@ mod tests {
         );
     }
 
-    /// The zero-row ruling, reaching the search: the collection keeps an entry taken to
-    /// zero (`collection::set_quantity`), so this filter — which asks whether the
-    /// collection has an *entry* for a printing, the same reading as
-    /// `CollectionSummary::unique_cards` — still calls it owned, while `owned_quantity`
-    /// counts copies and reads 0. Pinned rather than assumed, because the two halves
-    /// disagreeing is exactly the kind of thing a badge would render as a bug.
+    /// This filter asks whether the collection has an **entry** for a printing — the same
+    /// reading as `CollectionSummary::unique_cards` — so a row holding no copies is owned, while
+    /// `owned_quantity` counts copies and reads 0. Pinned rather than assumed, because the two
+    /// halves disagreeing is exactly the kind of thing a badge would render as a bug.
+    ///
+    /// **The row is written in SQL rather than through `set_quantity`, and that is the point
+    /// since schema v24**: that command now *deletes* at zero, so it can no longer produce the
+    /// state this test is about. `update_entry` still can (it keeps the row it is editing), and
+    /// so can a hand-written statement — which is what the column's `CHECK (quantity >= 0)` is
+    /// left permitting. The filter's rule is about entries and not about how rare a zero row is.
     #[test]
-    fn an_entry_emptied_to_zero_is_still_an_entry_the_collection_has() {
+    fn an_entry_with_no_copies_is_still_an_entry_the_collection_has() {
         let conn = seeded();
         conn.execute(
             "INSERT INTO collection_entries

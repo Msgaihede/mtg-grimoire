@@ -7485,23 +7485,23 @@ mod tests {
             "…so the read is what has to tell the truth about a shrunken binder"
         );
 
-        // The collection keeps a row it has been emptied to zero — the condition, the price
-        // and the acquisition story survive the day the copies are traded away — and an
-        // entry holding none of the card must reserve none of it. A claim of zero is not
-        // just wrong, it is `CHECK (quantity > 0)`: the allocator writes no row at all.
+        // And the floor of the same clamp: a collection row taken to zero is **deleted** since
+        // schema v24 (`collection::set_quantity`), and an entry that no longer exists reserves
+        // nothing. A claim of zero was never available either — `deck_allocations` is
+        // `CHECK (quantity > 0)`, so the allocator writes no row rather than a zero one.
         crate::collection::set_quantity(&conn, entry, 0).unwrap();
         set_card_quantity(&conn, deck.id, "bolt-lea", main, LIVE, None, 4).unwrap();
 
         assert_eq!(
             claims(&conn, deck.id),
             vec![],
-            "a zero-keeps row claims nothing"
+            "a row that is gone claims nothing"
         );
         assert_eq!(owned_of(&conn, deck.id, "bolt-lea", main), 0);
         assert_eq!(
             count(&conn, "collection_entries"),
-            1,
-            "and the row itself is still there, as it always is"
+            0,
+            "and the row went with the copies"
         );
     }
 

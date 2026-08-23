@@ -73,7 +73,12 @@ pub const FOLDER_NOT_YOURS: &str = "That folder is the app's own and is not your
 
 /// The kind a folder the reader made and named carries — [`crate::schema::COLLECTION_FOLDER_KINDS`]
 /// `[0]`, which is what every write in this module demands and what [`create_folder`] writes.
-const USER_KIND: &str = "user";
+///
+/// `pub(crate)` for one reader outside the module: `collection::folder_named`, the fence on the
+/// `folder_id` an *add* names. That write is not this module's, but the question it asks is —
+/// and answering it with a second `"user"` literal is how the two would come to disagree the day
+/// a fourth kind exists.
+pub(crate) const USER_KIND: &str = "user";
 
 /// How far [`move_folder`]'s cycle walk will climb before it calls the chain a cycle.
 ///
@@ -529,9 +534,12 @@ pub(crate) fn refile_entry(
     // **Every term is here, and the eleventh is the one that matters.** A fold that matched on
     // ten of them would merge this row into a row *in another folder* — copies leaving the
     // binder the reader put them in, silently, on a press that was supposed to move them
-    // somewhere else. That is not hypothetical: `reconcile::collision_target` still spells ten,
-    // and since v24 widened the grain it can fold across folders. Out of this branch's scope,
-    // and written down here rather than nowhere.
+    // somewhere else. That is not hypothetical: `reconcile::collision_target` shipped with ten
+    // for exactly as long as v24 took to widen the grain, and folded across folders until it
+    // was corrected in this same release. **So the rule is: every writer that probes for a
+    // collided collection row spells all eleven terms**, and each one is pinned by a test of
+    // its own — `a_refile_matching_ten_of_the_eleven_terms_does_not_merge` here, and
+    // `reconcile::tests::a_repointed_entry_folds_only_onto_an_entry_in_its_own_folder` there.
     //
     // At most one row can match, because these eleven terms *are* `idx_collection_grain`.
     let target: Option<(i64, i64)> = tx
@@ -593,84 +601,21 @@ pub(crate) fn refile_entry(
     })
 }
 
-/// Fold `source` into `target` and delete it — `reconcile::fold_into_existing`'s five statements,
-/// which are private there and are the crate's answer to "one collection row becomes another".
+/// Fold `source` into `target` and delete it — this module's name for
+/// [`crate::collection::fold_entry`], which is the crate's **one** answer to "one collection row
+/// becomes another" and where every rule about what moves is argued.
 ///
-/// # What moves
+/// **It was a second copy of those five statements until fan-in.** Two implementations of one
+/// rule disagree the first time either changes, and this one guards a built deck's claims:
+/// `deck_allocations.collection_entry_id` is `ON DELETE CASCADE`, so a fold that deleted the
+/// source row outright would silently unbuild whatever deck had reserved from it. That is not a
+/// rule to hold in two places.
 ///
-/// The quantities add, and the five columns the user typed themselves — what they paid, in what
-/// currency, when, where from, and their note — are taken by the survivor **only where it has
-/// none**. That is [`crate::collection::add_entry`]'s `ON CONFLICT` rule verbatim, and for the
-/// same reason: the survivor's own answers are not up for revision, but a fold that dropped the
-/// other row's is a receipt destroyed to resolve a filing decision. Inverting either coalesce
-/// would replace a note the reader wrote about the row they are keeping with one about a row
-/// that no longer exists.
-///
-/// `tags` and `condition_original` are deliberately absent, exactly as they are from
-/// `add_entry`'s `DO UPDATE`. Tags are a set the user curates per row, and merging two sets is
-/// not something one statement should decide; `condition_original` is the provenance of *this*
-/// row's condition — the string one import used — and it cannot describe a condition it was
-/// never written beside.
-///
-/// # And the decks' claims move with it
-///
-/// `deck_allocations.collection_entry_id` is the only enforced foreign key pointed at a
-/// collection entry, `ON DELETE CASCADE` (schema v5) so that `remove_entry` takes the
-/// reservations with the row. **This delete must therefore leave nothing for the cascade to
-/// take**: the copies still exist and the deck still wants them, and a folder press that quietly
-/// unbuilt a deck would be the worst kind of silent. Claims on the folding row move to the
-/// survivor; where the deck already claims the survivor, the two claims fold first — their grain
-/// is one row per `(deck, entry)`, the same shape as the entries' own.
-///
-/// All three allocation statements seek through `idx_deck_allocations_entry`, and every
-/// statement here is inside the caller's transaction: an allocation is never briefly homeless.
+/// The wrapper stays because this module's callers are `Result<_, String>` throughout while
+/// `fold_entry` answers `rusqlite::Result` for the reconciler's sake — one `map_err` here rather
+/// than one per call site, and one name for the folder tree's own vocabulary.
 fn merge_entry(tx: &Connection, target: i64, source: i64) -> Result<(), String> {
-    tx.execute(
-        "UPDATE collection_entries AS t SET
-            quantity = t.quantity + s.quantity,
-            tradelist_quantity = t.tradelist_quantity + s.tradelist_quantity,
-            purchase_price = coalesce(t.purchase_price, s.purchase_price),
-            purchase_currency = coalesce(t.purchase_currency, s.purchase_currency),
-            acquired_at = coalesce(t.acquired_at, s.acquired_at),
-            acquisition_source = coalesce(t.acquisition_source, s.acquisition_source),
-            notes = coalesce(t.notes, s.notes),
-            updated_at = unixepoch()
-          FROM (SELECT * FROM collection_entries WHERE id = ?2) AS s
-          WHERE t.id = ?1",
-        params![target, source],
-    )
-    .map_err(|e| e.to_string())?;
-    tx.execute(
-        "UPDATE deck_allocations AS t SET
-            quantity = t.quantity + s.quantity,
-            updated_at = unixepoch()
-          FROM (SELECT deck_id, quantity FROM deck_allocations
-                 WHERE collection_entry_id = ?2) AS s
-          WHERE t.deck_id = s.deck_id AND t.collection_entry_id = ?1",
-        params![target, source],
-    )
-    .map_err(|e| e.to_string())?;
-    tx.execute(
-        "DELETE FROM deck_allocations
-          WHERE collection_entry_id = ?2
-            AND EXISTS (SELECT 1 FROM deck_allocations t
-                         WHERE t.deck_id = deck_allocations.deck_id
-                           AND t.collection_entry_id = ?1)",
-        params![target, source],
-    )
-    .map_err(|e| e.to_string())?;
-    tx.execute(
-        "UPDATE deck_allocations SET collection_entry_id = ?1, updated_at = unixepoch()
-          WHERE collection_entry_id = ?2",
-        params![target, source],
-    )
-    .map_err(|e| e.to_string())?;
-    tx.execute(
-        "DELETE FROM collection_entries WHERE id = ?1",
-        params![source],
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(())
+    crate::collection::fold_entry(tx, target, source).map_err(|e| e.to_string())
 }
 
 /// The two numbers each folder tile draws, one row per folder that holds at least one entry.
