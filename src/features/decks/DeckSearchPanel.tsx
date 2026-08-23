@@ -7,6 +7,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
 } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus, Search } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { OwnedBadge } from "@/components/OwnedBadge";
@@ -15,13 +16,15 @@ import { CardGrid } from "@/features/search/CardGrid";
 import { FilterBar } from "@/features/search/FilterBar";
 import { summaryOf } from "@/features/search/SearchPage";
 import { useCardSearch, type FormatFilterOption } from "@/features/search/useCardSearch";
-import { FOCUS } from "@/lib/focus";
+import { FOCUS, FOCUS_INSET } from "@/lib/focus";
 import { ipcError, type CardSummary, type DeckCategory } from "@/lib/ipc";
 import { statusLine } from "@/lib/motion";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { AUTO_CATEGORY, autoCategoryFor } from "./autoCategory";
+import { CollectionSearchTab } from "./CollectionSearchTab";
 import { cardDraggable } from "./dnd";
+import { ADD_MODES, type AddMode } from "./NormalSearchAdd";
 import type { Deck } from "./useDeck";
 import { useDeckSearchOpen } from "./useDeckSearchOpen";
 
@@ -113,6 +116,108 @@ const TILE_BASE = 150;
  */
 const tileGameChanger = (card: CardSummary) => card.gameChanger;
 
+/**
+ * Which of the two searches this column is showing.
+ *
+ * `"collection"` reads the reader's own binder — collection *rows*, one per printing, finish and
+ * condition, with where each copy is filed — and `"all"` is the card search this panel has always
+ * been, over every printing Scryfall has published.
+ */
+export type DeckSearchTab = "collection" | "all";
+
+/**
+ * The strip, as data — the shape {@link TABS}' `.map` is the whole of the control.
+ *
+ * **Two short words rather than "Collection Search" and "Normal Search", and the reason is a
+ * measurement rather than taste.** This panel is dragged down to {@link MIN_PANEL_WIDTH_PX}, whose
+ * content box measures **193px**. Driven headless over the built stylesheet at that width: the
+ * strip is **141px** at these labels and **216px** at the spec's, and a segmented pair cannot wrap
+ * inside itself without breaking the one rounded box it is drawn as. So the long labels put the
+ * row at `scrollWidth` **216** against a `clientWidth` of **193** — a 23px overhang, which is the
+ * `ManaValueChips` failure exactly (`src/CLAUDE.md`) — while these wrap under the disclosure at
+ * **193/193** and the panel itself reads **205/205**. The spec's words survive as what this page's
+ * prose calls the two tabs.
+ *
+ * **Collection first**, for `DeckEditor`'s Theory/Live reason read across: the first tab is the one
+ * the panel opens on, and a reader arriving on the second half of a switch has to work out what
+ * the first half was.
+ */
+const TABS = [
+  { id: "collection", label: "Collection" },
+  { id: "all", label: "All cards" },
+] as const satisfies readonly { id: DeckSearchTab; label: string }[];
+
+/**
+ * Where the reader's answer about *which* search is kept for the life of the window.
+ *
+ * Exported for `DECK_SEARCH_OPEN_KEY`'s reason: a test or a story that wants the panel to open on
+ * the card search seeds the cache rather than pressing the control, and a key spelled twice is a
+ * key that drifts.
+ */
+export const DECK_SEARCH_TAB_KEY = ["deckSearchTab"];
+
+/** Whether a value out of the cache is a tab this build draws — `isPrintingGroupBy`'s shape, and
+ *  its reason: the entry is untyped at the cache and a story or an older build may have put
+ *  anything in it. */
+function isDeckSearchTab(value: unknown): value is DeckSearchTab {
+  return TABS.some(({ id }) => id === value);
+}
+
+/**
+ * The tab a reader who has never pressed one gets — **the collection, and that is the product
+ * decision this whole change is** (spec §7.2).
+ *
+ * A deck is built out of cards you have. A search of everything ever printed is what you reach for
+ * when your own binder does not answer, so it is the thing one press away rather than the thing in
+ * front of you; until now this panel had it the other way round and there was no way to search a
+ * collection from a deck at all.
+ */
+export const DEFAULT_DECK_SEARCH_TAB: DeckSearchTab = "collection";
+
+/**
+ * Which search the reader last chose — remembered across decks, for the length of the session.
+ *
+ * **The query cache rather than a `useState` here, for {@link useDeckSearchOpen}'s reason and with
+ * one difference.** The editor is keyed on the deck id, so leaving a deck and coming back tears
+ * this panel down and builds a new one; state held in it would put a reader who works from the
+ * wider search back on the collection tab on every deck they opened, which is exactly the
+ * complaint that moved the disclosure into `app_meta` (issue #183). The cache is app-scoped —
+ * one `QueryClient` per process — so it survives a remount the way that setting does.
+ *
+ * **The difference is that there is no command behind this one**, so the memory ends with the
+ * window. That is deliberate rather than pending: `SCHEMA_VERSION` does not move for this PR, and
+ * a tab is a smaller answer than a disclosure — which of two searches you last used is a fact
+ * about the deck-building you are in the middle of, where "do I work with a search column at all"
+ * is a standing preference. If it turns out to want an `app_meta` row, this hook is the one place
+ * that changes and every reader of it is already going through {@link DECK_SEARCH_TAB_KEY}.
+ *
+ * `staleTime`/`gcTime: Infinity` are what make "for the session" literal: nothing else writes this
+ * entry, so there is nothing to go stale against, and without the second the entry is collected
+ * once the last editor closes and the next deck opens on the default again.
+ */
+function useDeckSearchTab(): { tab: DeckSearchTab; setTab: (tab: DeckSearchTab) => void } {
+  const queryClient = useQueryClient();
+  const query = useQuery({
+    queryKey: DECK_SEARCH_TAB_KEY,
+    // Never actually run once a value is in the cache, and the honest answer if it ever is — a
+    // fetch here can only mean the entry was thrown away, and the default is what a session with
+    // no press in it means.
+    queryFn: () => DEFAULT_DECK_SEARCH_TAB,
+    staleTime: Infinity,
+    gcTime: Infinity,
+  });
+
+  const setTab = useCallback(
+    (tab: DeckSearchTab) => queryClient.setQueryData(DECK_SEARCH_TAB_KEY, tab),
+    [queryClient],
+  );
+
+  const stored = query.data;
+  // Narrowed on the way out rather than trusted: `undefined` is the first render, before the
+  // resolved `queryFn` has landed, and a seeded entry is whatever the seeder wrote.
+  return { tab: isDeckSearchTab(stored) ? stored : DEFAULT_DECK_SEARCH_TAB, setTab };
+}
+
 export interface DeckSearchPanelProps {
   /**
    * The editor's own `useDeck().addCard`, handed down rather than mounted again here — the
@@ -140,6 +245,25 @@ export interface DeckSearchPanelProps {
    */
   onAdded?: (entryId: number) => void;
   /**
+   * What a press on the **All cards** tab's Add button means — a copy the reader has, or one
+   * they are putting on the list in order to buy it. `NormalSearchAdd.ts` is the rule, the two
+   * labels and the memory; this panel draws the control and states neither.
+   *
+   * **Held by the editor and drawn here**, which is the split this pair exists for. The answer
+   * is the editor's because it governs the toolbar's quick-add field as well, and it is kept per
+   * deck for the length of the window (`useAddMode`); the *control* is here because the mode is
+   * a fact about this tab's Add button, and a reader looking at a wall of search results should
+   * not have to look across the desk to see which kind of add they are about to make.
+   *
+   * **It shipped on the toolbar for a day and that was a workaround rather than a placement**:
+   * this file belonged to another agent when the toggle was built. The prose it left behind
+   * argued the toolbar was right because the mode governs two controls — which is an argument
+   * for where the *state* lives, and this pair is what separates the two.
+   */
+  mode: AddMode;
+  /** The press. See {@link DeckSearchPanelProps.mode} — the panel owns no memory of its own. */
+  onMode: (mode: AddMode) => void;
+  /**
    * Where a card may be put, in the order the select offers them — the editor's own list of
    * the open deck's categories, so this panel offers exactly the columns beside it.
    *
@@ -148,6 +272,19 @@ export interface DeckSearchPanelProps {
    * a panel starts offering a pile the editor is not drawing.
    */
   categories: readonly DeckCategory[];
+  /**
+   * The deck this column is docked beside — what {@link CollectionSearchTab}'s write is
+   * addressed with.
+   *
+   * **Passed rather than inferred**, and the inference it replaces is worth naming because it
+   * worked: the tab used to read `categories[0].deckId`, on the true observation that every
+   * category of one deck carries the same id and that `deck_create` seeds four of them in the
+   * deck's own transaction. It is still an inference from a list that is a *different* fact, and
+   * the editor holds the id itself — so a deck with no categories (a state only a story or a
+   * half-answered query can be in) silently disabled the write instead of being a case nobody
+   * has to think about.
+   */
+  deckId: number;
   /**
    * The category every add from this panel lands in, by id — `AUTO_CATEGORY` (`0`) for "let
    * each card's own text decide", which is what a deck is born on.
@@ -263,7 +400,10 @@ export interface DeckSearchPanelProps {
 export function DeckSearchPanel({
   add,
   onAdded,
+  mode,
+  onMode,
   categories,
+  deckId,
   targetCategoryId,
   defaultFormat,
   cardMenu,
@@ -313,6 +453,7 @@ export function DeckSearchPanel({
    */
   const tip = useTooltip();
   const { open, setOpen } = useDeckSearchOpen();
+  const { tab, setTab } = useDeckSearchTab();
   const shown = open && roomy;
   const toggleRef = useRef<HTMLButtonElement>(null);
   const bodyId = useId();
@@ -491,7 +632,22 @@ export function DeckSearchPanel({
       <div
         className={cn(
           "flex gap-2",
-          shown ? "shrink-0 items-center" : "min-h-0 flex-1 items-stretch",
+          // **`flex-wrap` is the whole of what makes this row safe at this panel's floor**, and
+          // it is invisible at every width anybody designs at. Measured headless over the built
+          // stylesheet: 206px is a **193px** content box, the disclosure is **99**, the strip
+          // **141** and the own/need pair **175**, so no two of them share a line — each drops
+          // below the last, and the row is 62px with two controls on it and **100** with three
+          // against 30 for one line. At the panel's 384px opening width the disclosure and the
+          // strip sit on one line inside 371 and the pair takes the second (68px); by ~1000px all
+          // three are one 30px line. A flex item cannot shrink below its own min-content,
+          // so unwrapped this is not a squeeze but an *overhang* — and `DeckEditor`'s page section
+          // is `overflow-y-auto`, which computes `overflow-x` to `auto`, so the overhang becomes a
+          // horizontal scrollbar across the whole deck builder. That is the one thing the app's
+          // 1024px floor forbids, and `ManaValueChips` shipped it once already (`src/CLAUDE.md`).
+          //
+          // Only in the drawn state: the rail is one vertical child and a wrap there would be a
+          // wrap of nothing.
+          shown ? "shrink-0 flex-wrap items-center" : "min-h-0 flex-1 items-stretch",
         )}
       >
         {/* **The "Add to" select was here until 2026-08-15 and is now in deck settings.** It
@@ -501,8 +657,27 @@ export function DeckSearchPanel({
             answer governed the toolbar's quick-add field, which drew no control at all. It is
             `decks.default_category_id` now, asked once in the settings dialog and remembered.
             Nothing on this row replaced it: every Add button below already names the pile it
-            files into, per card, which is where the question is actually being asked. */}
+            files into, per card, which is where the question is actually being asked.
+
+            **The free space that left is where the tab strip went** (2026-08-23). The row was
+            one small button on a 384px column for eight days, which is what made it the honest
+            place to ask which of the two searches this column is showing. */}
         {toggle}
+        {shown && <TabStrip tab={tab} onPick={setTab} />}
+        {/* **On the card-search tab and nowhere else**, because that is the only tab whose Add
+            button it decides. A copy filed in the reader's own binder is a copy they *have*, so
+            the collection tab's press has nothing to ask — a mode control drawn beside it would
+            be a switch with one meaning, which reads as a control that does not work.
+
+            Measured at the panel's floor rather than reasoned about, the way the strip beside it
+            was: 206px is a **193px** content box, the pair is **175** at these labels, and the
+            row is `flex-wrap` — so it drops to a line of its own at **193/193** with 18px to
+            spare and no overhang. What it costs is height: the row is **100px** at the floor
+            (three lines) against 62 with the strip alone, **68** at the panel's 384px opening
+            width, and back to one 30px line by ~1000. Shorter words buy nothing at the floor —
+            `Own`/`Need` measures 95 and the tabs alone already force the wrap — so the reader's
+            own words stay. */}
+        {shown && tab === "all" && <AddModeStrip mode={mode} onMode={onMode} />}
       </div>
 
       {/* Everything below the row, and only once the reader has asked for it — see
@@ -524,18 +699,201 @@ export function DeckSearchPanel({
           query. */}
       {open && (
         <div className={shown ? "contents" : "hidden"} hidden={!shown}>
-          <OpenPanel
-            add={add}
-            onAdded={onAdded}
-            categories={categories}
-            targetCategoryId={targetCategoryId}
-            defaultFormat={defaultFormat}
-            cardMenu={cardMenu}
-            cardMenuKey={cardMenuKey}
-          />
+          {/* **Two components, never one body with a branch in it**, and that is {@link OpenPanel}'s
+              own reason one level in: each tab's data hook is called from a component that mounts
+              with that tab, because a hook called from a branch is a hook called conditionally and
+              React will not have it. Do not hoist the two hooks up here to "simplify" this — the
+              collection tab would then run a `collection_list` for every reader browsing the wider
+              search, and the card search would run a `search_cards` for every reader who never
+              leaves their binder.
+
+              Switching therefore throws the other tab's state away, exactly as a collapse does:
+              a press is a decision, and a reader who goes back to the wall is starting a search
+              rather than resuming one. */}
+          {tab === "collection" ? (
+            <CollectionPanel
+              categories={categories}
+              deckId={deckId}
+              targetCategoryId={targetCategoryId}
+              defaultFormat={defaultFormat}
+            />
+          ) : (
+            <OpenPanel
+              add={add}
+              onAdded={onAdded}
+              categories={categories}
+              targetCategoryId={targetCategoryId}
+              defaultFormat={defaultFormat}
+              cardMenu={cardMenu}
+              cardMenuKey={cardMenuKey}
+            />
+          )}
         </div>
       )}
     </section>
+  );
+}
+
+/**
+ * Which of the two searches this column is showing — one segmented pair on the header row.
+ *
+ * **`aria-pressed` over a `.map`, and deliberately not `role="tab"`.** That role is a contract
+ * rather than a name: roving focus on the arrow keys, `aria-controls` pointing at a `tabpanel`,
+ * and a panel that takes the caret. Nothing else in this app implements it — `DeckEditor`'s
+ * Theory/Live switch, `FilterChips`' layout pair and the card pane's toggles are all pressed
+ * buttons — so adopting it here would either be half-built (a `tab` role with no keyboard
+ * behaviour is worse than no role at all, because a screen reader announces a contract the control
+ * does not honour) or would make the one control that picks a *search* behave unlike the control
+ * that picks a *list* two feet away. Two buttons, one pressed.
+ *
+ * **The words are written out rather than derived**, for the reason the Theory/Live switch gives:
+ * `text-transform` changes what is drawn and not what a control is *called*, so a capitalised
+ * label is one voice control has to be asked for in the uncapitalised word (WCAG 2.5.3).
+ *
+ * `FOCUS_INSET` rather than `FOCUS`, which is the one place this differs from the switch it is
+ * modelled on: the pair is drawn as a single `overflow-hidden` box so the two buttons meet with no
+ * seam, and an outline standing 2px *off* a control that fills a clipped box is painted entirely
+ * in the clipped region — no focus indicator at all, which is a WCAG 2.4.7 failure and invisible
+ * to anyone testing with a mouse.
+ */
+function TabStrip({ tab, onPick }: { tab: DeckSearchTab; onPick: (tab: DeckSearchTab) => void }) {
+  return (
+    // Named for the question rather than for the control: "Search in — Collection" is what the
+    // pair says, and `role="group"` is what holds the two buttons together for a reader stepping
+    // through the panel.
+    <div
+      role="group"
+      aria-label="Search in"
+      className="flex shrink-0 overflow-hidden rounded-md border border-border"
+    >
+      {TABS.map(({ id, label }) => (
+        <button
+          key={id}
+          type="button"
+          onClick={() => onPick(id)}
+          aria-pressed={tab === id}
+          className={cn(
+            // 28px rather than the 36 of `DeckEditor`'s ribbon: that row's height is the app's
+            // agreement about a *toolbar* press, and this is chrome on a column whose own
+            // disclosure is a `text-xs` line and whose Add buttons are 24px squares. A 36px pair
+            // here would be the tallest thing on the panel by eight pixels.
+            "h-7 px-2.5 text-xs",
+            "transition-colors duration-150 motion-reduce:transition-none",
+            tab === id ? "bg-accent font-medium text-accent-fg" : "text-dim hover:text-text",
+            FOCUS_INSET,
+          )}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * **What a press on the card search's Add button _means_** — a card the reader has, or one they
+ * are putting on the list in order to buy it.
+ *
+ * Since schema v25 those are two different writes rather than a flag: "I need this" is a
+ * `deck_cards` row with nothing behind it, which reads as *missing* and drives the deck→wishlist
+ * sweep, and "I own this" is a collection row that physically moves into this deck's group.
+ *
+ * **A control rather than a guess**, because there is nothing to guess from. A card found in
+ * Scryfall's data says nothing about whether the reader has one, and asking per card would put a
+ * dialog in front of a button whose whole value is that it can be pressed three times for three
+ * copies.
+ *
+ * {@link TabStrip}'s shape, deliberately, down to `aria-pressed` over `role="tab"` and
+ * `FOCUS_INSET` inside the `overflow-hidden` box — two segmented pairs on one row that were drawn
+ * two ways would read as two different kinds of control. The 28px height is that strip's for that
+ * strip's reason: this is chrome on a column, not a press on the editor's toolbar.
+ *
+ * The tooltips are what keep the mode from ever being invisible: `aria-pressed` says which way
+ * round it is and each sentence says what that way round costs.
+ */
+function AddModeStrip({ mode, onMode }: { mode: AddMode; onMode: (mode: AddMode) => void }) {
+  const tip = useTooltip();
+  return (
+    // Named for the question, exactly as the strip beside it is: "Adding — Cards I need" is what
+    // the pair says, and `role="group"` is what holds the two buttons together for a reader
+    // stepping through the panel.
+    <div
+      role="group"
+      aria-label="Adding"
+      className="flex shrink-0 overflow-hidden rounded-md border border-border"
+    >
+      {ADD_MODES.map(({ id, label }) => (
+        <button
+          key={id}
+          type="button"
+          onClick={() => onMode(id)}
+          aria-pressed={mode === id}
+          {...tip(
+            id === "own"
+              ? "A copy you already have is moved into this deck"
+              : "Added to the list only — it reads as missing until you get one",
+            { describes: false },
+          )}
+          className={cn(
+            "h-7 px-2.5 text-xs",
+            "transition-colors duration-150 motion-reduce:transition-none",
+            mode === id ? "bg-accent font-medium text-accent-fg" : "text-dim hover:text-text",
+            FOCUS_INSET,
+          )}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * The collection tab's body — **the reader's own binder, and the first caller `collection_to_deck`
+ * has ever had**.
+ *
+ * It is a component rather than a branch inside {@link DeckSearchPanel} for the reason
+ * {@link OpenPanel} is one, and the reason is the only thing about this file that must not be
+ * tidied: `useCollectionSearch` — `collection_list` with this column's filters, an allocation and
+ * the write — has to be **called from something that mounts with this tab**. Hoisting it into the
+ * root would run a `collection_list` for every reader browsing the wider search and for every deck
+ * opened with the column shut, which is the exact cost `OpenPanel` exists to have removed.
+ *
+ * **Four props where `OpenPanel` takes seven, and each absence is a fact about this write rather
+ * than an oversight** — a prop nothing reads is a prop lint refuses, so the ones that cannot be
+ * read are not accepted:
+ *
+ * - **`add`** is `useDeck.addCard`, which is `deck_add_card` — it writes a deck row and moves no
+ *   copies. Putting a card the reader *owns* into a deck is `collection_to_deck`, a different
+ *   command with a different address, and sending both would put the card in the deck twice.
+ * - **`onAdded`** carries `EntryChange.id`, the **`deck_cards`** row the write landed in, which is
+ *   what the editor marks as freshly landed. `MoveOutcome` answers no such id — its `entryId` is
+ *   the **collection** row the copies ended up in — so there is nothing here to hand back. What
+ *   this tab says instead it says on its own status line, naming the deck the copies came out of.
+ * - **`cardMenu` / `cardMenuKey`** are `(card: CardSummary) => …`, and this list draws
+ *   `CollectionRow`s. A collection row's own menu is the collection page's (`Move to → folder`),
+ *   and building a fake `CardSummary` to reach a menu written for a different object is how one
+ *   surface starts offering rows that mean nothing where they are drawn.
+ * - **`mode` / `onMode`** are the own/need question, and a row of this list has already answered
+ *   it: the copy is in the reader's binder, which is what "I own this" *means*. That is why
+ *   {@link AddModeStrip} is drawn on the other tab only.
+ *
+ * A fragment for `OpenPanel`'s reason: whatever is drawn here is a flex child of the panel's own
+ * column, not a box in the middle of it.
+ */
+function CollectionPanel({
+  categories,
+  deckId,
+  targetCategoryId,
+  defaultFormat,
+}: Pick<DeckSearchPanelProps, "categories" | "deckId" | "targetCategoryId" | "defaultFormat">) {
+  return (
+    <CollectionSearchTab
+      categories={categories}
+      deckId={deckId}
+      targetCategoryId={targetCategoryId}
+      defaultFormat={defaultFormat}
+    />
   );
 }
 

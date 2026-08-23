@@ -53,6 +53,7 @@ import { DeckNameField } from "./DeckNameField";
 import { DeckSearchPanel, MIN_PANEL_WIDTH_PX } from "./DeckSearchPanel";
 import { DeckSettingsDialog } from "./DeckSettingsDialog";
 import { DeckStats } from "./DeckStats";
+import { NO_DECK_ROW, useAddMode } from "./NormalSearchAdd";
 import { useDeckUndo } from "./useDeckUndo";
 import { deckCardSlot, dropWrite, type DeckWrite, type DragPayload } from "./dnd";
 import { ExportDialog } from "@/features/transfer/export/ExportDialog";
@@ -78,7 +79,7 @@ import { asSortBy, DEFAULT_SORT_BY, SORT_OPTIONS, type SortBy } from "./sorting"
 import { TagsDialog } from "./TagsDialog";
 import { TheoryDiffDialog } from "./TheoryDiffDialog";
 import { theoryMatchSet } from "./theoryMatch";
-import { useDeck } from "./useDeck";
+import { useDeck, type Deck } from "./useDeck";
 import { useDeckMeta } from "./useDeckMeta";
 import { ANY_GAME, GAME_OPTIONS, pickerFormats, useFormatSpecs } from "./useFormatSpecs";
 import { useRecentAdds } from "./useRecentAdds";
@@ -707,6 +708,24 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // surfaces of one deck can name two marketplaces.
   const { marketplace } = useMarketplace();
   const deck = useDeck(deckId, variant);
+  /**
+   * Whether the cards this reader is adding are ones they **have** or ones they **need**.
+   *
+   * One decision for a brewing session rather than one per card, kept per deck for the length of
+   * the window — `NormalSearchAdd.ts` is the whole of the rule and the memory. It is read here,
+   * at the top of the editor, because it governs the editor's **two** click-to-add paths: the
+   * docked panel's Add button and the toolbar's quick-add field. It does not govern a *drag*,
+   * which is a gesture about a card that is already somewhere.
+   *
+   * **The control is the panel's** — `AddModeStrip`, on the card-search tab, handed this pair as
+   * `mode`/`onMode`. The answer is held here because two surfaces file by it; the control is over
+   * there because that is the tab whose Add button it decides. What follows from the split is
+   * worth stating: a reader who has never opened the search column never sees the question, and
+   * the quick-add field they are typing into is on `DEFAULT_ADD_MODE` — `need`, the mode
+   * that writes a list row and claims nothing about their cardboard, which is why that is the
+   * default rather than the other one.
+   */
+  const { mode: addMode, setMode: setAddMode } = useAddMode(deckId);
   const { specs, formatSpecFor } = useFormatSpecs();
   /**
    * The right-click, and everything a card menu needs that is not the card.
@@ -1762,12 +1781,27 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * can do something with. TanStack runs both, the definition's first.
    */
   const addTo = useCallback(
-    (cardId: string, categoryId: number, typeLine?: string | null) =>
+    (
+      cardId: string,
+      categoryId: number,
+      typeLine?: string | null,
+      /**
+       * Whether this is a copy the reader **has** — the own/need toggle, and **absent at every
+       * drop**. A drag is a gesture about a card that is already somewhere, so the two callers
+       * that pass it are the two the toggle names: the quick-add field, and (through the panel's
+       * own mutation below) the docked search column's Add button.
+       */
+      owned?: boolean,
+    ) =>
       writeAdd(
         categoryId === AUTO_CATEGORY
-          ? { cardId, typeLine: typeLine ?? null, quantity: 1 }
-          : { cardId, categoryId, quantity: 1 },
-        { onSuccess: (change) => markLanded(change.id) },
+          ? { cardId, typeLine: typeLine ?? null, quantity: 1, owned }
+          : { cardId, categoryId, quantity: 1, owned },
+        // **`change.id` is not always a row.** An owned add is `collection_to_deck`, which
+        // answers about the *collection* row it wrote and never about the deck one, so there is
+        // nothing to point the reader at — {@link NO_DECK_ROW} is what it says instead, and
+        // marking it would arm a five-second timer against a row id no card has.
+        { onSuccess: (change) => change.id !== NO_DECK_ROW && markLanded(change.id) },
       ),
     [writeAdd, markLanded],
   );
@@ -1794,6 +1828,27 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * says why). What is still driven is the stepper's zero — `ZeroRemovesTheCard` asserts the
    * caret lands on the pile — which exercises the same two passes on the pile a card *left*.
    */
+  /**
+   * The panel's own mutation, with the reader's answer folded in.
+   *
+   * The docked panel presses `addCard` itself — it is the one add path in this editor that does
+   * not go through {@link addTo}, which is what makes its button predictable — so it builds the
+   * mutation's variables and this component cannot reach into that call. What it can do is hand
+   * the panel a mutation whose `mutate` states the mode on the way past, which is what this is:
+   * the same object, the same error state, one field added.
+   *
+   * **A wrapper rather than a prop on the panel**, because the mode is not a fact about the
+   * panel: it governs the quick-add field on the other side of the desk too, and a second prop
+   * threaded through `DeckSearchPanel` into `OpenPanel` into the wall's `action` would be a
+   * fourth place for one answer to be spelled. It is rebuilt every render, which costs nothing —
+   * `useMutation` returns a new object every render anyway, so this identity was never stable.
+   */
+  const panelAdd: Deck["addCard"] = {
+    ...deck.addCard,
+    mutate: (variables, options) =>
+      deck.addCard.mutate({ ...variables, owned: addMode === "own" }, options),
+  };
+
   const owedFocus = useRef<number | null>(null);
   const handOffTo = useCallback((categoryId: number) => {
     owedFocus.current = categoryId;
@@ -3148,9 +3203,22 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                 rather than from a typed name. */}
             <QuickAdd
               targetName={targetName}
-              onAdd={(card) => addTo(card.id, targetCategoryId, card.typeLine)}
+              onAdd={(card) =>
+                addTo(card.id, targetCategoryId, card.typeLine, addMode === "own")
+              }
             />
           </div>
+
+          {/* **The own/need toggle stood here for a day and is on the search panel's card-search
+              tab now** (2026-08-23). It was drawn on this row because `DeckSearchPanel.tsx`
+              belonged to another agent while it was built, and the prose left behind argued the
+              toolbar on the grounds that the mode governs two controls — the panel's Add button
+              and the quick-add field beside this note. That is an argument about where the
+              *answer* lives, and it still holds: {@link useAddMode} is read at the top of this
+              component and the field below files by it. It is not an argument about where the
+              *control* goes, and a reader looking at a wall of search results should not have to
+              look across the desk to see which kind of add they are about to make. The pair, its
+              two tooltips and the 206px measurement that decided its shape are `AddModeStrip`. */}
 
           {/* The first of the row's three pickers, and the one that says how a card is drawn.
               It is the same control as the two beside it on purpose — see {@link VIEW_PICKER}. */}
@@ -3424,9 +3492,15 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               above measures for it. Every word of why: that effect. */}
           <div ref={dockRef} className="sticky top-0 flex shrink-0 self-start">
             <DeckSearchPanel
-              add={deck.addCard}
-              onAdded={markLanded}
+              add={panelAdd}
+              onAdded={(entryId) => entryId !== NO_DECK_ROW && markLanded(entryId)}
+              // The own/need question: the answer is held here, because it governs the quick-add
+              // field on this side of the desk too, and the control is drawn over there, on the
+              // tab whose Add button it decides. See {@link DeckSearchPanelProps.mode}.
+              mode={addMode}
+              onMode={setAddMode}
               categories={categories}
+              deckId={deckId}
               targetCategoryId={targetCategoryId}
               defaultFormat={searchFormatDefault}
               cardMenu={panelCardMenu}

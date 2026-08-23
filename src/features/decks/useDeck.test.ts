@@ -22,6 +22,13 @@ const deckSwapPrinting = vi.hoisted(() => vi.fn());
 const deckCardSetTag = vi.hoisted(() => vi.fn());
 const oracleTagsForPrintings = vi.hoisted(() => vi.fn());
 const deckSetViewState = vi.hoisted(() => vi.fn());
+// The four an `own` add reaches, and nothing else in this file touches them: the card's own
+// identity, the hunt for a free copy, the row recorded when there is none, and the move.
+const cardDetail = vi.hoisted(() => vi.fn());
+const collectionList = vi.hoisted(() => vi.fn());
+const collectionAdd = vi.hoisted(() => vi.fn());
+const collectionToDeck = vi.hoisted(() => vi.fn());
+const deckCategoryCreate = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -36,10 +43,16 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckCardSetTag,
     oracleTagsForPrintings,
     deckSetViewState,
+    cardDetail,
+    collectionList,
+    collectionAdd,
+    collectionToDeck,
+    deckCategoryCreate,
   },
 }));
 
 import { useDeck, useSwapFromPane } from "./useDeck";
+import { NO_DECK_ROW } from "./NormalSearchAdd";
 
 const DECK: DeckRow = {
   gameKey: "any",
@@ -193,6 +206,27 @@ beforeEach(() => {
   // the tags say so themselves.
   oracleTagsForPrintings.mockReset().mockResolvedValue([]);
   deckSetViewState.mockReset().mockResolvedValue(undefined);
+  // The `own` arm's four. The binder is empty by default, which is the state every `need` test
+  // in this file is written against and the one an `own` add records a new row in.
+  cardDetail.mockReset().mockResolvedValue({ id: "p2", oracleId: "o2", name: "Sol Ring" });
+  collectionList.mockReset().mockResolvedValue({ items: [], total: 0 });
+  collectionAdd.mockReset().mockResolvedValue({ id: 77, quantity: 1, removed: false });
+  collectionToDeck.mockReset().mockResolvedValue({ entryId: 77, fromDeck: null, quantity: 1 });
+  deckCategoryCreate
+    .mockReset()
+    .mockResolvedValue({ id: 31, deckId: 4, name: "Ramp", kind: "main" });
+});
+
+/** One free copy, as `collection_list` answers one — the five fields {@link chooseFreeCopy}
+ *  reads, spread over a row shape nothing here asserts the rest of. */
+const freeRow = (over: { id: number; cardId?: string; oracleId?: string; proxy?: boolean }) => ({
+  id: over.id,
+  cardId: over.cardId ?? "p2",
+  oracleId: over.oracleId ?? "o2",
+  quantity: 1,
+  proxy: over.proxy ?? false,
+  folderId: null,
+  name: "Sol Ring",
 });
 
 /**
@@ -747,6 +781,246 @@ describe("useDeck", () => {
 
     expect(deckAddCard).toHaveBeenCalledWith(4, "p2", SIDE.id, null, "live", null, 1);
     expect(oracleTagsForPrintings).not.toHaveBeenCalled();
+  });
+
+  /**
+   * ## `owned` — the Normal Search tab's other answer
+   *
+   * Everything above is an add that means "I need to buy this": a `deck_cards` row, no copy in
+   * the deck's group, and therefore *missing*, which is what the deck→wishlist sweep reads.
+   * `owned: true` is the other thing a press on that button can mean, and it has to end with a
+   * collection row sitting in the deck's group — the physical ledger since schema v25.
+   */
+  it("moves a free copy the reader already has, rather than writing a bare list row", async () => {
+    collectionList.mockResolvedValue({ items: [freeRow({ id: 12 })], total: 1 });
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    await result.current.addCard.mutateAsync({
+      cardId: "p2",
+      categoryId: SIDE.id,
+      quantity: 1,
+      owned: true,
+    });
+
+    expect(collectionToDeck).toHaveBeenCalledWith(12, 4, { id: SIDE.id }, 1);
+    // **Instead of, never beside**: `collection_to_deck` writes the `deck_cards` row itself, so
+    // sending both would put the card in the deck twice.
+    expect(deckAddCard).not.toHaveBeenCalled();
+    // And nothing is invented — the reader already had this one.
+    expect(collectionAdd).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **`unallocated` is the whole of "free", and it is what keeps another deck's cards out of
+   * reach.** This press is silent — one click, no dialog — so a copy another deck is holding
+   * must never be a candidate; taking one is the Collection Search tab's confirm and only that.
+   *
+   * Narrowed to the oracle card server-side, so the page it reads is a page of this card.
+   */
+  it("asks the collection only for copies no deck is holding", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    await result.current.addCard.mutateAsync({
+      cardId: "p2",
+      categoryId: SIDE.id,
+      quantity: 1,
+      owned: true,
+    });
+
+    expect(collectionList).toHaveBeenCalledWith(
+      expect.objectContaining({ allocation: "unallocated", oracleId: "o2" }),
+    );
+  });
+
+  /**
+   * The deleted allocator's order, reached through the hook: the exact printing before another
+   * printing of the same card. `chooseFreeCopy` is where the order is pinned; this is the wiring
+   * — that the printing the reader *searched for* is what gets handed to it.
+   */
+  it("takes the printing the reader searched for when the binder holds two", async () => {
+    collectionList.mockResolvedValue({
+      items: [freeRow({ id: 3, cardId: "other-printing" }), freeRow({ id: 9, cardId: "p2" })],
+      total: 2,
+    });
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    await result.current.addCard.mutateAsync({
+      cardId: "p2",
+      categoryId: SIDE.id,
+      quantity: 1,
+      owned: true,
+    });
+
+    expect(collectionToDeck).toHaveBeenCalledWith(9, 4, { id: SIDE.id }, 1);
+  });
+
+  /** "I own this, I just hadn't written it down" — the row is recorded and then filed into the
+   *  deck's group by the same write that moves a copy the reader already had. */
+  it("records a new copy when the binder has none free", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    await result.current.addCard.mutateAsync({
+      cardId: "p2",
+      categoryId: SIDE.id,
+      quantity: 1,
+      owned: true,
+    });
+
+    expect(collectionAdd).toHaveBeenCalledWith(
+      expect.objectContaining({ cardId: "p2", finish: "nonfoil", quantity: 1 }),
+    );
+    // The **new row's** id, not the card's — `collection_add` folds onto the grain, so the id it
+    // answers is the row the copies actually landed in.
+    expect(collectionToDeck).toHaveBeenCalledWith(77, 4, { id: SIDE.id }, 1);
+  });
+
+  /**
+   * Under `Auto` the pile is a **name**, and it travels as one: `collection_to_deck` takes a
+   * `DeckPile`, so the backend resolves it through `category_for_name` inside the move's own
+   * transaction — found where the deck has it, created `origin: 'auto'` where it does not.
+   *
+   * **`deckCategoryCreate` must not be reached, and that is the whole of the assertion.** This
+   * arm resolved the name here for one day, through the reader's own "New category" write, and
+   * every pile an owned add invented drew an empty heading for ever.
+   */
+  it("names the pile an auto add asks for rather than creating it here", async () => {
+    oracleTagsForPrintings.mockResolvedValue([{ cardId: "p2", slugs: ["ramp"] }]);
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    await result.current.addCard.mutateAsync({
+      cardId: "p2",
+      typeLine: "Artifact",
+      quantity: 1,
+      owned: true,
+    });
+
+    expect(deckCategoryCreate).not.toHaveBeenCalled();
+    expect(collectionToDeck).toHaveBeenCalledWith(77, 4, { name: "Ramp" }, 1);
+  });
+
+  /** And a pile the deck already has is named the same way — finding before creating is
+   *  `category_for_name`'s own rule, which both arms now get from the same backend write rather
+   *  than one of them keeping a second copy of it here. */
+  it("names an auto add's pile even when the deck already has it", async () => {
+    deckGet.mockResolvedValue({
+      ...DETAIL,
+      categories: [...DETAIL.categories, { ...SIDE, id: 44, name: "Artifact" }],
+    });
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    await result.current.addCard.mutateAsync({
+      cardId: "p2",
+      typeLine: "Artifact",
+      quantity: 1,
+      owned: true,
+    });
+
+    expect(deckCategoryCreate).not.toHaveBeenCalled();
+    expect(collectionToDeck).toHaveBeenCalledWith(77, 4, { name: "Artifact" }, 1);
+  });
+
+  /**
+   * **A theory list is a plan, and a plan holds no cards.** `collection_to_deck` writes
+   * `variant = 'live'` unconditionally, so an `owned` add made while the reader is looking at
+   * the Theory list would put the card on the *other* list — silently, and on the one they are
+   * not reading. The mode is ignored there and the ordinary add goes.
+   */
+  it("ignores the mode on a theory list", async () => {
+    const { result } = renderHook(() => useDeck(4, "theory"), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    await result.current.addCard.mutateAsync({
+      cardId: "p2",
+      categoryId: SIDE.id,
+      quantity: 1,
+      owned: true,
+    });
+
+    expect(deckAddCard).toHaveBeenCalledWith(4, "p2", SIDE.id, null, "theory", null, 1);
+    expect(collectionToDeck).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A printing that is not in `cards` has no oracle id, so there is nothing to match a binder
+   * row against — and both writes an `own` add would make refuse it anyway. The ordinary add
+   * goes instead, which is the one that refuses it *in words*.
+   */
+  it("falls back to the ordinary add for a card the database does not have", async () => {
+    cardDetail.mockResolvedValue(null);
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    await result.current.addCard.mutateAsync({
+      cardId: "gone",
+      categoryId: SIDE.id,
+      quantity: 1,
+      owned: true,
+    });
+
+    expect(deckAddCard).toHaveBeenCalledWith(4, "gone", SIDE.id, null, "live", null, 1);
+    expect(collectionList).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **The collection's root as well**, and this is the second write in this file that has to
+   * take it: a row has left the binder and been filed into a deck's group, which is exactly the
+   * shape that shipped a ghost row once already. The list, the summary, both folder cards and
+   * the folder tree are all wrong without it, and the deck root reaches none of them.
+   */
+  it("tells the collection to re-read after an owned add", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+    seedOwned(client);
+
+    await result.current.addCard.mutateAsync({
+      cardId: "p2",
+      categoryId: SIDE.id,
+      quantity: 1,
+      owned: true,
+    });
+
+    await waitFor(() => expect(staleRoots(client)).toContain("collection"));
+  });
+
+  /** And a plain add still does not — owned/missing is a sum over rows this write provably
+   *  leaves where they were, so firing the collection would be a refetch per press. */
+  it("leaves the collection alone for an add that owns nothing", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+    seedOwned(client);
+
+    await result.current.addCard.mutateAsync({ cardId: "p2", categoryId: SIDE.id, quantity: 1 });
+
+    await waitFor(() => expect(staleRoots(client)).toContain("decks"));
+    expect(staleRoots(client)).not.toContain("collection");
+    expect(collectionList).not.toHaveBeenCalled();
+  });
+
+  /**
+   * `collection_to_deck` answers about the **collection** row it wrote and never about the deck
+   * row, so an own add has no `deck_cards.id` to hand back — {@link NO_DECK_ROW} is what it says
+   * instead, and `DeckEditor` tests it before pointing the reader at anything.
+   */
+  it("answers no deck row for an owned add", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    const change = await result.current.addCard.mutateAsync({
+      cardId: "p2",
+      categoryId: SIDE.id,
+      quantity: 1,
+      owned: true,
+    });
+
+    expect(change.id).toBe(NO_DECK_ROW);
+    // What actually moved, which is the outcome's number and never the argument.
+    expect(change.quantity).toBe(1);
   });
 
   /**

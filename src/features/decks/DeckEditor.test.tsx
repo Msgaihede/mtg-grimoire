@@ -4,8 +4,10 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 import type {
+  CardDetail,
   CardSummary,
   CategoryKind,
+  CollectionRow,
   DeckCard,
   DeckCategory,
   DeckDetail,
@@ -120,6 +122,13 @@ const syncStatus = vi.hoisted(() => vi.fn());
 // a different URL on the CDN from the `grid` the search wall warms. Fire-and-forget, so the
 // stub only has to resolve; what it is *called with* is asserted in its own test below.
 const prefetchImages = vi.hoisted(() => vi.fn(() => Promise.resolve()));
+// The three an **owned** add reaches, and nothing else in this file touches them: the card's own
+// oracle identity, the hunt for a copy no deck is holding, and the move that files it into this
+// deck's group. `collectionAdd` and `deckCategoryCreate` above are the fourth and fifth, and are
+// already here for the card menu and the quick zones.
+const cardDetail = vi.hoisted(() => vi.fn());
+const collectionList = vi.hoisted(() => vi.fn());
+const collectionToDeck = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -175,6 +184,9 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckImportCommit,
     importReadFile,
     syncStatus,
+    cardDetail,
+    collectionList,
+    collectionToDeck,
   },
 }));
 
@@ -334,6 +346,91 @@ function found(name: string): CardSummary {
   };
 }
 
+/**
+ * The same printing as {@link found}, as `card_detail` answers it.
+ *
+ * **Complete rather than shaped for its caller**, and that is the point: an owned add reads this
+ * command for the card's oracle id, and `CardDetailPane` reads it for a dozen fields it indexes
+ * without a fence (`card.setCode.toUpperCase()`, `card.faces[face]`). A partial stub therefore
+ * takes the pane down as an *unhandled* error the moment a test leaves a card open, and vitest
+ * reports it against whichever test ran next.
+ */
+function detailOf(name: string): CardDetail {
+  return {
+    id: `s-${name}`,
+    oracleId: `o-${name}`,
+    name,
+    setCode: "mh2",
+    setName: "Modern Horizons 2",
+    collectorNumber: "12",
+    rarity: "rare",
+    layout: "normal",
+    lang: "en",
+    manaCost: "{R}",
+    cmc: 1,
+    typeLine: "Creature — Goblin",
+    oracleText: null,
+    illustrationId: null,
+    artist: null,
+    releasedAt: null,
+    legalities: null,
+    finishPrices: { nonfoil: 1.5, foil: null, etched: null },
+    finishes: `["nonfoil"]`,
+    promoTypes: null,
+    imageStatus: "highres_scan",
+    faces: [],
+  };
+}
+
+/**
+ * One copy in the binder, as `collection_list` answers it.
+ *
+ * **Whole, for {@link detailOf}'s reason with a second edge**: an owned add reads five fields off
+ * this row, and the docked panel's *Collection* tab draws the same answer — `CollectionSearchTab`
+ * builds a label out of `setCode`, `collectorNumber`, `finish` and `condition` and indexes none
+ * of them defensively. A row shaped for the add path alone takes that tab down, and the panel
+ * opens on it.
+ */
+function ownedRow(over: Partial<CollectionRow> & { id: number }): CollectionRow {
+  return {
+    cardId: "s-Goblin Guide",
+    folderId: null,
+    folderName: null,
+    name: "Goblin Guide",
+    oracleId: "o-Goblin Guide",
+    setCode: "mh2",
+    setName: "Modern Horizons 2",
+    collectorNumber: "12",
+    lang: "en",
+    rarity: "rare",
+    manaCost: "{R}",
+    typeLine: "Creature — Goblin",
+    layout: "normal",
+    finish: "nonfoil",
+    condition: "NM",
+    quantity: 1,
+    tradelistQuantity: 0,
+    unitPrice: 1.5,
+    purchasePrice: null,
+    purchaseCurrency: null,
+    acquiredAt: null,
+    acquisitionSource: null,
+    serialNumber: null,
+    altered: false,
+    signed: false,
+    proxy: false,
+    misprint: false,
+    grading: null,
+    tags: "[]",
+    notes: null,
+    needsReview: null,
+    updatedAt: 1_800_000_000,
+    promoTypes: null,
+    legalities: null,
+    ...over,
+  };
+}
+
 /** The one printing `import_resolve` answers with here — everything the plan does not
  *  read filled in as nothing, `plan.test.ts`'s own builder cut to one row. */
 const SOL_RING: ImportMatch = {
@@ -386,13 +483,24 @@ function wrap(ui: ReactElement) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
-  return render(
+  const hosts = (inner: ReactElement) => (
     <QueryClientProvider client={client}>
       <TooltipProvider>
-        <ContextMenuProvider>{ui}</ContextMenuProvider>
+        <ContextMenuProvider>{inner}</ContextMenuProvider>
       </TooltipProvider>
-    </QueryClientProvider>,
+    </QueryClientProvider>
   );
+  const view = render(hosts(ui));
+  return {
+    ...view,
+    /**
+     * Swap the editor **under the same three hosts** — and this is the whole reason it exists:
+     * `rerender` replaces the *root*, so `rerender(<DeckEditor …/>)` drops the
+     * `QueryClientProvider` and every hook in the tree throws "No QueryClient set". The one
+     * caller is the per-deck test below, which needs one query cache across two deck ids.
+     */
+    rerenderIn: (inner: ReactElement) => view.rerender(hosts(inner)),
+  };
 }
 
 /** The editor, rendered and waited for — every test starts from a deck on screen. */
@@ -419,7 +527,29 @@ async function open() {
 async function openSearchPanel() {
   const toggle = await screen.findByRole("button", { name: "Search cards" });
   if (toggle.getAttribute("aria-expanded") !== "true") await userEvent.click(toggle);
+  // **And then the tab**, since the panel grew a two-tab strip and opens on the *collection*
+  // one. Every test below reaches the card search's wall, which is the second tab's body, so a
+  // helper that stopped at the disclosure would hand back a searchbox that is not mounted. Same
+  // shape as the press above and for the same reason: it is idempotent, so a caller that has
+  // already switched tabs pays nothing and no test here is a claim about which tab the panel
+  // opens on — that is `DeckSearchPanel.test.tsx`'s to pin, and pinning it twice would make one
+  // of the two a copy that quietly stops meaning anything.
+  const cards = await screen.findByRole("button", { name: "All cards" });
+  if (cards.getAttribute("aria-pressed") !== "true") await userEvent.click(cards);
   return screen.findByRole("searchbox", { name: "Search cards" });
+}
+
+/**
+ * The own/need control, by the words on it — **opening the search column and its card-search tab
+ * on the way**, because that is where the pair is drawn (2026-08-23).
+ *
+ * It goes through {@link openSearchPanel} rather than repeating its two presses, so it inherits
+ * that helper's idempotence and its rule: no test in this file is a claim about which tab or which
+ * disclosure state the panel opens in.
+ */
+async function addMode(name: "Cards I own" | "Cards I need") {
+  await openSearchPanel();
+  return screen.findByRole("button", { name });
 }
 
 /**
@@ -592,8 +722,21 @@ beforeEach(() => {
   deckTagCreate
     .mockReset()
     .mockResolvedValue({ id: 12, name: "Cut candidate", color: "gold", cardCount: 0 });
-  collectionAdd.mockReset().mockResolvedValue(undefined);
+  collectionAdd.mockReset().mockResolvedValue({ id: 77, quantity: 1, removed: false });
   deckCategoryCreate.mockReset().mockResolvedValue(category(9, "Removal", "main"));
+  // The **own** arm's three. An empty binder by default, which is the state every other test
+  // here is written against and the one an owned add records a new row in.
+  /**
+   * **Refused by default, which is what this command did here before it was stubbed at all** —
+   * the whole `ipc` object is replaced above, so `cardDetail` was `undefined` and every caller
+   * of it threw. `CardDetailPane` is the other caller and reads a dozen fields off the answer
+   * without a fence, so a stub shaped for the add path takes the pane down as an *unhandled*
+   * error that vitest then reports against whichever test happened to be running. The four tests
+   * that drive an owned add state their own answer.
+   */
+  cardDetail.mockReset().mockRejectedValue(new Error("card_detail is not stubbed in this test"));
+  collectionList.mockReset().mockResolvedValue({ items: [], total: 0 });
+  collectionToDeck.mockReset().mockResolvedValue({ entryId: 77, fromDeck: null, quantity: 1 });
   oracleTagsForPrintings.mockReset().mockResolvedValue([]);
   // The whole list back, which is what `deck_category_reorder` answers. Nothing here reads it —
   // the desk shows the order it sent and the query refetch is what settles it — so the value is
@@ -2020,6 +2163,146 @@ describe("DeckEditor", () => {
     );
 
     expect(deckAddCard).toHaveBeenCalledWith(4, "s-Goblin Guide", null, "Creature", "live", null, 1);
+  });
+
+  /**
+   * ## The own/need toggle
+   *
+   * A press on that Add button is one of two things — a card the reader **has**, or one they are
+   * putting on the list in order to buy it — and the app cannot guess which. The toggle is one
+   * decision for a brewing session rather than one per card, and it says which way round it is.
+   *
+   * **The control is the search panel's, on its card-search tab** (2026-08-23) — that is the tab
+   * whose Add button it decides, and `addMode()` below is how these tests reach it. It shipped on
+   * this editor's toolbar for a day, because `DeckSearchPanel.tsx` belonged to another agent while
+   * it was built. What did *not* move is the answer: `useAddMode` is read at the top of the editor
+   * because the toolbar's quick-add field files by it too, which is what the third test here
+   * drives. `DeckSearchPanel.test.tsx` owns the control; this file owns the two writes it picks
+   * between.
+   */
+  it("starts on the mode that changes nothing", async () => {
+    await open();
+
+    const need = await addMode("Cards I need");
+    expect(need).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Cards I own" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+  });
+
+  /**
+   * **A card the reader owns is a copy that physically moves**, since schema v25: the deck holds
+   * it because a `collection_entries` row sits in that deck's folder. So an owned add is
+   * `collection_to_deck` and never `deck_add_card` — sending both would put the card in the deck
+   * twice, because the move writes the list row itself.
+   */
+  it("moves a free copy into the deck when the reader is adding cards they own", async () => {
+    searchCards.mockResolvedValue({
+      items: [found("Goblin Guide")],
+      total: 1,
+      totalIsCapped: false,
+    });
+    cardDetail.mockResolvedValue(detailOf("Goblin Guide"));
+    collectionList.mockResolvedValue({
+      items: [ownedRow({ id: 12 })],
+      total: 1,
+    });
+
+    await open();
+    await userEvent.click(await addMode("Cards I own"));
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Add Goblin Guide to Creature" }),
+    );
+
+    await waitFor(() =>
+      // The pile is a **name** on this path: nothing pointed at a column, so `autoCategoryFor`
+      // named one and the backend finds-or-creates it through `category_for_name`.
+      expect(collectionToDeck).toHaveBeenCalledWith(12, 4, { name: "Creature" }, 1),
+    );
+    expect(deckAddCard).not.toHaveBeenCalled();
+  });
+
+  /**
+   * And the toolbar's quick add is the same decision, **which is the whole reason the answer is
+   * held by this component rather than by the panel that draws the control**.
+   *
+   * The two controls are on opposite sides of the desk now, so this is the test that would go red
+   * if somebody moved `useAddMode` into `DeckSearchPanel` while tidying the pair in beside it: the
+   * panel would remember its own mode and the field over here would file every add as `need` with
+   * nothing on screen disagreeing.
+   */
+  it("takes the quick-add field with it", async () => {
+    searchCards.mockResolvedValue({
+      items: [found("Goblin Guide")],
+      total: 1,
+      totalIsCapped: false,
+    });
+    cardDetail.mockResolvedValue(detailOf("Goblin Guide"));
+
+    await open();
+    await userEvent.click(await addMode("Cards I own"));
+    await userEvent.type(screen.getByLabelText("Quick add a card"), "goblin guide{Enter}");
+
+    // Nothing free in the binder, so the copy is recorded and then filed into the deck's group.
+    await waitFor(() => expect(collectionAdd).toHaveBeenCalled());
+    expect(collectionToDeck).toHaveBeenCalledWith(77, 4, { name: "Creature" }, 1);
+    expect(deckAddCard).not.toHaveBeenCalled();
+  });
+
+  /** Pressed back, the button does exactly what it did before the toggle existed. */
+  it("goes back to writing a bare list row", async () => {
+    searchCards.mockResolvedValue({
+      items: [found("Goblin Guide")],
+      total: 1,
+      totalIsCapped: false,
+    });
+
+    await open();
+    await userEvent.click(await addMode("Cards I own"));
+    await userEvent.click(screen.getByRole("button", { name: "Cards I need" }));
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Add Goblin Guide to Creature" }),
+    );
+
+    await waitFor(() =>
+      expect(deckAddCard).toHaveBeenCalledWith(
+        4,
+        "s-Goblin Guide",
+        null,
+        "Creature",
+        "live",
+        null,
+        1,
+      ),
+    );
+    expect(collectionToDeck).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **Per deck.** The answer is kept in the query cache rather than in this component's state,
+   * because the editor is keyed on the deck id in the shipped app and a decision made once for a
+   * brewing session has to outlive a remount — but it must not follow the reader to the *next*
+   * deck, where a cube being assembled out of the binder and a deck being shopped for are two
+   * different answers. That the editor hands the hook its own deck's id is what this drives; the
+   * memory across a remount is `NormalSearchAdd.test.ts`'s, where the cache is in hand.
+   */
+  it("keeps one mode per deck", async () => {
+    const { rerenderIn } = await open();
+    await userEvent.click(await addMode("Cards I own"));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Cards I own" })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      ),
+    );
+
+    rerenderIn(<DeckEditor deckId={5} />);
+
+    expect(await screen.findByRole("button", { name: "Cards I need" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
   });
 
   /** Every category the deck has, in the order the groups are drawn — one list, one source —

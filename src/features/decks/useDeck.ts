@@ -6,6 +6,7 @@ import {
   type DeckDetail,
   type DeckFinish,
   type DeckPatch,
+  type DeckPile,
   type DeckTag,
   type DeckVariant,
   type DeckViewState,
@@ -14,6 +15,7 @@ import {
 import { useAppStore, type PaneDeckContext } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { autoCategoryFor } from "./autoCategory";
+import { NO_DECK_ROW, chooseFreeCopy, freeCopiesQuery } from "./NormalSearchAdd";
 
 /**
  * What a re-file did — the quick zones' `Auto` for a card already in the deck.
@@ -387,6 +389,70 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
   });
 
   /**
+   * The `owned` arm of {@link addCard} — **a copy of this card ends up in the deck's group**.
+   *
+   * Since schema v25 a deck holds a card because a `collection_entries` row sits in that deck's
+   * folder, so "I own this" is not a flag on the deck row: it is a copy that has to physically
+   * move. Two ways it can be true, and the order between them is the whole rule:
+   *
+   * 1. **A free copy the reader already has** — `chooseFreeCopy` over the rows no deck is
+   *    holding, in the deleted allocator's own preference order. That is what makes the two tabs
+   *    agree, and what makes a reader who used to let the allocator choose see the same copy
+   *    chosen now.
+   * 2. **A copy recorded on the spot** — "I own this, I just hadn't written it down." Two writes
+   *    rather than one, because there is no command that files a *new* row straight into a deck
+   *    group: `collection_add` puts it on the desk and `collection_to_deck` moves it in. A
+   *    failure between them leaves a row in the binder, which is the harmless half.
+   *
+   * **Three local round trips on a deliberate press**, which is `oracleTagsFor`'s trade one floor
+   * up: the card's own identity (a search row's `oracleId` cannot travel — `DeckSearchPanel`
+   * builds the mutation's variables and this hook does not own that file), the hunt, and the
+   * move.
+   *
+   * **A card the database does not have falls back to the ordinary add**, which is the write that
+   * refuses it *in words*: with no oracle id there is nothing to match a binder row against, and
+   * both writes this arm would make refuse an unknown printing anyway.
+   */
+  const addOwnedCopies = async (put: {
+    deckId: number;
+    cardId: string;
+    categoryId: number | null;
+    categoryName: string | null;
+    finish: DeckFinish;
+    quantity: number;
+  }) => {
+    const { deckId, cardId, categoryId, categoryName, finish, quantity } = put;
+    const card = await ipc.cardDetail(cardId, marketplace.id);
+    if (card === null || card.oracleId === null) {
+      return ipc.deckAddCard(deckId, cardId, categoryId, categoryName, variant, finish, quantity);
+    }
+    const page = await ipc.collectionList(freeCopiesQuery(card.oracleId));
+    const free = chooseFreeCopy(page.items, {
+      cardId,
+      oracleId: card.oracleId,
+      atLeast: quantity,
+    });
+    // **The pile is handed over as whichever of the two the caller has, and resolving a name is
+    // the backend's.** `collection_to_deck` takes a {@link DeckPile} now, so a name goes through
+    // `category_for_name` inside the move's own transaction — found where the deck has it, and
+    // created `origin: "auto"` where it does not, which is the flag `drawsWhenEmpty` reads. This
+    // arm used to resolve the name here through `deckCategoryCreate`, the reader's own "New
+    // category" write, and every pile an owned add invented drew an empty heading for ever.
+    const target: DeckPile =
+      categoryId !== null ? { id: categoryId } : { name: categoryName ?? DEFAULT_CATEGORY_NAME };
+    // `'nonfoil'` is what an add off a search wall means until the reader says otherwise —
+    // `addCard`'s own default, spelled here because a collection row's `finish` is a required
+    // word where a deck row's is a nullable one.
+    const entryId =
+      free?.id ?? (await ipc.collectionAdd({ cardId, finish: finish ?? "nonfoil", quantity })).id;
+    const outcome = await ipc.collectionToDeck(entryId, deckId, target, quantity);
+    // **The outcome's number, never the argument** — what moved is what the deck now holds. The
+    // id is {@link NO_DECK_ROW}: this write answers about the collection row and never about the
+    // deck row, so there is nothing for the editor to point the reader at.
+    return { id: NO_DECK_ROW, quantity: outcome.quantity, removed: false };
+  };
+
+  /**
    * Put copies into a category: the drag-in and the click-to-add write.
    *
    * **Not the stepper's** — see {@link useDeck}'s `setQuantity`. This one reads `cards` to
@@ -449,6 +515,7 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
       typeLine,
       finish = null,
       quantity,
+      owned = false,
     }: {
       cardId: string;
       categoryId?: number | null;
@@ -470,6 +537,19 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
        *  {@link DEFAULT_CATEGORY_NAME}. */
       typeLine?: string | null;
       quantity: number;
+      /**
+       * Whether this is a card the reader **has**, or one they are putting on the list in order
+       * to go and buy it — the docked panel's own/need toggle (`NormalSearchAdd.ts`).
+       *
+       * **Absent is `false`, which is what every add in this app did before the toggle existed**
+       * and is what "the deck holds a card nothing in the collection backs" means: the row reads
+       * as *missing*, and that is what the deck→wishlist sweep is built on. `true` is the arm
+       * below — a free copy is moved into the deck's group, or one is recorded there.
+       *
+       * Every caller other than the panel leaves it absent, deliberately: a drop is a gesture
+       * about a card that is already somewhere, and a quick add is a typed name.
+       */
+      owned?: boolean;
     }) => {
       // Before anything is asked about the card: a write with no deck open is refused here and
       // not one round trip later.
@@ -484,9 +564,25 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
           : typeLine === undefined
             ? DEFAULT_CATEGORY_NAME
             : autoCategoryFor({ typeLine, oracleTags: await oracleTagsFor(cardId) });
+      // **The `live` fence, and it is not belt and braces.** `collection_to_deck` writes
+      // `variant = 'live'` unconditionally — a plan holds no cards, so there is no theory arm to
+      // write — which means an `owned` press made while the reader is looking at the Theory list
+      // would put the card on the *other* list, silently, on the one they are not reading.
+      if (owned && variant === "live") {
+        return addOwnedCopies({ deckId, cardId, categoryId, categoryName, finish, quantity });
+      }
       return ipc.deckAddCard(deckId, cardId, categoryId, categoryName, variant, finish, quantity);
     },
-    onSuccess: invalidate,
+    onSuccess: (_change, { owned }) => {
+      invalidate();
+      // **The collection's root as well, for the one arm that files a row somewhere else.** An
+      // `own` add takes a row out of the binder and puts it in a deck's group — a row leaving one
+      // folder and often merging into another and being deleted, which is exactly the shape
+      // {@link invalidateCollection} was written for. It over-fires on the two arms that fall
+      // back to the ordinary add (a theory list, a printing the database does not have), which
+      // costs one refetch answering what is already on screen and is the right way round.
+      if (owned === true) invalidateCollection();
+    },
     onError: invalidate,
   });
 
