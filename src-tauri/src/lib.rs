@@ -1,6 +1,7 @@
 pub mod card;
 pub mod card_row;
 pub mod collection;
+pub mod collection_folders;
 pub mod collection_source;
 pub mod db;
 pub mod deck;
@@ -322,6 +323,13 @@ pub fn run() {
             collection::collection_list,
             collection::collection_summary,
             collection::collection_import_commit,
+            collection_folders::collection_folder_list,
+            collection_folders::collection_folder_create,
+            collection_folders::collection_folder_rename,
+            collection_folders::collection_folder_move,
+            collection_folders::collection_folder_delete,
+            collection_folders::collection_set_folder,
+            collection_folders::collection_folder_summary,
             wishlist::wishlist_add,
             wishlist::wishlist_set_quantity,
             wishlist::wishlist_remove,

@@ -6,18 +6,24 @@
 //! beside the reads of that table. These name a *table*, they are reachable from exactly one
 //! screen, and the thing they have in common is not the data they touch but the question the
 //! UI has to ask before calling them. Filing `collection_clear` in `collection.rs` beside
-//! `remove_entry` would put a command that empties the collection next to the one that is
-//! documented as *the only way a collection row is ever deleted*, which is the sentence it
-//! contradicts.
+//! `remove_entry` would put a command that empties the *whole table* next to the deletes that
+//! each name **one row** — `remove_entry`, the unconditional one, and since schema v24 the two
+//! conditional ones beside it (`set_quantity`'s zero and `fold_entry`'s merge). None of the three
+//! can be asked to take anything it was not pointed at, which is the property these four do not
+//! have and the reason they are filed apart from them.
 //!
 //! ## The three destructive ones lean on cascades already declared
 //!
-//! `foreign_keys` is ON for every connection [`crate::db::open`] hands out, so the `DELETE`s
-//! here are one statement each and the schema does the rest. What each one takes with it is
-//! written at its own site, because *what a wipe takes with it is the whole of what the
-//! confirmation has to promise* — a reader who is told "your decks" and loses their folders
-//! was mis-sold, and the sentence in the webview is checked against these notes rather than
-//! against the DDL.
+//! `foreign_keys` is ON for every connection [`crate::db::open`] hands out, so the schema does
+//! most of the work. **It does not do the folders, and all three now say so**: a folder table
+//! hangs off its list by `ON DELETE SET NULL` — deliberately, so deleting one cabinet never
+//! throws away what was in it — which means a wipe that stopped at the rows would leave an
+//! empty filing cabinet standing. Each of the three takes a second `DELETE` for that, entries
+//! first, and each still answers the count of the *things* it emptied rather than the drawers.
+//! What each one takes with it is written at its own site, because *what a wipe takes with it
+//! is the whole of what the confirmation has to promise* — a reader who is told "your decks"
+//! and loses their folders was mis-sold, and the sentence in the webview is checked against
+//! these notes rather than against the DDL.
 //!
 //! **Nothing here is undoable and nothing here writes history.** `deck_audit` is per-deck and
 //! CASCADEs away with the decks it describes, so recording a wipe into it would be recording
@@ -146,11 +152,22 @@ fn sweep_dir(root: &Path, out: &mut Swept) {
     }
 }
 
-/// Empty the collection.
+/// Empty the collection, and the folders that filed it.
 ///
-/// One statement plus one count. The count is taken **first and inside the transaction**,
-/// because after the `DELETE` there is nothing left to count: the cascade has already run and
-/// `deck_allocations` is empty whether it held ten rows or none.
+/// The count is taken **first and inside the transaction**, because after the `DELETE` there is
+/// nothing left to count: the cascade has already run and `deck_allocations` is empty whether it
+/// held ten rows or none.
+///
+/// **Two statements, because the schema will not do it in one** — [`clear_wishlist`]'s situation
+/// one table over, and for the same reason. `collection_entries.folder_id` is `ON DELETE SET
+/// NULL` (schema v24), so deleting the cards leaves their folders standing and a wipe that
+/// stopped at the entries would hand the reader an empty filing cabinet they now have to take
+/// apart one drawer at a time. The order is entries first: `collection_folders.parent_id`
+/// CASCADEs onto itself, and clearing the folders first would be a second cascade running under
+/// the statement that matters.
+///
+/// **The number answered stays the count of *cards*** and never counts a folder, because that is
+/// what the Settings sentence promises: a folder is where a card was kept rather than a card.
 pub fn clear_collection(conn: &Connection) -> Result<CollectionCleared, String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     let allocations: i64 = tx
@@ -158,6 +175,8 @@ pub fn clear_collection(conn: &Connection) -> Result<CollectionCleared, String> 
         .map_err(|e| e.to_string())?;
     let entries = tx
         .execute("DELETE FROM collection_entries", [])
+        .map_err(|e| e.to_string())?;
+    tx.execute("DELETE FROM collection_folders", [])
         .map_err(|e| e.to_string())?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(CollectionCleared {
@@ -449,6 +468,50 @@ mod tests {
 
         assert_eq!(count(&conn, "decks"), 1);
         assert_eq!(count(&conn, "wishlist_entries"), 1);
+    }
+
+    /// The sibling the collection's folders needed, and `clear_wishlist`'s test one table over.
+    /// Emptying the collection takes the filing cabinet the cards were kept in, stops there, and
+    /// still answers the number of **cards**.
+    ///
+    /// `wishlist_folders` and `deck_folders` are the rows that make the last two assertions mean
+    /// something: three tables of the same shape under three names, so a `DELETE` written
+    /// against the wrong one — or a wipe that decided "folders" meant all of them — passes every
+    /// assertion about `collection_folders` alone.
+    ///
+    /// **The card is seeded *inside* the folder so the returned count is not a vacuous pass.**
+    /// With one card and no folder — which is what `seed` gives the tests above — `1` is the
+    /// answer whether the number counts entries or entries plus folders, so an edit to
+    /// `(entries + folders)` would keep every test green and tell a reader with one card in one
+    /// binder that it removed two cards.
+    #[test]
+    fn clearing_the_collection_takes_its_folders_and_leaves_the_other_cabinets_alone() {
+        let conn = db();
+        conn.execute_batch(
+            "INSERT INTO collection_folders
+                (id, parent_id, name, kind, deck_id, sort_order, created_at, updated_at)
+             VALUES (1, NULL, 'Binder', 'user', NULL, 0, 0, 0);
+             INSERT INTO collection_entries
+                (card_id, set_code, collector_number, lang, finish, condition, quantity,
+                 folder_id, created_at, updated_at)
+             VALUES ('a', 'lea', '1', 'en', 'nonfoil', 'NM', 4, 1, 0, 0);
+             INSERT INTO wishlist_folders (id, parent_id, name, sort_order, created_at, updated_at)
+             VALUES (1, NULL, 'Ordered', 0, 0, 0);
+             INSERT INTO deck_folders (id, parent_id, name, sort_order, created_at, updated_at)
+             VALUES (1, NULL, 'Standard', 0, 0, 0);",
+        )
+        .unwrap();
+
+        let out = clear_collection(&conn).unwrap();
+
+        assert_eq!(
+            out.entries, 1,
+            "the number is cards removed, and the folder is not one"
+        );
+        assert_eq!(count(&conn, "collection_entries"), 0);
+        assert_eq!(count(&conn, "collection_folders"), 0);
+        assert_eq!(count(&conn, "wishlist_folders"), 1);
+        assert_eq!(count(&conn, "deck_folders"), 1);
     }
 
     #[test]

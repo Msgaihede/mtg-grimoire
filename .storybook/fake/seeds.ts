@@ -46,6 +46,7 @@ import {
   oracleTagRows,
 } from "./db";
 import type {
+  FakeCollectionFolder,
   FakeDb,
   FakeDeck,
   FakeDeckAudit,
@@ -112,6 +113,10 @@ function entry(
     misprint: false,
     grading: null,
     conditionOriginal: null,
+    // At the root unless `over` files it — the root is where every copy starts, and `folderId`
+    // is the eleventh term of the storage grain, so the same printing filed in two places is two
+    // rows here rather than one that moved.
+    folderId: null,
     // The column's own `DEFAULT '[]'`. A tags string is never null.
     tags: "[]",
     notes: null,
@@ -351,6 +356,11 @@ function emptySeed(): FakeDb {
  * Counted: nonfoil 8, foil 3, etched 1; NM 8, LP 1, MP 1, HP 1, DMG 1; **20 copies across 12
  * entries**, which is why `collection_summary`'s `totalCards` and `entries` disagree in every
  * story built on this seed — as they must, since a row at zero is still a row.
+ *
+ * **Four of the twelve are filed into {@link starterCollectionFolders} and eight are at the
+ * root** (schema v24). Filing moves no copies and changes no total: `CollectionQuery.folderId`
+ * is absent by default and means *every* folder, so every count above is what it always was and
+ * every story that says nothing about folders sees the list it always saw.
  */
 function starterEntries(): FakeEntry[] {
   const next = ids();
@@ -362,7 +372,8 @@ function starterEntries(): FakeEntry[] {
       tags: '["burn","modern"]',
     }),
     // The whole acquisition story on one row — price, currency, date, source, and the
-    // condition the seller called it before it was normalised to `HP`.
+    // condition the seller called it before it was normalised to `HP`. Filed in `Binder`, so
+    // the fixture's most-detailed row is also the one a folder story opens on.
     entry(next(), printing("lea", "161"), "nonfoil", "HP", 1, {
       purchasePrice: 450,
       purchaseCurrency: "USD",
@@ -370,6 +381,7 @@ function starterEntries(): FakeEntry[] {
       acquisitionSource: "Card Kingdom",
       conditionOriginal: "Heavily Played",
       notes: "Corner wear along the top edge — the reason it was affordable.",
+      folderId: 1,
     }),
     // The etched finish and a non-English printing in one row: `sta 105` is the fixture's only
     // `lang: "ja"` card and one of two that offer `etched`. `lang` is copied off the card, so
@@ -382,8 +394,9 @@ function starterEntries(): FakeEntry[] {
     entry(next(), printing("c21", "263"), "nonfoil", "LP", 1),
     // `sld 913` is foil-only and **every key of its prices blob is null** (measured
     // 2026-08-09), so this row is the collection's `unpricedUsd` branch: a card you own,
-    // counted, worth nothing the app can quote.
-    entry(next(), printing("sld", "913"), "foil", "NM", 1),
+    // counted, worth nothing the app can quote. Filed in `Trade binder` with the proxy below,
+    // which is what makes that folder's `value` **null rather than 0** at TCGplayer.
+    entry(next(), printing("sld", "913"), "foil", "NM", 1, { folderId: 2 }),
     // The nonfoil Ragavan that does **not** fill the foil wish below — the wishlist's
     // finish-aware rule, staged as two rows rather than asserted in a comment.
     entry(next(), printing("mh2", "138"), "nonfoil", "DMG", 1, {
@@ -396,6 +409,7 @@ function starterEntries(): FakeEntry[] {
     // be a row `canonical_grading` can never produce, and the next edit would fork it.
     entry(next(), printing("mp2", "8"), "foil", "NM", 1, {
       grading: '{"company":"PSA","grade":"9","cert":"88104412"}',
+      folderId: 1,
     }),
     // **Quantity 0, and the row stays.** The condition, the note and the row's place in the
     // list all survive the day the user owns none of the card; deleting is `collection_remove`
@@ -410,7 +424,45 @@ function starterEntries(): FakeEntry[] {
     entry(next(), printing("lea", "232"), "nonfoil", "NM", 1, {
       proxy: true,
       notes: "Cube proxy. The real one is not happening.",
+      folderId: 2,
     }),
+  ];
+}
+
+/**
+ * Three collection folders (schema v24), each a shape the collection page has to be able to
+ * draw, and the same three shapes {@link starterWishFolders} carries one table over — because
+ * the page is a port of that one and the arithmetic it has to get right is the same.
+ *
+ * **`Binder` holds cards of its own *and* a sub-folder**, which is the only arrangement that
+ * makes a folder card's arithmetic visible: `collection_folder_summary` is direct per folder, so
+ * the tile has to add `Trade binder`'s numbers in on the way up. A folder that held only cards,
+ * or only sub-folders, would let a tile that summed nothing look right.
+ *
+ * **`Trade binder` is the nesting** — the breadcrumb's second rung, and somewhere for a drag to
+ * go that is not the root. Both rows in it are printings the app cannot price at TCGplayer, so
+ * its `value` is **null and not 0**, which is the one number on that tile with a rule of its own.
+ * At Cardmarket one of the two prices, so the em dash is a fact about the marketplace rather
+ * than about the folder — a story can switch and watch it fill in.
+ *
+ * **`Someday` is empty on purpose**, and it is the row that proves the most: an empty folder has
+ * no `collection_folder_summary` row *at all*, because that read groups the entries. So a page
+ * that built its tree from the summary rather than from `collection_folder_list` would draw two
+ * folders here and never notice, and the empty-folder sentence would be unreachable.
+ *
+ * **Every one is `kind: "user"`, and that is the whole cabinet in this build.** Nothing creates
+ * a `deck` folder or the `removed` one yet, so a story about the pinned section they belong to
+ * has to seed one by hand — which is the honest state rather than a gap, since the page must
+ * draw nothing at all where those folders are not.
+ *
+ * `sortOrder` is what `collection_folder_create` writes — `max + 1` **among siblings** — so the
+ * two at the root are 0 and 1 while the child starts at 0 again rather than continuing their run.
+ */
+function starterCollectionFolders(): FakeCollectionFolder[] {
+  return [
+    { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0 },
+    { id: 2, parentId: 1, name: "Trade binder", kind: "user", deckId: null, sortOrder: 0 },
+    { id: 3, parentId: null, name: "Someday", kind: "user", deckId: null, sortOrder: 1 },
   ];
 }
 
@@ -1104,6 +1156,7 @@ function starterSeed(): FakeDb {
     ...starterFeeds(CARDS),
     ...starterTaxonomy(CARDS),
     collectionEntries: starterEntries(),
+    collectionFolders: starterCollectionFolders(),
     wishlistEntries: starterWishes(),
     wishlistFolders: starterWishFolders(),
     decks,

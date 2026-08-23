@@ -219,9 +219,12 @@ const MAX_LIMIT: u32 = 500;
 /// Condition is deliberately *not* a term: a wishlist has nowhere to say "and in NM", so
 /// there is nothing to match against, and a played copy is still a copy of the card.
 ///
-/// `sum(quantity)`, so a collection row emptied to zero (which the collection keeps — see
-/// [`crate::collection::set_quantity`]) contributes nothing: this figure is copies held,
-/// not entries recorded, and a wish is satisfied by copies.
+/// `sum(quantity)`, so a collection row holding no copies contributes nothing: this figure is
+/// copies held, not entries recorded, and a wish is satisfied by copies. **Since schema v24 a
+/// row taken to zero is deleted rather than kept** ([`crate::collection::set_quantity`]), so the
+/// only zero row that can still reach this sum is one [`crate::collection::update_entry`] left —
+/// the edit form must not delete its own subject. The arithmetic is the same either way, which
+/// is why it is written as a statement about copies rather than about which rows exist.
 ///
 /// **It narrows by finish and never by condition.**
 ///

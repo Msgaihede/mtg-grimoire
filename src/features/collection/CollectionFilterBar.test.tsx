@@ -49,7 +49,13 @@ const collection = (over: Record<string, unknown> = {}) =>
     ...over,
   }) as unknown as Collection;
 
+/** `+ New folder`'s handler. The page owns the layer that opens, so what this bar promises is
+ *  only that the press reaches it — with the trigger element, which is how the page hands the
+ *  caret back when the layer closes. */
+const newFolder = vi.fn();
+
 beforeEach(() => {
+  newFolder.mockReset();
   // Both halves start equal, so the assertion below can tell which one the toggle wrote.
   useAppStore.setState({ collectionView: "table", searchView: "table" });
 });
@@ -67,7 +73,7 @@ describe("CollectionFilterBar", () => {
    */
   it("wires every control to the filter it is named for", async () => {
     const c = collection({ activeCount: 2 });
-    render(<CollectionFilterBar collection={c} />);
+    render(<CollectionFilterBar collection={c} onNewFolder={newFolder} />);
 
     // The box is controlled by a spy, so its value never moves off "" — one character is the
     // whole of what a keystroke can prove here.
@@ -115,19 +121,19 @@ describe("CollectionFilterBar", () => {
    * and also be the same chip that means it when pressed.
    */
   it("says which of the three needs-review states is on", () => {
-    const { rerender } = render(<CollectionFilterBar collection={collection()} />);
+    const { rerender } = render(<CollectionFilterBar collection={collection()} onNewFolder={newFolder} />);
     expect(screen.getByRole("button", { name: "Needs review" })).toHaveAttribute(
       "aria-pressed",
       "false",
     );
 
-    rerender(<CollectionFilterBar collection={collection({ needsReview: true })} />);
+    rerender(<CollectionFilterBar collection={collection({ needsReview: true })} onNewFolder={newFolder} />);
     expect(screen.getByRole("button", { name: "Needs review" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
 
-    rerender(<CollectionFilterBar collection={collection({ needsReview: false })} />);
+    rerender(<CollectionFilterBar collection={collection({ needsReview: false })} onNewFolder={newFolder} />);
     const complement = screen.getByRole("button", { name: "Not flagged" });
     expect(complement).toHaveAttribute("aria-pressed", "true");
   });
@@ -142,7 +148,7 @@ describe("CollectionFilterBar", () => {
    * this view has never asked for.
    */
   it("shows the X chip on, with no count and nothing greyed", () => {
-    render(<CollectionFilterBar collection={collection({ manaX: true })} />);
+    render(<CollectionFilterBar collection={collection({ manaX: true })} onNewFolder={newFolder} />);
 
     const chip = screen.getByRole("button", { name: "Cards with X in their mana cost" });
     expect(chip).toHaveTextContent("X");
@@ -172,7 +178,7 @@ describe("CollectionFilterBar", () => {
    * sorted-in version would land between Modern and Pauper, where nobody would look for it.
    */
   it("offers the formats alphabetically, under a pinned Any format", () => {
-    render(<CollectionFilterBar collection={collection()} />);
+    render(<CollectionFilterBar collection={collection()} onNewFolder={newFolder} />);
 
     expect(optionsOf("Format")).toEqual([
       "Any format",
@@ -197,12 +203,12 @@ describe("CollectionFilterBar", () => {
    * this select has no option for, which is what the second render is.
    */
   it("offers the sort orders alphabetically, under a pinned Custom…", () => {
-    const { rerender } = render(<CollectionFilterBar collection={collection()} />);
+    const { rerender } = render(<CollectionFilterBar collection={collection()} onNewFolder={newFolder} />);
 
     const orders = ["Highest price", "Most copies", "Name", "Recently added", "Set and number"];
     expect(optionsOf("Sort")).toEqual(orders);
 
-    rerender(<CollectionFilterBar collection={collection({ sortSelection: "" })} />);
+    rerender(<CollectionFilterBar collection={collection({ sortSelection: "" })} onNewFolder={newFolder} />);
 
     expect(optionsOf("Sort")).toEqual(["Custom…", ...orders]);
     // Still the unpickable placeholder it was before the sort moved it: a native `<option>`
@@ -216,7 +222,7 @@ describe("CollectionFilterBar", () => {
    *  arrived on the first press would take its width out of the `flex-1` search box above and
    *  slide the row that is being pressed. */
   it("draws Reset all greyed until something is filtered", () => {
-    render(<CollectionFilterBar collection={collection()} />);
+    render(<CollectionFilterBar collection={collection()} onNewFolder={newFolder} />);
 
     expect(screen.getByRole("button", { name: /^Reset all/ })).toHaveAttribute(
       "aria-disabled",
@@ -230,7 +236,7 @@ describe("CollectionFilterBar", () => {
    * `role="group"` would go unnoticed by a test that only looked for one of them.
    */
   it("draws the finish and condition chip groups", () => {
-    render(<CollectionFilterBar collection={collection()} />);
+    render(<CollectionFilterBar collection={collection()} onNewFolder={newFolder} />);
 
     expect(screen.getByRole("group", { name: "Condition" })).toBeInTheDocument();
     expect(screen.getByRole("group", { name: "Finish" })).toBeInTheDocument();

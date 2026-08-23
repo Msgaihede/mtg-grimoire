@@ -164,6 +164,22 @@ export function useCollection() {
   // Empty is name order — the view's own default, which is what a cleared sort falls back
   // to. Not a filter, so `resetAll` leaves it alone.
   const [sort, setSort] = useState<SortSpec<CollectionSortKey>>([]);
+  /**
+   * Which folder the reader is standing in — `null` is the whole collection.
+   *
+   * **`null` is every folder here, where on the wishlist it is the wishes filed nowhere**, and
+   * the difference is the backend's rather than this hook's: `CollectionQuery.folder_id` is
+   * `None = every folder` (spec §8.4), chosen so that every existing caller — the export sweep,
+   * the deck panel, the importer's preview — keeps asking the question it always asked. So this
+   * view still opens on the reader's whole binder, and the root of the cabinet *is* the flat
+   * list. That is also why there is no Flatten chip beside the folder cards: the wishlist needs
+   * one because its own `null` narrows, and this one has nothing left for a second field to say.
+   *
+   * Deliberately outside `CollectionFilterState`: it is navigation, not something the reader
+   * narrowed, so `activeFilterCount` never sees it and `resetAll` leaves it alone — the same
+   * reason `sort` is outside.
+   */
+  const [folderId, setFolderId] = useState<number | null>(null);
   const [debouncedText, setDebouncedText] = useState("");
 
   useEffect(() => {
@@ -210,6 +226,17 @@ export function useCollection() {
     // the list and the header both carry, so it belongs on the shared object and in the key
     // both queries are built from.
     marketplace: marketplace.id,
+    // Sent only when the reader is actually inside a folder — an absent `folder_id` is "every
+    // folder" on the other end, which is exactly what the root of this cabinet means. Dropped
+    // rather than spelled as `null` for the rule `text` already follows: a value the backend
+    // would infer anyway is not put on the wire.
+    //
+    // It rides on `filters` rather than beside it because `useExportScope`'s sweep reads this
+    // object: standing in a folder and pressing Export exports that drawer, and `everythingFilters`
+    // strips this field along with the rest to widen the sweep back out. On this surface that
+    // strip is sufficient — unlike the wishlist's, where an absent `folderId` narrows to the root
+    // and "everything" has to be said a second way.
+    folderId: folderId ?? undefined,
   };
 
   /**
@@ -242,6 +269,14 @@ export function useCollection() {
     // sets, so a key that spelled both `""` would serve the complement from the other's cache.
     needsReview === undefined ? "" : needsReview ? "review" : "clear",
     marketplace.id,
+    // Two folders are two lists, and the whole binder is a third: each keeps its own cached
+    // pages and its own scroll position (`queryKeyString` below is what resets it), rather than
+    // one list quietly showing another drawer's page while the new one is still in flight.
+    //
+    // In `filterKey` rather than beside the sort, because it is a statement about *which rows* —
+    // so the header's aggregates are re-run for the level on screen, which is the whole point of
+    // a header that describes what is under it.
+    folderId === null ? "all" : String(folderId),
   ];
 
   // `["collection", …]` on both, so the one `invalidateQueries({ queryKey: ["collection"] })`
@@ -309,6 +344,16 @@ export function useCollection() {
     /** The banner's "Show them", which has a destination rather than a next state — it is
      *  offering the flagged rows, not cycling the chip the reader has not touched. */
     setNeedsReview,
+    /**
+     * Which folder the reader is standing in. `null` is the whole collection — every folder,
+     * which is the view this page opens on and the only thing an absent `folder_id` can mean on
+     * the wire.
+     */
+    folderId,
+    /** Open a folder, or `null` for the whole collection. This hook only tracks where the reader
+     *  now is; it does not create, rename, move or delete a folder — those live on the page,
+     *  beside the folder cards. */
+    openFolder: setFolderId,
     /** The columns this list is ordered by, first one deciding. Empty is name order. */
     sort,
     /** One press on a column header. `additive` is Shift being held. */
@@ -348,7 +393,9 @@ export function useCollection() {
       needsReview,
     }),
     /** Clear every filter at once, including the search box. The sort is not a filter and
-     *  stays: it is how the reader reads, not what they are looking at. */
+     *  stays: it is how the reader reads, not what they are looking at. `folderId` stays for the
+     *  same reason — it is *where* they are, and a Reset all that marched them back out of the
+     *  drawer they had opened would be navigating on their behalf. */
     resetAll: () => {
       setText("");
       setFormat("");

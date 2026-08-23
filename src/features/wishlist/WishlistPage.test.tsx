@@ -1089,6 +1089,9 @@ describe("the card menu", () => {
         finish: "foil",
         condition: "NM",
         quantity: 1,
+        // The root, because this reader has no collection folders — which is also why
+        // `Collection` above is a plain action rather than the folder submenu (v24).
+        folderId: null,
       }),
     );
   });

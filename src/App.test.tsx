@@ -330,6 +330,9 @@ const M10: Printing = {
 const BOLT_ENTRY: CollectionRow = {
   promoTypes: null,
   legalities: null,
+  // At the root, which is where a copy nobody has filed lives (schema v24).
+  folderId: null,
+  folderName: null,
   id: 7,
   cardId: "c1",
   name: "Lightning Bolt",

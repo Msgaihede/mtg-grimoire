@@ -1,6 +1,6 @@
 import { useEffect, useRef } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, userEvent, within } from "storybook/test";
+import { expect, fn, userEvent, within } from "storybook/test";
 import { CollectionFilterBar } from "./CollectionFilterBar";
 import { useCollection, type Collection } from "./useCollection";
 
@@ -55,7 +55,10 @@ function CollectionFilters({
   });
   return (
     <div className={width}>
-      <CollectionFilterBar collection={collection} />
+      {/* `+ New folder` opens a layer the *page* owns and this workbench does not hold, so the
+          press is reported rather than acted on — the same trade every other write-shaped prop in
+          this file makes. */}
+      <CollectionFilterBar collection={collection} onNewFolder={fn()} />
     </div>
   );
 }

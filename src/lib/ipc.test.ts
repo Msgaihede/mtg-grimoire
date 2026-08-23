@@ -1188,3 +1188,93 @@ describe("the Settings clears name the commands `reset.rs` registers", () => {
     expect(invoke).toHaveBeenCalledWith(command);
   });
 });
+
+/**
+ * The collection's seven folder commands.
+ *
+ * **Every one of them is a name and a set of argument spellings that nothing type-checks.**
+ * `invoke` matches by name against the Rust parameter list, and `collection_folders.rs` renames
+ * to camelCase — so a wrapper reaching for a plausible `collection_folder_set` or spelling
+ * `parent_id` is a runtime rejection, or worse a bound `None` that files at the root, with no
+ * type error anywhere. The seven names below are the seven entries in `lib.rs`'s
+ * `generate_handler!`, and the `null`s are load-bearing: `null` is how a folder is made at the
+ * top level, moved back out of one, and how a card is filed back at the root of the collection.
+ */
+describe("the collection folder wrappers name the commands `collection_folders.rs` registers", () => {
+  it("asks for the folder list with no arguments at all", async () => {
+    invoke.mockResolvedValue([]);
+
+    await ipc.collectionFolderList();
+
+    // No card id scopes it: a folder belongs to no card, the way a directory belongs to no file.
+    expect(invoke).toHaveBeenCalledWith("collection_folder_list");
+  });
+
+  it("spells the four folder writes the way their commands declare them", async () => {
+    invoke.mockResolvedValue({ id: 2, parentId: null, name: "Binder", kind: "user", deckId: null });
+
+    await ipc.collectionFolderCreate(null, "Binder");
+    expect(invoke).toHaveBeenCalledWith("collection_folder_create", {
+      parentId: null,
+      name: "Binder",
+    });
+
+    await ipc.collectionFolderCreate(2, "Rares");
+    expect(invoke).toHaveBeenCalledWith("collection_folder_create", { parentId: 2, name: "Rares" });
+
+    await ipc.collectionFolderRename(2, "Trade binder");
+    expect(invoke).toHaveBeenCalledWith("collection_folder_rename", { id: 2, name: "Trade binder" });
+
+    // `null` is the root and is a destination rather than an omission — the way back out.
+    await ipc.collectionFolderMove(3, null);
+    expect(invoke).toHaveBeenCalledWith("collection_folder_move", { id: 3, parentId: null });
+
+    invoke.mockResolvedValue(undefined);
+    await ipc.collectionFolderDelete(3);
+    expect(invoke).toHaveBeenCalledWith("collection_folder_delete", { id: 3 });
+  });
+
+  /**
+   * The one write that is about a **card** rather than a folder, and the one whose name breaks
+   * the family's pattern: `collection_set_folder`, not `collection_folder_set`.
+   */
+  it("moves an owned row with `collection_set_folder`, and `null` is the root", async () => {
+    invoke.mockResolvedValue({ id: 7, quantity: 3, removed: false });
+
+    await ipc.collectionSetFolder(7, 4);
+    expect(invoke).toHaveBeenCalledWith("collection_set_folder", { id: 7, folderId: 4 });
+
+    // Not an omission: the root of the collection is where every unfiled copy is, and this is
+    // the only way back to it.
+    await ipc.collectionSetFolder(7, null);
+    expect(invoke).toHaveBeenCalledWith("collection_set_folder", { id: 7, folderId: null });
+  });
+
+  it("prices the folder summary at the marketplace it is given", async () => {
+    invoke.mockResolvedValue([{ folderId: 4, cards: 12, value: null }]);
+
+    const rows = await ipc.collectionFolderSummary("cardkingdom");
+
+    expect(invoke).toHaveBeenCalledWith("collection_folder_summary", {
+      marketplace: "cardkingdom",
+    });
+    // `null`, never `0`: a folder of cards the feed has never listed is unpriced rather than
+    // worthless, and the tile draws an em dash for it.
+    expect(rows[0].value).toBeNull();
+  });
+
+  /**
+   * The folder an **add** files into, which is a field on `EntryInput` rather than a command of
+   * its own — because `folder_id` is part of the collection's storage grain, so adding the same
+   * printing to two folders is two rows.
+   */
+  it("carries the add's destination folder on the entry", async () => {
+    invoke.mockResolvedValue({ id: 1, quantity: 1, removed: false });
+
+    await ipc.collectionAdd({ cardId: "bolt", finish: "nonfoil", quantity: 1, folderId: 4 });
+
+    expect(invoke).toHaveBeenCalledWith("collection_add", {
+      entry: { cardId: "bolt", finish: "nonfoil", quantity: 1, folderId: 4 },
+    });
+  });
+});

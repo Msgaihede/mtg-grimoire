@@ -31,6 +31,7 @@ import type {
   CategoryKind,
   CollectionImportItem,
   CollectionPage,
+  CollectionQuery,
   CollectionSortKey,
   DeckDetail,
   DeckVariant,
@@ -91,6 +92,9 @@ function entry(over: Partial<FakeEntry> = {}): FakeEntry {
     misprint: false,
     grading: null,
     conditionOriginal: null,
+    // The root, unless `over` files it. The eleventh term of the storage grain, so a test that
+    // wants two rows of one printing can make them with this alone.
+    folderId: null,
     tags: "[]",
     notes: null,
     needsReview: null,
@@ -2042,21 +2046,75 @@ describe("the tables that are not tables", () => {
 /** The two Lightning Bolt printings the swap tests pair off. */
 const [BOLT_A, BOLT_B] = CARDS.filter((c) => c.oracleId === BOLT.oracleId);
 
-describe("zero is not one thing", () => {
-  it("keeps the collection row and says removed: false", () => {
+/**
+ * **Zero used to mean three different things and now means one**, which is the reversal schema
+ * v24 landed and the reason this block was rewritten rather than deleted.
+ *
+ * The collection was the outlier: a stepper taken to zero *kept* the row, on the argument that
+ * the row still held a condition, a purchase price and an acquisition story worth preserving. It
+ * deletes now, siding with the wishlist and the deck — a collection is what somebody *has*, a row
+ * saying the reader has none of a printing says nothing, and every list, count and total in the
+ * app carried a special case to describe it. What survives of the old asymmetry is exactly one
+ * place: an **edit form** applies a zero like any other value and keeps the row, because nothing
+ * typed into a number field beside seven others should delete the row being edited.
+ */
+describe("zero, and the one place it still keeps a row", () => {
+  it("removes the collection row and says removed: true", () => {
     const db = makeDb({ collectionEntries: [entry({ id: 1, cardId: BOLT.id, quantity: 3 })] });
     const change = writeHandlers(db).collection_set_quantity({ id: 1, quantity: 0 });
-    expect(change).toMatchObject({ quantity: 0, removed: false });
-    expect(db.collectionEntries).toHaveLength(1);
+    expect(change).toMatchObject({ quantity: 0, removed: true });
+    expect(db.collectionEntries).toHaveLength(0);
+    // Still not `collection_remove`, which is the **unconditional** delete: an adjustment to a
+    // row that is not there could not do what it was asked, so a second press is a refusal
+    // rather than a second success.
+    expect(() => writeHandlers(db).collection_set_quantity({ id: 1, quantity: 0 })).toThrow(
+      /not there any more/,
+    );
   });
 
-  it("keeps the condition, the price paid and the tags on the row it emptied", () => {
+  /**
+   * **What the reversal costs, written down rather than left to be discovered.**
+   *
+   * This test asserted the opposite until schema v24 — the emptied row survived with its
+   * condition, its purchase price and its tags — and that preservation *was* the argument for
+   * the old rule. The rule was reversed anyway, so the cost is real and this is where it is
+   * recorded: a zero takes the row's `condition` and `conditionOriginal`, the purchase price and
+   * currency, `acquiredAt`, the acquisition source, the notes and the tags with it. A reader who
+   * trades a playset away and buys it back next year retypes every one of them.
+   *
+   * Asserted as the whole array rather than field by field, because the claim is that *nothing*
+   * is left — a `toMatchObject` against a row that is gone would fail for the right reason by
+   * accident, and one against `[0]` would throw rather than assert.
+   */
+  it("takes the condition, the price paid, the provenance and the tags with it", () => {
+    const db = makeDb({
+      collectionEntries: [
+        entry({
+          id: 1,
+          quantity: 3,
+          condition: "LP",
+          conditionOriginal: "lightly played",
+          purchasePrice: 12,
+          purchaseCurrency: "USD",
+          acquiredAt: "2024-01-05",
+          acquisitionSource: "the LGS",
+          notes: "the good one",
+          tags: '["cube"]',
+        }),
+      ],
+    });
+    writeHandlers(db).collection_set_quantity({ id: 1, quantity: 0 });
+    expect(db.collectionEntries).toEqual([]);
+  });
+
+  it("keeps the row an edit form takes to zero, with all of that still on it", () => {
     const db = makeDb({
       collectionEntries: [
         entry({ id: 1, quantity: 3, condition: "LP", purchasePrice: 12, tags: '["cube"]' }),
       ],
     });
-    writeHandlers(db).collection_set_quantity({ id: 1, quantity: 0 });
+    const change = writeHandlers(db).collection_update({ id: 1, patch: { quantity: 0 } });
+    expect(change).toMatchObject({ quantity: 0, removed: false });
     expect(db.collectionEntries[0]).toMatchObject({
       condition: "LP",
       purchasePrice: 12,
@@ -2073,7 +2131,7 @@ describe("zero is not one thing", () => {
     expect(db.wishlistEntries).toHaveLength(0);
   });
 
-  it("removes the deck row, siding with the wishlist", () => {
+  it("removes the deck row, which all three tables now agree on", () => {
     const db = makeDeckDb({
       decks: [deck({ id: 1 })],
       deckCards: [
@@ -2147,6 +2205,77 @@ describe("the collection grain", () => {
     expect(db.collectionEntries).toHaveLength(5);
   });
 
+  /**
+   * **Adding into a folder is an *add*, and the eleventh grain term is what makes it one.**
+   *
+   * `folderId` was hard-coded to the root in this fake for as long as `EntryInput` had no such
+   * field, so every "Add to → Collection → <binder>" landed unfiled, folded into whatever was
+   * already at the root and reported success. Nothing threw and nothing logged — the fake being
+   * *kinder* than the app about the one press this whole cabinet exists for, which is the
+   * direction of drift that lets a story document a state the reader can never reach.
+   *
+   * Two rows for one printing at one finish, condition and language is the whole assertion; the
+   * second half is that a *second* add into the same folder still folds, so the term narrows the
+   * grain rather than disabling the fold.
+   */
+  it("makes the same printing filed in a folder a second row, and still folds inside it", () => {
+    const db = makeDb();
+    const w = writeHandlers(db);
+    const binder = w.collection_folder_create({ parentId: null, name: "Binder" });
+
+    const atRoot = w.collection_add(add({ quantity: 2 }));
+    const filed = w.collection_add(add({ quantity: 3, folderId: binder.id }));
+
+    expect(filed.id).not.toBe(atRoot.id);
+    // The column is written rather than defaulted to the root, and none of the root's copies
+    // came with it.
+    expect(db.collectionEntries.map((e) => [e.id, e.folderId, e.quantity])).toEqual([
+      [atRoot.id, null, 2],
+      [filed.id, binder.id, 3],
+    ]);
+
+    // The same press again is "one more of these", which is what the fold is for.
+    expect(w.collection_add(add({ quantity: 1, folderId: binder.id }))).toMatchObject({
+      id: filed.id,
+      quantity: 4,
+    });
+    expect(db.collectionEntries).toHaveLength(2);
+
+    // A folder that is not there is a sentence rather than a foreign-key failure, and the
+    // refused add writes nothing.
+    expect(() => w.collection_add(add({ folderId: 404 }))).toThrow(/not there any more/);
+    expect(db.collectionEntries).toHaveLength(2);
+  });
+
+  /**
+   * **The add is fenced on the folder's *kind* as well as on its existence**, which this fake was
+   * missing for a day. `collection::folder_named` answers `FOLDER_NOT_YOURS` for a `deck` folder
+   * or `Recently removed`, in `collection_folders`' own wording and exactly as
+   * `collection_set_folder` does — so an `Add to → Collection → <a deck's group>` succeeded here
+   * and was refused in the window, which is the direction of drift a fake must never take.
+   *
+   * The menu offers `kind === "user"` and nothing else and no build creates a `deck` folder yet,
+   * so the fixture seeds one by hand: that is the only way to exercise the branch at all, and
+   * saying so is better than a test that passes because the state is unreachable.
+   */
+  it("refuses an add into a folder the app owns, and still takes the reader's own", () => {
+    const db = makeDb({
+      collectionFolders: [
+        { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0 },
+        { id: 2, parentId: null, name: "Burn", kind: "deck", deckId: 7, sortOrder: 1 },
+      ],
+    });
+    const w = writeHandlers(db);
+
+    expect(() => w.collection_add(add({ folderId: 2 }))).toThrow(/the app's own/);
+    expect(db.collectionEntries).toHaveLength(0);
+
+    // And the reader's own drawer is untouched by the fence — the two halves are one question
+    // asked in one order, gone before not-yours.
+    expect(w.collection_add(add({ quantity: 1, folderId: 1 }))).toMatchObject({ quantity: 1 });
+    expect(db.collectionEntries).toHaveLength(1);
+  });
+
   it("is one row for one slab however its JSON was spelled", () => {
     const db = makeDb();
     const w = writeHandlers(db);
@@ -2203,23 +2332,56 @@ describe("the collection grain", () => {
     expect(db.collectionEntries).toHaveLength(0);
   });
 
-  it("tells an edit that lands on an occupied grain what to do instead", () => {
+  /**
+   * **An edit that lands on a grain the collection already holds folds into it.**
+   *
+   * This asserted a refusal until schema v24 — "You already have an entry for that printing at
+   * that finish and condition — change its quantity instead" — which named the way out and then
+   * left the reader to walk it. It was already the odd one out: `collection_set_folder` merges
+   * when a card is filed into a folder that holds its printing, and the wishlist's two grain
+   * writes have merged since v23. An edit is the same fact from the third side — the reader has
+   * said these two rows are one row — so it is answered the same way, and the sentence is deleted
+   * rather than left standing beside a state nothing can reach.
+   *
+   * **The answer names a row the caller did not pass in**, which is the half a table has to
+   * follow: the row the reader was editing is gone. The patch carries a non-grain field as well,
+   * so this also pins the ordering — the crate applies the patch's non-grain half to the source
+   * *before* the fold, which is why the quantity that folds is the one the reader typed rather
+   * than the one the row had, and why the note survives the row it was typed onto.
+   */
+  it("folds an edit that lands on an occupied grain into the row already there", () => {
     const db = makeDb();
     const w = writeHandlers(db);
     const nonfoil = w.collection_add(add());
-    w.collection_add(add({ finish: "foil" }));
-    expect(() => w.collection_update({ id: nonfoil.id, patch: { finish: "foil" } })).toThrow(
-      /change its quantity instead/,
-    );
-    expect(db.collectionEntries[0].finish).toBe("nonfoil");
+    const foil = w.collection_add(add({ finish: "foil" }));
+
+    const change = w.collection_update({
+      id: nonfoil.id,
+      patch: { finish: "foil", quantity: 4, notes: "the good one" },
+    });
+
+    expect(change.id).toBe(foil.id);
+    expect(change).toMatchObject({ quantity: 5, removed: false });
+    expect(db.collectionEntries).toHaveLength(1);
+    // The survivor had no note of its own, so it takes the folded row's — `foldEntry`'s
+    // coalesce, and the proof that the non-grain half landed before the source went.
+    expect(db.collectionEntries[0]).toMatchObject({ id: foil.id, notes: "the good one" });
   });
 
-  it("removes only through collection_remove", () => {
+  it("has three doors out now, and only collection_remove is unconditional", () => {
     const db = makeDb({ collectionEntries: [entry({ id: 1, quantity: 0 })] });
     expect(writeHandlers(db).collection_remove({ id: 1 })).toMatchObject({ removed: true });
     expect(db.collectionEntries).toHaveLength(0);
-    // A stale id is a success: the caller wanted that row gone, and it is gone.
+    // A stale id is a success here and a refusal at the other two: a delete that finds nothing
+    // already has what it wanted, where an adjustment to a row that is not there could not do
+    // what it was asked.
     expect(writeHandlers(db).collection_remove({ id: 1 }).removed).toBe(true);
+    expect(() => writeHandlers(db).collection_set_quantity({ id: 1, quantity: 0 })).toThrow(
+      /not there any more/,
+    );
+    expect(() => writeHandlers(db).collection_update({ id: 1, patch: { quantity: 1 } })).toThrow(
+      /not there any more/,
+    );
   });
 });
 
@@ -2702,6 +2864,337 @@ describe("the wishlist's folders", () => {
   });
 });
 
+/**
+ * The binder's own filing cabinet (schema v24), and the **refusals** earn this block the way
+ * the wishlist's do — with one more of them, because a collection folder can belong to the app.
+ *
+ * A fake that let a story file a card into a deck's folder by hand would draw an affordance the
+ * window refuses, which is worse than no story: it is a claim about the app made in the app's
+ * own drawing.
+ */
+describe("the collection's folders", () => {
+  /** A binder with `Trade binder` inside it, and nothing filed yet. Every folder is the
+   *  reader's; a test that wants one of the app's says so. */
+  function filed(over: Partial<FakeDb> = {}): FakeDb {
+    return makeDb({
+      collectionFolders: [
+        { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0 },
+        { id: 2, parentId: 1, name: "Trade binder", kind: "user", deckId: null, sortOrder: 0 },
+      ],
+      ...over,
+    });
+  }
+
+  it("files a new folder among its siblings, always as the reader's own", () => {
+    const db = filed();
+    const w = writeHandlers(db);
+    const inner = w.collection_folder_create({ parentId: 1, name: "  Paid for  " });
+    // Trimmed, `max + 1` **among siblings**, and `user` **written** rather than left to the
+    // column's default — a default is a decision nobody can see at the call site.
+    expect(inner).toMatchObject({ parentId: 1, name: "Paid for", sortOrder: 1, kind: "user" });
+    expect(inner.deckId).toBeNull();
+    expect(w.collection_folder_create({ parentId: null, name: "Someday" }).sortOrder).toBe(1);
+
+    expect(() => w.collection_folder_create({ parentId: null, name: "   " })).toThrow(
+      /A folder needs a name\./,
+    );
+    expect(() => w.collection_folder_rename({ id: 1, name: " " })).toThrow(/A folder needs a name/);
+    expect(db.collectionFolders.find((f) => f.id === 1)!.name).toBe("Binder");
+  });
+
+  /**
+   * The fence this cabinet has and the other two do not, on **every** write that names a folder.
+   *
+   * `deck` and `removed` folders say something the app is responsible for — that a deck holds
+   * these copies, that these have left the collection — and a reader renaming or filing into one
+   * would be asserting it without any of the writes that make it true. Nothing in this build
+   * *creates* one, which is exactly why the fence is written before there is anything to fence:
+   * a fence added after the thing it guards is one somebody has to remember to add.
+   *
+   * `collection_folder_delete` is the odd one out and is here for it: an id that is not there is
+   * a **success**, so its two halves come apart — only a folder that exists *and* is the app's is
+   * refused.
+   */
+  it("refuses every write against a folder the app owns, and only those", () => {
+    const db = filed({
+      collectionFolders: [
+        { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0 },
+        { id: 2, parentId: null, name: "Burn", kind: "deck", deckId: 7, sortOrder: 1 },
+        { id: 3, parentId: null, name: "Recently removed", kind: "removed", deckId: null,
+          sortOrder: 2 },
+      ],
+      collectionEntries: [entry({ id: 1, quantity: 1 })],
+    });
+    const w = writeHandlers(db);
+    const notYours = /is the app's own/;
+    expect(() => w.collection_folder_rename({ id: 2, name: "Mine now" })).toThrow(notYours);
+    expect(() => w.collection_folder_move({ id: 3, parentId: 1 })).toThrow(notYours);
+    expect(() => w.collection_folder_move({ id: 1, parentId: 2 })).toThrow(notYours);
+    expect(() => w.collection_folder_create({ parentId: 3, name: "Inside" })).toThrow(notYours);
+    expect(() => w.collection_folder_delete({ id: 2 })).toThrow(notYours);
+    // Filing into one by hand is the refusal the reader is most likely to meet, since a picker
+    // is what would offer it.
+    expect(() => w.collection_set_folder({ id: 1, folderId: 2 })).toThrow(notYours);
+    expect(db.collectionEntries[0].folderId).toBeNull();
+    // Nothing about the fence stops the reader's own folders working.
+    expect(w.collection_set_folder({ id: 1, folderId: 1 }).id).toBe(1);
+  });
+
+  it("answers every folder flat, in `sortOrder, id`, and hides none of them by kind", () => {
+    const db = makeDb({
+      collectionFolders: [
+        { id: 3, parentId: null, name: "Someday", kind: "user", deckId: null, sortOrder: 0 },
+        { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0 },
+        { id: 2, parentId: null, name: "Burn", kind: "deck", deckId: 7, sortOrder: 1 },
+      ],
+    });
+    // The reader's own arrangement, `sortOptions`' "they arranged it themselves" exemption — so
+    // insertion order would look entirely plausible and be wrong. The `deck` folder is in the
+    // answer: a page that could not see it would draw a tree the collection does not have.
+    expect(readHandlers(db).collection_folder_list().map((f) => f.id)).toEqual([1, 3, 2]);
+    expect(readHandlers(db).collection_folder_list()[2]).toMatchObject({
+      kind: "deck",
+      deckId: 7,
+    });
+  });
+
+  it("refuses a cycle, a move into itself, a parent that is gone, and a loop it did not write", () => {
+    const db = filed();
+    const w = writeHandlers(db);
+    expect(() => w.collection_folder_move({ id: 1, parentId: 2 })).toThrow(/inside itself/);
+    expect(() => w.collection_folder_move({ id: 1, parentId: 1 })).toThrow(/inside itself/);
+    expect(db.collectionFolders.find((f) => f.id === 1)!.parentId).toBeNull();
+    // The destination, which the cycle walk cannot check for it: `collectionFolderById(...)
+    // ?.parentId ?? null` reads an id no folder has as "already at the root" and ends the climb
+    // on the first hop.
+    expect(() => w.collection_folder_move({ id: 2, parentId: 404 })).toThrow(/not there any more/);
+    expect(db.collectionFolders.find((f) => f.id === 2)!.parentId).toBe(1);
+
+    // A loop written straight into the store, between two folders neither of which is the one
+    // being moved — so the `cursor === id` arm never fires and only the hop budget ends the
+    // climb. A fake with no budget hangs the tab here rather than failing.
+    db.collectionFolders[0].parentId = 2;
+    const moving = w.collection_folder_create({ parentId: null, name: "Someday" });
+    expect(() => w.collection_folder_move({ id: moving.id, parentId: 1 })).toThrow(/inside itself/);
+  });
+
+  it("takes the sub-folders and leaves the cards standing at the root", () => {
+    const db = filed({
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT.id, folderId: 1 }),
+        entry({ id: 2, cardId: BOLT_2X2.id, folderId: 2 }),
+      ],
+    });
+    writeHandlers(db).collection_folder_delete({ id: 1 });
+    expect(db.collectionFolders).toHaveLength(0);
+    // The two cascades pointing opposite ways: the cabinet and its drawer are gone, and both
+    // cards are still owned. A folder is where a card was kept; the card is the reader's.
+    expect(db.collectionEntries.map((e) => e.folderId)).toEqual([null, null]);
+    // An id that resolves to nothing is a success.
+    expect(() => writeHandlers(db).collection_folder_delete({ id: 404 })).not.toThrow();
+  });
+
+  /**
+   * The delete **merges**, and the two shapes that make it have to.
+   *
+   * Un-filing a sub-tree rewrites the eleventh term of `collectionGrain` on every row in it, so a
+   * press can land twice on one grain. Both shapes are reachable in the shipped app:
+   *
+   * - a filed row and an **unfiled** row for the same printing, which is what every writer that
+   *   cannot name a folder produces — a quick add from the search, an import, a deck sweep;
+   * - two rows in **sibling sub-folders**, colliding with each other with no root row in play.
+   *
+   * A bare loop over the rows produces both while the app answers `UNIQUE constraint failed:
+   * index 'idx_collection_grain'` and deletes nothing — the fake kinder than the app, which is
+   * the drift that lets a story document a state the reader cannot reach.
+   */
+  it("merges the rows it un-files, onto the root row and onto each other", () => {
+    const db = makeDb({
+      collectionFolders: [
+        { id: 1, parentId: null, name: "Top", kind: "user", deckId: null, sortOrder: 0 },
+        { id: 2, parentId: 1, name: "A", kind: "user", deckId: null, sortOrder: 0 },
+        { id: 3, parentId: 1, name: "B", kind: "user", deckId: null, sortOrder: 1 },
+      ],
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT.id, quantity: 1, folderId: null }),
+        entry({ id: 2, cardId: BOLT.id, quantity: 2, folderId: 2, notes: "traded for" }),
+        entry({ id: 3, cardId: BOLT.id, quantity: 5, folderId: 3 }),
+        // A printing only one of them holds, so the merge is shown to be about the grain rather
+        // than about "everything in a deleted folder becomes one row".
+        entry({ id: 4, cardId: BOLT_2X2.id, quantity: 1, folderId: 3 }),
+      ],
+    });
+    writeHandlers(db).collection_folder_delete({ id: 1 });
+    expect(db.collectionFolders).toHaveLength(0);
+    // Lowest id first, so the row that survives is a fact about the store and not about
+    // iteration order — the crate collects its sub-tree with `ORDER BY e.id` for the same reason.
+    // The survivor had no note and takes the folded row's: a fold that dropped it would be a
+    // receipt destroyed to resolve a filing decision.
+    expect(db.collectionEntries).toEqual([
+      expect.objectContaining({ id: 1, folderId: null, quantity: 8, notes: "traded for" }),
+      expect.objectContaining({ id: 4, folderId: null, quantity: 1 }),
+    ]);
+  });
+
+  it("moves a row to a folder and back to the root, and refuses a folder that is gone", () => {
+    const db = filed({ collectionEntries: [entry({ id: 1, quantity: 2 })] });
+    const w = writeHandlers(db);
+    expect(w.collection_set_folder({ id: 1, folderId: 2 })).toEqual({
+      id: 1,
+      quantity: 2,
+      removed: false,
+    });
+    // `null` is the root of the collection, a real destination rather than an omission.
+    w.collection_set_folder({ id: 1, folderId: null });
+    expect(db.collectionEntries[0].folderId).toBeNull();
+    expect(() => w.collection_set_folder({ id: 1, folderId: 404 })).toThrow(/not there any more/);
+    expect(() => w.collection_set_folder({ id: 404, folderId: 1 })).toThrow(/collection entry/);
+  });
+
+  it("merges onto a grain the destination already holds, and names the survivor", () => {
+    const db = filed({
+      collectionEntries: [
+        entry({ id: 10, cardId: BOLT.id, quantity: 2, notes: "root" }),
+        entry({ id: 11, cardId: BOLT.id, quantity: 5, folderId: 1, notes: "binder" }),
+      ],
+    });
+    const change = writeHandlers(db).collection_set_folder({ id: 10, folderId: 1 });
+    // The destination's id and the summed quantity, and `removed: false` over a row that really
+    // was deleted — the field means "the reader owns none of it", and they own seven.
+    expect(change).toEqual({ id: 11, quantity: 7, removed: false });
+    expect(db.collectionEntries).toHaveLength(1);
+    // The survivor's own answers are not up for revision: the destination is the row the reader
+    // filed and wrote on, and inverting the coalesce would replace their note with one about a
+    // row that no longer exists.
+    expect(db.collectionEntries[0].notes).toBe("binder");
+  });
+
+  it("is the same printing twice when the only difference is the folder", () => {
+    const db = filed({ collectionEntries: [entry({ id: 1, cardId: BOLT.id, quantity: 1 })] });
+    const w = writeHandlers(db);
+    // An add names no folder and lands at the root, so it folds into the row already there
+    // rather than into the filed one — which is the whole point of the eleventh term.
+    w.collection_set_folder({ id: 1, folderId: 1 });
+    const added = w.collection_add({ entry: { cardId: BOLT.id, finish: "nonfoil", quantity: 1 } });
+    expect(added.id).not.toBe(1);
+    expect(db.collectionEntries.map((e) => e.folderId)).toEqual([1, null]);
+  });
+
+  it("reads every folder by default and one folder when asked", () => {
+    const db = filed({
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT.id, folderId: null }),
+        entry({ id: 2, cardId: BOLT_2X2.id, folderId: 1 }),
+        entry({ id: 3, cardId: FOIL_ONLY.id, finish: "foil", folderId: 2 }),
+      ],
+    });
+    // Sorted by id rather than read off the page: the list's own order is name order, which is
+    // a different claim and one `describe("ordering")` already pins.
+    const list = (query: Partial<CollectionQuery>) =>
+      readHandlers(db)
+        .collection_list({ query: { limit: 10, offset: 0, ...query } })
+        .items.map((r) => r.id)
+        .sort((a, b) => a - b);
+    // **Absent and `null` are one state here, and it is "every folder"** — the opposite of
+    // `wishlist_list`, whose absent `folderId` is the root. `Option<i64>` cannot tell a JSON
+    // `null` from an omission, so the collection has two states where the wishlist has three.
+    expect(list({})).toEqual([1, 2, 3]);
+    expect(list({ folderId: null })).toEqual([1, 2, 3]);
+    // Direct only: `Binder` does not answer for what is inside `Trade binder`.
+    expect(list({ folderId: 1 })).toEqual([2]);
+    // And the row carries its folder's name for the table's own column — a display string, so
+    // the root reads `null` rather than a word.
+    const rows = readHandlers(db).collection_list({ query: { limit: 10, offset: 0 } }).items;
+    expect(Object.fromEntries(rows.map((r) => [r.id, r.folderName]))).toEqual({
+      1: null,
+      2: "Binder",
+      3: "Trade binder",
+    });
+  });
+
+  /**
+   * `allocation: "unallocated"` — the copies a **deck** is holding, and nothing else.
+   *
+   * The root, a folder the reader made and `Recently removed` are all cards on their desk; only
+   * a copy a deck has taken off it is spoken for. Nothing in this build creates a `deck` folder,
+   * so the fixture seeds one by hand — which is the only way to exercise the branch at all, and
+   * saying so is better than a test that passes because the state is unreachable.
+   */
+  it("drops only a deck folder's copies when the query asks for the unallocated ones", () => {
+    const db = makeDb({
+      collectionFolders: [
+        { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0 },
+        { id: 2, parentId: null, name: "Recently removed", kind: "removed", deckId: null,
+          sortOrder: 1 },
+        { id: 3, parentId: null, name: "Burn", kind: "deck", deckId: 7, sortOrder: 2 },
+      ],
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT.id, folderId: null }),
+        entry({ id: 2, cardId: BOLT_2X2.id, folderId: 1 }),
+        entry({ id: 3, cardId: FOIL_ONLY.id, finish: "foil", folderId: 2 }),
+        entry({ id: 4, cardId: BOLT.id, folderId: 3 }),
+      ],
+    });
+    const list = (allocation: CollectionQuery["allocation"]) =>
+      readHandlers(db)
+        .collection_list({ query: { limit: 10, offset: 0, allocation } })
+        .items.map((r) => r.id)
+        .sort((a, b) => a - b);
+    expect(list(undefined)).toEqual([1, 2, 3, 4]);
+    expect(list("all")).toEqual([1, 2, 3, 4]);
+    expect(list("unallocated")).toEqual([1, 2, 3]);
+  });
+
+  /**
+   * The two numbers on a folder tile, and both have a rule of their own.
+   *
+   * `cards` is **copies** (`sum(quantity)`) rather than rows — the header's own arithmetic — so a
+   * row stepped to zero contributes nothing while still being a row. `value` is **`null` and
+   * never `0`** where the marketplace prices nothing in the folder: a tile has no room for the
+   * header's "n unpriced" note, so a folder of cards the feed has never heard of would otherwise
+   * read as a folder worth nothing.
+   *
+   * `FOIL_ONLY` at `nonfoil` is the unpriceable row — the printing is foil-only, so its `usd` is
+   * null while `usd_foil` is not — which is the same trick the wishlist's own summary test uses.
+   *
+   * Direct per folder and never recursive: `Binder` answers for its own copies and **not** for
+   * `Trade binder`'s, because `buildFolderTree` sums a node's children on the way up and two
+   * implementations of one figure disagree the first time either changes.
+   */
+  it("counts copies per folder directly, leaves the root out, skips an empty one, and answers null for an unpriced folder", () => {
+    const db = filed({
+      collectionFolders: [
+        { id: 1, parentId: null, name: "Binder", kind: "user", deckId: null, sortOrder: 0 },
+        { id: 2, parentId: 1, name: "Trade binder", kind: "user", deckId: null, sortOrder: 0 },
+        { id: 3, parentId: null, name: "Someday", kind: "user", deckId: null, sortOrder: 1 },
+      ],
+      collectionEntries: [
+        entry({ id: 1, cardId: BOLT.id, quantity: 2, folderId: 1 }),
+        // A row at zero: still a row, and worth nothing — so it moves neither figure.
+        entry({ id: 2, cardId: BOLT_2X2.id, quantity: 0, folderId: 1 }),
+        entry({ id: 3, cardId: FOIL_ONLY.id, finish: "nonfoil", quantity: 3, folderId: 2 }),
+        entry({ id: 4, cardId: BOLT.id, quantity: 9, folderId: null }),
+      ],
+    });
+    const rows = readHandlers(db).collection_folder_summary({});
+    // Two rows: the root is not a folder and draws no tile, and `Someday` has no row at all —
+    // which is why a page has to build its tree from `collection_folder_list`.
+    expect(rows.map((r) => r.folderId)).toEqual([1, 2]);
+    expect(rows[0].cards).toBe(2);
+    expect(rows[0].value).toBeGreaterThan(0);
+    // Copies counted, and `null` rather than `0` for what none of them can be priced at.
+    expect(rows[1]).toEqual({ folderId: 2, cards: 3, value: null });
+  });
+
+  it("throws the filing cabinet away with the cards it filed", () => {
+    const db = filed({ collectionEntries: [entry({ id: 1, folderId: 1 })] });
+    // `collection_entries.folder_id` is `ON DELETE SET NULL`, so emptying the entries alone would
+    // hand the reader an empty cabinet to take apart one drawer at a time.
+    expect(writeHandlers(db).collection_clear().entries).toBe(1);
+    expect(db.collectionFolders).toHaveLength(0);
+  });
+});
+
 describe("collection_import_commit", () => {
   it("accumulates a repeated grain and counts added versus updated", () => {
     const db = makeDb();
@@ -2714,6 +3207,49 @@ describe("collection_import_commit", () => {
     expect(out).toEqual({ added: 1, updated: 1, removed: 0 });
     expect(db.collectionEntries).toHaveLength(1);
     expect(db.collectionEntries[0].quantity).toBe(5);
+  });
+
+  /**
+   * **A `set` of 0 deletes the row**, which is `collection_set_quantity`'s schema v24 reversal
+   * reached from a file rather than from the stepper — `wishlist_import_commit` has done the same
+   * one table over since v23, and `removed` was that command's alone and a hard 0 here until the
+   * collection followed.
+   */
+  it("deletes a row a set line takes to zero, and counts it as removed", () => {
+    const db = makeDb({ collectionEntries: [entry({ id: 1, cardId: BOLT.id, quantity: 4 })] });
+    const out = writeHandlers(db).collection_import_commit({
+      items: [{ cardId: BOLT.id, finish: "nonfoil", quantity: 0 }],
+      mode: "set",
+    });
+    expect(out).toEqual({ added: 0, updated: 0, removed: 1 });
+    expect(db.collectionEntries).toHaveLength(0);
+  });
+
+  /**
+   * **An import line lands on its own grain, not on the plain one** — the fake's half of the fold
+   * `collection::commit_import` does, and the six grain columns were dropped from this map while
+   * `CollectionImportItem` already carried them. A file describing an altered copy therefore
+   * folded into the plain row here and into its own row in the app, and a re-import could never
+   * add to the reader's altered row: it wrote an anonymous twin beside it.
+   *
+   * One altered line and one plain line for the same printing is the cheapest seed where the two
+   * answers differ — two rows if the column is carried, one folded row of three copies if it is
+   * not.
+   */
+  it("keeps an altered import line off the plain grain", () => {
+    const db = makeDb();
+    const items: CollectionImportItem[] = [
+      { cardId: BOLT.id, finish: "nonfoil", quantity: 1 },
+      { cardId: BOLT.id, finish: "nonfoil", quantity: 2, altered: true },
+    ];
+
+    const out = writeHandlers(db).collection_import_commit({ items, mode: "add" });
+
+    expect(out).toEqual({ added: 2, updated: 0, removed: 0 });
+    expect(db.collectionEntries.map((e) => [e.altered, e.quantity])).toEqual([
+      [false, 1],
+      [true, 2],
+    ]);
   });
 
   it("is all or nothing: one line it cannot land leaves the collection as it was", () => {
@@ -3777,8 +4313,20 @@ describe("the busy fault", () => {
     // right about the tree it was in and none predicted the merge — which is the whole of why
     // this file's own rule says never to add one branch's delta to another's total. Measured
     // again at 59 on 2026-08-23, with `set_deck_driven_collection` gone.
+    //
+    // Schema v24's **collection** folders then added five, 59 → 64: `collection_folder_create`,
+    // `_rename`, `_move` and `_delete`, and `collection_set_folder`. Five where the wishlist's
+    // branch added six, and the missing one is not an omission — that sixth was
+    // `wishlist_set_printing`, a `wishlist.rs` write that had simply never been registered here
+    // and rode along with folders it is unrelated to. Four of these five take `sync::with_write`
+    // and the fifth (`collection_set_folder`) takes `collection_source::with_write_owned`,
+    // because filing a row changes which rows *exist* — a merge deletes one — and the facet
+    // index's `owned` dimension is built by counting them. Both are the same lock from this
+    // loop's point of view. The branch's two reads (`collection_folder_list` and
+    // `collection_folder_summary`) go through `db_read` and are not in this table at all,
+    // exactly as the wishlist's two are not.
     const names = Object.keys(w).filter((n) => !unlocked.includes(n));
-    expect(names).toHaveLength(59);
+    expect(names).toHaveLength(64);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,

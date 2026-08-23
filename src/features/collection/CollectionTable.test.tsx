@@ -20,6 +20,9 @@ beforeAll(() => {
 const ROW: CollectionRow = {
   id: 42,
   cardId: "c1",
+  // Filed nowhere — the Folder column's em dash, and the state most of a collection is in.
+  folderId: null,
+  folderName: null,
   name: "Lightning Bolt",
   oracleId: "o1",
   setCode: "lea",
@@ -94,9 +97,10 @@ describe("CollectionTable", () => {
   });
 
   /**
-   * Removal is offered on an emptied row and nowhere else. Zero copies is a state the stepper
-   * can reach and nothing else can leave: the backend keeps the row until something says
-   * delete, and this button is the only thing in the app that does.
+   * Removal is offered on an emptied row and nowhere else. Since schema v24 the stepper does not
+   * produce one — `collectionSetQuantity(id, 0)` deletes — so a row at zero comes from the entry
+   * editor, the one write that still keeps the row it is editing, and this button is the only
+   * thing in the app that clears it.
    */
   it("offers the removal on a row at zero copies", async () => {
     const onRemove = vi.fn();
@@ -118,16 +122,50 @@ describe("CollectionTable", () => {
   });
 
   /**
-   * A row whose grade was never stated draws the finish alone: the separator goes with the
-   * missing half, because a dangling middle dot before nothing reads as a rendering fault.
-   * The test is the DTO's own `null`, which is the fact about *this row*.
+   * **The column `DeckCountCell` vacated says where the copy is filed** — one value already on the
+   * row rather than a lazy per-row ipc call, which is the net deletion spec §7.1 asked for.
+   *
+   * `folderName` is the backend's own join, so the cell draws what the last read said the drawer
+   * was called and never has to hold the folder list to find out.
    */
-  it("drops the separator on a row with no condition", () => {
-    renderTable([{ ...ROW, condition: null }]);
+  it("names the folder a copy is filed in", () => {
+    renderTable([{ ...ROW, folderId: 4, folderName: "Trade binder" }]);
+    expect(screen.getByText("Trade binder")).toBeInTheDocument();
+  });
 
-    expect(screen.getByText("Nonfoil")).toBeInTheDocument();
+  /**
+   * A copy at the root reads an em dash and never the word "Collection": the breadcrumb says that
+   * about the *level*, and repeating it down a column of four hundred rows would be a name for the
+   * absence of filing rather than a folder.
+   */
+  it("draws an em dash for a copy at the root", () => {
+    // Priced, so the Value cell is not drawing an em dash of its own: `ROW` has no `unitPrice`,
+    // and two dashes would make `getByText` ambiguous — which reads as a missing dash rather than
+    // as a second one.
+    renderTable([{ ...ROW, unitPrice: 1.5 }]);
+    expect(screen.getByText("—")).toBeInTheDocument();
+    expect(screen.queryByText("Collection")).not.toBeInTheDocument();
+  });
+
+  /**
+   * **Both halves and the separator, always.** `collection_entries.condition` is
+   * `TEXT NOT NULL DEFAULT 'NM'` and {@link CollectionRow.condition} is non-nullable to match, so
+   * the "grade never stated" arm this cell and `copyLabel` used to carry could not be reached —
+   * a row with no grade is not a state the backend can build. The test that pinned that arm
+   * asserted a `condition: null` the DTO no longer admits.
+   *
+   * The grade is abbreviated in the cell and expanded in `sr-only` text beside it, so the two
+   * spellings are both asserted here: `NM` is what a reader sees and `Near mint` is what is
+   * announced.
+   */
+  it("draws the finish, the separator and the grade", () => {
+    renderTable([ROW]);
+
+    expect(screen.getByText("Nonfoil ·")).toBeInTheDocument();
+    expect(screen.getByText("NM")).toBeInTheDocument();
+    expect(screen.getByText("(Near mint)")).toBeInTheDocument();
     expect(
-      screen.getByRole("spinbutton", { name: "Quantity of Lightning Bolt (Nonfoil)" }),
+      screen.getByRole("spinbutton", { name: "Quantity of Lightning Bolt (Nonfoil, NM)" }),
     ).toBeInTheDocument();
   });
 });

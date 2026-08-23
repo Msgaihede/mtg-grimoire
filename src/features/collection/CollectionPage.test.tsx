@@ -11,6 +11,7 @@ import {
 } from "@/components/tooltip/TooltipProvider";
 import { readDragData } from "@/features/decks/dnd";
 import type {
+  CollectionFolder,
   CollectionQuery,
   CollectionRow,
   CollectionSummary,
@@ -52,6 +53,21 @@ const oracleTagsForPrintings = vi.hoisted(() => vi.fn());
 // rejection about a missing Tauri runtime.
 const importResolve = vi.hoisted(() => vi.fn());
 const collectionImportCommit = vi.hoisted(() => vi.fn());
+/**
+ * The cabinet: the census, the per-folder figures, the four writes that shape it, and the one
+ * write that files a copy.
+ *
+ * Answered even where a test has no folders, because an unmocked command is `undefined` called as
+ * a function — a rejected query rather than an empty cabinet, which is a different picture and one
+ * no test here means to draw.
+ */
+const collectionFolderList = vi.hoisted(() => vi.fn());
+const collectionFolderSummary = vi.hoisted(() => vi.fn());
+const collectionFolderCreate = vi.hoisted(() => vi.fn());
+const collectionFolderRename = vi.hoisted(() => vi.fn());
+const collectionFolderMove = vi.hoisted(() => vi.fn());
+const collectionFolderDelete = vi.hoisted(() => vi.fn());
+const collectionSetFolder = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -71,6 +87,13 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     oracleTagsForPrintings,
     importResolve,
     collectionImportCommit,
+    collectionFolderList,
+    collectionFolderSummary,
+    collectionFolderCreate,
+    collectionFolderRename,
+    collectionFolderMove,
+    collectionFolderDelete,
+    collectionSetFolder,
   },
 }));
 
@@ -84,6 +107,10 @@ const BOLT: CollectionRow = {
   legalities: null,
   id: 7,
   cardId: "c1",
+  // At the root of the cabinet, which is where every copy starts and where a deleted folder's
+  // cards return to. The table's Folder column draws an em dash for it.
+  folderId: null,
+  folderName: null,
   name: "Lightning Bolt",
   oracleId: "o1",
   setCode: "lea",
@@ -166,6 +193,26 @@ const BURN: DeckRow = {
   lastSortBy: "alphabetical",
   separateXGroup: false,
   defaultCategoryId: 0,
+};
+
+/** Two drawers, one inside the other — flat rows, because the tree is the page's to build from
+ *  `parentId`. `kind: "user"` is a folder the reader made and named, which is the only kind this
+ *  PR can produce and the only kind the nestable wall draws. */
+const BINDER: CollectionFolder = {
+  id: 3,
+  parentId: null,
+  name: "Trade binder",
+  kind: "user",
+  deckId: null,
+  sortOrder: 0,
+};
+const FOILS: CollectionFolder = {
+  id: 9,
+  parentId: 3,
+  name: "Foils",
+  kind: "user",
+  deckId: null,
+  sortOrder: 0,
 };
 
 const summary = (over: Partial<CollectionSummary> = {}): CollectionSummary => ({
@@ -292,6 +339,16 @@ beforeEach(() => {
   // between tests, since `importDefaults` lives in the store rather than in this component.
   importResolve.mockReset().mockResolvedValue([{ index: 0, matched: SOL_RING, hintMissed: false }]);
   collectionImportCommit.mockReset().mockResolvedValue({ added: 1, updated: 0, removed: 0 });
+  // **A collection nobody has filed is the default**, which is what every test written before the
+  // folders assumes: no breadcrumb, no folder cards, and the whole binder on screen. The folder
+  // tests below say otherwise for themselves.
+  collectionFolderList.mockReset().mockResolvedValue([]);
+  collectionFolderSummary.mockReset().mockResolvedValue([]);
+  collectionFolderCreate.mockReset().mockResolvedValue(BINDER);
+  collectionFolderRename.mockReset().mockResolvedValue(BINDER);
+  collectionFolderMove.mockReset().mockResolvedValue(BINDER);
+  collectionFolderDelete.mockReset().mockResolvedValue(undefined);
+  collectionSetFolder.mockReset().mockResolvedValue({ id: 7, quantity: 2, removed: false });
   useAppStore.setState({
     collectionView: "table",
     selectedCardId: null,
@@ -566,20 +623,25 @@ describe("CollectionPage", () => {
   });
 
   /**
-   * Task 5's ruling: `set_quantity(0)` keeps the row, with its condition, its purchase price
-   * and its acquisition story. So the list keeps it too — dimmed, because a row with no
-   * copies is a record rather than a holding — and offers the explicit removal that is the
-   * only thing that actually deletes one.
+   * The rule since schema v24, which reverses the one this test was written under:
+   * `set_quantity(0)` **deletes** the row — its condition, its purchase price and its whole
+   * acquisition story with it — and answers `removed: true`. So the list drops it on the
+   * answer, exactly as it does for an explicit removal, and no second command is sent.
+   *
+   * **The mock is as much the subject here as the assertion is.** It answered `removed: false`
+   * for a while after the reversal — a response the backend cannot produce any more — and that
+   * is a green test drawn over a ghost: the entry was gone from SQLite, the header (which
+   * `settle` re-reads) had already stopped counting it, and the table went on drawing the row
+   * until a filter change or a reload, with a `+` on it answering GONE.
    */
-  it("keeps a row that has been emptied to zero, and offers to remove it", async () => {
-    collectionSetQuantity.mockResolvedValue({ id: 7, quantity: 0, removed: false });
+  it("drops a row the stepper empties to zero, because zero deletes it", async () => {
+    collectionSetQuantity.mockResolvedValue({ id: 7, quantity: 0, removed: true });
     collectionList.mockResolvedValue(page([{ ...BOLT, quantity: 1 }]));
     wrap(<CollectionPage />);
     await screen.findByText("Lightning Bolt");
 
-    // And the reader is told so before they get there: removal is offered on a row at zero
-    // and nowhere else, so a mis-added four-copy row would otherwise only be got rid of by
-    // accidental discovery.
+    // And the reader is told where the way out is before they look for one: the stepper is it,
+    // and the sentence under the table is the whole of what says so.
     expect(screen.getByText(/to remove an entry, set its copies to zero/i)).toBeInTheDocument();
 
     await userEvent.click(
@@ -587,17 +649,10 @@ describe("CollectionPage", () => {
     );
 
     expect(collectionSetQuantity).toHaveBeenCalledWith(7, 0);
-    const row = (await screen.findByText("Lightning Bolt")).closest('[role="row"]');
-    expect(row).toBeInTheDocument();
-    expect(row).toHaveClass("text-dim");
-
-    const remove = screen.getByRole("button", {
-      name: /^Remove Lightning Bolt \(Foil, NM\) from your collection/,
-    });
-    await userEvent.click(remove);
-
-    expect(collectionRemove).toHaveBeenCalledWith(7);
     await waitFor(() => expect(screen.queryByText("Lightning Bolt")).not.toBeInTheDocument());
+    // And on the one command: the delete happened inside `collection_set_quantity`, so a
+    // second write here would be the page removing a row that is already gone.
+    expect(collectionRemove).not.toHaveBeenCalled();
   });
 
   /**
@@ -607,7 +662,11 @@ describe("CollectionPage", () => {
    * word about why, and the header went on counting it.
    */
   it("re-reads every list that counts these copies when a removal is refused", async () => {
-    collectionSetQuantity.mockResolvedValue({ id: 7, quantity: 0, removed: false });
+    // The stepper is not pressed here — the fixture below is what puts a row at zero on screen
+    // — but the answer is the one the backend would actually give if it were: since v24 a
+    // quantity of 0 comes back `removed: true`, and a mock saying otherwise is a shape nothing
+    // can produce.
+    collectionSetQuantity.mockResolvedValue({ id: 7, quantity: 0, removed: true });
     collectionList.mockResolvedValue(page([{ ...BOLT, quantity: 0 }]));
     collectionRemove.mockRejectedValue("That collection entry is not there any more.");
     const { client } = wrap(<CollectionPage />);
@@ -863,7 +922,15 @@ describe("CollectionPage", () => {
    */
   it("shows an em dash for a row this marketplace does not price", async () => {
     getMarketplace.mockResolvedValue("cardmarket");
-    collectionList.mockResolvedValue(page([{ ...BOLT, quantity: 3, unitPrice: null }]));
+    // **Filed, so the Value cell's dash is the only one on the row.** The Folder column draws an
+    // em dash for a copy at the root, which is exactly what `BOLT` is — and two of them would
+    // make `getByText("—")` ambiguous, which reads as a missing dash rather than as a second one.
+    // A filed row keeps this test about the price it is not being quoted.
+    collectionList.mockResolvedValue(
+      page([
+        { ...BOLT, quantity: 3, unitPrice: null, folderId: 4, folderName: "Trade binder" },
+      ]),
+    );
     wrap(<CollectionPage />);
 
     await screen.findByText("Lightning Bolt");
@@ -1025,6 +1092,17 @@ describe("CollectionPage", () => {
             acquiredAt: undefined,
             acquisitionSource: undefined,
             notes: undefined,
+            // The six grain columns the planner carries now rather than letting `commit_import`
+            // default them. A pasted line states none of them, so they arrive as the values a
+            // plain copy has — which is the point: the fold key is the full grain since schema
+            // v24, so a re-import has to be able to land on the reader's *altered* row instead of
+            // writing a second all-defaults one beside it.
+            altered: false,
+            signed: false,
+            proxy: false,
+            misprint: false,
+            serialNumber: undefined,
+            grading: undefined,
           },
         ],
         "add",
@@ -1190,6 +1268,9 @@ describe("the card menu", () => {
         finish: "foil",
         condition: "NM",
         quantity: 1,
+        // The root of the cabinet — a real destination, and what the menu names when the reader
+        // has no folders for it to offer.
+        folderId: null,
       }),
     );
   });
@@ -1426,6 +1507,9 @@ describe("the card menu", () => {
         finish: "foil",
         condition: "NM",
         quantity: 1,
+        // The root of the cabinet — a real destination, and what the menu names when the reader
+        // has no folders for it to offer.
+        folderId: null,
       }),
     );
     expect(useAppStore.getState().selectedCardId).toBeNull();
@@ -1486,6 +1570,8 @@ describe("the card menu", () => {
         finish: "nonfoil",
         condition: "NM",
         quantity: 1,
+        // The root of the cabinet, as above: the finish was the question, the folder was not.
+        folderId: null,
       }),
     );
   });
@@ -1581,5 +1667,242 @@ describe("the walk it publishes for the printings modal", () => {
     view.unmount();
 
     expect(walk().stops).toEqual([]);
+  });
+});
+
+/**
+ * The cabinet the page draws above whichever view is on — the breadcrumb, the folder cards, and
+ * the two ways a copy is filed.
+ *
+ * **Drawn once for both layouts rather than inside each**, so the wall and the table navigate
+ * identically; the alternative is two drill-downs that agree today. The filing itself is the
+ * backend's: `collection_list` takes the folder, so the rows below are already the rows of the
+ * level on screen and nothing here filters.
+ */
+describe("the collection's folders", () => {
+  /** A collection nobody has filed draws no cabinet at all: a lone inert "Collection" under a
+   *  ribbon that already says Collection is a subheading repeating its own heading. */
+  it("draws nothing at all when there are no folders", async () => {
+    wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+
+    expect(
+      screen.queryByRole("navigation", { name: "Collection folders" }),
+    ).not.toBeInTheDocument();
+    expect(screen.queryByRole("list", { name: "Folders" })).not.toBeInTheDocument();
+  });
+
+  /**
+   * **The root of this cabinet is every folder, which is where the collection parts company with
+   * the wishlist.** `CollectionQuery.folderId` absent means "every folder" rather than "the copies
+   * filed nowhere", so opening the page still asks the question it always asked — and a reader who
+   * has made drawers still sees their whole binder until they open one.
+   */
+  it("asks for every folder at the root, and for one folder once opened", async () => {
+    collectionFolderList.mockResolvedValue([BINDER]);
+    collectionFolderSummary.mockResolvedValue([{ folderId: 3, cards: 12, value: 340.25 }]);
+    wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+
+    expect(lastQuery().folderId).toBeUndefined();
+
+    await userEvent.click(await screen.findByRole("button", { name: /^Trade binder folder/ }));
+
+    await waitFor(() => expect(lastQuery().folderId).toBe(3));
+  });
+
+  /** The recursive total, never the summary's own row: that one is direct per folder, and a drawer
+   *  holding a full sub-folder and nothing of its own would otherwise read as empty. */
+  it("adds a sub-folder's copies into the card above it", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, FOILS]);
+    // Nothing filed directly in `Trade binder`; everything is one level down. A raw lookup would
+    // draw `0 cards` over a drawer holding four.
+    collectionFolderSummary.mockResolvedValue([{ folderId: 9, cards: 4, value: 88 }]);
+    wrap(<CollectionPage />);
+
+    expect(
+      await screen.findByRole("button", { name: "Trade binder folder, 4 cards, $88.00" }),
+    ).toBeInTheDocument();
+  });
+
+  /** The breadcrumb is the way back out, and the level the reader is in is not a place to go. */
+  it("climbs back out through the breadcrumb", async () => {
+    collectionFolderList.mockResolvedValue([BINDER]);
+    wrap(<CollectionPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /^Trade binder folder/ }));
+    await waitFor(() => expect(lastQuery().folderId).toBe(3));
+
+    expect(screen.getByText("Trade binder")).toHaveAttribute("aria-current", "page");
+    await userEvent.click(screen.getByRole("button", { name: "Collection" }));
+
+    await waitFor(() => expect(lastQuery().folderId).toBeUndefined());
+  });
+
+  /**
+   * `+ New folder` makes one **inside the folder the reader is standing in**, which at the root is
+   * the top level — and the field says so in words for a reader who cannot see which level the
+   * strip is drawn over.
+   */
+  it("makes a folder inside the level the reader is standing in", async () => {
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+
+    await user.click(screen.getByRole("button", { name: "+ New folder" }));
+    expect(screen.getByText("in Collection")).toBeInTheDocument();
+    await user.type(screen.getByRole("textbox", { name: "New folder name" }), "Trade binder");
+    await user.click(screen.getByRole("button", { name: "Create folder" }));
+
+    await waitFor(() => expect(collectionFolderCreate).toHaveBeenCalledWith(null, "Trade binder"));
+  });
+
+  /**
+   * **Filing a copy is a re-read, never an optimistic patch.**
+   *
+   * The wishlist shipped the optimistic version and it was wrong three ways at once: the row left
+   * every cached list page and **nothing ever put it back**, so a filed wish was gone from the app
+   * until a reload; the destination folder said "Nothing filed here yet" under a card already
+   * counting it; and the header under-counted on the way out to the root as well as on the way in.
+   *
+   * So the assertion is the *invalidation*, and it is the whole `["collection"]` root rather than
+   * the summary and the folder keys: `invalidateQueries` matches by prefix, so that reaches
+   * `["collection", "list", …]` itself. Marking it stale would not be enough on its own —
+   * `lib/query.ts` sets `staleTime: 30_000`, so a mounted observer that is merely stale never
+   * refetches, which is exactly why the wishlist's bug survived every reload-free session.
+   */
+  it("re-reads the whole collection after a folder move rather than guessing", async () => {
+    collectionFolderList.mockResolvedValue([BINDER]);
+    const { client, container } = wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+    const card = (await screen.findByRole("button", { name: /^Trade binder folder/ })).closest(
+      "li",
+    )!;
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    const row = container.querySelector('[draggable="true"]')!;
+    const held = await startDrag(row, { pressOn: screen.getByText("Lightning Bolt") });
+    await held.over(card);
+    await held.drop();
+
+    await waitFor(() => expect(collectionSetFolder).toHaveBeenCalledWith(7, 3));
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["collection"] }));
+    // And every deck, which is the half this page's own copy of the mutation was missing before
+    // the two were collapsed onto `useSetCollectionFolder`: a move onto a taken grain **merges**,
+    // deleting one row, and a built deck holding a claim on that `collection_entry_id` would go
+    // on drawing a reservation it has just lost.
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] });
+    // And the row is still on screen: nothing took it off the level on a guess about where it
+    // went. The backend is what says which list it belongs to now.
+    expect(screen.getByText("Lightning Bolt")).toBeInTheDocument();
+  });
+
+  /**
+   * **The folder a copy is already filed in refuses it before the drop.** A ring there would lead
+   * to a write that moves nothing and bumps `updated_at` — `dropWrite`'s rule about a card dropped
+   * back into its own column, which is why `CollectionDrag` carries `folderId` at all.
+   */
+  it("refuses a drop onto the folder the copy is already in", async () => {
+    collectionFolderList.mockResolvedValue([BINDER]);
+    collectionList.mockResolvedValue(page([{ ...BOLT, folderId: 3, folderName: "Trade binder" }]));
+    const { container } = wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+    const card = (await screen.findByRole("button", { name: /^Trade binder folder/ })).closest(
+      "li",
+    )!;
+
+    const row = container.querySelector('[draggable="true"]')!;
+    const held = await startDrag(row, { pressOn: screen.getByText("Lightning Bolt") });
+    expect(card.classList.contains("ring-2")).toBe(false);
+
+    await held.over(card);
+    await held.drop();
+    expect(collectionSetFolder).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **Deck groups and `Recently removed` are the app's, not the reader's**, so they never join the
+   * nestable tree — they belong to a pinned flat section with no rename or delete affordance, and
+   * in this PR that section is always empty because nothing yet creates either kind. Rendering
+   * nothing at all is the point: an empty heading is a promise about a feature that has not
+   * shipped.
+   *
+   * The fixture is a folder this PR cannot produce, which is exactly why the test is worth having:
+   * PR 3 creates them, and the day it does they must not appear beside `Trade binder`.
+   */
+  it("keeps an app-owned folder out of the reader's own tree", async () => {
+    collectionFolderList.mockResolvedValue([
+      BINDER,
+      { id: 20, parentId: null, name: "Mono-Red Aggro", kind: "deck", deckId: 1, sortOrder: 0 },
+      {
+        id: 21,
+        parentId: null,
+        name: "Recently removed",
+        kind: "removed",
+        deckId: null,
+        sortOrder: 1,
+      },
+    ]);
+    wrap(<CollectionPage />);
+
+    await screen.findByRole("button", { name: /^Trade binder folder/ });
+    expect(
+      screen.queryByRole("button", { name: /^Mono-Red Aggro folder/ }),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByRole("button", { name: /^Recently removed folder/ }),
+    ).not.toBeInTheDocument();
+    // One card in the wall, and it is the reader's own.
+    expect(
+      within(screen.getByRole("list", { name: "Folders" })).getAllByRole("listitem"),
+    ).toHaveLength(1);
+  });
+
+  /**
+   * **A stepper press moves the folder card above the row, and the page has to say so.**
+   *
+   * `collection_folder_summary`'s `cards` is `sum(quantity)` and its `value` is
+   * `sum(quantity * unit_price)`, so a copy added to a filed row changes both — arithmetic this
+   * page cannot redo, over a query whose observer is mounted for the life of the view. The
+   * wishlist shipped without this and a folder card went on saying `2 wishes · $20.00` over a
+   * drawer holding one; marking it stale is not enough, because `lib/query.ts` caches 30s and a
+   * mounted observer that is merely stale never refetches.
+   */
+  it("re-reads the folder subtotals after a stepper press on a filed row", async () => {
+    collectionFolderList.mockResolvedValue([BINDER]);
+    collectionList.mockResolvedValue(page([{ ...BOLT, folderId: 3, folderName: "Trade binder" }]));
+    const { client } = wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Increase Quantity of Lightning Bolt (Foil, NM)" }),
+    );
+
+    await waitFor(() =>
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ["collection", "folderSummary"] }),
+    );
+    // And *not* the whole root: the list is deliberately left alone here, because the row's own
+    // number has already been rewritten from the answer.
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["collection"] });
+  });
+
+  /**
+   * The export dialog has to name the drawer, because the sweep already reads it: `folderId` is on
+   * `collection.filters` and therefore in the sweep's key, so standing in `Trade binder` and
+   * pressing Export exports that drawer — and a sentence saying only "matching your filters" would
+   * be describing something else.
+   */
+  it("says which drawer an export is standing in", async () => {
+    collectionFolderList.mockResolvedValue([BINDER]);
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await user.click(await screen.findByRole("button", { name: /^Trade binder folder/ }));
+    await waitFor(() => expect(lastQuery().folderId).toBe(3));
+
+    await user.click(screen.getAllByRole("button", { name: "Export" })[0]);
+
+    const dialog = await screen.findByRole("dialog", { name: /export/i });
+    expect(within(dialog).getByText(/in Trade binder/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/ignoring the filters and folders/)).toBeInTheDocument();
   });
 });

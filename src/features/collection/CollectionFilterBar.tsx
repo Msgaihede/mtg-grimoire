@@ -12,6 +12,7 @@ import { FORMATS } from "@/features/search/useCardSearch";
 import { SetCombobox } from "@/features/search/SetCombobox";
 import { CONDITIONS, CONDITION_LABEL } from "@/lib/conditions";
 import { FINISHES, FINISH_LABEL } from "@/lib/finish";
+import { FOCUS } from "@/lib/focus";
 import { MANA_KEYS } from "@/lib/mana";
 import { sortOptions } from "@/lib/options";
 import { useAppStore } from "@/lib/store";
@@ -29,8 +30,26 @@ import { COLLECTION_SORTS, type Collection, type CollectionSort } from "./useCol
  * should not have to learn it twice — and the second holds everything that is *about* a
  * card without being on it: which formats it is legal in this month, which copy of it this
  * is, and how the list should be read.
+ *
+ * `folderId` is not a filter and draws nothing here beyond `+ New folder` — the folder cards and
+ * the breadcrumb this bar shares its row with are the page's, not this component's. There is no
+ * Flatten chip either, and `useCollection.folderId` says why: the root of this cabinet already is
+ * the whole binder.
  */
-export function CollectionFilterBar({ collection }: { collection: Collection }) {
+export function CollectionFilterBar({
+  collection,
+  onNewFolder,
+}: {
+  collection: Collection;
+  /**
+   * Opens the "new folder" field beside the folder cards. Not owned here: this bar only offers
+   * the way in, and the page owns the layer, its Escape rung and the write.
+   *
+   * The trigger element travels with the press because the page hands the caret back to whatever
+   * opened the layer, and a wall of cards has no other way to say which control that was.
+   */
+  onNewFolder: (opener: HTMLButtonElement) => void;
+}) {
   const view = useAppStore((s) => s.collectionView);
   const setCollectionView = useAppStore((s) => s.setCollectionView);
 
@@ -193,6 +212,20 @@ export function CollectionFilterBar({ collection }: { collection: Collection }) 
             </option>
           ))}
         </select>
+
+        {/* Always drawn, unlike the wishlist's twin, which hides while the list is flattened:
+            there is no flattened state here to hide from, and a new folder is made **inside the
+            one the reader is standing in** — which at the root is the top level.
+
+            Styled like the page's own Import/Export buttons rather than as a chip, because this
+            opens a field on the page instead of toggling a state that lives here. */}
+        <button
+          type="button"
+          onClick={(e) => onNewFolder(e.currentTarget)}
+          className={cn("h-8 rounded-md border border-border px-3 text-sm hover:bg-surface", FOCUS)}
+        >
+          + New folder
+        </button>
 
         {/* Always drawn, greyed when there is nothing to clear — the rule lives in the
             control, so every view that offers a reset offers the same one. */}

@@ -66,12 +66,21 @@ both plus the frontend.
   never runs it again. **It happened three times, not twice**: the oracle-tag step was a third
   branch numbering itself 12 against that same head of 11, and it is **v14**. Three collisions on
   one rung in one day is the ladder's own argument — take the next free number when you land, and
-  never reuse one. Schema is at **v23** — `schema::SCHEMA_VERSION` is the answer, and
+  never reuse one. Schema is at **v24** — `schema::SCHEMA_VERSION` is the answer, and
   [the ladder's history](../docs/reference/data-and-sync.md) is the story. (This line read
-  **v18** for two whole rungs and then **v20** for two more, because a prose-only edit routes to
-  neither CI job: v19 added `deck_cards.finish`, v20 the art-tag tables, v21 the app-wide tag
-  list, v22 the `slug_norm` repair and v23 the wishlist's folders, and nothing went red for any
-  of them.)
+  **v18** for two whole rungs, then **v20** for two more, then **v23** for one, because a
+  prose-only edit routes to neither CI job: v19 added `deck_cards.finish`, v20 the art-tag
+  tables, v21 the app-wide tag list, v22 the `slug_norm` repair, v23 the wishlist's folders and
+  v24 the collection's, and nothing went red for any of them.)
+- **v24's rung is deliberately only half of what its spec asked for**, and the half it left is
+  numbered: `collection_folders` is created in its **final** shape — `kind` and `deck_id` columns
+  and both partial unique indexes included — and **nothing is filed into it**. Inserting the
+  `removed` folder and one folder per deck, converting `deck_allocations` into placements and
+  dropping that table, `decks.is_built` and the orphaned `app_meta` row is **v25**'s. A rung that
+  had done it all at v24 would have taken out the app's only source of owned/missing while
+  nothing had replaced it. Creating the two unused columns now is what lets v25 be inserts,
+  a backfill and drops with no `ALTER TABLE` at all. See
+  [collection-folders.md](../docs/reference/collection-folders.md).
 - **A step that writes to a table an older *forward-built* fixture never created fails on that
   fixture alone**, and v18 is the first one to do it. `schema.rs`'s `v1_database` and
   `v6_deck_database` are hand-written old schemas rather than rewinds, so they carry only what
@@ -218,11 +227,43 @@ shared_cell` walks both into two databases and compares them column by column.
   and on deck cards) — as does `decks.cover_card_id`. A row whose card vanishes is **flagged**
   (`needs_review`, a sentence) and never deleted — `reconcile::sweep_orphans` runs after every
   ingest over all three user card tables and clears the flag if the card returns.
-- Grain: `(card_id, finish, condition, lang, altered, signed, proxy, misprint, serial, grading)`,
-  as `schema::COLLECTION_GRAIN` — one constant, because the UNIQUE index and every
-  `ON CONFLICT` target must match verbatim. The `coalesce(…, '')`s are load-bearing: NULLs in
-  a UNIQUE index are distinct. `grading` enters identity as **raw text**, so it is only ever
+- Grain: `(card_id, finish, condition, lang, altered, signed, proxy, misprint,
+  coalesce(serial_number,''), coalesce(grading,''), coalesce(folder_id, 0))` — **eleven terms
+  since schema v24**, as `schema::COLLECTION_GRAIN`. One constant, because the UNIQUE index and
+  every `ON CONFLICT` target must match verbatim. The `coalesce`s are load-bearing: NULLs in a
+  UNIQUE index are distinct. `grading` enters identity as **raw text**, so it is only ever
   written through the one fixed-field struct that owns its key order.
+- **The eleventh term is the folder, and it is what makes "Add to \<binder\>" an *add***
+  (schema v24, the wishlist's fourth-term argument one table over). Without it, filing a printing
+  the reader already owns would land on the row they already had and raise its quantity — the
+  copies would appear to **move**, and a playset would collapse into whichever folder was pointed
+  at last. `coalesce(folder_id, 0)` can never collide with a real folder because
+  `collection_folders.id` is `INTEGER PRIMARY KEY`, which SQLite never *auto*-assigns 0 — so
+  `create_folder` never supplies an id, and that is the whole of the fence.
+  **The price of the term is the merge**: every write that lands on a taken grain sums and folds
+  rather than refusing, and `collection_folders::merge_entry` follows
+  `reconcile::fold_into_existing`'s **five** statements rather than the wishlist's two, because
+  `deck_allocations.collection_entry_id` is `ON DELETE CASCADE` and deleting a source row outright
+  would silently strip a built deck's claims. Those three allocation statements are v25's to
+  remove, not a simplification to make now.
+- **`collection_folders` is `wishlist_folders` ported, cascade rules included** (schema v24):
+  `parent_id` CASCADEs onto its own table so a sub-tree goes in one press, and
+  `collection_entries.folder_id` is `ON DELETE SET NULL` so deleting the cabinet surfaces the
+  **cards** at the root — the strongest of the schema's SET NULLs, because a collection row is a
+  card that physically exists. `collection_folders.deck_id` is a third action and CASCADEs, for
+  `parent_id`'s reason and not the entries': a folder that *stands for* a deck has no meaning once
+  that deck is gone. That SET NULL is a **backstop and not the mechanism** — it rewrites a grain
+  term — so `delete_folder` collects the sub-tree and re-files every row **one at a time** through
+  the same merge, inside the transaction and before the folder goes; one at a time is what makes
+  two doomed rows that collide *with each other* at the root merge instead of raising
+  `UNIQUE constraint failed`. `reset::clear_collection` sweeps the folders by hand for
+  `clear_wishlist`'s reason, and still answers the count of *cards*.
+- **A collection folder can belong to the app**, which is the one thing the other two cabinets
+  have no equivalent of: `collection_folders.kind` is one of `schema::COLLECTION_FOLDER_KINDS`
+  (`user|deck|removed`). Nothing writes a `deck` or a `removed` row before v25, and every write in
+  `collection_folders.rs` already refuses to touch one — `FOLDER_NOT_YOURS`, in words, because the
+  DDL CHECKs what a row *is* and can say nothing about who may edit it. `refile_entry` carries no
+  such fence deliberately: that is what lets v25's deck writes file into exactly those folders.
 - **"Does the reader own this?" is `collection_source`, and four fragments plus one write
   wrapper is all that module owns.** `owns_printing`/`copies_of_printing`/`copies_of_oracle`/
   `owned_rowids` are correlated SQL a caller splices into its own statement; `with_write_owned`
@@ -235,16 +276,26 @@ shared_cell` walks both into two databases and compares them column by column.
 - **`reset.rs` holds the only writes in the crate with no subject, and they belong there.**
   `collection_clear`, `wishlist_clear`, `decks_clear` and `cache_clear` name a *table* rather
   than a row: none takes an id and none can be scoped. Filing one beside the reads of its table
-  would put it next to the rule it contradicts — `remove_entry` is documented as the only way a
-  collection row is ever deleted. **Nothing there writes history and nothing is undoable**:
+  would put it next to the deletes that each name **one row** and cannot be asked to take
+  anything they were not pointed at — `remove_entry`, the unconditional one, plus the two
+  conditional deletes schema v24 put beside it (`set_quantity`'s zero and `fold_entry`'s merge).
+  **Nothing there writes history and nothing is undoable**:
   `deck_audit` and `deck_undo` are per-deck and cascade away with the decks they describe, so a
   wipe has nowhere to be recorded. The confirmation is the **webview's** and the commands take
   no `confirm` argument — a fence passed as a parameter is a fence a caller can forget.
-- **Quantity 0 keeps the collection row** — the condition, purchase price, tags and
-  acquisition story survive the day the user owns none of the card. Deleting is
-  `remove_entry` and only ever `remove_entry`. The wishlist is the opposite by table CHECK
-  (`quantity > 0`): a wish for none of something is not a wish, so zero removes it. Both
-  refuse a negative through the one `collection::valid_quantity`.
+- **Quantity 0 deletes the collection row, and this reverses what this file said until v24.**
+  `set_quantity(id, 0)` deletes and answers `EntryChange { removed: true }`, the v24 rung deletes
+  every stored zero row, and the importer's `set` mode does the same. `remove_entry` is no longer
+  the only way a row goes. The reason is the folder: with `folder_id` in the grain, a row holding
+  no copies is indistinguishable from a row somebody filed and emptied. **The cost is real and was
+  accepted deliberately** — the row's `condition`, `condition_original`, purchase price and
+  currency, acquired-at, acquisition source, notes and tags go with it, which is exactly what the
+  old rule was preserving; a story that took years to accumulate no longer survives the day the
+  card is traded away. `CHECK (quantity >= 0)` stays on the column: the guard is the command, and
+  an intermediate zero inside a transaction is still legal. The wishlist has always been this way
+  by table CHECK (`quantity > 0`) — a wish for none of something is not a wish — so the two tables
+  now agree where they used to be a deliberate asymmetry. Both still refuse a negative through the
+  one `collection::valid_quantity`.
 - Finish is an **enum** (`nonfoil|foil|etched`), condition is one of `NM|LP|MP|HP|DMG`; both
   are CHECK-constrained in SQL _and_ validated in Rust, and the imported string is kept in
   `condition_original`.
@@ -356,10 +407,17 @@ Full detail, with the measurements and the traps behind each rule, is in
   exactly two of the deck
   side's — `decks.folder_id` and `deck_cards.tag_id`, because deleting a folder must not delete
   the decks in it and deleting a tag must never delete a card. **`deck_tags` left that list at
-  schema v21** and has no `deck_id` to cascade from — see the tag rule below. **The
-  whole-schema totals are one higher on each list since v23**, and neither addition is a deck's:
-  `wishlist_folders.parent_id` CASCADEs and `wishlist_entries.folder_id` SET NULLs, the same
-  pair one list over. `schema.rs`'s module doc is the copy of record for both lists.
+  schema v21** and has no `deck_id` to cascade from — see the tag rule below. **Both whole-schema
+  lists have grown twice since, and none of the four additions is a deck's**: v23 added
+  `wishlist_folders.parent_id` (CASCADE) and `wishlist_entries.folder_id` (SET NULL), and v24
+  added `collection_folders.parent_id` **and** `collection_folders.deck_id` (both CASCADE) and
+  `collection_entries.folder_id` (SET NULL) — so the CASCADE list is three longer than the deck
+  side's own and the SET NULL list two. `collection_folders.deck_id` is the odd one and the one to
+  read twice: the three keys that join a folder to the thing it *files* all SET NULL, and this one
+  CASCADEs because it points the other way — a folder that **stands for** a deck has no meaning
+  once that deck is gone, which is the opposite of what its contents get.
+  `schema.rs`'s module doc is the copy of record for both lists, and a rung that adds one half of a
+  filing cabinet and forgets the other is what it exists to catch.
 - **A tag is one app-wide row, and `deck_tags` has no `deck_id`** (schema v21). Its grain is
   `schema::DECK_TAG_GRAIN` — `name_key`, one name for the whole app — where it was `deck_id, name`
   from v8. A category says *where in a deck* a card lives and belongs to that deck; a tag says
@@ -708,3 +766,5 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
 | [search-faceting.md](../docs/reference/search-faceting.md) | `src/index/` — why the index is in memory, and the fail-open rule |
 | [in-app-updates.md](../docs/reference/in-app-updates.md) | `update.rs` — why the portable swap is hand-written |
 | [decks-storage.md](../docs/reference/decks-storage.md) | The deck tables, the card commands, the allocator, the audit log, the decklist import |
+| [wishlist-folders.md](../docs/reference/wishlist-folders.md) | The wishlist's cabinet (v23) — the four-term grain, the merge rule, the root-add duplicate |
+| [collection-folders.md](../docs/reference/collection-folders.md) | The collection's cabinet (v24) — the split rung, the eleventh grain term, the merge's five statements, what a zero quantity now costs |

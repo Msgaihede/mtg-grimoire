@@ -1,0 +1,246 @@
+import { useMemo } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { ipc, type CollectionFolder } from "@/lib/ipc";
+import { useMarketplace } from "@/lib/useMarketplace";
+
+/** Stable identity for "no folders yet" — a collection nobody has filed is the ordinary case, and
+ *  the tree builder's `useMemo` does not see a new identity every render. */
+const NONE: readonly CollectionFolder[] = [];
+
+/**
+ * Every folder there is, and nothing else — one query, no summary, no writes.
+ *
+ * **The card menu is why this is a hook of its own**, exactly as `useWishlistFolderList` is.
+ * `Add to → Collection` offers the binder as a submenu, so `useCardMenuDeps` wants this list on
+ * every surface that draws a card menu: the two search views, the collection, the tags page, the
+ * deck editor and the card pane. Not one of them draws a folder card or a price subtotal, and
+ * `collection_folder_summary` is a `GROUP BY` over `collection_entries` carrying a marketplace
+ * price expression — real work, computed on each of those mounts and thrown away. The summary is
+ * **opt-in** because the list has several times as many readers as it does.
+ *
+ * **A split rather than a second `useQuery`, and that is the whole point of the shape.** The key
+ * and its `queryFn` are written once, here; two hooks want the same rows and TanStack serves both
+ * from one cache entry, so the collection page — which mounts both, through its folder cards and
+ * through the card menu on its own rows — still asks the backend for the list exactly once.
+ */
+export function useCollectionFolderList() {
+  const query = useQuery({
+    queryKey: ["collection", "folders"],
+    queryFn: () => ipc.collectionFolderList(),
+  });
+
+  return {
+    query,
+    /** Every folder, flat. Empty until the first answer — a collection that files nothing and one
+     *  that has not loaded are told apart by `query.isPending`, not by this. */
+    folders: query.data ?? NONE,
+  };
+}
+
+/**
+ * The collection's filing cabinet: every folder there is, the four writes that shape them, and the
+ * per-folder summary a folder card is drawn from.
+ *
+ * **The folder list itself comes from {@link useCollectionFolderList}**, which this composes
+ * rather than repeats — see there for why the summary below is something a caller opts into.
+ *
+ * **Flat rows, and the tree is the reader's to build from `parentId`** — `collection_folders` has
+ * no notion of depth and the command takes no entry id, because a folder belongs to no entry: it
+ * files them. So there is one query here for the whole app rather than one per row, and no
+ * argument to this hook at all.
+ *
+ * **Both keys sit under `["collection"]`** — `["collection", "folders"]` and
+ * `["collection", "folderSummary", marketplace.id]`. That is not tidiness. Every collection write
+ * in this app already fires `invalidateQueries({ queryKey: ["collection"] })`, so a folder card's
+ * copy count and subtotal stay honest when a stepper two views away moves a quantity. And a folder
+ * **delete** re-files the cards inside it — `collection_folders.delete_folder` walks the sub-tree
+ * by hand and the `ON DELETE SET NULL` behind it is only the backstop — so the rows surface at the
+ * root, and a hook that refreshed only its own folder list would leave the table drawing cards in
+ * a folder that no longer exists.
+ */
+export function useCollectionFolders() {
+  const queryClient = useQueryClient();
+  const { marketplace } = useMarketplace();
+
+  const { query, folders } = useCollectionFolderList();
+
+  /**
+   * The numbers a folder card is drawn from, one row per folder that has anything in it.
+   *
+   * **Keyed on the marketplace, not just on `["collection", "folderSummary"]`** — two
+   * marketplaces are two answers to the same question, exactly as every other price-bearing query
+   * in this app carries the marketplace in its key (`useMarketplace`'s own doc comment): Card
+   * Kingdom's and Mana Pool's prices live in `marketplace_prices` rather than `cards.prices`, so
+   * neither marketplace's folder cards may be served from the other's cached page.
+   */
+  const summaryQuery = useQuery({
+    queryKey: ["collection", "folderSummary", marketplace.id],
+    queryFn: () => ipc.collectionFolderSummary(marketplace.id),
+  });
+
+  /**
+   * `summaryQuery.data`, indexed by folder id — a caller draws the tree one node at a time and
+   * looks a folder's numbers up rather than scanning the whole list per node.
+   *
+   * **Direct per folder, never recursive, and an empty folder is not in here at all.**
+   * `collection_folder_summary` is a `GROUP BY` over `collection_entries`, so a folder holding
+   * nothing emits no row — which is why the *list* is the census and this is a lookup layered onto
+   * it. A page that built its tree from this map would have no node for exactly the drawer whose
+   * whole job on screen is to be empty.
+   */
+  const summary = useMemo(
+    () => new Map((summaryQuery.data ?? []).map((s) => [s.folderId, s])),
+    [summaryQuery.data],
+  );
+
+  /**
+   * The whole `["collection"]` root, on success **and** on error — `useWishlistFolders`' rule, on
+   * the definition rather than on a call site.
+   *
+   * A refusal here is a busy database, a folder another surface has already deleted, or one of
+   * this cabinet's own three refusals in words; the middle one must not leave a tree drawing a
+   * node that is gone.
+   *
+   * Nothing outside `["collection"]` moves. A folder write files copies rather than counting
+   * them: no quantity changes, so no wish's `ownedQuantity`, no search row's owned badge and no
+   * deck's claims are any different afterwards.
+   */
+  const invalidate = () => void queryClient.invalidateQueries({ queryKey: ["collection"] });
+  const writes = { onSuccess: invalidate, onError: invalidate };
+
+  /** A new folder — at the root with `parentId: null`, or inside another one. */
+  const create = useMutation({
+    mutationFn: ({ parentId, name }: { parentId: number | null; name: string }) =>
+      ipc.collectionFolderCreate(parentId, name),
+    ...writes,
+  });
+
+  const rename = useMutation({
+    mutationFn: ({ id, name }: { id: number; name: string }) => ipc.collectionFolderRename(id, name),
+    ...writes,
+  });
+
+  /**
+   * Re-parent a folder; `parentId: null` moves it back to the root.
+   *
+   * A move into itself or into one of its own descendants is refused by the backend, and that
+   * guard is not cosmetic: `collection_folders.parent_id` is `ON DELETE CASCADE` **on itself**, so
+   * a cycle is a graph SQLite's recursive cascade would walk forever the day the folder is
+   * deleted. The picker still greys the illegal destinations — the refusal is a fence, not the
+   * affordance.
+   */
+  const move = useMutation({
+    mutationFn: ({ id, parentId }: { id: number; parentId: number | null }) =>
+      ipc.collectionFolderMove(id, parentId),
+    ...writes,
+  });
+
+  /**
+   * Delete a folder. Named `remove` for `useDecks`' reason — `delete` is a reserved word.
+   *
+   * **Its cards are not deleted**, and a confirmation must say so: they surface at the root, filed
+   * nowhere and otherwise exactly as they were — with their condition, their purchase price and
+   * their acquisition story. Its **sub-folders are**, by cascade. An id that resolves to nothing is
+   * a success: the caller wanted that folder gone.
+   */
+  const remove = useMutation({
+    mutationFn: (id: number) => ipc.collectionFolderDelete(id),
+    ...writes,
+  });
+
+  return {
+    // Both passed straight through, so this hook's public surface is exactly what it would have
+    // been without the split: the page reads `query` and `folders` off this object and must not
+    // have to know that the card menu shares the list with it.
+    query,
+    folders,
+    summary,
+    summaryQuery,
+    create,
+    rename,
+    move,
+    remove,
+  };
+}
+
+/** The whole of what a folder tree consumes, named so the view and the hook agree. */
+export type CollectionFolders = ReturnType<typeof useCollectionFolders>;
+
+/**
+ * What a caller does about a refusal, which is the only thing the two callers of
+ * {@link useSetCollectionFolder} do differently.
+ */
+export interface SetCollectionFolderHandlers {
+  /** Before the write. Both callers use it to clear whatever the last refusal left on screen. */
+  onMutate?: () => void;
+  /** The refusal, for a surface to draw. The invalidation is not this hook's caller's business
+   *  and happens either way. */
+  onError?: (error: unknown) => void;
+}
+
+/**
+ * Filing one copy — `collection_set_folder` — and **the only mutation in the app that does it**.
+ *
+ * There were two for a while, the drag's and the card menu's, with different settle sets and a
+ * comment on the page claiming there was one. Two implementations of one write disagree the first
+ * time either changes, and these already had: the menu's took `["decks"]` and the drag's did not,
+ * so the same gesture left a built deck's claims stale or fresh depending on which hand made it.
+ * The hook is the settle set plus the two hooks a surface needs to draw its own refusal, and
+ * nothing else.
+ *
+ * **Not optimistic, deliberately, and the wishlist is why this is written down rather than merely
+ * done.** That page shipped a `setFolder` that removed the row optimistically from every cached
+ * list page and then invalidated only the summary and the card search — so **nothing ever put it
+ * back where it went**. The folder card read `1 wish` while the folder's own contents read
+ * `Nothing filed here yet`, with the row in the database the whole time; it reproduced on all
+ * three routes and cleared only on reload.
+ *
+ * Every optimistic answer to "which list does this row belong to now" is a guess a surface is not
+ * entitled to make:
+ *
+ * * Taking the row off the level is the guess that shipped, and it is wrong in both directions —
+ *   out to the root as well as in.
+ * * Putting the row in is the other guess, and it is worse: the destination list is sorted and
+ *   paged by the backend, so an insert has to invent both the position and the page and then be
+ *   undone whenever the answer disagrees.
+ * * And **a merge answers a different id than the one asked about** — filing a copy into a drawer
+ *   that already holds the same eleven-column grain sums the quantities into the *destination* row
+ *   and deletes the source (`collection_folders::refile_entry`) — so there is not always a row
+ *   left to patch at all.
+ *
+ * So the answer is a re-read, both ways. A folder move is one deliberate press rather than a
+ * held-down stepper, so there is no second press racing the first — which is the whole reason the
+ * collection table's quantity stepper *is* optimistic.
+ */
+export function useSetCollectionFolder({ onMutate, onError }: SetCollectionFolderHandlers = {}) {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: ({ entryId, folderId }: { entryId: number; folderId: number | null }) =>
+      ipc.collectionSetFolder(entryId, folderId),
+    onMutate: () => {
+      onMutate?.();
+    },
+    onError: (error) => onError?.(error),
+    // **On success and on failure both**, and one handler because there is one behaviour: a
+    // refusal leaves the list exactly as unknown as a success does, since a refused move is
+    // almost always a row another surface has already moved or deleted.
+    onSettled: () => {
+      // **The whole `["collection"]` root, which is the list as well as everything counted from
+      // it** — the level being left, the level being joined, both folder subtotals and the
+      // header. `invalidateQueries` matches by key *prefix*, so this reaches
+      // `["collection", "list", …]` itself and refetches it because it is mounted; a settle that
+      // named only the summary and the folder keys is precisely the wishlist bug above. And
+      // marking it stale would not be enough on its own: `lib/query.ts` sets `staleTime: 30_000`,
+      // so a mounted observer that is merely stale never refetches.
+      void queryClient.invalidateQueries({ queryKey: ["collection"] });
+      // **And every deck, which is the half the drag's own mutation was missing.** A move changes
+      // no quantity, so no wish's `ownedQuantity` and no search row's owned badge can be
+      // different afterwards — but the destination may already hold this printing at this grain,
+      // in which case the backend *merges*: one row is deleted and the deck claims on it are
+      // carried onto the survivor. A deck holding a `collection_entry_id` that no longer exists
+      // would draw a claim it has just lost.
+      void queryClient.invalidateQueries({ queryKey: ["decks"] });
+    },
+  });
+}
