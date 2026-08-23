@@ -54,8 +54,8 @@ Nine buckets in three waves. **No two buckets in a wave share a file.**
 | --- | --- | --- |
 | 1 | **A — Schema v25** | `src-tauri/src/schema.rs` |
 | 2 | **B — The two writes** | `src-tauri/src/collection_alloc.rs` (new), `src-tauri/src/lib.rs` |
-| 2 | **C — Allocator removal + deck lifecycle** | `src-tauri/src/deck.rs` |
-| 3 | **D — Theory, reconcile, reset, fold** | `src-tauri/src/deck_theory.rs`, `reconcile.rs`, `reset.rs`, `collection.rs` |
+| 2 | **C — Allocator removal + deck lifecycle** | `src-tauri/src/deck.rs`, **`deck_meta.rs`, `deck_undo.rs`, `import.rs`** |
+| 3 | **D — Theory, reconcile, reset, fold** | `src-tauri/src/deck_theory.rs`, `reconcile.rs`, `reset.rs`, `collection.rs`, **`collection_folders.rs`, `collection_source.rs`, `deck_audit.rs`** |
 | 3 | **E — `is_built` out of TypeScript** | `src/lib/ipc.ts` + the 18 files listed in Task 5 |
 | 3 | **F — The pinned Decks section** | `src/features/collection/*` |
 | 3 | **G — Deck editor and its confirmation** | `src/features/decks/*` |
@@ -433,9 +433,18 @@ SELECT c.oracle_id, sum(e.quantity)
 
 `JOIN cards` stays an INNER join for the reason it always was: an orphaned row names no oracle card, and it reads owned 0 until the reconciler or the next sync gives it its identity back.
 
-- [ ] **Step 3: Delete the allocator**
+- [ ] **Step 3: Delete the allocator, and its call sites are NOT all in `deck.rs`**
 
-`allocate_deck`, `kind_rank`, `struct Candidate`, `ALLOCATION_ORDER` and every call site — the run list `src-tauri/CLAUDE.md` records (every card write, the Built toggle, `missing_to_wishlist`, `set_category_active`, `delete_category`, `clear_category`, `commit_import`, the theory list switching on). **`attribute_owned` keeps its shape** and simply reads the new map; it already filters `variant == LIVE`, which is now true by construction rather than by the table lacking a variant column.
+`allocate_deck`, `kind_rank`, `struct Candidate`, `ALLOCATION_ORDER` — and every call site. A pre-flight sweep on 2026-08-23 found the live ones spread across four files, which is why this bucket owns more than `deck.rs`:
+
+| File | Live call sites |
+| --- | --- |
+| `deck.rs` | the definition, plus its own callers |
+| `deck_meta.rs` | `:799` (`set_category_active`) and `:1044` (`delete_category`) |
+| `deck_undo.rs` | `:1175` — one call for the whole undo step, deliberately not per row |
+| `import.rs` | `:949` — one call for the whole import, deliberately not per line, and `:1997-2008` is a **test that pins that**: it counts allocator runs and fails if anyone moves the call inside the loop. That test loses its subject when the allocator goes; delete it with the code rather than leaving it asserting a number about nothing. |
+
+The run list in `src-tauri/CLAUDE.md` (every card write, the Built toggle, `missing_to_wishlist`, `set_category_active`, `delete_category`, `clear_category`, `commit_import`, the theory list switching on) is the census to check yourself against — and it goes with the allocator in Task 9. **`attribute_owned` keeps its shape** and simply reads the new map; it already filters `variant == LIVE`, which is now true by construction rather than by the table lacking a variant column.
 
 - [ ] **Step 4: Wire the deck lifecycle**
 
