@@ -185,16 +185,24 @@ export const WithHint: Story = {
 };
 
 /**
- * `hint` where the word fits and the *consequence* does not — the deck editor's Built toggle,
- * the second and only other call site that passes one.
+ * `hint` where the word fits and the *meaning* does not — the deck history's `Other` chip.
  *
- * "Built" is a whole word and it still needs a sentence, because this is the one switch in the
- * editor with an effect outside its own deck: a built deck's claims come off what every other
- * deck can reach. Same mechanism as `WithHint` and a different job for it, which is why the
- * prop is `hint` rather than `abbreviationOf`.
+ * "Other" is a whole word and it still needs a sentence, because it names a residue rather than
+ * a thing: the band an audit row falls into when this version of the app has no name for its
+ * kind. A reader can guess what "Adds" filters and nobody can guess this one — and the chip is
+ * drawn at all only when the history actually holds such a row. Same mechanism as `WithHint`
+ * and a different job for it, which is why the prop is `hint` rather than `abbreviationOf`.
+ *
+ * The third call site does a third job again: `CategoriesDialog` passes the category's own name
+ * beside a chip reading "Active", so eight of them are eight addressable controls rather than
+ * one control repeated eight times.
  */
 export const WithHintExplaining: Story = {
-  args: { label: "Built", pressed: true, hint: "Reserves your copies for this deck" },
+  args: {
+    label: "Other",
+    pressed: true,
+    hint: "changes this version of the app has no name for",
+  },
 };
 
 /**

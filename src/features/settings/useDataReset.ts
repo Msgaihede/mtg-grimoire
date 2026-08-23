@@ -15,9 +15,9 @@ import { cacheOutcome, collectionOutcome, decksOutcome, wishlistOutcome } from "
  *
  * **The invalidation is the interesting half.** A clear empties a table the query cache has
  * already answered from, and — for the collection — several tables it has *joined*: every card
- * in the search wall carries an `ownedQuantity`, every card in a deck carries the allocator's
- * claim on it, and both are `LEFT JOIN`s into `collection_entries` rather than fields anything
- * would think to refresh. Each mutation names the roots it can have made wrong and no more,
+ * in the search wall carries an `ownedQuantity`, every card in a deck carries what that deck's
+ * own collection group holds, and both are `LEFT JOIN`s into `collection_entries` rather than
+ * fields anything would think to refresh. Each mutation names the roots it can have made wrong and no more,
  * which is written out at each site.
  */
 
@@ -46,8 +46,10 @@ function invalidate(client: QueryClient, roots: readonly string[][]): void {
  *   `owned` tri-state both count `collection_entries`, so every row and the Owned chip above
  *   them are now describing a collection that is gone.
  * * `["card"]` — the detail pane, whose printings list carries the same count per printing.
- * * `["decks"]` — `DeckCard.ownedQuantity` is the allocator's *claim* on an owned copy, and
- *   the cascade just deleted every claim in the app.
+ * * `["decks"]` — `DeckCard.ownedQuantity` is what the deck's **own collection group** holds for
+ *   that oracle card, and the wipe just emptied every group in the app. Since schema v25 there is
+ *   no claim ledger to delete: a copy is in a deck because its row is filed there, so clearing the
+ *   collection is what takes it out.
  * * `["wishlist"]` — the fifth, and the one that reads as wrong: a wish is for a card the reader
  *   does *not* own, so a wishlist ought not to care. `WishRow.ownedQuantity` is why it does —
  *   it counts the copies that already fill each wish, so every row on that page has just gone

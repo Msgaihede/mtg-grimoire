@@ -2,8 +2,8 @@
  * What a clear did, in a sentence.
  *
  * **A module rather than four lines inside the panels, because these are conclusions and Rust
- * only supplies the facts.** `reset.rs` answers counts — entries, allocations, folders, files,
- * bytes — and every one of the decisions below is about English rather than about data: whether
+ * only supplies the facts.** `reset.rs` answers counts — entries, folders, files, bytes — and
+ * every one of the decisions below is about English rather than about data: whether
  * a second clause is worth printing at all when its number is zero, which unit 329 682 302 bytes
  * belongs in, and what "nothing happened" should say instead of "cleared 0 things". That is the
  * boundary this repo draws, and it is also what makes these testable without a render.
@@ -55,17 +55,14 @@ export function fileSize(bytes: number): string {
 /**
  * What emptying the collection did.
  *
- * **The allocations clause is the one that has to be there**, because it is the consequence a
- * reader did not ask for: every deck in the app has just stopped holding a claim on an owned
- * copy. It is dropped when the number is zero rather than printed as "and released 0" — a reader
- * with no decks is not owed a sentence about decks.
+ * **One number, and there is no second clause to print.** There used to be one — a count of the
+ * deck reservations the cascade took with the collection — and it went when the claim ledger
+ * did: a card is in a deck because its collection row sits in that deck's group, so clearing
+ * the collection empties the decks themselves rather than releasing a claim against them.
  */
 export function collectionOutcome(r: CollectionCleared): string {
   if (r.entries === 0) return "The collection was already empty.";
-  const cleared = `Cleared ${counted(r.entries, "collection entry", "collection entries")}`;
-  return r.allocations === 0
-    ? `${cleared}.`
-    : `${cleared} and released ${counted(r.allocations, "deck reservation")}.`;
+  return `Cleared ${counted(r.entries, "collection entry", "collection entries")}.`;
 }
 
 export function wishlistOutcome(entries: number): string {

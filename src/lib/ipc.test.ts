@@ -340,8 +340,8 @@ describe("ipc argument names match the Rust command signatures", () => {
       },
     });
 
-    await ipc.deckUpdate(4, { isBuilt: true });
-    expect(invoke).toHaveBeenCalledWith("deck_update", { id: 4, patch: { isBuilt: true } });
+    await ipc.deckUpdate(4, { archived: true });
+    expect(invoke).toHaveBeenCalledWith("deck_update", { id: 4, patch: { archived: true } });
 
     invoke.mockResolvedValue(undefined);
     await ipc.deckDelete(4);
@@ -1248,6 +1248,48 @@ describe("the collection folder wrappers name the commands `collection_folders.r
     // the only way back to it.
     await ipc.collectionSetFolder(7, null);
     expect(invoke).toHaveBeenCalledWith("collection_set_folder", { id: 7, folderId: null });
+  });
+
+  /**
+   * The two writes that move a row across the deck boundary. **The command names have no
+   * prefix** — `collection_alloc::commands` exists so the wire name and the function name can be
+   * the same word — so neither follows the `collection_*`/`deck_*` family above, and a mirror
+   * that "corrected" them would fail only at runtime.
+   *
+   * `collectionToDeck` has no caller in `src/` yet (its one caller is the deck builder's
+   * Collection Search tab), which is exactly why its argument names are pinned here: nothing
+   * else would notice a typo until the day something calls it.
+   */
+  it("names the two deck-boundary moves without a prefix", async () => {
+    invoke.mockResolvedValue({ entryId: 9, fromDeck: null, quantity: 2 });
+
+    await ipc.collectionToDeck(7, 3, 11, 2);
+    expect(invoke).toHaveBeenCalledWith("collection_to_deck", {
+      entryId: 7,
+      deckId: 3,
+      categoryId: 11,
+      quantity: 2,
+    });
+
+    // Addressed by `deck_cards.id` — the one deck command that is, where every other one takes
+    // the grain.
+    const out = await ipc.deckToCollection(42, 2);
+    expect(invoke).toHaveBeenCalledWith("deck_to_collection", { deckCardId: 42, quantity: 2 });
+    expect(out.entryId).toBe(9);
+  });
+
+  /**
+   * **What moved is the answer, never the argument.** A deck card nobody owned reports `0` and
+   * `entryId: null` rather than failing — the group is the record of which cards the reader
+   * actually has behind a list — and a caller that quoted its own `quantity` would tell them
+   * two copies are on their desk when none are.
+   */
+  it("reports what a cut actually moved, which can be nothing", async () => {
+    invoke.mockResolvedValue({ entryId: null, fromDeck: null, quantity: 0 });
+
+    const out = await ipc.deckToCollection(42, 2);
+
+    expect(out).toEqual({ entryId: null, fromDeck: null, quantity: 0 });
   });
 
   it("prices the folder summary at the marketplace it is given", async () => {

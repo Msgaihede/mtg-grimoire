@@ -306,7 +306,6 @@ const DECK: DeckRow = {
   coverCardId: BOLT.id,
   coverKind: "card_art",
   coverArtist: BOLT.artist,
-  isBuilt: true,
   archived: false,
   cardCount: 100,
   updatedAt: 1_786_266_000,

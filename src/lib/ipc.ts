@@ -16,6 +16,7 @@
  * `SyncOutcome`/`SyncStatus`/`Progress`          — `src-tauri/src/sync.rs`
  * `EntryInput`/`EntryPatch`/`EntryChange`/`CollectionQuery`/`CollectionRow`/
  * `CollectionPage`/`CollectionSummary`           — `src-tauri/src/collection.rs`
+ * `MoveOutcome`                                  — `src-tauri/src/collection_alloc.rs`
  * `WishInput`/`WishlistQuery`/`WishRow`/`WishlistPage` — `src-tauri/src/wishlist.rs`
  * `DeckInput`/`DeckPatch`/`DeckViewState`/`DeckRow`/`DeckCardRow`/`DeckDetail`/
  * `FormatSpecRow`                                — `src-tauri/src/deck.rs`
@@ -1581,6 +1582,42 @@ export interface CollectionFolderSummary {
 }
 
 /**
+ * What a move across the deck boundary did — `collection_alloc::MoveOutcome`.
+ *
+ * The two writes it answers are the **only** pair in the crate that moves a collection row into
+ * or out of a deck's group, which is what makes "this deck holds this card" a fact about where
+ * the row sits rather than a sum somebody has to remember to compute. Everything a caller has to
+ * do afterwards is here, and none of it is guessable from the arguments that went in.
+ */
+export interface MoveOutcome {
+  /**
+   * The collection row the copies ended up in — **the destination's id, which is not the id the
+   * caller handed in whenever the write merged**, exactly like {@link EntryChange.id} off a
+   * refile. A caller holding the old id after a fold is holding a row that has been deleted.
+   *
+   * `null` when nothing moved, and that is an answer rather than a failure: a deck card nobody
+   * owned just goes away. A card added from search is an intention to buy — the reader never
+   * had it, so nothing lands on their desk when it is cut, and the group **is** the record of
+   * which is which.
+   */
+  entryId: number | null;
+  /**
+   * Set when the copies came out of **another deck**, so the UI can say which one it took them
+   * from after the fact as well as before it. Never set by {@link ipc.deckToCollection}, where
+   * the deck they came out of is the one the reader is looking at.
+   */
+  fromDeck: string | null;
+  /**
+   * How many copies actually **moved**, which is not always what was asked. Never more; less
+   * wherever the deck list wanted more than the group held — a list and a group can disagree,
+   * because an import writes a list without moving a single card.
+   *
+   * So this is the number a message quotes, never the argument that was sent.
+   */
+  quantity: number;
+}
+
+/**
  * One card the **theory** list wants more of than the live list has — a line of the plan's
  * shopping list.
  *
@@ -1934,12 +1971,6 @@ export interface DeckPatch {
    *  `card_art`, so a deck showing an uploaded picture returns to card art without the file
    *  being deleted — see {@link DeckRow.coverKind}. */
   coverCardId?: string;
-  /**
-   * Sleeved up on a table, or a plan on paper. The **only** thing this means: a built deck's
-   * claims are subtracted from what every *other* deck can reach, while drafts all plan with
-   * the same shared copies. Sending it reallocates this deck in the same transaction.
-   */
-  isBuilt?: boolean;
   /** Filed away: sorted last in the gallery, never deleted. This is what a gallery's
    *  "remove" should reach for — `deckDelete` really deletes. */
   archived?: boolean;
@@ -2061,7 +2092,6 @@ export interface DeckRow {
    * quite properly draws one.
    */
   coverArtist: string | null;
-  isBuilt: boolean;
   archived: boolean;
   /**
    * `live` copies in **active** categories of kind `main`, `commander` or `maybe` — what "a
@@ -2148,7 +2178,7 @@ export interface DeckRow {
    * It is not one of the three `last*` fields above, and the split is the point: those are how
    * the reader was *looking* at this deck a moment ago, written by a command that moves no
    * `updatedAt`, while this is an answer about the deck's own curve and rides the ordinary
-   * {@link ipc.deckUpdate} with the rename and the Built toggle.
+   * {@link ipc.deckUpdate} with the rename and the format.
    */
   separateXGroup: boolean;
   /**
@@ -3251,13 +3281,12 @@ export interface ErrorEntry {
 /**
  * What emptying the collection took with it — `src-tauri/src/reset.rs`.
  *
- * `allocations` is the number nobody predicts and is why this is a shape rather than a count:
- * `deck_allocations.collection_entry_id` cascades from `collection_entries`, so every deck's
- * reservation against an owned copy goes with the collection. The decks themselves stay.
+ * A shape rather than a bare count so the panel's sentence has somewhere to grow, and because
+ * the command has always answered an object. The decks themselves stay: a deck is a list of
+ * cards, not a list of *your* cards.
  */
 export interface CollectionCleared {
   entries: number;
-  allocations: number;
 }
 
 /**
@@ -3448,6 +3477,50 @@ export const ipc = {
    */
   collectionFolderSummary: (marketplace: MarketplaceId) =>
     invoke<CollectionFolderSummary[]>("collection_folder_summary", { marketplace }),
+  /**
+   * Take `quantity` copies out of a collection row, put them in a deck's group, and write the
+   * `deck_cards` row that says the deck plays them — **one transaction**, so mid-move the copies
+   * are in both places or in neither.
+   *
+   * **Nothing in `src/` calls this yet, and that is deliberate rather than an oversight.** Its
+   * one caller is the deck builder's Collection Search tab, which is the next PR; the wrapper is
+   * here because {@link ipc.deckToCollection} beside it is the same pair and a mirror with one
+   * half missing is a mirror somebody completes from memory. Do not delete it as unused.
+   *
+   * **The copies may be coming out of another deck**, which is the case this command exists to
+   * get right: the source row sits in that deck's group, so taking it decrements that deck's
+   * *live* list by the same quantity and reports its name in {@link MoveOutcome.fromDeck}. The
+   * copies are custody and not a reservation — a deck that loses them loses the card — so a UI
+   * confirms that before pressing, because the side effect lands on a deck the reader is not
+   * looking at.
+   *
+   * Refused in words, never as a constraint failure: a quantity below one, more copies than the
+   * row holds, a category belonging to another deck, a deck with no group, and copies already in
+   * the deck they were pointed at (which would write a second `deck_cards` row against copies
+   * the group already holds).
+   */
+  collectionToDeck: (entryId: number, deckId: number, categoryId: number, quantity: number) =>
+    invoke<MoveOutcome>("collection_to_deck", { entryId, deckId, categoryId, quantity }),
+  /**
+   * Cut `quantity` copies from a deck card and file whatever the deck's group holds for that
+   * printing into `Recently removed` — the write that makes issue #209's holding area true.
+   *
+   * **This replaces `deckSetCardQuantity` for a decrease on a `live` list**, rather than
+   * accompanying it: it decrements the `deck_cards` row itself, so calling both takes the copies
+   * off the list twice. It addresses `deck_cards.id`, which is the one deck command that does —
+   * every other one takes the grain.
+   *
+   * **A theory row is refused** ("A theory list is a plan, and a plan holds no cards."), so the
+   * caller must not ask: a plan holds nothing in any folder, and a press that reported success
+   * and moved nothing would read as a card that vanished.
+   *
+   * **A deck card with no backing copies just goes away**, answering
+   * {@link MoveOutcome.quantity} `0` and {@link MoveOutcome.entryId} `null`. Read the outcome
+   * rather than the argument: what moved is what the reader now has on their desk, and it is
+   * less than was asked wherever the list claimed more than the group held.
+   */
+  deckToCollection: (deckCardId: number, quantity: number) =>
+    invoke<MoveOutcome>("deck_to_collection", { deckCardId, quantity }),
   wishlistAdd: (wish: WishInput) => invoke<EntryChange>("wishlist_add", { wish }),
   /** An absolute quantity — and `0` *removes* the row, because a wish holds nothing worth
    *  keeping once it is emptied. This was the opposite of the collection's rule until schema
@@ -3585,16 +3658,14 @@ export const ipc = {
    * a follow-up and always has to handle failing on its own — the deck exists by then.
    */
   deckCreate: (deck: DeckInput) => invoke<DeckRow>("deck_create", { deck }),
-  /** Rename, re-format, cover, build and archive all arrive here. Sending `isBuilt`
-   *  reallocates the deck in the same transaction. */
+  /** Rename, re-format, cover and archive all arrive here. */
   deckUpdate: (id: number, patch: DeckPatch) => invoke<DeckRow>("deck_update", { id, patch }),
   /** **This one really deletes** — the deck, its cards and its claims, by cascade. Archiving
    *  is `deckUpdate(id, { archived: true })`, and it is what a gallery's "remove" wants.
    *  An id that resolves to nothing is a success: the caller wanted that deck gone. */
   deckDelete: (id: number) => invoke<void>("deck_delete", { id }),
   /** Copy the deck: its categories and tags as new rows, its cards in **both** variants
-   *  remapped onto them — never its claims, never `isBuilt`, never `archived`. A copy is a
-   *  draft. */
+   *  remapped onto them — never `archived`. A copy is a draft. */
   deckDuplicate: (id: number) => invoke<DeckRow>("deck_duplicate", { id }),
   /**
    * Point the deck at a picture on disk: decode it, re-encode it as this app's cover shape

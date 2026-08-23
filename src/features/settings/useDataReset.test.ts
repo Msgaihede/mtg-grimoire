@@ -31,7 +31,7 @@ beforeEach(() => {
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
   });
   invalidate = vi.spyOn(client, "invalidateQueries").mockReturnValue(Promise.resolve());
-  collectionClear.mockReset().mockResolvedValue({ entries: 12, allocations: 3 });
+  collectionClear.mockReset().mockResolvedValue({ entries: 12 });
   wishlistClear.mockReset().mockResolvedValue(4);
   decksClear.mockReset().mockResolvedValue({ decks: 2, folders: 1, covers: 0 });
   cacheClear.mockReset().mockResolvedValue({ files: 20, bytes: 4_000, rows: 20, failed: 0 });
@@ -114,7 +114,7 @@ describe("useDangerZone", () => {
     await waitFor(() =>
       expect(result.current.status).toEqual({
         tone: "plain",
-        text: "Cleared 12 collection entries and released 3 deck reservations.",
+        text: "Cleared 12 collection entries.",
       }),
     );
   });

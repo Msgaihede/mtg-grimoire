@@ -38,33 +38,20 @@ describe("fileSize", () => {
 
 describe("collectionOutcome", () => {
   /**
-   * The allocations clause is the consequence the reader did not ask for, and the reason this
-   * is a sentence rather than a count.
+   * The measured library on this machine is five figures, which is why `counted` reaches for
+   * `count` rather than `plural` — so the separator is the assertion here, not the noun.
    */
-  it("names the deck reservations the cascade released", () => {
-    expect(collectionOutcome({ entries: 1284, allocations: 37 })).toBe(
-      "Cleared 1,284 collection entries and released 37 deck reservations.",
-    );
-  });
-
-  /** A reader with no decks is not owed a sentence about decks. */
-  it("drops the clause rather than printing zero reservations", () => {
-    expect(collectionOutcome({ entries: 12, allocations: 0 })).toBe(
-      "Cleared 12 collection entries.",
-    );
+  it("counts the entries with thousands separators", () => {
+    expect(collectionOutcome({ entries: 1284 })).toBe("Cleared 1,284 collection entries.");
   });
 
   it("agrees with a count of one", () => {
-    expect(collectionOutcome({ entries: 1, allocations: 1 })).toBe(
-      "Cleared 1 collection entry and released 1 deck reservation.",
-    );
+    expect(collectionOutcome({ entries: 1 })).toBe("Cleared 1 collection entry.");
   });
 
   /** Pressing Clear on an empty collection is not a mistake worth a row of zeroes. */
   it("says nothing happened rather than reporting zero", () => {
-    expect(collectionOutcome({ entries: 0, allocations: 0 })).toBe(
-      "The collection was already empty.",
-    );
+    expect(collectionOutcome({ entries: 0 })).toBe("The collection was already empty.");
   });
 });
 
