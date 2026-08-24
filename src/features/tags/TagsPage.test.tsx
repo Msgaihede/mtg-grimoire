@@ -755,6 +755,9 @@ describe("the results wall", () => {
     wrap(<TagsPage />);
     await screen.findByRole("button", { name: "Lightning Bolt" });
 
+    // A view mode, and it lives in the filter row's tray with the other five since the row was
+    // redesigned — only the box, the colours, the mana values and the sort stay on the bar.
+    await user.click(screen.getByRole("button", { name: /^Show filters/ }));
     await user.click(screen.getByRole("button", { name: "All printings" }));
 
     await waitFor(() => expect(lastRequest().collapse).toBe(true));

@@ -540,6 +540,21 @@ async function openSearchPanel() {
 }
 
 /**
+ * The panel's card search **with its filter tray open** — Set, Format, Owned, Rarity, Price and
+ * Printings, which the filter row has kept behind a disclosure since it was redesigned.
+ *
+ * Idempotent for {@link openSearchPanel}'s reason and by the same test: it presses only when the
+ * button says the tray is shut, so no case here is a claim about which state it opens in. That
+ * claim is `FilterBar.test.tsx`'s, and making it twice would leave one of the two a copy that
+ * quietly stopped meaning anything.
+ */
+async function openFilterTray() {
+  await openSearchPanel();
+  const toggle = await screen.findByRole("button", { name: /^(Show|Hide) filters/ });
+  if (toggle.getAttribute("aria-expanded") !== "true") await userEvent.click(toggle);
+}
+
+/**
  * The own/need control, by the words on it — **opening the search column and its card-search tab
  * on the way**, because that is where the pair is drawn (2026-08-23).
  *
@@ -571,25 +586,40 @@ async function openAddTo() {
 const group = (name: string) => screen.getByRole("region", { name });
 
 /**
- * Wait until `format_specs` has answered.
+ * Wait until `format_specs` has answered, for the deck under test.
  *
  * The seed is a query, so on the first deck of a session the editor mounts before it lands and
  * the docked panel's format default is `null` for a render or two — which looks exactly like a
  * deck the fence deliberately left unfiltered. Anything asserting on that default has to be past
  * this line or it is testing a query in flight.
  *
- * **The sentinel has to be a `PICKER` format the deck under test is _not_ on**: `pickerFormats`
- * folds a deck's own format into the header's list whether or not anything has loaded, so that
- * option is there from the first paint and waiting for it would gate on nothing. `Gladiator` is
- * the default because every deck fixture here is on something else; the one test whose deck *is*
- * Gladiator passes another of `PICKER`'s four.
+ * **It waited on an option of the header's `Deck format` select until 2026-08-24**, and that
+ * select is gone — the question is Deck settings' now. The ledger's check button is the tell that
+ * replaced it, and it is a *stronger* one: it is drawn only once a spec is in hand and it names
+ * the ruleset it checked against, where the old sentinel merely proved that some other row of the
+ * same table had arrived.
+ *
+ * So it takes the deck's own format rather than a sentinel — and the one fixture whose key the
+ * seed does not carry (`historic`) can never satisfy it, which is honest: there is no spec for
+ * that deck, so there is nothing for this to wait for. That test says so at its own site.
  */
-const seeded = (sentinel = "Gladiator") =>
-  waitFor(() =>
-    expect(
-      within(screen.getByLabelText("Deck format")).getByRole("option", { name: sentinel }),
-    ).toBeInTheDocument(),
-  );
+const seeded = (format: string) =>
+  screen.findByRole("button", { name: new RegExp(`· ${format}$`) });
+
+/**
+ * Make a deck-row write, in the fewest acts a test can spend.
+ *
+ * **The header's `Deck game` select was this and is gone** (2026-08-24): both selects are Deck
+ * settings' now, and reaching one from here would be a dialog and four presses for a write whose
+ * *field* no caller cares about. The name field is the header's remaining one-act `deck_update` —
+ * Enter commits without waiting for the caret to leave — and it goes through exactly the same
+ * mutation, so the refusal banner, the re-read and the gone message are reached the same way.
+ */
+async function writeToDeck(name = "Sunday burn") {
+  const field = screen.getByLabelText("Deck name");
+  await userEvent.clear(field);
+  await userEvent.type(field, `${name}{Enter}`);
+}
 
 /** What the stepper on the fixture's Bolt is called. Named by the **slot** — the card and the
  *  pile — because the same printing sits in two categories often enough that a name without one
@@ -803,92 +833,36 @@ describe("DeckEditor", () => {
     );
   });
 
-  /** The header is the deck: what it is called and what it is for. */
-  it("heads the editor with the deck's name and format", async () => {
+  /**
+   * The header is the deck: what it is called and what it is judged by.
+   *
+   * **The format is a word on the ledger and no longer a select** (2026-08-24). Both of the
+   * header's selects moved out — `DeckSettingsDialog` had been asking the same two questions all
+   * along, and this row was printing the answers at the cost of ~250px on a row that already
+   * wrapped. What had to stay is the *answer*: a ledger that says `2 issues` without saying issues
+   * with what is a count with no scope.
+   */
+  it("heads the editor with the deck's name and the ruleset it is judged by", async () => {
     await open();
 
     expect(screen.getByLabelText("Deck name")).toHaveValue("Burn");
-    expect(screen.getByLabelText("Deck format")).toHaveValue("modern");
-  });
-
-  /**
-   * **Alphabetically by display name, not in the `sortOrder` Rust answers in.** The seed ranks
-   * the formats by how the game groups them and the mock keeps that ranking — Modern,
-   * Commander, Gladiator, Casual — so the sequence below is the picker's own doing. A reader
-   * changing a deck's format looks for Modern under M, not in seventh place.
-   *
-   * The whole sequence rather than one position: an ordering asserted a row at a time still
-   * passes once somebody adds a format that lands in the wrong half of it.
-   */
-  it("offers the formats alphabetically, whatever order the table answered in", async () => {
-    await open();
-
-    const format = screen.getByLabelText("Deck format");
+    // Scoped to the term, because `Modern` is also an `<option>` of the docked panel's own
+    // format filter — which is the pair the four tests further down are about.
     expect(
-      within(format)
-        .getAllByRole("option")
-        .map((o) => o.textContent),
-    ).toEqual(["Casual", "Commander", "Gladiator", "Modern"]);
-  });
-
-  /**
-   * A deck on a format the seed no longer offers still shows its own format — `decks.format_key`
-   * is deliberately not a foreign key, so this state can exist, and a select that cannot show
-   * its own value would silently re-format the deck on the first other change.
-   *
-   * **The row is folded into the alphabet rather than pinned first**: it is an option like any
-   * other, and the select's own `value` is what marks it as the current one. Historic sits
-   * between Gladiator and Modern here, which is the whole assertion — pinned, it would be
-   * first, and the list would be telling the reader something the `value` already says.
-   */
-  it("folds a deck's own format into the list when the seed no longer offers it", async () => {
-    deckGet.mockResolvedValue(detail({ formatKey: "historic", formatName: "Historic" }, [bolt()]));
-    await open();
-
-    const format = screen.getByLabelText("Deck format");
-    expect(format).toHaveValue("historic");
-    expect(
-      within(format)
-        .getAllByRole("option")
-        .map((o) => o.textContent),
-    ).toEqual(["Casual", "Commander", "Gladiator", "Historic", "Modern"]);
-  });
-
-  /**
-   * The game select, and **the two things it does are one write and one filter**.
-   *
-   * The write is an ordinary `deckUpdate` on `gameKey` alone — no `formatKey` rides with it,
-   * which is what "setting a game never re-formats a deck" means on the wire. The filter is
-   * `pickerFormats`': Arena keeps Gladiator and Casual out of `PICKER`'s four and drops
-   * Commander, and **Modern is still there because it is this deck's own** — folded back in by
-   * `keep`, which is the whole reason a Modern deck can say Arena at all.
-   *
-   * The list is read after the write rather than in the same act, because the deck row is what
-   * feeds it: the mock has to answer before the header can redraw.
-   */
-  it("narrows the format list to the deck's game, keeping the deck's own format", async () => {
-    await open();
-    const game = screen.getByLabelText("Deck game");
-    expect(game).toHaveValue("any");
-    expect(
-      within(game)
-        .getAllByRole("option")
-        .map((o) => o.textContent),
-    ).toEqual(["Any", "Paper", "Arena", "MTGO"]);
-
-    deckGet.mockResolvedValue(detail({ gameKey: "arena" }, [bolt()]));
-    deckUpdate.mockResolvedValue({ ...DECK, gameKey: "arena" });
-    await userEvent.selectOptions(game, "arena");
-
-    expect(deckUpdate).toHaveBeenCalledWith(DECK.id, { gameKey: "arena" });
-    await waitFor(() =>
-      expect(
-        within(screen.getByLabelText("Deck format"))
-          .getAllByRole("option")
-          .map((o) => o.textContent),
-      ).toEqual(["Casual", "Gladiator", "Modern"]),
+      await screen.findByText("Format", { selector: "dt" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Format", { selector: "dt" }).closest("div")).toHaveTextContent(
+      "Modern",
     );
-    expect(screen.getByLabelText("Deck format")).toHaveValue("modern");
+  });
+
+  /** Changing either is a Deck settings trip, and this row draws neither control. Asserted as an
+   *  absence, which is the only thing that would catch one creeping back. */
+  it("draws no format or game select of its own", async () => {
+    await open();
+
+    expect(screen.queryByLabelText("Deck format")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Deck game")).not.toBeInTheDocument();
   });
 
   /** The caret starts in the editor rather than on `<body>`: the gallery's New deck button —
@@ -919,7 +893,13 @@ describe("DeckEditor", () => {
    *   pixels of the control beside it (then a "N cards differ" readout, now Compare) hit-tested
    *   to the format select.
    *
-   * Reverting any one of the three brings the collapse back, so all three are asserted.
+   * **The third of those is deliberately reversed since 2026-08-24, and the reversal is safe for
+   * a reason the old shape did not have.** The controls are `shrink-0 flex-nowrap` again — but
+   * the block gives width back *itself* now, dropping the four labelled buttons to their icons as
+   * the column narrows, so it is a fixed run whose fixed width is a function of the column. What
+   * catches the width below which even the narrow run does not fit is the row's own `flex-wrap`:
+   * the whole block folds to a line of its own rather than crushing the name. The wrapper that
+   * used to sit between the field and this row went with the Compare button that made it a group.
    */
   it("keeps the deck name from collapsing between the controls beside it", async () => {
     await open();
@@ -931,14 +911,16 @@ describe("DeckEditor", () => {
     // …and an intrinsic width small enough that the floor is the only floor.
     expect(name).toHaveAttribute("size", "1");
 
-    const identity = name.parentElement!;
-    expect(identity.className).toContain("flex-wrap");
-    expect(identity.className).not.toContain("min-w-0");
+    // The field is the row's own flexible child: no wrapper between it and the wrapping row.
+    const row = name.parentElement!;
+    expect(row.className).toContain("flex-wrap");
+    expect(row.className).not.toContain("min-w-0");
 
-    // The controls: shrinkable, so they fold rather than pushing the name out of the window.
-    const controls = identity.parentElement!.lastElementChild!;
-    expect(controls.className).toContain("flex-wrap");
-    expect(controls.className).not.toContain("shrink-0");
+    // The controls are the row's last child, pinned to the right and never squeezed.
+    const controls = row.lastElementChild!;
+    expect(controls.className).toContain("shrink-0");
+    expect(controls.className).toContain("ml-auto");
+    expect(controls.className).not.toContain("flex-wrap");
   });
 
   /**
@@ -1067,14 +1049,6 @@ describe("DeckEditor", () => {
     await userEvent.click(screen.getByRole("button", { name: /back to decks/i }));
 
     expect(useAppStore.getState().openDeckId).toBeNull();
-  });
-
-  it("re-formats the deck from the header select", async () => {
-    await open();
-
-    await userEvent.selectOptions(screen.getByLabelText("Deck format"), "commander");
-
-    await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { formatKey: "commander" }));
   });
 
   /**
@@ -1649,7 +1623,6 @@ describe("DeckEditor", () => {
 
     const stats = screen.getByRole("region", { name: "Deck stats" });
     // Four Bolts and two Bears, both nonlands, both mana value 1.
-    expect(within(stats).getByText("Cards").nextElementSibling).toHaveTextContent("6");
     expect(
       within(within(stats).getByRole("list", { name: "Mana curve" })).getByText(
         "6 cards at mana value 1",
@@ -1657,6 +1630,25 @@ describe("DeckEditor", () => {
     ).toBeInTheDocument();
 
     expect(screen.queryByRole("button", { name: "Stats" })).not.toBeInTheDocument();
+  });
+
+  /**
+   * **The five figures are the header's ledger and are drawn exactly once** (2026-08-24). They
+   * were the band's `FigureRow` until then, under two screens of deck — the wrong end of the page
+   * for the numbers a reader edits against — and both surfaces derive them from `deckStats` over
+   * the same rows, so moving them could only ever have left a duplicate rather than a
+   * disagreement. The absence below is what pins that it did not.
+   */
+  it("heads the deck with a ledger of what it adds up to, and draws it once", async () => {
+    await open();
+
+    // Four Bolts and two Bears, none of them lands.
+    const cards = screen.getByText("Cards", { selector: "dt" });
+    expect(cards.closest("div")).toHaveTextContent("6");
+    expect(screen.getAllByText("Cards", { selector: "dt" })).toHaveLength(1);
+    expect(
+      within(screen.getByRole("region", { name: "Deck stats" })).queryByText("Cards"),
+    ).not.toBeInTheDocument();
   });
 
   /**
@@ -1840,9 +1832,9 @@ describe("DeckEditor", () => {
     await screen.findByRole("complementary", { name: "Card details" });
 
     // The deck goes, and the editor's own re-read is what tells it. Any deck write would do it;
-    // the format select is the cheapest one to press.
+    // the name field is the cheapest one left in this header.
     deckGet.mockResolvedValue(null);
-    await userEvent.selectOptions(screen.getByLabelText("Deck format"), "modern");
+    await writeToDeck();
 
     expect(
       await screen.findByText(/this deck is not there any more\. it may have been deleted/i),
@@ -2515,7 +2507,7 @@ describe("DeckEditor", () => {
         CATEGORIES.filter((c) => c.id !== SIDE),
       ),
     );
-    await userEvent.selectOptions(screen.getByLabelText("Deck game"), "paper");
+    await writeToDeck();
 
     // Read off the Add button, which is where the answer is visible: `Creature` is what
     // `autoCategoryFor` makes of this card, so the editor is on Auto.
@@ -2525,11 +2517,14 @@ describe("DeckEditor", () => {
   });
 
   /**
-   * The editor draws **two** format controls and they ask different questions about the same
-   * word: the header's `Deck format` says what the deck *is* and writes it, and the panel's
-   * `Format` narrows what the search *offers* and writes nothing. Both are read in each of the
-   * three tests below, so a rename that collapsed the two names into one fails here rather than
-   * passing by matching whichever control the query happened to reach first.
+   * The docked panel's `Format` narrows what the search *offers* and writes nothing; what the
+   * deck **is** is a word on the ledger and a control in Deck settings.
+   *
+   * **The editor drew two format controls until 2026-08-24 and the three tests below read both**,
+   * so that a rename collapsing the two names into one failed here rather than passing by
+   * matching whichever the query reached first. There is one control called `Format` on this
+   * screen now, which retires the ambiguity rather than the tests: each still reads the deck's own
+   * format off the ledger beside the filter, which is the pair that could disagree.
    */
   it("opens the docked panel's format filter on the deck's own format", async () => {
     await open();
@@ -2537,11 +2532,13 @@ describe("DeckEditor", () => {
     // there is no Format select to read until the disclosure is pressed. The seed is applied
     // when the search mounts, which is that press — so "opens on" is literally what this
     // asserts rather than a state the editor arranged in advance.
-    await openSearchPanel();
-    await seeded();
+    await openFilterTray();
+    await seeded("Modern");
 
     expect(screen.getByLabelText("Format")).toHaveValue("modern");
-    expect(screen.getByLabelText("Deck format")).toHaveValue("modern");
+    expect(screen.getByText("Format", { selector: "dt" }).closest("div")).toHaveTextContent(
+      "Modern",
+    );
   });
 
   /**
@@ -2558,11 +2555,13 @@ describe("DeckEditor", () => {
   it("opens on Any format for a deck whose format has no legality data", async () => {
     deckGet.mockResolvedValue(detail({ formatKey: "casual", formatName: "Casual" }, [bolt()]));
     await open();
-    await openSearchPanel();
-    await seeded();
+    await openFilterTray();
+    await seeded("Casual");
 
     expect(screen.getByLabelText("Format")).toHaveValue("");
-    expect(screen.getByLabelText("Deck format")).toHaveValue("casual");
+    expect(screen.getByText("Format", { selector: "dt" }).closest("div")).toHaveTextContent(
+      "Casual",
+    );
   });
 
   /**
@@ -2574,15 +2573,22 @@ describe("DeckEditor", () => {
    * `null`, whatever made it do so.) There is no `hasLegalityData` cell to read then — and
    * inferring one from the key would be this file guessing at what the database can answer — so
    * the panel opens unfiltered rather than on a filter nothing behind it has heard of.
+   *
+   * **This is the one test `seeded` cannot gate**, and the reason is the state it is about: there
+   * is no spec for this deck, so the ledger's check button — the thing that says a spec has
+   * arrived — is never drawn at all. Nothing is lost by waiting on the ledger's own `Format` term
+   * instead, because the fence's answer here is `Any format` before the seed lands and after it:
+   * the wait was never what made the assertion true. What that term reads is a second claim worth
+   * having — with no spec to name the ruleset, it falls back to the deck row's own `formatName`.
    */
   it("opens on Any format for a deck whose format the seed does not carry", async () => {
     deckGet.mockResolvedValue(detail({ formatKey: "historic", formatName: "Historic" }, [bolt()]));
     await open();
-    await openSearchPanel();
-    await seeded();
+    await openFilterTray();
+    await screen.findByText("Historic");
 
     expect(screen.getByLabelText("Format")).toHaveValue("");
-    expect(screen.getByLabelText("Deck format")).toHaveValue("historic");
+    expect(screen.queryByRole("button", { name: /issues? ·|No issues ·/ })).not.toBeInTheDocument();
   });
 
   /**
@@ -2596,23 +2602,20 @@ describe("DeckEditor", () => {
    * that is not disabled, and the panel would say `Any format` over a wall already narrowed to
    * Gladiator. Both assertions are made for that reason: `value` reads back `""` under the bug
    * and the option's text is the whole of what the reader sees.
-   *
-   * The sentinel is `Commander` here rather than the helper's `Gladiator`, because this deck's
-   * own format is folded into the header's list before the seed lands.
    */
   it("draws a deck format the filter row's own list has never carried", async () => {
     deckGet.mockResolvedValue(
       detail({ formatKey: "gladiator", formatName: "Gladiator" }, [bolt()]),
     );
     await open();
-    // The filter row lives in `OpenPanel`, which mounts on the disclosure press (2026-08-14).
-    await openSearchPanel();
-    await seeded("Commander");
+    // The filter row lives in `OpenPanel`, which mounts on the disclosure press (2026-08-14),
+    // and the Format select is one press further in — inside the row's own filter tray.
+    await openFilterTray();
+    await seeded("Gladiator");
 
     const filter = screen.getByLabelText("Format") as HTMLSelectElement;
     expect(filter).toHaveValue("gladiator");
     expect(filter.selectedOptions[0]).toHaveTextContent("Gladiator");
-    expect(screen.getByLabelText("Deck format")).toHaveValue("gladiator");
   });
 
   /**
@@ -3326,7 +3329,7 @@ describe("DeckEditor", () => {
    */
   it("never has the set filter and one of the editor's own layers open at once", async () => {
     await open();
-    await openSearchPanel();
+    await openFilterTray();
     const setFilter = () => screen.getByRole("button", { name: "Set" });
     const filterOpen = () => screen.queryByRole("combobox", { name: "Search sets" });
 
@@ -3368,7 +3371,7 @@ describe("DeckEditor", () => {
     // before the press would take the deck away on the way in rather than on the write.
     deckUpdate.mockRejectedValue("That deck is not there any more.");
     deckGet.mockResolvedValue(null);
-    await userEvent.selectOptions(screen.getByLabelText("Deck game"), "paper");
+    await writeToDeck();
 
     expect(await screen.findByText(/this deck is not there any more/i)).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
@@ -3457,17 +3460,28 @@ describe("DeckEditor", () => {
     );
   }
 
-  /** The two tabs, and which of them the reader's eye lands on first. **Theory before Live**:
-   *  the plan is the list a deck is built in, and it is where turning the switch on now puts
-   *  the cards. Asserted as a sequence, because both being present says nothing about that. */
-  it("draws the plan's tab before the deck's", async () => {
+  /**
+   * The two tabs, and which of them the reader's eye lands on first. **Theory before Live**: the
+   * plan is the list a deck is built in, and it is where turning the switch on now puts the
+   * cards. Asserted as a sequence, because both being present says nothing about that.
+   *
+   * **Compare is the third control in this group since 2026-08-24** — a `Scale` glyph between the
+   * two lists it weighs against each other, which is where the redesign puts it and is why it
+   * stopped being a worded button. So the sequence is asserted over the *names*, and the middle
+   * one has no text at all.
+   */
+  it("draws the plan's tab before the deck's, with Compare between them", async () => {
     withPlan();
     await open();
 
     const tabs = within(await screen.findByRole("group", { name: "Deck list" })).getAllByRole(
       "button",
     );
-    expect(tabs.map((b) => b.textContent)).toEqual(["Theory", "Live"]);
+    expect(tabs.map((b) => b.getAttribute("aria-label") ?? b.textContent)).toEqual([
+      "Theory",
+      "Compare",
+      "Live",
+    ]);
   });
 
   /**
@@ -3743,7 +3757,7 @@ describe("DeckEditor", () => {
     deckGet.mockResolvedValueOnce(detail({}, [bolt()])).mockResolvedValue(null);
 
     await open();
-    await userEvent.selectOptions(screen.getByLabelText("Deck game"), "paper");
+    await writeToDeck();
 
     expect(await screen.findByText(/this deck is not there any more/i)).toBeInTheDocument();
   });
@@ -3812,7 +3826,7 @@ describe("DeckEditor", () => {
     deckUpdate.mockRejectedValue("The database is busy with a sync — try again in a moment.");
 
     await open();
-    await userEvent.selectOptions(screen.getByLabelText("Deck game"), "paper");
+    await writeToDeck();
 
     expect(await screen.findByRole("alert")).toHaveTextContent("The database is busy with a sync");
   });
@@ -4433,7 +4447,7 @@ describe("DeckEditor — a card's menu", () => {
   /** Modern has no command zone, so neither zone row is a thing this deck can be asked about. */
   it("offers no commander row in a format with no command zone", async () => {
     await open();
-    await seeded();
+    await seeded("Modern");
     await rightClickCard("Lightning Bolt");
 
     expect(screen.queryByRole("menuitem", { name: /Set as commander/ })).not.toBeInTheDocument();
@@ -4458,7 +4472,7 @@ describe("DeckEditor — a card's menu", () => {
       detail({ formatKey: "commander", formatName: "Commander" }, [bolt()]),
     );
     await open();
-    await seeded("Modern");
+    await seeded("Commander");
 
     await rightClickCard("Lightning Bolt");
     const row = await screen.findByRole("menuitem", { name: /Set as commander/ });
@@ -4485,7 +4499,7 @@ describe("DeckEditor — a card's menu", () => {
       detail({ formatKey: "commander", formatName: "Commander" }, [atraxa]),
     );
     await open();
-    await seeded("Modern");
+    await seeded("Commander");
 
     await rightClickCard("Atraxa, Praetors' Voice");
     const row = await screen.findByRole("menuitem", { name: /Set as commander/ });

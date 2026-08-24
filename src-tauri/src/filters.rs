@@ -102,6 +102,16 @@ pub struct CardFilters {
     /// See [`VARIABLE_COST_LIKE`] for why the test is a `LIKE` over `{X}` alone.
     pub mana_x: Option<bool>,
     pub rarity: Option<String>,
+    /// Rarities to include, ORed with each other and ANDed with everything else — the search
+    /// view's chip row, where picking `rare` and `mythic` means "either".
+    ///
+    /// **A field beside [`Self::rarity`] rather than a widening of it**, and the two are not
+    /// the same question asked twice. That one is a *single* rarity and is what the printings
+    /// modal's `<select>` sends; this is a multi-select, and a control that can pick two has
+    /// to be able to pick none — which for a `Vec` is `[]`, a value the single field cannot
+    /// spell. They AND with each other if a caller sends both, exactly as any two filters on
+    /// this struct do; nothing in the app sends both today.
+    pub rarities: Option<Vec<String>>,
     /// Omitted means true in the search and false in the collection: a search offers cards
     /// to own, a collection lists cards that are owned.
     pub paper_only: Option<bool>,
@@ -377,6 +387,24 @@ pub fn push_card_filters(p: &mut Predicates, f: &CardFilters, alias: &str, rows:
     if let Some(r) = nonblank(&f.rarity) {
         p.push(format!("{alias}.rarity = ?"), Box::new(r.to_owned()));
     }
+
+    // OR within, AND without — [`picked_sets`]' shape, for [`picked_rarities`]' reason. A
+    // cleared chip row sends `[]` and would otherwise bind `IN ()`, which is a syntax error in
+    // SQLite; an empty list is therefore no filter at all rather than a filter matching nothing.
+    //
+    // `{alias}.rarity` with no `rows` fallback, like the format, colour and mana-value arms
+    // above it: a rarity is a claim only a card row can make, so an orphaned collection entry
+    // fails it — `NULL IN (…)` is NULL.
+    if let Some(rarities) = f.rarities.as_deref() {
+        let picked = picked_rarities(rarities);
+        if !picked.is_empty() {
+            let holes = vec!["?"; picked.len()].join(",");
+            p.wheres.push(format!("{alias}.rarity IN ({holes})"));
+            for r in picked {
+                p.params.push(Box::new(r));
+            }
+        }
+    }
     if f.paper_only.unwrap_or(true) {
         p.wheres.push(format!("{alias}.is_paper = 1"));
     }
@@ -539,6 +567,32 @@ pub fn push_card_filters(p: &mut Predicates, f: &CardFilters, alias: &str, rows:
 /// [`crate::index::facets`] has to narrow by *exactly* this list: a facet counted over 70
 /// picked sets while the search returns the 64 this cap leaves would report options as live
 /// that the search cannot reach. Two copies of a normalisation that must agree will not.
+/// The rarities a request really filters on: trimmed, lower-cased, blanks dropped, sorted and
+/// deduplicated.
+///
+/// **An empty answer means "no rarity filter", never "match nothing"** — [`picked_sets`]' rule
+/// and its reason, one dimension along. No cap: Scryfall names six rarities and the chip row
+/// offers four, so there is no list long enough to be worth truncating and a cap would only be
+/// a number to keep in step with nothing.
+///
+/// Lower-cased because `cards.rarity` is Scryfall's own lower-case word and the comparison is
+/// `=`, which in SQLite is case-**sensitive** for text. A `Rare` from a hand-built payload
+/// would otherwise match nothing and read as an empty corpus.
+///
+/// A function rather than five lines inside [`push_card_filters`], because
+/// [`crate::index::facets`] narrows by exactly this list — the argument [`picked_sets`] makes,
+/// and the trap it was extracted to avoid.
+pub fn picked_rarities(rarities: &[String]) -> Vec<String> {
+    let mut picked: Vec<String> = rarities
+        .iter()
+        .map(|r| r.trim().to_ascii_lowercase())
+        .filter(|r| !r.is_empty())
+        .collect();
+    picked.sort();
+    picked.dedup();
+    picked
+}
+
 pub fn picked_sets(sets: &[String]) -> Vec<String> {
     let mut picked: Vec<String> = sets
         .iter()
@@ -713,6 +767,77 @@ mod tests {
             "{:?}",
             joined.wheres
         );
+    }
+
+    /// The rarity chips are **OR within and AND without**, which is what a multi-select means
+    /// everywhere else on this row — and an empty list is *no filter*, never a filter matching
+    /// nothing.
+    ///
+    /// The empty arm is the one that has bitten every other list filter here: a cleared control
+    /// sends `[]` and some send `[""]`, and either taken literally is `IN ()` — a syntax error in
+    /// SQLite, and an empty wall with no chip drawn to explain it anywhere else.
+    #[test]
+    fn the_rarity_chips_or_within_and_an_empty_list_is_no_filter() {
+        let sql = |f: CardFilters| {
+            let mut p = Predicates::default();
+            push_card_filters(&mut p, &f, "c", None);
+            p.where_sql()
+        };
+
+        assert!(!sql(CardFilters::default()).contains("rarity"));
+        assert!(
+            !sql(CardFilters {
+                rarities: Some(vec![]),
+                ..Default::default()
+            })
+            .contains("rarity"),
+            "an empty list is no filter"
+        );
+        assert!(
+            !sql(CardFilters {
+                rarities: Some(vec!["".into(), "   ".into()]),
+                ..Default::default()
+            })
+            .contains("rarity"),
+            "blanks are dropped rather than bound"
+        );
+
+        let mut p = Predicates::default();
+        push_card_filters(
+            &mut p,
+            &CardFilters {
+                rarities: Some(vec!["mythic".into(), "rare".into()]),
+                ..Default::default()
+            },
+            "c",
+            None,
+        );
+        // Filtered to the arm under test: `paper_only` defaults on, so it is always in here.
+        let rarity: Vec<&String> = p.wheres.iter().filter(|w| w.contains("rarity")).collect();
+        assert_eq!(rarity, vec!["c.rarity IN (?,?)"], "one group, ORed");
+        assert_eq!(p.params.len(), 2);
+    }
+
+    /// **The normalisation is [`picked_rarities`] and the facet index narrows by the same
+    /// function**, which is the whole reason it is a function: a count taken over a rarity the
+    /// search dropped reports an option as live that the search cannot reach.
+    ///
+    /// Lower-cased because `cards.rarity` holds Scryfall's own lower-case word and SQLite's `=`
+    /// on text is case-sensitive — a `Rare` bound as sent would match nothing and read as an
+    /// empty corpus rather than as a bug.
+    #[test]
+    fn picked_rarities_lower_cases_sorts_and_deduplicates() {
+        assert_eq!(
+            picked_rarities(&[
+                " Rare ".into(),
+                "MYTHIC".into(),
+                "rare".into(),
+                "".into(),
+                "common".into(),
+            ]),
+            vec!["common", "mythic", "rare"]
+        );
+        assert!(picked_rarities(&[]).is_empty());
     }
 
     /// `manaX` is omitted-means-**off**, like [`CardFilters::playable_only`] and unlike

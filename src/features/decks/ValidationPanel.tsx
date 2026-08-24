@@ -1,7 +1,6 @@
-import { Fragment, useEffect, useMemo, useRef, useState, type RefObject } from "react";
-import { ChevronRight, CircleCheck, TriangleAlert } from "lucide-react";
+import { Fragment, useEffect, useMemo, useRef, type RefObject } from "react";
+import { CircleCheck, TriangleAlert } from "lucide-react";
 import { AnimatePresence, motion, useIsPresent } from "motion/react";
-import { FILTER_CONTROL, FILTER_FOCUS } from "@/components/FilterChips";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { FOCUS } from "@/lib/focus";
 import type { DeckCard, FormatSpec } from "@/lib/ipc";
@@ -9,7 +8,6 @@ import { LAYER } from "@/lib/layers";
 import { popup } from "@/lib/motion";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
-import { estimateBracket } from "./validation/bracket";
 import { validateDeck } from "./validation/engine";
 import type { ValidationIssue } from "./validation/types";
 
@@ -126,10 +124,19 @@ export interface ValidationPanelProps {
    *  `format_specs` is still loading, or the deck's format has left the seed. */
   spec: FormatSpec;
   open: boolean;
-  /** The chip, so the editor can hand the caret back to it on the way out. */
+  /**
+   * The narrowest editor column the header reasons about, where the button keeps the count and
+   * loses the word.
+   *
+   * Nothing goes with the word: the count is still the button's whole visible text, and the
+   * sentence it shortens from — `2 issues · Modern` — is its accessible name and its tooltip at
+   * every width.
+   */
+  tight?: boolean;
+  /** The button, so the editor can hand the caret back to it on the way out. */
   buttonRef: RefObject<HTMLButtonElement | null>;
   onOpen: () => void;
-  /** Escape, and the chip pressed a second time: the caret comes back to the chip. */
+  /** Escape, and the button pressed a second time: the caret comes back to it. */
   onDismiss: () => void;
   /** Focus left on its own. Closes and hands nothing back — the reader is already
    *  somewhere else. */
@@ -138,7 +145,7 @@ export interface ValidationPanelProps {
 }
 
 /**
- * What the rules make of this deck, behind one glyph.
+ * What the rules make of this deck, behind a count.
  *
  * **Advisory, never blocking** — spec §7, and the engine's own design: nothing here refuses a
  * write, greys out a control or stops a deck from being saved, because an illegal deck is a
@@ -146,15 +153,18 @@ export interface ValidationPanelProps {
  * much of it; opening it says what, in the engine's own sentences, with the card each finding is
  * about reachable from the sentence itself.
  *
- * **It was a chip reading "No issues · Modern" or "3 issues" until 2026-08-18**, and what
- * retired that is the deck it sits over having two lists: Live and Theory hold different cards,
- * fail different rules, and are switched between two controls to the left of this one — so the
- * readout changed width as the reader flipped between them and took the rest of the row with it.
- * The button's own site below carries the rest of that argument.
+ * **It said its count in words, then in a glyph, and says it in words again** — and the two
+ * changes are about two different rows. It went glyph-only on 2026-08-18 because it stood beside
+ * the Live/Theory switch on the *action* row: the two lists fail different rules, so flipping
+ * between them took the readout from "No issues · Modern" to "3 issues" and slid every control to
+ * its right, at widths where that could also change which line they were on. It sits on the
+ * header's ledger line now (2026-08-24), at the right-hand end of a group pinned by `ml-auto`
+ * with nothing after it — so a change of width moves this control and the two chips beside it and
+ * reflows nothing else. The argument expired with the position; the words came back with it.
  *
- * The bracket estimate rides in the same panel for the commander formats, and is an estimate
- * in the copy as well as in the code: `estimateBracket` emits no issue, and a number that
- * cannot make a deck illegal must not be drawn as though it could.
+ * **The bracket estimate used to ride in this panel and does not** (2026-08-24). It is
+ * `DeckBracket` now, one press along the same line: a bracket cannot make a deck illegal, and an
+ * advisory stapled to the bottom of a list of findings is an advisory nobody goes looking for.
  *
  * The panel is an `"inner"` Escape rung — one press closes it and the card pane behind the
  * view keeps its own — and it is the *same* piece of state as the editor's dialogs, so those can
@@ -171,6 +181,7 @@ export function ValidationPanel({
   cards,
   spec,
   open,
+  tight = false,
   buttonRef,
   onOpen,
   onDismiss,
@@ -184,13 +195,6 @@ export function ValidationPanel({
   // few hundred rows, and one pass over them is cheaper than the render it rides along with. A
   // check that lagged the stepper beside it would be a check the reader stops trusting.
   const issues = useMemo(() => validateDeck([...cards], spec), [cards, spec]);
-  // Only while the panel is up, unlike the issues: nothing outside the panel draws a bracket,
-  // and this one greps every face of every card for four phrases. `validateDeck` earns its
-  // every-render pass because the chip prints its count; this earns nothing until it is read.
-  const bracket = useMemo(
-    () => (open && spec.commanderRule !== null ? estimateBracket([...cards]) : null),
-    [cards, spec, open],
-  );
 
   // The `"inner"` rung, owned here rather than by the editor so that this component is a whole
   // dismissible layer on its own. Safe beside the editor's *other* `"inner"` rung — the row
@@ -205,13 +209,12 @@ export function ValidationPanel({
 
   const count = issues.length;
   /**
-   * The whole of what this control says, now that it says nothing in words.
+   * The whole sentence, which the button never draws in full.
    *
-   * **It names the format in both states, which it did not before.** The count used to be
-   * visible text and the format rode along only on the empty state, where there was nothing
-   * else to print; a label is now the only place either fact exists, and one that named the
-   * ruleset for a clean deck and withheld it for a broken one would be answering "checked
-   * against what?" exactly when the question stops being worth asking.
+   * **It names the format in both states.** The count is visible text again, but the ruleset is
+   * not — the ledger's own `Format` term says it, and that term is the first thing to go when the
+   * column is narrow. So the name is the one place both facts are always true, which is what
+   * makes it worth spending on a tooltip that otherwise repeats the words beside it.
    */
   const label =
     count === 0
@@ -232,43 +235,37 @@ export function ValidationPanel({
       }}
     >
       {/**
-       * **A glyph in a fixed 36px box, because the two lists disagree and this control is
-       * beside the switch between them.** Live and Theory hold different cards, so they fail
-       * different rules: flipping the switch took this from "No issues · Modern" to
-       * "3 issues" and back, and every control to its right — Built, the two action buttons —
-       * slid along with it. A readout that moves the row when the reader changes what it is
-       * describing is a readout they have to find again each time, and at the widths this row
-       * already wraps at (see the header's `flex-wrap` note) it could also change *which line*
-       * those buttons are on.
+       * **28px and worded, because it is a term on the ledger now rather than a control on the
+       * action row.** The three presses at the right of that line — this, the game-changer count
+       * and the bracket — are one group pinned by `ml-auto`, so what a width change here moves is
+       * the two chips beside it and nothing else. The old 36px square was sized against
+       * `FILTER_CONTROL`'s toolbar; this is sized against the 11px data face the figures to its
+       * left are written in.
        *
-       * The box is `w-9` for the same reason the undo/redo pair on the row below is: 36px is
-       * {@link FILTER_CONTROL}'s own height, so a square is the one width that cannot sit off
-       * the line. Nothing inside it may change that width — which is what the count being
-       * absolutely positioned is for, below.
+       * `tight` takes the word and leaves the count, which is the whole of the shortening: the
+       * visible text stays a prefix of the accessible name (WCAG 2.5.3) in both states, and a
+       * clean deck at that width is the green glyph alone.
        */}
       <button
         ref={buttonRef}
         type="button"
         aria-expanded={open}
         aria-haspopup="dialog"
-        // The name and the tooltip are one string: a glyph says nothing to a screen reader and
-        // nothing to a pointer either, and two hand-written copies of a sentence are two
-        // sentences waiting to disagree. Same arrangement as the undo/redo buttons'.
+        // The name and the tooltip are one string: the button draws the count and never the
+        // ruleset, and two hand-written copies of a sentence are two sentences waiting to
+        // disagree. Same arrangement as the undo/redo buttons'.
         aria-label={label}
         {...tip(label, { describes: false })}
         onClick={() => (open ? onDismiss() : onOpen())}
         className={cn(
-          FILTER_CONTROL,
-          FILTER_FOCUS,
-          // `relative` for the count; `px-0` because the padding was for words.
-          "relative grid w-9 place-items-center px-0",
-          // **Not `filterChipState`**, which is this row's recipe and stays so for every
-          // control on it that is made of text. It says on, off and hover in the *text*
-          // colour, and there is no text here: the glyph's colour is its meaning, so a state
-          // that repainted it would be a green check that turns gold when the panel opens.
-          // The border carries both instead — the on half of `filterChipState` unchanged, and
-          // a hover that brightens the same edge rather than a word.
-          open ? "border-accent" : "border-border hover:border-dim",
+          "inline-flex h-7 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border",
+          "px-2 font-mono text-[0.6875rem] tabular-nums text-dim",
+          "transition-colors duration-150 motion-reduce:transition-none",
+          // **The border carries open and hover, never the words.** The glyph's colour is its
+          // meaning — red for a break, green for none — so a state that repainted the text would
+          // be a green check that turns gold when the panel opens.
+          open ? "border-accent text-text" : "border-border hover:border-dim hover:text-text",
+          FOCUS,
         )}
       >
         {/* Red for a break, green for none, and **the glyph is the only thing coloured** — a
@@ -286,41 +283,20 @@ export function ValidationPanel({
             rule, so a two-tone count would be more precise; it would also be a control with two
             numbers on it, and the panel behind it already tells the two apart per sentence. */}
         {count === 0 ? (
-          <CircleCheck className="size-4 text-ok" aria-hidden="true" />
+          <CircleCheck className="size-3.5 shrink-0 text-ok" aria-hidden="true" />
         ) : (
-          <TriangleAlert className="size-4 text-destructive" aria-hidden="true" />
+          <TriangleAlert className="size-3.5 shrink-0 text-destructive" aria-hidden="true" />
         )}
 
-        {count > 0 && (
-          // **Out of flow, so the box cannot grow.** `absolute` takes the count out of the
-          // `grid` above, which is the whole mechanism: 3 issues and 47 issues draw the same
-          // 36px control, and so does a clean deck. The ring is the page's own background, so
-          // the bubble reads as sitting *on* the button rather than welded to its border.
-          //
-          // **It hangs off the top and never off the right, and that asymmetry is a scrollbar.**
-          // The block this control is in is `flex-wrap justify-end`, so every folded line ends
-          // flush against the header's right edge — which is the deck editor's own edge, and
-          // that editor is the page scroller. `overflow-y: auto` computes `overflow-x` to
-          // `auto` as well, so a bubble 4px past that edge on any width where the wrap happens
-          // to fall right here is 4px of horizontal scroll on a page that must never have any.
-          // Up it costs nothing: the header's `py-1.5` leaves the row 6px of room and the
-          // bubble asks for 3.
-          //
-          // `aria-hidden`, because the number is already in the button's name and a reader who
-          // hears "3 issues · Modern, 3" has been told twice. Capped at two digits — sixty
-          // findings is a real state (a Standard deck full of cards from other formats), and
-          // "99+" is the same shape as "12".
-          <span
-            aria-hidden="true"
-            className={cn(
-              "absolute -top-1 right-0 grid h-4 min-w-4 place-items-center",
-              "rounded-full px-1 font-mono text-[0.625rem] leading-none tabular-nums",
-              "bg-destructive text-bg ring-2 ring-bg",
-            )}
-          >
-            {count > 99 ? "99+" : count}
-          </span>
-        )}
+        {/* The count is the word's own first token, so the two are one text run split at a space
+            rather than two spellings of the same fact — which is what keeps `tight` a *deletion*
+            and not a second string that can drift from this one. A clean deck at that width says
+            nothing at all and leans on the glyph, because "No" alone is not a readout. */}
+        {count === 0
+          ? !tight && "No issues"
+          : tight
+            ? count
+            : `${count} ${count === 1 ? "issue" : "issues"}`}
       </button>
 
       {/* The panel's presence, and it is safe here in a way it is not on the editor's four
@@ -334,7 +310,6 @@ export function ValidationPanel({
             issues={issues}
             cards={cards}
             spec={spec}
-            bracket={bracket}
             buttonRef={buttonRef}
             onSelectCard={onSelectCard}
           />
@@ -349,14 +324,12 @@ function Findings({
   issues,
   cards,
   spec,
-  bracket,
   buttonRef,
   onSelectCard,
 }: {
   issues: ValidationIssue[];
   cards: readonly DeckCard[];
   spec: FormatSpec;
-  bracket: ReturnType<typeof estimateBracket> | null;
   buttonRef: RefObject<HTMLButtonElement | null>;
   onSelectCard: (cardId: string) => void;
 }) {
@@ -396,12 +369,12 @@ function Findings({
       // moment it opens (`SetCombobox`'s decision, for its reason). The editor behind it stays
       // live, which is the point — a reader fixes the deck while reading what is wrong with it.
       className={cn(
-        "absolute left-0 top-11 w-80 max-w-[calc(100vw-2rem)] rounded-lg border",
+        "absolute right-0 top-9 w-80 max-w-[calc(100vw-2rem)] rounded-lg border",
         "border-border bg-bg/95 p-3 text-xs shadow-lg",
         // The scale grows from the corner the panel is pinned by, which is the whole of what
         // `popup` leaves to its consumer: a panel that grew from its own middle would read as
         // unrelated to the chip it hangs off. `left-0` above is why this corner and not another.
-        "origin-top-left",
+        "origin-top-right",
         !present && "pointer-events-none",
         LAYER.popup,
         // The panel scrolls rather than the editor: a Standard deck full of cards from other
@@ -466,76 +439,6 @@ function Findings({
           </div>
         ))
       )}
-
-      {bracket && <Bracket estimate={bracket} />}
     </motion.div>
-  );
-}
-
-/**
- * The Commander bracket, as an advisory.
- *
- * Wizards' scale is explicitly "advisory only, not hard validation" (research doc), so the copy
- * leads with the word estimate and the disclosure names every card the number was read from —
- * a reader who disagrees with a heuristic can see which card caused it, which is the only thing
- * that makes a guess like this worth showing at all.
- */
-function Bracket({ estimate }: { estimate: ReturnType<typeof estimateBracket> }) {
-  const [why, setWhy] = useState(false);
-  const read: { label: string; names: string[] }[] = [
-    { label: "Game changers", names: estimate.gameChangerNames },
-    { label: "Mass land denial", names: estimate.massLandDenial },
-    { label: "Extra turns", names: estimate.extraTurns },
-  ].filter((line) => line.names.length > 0);
-
-  return (
-    <div className="mt-3 border-t border-border pt-2">
-      {/* One text run: a headline fact split across styled spans is a sentence nothing —
-          screen reader, test, or reader skimming — puts back together. */}
-      {/* Geist Mono for the counts, as everywhere else data is counted (the direction doc; the
-          chip above and `DeckStats`'s figures are the in-file precedents). */}
-      <p className="font-mono font-medium tabular-nums">
-        Bracket ~{estimate.bracket} · {estimate.gameChangers} game changer
-        {estimate.gameChangers === 1 ? "" : "s"}
-      </p>
-      <p className="mt-1 text-dim">
-        An estimate from what this app can see — a bracket is a conversation at the table, never a
-        rule this deck can fail.
-      </p>
-
-      {read.length > 0 && (
-        <>
-          <button
-            type="button"
-            aria-expanded={why}
-            onClick={() => setWhy((v) => !v)}
-            className={cn(
-              "mt-1 inline-flex items-center gap-1 rounded-md text-dim",
-              "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
-              FOCUS,
-            )}
-          >
-            <ChevronRight
-              className={cn(
-                "size-3 transition-transform duration-150 motion-reduce:transition-none",
-                why && "rotate-90",
-              )}
-              aria-hidden="true"
-            />
-            What this read
-          </button>
-          {why && (
-            <dl className="mt-1 space-y-1">
-              {read.map((line) => (
-                <div key={line.label}>
-                  <dt className="text-dim">{line.label}</dt>
-                  <dd>{line.names.join(", ")}</dd>
-                </div>
-              ))}
-            </dl>
-          )}
-        </>
-      )}
-    </div>
   );
 }

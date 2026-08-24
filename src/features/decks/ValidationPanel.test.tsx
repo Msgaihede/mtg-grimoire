@@ -5,14 +5,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { DeckCard, FormatSpec } from "@/lib/ipc";
 import { card, commander, gameChanger, islands, LEGAL, spec } from "./validation/fixtures";
 import { messageParts, ValidationPanel } from "./ValidationPanel";
-import { estimateBracket } from "./validation/bracket";
-
-/** The real estimate, watched: the only thing worth asserting about it here is *when* it is
- *  asked, so it delegates rather than pretending. */
-vi.mock("./validation/bracket", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./validation/bracket")>();
-  return { ...actual, estimateBracket: vi.fn(actual.estimateBracket) };
-});
 
 /** The editor's own wiring, in the smallest thing that can hold it: one piece of state, a
  *  ref for the hand-back, and the two ways out kept apart (Escape hands the caret back, a
@@ -67,11 +59,6 @@ function threeIssues(): DeckCard[] {
   ];
 }
 
-/** More findings than the bubble has room for: a hundred and one cards on the ban list. */
-function overAHundredIssues(): DeckCard[] {
-  return Array.from({ length: 101 }, (_, at) => listed(`Banned ${at}`, "banned"));
-}
-
 async function open(ui: Parameters<typeof render>[0]) {
   render(ui);
   await userEvent.click(screen.getByRole("button", { name: /issue|No issues/ }));
@@ -117,20 +104,47 @@ describe("ValidationPanel", () => {
   });
 
   /**
-   * **The whole reason this control is a glyph, and the one half of it jsdom can be asked
-   * about.** Live and Theory hold different cards and so fail different rules, which put the
-   * two states of this readout one switch apart — and while it was words, flipping that switch
-   * changed its width and slid every control to its right along with it. There is no layout
-   * engine here, so the claim is made about the class list rather than about a rect: one
-   * recipe, one fixed width, whatever the deck is doing.
+   * **The count is the button's visible text again** (2026-08-24), which it had not been since
+   * the glyph-only change of 2026-08-18. That change was about the *action row*, where a width
+   * that moved with the variant switch slid every control to its right; this control is at the
+   * right-hand end of the ledger's `ml-auto` group now, with nothing after it to slide.
    */
-  it("draws the same box whether or not anything is wrong", () => {
+  it("says its count in words", () => {
     const clean = render(<Harness cards={[islands(60)]} format={spec("modern")} />).container;
     const broken = render(<Harness cards={threeIssues()} format={spec("modern")} />).container;
     const box = (root: HTMLElement) => root.querySelector<HTMLElement>("[aria-haspopup=dialog]")!;
 
-    expect(box(clean).className).toBe(box(broken).className);
-    expect(box(clean).className).toContain("w-9");
+    expect(box(clean)).toHaveTextContent("No issues");
+    expect(box(broken)).toHaveTextContent("3 issues");
+    // The ruleset is in the name and never on the face: the ledger's own `Format` term says it,
+    // and this control has no room for a second copy.
+    expect(box(broken).textContent).not.toContain("Modern");
+  });
+
+  /**
+   * The narrowest editor column keeps the count and drops the word — a *deletion* rather than a
+   * second string, so the two can never disagree — and the name is the whole sentence at both
+   * widths.
+   */
+  it("keeps the count and drops the word when the column is tight", () => {
+    const { container } = render(
+      <ValidationPanel
+        cards={threeIssues()}
+        spec={spec("modern")}
+        open={false}
+        tight
+        buttonRef={{ current: null }}
+        onOpen={vi.fn()}
+        onDismiss={vi.fn()}
+        onClose={vi.fn()}
+        onSelectCard={vi.fn()}
+      />,
+    );
+    const box = container.querySelector<HTMLElement>("[aria-haspopup=dialog]")!;
+
+    expect(box).toHaveTextContent("3");
+    expect(box.textContent).not.toContain("issues");
+    expect(box).toHaveAccessibleName("3 issues · Modern");
   });
 
   /** Red for a break, green for none — and the glyph is the only thing either colour touches,
@@ -142,24 +156,6 @@ describe("ValidationPanel", () => {
 
     expect(glyph(clean).getAttribute("class")).toContain("text-ok");
     expect(glyph(broken).getAttribute("class")).toContain("text-destructive");
-  });
-
-  /** The count is a bubble hung off the corner: out of the box's flow, so it cannot widen it,
-   *  and out of the accessible name, which already says the number once. */
-  it("prints the count in a bubble that is out of flow and out of the name", () => {
-    render(<Harness cards={threeIssues()} format={spec("modern")} />);
-    const bubble = within(screen.getByRole("button", { name: "3 issues · Modern" })).getByText("3");
-
-    expect(bubble).toHaveAttribute("aria-hidden", "true");
-    expect(bubble.className).toContain("absolute");
-  });
-
-  /** Sixty findings is a real state and three digits are not — the name still says how many. */
-  it("caps the bubble at two digits, and the name never is", () => {
-    render(<Harness cards={overAHundredIssues()} format={spec("modern")} />);
-    const chip = screen.getByRole("button", { name: /^101 issues · Modern$/ });
-
-    expect(within(chip).getByText("99+")).toBeInTheDocument();
   });
 
   /** The engine writes the sentences; the panel prints them. A panel that paraphrased would
@@ -270,58 +266,19 @@ describe("ValidationPanel", () => {
   });
 
   /**
-   * The bracket is an advisory: it emits no issue, it never makes a deck illegal, and the
-   * copy says so in the word the research doc uses.
+   * **The bracket left this panel on 2026-08-24 and must not creep back.** It is `DeckBracket`,
+   * one press along the header's ledger, because a number that cannot make a deck illegal has no
+   * business being stapled to the bottom of a list of things that can. Asserted over a
+   * *commander* deck, which is the only kind that ever drew one.
    */
-  it("estimates a bracket for a commander deck and names what it read", async () => {
-    const deck = [
-      commander(),
-      gameChanger("Rhystic Study"),
-      gameChanger("Cyclonic Rift"),
-      islands(97),
-    ];
+  it("draws no bracket, in the one format that used to get one", async () => {
+    const deck = [commander(), gameChanger("Rhystic Study"), islands(98)];
     const panel = await open(<Harness cards={deck} format={spec("commander")} />);
-
-    expect(within(panel).getByText("Bracket ~3 · 2 game changers")).toBeInTheDocument();
-    expect(within(panel).getByText(/estimate/i)).toBeInTheDocument();
-
-    await userEvent.click(within(panel).getByRole("button", { name: /what this read/i }));
-
-    expect(within(panel).getByText(/Rhystic Study/)).toBeInTheDocument();
-    expect(within(panel).getByText(/Cyclonic Rift/)).toBeInTheDocument();
-  });
-
-  /** No commander zone, no bracket: it is a Commander conversation and nothing else. */
-  it("says nothing about brackets in a format that has no commander", async () => {
-    const panel = await open(<Harness cards={threeIssues()} format={spec("modern")} />);
 
     expect(within(panel).queryByText(/bracket/i)).not.toBeInTheDocument();
+    expect(within(panel).queryByText(/game changer/i)).not.toBeInTheDocument();
   });
 
-  /**
-   * The issues are computed on every render because the chip prints their count; the bracket is
-   * not, because nothing outside the open panel draws it and it greps every face of every card
-   * for four phrases.
-   */
-  it("does not read a bracket until the panel is opened", async () => {
-    vi.mocked(estimateBracket).mockClear();
-    render(<Harness cards={[commander(), islands(99)]} format={spec("commander")} />);
-
-    expect(estimateBracket).not.toHaveBeenCalled();
-
-    await userEvent.click(screen.getByRole("button", { name: /No issues/ }));
-
-    expect(estimateBracket).toHaveBeenCalled();
-  });
-
-  /** The one card fact that decides the number is a column a sync fills, so a deck with
-   *  none of them reads as the bottom of the scale rather than as nothing at all. */
-  it("estimates the lowest bracket for a deck with nothing in it to see", async () => {
-    const deck = [commander(), islands(99)];
-    const panel = await open(<Harness cards={deck} format={spec("commander")} />);
-
-    expect(within(panel).getByText("Bracket ~1 · 0 game changers")).toBeInTheDocument();
-  });
 });
 
 describe("messageParts", () => {

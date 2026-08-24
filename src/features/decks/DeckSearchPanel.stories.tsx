@@ -370,6 +370,10 @@ export const DeckFormat: Story = {
     // rest again (issue #183) but the panel opens on the collection, so the seed is applied when
     // the card search itself arrives. `findBy`, not `getBy`: it still has a round trip to make.
     await showAllCards(panel);
+    // …and then the filter row's own tray, which is where Format has lived since the row was
+    // redesigned. Three presses to a select is a lot to write down, and each is a real thing a
+    // reader does: open the column, choose the card search, open the filters.
+    await userEvent.click(await within(panel).findByRole("button", { name: /^Show filters/ }));
     const format = (await within(panel).findByLabelText("Format")) as HTMLSelectElement;
 
     // The value is what the request carries; the option's own text is the whole of what the

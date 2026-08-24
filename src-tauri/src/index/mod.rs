@@ -80,6 +80,19 @@ pub struct CardIndex {
     /// name. The two are the same set today — [`crate::legalities::legal_mask`] only ever sets
     /// bits it has a key for — and only one of them stays right if that ever stops being true.
     pub playable: BitSet,
+    /// One per [`CardIndex::RARITY_KEYS`] entry, same order.
+    ///
+    /// **A bitset apiece and not an ordinal array**, unlike [`Self::set_ord`] beside it: the
+    /// module note's rule is low cardinality gets a bitset, and four is as low as this index
+    /// goes. Four bitsets over the live corpus is ~58 KB, against 1 047 set codes which was
+    /// 14.3 MB and 35x slower before `set_ord` replaced them.
+    ///
+    /// **Not a partition, because the corpus holds rarities this list does not name.** Scryfall
+    /// prints `special` and `bonus` as well, and the filter row offers neither — so a printing
+    /// can be in none of these four, and their counts do not sum to the result set. That is the
+    /// same shape [`Self::mana`] has for a fractional cost, and it is why nothing may derive a
+    /// total from them.
+    pub rarity: [BitSet; Self::RARITY_KEYS.len()],
     /// Set ordinal per doc, indexing [`CardIndex::set_codes`]. `u16` because 986 codes is
     /// three orders of magnitude inside its range and this array is one per printing.
     pub set_ord: Vec<u16>,
@@ -91,6 +104,17 @@ pub struct CardIndex {
 
 impl CardIndex {
     pub const COLOR_KEYS: [char; 6] = ['W', 'U', 'B', 'R', 'G', 'C'];
+    /// The rarities the filter row offers, in the order a card is printed at them.
+    ///
+    /// Scryfall's own lower-case words, because [`crate::filters::picked_rarities`] lower-cases
+    /// what it is sent and `cards.rarity` stores them that way — the bitset and the SQL answer
+    /// the same question or a chip greys over results that exist.
+    ///
+    /// **Four of Scryfall's six.** `special` and `bonus` exist and are deliberately absent: no
+    /// control offers them, so indexing them would be a dimension nothing counts. A printing at
+    /// one of them is in none of these bitsets, which is what makes this list a filter's
+    /// vocabulary rather than a partition of the corpus.
+    pub const RARITY_KEYS: [&'static str; 4] = ["common", "uncommon", "rare", "mythic"];
     pub const MANA_BUCKETS: usize = 10;
     /// The bucket for a printing with no `cmc`. Not bucket 0: a card that costs nothing and
     /// a card whose cost is unknown are different answers, and no chip asks for the latter.
@@ -170,6 +194,7 @@ impl CardIndex {
                 .map(|_| BitSet::new(capacity))
                 .collect(),
             playable: BitSet::new(capacity),
+            rarity: std::array::from_fn(|_| BitSet::new(capacity)),
             set_ord: vec![0; capacity],
             set_codes: Vec::new(),
             owned: BitSet::new(capacity),
@@ -177,7 +202,8 @@ impl CardIndex {
 
         let mut seen: std::collections::HashMap<String, u16> = std::collections::HashMap::new();
         let mut stmt = conn.prepare(
-            "SELECT rowid, set_code, cmc, color_identity, legal_mask, is_paper, mana_cost
+            "SELECT rowid, set_code, cmc, color_identity, legal_mask, is_paper, mana_cost,
+                    rarity
                FROM cards",
         )?;
         let mut rows = stmt.query([])?;
@@ -193,6 +219,9 @@ impl CardIndex {
             // `NULL LIKE '%{X}%'` is NULL rather than false. Read as `Option` so a row with no
             // printed cost is a miss instead of a `rusqlite` type error that fails the build.
             let mana_cost: Option<String> = row.get(6)?;
+            // Nullable, and a NULL rarity is in none of the four buckets — the same answer the
+            // SQL gives, where `NULL IN (…)` is NULL rather than false.
+            let rarity: Option<String> = row.get(7)?;
 
             ix.all.set(doc);
             if paper {
@@ -256,6 +285,17 @@ impl CardIndex {
             // bitset answer the same question or the chip greys out over results that exist.
             if mana_cost.is_some_and(|c| c.contains("{X}")) {
                 ix.mana_x.set(doc);
+            }
+
+            // Exact match against [`Self::RARITY_KEYS`] and no normalisation of the stored
+            // value: `cards.rarity` is written straight from Scryfall's lower-case word by the
+            // ingest, and `picked_rarities` lower-cases the *request* rather than the column —
+            // so a row that somehow held `Rare` would miss here and miss the SQL's
+            // case-sensitive `IN` too, which is the two sides agreeing rather than a gap.
+            if let Some(r) = rarity.as_deref() {
+                if let Some(i) = Self::RARITY_KEYS.iter().position(|k| *k == r) {
+                    ix.rarity[i].set(doc);
+                }
             }
 
             let mask = mask.unwrap_or(0) as u64;
@@ -344,18 +384,23 @@ pub(crate) mod fixtures {
     /// lifecycle opens for itself.
     pub(crate) fn seed(conn: &Connection) {
         let modern = crate::legalities::bit("modern").unwrap() as i64;
+        // **One rarity apiece, and the fourth is one no chip offers.** `special` is a real
+        // Scryfall value with no bitset and no control, so the four counted rarities are a
+        // vocabulary rather than a partition of the corpus — and a fixture where they summed to
+        // the total would let a test assume they always do.
         let rows: [Printing; 4] = [
             ("1", "Lightning Bolt", "lea", Some(1.0), "R", 1, modern),
             ("2", "Lightning Helix", "rav", Some(2.0), "RW", 1, modern),
             ("3", "Sol Ring", "lea", Some(1.0), "", 1, 0),
             ("4", "Digital Only", "alc", None, "B", 0, 0),
         ];
-        for (id, name, set, cmc, ci, paper, mask) in rows {
+        let rarities = ["common", "uncommon", "special", "mythic"];
+        for ((id, name, set, cmc, ci, paper, mask), rarity) in rows.into_iter().zip(rarities) {
             conn.execute(
                 "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,cmc,
-                    color_identity,is_paper,legal_mask,raw)
-                 VALUES (?1,?2,?3,'1','en','normal',?4,?5,?6,?7,'{}')",
-                rusqlite::params![id, name, set, cmc, ci, paper, mask],
+                    color_identity,is_paper,legal_mask,rarity,raw)
+                 VALUES (?1,?2,?3,'1','en','normal',?4,?5,?6,?7,?8,'{}')",
+                rusqlite::params![id, name, set, cmc, ci, paper, mask, rarity],
             )
             .unwrap();
         }

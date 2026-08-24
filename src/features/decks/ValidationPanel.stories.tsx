@@ -181,14 +181,10 @@ type Story = StoryObj<typeof meta>;
 /**
  * A deck with nothing wrong with it: 60 Modern-legal cards and a 15-card sideboard.
  *
- * Shut, the control is a green check in a 36px box and the format's name is in its accessible
- * name — "No issues · Modern", which is what a pointer gets as a tooltip and a screen reader as
- * the button. The panel behind it says the same thing in a whole sentence rather than showing an
- * empty list: an empty list is indistinguishable from a list that failed to render.
- *
- * Modern rather than a commander format, because the commander formats also draw the bracket
- * advisory below the findings and this story is about the absence of findings. {@link
- * BracketEstimate} is the legal deck that draws one.
+ * Shut, the control reads `No issues` beside a green check, and the format's name is in its
+ * accessible name — "No issues · Modern", which is what a pointer gets as a tooltip and a screen
+ * reader as the button. The panel behind it says the same thing in a whole sentence rather than
+ * showing an empty list: an empty list is indistinguishable from a list that failed to render.
  */
 export const Legal: Story = {
   args: { cards: [...MODERN_MAIN, ...modernSide(15)], spec: SPECS.modern, buttonRef: chipRef() },
@@ -211,19 +207,21 @@ export const Legal: Story = {
 };
 
 /**
- * The two states of the shut control, side by side — which is the whole reason it stopped being
- * words.
+ * The three states of the shut control, side by side: clean, broken, and broken on the narrowest
+ * editor column the header reasons about.
  *
- * Live and Theory hold different cards, so they fail different rules, and this readout sits two
- * controls along from the switch between them. While it read "No issues · Modern" against
- * "3 issues" the two states were tens of pixels apart, so flipping that switch slid `Built` and
- * the header's action buttons along the row — and at the widths that row already wraps at, it
- * could move them onto a different line. Both states are one 36px box now, and the count hangs
- * off the corner where it is out of that box's flow.
+ * **It said its count in words, then in a glyph, and says it in words again**, and the middle
+ * state was about a row this control no longer sits on. Live and Theory hold different cards and
+ * so fail different rules, so while this stood two controls along from the switch between them a
+ * flip took the readout from "No issues · Modern" to "3 issues" and slid every button to its
+ * right — at widths where that could also change which line they were on. It is at the right-hand
+ * end of the ledger's `ml-auto` group now, with nothing after it to slide.
  *
- * **Shut, unlike every other story in this file**, because shut is the state this is about. The
- * play asserts the two class lists rather than two rects: a story runs in jsdom, which has no
- * layout engine, so the width itself is a claim only a live pass or the workbench can settle.
+ * `tight` is the third box: the count stays, the word goes, and the sentence both are shortened
+ * from is still the accessible name and the tooltip. A *deletion* rather than a second string, so
+ * the two can never drift.
+ *
+ * **Shut, unlike every other story in this file**, because shut is the state this is about.
  */
 export const ShutBothWays: Story = {
   args: { cards: [], spec: SPECS.modern, buttonRef: chipRef(), open: false },
@@ -239,17 +237,24 @@ export const ShutBothWays: Story = {
         cards={padWithIslands(40, MODERN_SPELLS)}
         buttonRef={chipRef()}
       />
+      <ValidationPanel
+        {...args}
+        cards={padWithIslands(40, MODERN_SPELLS)}
+        buttonRef={chipRef()}
+        tight
+      />
     </div>
   ),
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    const clean = canvas.getByRole("button", { name: "No issues · Modern" });
-    const broken = canvas.getByRole("button", { name: "1 issue · Modern" });
+    const [clean, broken, narrow] = canvas.getAllByRole("button");
 
-    await expect(clean.className).toBe(broken.className);
-    // The bubble is the count's whole appearance on screen and says nothing to a screen reader:
-    // the button's own name has already said how many.
-    await expect(within(broken).getByText("1")).toHaveAttribute("aria-hidden", "true");
+    await expect(clean).toHaveTextContent("No issues");
+    await expect(broken).toHaveTextContent("1 issue");
+    // The word goes and the count stays, and the whole sentence is still the name at both widths.
+    await expect(narrow).toHaveTextContent("1");
+    await expect(narrow.textContent).not.toContain("issue");
+    await expect(narrow).toHaveAccessibleName("1 issue · Modern");
   },
 };
 
@@ -773,61 +778,5 @@ export const OrphanCard: Story = {
     await expect(
       within(panel).getByRole("button", { name: "Sword of the Meek" }),
     ).toBeInTheDocument();
-  },
-};
-
-/**
- * A legal Commander deck, with the advisory that is not a finding.
- *
- * The bracket rides in the same panel for the commander formats and is **an estimate in the copy
- * as well as in the code**: `bracket.ts` returns a `BracketEstimate` rather than a
- * `ValidationIssue`, `engine.ts` does not import it at all, and a number that cannot make a deck
- * illegal must not be drawn as though it could. It is computed only while the panel is open,
- * unlike the findings — the chip prints a count, so `validateDeck` earns its every-render pass;
- * this greps every face of every card for four phrases and earns nothing until it is read.
- *
- * Three Game Changers put this deck at bracket 3, and the number comes from a **column**
- * (`cards.game_changer`, maintained by the Commander Format Panel and delivered by a sync) rather
- * than a list this app keeps. Those three are the whole of the corpus's Game Changers: Ancient
- * Tomb, Rhystic Study and Consecrated Sphinx. Measured 2026-08-09 by running `estimateBracket`
- * over all 52 printings at once — **no** card in the corpus reads as mass land denial, and the
- * only one that takes an extra turn is Emrakul, the Aeons Torn, which is `commander: banned`. So
- * those two lines of the disclosure are absent here rather than empty: `estimate` filters an
- * empty list out, and three headings above one number would be two lines of nothing.
- */
-export const BracketEstimate: Story = {
-  args: {
-    cards: padWithIslands(100, [
-      kenrith(),
-      ...commanderSingles(),
-      deckCard(printing("tmp", "315")),
-      deckCard(printing("pcy", "45")),
-      deckCard(printing("mp2", "8")),
-    ]),
-    spec: SPECS.commander,
-    buttonRef: chipRef(),
-  },
-  play: async ({ canvasElement }) => {
-    const canvas = within(canvasElement);
-    const panel = canvas.getByRole("dialog", { name: "Commander check" });
-    // The headline is one text run rather than styled spans, so it is a sentence something can
-    // read back: a fact split across elements is one nothing — screen reader, test, or reader
-    // skimming — puts together.
-    await expect(panel).toHaveTextContent("Bracket ~3 · 3 game changers");
-    // The disclosure is closed until asked, and **what it says is the reason the number is worth
-    // showing at all**: a reader who disagrees with a heuristic can see which card caused it.
-    const why = within(panel).getByRole("button", { name: "What this read" });
-    await expect(why).toHaveAttribute("aria-expanded", "false");
-    await userEvent.click(why);
-    await expect(why).toHaveAttribute("aria-expanded", "true");
-    await expect(within(panel).getByText("Game changers")).toBeInTheDocument();
-    await expect(
-      within(panel).getByText("Ancient Tomb, Rhystic Study, Consecrated Sphinx"),
-    ).toBeInTheDocument();
-    // Mass land denial and extra turns have no line at all, rather than a line reading none —
-    // `estimate` filters the empty ones out, and an advisory with three headings and one number
-    // under them would be two lines of nothing.
-    await expect(within(panel).queryByText("Mass land denial")).toBeNull();
-    await expect(within(panel).queryByText("Extra turns")).toBeNull();
   },
 };

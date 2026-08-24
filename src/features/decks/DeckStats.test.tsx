@@ -1,10 +1,8 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { TOOLTIP_OPEN_MS, TooltipProvider } from "@/components/tooltip/TooltipProvider";
+import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import type { DeckCard } from "@/lib/ipc";
-import { MARKETPLACES } from "@/lib/marketplace";
-import { pricesAsOf } from "@/lib/prices";
 import { card, islands } from "./validation/fixtures";
 import {
   DeckStats,
@@ -13,17 +11,6 @@ import {
   type DeckStatsSummary,
   type MissingWrite,
 } from "./DeckStats";
-
-/**
- * Hover a tooltip anchor open and hand back its panel — `Figure`'s hint is a description of an
- * already-named pair (the label and the value beside it), so it binds `describes: true` (the
- * default) and the panel carries `role="tooltip"`, unlike the `describes: false` marks this
- * bucket's own components bind.
- */
-async function openTooltip(anchor: Element): Promise<HTMLElement> {
-  fireEvent.pointerEnter(anchor);
-  return await screen.findByRole("tooltip", {}, { timeout: TOOLTIP_OPEN_MS + 1000 });
-}
 
 /** The write the strip's one button makes, in whatever state a test needs it. */
 function sender(overrides: Partial<MissingWrite> = {}): MissingWrite {
@@ -558,7 +545,7 @@ describe("DeckStats", () => {
   const strip = (cards: DeckCard[], send = sender()) =>
     render(
       <TooltipProvider>
-        <DeckStats cards={cards} marketplace={MARKETPLACES.tcgplayer} send={send} />
+        <DeckStats cards={cards} send={send} />
       </TooltipProvider>,
     );
 
@@ -572,10 +559,10 @@ describe("DeckStats", () => {
    */
   async function press(cards: DeckCard[], settled: MissingWrite) {
     const view = render(
-      <DeckStats cards={cards} marketplace={MARKETPLACES.tcgplayer} send={sender()} />,
+      <DeckStats cards={cards} send={sender()} />,
     );
     await userEvent.click(screen.getByRole("button", { name: "Send missing to wishlist" }));
-    view.rerender(<DeckStats cards={cards} marketplace={MARKETPLACES.tcgplayer} send={settled} />);
+    view.rerender(<DeckStats cards={cards} send={settled} />);
     return view;
   }
 
@@ -636,12 +623,7 @@ describe("DeckStats", () => {
     expect(within(curve()).getByText("4 cards at mana value 3")).toBeInTheDocument();
 
     rerender(
-      <DeckStats
-        cards={deck}
-        marketplace={MARKETPLACES.tcgplayer}
-        send={sender()}
-        separateXGroup
-      />,
+      <DeckStats cards={deck} send={sender()} separateXGroup />,
     );
 
     expect(within(curve()).getAllByRole("listitem")).toHaveLength(10);
@@ -649,32 +631,6 @@ describe("DeckStats", () => {
     // And they left the bucket they were in, so the two bars are not the same four cards
     // counted twice.
     expect(within(curve()).getByText("0 cards at mana value 3")).toBeInTheDocument();
-  });
-
-  /**
-   * The figure the toggle must leave alone, read off the rendered strip rather than off
-   * `deckStats` — because it is the number on screen that a reader would see move.
-   *
-   * `(3 × 4 + 1 × 4) / 8 = 2.00` with X at zero (CR 202.3b), whichever bar the X spells are
-   * drawn in.
-   */
-  it("prints the same average mana value with the X split on and off", () => {
-    const deck = [xSpell("Awakening", { quantity: 4 }), spell("Bolt", 1, { quantity: 4 })];
-    const average = () => screen.getByText("Avg. mana value", { selector: "dt" }).closest("div");
-
-    const { rerender } = strip(deck);
-    expect(average()).toHaveTextContent("2.00");
-
-    rerender(
-      <DeckStats
-        cards={deck}
-        marketplace={MARKETPLACES.tcgplayer}
-        send={sender()}
-        separateXGroup
-      />,
-    );
-
-    expect(average()).toHaveTextContent("2.00");
   });
 
   it("draws the colour pie with a legend that counts each segment", () => {
@@ -748,10 +704,11 @@ describe("DeckStats", () => {
     expect(screen.queryByRole("list", { name: "Lands" })).not.toBeInTheDocument();
   });
 
-  it("renders the figures and no charts at all for an empty deck", () => {
+  /** The figures moved to the header's ledger on 2026-08-24, so an empty deck draws the pips
+   *  row and nothing else at all — see `DeckLedger.test.tsx` for the numbers. */
+  it("draws no chart at all for an empty deck", () => {
     strip([]);
 
-    expect(screen.getByText("Cards")).toBeInTheDocument();
     expect(screen.queryByRole("list", { name: "Mana curve" })).not.toBeInTheDocument();
     expect(screen.queryByRole("list", { name: "Colors" })).not.toBeInTheDocument();
     expect(screen.queryByRole("list", { name: "Card types" })).not.toBeInTheDocument();
@@ -769,84 +726,6 @@ describe("DeckStats", () => {
 
   /** Spec §5: a price never appears without saying how old it is — and, now that a reader can
    *  pick, whose it is. */
-  it("says how old the deck's price is, and whose", async () => {
-    strip([card({ name: "Bolt", unitPrice: 4.5, quantity: 2 })]);
-
-    const figure = screen.getByText("Price (USD)").closest("div") as HTMLElement;
-    expect(await openTooltip(figure)).toHaveTextContent(pricesAsOf(MARKETPLACES.tcgplayer));
-    expect(screen.getByText("$9.00")).toBeInTheDocument();
-  });
-
-  /**
-   * The strip on a euro marketplace: the figure, the label and the as-of sentence all move
-   * together. A label still naming USD over a euro figure would be the one failure mode a
-   * reader cannot detect from the number alone.
-   */
-  it("draws the selected marketplace's currency in the figure, the label and the sentence", async () => {
-    render(
-      <TooltipProvider>
-        {/* The row as a Cardmarket read answers it: €3.00 a copy, where TCGplayer's read of the
-            same card answers $4.50. A switch changes the rows, not which field a figure reads. */}
-        <DeckStats
-          cards={[card({ name: "Bolt", unitPrice: 3, quantity: 2 })]}
-          marketplace={MARKETPLACES.cardmarket}
-          send={sender()}
-        />
-      </TooltipProvider>,
-    );
-
-    expect(screen.getByText("€6.00")).toBeInTheDocument();
-    expect(screen.queryByText("$9.00")).not.toBeInTheDocument();
-    const figure = screen.getByText("Price (EUR)").closest("div") as HTMLElement;
-    expect(await openTooltip(figure)).toHaveTextContent(pricesAsOf(MARKETPLACES.cardmarket));
-  });
-
-  /**
-   * An etched printing has no euro price at all, so on Cardmarket the figure is an em dash
-   * with the copies counted beside it — never the dollar figure re-badged.
-   */
-  it("shows an em dash and an unpriced count for a deck with no euro prices", () => {
-    render(
-      <DeckStats
-        cards={[card({ name: "Etched Bomb", unitPrice: null, quantity: 2 })]}
-        marketplace={MARKETPLACES.cardmarket}
-        send={sender()}
-      />,
-    );
-
-    const figure = screen.getByText("Price (EUR)").closest("div");
-    expect(within(figure as HTMLElement).getByText("—")).toBeInTheDocument();
-    expect(screen.getByText("2 unpriced")).toBeInTheDocument();
-    expect(screen.queryByText("$100.00")).not.toBeInTheDocument();
-  });
-
-  /**
-   * The headline figure is the number the format check beside it is talking about — the
-   * engine's own `SIZE_KINDS`. The sideboard and the companion are counted by the price, the
-   * shortfall and every chart, and named here — in the reader's own words for those piles —
-   * rather than folded in: "Cards 9" over a chip reading "you have 5" is two numbers for one
-   * question.
-   */
-  it("heads the strip with the cards a format's size rule counts", async () => {
-    strip([
-      card({ name: "Bolt", quantity: 4 }),
-      card({ name: "Kenrith", categoryKind: "commander", quantity: 1 }),
-      card({ name: "Pyroblast", categoryKind: "side", quantity: 3 }),
-      card({ name: "Lurrus", categoryKind: "companion", quantity: 1 }),
-      card({ name: "Ghost", categoryKind: "maybe", quantity: 9 }),
-    ]);
-
-    const figure = screen.getByText("Cards").closest("div") as HTMLElement;
-    expect(figure.querySelector("dd")?.textContent).toBe("5+ 3 sideboard + 1 companion");
-    expect(await openTooltip(figure)).toHaveTextContent(/size rule counts/i);
-  });
-
-  it("says nothing about other piles when the deck is only a main deck", () => {
-    strip([card({ name: "Bolt", quantity: 4 })]);
-
-    expect(screen.getByText("Cards").closest("div")?.querySelector("dd")?.textContent).toBe("4");
-  });
-
   it("counts what the deck is short of, and offers to wish for it", async () => {
     const send = sender();
     strip(
@@ -922,13 +801,13 @@ describe("DeckStats", () => {
     const settled = sender({ isSuccess: true, data: 1 });
     const view = render(
       <TooltipProvider>
-        <DeckStats cards={short()} marketplace={MARKETPLACES.tcgplayer} send={sender()} />
+        <DeckStats cards={short()} send={sender()} />
       </TooltipProvider>,
     );
     await userEvent.click(screen.getByRole("button", { name: "Send missing to wishlist" }));
     view.rerender(
       <TooltipProvider>
-        <DeckStats cards={short()} marketplace={MARKETPLACES.tcgplayer} send={settled} />
+        <DeckStats cards={short()} send={settled} />
       </TooltipProvider>,
     );
 
@@ -955,7 +834,6 @@ describe("DeckStats", () => {
     rerender(
       <DeckStats
         cards={[card({ name: "Bolt", quantity: 4, ownedQuantity: 1 }), card({ name: "Bear" })]}
-        marketplace={MARKETPLACES.tcgplayer}
         send={sender({ isSuccess: true, data: 1 })}
       />,
     );
@@ -984,12 +862,11 @@ describe("DeckStats", () => {
     rerender(
       <DeckStats
         cards={[card({ name: "Bolt", quantity: 5, ownedQuantity: 1 })]}
-        marketplace={MARKETPLACES.tcgplayer}
         send={settled}
       />,
     );
     // …and back to exactly the number that was sent.
-    rerender(<DeckStats cards={deck} marketplace={MARKETPLACES.tcgplayer} send={settled} />);
+    rerender(<DeckStats cards={deck} send={settled} />);
 
     expect(screen.getByRole("status")).toHaveTextContent("");
     const button = screen.getByRole("button", { name: "Send missing to wishlist" });
@@ -1031,7 +908,7 @@ describe("DeckStats", () => {
   it("takes the caret back after the write it disabled itself for", async () => {
     const deck = short();
     const { rerender } = render(
-      <DeckStats cards={deck} marketplace={MARKETPLACES.tcgplayer} send={sender()} />,
+      <DeckStats cards={deck} send={sender()} />,
     );
     const button = screen.getByRole("button", { name: "Send missing to wishlist" });
     await userEvent.click(button);
@@ -1046,7 +923,6 @@ describe("DeckStats", () => {
     rerender(
       <DeckStats
         cards={deck}
-        marketplace={MARKETPLACES.tcgplayer}
         send={sender({ isPending: true })}
       />,
     );
@@ -1055,7 +931,6 @@ describe("DeckStats", () => {
     rerender(
       <DeckStats
         cards={deck}
-        marketplace={MARKETPLACES.tcgplayer}
         send={sender({ isSuccess: true, data: 3 })}
       />,
     );

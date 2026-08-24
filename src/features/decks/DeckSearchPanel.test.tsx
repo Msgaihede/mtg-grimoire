@@ -433,6 +433,20 @@ const tab = (name: string) => screen.getByRole("button", { name });
  */
 const formatSelect = (): HTMLSelectElement => screen.getByLabelText("Format") as HTMLSelectElement;
 
+/**
+ * Open the filter row's tray, where Set, Format, Owned, Rarity, Price and Printings live since
+ * the row was redesigned. Only the search box, the colours, the mana values and the sort are on
+ * the bar at every width.
+ *
+ * Idempotent, so a case may call it after a railing without asking whether the press survived —
+ * which is the question the railing case below actually cares about, and it asks it of the query
+ * and the format rather than of a disclosure this panel does not own.
+ */
+async function openFilterTray(): Promise<void> {
+  const toggle = await screen.findByRole("button", { name: /^(Show|Hide) filters/ });
+  if (toggle.getAttribute("aria-expanded") !== "true") await userEvent.click(toggle);
+}
+
 describe("DeckSearchPanel", () => {
   /**
    * The state a deck opens in, and the reason it changed **back** (issue #183, 2026-08-22).
@@ -560,6 +574,7 @@ describe("DeckSearchPanel", () => {
     // for the wall.
     await openPanel();
     await screen.findByRole("button", { name: "Lightning Bolt" });
+    await openFilterTray();
 
     expect(formatSelect()).toHaveValue("");
   });
@@ -577,6 +592,7 @@ describe("DeckSearchPanel", () => {
   it("opens on the deck's own format when it is handed one", async () => {
     await openPanel({ defaultFormat: COMMANDER });
     await screen.findByRole("button", { name: "Lightning Bolt" });
+    await openFilterTray();
 
     const select = formatSelect();
     expect(select).toHaveValue(COMMANDER.value);
@@ -596,6 +612,7 @@ describe("DeckSearchPanel", () => {
   it("lets the reader move the select off the deck's format, and keeps searching", async () => {
     await openPanel({ defaultFormat: COMMANDER });
     await screen.findByRole("button", { name: "Lightning Bolt" });
+    await openFilterTray();
 
     await userEvent.selectOptions(formatSelect(), "modern");
 
@@ -927,6 +944,7 @@ describe("DeckSearchPanel", () => {
     await screen.findByRole("button", { name: "Lightning Bolt" });
 
     await userEvent.type(screen.getByRole("searchbox", { name: "Search cards" }), "goblin");
+    await openFilterTray();
     await userEvent.selectOptions(formatSelect(), "modern");
     expect(formatSelect()).toHaveValue("modern");
 
@@ -950,6 +968,7 @@ describe("DeckSearchPanel", () => {
     view.update({ roomy: true });
 
     expect(screen.getByRole("searchbox", { name: "Search cards" })).toHaveValue("goblin");
+    await openFilterTray();
     expect(formatSelect()).toHaveValue("modern");
 
     // And a press is still a press: shutting the panel is the reader saying they are done, so
@@ -958,6 +977,7 @@ describe("DeckSearchPanel", () => {
     await userEvent.click(screen.getByRole("button", { name: "Search cards" }));
 
     expect(screen.getByRole("searchbox", { name: "Search cards" })).toHaveValue("");
+    await openFilterTray();
     expect(formatSelect()).toHaveValue(COMMANDER.value);
   });
 
@@ -978,6 +998,7 @@ describe("DeckSearchPanel", () => {
       },
     ]);
     await openPanel();
+    await openFilterTray();
     await userEvent.click(screen.getByRole("button", { name: "Set" }));
     await screen.findByRole("combobox", { name: /search sets/i });
 

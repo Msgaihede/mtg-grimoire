@@ -298,8 +298,12 @@ export const Modern60: Story = {
     ).toBeInTheDocument();
 
     await expect(canvas.getByRole("button", { name: "No issues · Modern" })).toBeInTheDocument();
-    // Not the 75 copies the price and the shortfall are counted over.
-    await expect(canvas.getByText("+ 15 sideboard")).toBeInTheDocument();
+    // Not the 75 copies the price and the shortfall are counted over. The figure and its spare
+    // count are the header's ledger since 2026-08-24 — `Decks/DeckLedger` is where the pile that
+    // spare count names is spelled out, in the tooltip a 36px line has no room to write.
+    await expect(
+      canvas.getByText("Cards", { selector: "dt" }).closest("div"),
+    ).toHaveTextContent("60+15");
 
     // The shortage, spoken rather than only marked: every mark on a stacked card is
     // `aria-hidden`, so the button's own name is the whole of what a keyboard reader gets.
@@ -484,8 +488,12 @@ export const ReopensOnThePlan: Story = {
     const tabs = within(await canvas.findByRole("group", { name: "Deck list" }));
 
     // Theory first, Live second — read off the DOM order, because "on the left" is the claim.
-    const [theory, live] = tabs.getAllByRole("button");
-    await expect([theory.textContent, live.textContent]).toEqual(["Theory", "Live"]);
+    // Compare is the third control in this group since 2026-08-24, a `Scale` glyph between the
+    // two lists it weighs, so the sequence is read off the names rather than the text.
+    const [theory, compare, live] = tabs.getAllByRole("button");
+    await expect(
+      [theory, compare, live].map((b) => b.getAttribute("aria-label") ?? b.textContent),
+    ).toEqual(["Theory", "Compare", "Live"]);
     await expect(theory).toHaveAttribute("aria-pressed", "true");
 
     await expect(canvas.getByLabelText("Group by")).toHaveValue("type");
@@ -673,8 +681,12 @@ export const FilterAndStats: Story = {
     await canvas.findByRole("region", { name: "Main deck" });
     const stats = canvas.getByRole("region", { name: "Deck stats" });
     await expect(stats).toBeVisible();
-    const cards = within(stats).getByText("Cards").nextElementSibling;
+    // The headline figure is the header's ledger since 2026-08-24 and the charts are the band's;
+    // the claim below is about **both** — the filter narrows what is *shown* and nothing that is
+    // counted, so neither surface moves.
+    const cards = canvas.getByText("Cards", { selector: "dt" }).closest("div");
     const whole = cards?.textContent;
+    const curve = within(stats).getByRole("list", { name: "Mana curve" }).textContent;
 
     await userEvent.type(canvas.getByLabelText("Filter this deck"), "counterspell");
 
@@ -687,6 +699,9 @@ export const FilterAndStats: Story = {
     // The whole deck, not the four rows the filter left on screen — and nothing offers to put
     // the band away.
     await expect(cards).toHaveTextContent(whole ?? "");
+    await expect(
+      within(stats).getByRole("list", { name: "Mana curve" }).textContent,
+    ).toEqual(curve);
     await expect(canvas.queryByRole("button", { name: "Stats" })).toBeNull();
   },
 };
@@ -964,12 +979,12 @@ export const NeedsReview: Story = {
  * to leave its sentence up while a rename succeeded behind it. The docked panel's add is
  * deliberately not among them: it reports beside the button that was pressed.
  *
- * The header's `Deck game` select is the write pressed here because it is a one-act deck-row
- * write the header always draws; before the four views replaced the category columns it would
- * have been a stepper, which also exercised the optimistic rollback. That rollback is still
- * `useDeck`'s and still tested there — what this story shows is the *banner*, and that the deck
- * survives a refusal. (It was the `Built` toggle until that chip was removed with the claim
- * ledger.)
+ * The header's name field is the write pressed here because it is a one-act deck-row write the
+ * header always draws; before the four views replaced the category columns it would have been a
+ * stepper, which also exercised the optimistic rollback. That rollback is still `useDeck`'s and
+ * still tested there — what this story shows is the *banner*, and that the deck survives a
+ * refusal. (It was the `Built` toggle until that chip was removed with the claim ledger, and the
+ * `Deck game` select until that select moved to Deck settings on 2026-08-24.)
  */
 export const Busy: Story = {
   args: { deckId: 1 },
@@ -978,7 +993,9 @@ export const Busy: Story = {
     const canvas = within(canvasElement);
     await canvas.findByRole("region", { name: "Main deck" });
 
-    await userEvent.selectOptions(canvas.getByLabelText("Deck game"), "paper");
+    const name = canvas.getByLabelText("Deck name");
+    await userEvent.clear(name);
+    await userEvent.type(name, "Sunday burn{Enter}");
 
     const alert = await canvas.findByRole("alert");
     await expect(alert).toHaveTextContent(
@@ -1087,6 +1104,7 @@ export const SwapFolds: Story = {
     // **All printings, because the panel collapses like the search page does.** Collapsed, Sol
     // Ring is one tile — its newest printing — which is the right default for building a deck
     // and the wrong one for a story about choosing between two printings.
+    await userEvent.click(canvas.getByRole("button", { name: /^Show filters/ }));
     await userEvent.click(canvas.getByRole("button", { name: "All printings" }));
 
     // Two tiles, newest printing first — `sld 913` (2025-12-01) ahead of `c21 263` (2021-04-23),

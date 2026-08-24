@@ -1505,6 +1505,46 @@ clientWidth` at 1024, 1280 and 1920, and the deck view's own scroller matched it
   controls is sized by the _narrowest_ surface that draws it, and in this app that is the 384px
   docked panel — never the filter bar it was designed in. Nothing goes red when a tenth chip is
   added, so `FilterChips.test.tsx` now holds the arithmetic beside the wrap.
+- **The search filter row lays out by its own width and not the window's, in four bands — and
+  the mechanism is `@container`, not a media query.** The same component is the search page's bar
+  across a maximised window and the deck editor's docked panel, which is draggable from 206px, so
+  a viewport query would be answering a question about the wrong box. The container is named
+  (`@container/fb`) rather than anonymous, because container variants bind to the nearest
+  ancestor container and an unnamed one here would be claimed by any future `@container` inside a
+  card tile or a panel.
+  **The bands were swept a container width at a time from 206 to 1956 against the built
+  stylesheet** (2026-08-24, headless Chromium over a `file://` page and `dist/assets/*.css`, the
+  real component's markup rendered out of the suite — the lock-free arrangement, so no app was
+  running). Four shapes, and the transitions land exactly on the thresholds:
+
+  | container | top row | tray | Filters | mana chip |
+  | --- | --- | --- | --- | --- |
+  | 206–640 | stacked: search / colours + Filters / mana / sort + layout | 1 column | icon + badge | 32px |
+  | 647–899 | search · colours · Filters · layout, then mana · sort | 2 columns | icon + badge | 36px |
+  | 906–1501 | the same two lines | 3 columns | with its word | 36px |
+  | 1508–1956 | one line: search · colours · mana · Filters · sort · layout | 3 columns | with its word | 36px |
+
+  **`order` plus a `basis-full` break, never one `<div>` per breakpoint with `hidden` on the
+  rest.** The obvious build puts two mana-value groups and two sort pickers in the tree at once,
+  which is two controls with one accessible name, two tab stops for one filter, and a
+  `getByLabelText` that starts throwing "found multiple". The items are written once and the
+  arrangement is `order-[N]`; a `basis-full h-0` item consumes the rest of its line, so
+  everything ordered after it starts a new one. The Filters button's *word* is hidden by a class
+  the caller passes (`labelClass`) for the same reason — one button, one name, at every width.
+  **Two overflows the sweep found and neither was visible in a screenshot.** Below 640 the sort
+  pair is `flex-1` so it can fill a line; without a second break it instead shared the mana
+  values' line wherever one was left over, and `flex-1` then gave it *whatever was left* — at a
+  369px container that was **5px**, and the 36px direction button inside it (which cannot shrink)
+  spilled **53px** out of the panel. And the price band's two 64px boxes, 48px track and two 8px
+  gaps come to **192** against the one-column tray's ~174 at the panel's 206px floor, 5px over.
+  The fixes are a second `basis-full` break below 640 and `flex-wrap` on the price row. Both are
+  instances of the rule two entries down — *a row of fixed-width controls is sized by the
+  narrowest surface that draws it* — and both would have reached a reader as a horizontal
+  scrollbar across the whole deck builder, because `DeckEditor`'s section computes `overflow-x`
+  to `auto`.
+  **jsdom applies no container queries and loads no stylesheet at all**, so none of this can go
+  red in the suite: every test there sees the base (narrowest) arrangement, and the numbers come
+  from a browser.
 - **The three tables are one component**, `src/components/table/VirtualTable.tsx`: columns
   are data, and the two things that genuinely differ stay callbacks — `renderRow` (the
   collection and wishlist wrap a row in a drag source; the wishlist also decides per row
