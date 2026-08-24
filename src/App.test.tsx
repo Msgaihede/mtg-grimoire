@@ -680,6 +680,48 @@ it("closes the import dialog on the first Escape and the card on the second", as
   expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
 });
 
+/**
+ * The bottom of the ladder, and the pair that made it need a stack on the bubble side.
+ *
+ * `"navigation"` and the card pane are **both** bubble-phase layers, and the view is mounted long
+ * before the pane docks beside it — so in registration order the floor acts first, and this press
+ * would close the deck out from under a card the reader was still reading. Rank is what orders
+ * them; the assertion in the middle, that the editor is still on screen after the first press, is
+ * the whole of it.
+ *
+ * Neither half's own suite can see this. `DeckEditor.test.tsx` mounts the editor with no pane
+ * beside it, and the pane's tests have no view under them to navigate. Checked by breaking it: with
+ * `"navigation"` ranked at or above `"outer"` the first press closes the *deck* and the pane goes
+ * with it, so both assertions after it fail together.
+ */
+it("closes the card on the first Escape and the deck on the second", async () => {
+  deckList.mockResolvedValue([BURN]);
+  deckGet.mockResolvedValue(detail([DECK_BOLT]));
+  // The editor's docked search column finds nothing, so the deck's own card is the only control
+  // by that name — and, just as much to the point, its search box is empty, so the field rung
+  // above these two has nothing to spend a press on.
+  searchCards.mockResolvedValue({ items: [], total: 0, totalIsCapped: false });
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: "Decks" }));
+  await userEvent.click(await screen.findByRole("button", { name: /^Burn/ }));
+  await screen.findByLabelText("Deck name");
+
+  await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+  await screen.findByRole("complementary", { name: /card details/i });
+
+  await userEvent.keyboard("{Escape}");
+
+  expect(screen.queryByRole("complementary")).not.toBeInTheDocument();
+  expect(screen.getByLabelText("Deck name")).toBeInTheDocument();
+
+  await userEvent.keyboard("{Escape}");
+
+  // The editor is a `motion` surface, so it outlives the flag by the length of its exit — the
+  // same reason the import dialog above is awaited out rather than asserted out.
+  await waitFor(() => expect(screen.queryByLabelText("Deck name")).not.toBeInTheDocument());
+  expect(await screen.findByRole("button", { name: /^Burn/ })).toBeInTheDocument();
+});
+
 /** A card left open through a view change would dock beside a list it did not come from —
  *  a printing from the search, pinned open next to a wall of decks. */
 it("closes the card when the reader leaves the view", async () => {

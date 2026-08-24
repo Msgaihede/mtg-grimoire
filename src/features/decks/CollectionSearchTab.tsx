@@ -11,6 +11,7 @@ import { FOCUS } from "@/lib/focus";
 import { ipcError, type CollectionRow, type DeckCategory } from "@/lib/ipc";
 import { statusLine } from "@/lib/motion";
 import { sortOptions } from "@/lib/options";
+import { clearFieldOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { AUTO_CATEGORY, autoCategoryFor } from "./autoCategory";
 import { CONFIRM_CANCEL, CONFIRM_DESTRUCTIVE, useConfirmFocus } from "./metaRows";
@@ -245,6 +246,13 @@ export function CollectionSearchTab({
           type="search"
           value={search.text}
           onChange={(e) => search.setText(e.target.value)}
+          // **A box with text in it owns one Escape, and an empty one owns none.** This column is
+          // docked rather than modal, so the press it does not take falls through to the editor's
+          // `"navigation"` rung and closes the deck — which is right for an empty box and wrong
+          // for one the reader was filtering with, since Chromium clears an `<input
+          // type="search">` on Escape itself and never sets `defaultPrevented`. The whole
+          // argument, and why jsdom can only see half of it, is on {@link clearFieldOnEscape}.
+          onKeyDown={(e) => clearFieldOnEscape(e, search.text, () => search.setText(""))}
           placeholder="Search your collection…"
           // `FILTER_FIELD` rather than `FILTER_CONTROL`: a box the reader types into must not dip
           // under the press, or Chromium's own ✕ slides out from under the pointer clearing it

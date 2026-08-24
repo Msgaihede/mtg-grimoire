@@ -1366,6 +1366,22 @@ describe("the folders", () => {
   /** The `Wishes` figure's own value, which is a `<dd>` beside the label rather than inside it. */
   const wishes = () => screen.getByText("Wishes").nextElementSibling as HTMLElement;
 
+  /** The trail, re-queried each time: every level change replaces the whole `<nav>`. */
+  const crumbs = () => screen.getByRole("navigation", { name: "Wishlist folders" });
+
+  /**
+   * A real Escape at `document.body`, reporting whether **anything consumed it** —
+   * `useDismissOnEscape.test.tsx`'s own helper, here because `userEvent.keyboard` throws the
+   * answer away and the answer is the whole of what the three "does nothing" tests below assert.
+   * A rung that acted on a press it had no level to spend it on would swallow it from everything
+   * behind this page, and a no-op state write looks identical on screen.
+   */
+  const pressEscape = () => {
+    const e = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
+    document.body.dispatchEvent(e);
+    return e.defaultPrevented;
+  };
+
   /**
    * **A folder card's face is the recursive total, and the summary row it is drawn from is not.**
    * `Ordered` holds one wish itself and a sub-folder holding two, so a card reading its own row
@@ -1406,6 +1422,120 @@ describe("the folders", () => {
     expect(
       await screen.findByRole("button", { name: /^Backordered folder, 2 wishes/ }),
     ).toBeInTheDocument();
+  });
+
+  /**
+   * Escape is the way back out, and the breadcrumb is where a reader reads that it worked.
+   * `useDismissOnEscape`'s `"navigation"` rung — the floor, the press nothing nearer wanted.
+   *
+   * **Two levels deep on purpose.** A rung that sent the reader to the root would pass a
+   * one-level test and strand anyone who had drilled twice, which is exactly the failure the
+   * trail-derived parent exists to prevent.
+   */
+  it("walks up one folder per Escape", async () => {
+    wrap(<WishlistPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /^Ordered folder/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /^Backordered folder/ }));
+    await waitFor(() => expect(lastQuery().folderId).toBe(2));
+
+    await userEvent.keyboard("{Escape}");
+
+    // Its parent, not the root.
+    expect(await screen.findByText("Rhystic Study")).toBeInTheDocument();
+    expect(within(crumbs()).getByText("Ordered")).toHaveAttribute("aria-current", "page");
+
+    await userEvent.keyboard("{Escape}");
+
+    // And out of the cabinet altogether: the root's own wishes are back.
+    expect(await screen.findByText("Lightning Bolt")).toBeInTheDocument();
+    expect(within(crumbs()).getByText("Wishlist")).toHaveAttribute("aria-current", "page");
+  });
+
+  /**
+   * At the top of the cabinet the press is **not this page's**, and it has to be left unconsumed
+   * rather than spent on a no-op — a press this rung swallows is one nothing else in the app can
+   * ever be given. `defaultPrevented` is the only thing that can tell those two apart, which is
+   * why this one test fires a real `KeyboardEvent` instead of driving `userEvent`.
+   */
+  it("leaves Escape alone at the root", async () => {
+    wrap(<WishlistPage />);
+    await screen.findByText("Lightning Bolt");
+
+    expect(pressEscape()).toBe(false);
+
+    expect(screen.getByText("Lightning Bolt")).toBeInTheDocument();
+    expect(within(crumbs()).getByText("Wishlist")).toHaveAttribute("aria-current", "page");
+  });
+
+  /**
+   * **Flatten is not a rung, and that is a decision.** Escape walks folders; it does not switch
+   * the chip off. With the filing ignored there is no level on screen to leave — the breadcrumb
+   * says so in inert words — so the press stays unconsumed and the chip stays on.
+   */
+  it("does not switch Flatten off", async () => {
+    wrap(<WishlistPage />);
+    await screen.findByText("Lightning Bolt");
+    await userEvent.click(screen.getByRole("button", { name: "Flatten" }));
+    await screen.findByText("Rhystic Study");
+
+    expect(pressEscape()).toBe(false);
+
+    expect(screen.getByRole("button", { name: "Flatten" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByText("Wishlist · all folders")).toBeInTheDocument();
+  });
+
+  /**
+   * The same decision from the side that can actually go wrong: a reader who flattens *while
+   * standing in a folder* still has a `folderId` under the flattened list, and walking it would
+   * move a level they cannot see — so that un-flattening later would drop them somewhere they
+   * never left. Nothing moves, and pressing Flatten back off returns them to `Ordered`.
+   */
+  it("moves nothing under a flattened list, even standing in a folder", async () => {
+    wrap(<WishlistPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /^Ordered folder/ }));
+    await waitFor(() => expect(lastQuery().folderId).toBe(1));
+    await userEvent.click(screen.getByRole("button", { name: "Flatten" }));
+    await waitFor(() => expect(lastQuery().flatten).toBe(true));
+
+    expect(pressEscape()).toBe(false);
+
+    await userEvent.click(screen.getByRole("button", { name: "Flatten" }));
+    await waitFor(() =>
+      expect(within(crumbs()).getByText("Ordered")).toHaveAttribute("aria-current", "page"),
+    );
+  });
+
+  /**
+   * **The filter box owns the first press, and only while it has something to spend it on.**
+   *
+   * This is the pair the `"navigation"` rung could not ship without. Chromium empties an
+   * `<input type="search">` on Escape by itself and does **not** mark the press handled, so one
+   * key in a filtered folder would clear the box *and* walk the reader out of the folder they
+   * were filtering. jsdom implements no native clear, so what can go red here is the JS half:
+   * the box empties, the level holds, and the next press is the view's again.
+   */
+  it("spends Escape on the filter box first, and on the folder next", async () => {
+    wrap(<WishlistPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /^Ordered folder/ }));
+    await waitFor(() => expect(lastQuery().folderId).toBe(1));
+
+    const box = screen.getByLabelText("Search your wishlist");
+    await userEvent.type(box, "rhystic");
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(box).toHaveValue("");
+    // The folder is exactly where it was — this is the press that used to do both.
+    expect(within(crumbs()).getByText("Ordered")).toHaveAttribute("aria-current", "page");
+
+    // Empty now, so the box has nothing to undo and the press falls through to the folder rung.
+    await userEvent.keyboard("{Escape}");
+
+    expect(await screen.findByText("Lightning Bolt")).toBeInTheDocument();
+    expect(within(crumbs()).getByText("Wishlist")).toHaveAttribute("aria-current", "page");
   });
 
   /**

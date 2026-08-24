@@ -16,6 +16,7 @@ import { FOCUS } from "@/lib/focus";
 import { MANA_KEYS } from "@/lib/mana";
 import { sortOptions } from "@/lib/options";
 import { useAppStore } from "@/lib/store";
+import { clearFieldOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { COLLECTION_SORTS, type Collection, type CollectionSort } from "./useCollection";
 
@@ -64,6 +65,15 @@ export function CollectionFilterBar({
           type="search"
           value={collection.text}
           onChange={(e) => collection.setText(e.target.value)}
+          // Escape empties the box, and only while there is something in it —
+          // `lib/useDismissOnEscape.ts` carries the reasoning. **Required rather than polish**,
+          // because that is where the two Escapes meet: Chromium clears an
+          // `<input type="search">` on Escape all by itself and leaves `defaultPrevented` false, so
+          // with the page's `"navigation"` rung listening one press would empty the box *and* walk
+          // the reader up a folder. An empty box owns nothing and lets the press fall through, which
+          // is what makes the second press the cabinet's. jsdom implements neither the native clear
+          // nor its absence of a `preventDefault`, so only the JS half of this can go red.
+          onKeyDown={(e) => clearFieldOnEscape(e, collection.text, () => collection.setText(""))}
           placeholder="Search your collection…"
           // `FILTER_FIELD` and not `FILTER_CONTROL`: the row's chips dip 3% under the press and
           // a box the reader types into must not, or the native ✕ slides out from under the
