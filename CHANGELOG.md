@@ -1,5 +1,61 @@
 # Changelog
 
+## [0.15.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.14.0...v0.15.0) (2026-08-24)
+
+
+### Features
+
+* **card:** nested folder targets on Add to Collection, and Move to folder ([6f1a04f](https://github.com/Msgaihede/mtg-grimoire/commit/6f1a04f44a0a0a95077103796602eb316d10f8d7)), closes [#215](https://github.com/Msgaihede/mtg-grimoire/issues/215)
+* **cards:** multi-select with Ctrl and Shift, carried by drag and drop ([9a0ca02](https://github.com/Msgaihede/mtg-grimoire/commit/9a0ca02682ec7baf7362baa9bbc8ff14e7f478e5))
+* **cards:** multi-select with Ctrl and Shift, carried by drag and drop ([6130a49](https://github.com/Msgaihede/mtg-grimoire/commit/6130a496915685da14107816808a4854283a571c)), closes [#214](https://github.com/Msgaihede/mtg-grimoire/issues/214)
+* **collection:** folder writes, the merge rule and the reconcile fix ([dc304ab](https://github.com/Msgaihede/mtg-grimoire/commit/dc304abac476ecadb0288d6d02e9ea5fcf09fcb3)), closes [#215](https://github.com/Msgaihede/mtg-grimoire/issues/215)
+* **collection:** nested folders for the collection (PR 2 of 4) ([4f9c6e6](https://github.com/Msgaihede/mtg-grimoire/commit/4f9c6e65161497110bc482586ccbc121a46b7ebc))
+* **collection:** schema v24 adds the collection's folders ([159de2b](https://github.com/Msgaihede/mtg-grimoire/commit/159de2bb841851c5ff0c182f46eb7fbbf1d7174d)), closes [#215](https://github.com/Msgaihede/mtg-grimoire/issues/215)
+* **collection:** the folder tree on the collection page ([4e4c8cf](https://github.com/Msgaihede/mtg-grimoire/commit/4e4c8cfb6cbe2332f6d01c1834e4a6d84c394d05)), closes [#215](https://github.com/Msgaihede/mtg-grimoire/issues/215)
+* **collection:** the pinned Decks section and Recently removed ([f124510](https://github.com/Msgaihede/mtg-grimoire/commit/f124510fe1f62f8e4cd283bced5c821d64d8b880)), closes [#209](https://github.com/Msgaihede/mtg-grimoire/issues/209)
+* **collection:** the seven folder commands ([5c0f339](https://github.com/Msgaihede/mtg-grimoire/commit/5c0f339e7f1b1e7d71a2ec8b928a4a4eca05b55b)), closes [#215](https://github.com/Msgaihede/mtg-grimoire/issues/215)
+* **collection:** the wire for filing a card into a deck ([79fec27](https://github.com/Msgaihede/mtg-grimoire/commit/79fec277ea13b3b7531aedc350268dde7cda354c)), closes [#215](https://github.com/Msgaihede/mtg-grimoire/issues/215)
+* **collection:** wire the two writes, and retire the Built flag from the client ([d37f0fe](https://github.com/Msgaihede/mtg-grimoire/commit/d37f0feb52ae51204e730fb39f37e77492b0ab28)), closes [#209](https://github.com/Msgaihede/mtg-grimoire/issues/209)
+* **decks:** collection search in the deck builder (PR 4 of 4) ([019fd92](https://github.com/Msgaihede/mtg-grimoire/commit/019fd921e0e23d7a9756331716568b74b923b4f0))
+* **decks:** collection_to_deck records its add and can name its pile ([75d8e74](https://github.com/Msgaihede/mtg-grimoire/commit/75d8e749a72582c215039611879b8a32f7c2a99d))
+* **decks:** cutting a card returns its copies to Recently removed ([9beb19f](https://github.com/Msgaihede/mtg-grimoire/commit/9beb19f925fd526b14ba9994103f7f85cc302a21)), closes [#209](https://github.com/Msgaihede/mtg-grimoire/issues/209)
+* **decks:** deck groups, Recently removed, and the end of the allocator (PR 3 of 4) ([4829520](https://github.com/Msgaihede/mtg-grimoire/commit/48295202154d6d4b214b6f10f7eeb54f20bfd6a2))
+* **decks:** rebuild the deck editor header as three lines ([3e24a5b](https://github.com/Msgaihede/mtg-grimoire/commit/3e24a5bb20819b3bba419bf6060797c55418dc41))
+* **decks:** rebuild the deck editor header as three lines ([a6a3e66](https://github.com/Msgaihede/mtg-grimoire/commit/a6a3e6673c95179874a87a7ec3dd88082796b7b8))
+* **decks:** the collection search is the card search, over your binder ([ebe6e0e](https://github.com/Msgaihede/mtg-grimoire/commit/ebe6e0e9ccd876030ea3e5e79b3a612d65ab5437))
+* **decks:** the collection search is the card search, over your binder ([8b6eff9](https://github.com/Msgaihede/mtg-grimoire/commit/8b6eff910b180c0216ece3298fc1ecafb87b5156))
+* **decks:** the collection's folders become the physical ledger ([62a04b5](https://github.com/Msgaihede/mtg-grimoire/commit/62a04b575ea164f399d658e1112ca90e81185975)), closes [#209](https://github.com/Msgaihede/mtg-grimoire/issues/209)
+* **decks:** two search tabs, and a mode for the cards you already own ([3b50181](https://github.com/Msgaihede/mtg-grimoire/commit/3b50181d475cbe5bca283709eced992b6fc233f3))
+* **search:** redo the filter row as a bar, a tray and the search in words ([be6c0d8](https://github.com/Msgaihede/mtg-grimoire/commit/be6c0d80180e1ce4b0a8447a297f86876f197482))
+* **search:** redo the filter row as a bar, a tray and the search in words ([a8e3b01](https://github.com/Msgaihede/mtg-grimoire/commit/a8e3b012414b4f8143034fe9fd22883293b637ea))
+* **shell:** Escape closes the open deck, and climbs one folder ([9fe86fc](https://github.com/Msgaihede/mtg-grimoire/commit/9fe86fc096bedbed8365f742e007ae867b70c4a5))
+* **shell:** Escape closes the open deck, and climbs one folder ([984cec9](https://github.com/Msgaihede/mtg-grimoire/commit/984cec92213254fe5caab7d91f48120417aca701))
+* **shell:** reorder the sidebar, and give Decks and Collection their own icons ([39bb966](https://github.com/Msgaihede/mtg-grimoire/commit/39bb966980556f928eed7592c7d7ecb158b38609))
+* **shell:** reorder the sidebar, and give Decks and Collection their own icons ([42548b4](https://github.com/Msgaihede/mtg-grimoire/commit/42548b435db39145533af5d24225c70088e5cae9))
+* **storybook:** teach the fake the deck groups ([95f018d](https://github.com/Msgaihede/mtg-grimoire/commit/95f018d4ac81f63e898e1f4cb04f03c168344766)), closes [#209](https://github.com/Msgaihede/mtg-grimoire/issues/209)
+* **storybook:** teach the fake the folder commands ([b2e5e6f](https://github.com/Msgaihede/mtg-grimoire/commit/b2e5e6f36280c2ed80473629c28b2a1f6a38c548)), closes [#215](https://github.com/Msgaihede/mtg-grimoire/issues/215)
+* **transfer:** export deck tags, so Archidekt round-trips ([cb22d81](https://github.com/Msgaihede/mtg-grimoire/commit/cb22d816e1ae03a8b566430616941441ba458992))
+* **transfer:** export deck tags, so Archidekt round-trips ([83a590f](https://github.com/Msgaihede/mtg-grimoire/commit/83a590fb44938242ec2b582a30ae65607fac20e8))
+* **transfer:** import a decklist into the deck and the collection at once ([5b1cbc2](https://github.com/Msgaihede/mtg-grimoire/commit/5b1cbc2548d3ecf4cffc793d6766106cc5b92a36)), closes [#215](https://github.com/Msgaihede/mtg-grimoire/issues/215)
+* **transfer:** import Archidekt tags, and let the reader pick which ([3974f95](https://github.com/Msgaihede/mtg-grimoire/commit/3974f95ee9158450354eabfafa8619b9171ccb2e))
+* **transfer:** import Archidekt tags, and let the reader pick which ([aadfe9f](https://github.com/Msgaihede/mtg-grimoire/commit/aadfe9fe861b14f69cb1f53ef8c23853bdec04a7))
+
+
+### Bug Fixes
+
+* **collection:** drop the row the stepper empties, and close the review's findings ([3036e18](https://github.com/Msgaihede/mtg-grimoire/commit/3036e18f3942fb84814377c56eda3c76468eb2f3)), closes [#215](https://github.com/Msgaihede/mtg-grimoire/issues/215)
+* **decks:** draw the variant switch as Live | Compare | Theory ([d3e4908](https://github.com/Msgaihede/mtg-grimoire/commit/d3e4908e669efe1c43a538ff5ebee599cd9de1cf))
+* **decks:** draw the variant switch as Live | Compare | Theory ([f428bdc](https://github.com/Msgaihede/mtg-grimoire/commit/f428bdc8284caa071deddb418b32e77bf08cdf3f))
+* **decks:** follow the scroll fix into the test and the docs ([f42d0e1](https://github.com/Msgaihede/mtg-grimoire/commit/f42d0e1903dcf6b9dc7e3a91db0ea8664dbbacdb))
+* **decks:** follow the scroll fix into the test and the docs ([4317fe0](https://github.com/Msgaihede/mtg-grimoire/commit/4317fe085a3c2a11e0cbbf5acff9c21c242fc5cd))
+* **decks:** glow the card an owned add landed, and widen what it invalidates ([3b1c8f7](https://github.com/Msgaihede/mtg-grimoire/commit/3b1c8f7b1738362c742779ea8138168e2cf44d89))
+* **decks:** stop the split doubling a tradelist, and cut a swapped card correctly ([5316f5d](https://github.com/Msgaihede/mtg-grimoire/commit/5316f5da65d44a749e5004c954d6962bd1f7007f)), closes [#209](https://github.com/Msgaihede/mtg-grimoire/issues/209)
+* **search:** name the pinned sort row Best match, not Default order ([f7247d0](https://github.com/Msgaihede/mtg-grimoire/commit/f7247d0cf6b9085e672df72e36e19781fe08543d))
+* **search:** name the pinned sort row Best match, not Default order ([c66e221](https://github.com/Msgaihede/mtg-grimoire/commit/c66e221dfcb3f2520964c76e5605afaad6b6710c)), closes [#213](https://github.com/Msgaihede/mtg-grimoire/issues/213)
+* **search:** the price track is gold only once the band is a filter ([30fe39a](https://github.com/Msgaihede/mtg-grimoire/commit/30fe39aea1a6ea9b0df09f026141c7c16d57943c))
+* **search:** the price track is gold only once the band is a filter ([1e4f2ee](https://github.com/Msgaihede/mtg-grimoire/commit/1e4f2ee34b95a1fdba3c743764aafe78c9c61e80))
+* **transfer:** widen the collection importer's fold to the full grain ([2c96043](https://github.com/Msgaihede/mtg-grimoire/commit/2c960435ae8b826f95f8e456bc3ea822b78c68d5)), closes [#215](https://github.com/Msgaihede/mtg-grimoire/issues/215)
+
 ## [0.14.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.13.0...v0.14.0) (2026-08-22)
 
 
