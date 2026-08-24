@@ -798,9 +798,14 @@ describe("FilterBar, its sort picker", () => {
   });
 
   /**
-   * The row a reader opens the app on. `Default order` is not one of the orders — it is the
-   * absence of one, which for this view means relevance when there is a query and name when
-   * there is not — so it is pinned above them rather than sorted in.
+   * The row a reader opens the app on. `Best match` is not one of the seven columns — it is the
+   * search's own ranking, relevance when there is a query and name when there is not — so it is
+   * pinned above them rather than sorted in.
+   *
+   * **The name is load-bearing and issue #213 is why.** It read `Default order` until then, which
+   * named the empty sort spec rather than the order it produces, and a reader on the alphabetical
+   * opening wall took it for the name of alphabetical order. `Name`, two rows below, is the one
+   * that really is alphabetical.
    *
    * **`toHaveValue`, never the text of the selected option.** A controlled `<select>` whose
    * `value` matches no `<option>` does not draw blank: `react-dom` walks the options setting
@@ -808,11 +813,28 @@ describe("FilterBar, its sort picker", () => {
    * row — so a picker that had lost its selection entirely would read exactly like one that is
    * correctly untouched.
    */
-  it("opens on Default order, pinned above the orders", () => {
+  it("opens on Best match, pinned above the orders", () => {
     render(<FilterBar search={search()} />);
 
     expect(screen.getByLabelText("Sort results")).toHaveValue("");
-    expect(sortOrder()[0]).toBe("Default order");
+    expect(sortOrder()[0]).toBe("Best match");
+  });
+
+  /**
+   * Issue #213's fix, stated as the thing that was wrong: the pinned row and the alphabetical
+   * row are two different rows with two different names, and neither of them says `Default`.
+   *
+   * A `not.toContain` over the whole list rather than a check on row 0, because the failure this
+   * guards against is the old string coming back *anywhere* — a merge restoring the option, a
+   * story fixture, a second picker copied off this one.
+   */
+  it("names the alphabetical order Name and never calls anything Default", () => {
+    render(<FilterBar search={search()} />);
+
+    const rows = sortOrder();
+    expect(rows).toContain("Name");
+    expect(rows).toContain("Best match");
+    expect(rows.some((r) => /default/i.test(r))).toBe(false);
   });
 
   /**
@@ -825,11 +847,11 @@ describe("FilterBar, its sort picker", () => {
    * assertion about one row's presence. `Mana value` and `Released` are the two orders no header
    * can reach, and they are in here as ordinary rows, pinned nowhere.
    */
-  it("offers the orders alphabetically, under the pinned Default order", () => {
+  it("offers the orders alphabetically, under the pinned Best match", () => {
     render(<FilterBar search={search()} />);
 
     expect(sortOrder()).toEqual([
-      "Default order",
+      "Best match",
       "Mana value",
       "Name",
       "Price",
@@ -859,7 +881,7 @@ describe("FilterBar, its sort picker", () => {
    *  that clears one is a press on a table header the grid does not draw. Selected by element
    *  rather than by value, because `""` as a value string is not a match Testing Library can
    *  resolve unambiguously. */
-  it("sends the empty key when the reader picks Default order back", async () => {
+  it("sends the empty key when the reader picks Best match back", async () => {
     const setSortKey = vi.fn();
     render(
       <FilterBar
@@ -872,7 +894,7 @@ describe("FilterBar, its sort picker", () => {
     );
 
     const select = screen.getByLabelText("Sort results");
-    const back = within(select).getByRole("option", { name: "Default order" });
+    const back = within(select).getByRole("option", { name: "Best match" });
     await userEvent.selectOptions(select, back);
 
     expect(setSortKey).toHaveBeenCalledWith("");
@@ -888,12 +910,12 @@ describe("FilterBar, its sort picker", () => {
    * order shrinks the row out from under a keyboard caret. This one can only grey from the
    * select beside it, which is where the caret already is when it happens.
    */
-  it("disables the direction button while the list is in its default order", () => {
+  it("disables the direction button while the list is ranked by Best match", () => {
     render(<FilterBar search={search()} />);
 
     const button = dirButton();
     expect(button).toBeDisabled();
-    expect(button).toHaveAccessibleName("Sort direction — no order picked");
+    expect(button).toHaveAccessibleName("Sort direction — Best match has no direction");
   });
 
   /**
@@ -922,7 +944,7 @@ describe("FilterBar, its sort picker", () => {
       timeout: TOOLTIP_OPEN_MS + 1000,
     });
     expect(document.getElementById(TOOLTIP_PANEL_ID)).toHaveTextContent(
-      "Sort direction — no order picked",
+      "Sort direction — Best match has no direction",
     );
   });
 
