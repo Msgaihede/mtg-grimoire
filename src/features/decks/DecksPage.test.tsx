@@ -204,11 +204,14 @@ function wrap(ui: ReactElement) {
   // right-click. `useContextMenu` degrades to a no-op without one — deliberately, so that every
   // surface's own suite and story can render alone — so a test that forgot it would find a
   // right-click doing nothing rather than an error saying why.
-  return render(
+  const view = render(
     <QueryClientProvider client={client}>
       <ContextMenuProvider>{ui}</ContextMenuProvider>
     </QueryClientProvider>,
   );
+  // Handed back for the one case that has to make a *read* answer differently mid-test: a folder
+  // deleted by another surface is not something any control on this screen can do.
+  return { ...view, client };
 }
 
 /** The tile, addressed the way a reader sees it: the deck's name first. */
@@ -1797,5 +1800,96 @@ describe("the folder row's menu", () => {
     await userEvent.type(await screen.findByLabelText("Name"), "Aristocrats");
 
     expect(screen.getByLabelText("Folder")).toHaveValue("");
+  });
+
+  /**
+   * **Escape walks the reader up one level, and the caret goes with them.**
+   *
+   * Two levels in one case, because the interesting claim is that it *repeats*: a rung that read
+   * the selected id rather than the resolved node would work once and then be asking a tree for
+   * a folder it no longer had open.
+   *
+   * `document.activeElement`, never `toHaveFocus` on something the test pressed — the file's own
+   * rule two describes up. Nothing here is clicked between the press and the assertion, so the
+   * caret's landing place is the app's answer rather than the test's.
+   */
+  it("goes up one folder level on Escape, with the caret on the row it left", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Legends, 1 deck" }));
+    expect(screen.getByRole("heading", { name: "Legends" })).toBeInTheDocument();
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(screen.getByRole("heading", { name: "Commander" })).toBeInTheDocument();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Legends, 1 deck" }));
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(screen.getByRole("heading", { name: "All decks" })).toBeInTheDocument();
+    expect(document.activeElement).toBe(screen.getByRole("button", { name: "Commander, 2 decks" }));
+  });
+
+  /**
+   * **…and at "All decks" the press is not the gallery's at all.**
+   *
+   * The rung is not registered at the root rather than registered and answering nothing, which is
+   * the difference between a press that falls through to whatever the app puts below this screen
+   * and one that is silently swallowed. Both look identical on screen, so `defaultPrevented` at a
+   * `window` listener is the only thing that can tell them apart — and it is a *bubble* listener,
+   * registered after the gallery mounted, so a rung of this screen's own would have run first.
+   */
+  it("leaves Escape alone at the top level", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    await screen.findByRole("heading", { name: "All decks" });
+    const heard: boolean[] = [];
+    const listen = (e: KeyboardEvent) => {
+      if (e.key === "Escape") heard.push(e.defaultPrevented);
+    };
+    window.addEventListener("keydown", listen);
+
+    await userEvent.keyboard("{Escape}");
+
+    window.removeEventListener("keydown", listen);
+    expect(heard).toEqual([false]);
+    expect(screen.getByRole("heading", { name: "All decks" })).toBeInTheDocument();
+  });
+
+  /**
+   * A folder the reader is standing in that goes away under them is the case `openNode` exists
+   * for, and it is the one a rung reading `selectedFolderId` would get wrong: the id still names
+   * the deleted folder, so "up" would be asked of a node that is not in the tree. Deriving the
+   * answer instead puts the wall at the root already — where Escape is nobody's, which is what
+   * this asserts rather than a throw.
+   */
+  it("owns no press once the open folder has gone from the tree", async () => {
+    withFolders();
+
+    const { client } = wrap(<DecksPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Legends, 1 deck" }));
+    expect(screen.getByRole("heading", { name: "Legends" })).toBeInTheDocument();
+
+    // Another surface deleted it. The gallery re-reads and the row is simply not there, so
+    // `selectedFolderId` is left naming nothing — which is the whole state under test.
+    deckFolderList.mockResolvedValue([EDH]);
+    await act(async () => {
+      await client.refetchQueries({ queryKey: ["decks", "folders"] });
+    });
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "All decks" })).toBeInTheDocument(),
+    );
+
+    const heard: boolean[] = [];
+    const listen = (e: KeyboardEvent) => {
+      if (e.key === "Escape") heard.push(e.defaultPrevented);
+    };
+    window.addEventListener("keydown", listen);
+    await userEvent.keyboard("{Escape}");
+    window.removeEventListener("keydown", listen);
+
+    expect(heard).toEqual([false]);
   });
 });

@@ -19,6 +19,7 @@ import { TRANSITION } from "@/lib/motion";
 import { sortOptions } from "@/lib/options";
 import type { SortDir } from "@/lib/sort";
 import { useAppStore } from "@/lib/store";
+import { clearFieldOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { colorDisabled, countDisabled, facetTitle, optionDisabled } from "./facets";
 import { SetCombobox } from "./SetCombobox";
@@ -210,6 +211,13 @@ export function FilterBar({
           type="search"
           value={search.text}
           onChange={(e) => search.setText(e.target.value)}
+          // Escape empties the box while there is something in it to empty, and falls through
+          // when there is not. Chromium clears an `<input type="search">` by itself but leaves
+          // `defaultPrevented` false, so on a view where Escape also means "go back" the same
+          // press would do both — and this row is the deck editor's docked panel as well as the
+          // search page's. jsdom implements no native clear at all, so the handler is also the
+          // only half of the behaviour a test can see. The rule is {@link clearFieldOnEscape}'s.
+          onKeyDown={(e) => clearFieldOnEscape(e, search.text, () => search.setText(""))}
           placeholder="Search cards…"
           // `FILTER_FIELD` and not `FILTER_CONTROL`: the row's chips dip 3% under the press and
           // a box the reader types into must not, or the native ✕ slides out from under the

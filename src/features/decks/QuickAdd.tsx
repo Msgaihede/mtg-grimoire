@@ -7,7 +7,7 @@ import { DEBOUNCE_MS } from "@/features/search/useCardSearch";
 import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError, type CardSummary } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
-import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
+import { clearFieldOnEscape, useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 
 /**
@@ -226,6 +226,25 @@ export function QuickAdd({
       submit();
       return;
     }
+    /**
+     * **Escape's second rung in this one field, and it is not a second registration.**
+     *
+     * The rung above owns the press while the list is up and consumes it in the **capture**
+     * phase — so by the time this target-phase handler runs, `listOpen` is exactly the test for
+     * "somebody nearer has already spent it". Guarding on the flag rather than on
+     * `e.defaultPrevented` says which layer that was, and keeps the two branches from ever
+     * double-firing on one press.
+     *
+     * With the list closed and text in the field, that text is what the press is for: without
+     * this the `"navigation"` rung would take it and close the deck the reader was about to add
+     * a card to. An empty field owns nothing and the press falls through — `clearFieldOnEscape`
+     * is the guard, written once for every box in the app that shares this rule.
+     *
+     * **Above the `options.length` guard on purpose.** A field can hold a name with no
+     * suggestions under it at all — the whole first 300ms of typing, and every miss — and those
+     * are the presses this exists for.
+     */
+    if (!listOpen) clearFieldOnEscape(e, text, () => setText(""));
     // Nothing to move through, so the arrows keep their native meaning — Home and End really do
     // belong to the caret in a text field with no list under it.
     if (options.length === 0) return;
