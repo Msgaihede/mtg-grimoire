@@ -78,6 +78,7 @@ export function SetCombobox({
   counts,
   options,
   align = "end",
+  fill = false,
 }: {
   selected: readonly string[];
   onToggle: (code: string) => void;
@@ -122,6 +123,15 @@ export function SetCombobox({
    * whatever it landed on.
    */
   align?: "start" | "end";
+  /**
+   * Stretch the trigger to its container and push the chevron to the far edge.
+   *
+   * For the filter **tray**, where this control is one cell of a grid beside a `<select>` and a
+   * pair of buttons: a trigger sized to its own text would be the one field in that grid with a
+   * ragged right edge, and the column it sits in would change width as the reader picked sets.
+   * Every row-shaped caller leaves it off and keeps a control as wide as what it says.
+   */
+  fill?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
@@ -397,7 +407,7 @@ export function SetCombobox({
   return (
     <div
       ref={rootRef}
-      className="relative"
+      className={cn("relative", fill && "min-w-0")}
       // Tab out of the panel and the panel should not still be there: 288px of listbox
       // hanging over the results, with the caret three controls further along. `onBlur`
       // is React's `focusout`, so it catches the input losing focus to anything at all;
@@ -434,6 +444,10 @@ export function SetCombobox({
           "inline-flex h-9 items-center gap-1.5 rounded-md border px-2.5 text-sm",
           "transition-colors duration-150 motion-reduce:transition-none",
           FOCUS,
+          // `flex` rather than `inline-flex`, so the button is a block that takes its container's
+          // width; `justify-between` is what then holds the chevron against the far edge instead
+          // of letting it sit against the label.
+          fill && "flex w-full justify-between",
           selected.length > 0
             ? "border-accent text-accent"
             : "border-border text-dim hover:text-text",

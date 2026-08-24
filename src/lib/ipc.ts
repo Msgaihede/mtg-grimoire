@@ -145,6 +145,32 @@ export interface SearchRequest {
    */
   manaX?: boolean;
   rarity?: string;
+  /**
+   * Rarity chips: `["rare", "mythic"]` means "either". ORed with each other, ANDed with every
+   * other filter — {@link sets}' shape one dimension along.
+   *
+   * **A field beside {@link rarity} rather than a widening of it.** That one is single-valued
+   * and is what `PrintingsFilterBar`'s `<select>` sends; a multi-select has to be able to say
+   * "none picked", which for an array is `[]` and which a lone string cannot spell. Rust:
+   * `rarities: Option<Vec<String>>`.
+   */
+  rarities?: string[];
+  /**
+   * The price band, at {@link marketplace}. Inclusive at both ends, either half usable alone.
+   *
+   * **An unpriced printing matches neither bound** — a shop that does not list a card has not
+   * offered it at zero. So a range narrows away every printing the chosen marketplace is silent
+   * about, which on Card Kingdom and Mana Pool is most of the corpus until that feed has been
+   * fetched. Rust: `price_min`/`price_max`, applied in `run_search` over
+   * `sorting::printing_price_expr` — the same expression the Price column shows.
+   *
+   * **The facet counts ignore both**, and that is deliberate: `CardIndex` has no price
+   * dimension, so a bounded search is faceted over the unbounded corpus and every count reads
+   * high. Fails open, which is the rule the whole row is built on — an over-read count only
+   * ever leaves a control live that a real count would have greyed.
+   */
+  priceMin?: number;
+  priceMax?: number;
   /** Omitted means true: digital-only printings are hidden unless asked for. */
   paperOnly?: boolean;
   /**
@@ -389,6 +415,16 @@ export interface FacetResponse {
   manaX: number;
   /** Keyed by `legalities` key. Plain counts. */
   formats: Record<string, number>;
+  /**
+   * Keyed `common`/`uncommon`/`rare`/`mythic`. Plain counts, and all four arrive on every
+   * **ready** response, zeros included — the chips grey a counted zero and stay live on an
+   * absent key, so a key that went missing would silently stop greying.
+   *
+   * **They do not sum to {@link total}.** The corpus also holds `special` and `bonus`
+   * printings, which no chip offers and nothing counts, so these four are a filter's
+   * vocabulary rather than a partition of the result set.
+   */
+  rarities: Record<string, number>;
   /**
    * Keyed by set code. Plain counts, and **every code in the corpus arrives, zeros
    * included** — 1 047 keys on the live corpus, on every **ready** response, whatever the
@@ -642,6 +678,11 @@ export interface CardFilters {
    *  the numbers above and additive, never a re-filing. Rust: `mana_x: Option<bool>`. */
   manaX?: boolean;
   rarity?: string;
+  /** Rarity chips, ORed with each other — see {@link SearchRequest.rarities}, which is the same
+   *  field on the same control. Declared here as well because `filters::push_card_filters` emits
+   *  it for all three lists, exactly as {@link oracleId} above is. Rust:
+   *  `rarities: Option<Vec<String>>`. */
+  rarities?: string[];
   /** Omitted means true in the search and false in the collection: a search offers cards to
    *  own, a collection lists cards that are owned. */
   paperOnly?: boolean;

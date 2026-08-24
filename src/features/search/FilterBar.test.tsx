@@ -47,8 +47,33 @@ const search = (over: Record<string, unknown> = {}) =>
     flipSortDir: vi.fn(),
     activeCount: 0,
     resetAll: vi.fn(),
+    // The tray's own three filters. `owned` and `allPrintings` are left off deliberately —
+    // `undefined` is the unfiltered value of both, and the row reads them as such.
+    rarities: [] as string[],
+    toggleRarity: vi.fn(),
+    setOwned: vi.fn(),
+    priceMin: undefined as number | undefined,
+    priceMax: undefined as number | undefined,
+    setPriceRange: vi.fn(),
+    // **Not optional in the stub, because it is not optional in the hook.** The price field's
+    // caption and the price chip's figures are both drawn in the marketplace's own currency, so a
+    // stub without one crashes the whole component rather than losing one assertion — which is
+    // what it did the first time this row grew a price filter.
+    marketplace: { id: "tcgplayer", label: "TCGplayer", currency: "usd", feed: false },
     ...over,
   }) as unknown as Parameters<typeof FilterBar>[0]["search"];
+
+/**
+ * Open the filter tray, and hand back the panel.
+ *
+ * Set, Format, Owned, Rarity, Price and Printings are behind a disclosure since the row was
+ * redesigned, so a case about any of them opens it first. The four controls that never fold away
+ * — the search box, the colours, the mana values and the sort — need none of this.
+ */
+async function openTray(): Promise<HTMLElement> {
+  await userEvent.click(screen.getByRole("button", { name: /^Show filters/ }));
+  return screen.getByRole("button", { name: /^Hide filters/ });
+}
 
 /** The direction button, matched on a **prefix**: its accessible name carries the direction and
  *  grows a reason when there is none to flip, so the exact enabled string fails on the row this
@@ -160,6 +185,8 @@ describe("FilterBar", () => {
     const setFormat = vi.fn();
     render(<FilterBar search={search({ setFormat })} />);
 
+    await openTray();
+
     const select = screen.getByLabelText("Format") as HTMLSelectElement;
     expect(select).toHaveValue("");
     expect(select.selectedOptions[0]).toHaveTextContent("Any format");
@@ -176,8 +203,10 @@ describe("FilterBar", () => {
    * disabled. Both halves are asserted because they fail differently, and `getByRole` would
    * catch neither: a present-but-unselected option passes it.
    */
-  it("shows Any card as picked when it is", () => {
+  it("shows Any card as picked when it is", async () => {
     render(<FilterBar search={search({ format: ANY_CARD })} />);
+
+    await openTray();
 
     const select = screen.getByLabelText("Format") as HTMLSelectElement;
     expect(select).toHaveValue(ANY_CARD);
@@ -213,12 +242,30 @@ const facets = (over: Partial<FacetResponse> = {}): FacetResponse => ({
   // not a number. Five, like the values, so the whole group starts live.
   manaX: 5,
   formats: Object.fromEntries(FORMATS.map((f) => [f.value, 5])),
+  // All four keys, as a ready response always carries them — a chip greys on a counted zero and
+  // stays live on an absent key, so a fixture missing one would be testing the wrong arm.
+  rarities: { common: 5, uncommon: 5, rare: 5, mythic: 5 },
   sets: { lea: 5 },
   owned: { owned: 3, missing: 37 },
   total: 40,
   ready: true,
   ...over,
 });
+
+/** Every rarity counted, so a case overriding one is overriding exactly one. */
+const ALL_RARITIES = { common: 5, uncommon: 5, rare: 5, mythic: 5 };
+
+/**
+ * What the row says it is filtering by, in document order.
+ *
+ * The **sequence** is part of the behaviour — the chips read left to right in the order the
+ * filters are counted — so this hands back the whole list and each case asserts all of it. Two
+ * chips swapped past each other satisfy any assertion about one being present.
+ */
+const chipLabels = () =>
+  screen
+    .queryAllByRole("button", { name: /^Remove filter — / })
+    .map((b) => b.getAttribute("aria-label")!.replace("Remove filter — ", ""));
 
 describe("FilterBar, greyed by its facets", () => {
   /**
@@ -315,8 +362,10 @@ describe("FilterBar, greyed by its facets", () => {
    * response carries `0` where the maps carry an absent key, and it is the one chip that
    * would grey if a raw response ever reached this row.
    */
-  it("leaves every control live while the index is still building", () => {
+  it("leaves every control live while the index is still building", async () => {
     render(<FilterBar search={search()} />);
+
+    await openTray();
 
     for (const name of [/^Mana value 7\b/, /^Cards with X\b/, /^White\b/, /^Owned\b/]) {
       expect(screen.getByRole("button", { name })).not.toHaveAttribute("aria-disabled");
@@ -370,10 +419,12 @@ describe("FilterBar, greyed by its facets", () => {
 
   /** Native `<option disabled>` — the one place a real `disabled` is right, because a listbox
    *  option is not a tab stop to lose. */
-  it("greys a format nothing in this search is legal in", () => {
+  it("greys a format nothing in this search is legal in", async () => {
     render(
       <FilterBar search={search({ facets: facets({ formats: { modern: 0, legacy: 4 } }) })} />,
     );
+
+    await openTray();
 
     expect(screen.getByRole("option", { name: "Modern" })).toBeDisabled();
     expect(screen.getByRole("option", { name: "Legacy" })).not.toBeDisabled();
@@ -410,10 +461,12 @@ describe("FilterBar, greyed by its facets", () => {
 
   /** The Owned chip is never greyed — one button cycling off → owned → missing → off, and
    *  greying it would strand whoever is mid-cycle. It carries its count anyway. */
-  it("counts the Owned chip without ever greying it", () => {
+  it("counts the Owned chip without ever greying it", async () => {
     const { rerender } = render(
       <FilterBar search={search({ facets: facets({ owned: { owned: 0, missing: 40 } }) })} />,
     );
+
+    await openTray();
 
     const chip = screen.getByRole("button", { name: "Owned — nothing in this search" });
     expect(chip).not.toHaveAttribute("aria-disabled");
@@ -450,8 +503,10 @@ describe("FilterBar, its format options in order", () => {
    * for every key, which is the path that has to fall out of the grouping rather than be a
    * special case somebody has to remember.
    */
-  it("reads alphabetically while the index is still building", () => {
+  it("reads alphabetically while the index is still building", async () => {
     render(<FilterBar search={search()} />);
+
+    await openTray();
 
     expect(formatOrder()).toEqual([
       "Any card",
@@ -473,8 +528,10 @@ describe("FilterBar, its format options in order", () => {
    * exactly why this is asserted rather than left to fall out — a reader predicts the ladder,
    * and the alphabet agreeing with it here is not what puts it in that order.
    */
-  it("opens on Any format with Any card above it", () => {
+  it("opens on Any format with Any card above it", async () => {
     render(<FilterBar search={search()} />);
+
+    await openTray();
 
     expect(formatOrder().slice(0, 2)).toEqual(["Any card", "Any format"]);
     expect(screen.getByLabelText("Format")).toHaveValue("");
@@ -486,7 +543,7 @@ describe("FilterBar, its format options in order", () => {
    * there, and a list that shed rows as the facets landed would jump under the cursor — but it
    * has no business sitting between two formats that would return cards.
    */
-  it("floats the pickable formats above the greyed ones, each half alphabetical", () => {
+  it("floats the pickable formats above the greyed ones, each half alphabetical", async () => {
     render(
       <FilterBar
         search={search({
@@ -504,6 +561,8 @@ describe("FilterBar, its format options in order", () => {
         })}
       />,
     );
+
+    await openTray();
 
     expect(formatOrder()).toEqual([
       "Any card",
@@ -528,7 +587,7 @@ describe("FilterBar, its format options in order", () => {
    * the one row the reader needs, because changing it is how they get their cards back.
    * Sinking it would file that row below every row they cannot use.
    */
-  it("keeps the selected format above the greyed ones even at zero", () => {
+  it("keeps the selected format above the greyed ones even at zero", async () => {
     render(
       <FilterBar
         search={search({
@@ -547,6 +606,8 @@ describe("FilterBar, its format options in order", () => {
         })}
       />,
     );
+
+    await openTray();
 
     expect(formatOrder()).toEqual([
       "Any card",
@@ -568,7 +629,7 @@ describe("FilterBar, its format options in order", () => {
    * first and pickable here exactly as they are everywhere else: neither is a format, and they
    * are how a reader who has filtered themselves into nothing gets out.
    */
-  it("pins both non-format rows first even when nothing at all is legal", () => {
+  it("pins both non-format rows first even when nothing at all is legal", async () => {
     render(
       <FilterBar
         search={search({
@@ -576,6 +637,8 @@ describe("FilterBar, its format options in order", () => {
         })}
       />,
     );
+
+    await openTray();
 
     expect(formatOrder()).toEqual([
       "Any card",
@@ -607,8 +670,10 @@ describe("FilterBar, its format options in order", () => {
    * text is the whole of what the reader can see. Neither is `getByRole` — a
    * present-but-unselected option would pass that and be exactly the bug this prevents.
    */
-  it("draws a format the shared list does not carry, and shows it as picked", () => {
+  it("draws a format the shared list does not carry, and shows it as picked", async () => {
     render(<FilterBar search={seeded({ format: "historic" })} />);
+
+    await openTray();
 
     const select = screen.getByLabelText("Format") as HTMLSelectElement;
     expect(select).toHaveValue("historic");
@@ -618,8 +683,10 @@ describe("FilterBar, its format options in order", () => {
 
   /** It is a format like every other once it arrives, so it files under H rather than riding
    *  the top as the newcomer — a reader hunting for it hunts where the alphabet says. */
-  it("sorts the seeded format into the alphabet rather than pinning it", () => {
+  it("sorts the seeded format into the alphabet rather than pinning it", async () => {
     render(<FilterBar search={seeded({ format: "historic" })} />);
+
+    await openTray();
 
     expect(formatOrder()).toEqual([
       "Any card",
@@ -642,7 +709,7 @@ describe("FilterBar, its format options in order", () => {
    * this suite would notice. Neither pinned row is a format, and both are first whatever the
    * alphabet hands them.
    */
-  it("keeps both pinned rows first when a seeded format would collate above them", () => {
+  it("keeps both pinned rows first when a seeded format would collate above them", async () => {
     render(
       <FilterBar
         search={search({
@@ -651,6 +718,8 @@ describe("FilterBar, its format options in order", () => {
         })}
       />,
     );
+
+    await openTray();
 
     expect(formatOrder()).toEqual([
       "Any card",
@@ -669,12 +738,14 @@ describe("FilterBar, its format options in order", () => {
 
   /** The seeded row greys by the rule every other row greys by — one `optionDisabled` answer,
    *  and no arm of it that only the seven written-down keys reach. */
-  it("greys the seeded format when this search has nothing legal in it", () => {
+  it("greys the seeded format when this search has nothing legal in it", async () => {
     render(
       <FilterBar
         search={seeded({ facets: facets({ formats: { ...facets().formats, historic: 0 } }) })}
       />,
     );
+
+    await openTray();
 
     expect(screen.getByRole("option", { name: "Historic" })).toBeDisabled();
     expect(screen.getByRole("option", { name: "Modern" })).not.toBeDisabled();
@@ -1065,5 +1136,341 @@ describe("FilterBar, its sort picker", () => {
     expect(select.classList.contains("text-dim")).toBe(true);
     expect(dirButton().classList.contains("text-accent")).toBe(false);
     expect(dirButton().classList.contains("border-accent")).toBe(false);
+  });
+});
+
+/**
+ * The shape of the redesign, and the only claim on this page that is about *absence*.
+ *
+ * Four controls never fold away — the box you type in, the colours, the mana values, and the
+ * order the results come in — because those are the four a reader reaches for without looking.
+ * Everything else is one press in. Asserted from both sides: a control that quietly stayed on the
+ * bar would pass any test about the tray holding it.
+ */
+describe("FilterBar, its tray", () => {
+  const ON_THE_BAR = [
+    () => screen.getByPlaceholderText("Search cards…"),
+    () => screen.getByRole("button", { name: "White" }),
+    () => screen.getByRole("button", { name: "Mana value 3" }),
+    () => screen.getByLabelText("Sort results"),
+  ];
+
+  it("keeps four controls on the bar and folds the rest away", async () => {
+    render(<FilterBar search={search()} />);
+
+    for (const found of ON_THE_BAR) expect(found()).toBeInTheDocument();
+    expect(screen.queryByLabelText("Format")).toBeNull();
+    expect(screen.queryByTestId("set-combobox")).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Owned\b/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Rare cards\b/ })).toBeNull();
+    expect(screen.queryByLabelText("Lowest price")).toBeNull();
+    expect(screen.queryByRole("button", { name: "All printings" })).toBeNull();
+
+    const toggle = await openTray();
+
+    for (const found of ON_THE_BAR) expect(found()).toBeInTheDocument();
+    expect(screen.getByLabelText("Format")).toBeInTheDocument();
+    expect(screen.getByTestId("set-combobox")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Owned\b/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Rare cards\b/ })).toBeInTheDocument();
+    expect(screen.getByLabelText("Lowest price")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "All printings" })).toBeInTheDocument();
+    // The panel is the button's, said in the markup rather than only in the layout — an
+    // `aria-controls` pointing at nothing is a promise to assistive tech that is not kept.
+    expect(document.getElementById(toggle.getAttribute("aria-controls")!)).toBeInTheDocument();
+  });
+
+  /**
+   * **The count is the whole search's, not the tray's.** It is the same number Reset all wears,
+   * so the two cannot disagree about how much is on while the tray is shut — and a reader who has
+   * pressed three colours is never looking at a Filters button reading zero.
+   */
+  it("carries the search's own count, and draws no badge at zero", async () => {
+    const { rerender } = render(<FilterBar search={search()} />);
+
+    const quiet = screen.getByRole("button", { name: "Show filters — 0 active" });
+    expect(quiet).toHaveTextContent("Filters");
+    expect(quiet).not.toHaveTextContent("0");
+
+    rerender(<FilterBar search={search({ activeCount: 3, colors: ["W"] })} />);
+
+    expect(screen.getByRole("button", { name: "Show filters — 3 active" })).toHaveTextContent("3");
+  });
+
+  it("says whether it is open, and shuts again on a second press", async () => {
+    render(<FilterBar search={search()} />);
+
+    const toggle = screen.getByRole("button", { name: /^Show filters/ });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+    await userEvent.click(toggle);
+    expect(screen.getByRole("button", { name: /^Hide filters/ })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: /^Hide filters/ }));
+    expect(screen.queryByLabelText("Format")).toBeNull();
+  });
+});
+
+describe("FilterBar, its rarity chips", () => {
+  /**
+   * Common through mythic, and **not alphabetical** — the order is the information, the way Near
+   * Mint through Damaged is on the collection's condition chips. `sortOptions`' second kind of
+   * exemption, and the one place on this row it applies.
+   */
+  it("offers the four rarities in the order a card is printed at them", async () => {
+    render(<FilterBar search={search()} />);
+    await openTray();
+
+    const names = screen
+      .getAllByRole("button")
+      .map((b) => b.getAttribute("aria-label"))
+      .filter((n): n is string => !!n && n.endsWith(" cards"));
+    expect(names).toEqual([
+      "Common cards",
+      "Uncommon cards",
+      "Rare cards",
+      "Mythic cards",
+    ]);
+  });
+
+  it("shows which rarities are on, and toggles one", async () => {
+    const toggleRarity = vi.fn();
+    render(<FilterBar search={search({ rarities: ["rare"], toggleRarity })} />);
+    await openTray();
+
+    expect(screen.getByRole("button", { name: /^Rare\b/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: /^Mythic\b/ })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: /^Mythic\b/ }));
+
+    expect(toggleRarity).toHaveBeenCalledWith("mythic");
+  });
+
+  /**
+   * The row's one greying rule, one dimension further along: greyed means "turning this on would
+   * not change the result set". `aria-disabled` and never the attribute, so the chip keeps its tab
+   * stop and a reader sweeping the tray still hears the option and its count.
+   */
+  it("greys a rarity nothing in this search is printed at, and keeps it reachable", async () => {
+    const toggleRarity = vi.fn();
+    render(
+      <FilterBar
+        search={search({ toggleRarity, facets: facets({ rarities: { ...ALL_RARITIES, mythic: 0 } }) })}
+      />,
+    );
+    await openTray();
+
+    const mythic = screen.getByRole("button", { name: "Mythic — nothing in this search" });
+    expect(mythic).toHaveAttribute("aria-disabled", "true");
+    expect(mythic).not.toBeDisabled();
+
+    await userEvent.click(mythic);
+    expect(toggleRarity).not.toHaveBeenCalled();
+  });
+
+  /** A selected option is never greyed — that is the way out of a dead end (`facets.ts`). */
+  it("never greys a rarity that is switched on", async () => {
+    render(
+      <FilterBar
+        search={search({
+          rarities: ["mythic"],
+          facets: facets({ rarities: { ...ALL_RARITIES, mythic: 0 } }),
+        })}
+      />,
+    );
+    await openTray();
+
+    expect(screen.getByRole("button", { name: /^Mythic\b/ })).not.toHaveAttribute("aria-disabled");
+  });
+});
+
+/**
+ * The chips under the rule — the search, said in words.
+ *
+ * This is what the tray is paid for. Four of the six filters behind it have no control on screen
+ * at all once it is shut, so without these a reader could be looking at a narrowed wall with
+ * nothing to say why.
+ */
+describe("FilterBar, the filters it states", () => {
+  it("says nothing at all when nothing is filtered", () => {
+    render(<FilterBar search={search()} />);
+
+    expect(screen.queryByText("Filtering by")).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Remove filter/ })).toBeNull();
+    // The rule and Reset all stay, because that button is drawn on every row and greyed at zero.
+    expect(screen.getByRole("button", { name: /^Reset all/ })).toBeInTheDocument();
+  });
+
+  /**
+   * **One chip per *kind*, and the same kinds `activeFilterCount` counts.** Three colours are one
+   * chip, because the number on Reset all and the number of chips under the bar have to be the
+   * same number — a reader looking at `Reset all 3` over six chips has been told two different
+   * things about one search.
+   */
+  it("states each kind once, in the reader's words rather than the payload's", async () => {
+    render(
+      <FilterBar
+        search={search({
+          colors: ["U", "R"],
+          manaValues: [2, 8],
+          manaX: true,
+          sets: ["lea", "dom"],
+          format: "commander",
+          rarities: ["rare", "mythic"],
+          owned: false,
+          priceMin: 2,
+          priceMax: 40,
+        })}
+      />,
+    );
+
+    expect(screen.getByText("Filtering by")).toBeInTheDocument();
+    expect(chipLabels()).toEqual([
+      // WUBRG order and the colours' own names — `Colour: U, R` is the payload, and the payload
+      // is not what the reader pressed.
+      "Colour: Blue, Red",
+      // One chip for the whole OR group, X included: it is one entry in the count for the same
+      // reason it is one question on the row.
+      "Mana value: 2, 8+, X",
+      // Upper-cased and sorted, which is how a set code is printed on the card.
+      "Set: DOM, LEA",
+      "Format: Commander",
+      "Rarity: Rare, Mythic",
+      "Missing",
+      "Price: $2.00 – $40.00",
+    ]);
+  });
+
+  /**
+   * `Any card` is not a format — it is the corpus the search is drawn from — so its chip may not
+   * read `Format: Any card`, which would state a format filter that is not on.
+   */
+  it("calls the widening row what it is", () => {
+    render(<FilterBar search={search({ format: ANY_CARD })} />);
+
+    expect(chipLabels()).toEqual(["Showing: Any card"]);
+  });
+
+  /** Half a band is a sentence, never a range with a hole in it. */
+  it("says a one-ended price band in words", () => {
+    const { rerender } = render(<FilterBar search={search({ priceMin: 5 })} />);
+    expect(chipLabels()).toEqual(["Price: from $5.00"]);
+
+    rerender(<FilterBar search={search({ priceMax: 5 })} />);
+    expect(chipLabels()).toEqual(["Price: up to $5.00"]);
+  });
+
+  /** The marketplace's own money, never a bare dollar sign. */
+  it("prices the band where the view prices everything else", () => {
+    render(
+      <FilterBar
+        search={search({
+          priceMin: 5,
+          marketplace: { id: "cardmarket", label: "Cardmarket", currency: "eur", feed: false },
+        })}
+      />,
+    );
+
+    expect(chipLabels()).toEqual(["Price: from €5.00"]);
+  });
+
+  /**
+   * Pressing a chip takes its **whole kind** off, which is what makes it the exact inverse of the
+   * count: one press, one fewer on the badge.
+   */
+  it("clears a whole kind when its chip is pressed", async () => {
+    const toggleColor = vi.fn();
+    const toggleManaValue = vi.fn();
+    const toggleManaX = vi.fn();
+    const setPriceRange = vi.fn();
+    render(
+      <FilterBar
+        search={search({
+          colors: ["U", "R"],
+          toggleColor,
+          manaValues: [2, 8],
+          manaX: true,
+          toggleManaValue,
+          toggleManaX,
+          priceMin: 2,
+          setPriceRange,
+        })}
+      />,
+    );
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Remove filter — Colour: Blue, Red" }),
+    );
+    expect(toggleColor.mock.calls.map(([c]) => c)).toEqual(["U", "R"]);
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Remove filter — Mana value: 2, 8+, X" }),
+    );
+    expect(toggleManaValue.mock.calls.map(([v]) => v)).toEqual([2, 8]);
+    expect(toggleManaX).toHaveBeenCalledTimes(1);
+
+    await userEvent.click(screen.getByRole("button", { name: "Remove filter — Price: from $2.00" }));
+    expect(setPriceRange).toHaveBeenCalledWith(undefined, undefined);
+  });
+});
+
+/**
+ * Two buttons rather than the one cycling chip the bar used to carry.
+ *
+ * A chip in a row has space for one word, so it cycled off → Owned → Missing → off and the word on
+ * it was what said which of the two questions was being asked — which meant the state the reader
+ * was *not* in was invisible until they had pressed through to it. The tray has room for both.
+ */
+describe("FilterBar, its owned pair", () => {
+  it("draws both questions, and shows which one is on", async () => {
+    const setOwned = vi.fn();
+    render(<FilterBar search={search({ owned: true, setOwned })} />);
+    await openTray();
+
+    expect(screen.getByRole("button", { name: /^Owned\b/ })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(screen.getByRole("button", { name: /^Missing\b/ })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+
+    // The opposite question is one press away and does not go through "off" to get there.
+    await userEvent.click(screen.getByRole("button", { name: /^Missing\b/ }));
+    expect(setOwned).toHaveBeenCalledWith(false);
+  });
+
+  /** Pressing the one that is already on is how the filter comes off — the cycle's third step. */
+  it("clears the filter on a second press of the same button", async () => {
+    const setOwned = vi.fn();
+    render(<FilterBar search={search({ owned: true, setOwned })} />);
+    await openTray();
+
+    await userEvent.click(screen.getByRole("button", { name: /^Owned\b/ }));
+
+    expect(setOwned).toHaveBeenCalledWith(true);
+  });
+
+  /** Never greyed, whatever the counts say — the tooltip carries them instead. */
+  it("counts both sides without greying either", async () => {
+    render(
+      <FilterBar search={search({ facets: facets({ owned: { owned: 0, missing: 40 } }) })} />,
+    );
+    await openTray();
+
+    const owned = screen.getByRole("button", { name: "Owned — nothing in this search" });
+    const missing = screen.getByRole("button", { name: "Missing — 40 printings" });
+    expect(owned).not.toHaveAttribute("aria-disabled");
+    expect(missing).not.toHaveAttribute("aria-disabled");
   });
 });

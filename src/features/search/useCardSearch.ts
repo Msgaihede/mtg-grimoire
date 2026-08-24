@@ -225,6 +225,17 @@ export interface FilterState {
   /** `false` is a filter too — "the cards I do *not* have" — so this is compared against
    *  `undefined` rather than tested for truthiness. */
   owned: boolean | undefined;
+  /** The rarity chips. One kind however many are pressed, like {@link colors}. */
+  rarities: readonly string[];
+  /**
+   * The price band's two ends, either usable alone. `undefined` is "this end is open".
+   *
+   * **Two fields and one kind**: a reader who has moved both handles has narrowed once, the way
+   * three colours are one thing that is on. Counted below as `min !== undefined || max !==
+   * undefined` for exactly that reason.
+   */
+  priceMin: number | undefined;
+  priceMax: number | undefined;
 }
 
 /**
@@ -250,6 +261,10 @@ export function activeFilterCount(f: FilterState): number {
     // zero, hide Reset all, and leave a reader who filtered into nothing with no way out.
     f.manaValues.length > 0 || f.manaX,
     f.owned !== undefined,
+    f.rarities.length > 0,
+    // One term for the pair, not two: a band is one narrowing however many of its ends the
+    // reader has moved — the argument the mana row's `manaValues || manaX` makes.
+    f.priceMin !== undefined || f.priceMax !== undefined,
   ].filter(Boolean).length;
 }
 
@@ -445,6 +460,13 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   // sentinel inside `manaValues`, because it is not a mana value.
   const [manaX, setManaX] = useState(false);
   const [owned, setOwned] = useState<boolean | undefined>(undefined);
+  const [rarities, setRarities] = useState<readonly string[]>([]);
+  // Two independent ends rather than a `[min, max]` tuple, so moving one does not rewrite the
+  // other and so "this end is open" has a value of its own. `undefined` and not `0`/`Infinity`:
+  // a zero floor is a real filter (it drops every printing the marketplace does not price) and
+  // must not be what an untouched control sends.
+  const [priceMin, setPriceMin] = useState<number | undefined>(undefined);
+  const [priceMax, setPriceMax] = useState<number | undefined>(undefined);
   // Not a filter, and deliberately outside `resetAll`: clearing what you are looking at
   // should not also throw away the order you chose to read it in.
   const [sort, setSort] = useState<SortSpec<SearchSortKey>>([]);
@@ -635,6 +657,9 @@ export function useCardSearch(options: CardSearchOptions = {}) {
   // and must not cost a second round trip.
   const setsParam = sets.length > 0 ? [...sets].sort() : undefined;
   const manaParam = manaValues.length > 0 ? [...manaValues].sort((a, b) => a - b) : undefined;
+  // Sorted for `setsParam`'s reason: picking rare then mythic is the same search as mythic then
+  // rare, and must not cost a second round trip.
+  const raritiesParam = rarities.length > 0 ? [...rarities].sort() : undefined;
 
   // Every input the request is built from, so a changed filter can never be answered by
   // another filter's cached pages.
@@ -661,6 +686,12 @@ export function useCardSearch(options: CardSearchOptions = {}) {
     // `String(false)` are both truthy strings, and a key that cannot tell "off" from "the
     // ones I do not own" answers one with the other's cached pages.
     owned === undefined ? "" : owned ? "owned" : "missing",
+    raritiesParam?.join(",") ?? "",
+    // Spelled rather than stringified, like every other optional segment here: `String(undefined)`
+    // is the truthy `"undefined"`, and a key that cannot tell an open end from a bound one answers
+    // a narrowed search out of the unbounded one's cached pages.
+    priceMin === undefined ? "" : String(priceMin),
+    priceMax === undefined ? "" : String(priceMax),
     // The whole sort in one segment: a differently-ordered page is a different answer, and
     // must not be served from the cached pages of the order before it.
     sort.map((t) => `${t.key}:${t.dir}`).join(","),
@@ -697,6 +728,13 @@ export function useCardSearch(options: CardSearchOptions = {}) {
         colors: colorsParam,
         sets: setsParam,
         manaValues: manaParam,
+        rarities: raritiesParam,
+        // The band, at the marketplace this page is quoting. Absent ends are absent fields, so
+        // an untouched control produces exactly the payload it always did — and note that a
+        // *bound* one narrows away every printing the marketplace does not price, which is the
+        // filter meaning what it says rather than a gap (`SearchRequest.priceMin`).
+        priceMin,
+        priceMax,
         // Absent rather than `false`, which is the backend's own default: an off chip is not
         // a filter, and sending one would make the payload lie about intent the way an empty
         // `text` would. `true` *widens* — it adds the `{X}` cards to whatever the numerals
@@ -783,6 +821,15 @@ export function useCardSearch(options: CardSearchOptions = {}) {
     // `false` would mint a second key for the search an untouched row has always had.
     manaX: manaX || undefined,
     owned,
+    rarities: raritiesParam,
+    // **The price band deliberately does not ride.** `CardIndex` has no price dimension — two of
+    // the four marketplaces price out of `marketplace_prices`, a table the corpus scan does not
+    // read and that refreshes on its own — so sending the bounds would mint a second facet key
+    // per handle move for an answer that cannot differ. The counts are therefore taken over the
+    // *unbounded* corpus and read high, which is the direction this row is built to fail in:
+    // `facets.ts` greys only what would change nothing, so an over-read count offers an option
+    // that turns out empty, where an under-read one would hide cards nobody would report missing.
+    // `index/facets.rs`'s `base` carries the same note from the other side.
     // The tag chips travel with the facets for the reason every other filter here does: the
     // counts that grey a chip and the wall that chip filters have to describe one corpus, or a
     // colour the picked motif has none of is still offered. Spread from the same object the
@@ -955,6 +1002,45 @@ export function useCardSearch(options: CardSearchOptions = {}) {
     /** Off → owned → missing → off. The search asks "what have I already got" first. */
     toggleOwned: () => setOwned((current) => cycleTriState(current, true)),
     /**
+     * The same state, set outright rather than cycled — what the tray's **two** buttons press.
+     *
+     * Both shapes are exported and both are real. A single chip in a filter *row* has no room
+     * for two words, so it cycles and the word on it says which question is being asked; the
+     * tray has room for both, and two buttons show the state the reader is not in as well as
+     * the one they are. The deck editor's docked panel draws the tray too, so the cycle has no
+     * caller left today — it stays because it is the honest control for a one-line row and
+     * losing it would cost that argument as well as the code.
+     *
+     * Passing the value that is already set clears the filter, so a second press on `Owned` is
+     * the way back out — the cycle's third step, reachable without walking through `Missing`.
+     */
+    setOwned: (next: boolean | undefined) =>
+      setOwned((current) => (current === next ? undefined : next)),
+    /**
+     * The rarity chips — `common`, `uncommon`, `rare`, `mythic`, ORed with each other.
+     *
+     * Scryfall's own lower-case words, because that is what `cards.rarity` stores and what the
+     * backend's `IN` compares against — SQLite's `=` on text is case-sensitive, so a capitalised
+     * value would match nothing and read as an empty corpus rather than as a bug.
+     */
+    rarities,
+    toggleRarity: (rarity: string) => setRarities((picked) => toggleIn(picked, rarity)),
+    /**
+     * The price band's ends, at the marketplace this view quotes from. `undefined` is open.
+     *
+     * **A bound end drops every printing the marketplace does not price**, which is the filter
+     * meaning what it says: a shop silent about a card has not offered it at zero. On Card
+     * Kingdom and Mana Pool that is most of the corpus until the feed has been fetched, which is
+     * why the control captions itself with the marketplace's own currency rather than with a
+     * bare `$`.
+     */
+    priceMin,
+    priceMax,
+    setPriceRange: (min: number | undefined, max: number | undefined) => {
+      setPriceMin(min);
+      setPriceMax(max);
+    },
+    /**
      * Show every printing rather than one row per card.
      *
      * `false` — one row per card — is the default. A view mode and not a filter, so it is
@@ -982,6 +1068,9 @@ export function useCardSearch(options: CardSearchOptions = {}) {
       manaValues,
       manaX,
       owned,
+      rarities,
+      priceMin,
+      priceMax,
     }),
     /**
      * The keys this list is ordered by, first one deciding. Keys rather than columns since
@@ -1065,6 +1154,9 @@ export function useCardSearch(options: CardSearchOptions = {}) {
       setManaValues([]);
       setManaX(false);
       setOwned(undefined);
+      setRarities([]);
+      setPriceMin(undefined);
+      setPriceMax(undefined);
     },
     /**
      * The marketplace every price on this view is quoted from — its label for the as-of
@@ -1123,6 +1215,9 @@ export function useCardSearch(options: CardSearchOptions = {}) {
       !manaParam &&
       !manaX &&
       owned === undefined &&
+      !raritiesParam &&
+      priceMin === undefined &&
+      priceMax === undefined &&
       !hasTagTerms,
   };
 }

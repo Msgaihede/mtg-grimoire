@@ -58,6 +58,30 @@ pub struct SearchRequest {
     /// already matched. See [`crate::filters::CardFilters::mana_x`].
     pub mana_x: Option<bool>,
     pub rarity: Option<String>,
+    /// Rarities to include — ORed with each other, ANDed with every other filter, exactly as
+    /// [`Self::sets`] is. The filter bar's four chips; absent or empty means no rarity filter.
+    /// See [`crate::filters::CardFilters::rarities`] for why it is a field beside
+    /// [`Self::rarity`] rather than a widening of it.
+    pub rarities: Option<Vec<String>>,
+    /// The cheapest and dearest a printing may cost at [`Self::marketplace`] and still match.
+    ///
+    /// Inclusive on both ends, either half usable alone, and **an unpriced printing matches
+    /// neither** — `NULL >= ?` is NULL, which is what a shop that does not list a card has
+    /// said about it. That is the one place this filter narrows more than a reader might
+    /// expect, and it is the honest reading: the range names a price, and a printing with no
+    /// price at the chosen marketplace has none to be inside it.
+    ///
+    /// **Applied in [`run_search`] rather than in [`crate::filters::push_card_filters`]**,
+    /// because the expression is a function of the marketplace — `c.price_usd` on TCGplayer,
+    /// `c.price_eur` on Cardmarket, a correlated subquery over `marketplace_prices` on the two
+    /// feeds ([`crate::sorting::printing_price_expr`]). `CardFilters` is shared with the
+    /// collection and the wishlist, which price a *copy* by its finish rather than a printing,
+    /// so a price field on that struct would have to carry SQL to mean anything there.
+    ///
+    /// **Not a facet dimension, and the counts fail open under it** — see
+    /// [`crate::index::facets::base`], which spells out why and in which direction.
+    pub price_min: Option<f64>,
+    pub price_max: Option<f64>,
     /// Defaults to true: digital-only printings are hidden unless asked for.
     pub paper_only: Option<bool>,
     /// Narrow to printings that are legal or restricted in **at least one** format —
@@ -138,6 +162,7 @@ impl SearchRequest {
             mana_values: self.mana_values.clone(),
             mana_x: self.mana_x,
             rarity: self.rarity.clone(),
+            rarities: self.rarities.clone(),
             paper_only: self.paper_only,
             playable_only: self.playable_only,
             art_tags: self.art_tags.clone(),
@@ -729,6 +754,33 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
         )),
         None => {}
     }
+
+    // The price range, at the marketplace this request quotes from.
+    //
+    // **Built here rather than in `filters.rs` because the expression is the marketplace's**,
+    // and [`crate::sorting::printing_price_expr`] is the one place that mapping is written —
+    // the same expression the Price column shows and the `price` sort orders by, so a card
+    // inside the range cannot be a card the wall prices outside it.
+    //
+    // Interpolated as SQL and bound as a parameter: `printing_price_expr` returns a *fragment*
+    // built from a closed enum with no user text anywhere in it, and the number is bound. On the
+    // two feed marketplaces the fragment is a correlated scalar subquery, so a bounded search
+    // there costs one extra probe of `marketplace_prices` per surviving row — indexed, since
+    // that table's primary key leads with `(marketplace, card_id)`.
+    //
+    // Two half-open bounds rather than a `BETWEEN`, so a reader who has moved only one end
+    // sends only one predicate — and so an inverted pair (`min` above `max`) narrows to nothing
+    // rather than being silently reordered into a range nobody asked for.
+    if req.price_min.is_some() || req.price_max.is_some() {
+        let price = crate::sorting::printing_price_expr(req.marketplace);
+        if let Some(min) = req.price_min {
+            p.push(format!("{price} >= ?"), Box::new(min));
+        }
+        if let Some(max) = req.price_max {
+            p.push(format!("{price} <= ?"), Box::new(max));
+        }
+    }
+
     let where_sql = p.where_sql();
     let mut params = p.params;
 
@@ -4014,6 +4066,133 @@ mod tests {
             ],
         );
         conn
+    }
+
+    /// The price band, over the marketplace's **own** figure — and an unpriced printing fails a
+    /// bound end rather than counting as free.
+    ///
+    /// The corpus is the same three printings every marketplace case here uses, and the point is
+    /// that one band means two different things: at TCGplayer Alpha is $1.00 and Beta $50.00,
+    /// while Card Kingdom's feed has them at $0.50 and $5.00 and has never listed Gamma at all.
+    /// A filter written against `cards.price_usd` would have answered the same for both.
+    ///
+    /// **Gamma is the arm that matters.** `NULL >= ?` is NULL, so a shop that does not quote a
+    /// printing has not offered it for nothing — it simply is not in a band. That is the one way
+    /// this filter narrows more than a reader might expect, and it is the honest reading.
+    #[test]
+    fn a_price_band_reads_the_marketplace_it_was_asked_for_and_drops_the_unpriced() {
+        let conn = seeded_marketplaces();
+        let band = |marketplace, min: Option<f64>, max: Option<f64>| {
+            let r = run_search(
+                &conn,
+                &SearchRequest {
+                    marketplace,
+                    price_min: min,
+                    price_max: max,
+                    limit: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let mut got: Vec<String> = names(&r).iter().map(|s| s.to_string()).collect();
+            got.sort();
+            (got, r.total)
+        };
+
+        use crate::sorting::Marketplace::{Cardkingdom, Tcgplayer};
+
+        // TCGplayer: Alpha 1.00, Beta 50.00, Gamma 0.71 (through `usd_etched`).
+        assert_eq!(band(Tcgplayer, Some(0.80), Some(2.00)).0, ["Alpha"]);
+        assert_eq!(
+            band(Tcgplayer, Some(0.50), None).0,
+            ["Alpha", "Beta", "Gamma"]
+        );
+        assert_eq!(band(Tcgplayer, None, Some(0.80)).0, ["Gamma"]);
+
+        // Card Kingdom: Alpha 0.50, Beta 5.00, and no row at all for Gamma.
+        assert_eq!(
+            band(Cardkingdom, Some(0.80), Some(2.00)).0,
+            Vec::<String>::new()
+        );
+        assert_eq!(band(Cardkingdom, Some(0.40), Some(1.00)).0, ["Alpha"]);
+        assert_eq!(
+            band(Cardkingdom, None, Some(9_999.0)).0,
+            ["Alpha", "Beta"],
+            "a printing the feed has never listed is in no band, however wide"
+        );
+
+        // The count subquery carries the same predicate, or the caption describes other rows
+        // than the wall under it.
+        let (rows, total) = band(Tcgplayer, Some(0.80), Some(2.00));
+        assert_eq!(total as usize, rows.len());
+
+        // Both ends absent is no filter at all — the request every other caller sends.
+        assert_eq!(band(Tcgplayer, None, None).0.len(), 3);
+
+        // An inverted pair narrows to nothing rather than being quietly reordered into a band
+        // nobody asked for.
+        assert!(band(Tcgplayer, Some(50.0), Some(1.0)).0.is_empty());
+    }
+
+    /// The rarity chips against a real query: **OR within, AND without.**
+    ///
+    /// Two chips mean "either", which is what a multi-select means everywhere else on the row —
+    /// and the rarities the row does not offer (`special`, `bonus`) are matched by no chip, which
+    /// is the same answer they get from a search that names none.
+    #[test]
+    fn the_rarity_chips_or_within_and_leave_the_unoffered_rarities_alone() {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::schema::migrate(&conn).unwrap();
+        for (id, name, rarity) in [
+            ("1", "Common Card", "common"),
+            ("2", "Rare Card", "rare"),
+            ("3", "Mythic Card", "mythic"),
+            ("4", "Special Card", "special"),
+        ] {
+            conn.execute(
+                "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,rarity,
+                                    is_paper,search_text,raw)
+                 VALUES (?1,?2,'lea',?1,'en','normal',?3,1,?2,'{}')",
+                rusqlite::params![id, name, rarity],
+            )
+            .unwrap();
+        }
+        let pick = |rarities: Option<Vec<String>>| {
+            let r = run_search(
+                &conn,
+                &SearchRequest {
+                    rarities,
+                    limit: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let mut got: Vec<String> = names(&r).iter().map(|s| s.to_string()).collect();
+            got.sort();
+            got
+        };
+
+        assert_eq!(pick(None).len(), 4, "no chip pressed is no filter");
+        assert_eq!(pick(Some(vec![])).len(), 4, "and neither is an empty list");
+        assert_eq!(
+            pick(Some(vec!["rare".into(), "mythic".into()])),
+            ["Mythic Card", "Rare Card"],
+            "either, never both"
+        );
+        assert_eq!(
+            pick(Some(vec!["MYTHIC".into()])),
+            ["Mythic Card"],
+            "the request is lower-cased, because SQLite's `=` on text is not"
+        );
+        // `special` has no *chip*, but it is a real value and the backend has no vocabulary of
+        // its own — a payload naming it filters by it. What has no chip is the control, which is
+        // why a `special` printing is untouched by every rarity a reader can actually press.
+        assert_eq!(pick(Some(vec!["special".into()])), ["Special Card"]);
+        assert_eq!(
+            pick(Some(vec!["common".into(), "rare".into(), "mythic".into()])).len(),
+            3,
+            "and every chip pressed at once still leaves it out"
+        );
     }
 
     /// One price per row, and it is the marketplace's own — no two of these four answers about

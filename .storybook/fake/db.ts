@@ -2508,6 +2508,16 @@ function matchesCardFilters(
   const rarity = nonblank(f.rarity);
   if (rarity !== null && (card?.rarity ?? null) !== rarity) return false;
 
+  // OR within, AND without — `picked_rarities`' normalisation, which is a shared function on the
+  // Rust side for exactly this reason: the facet counts narrow by the same list the search does,
+  // or a chip greys over results that exist. Lower-cased because `cards.rarity` is Scryfall's own
+  // lower-case word and SQLite's `=` on text is case-sensitive. An empty list is **no filter**,
+  // never a filter matching nothing: a cleared chip row sends `[]`, and some send `[""]`.
+  if (f.rarities) {
+    const picked = f.rarities.map((r) => r.trim().toLowerCase()).filter((r) => r !== "");
+    if (picked.length > 0 && !picked.includes(card?.rarity ?? "")) return false;
+  }
+
   // Omitted means true — and it keys on `is_paper`, which is the column `filters.rs` emits
   // and `PRINTINGS_WHERE` repeats. Nothing in the app filters on `digital`.
   if (f.paperOnly ?? true) {
@@ -2636,6 +2646,19 @@ const LEGALITY_KEYS = [
 ];
 
 /**
+ * `CardIndex::RARITY_KEYS` — the four rarities the filter tray offers, in the order a card is
+ * printed at them.
+ *
+ * Declared rather than derived from the corpus, for {@link LEGALITY_KEYS}' reason:
+ * {@link FacetResponse.rarities} promises all four keys on every ready response, and a story
+ * passing a corpus of two commons would otherwise emit one.
+ *
+ * Four of Scryfall's six. `special` and `bonus` are in the data and in no chip, which is why the
+ * counts here do not sum to the response's `total`.
+ */
+const RARITY_KEYS = ["common", "uncommon", "rare", "mythic"];
+
+/**
  * Which filter a facet base leaves out — `facets::Skip`, minus its `Nothing` arm, which is
  * `null` here.
  *
@@ -2643,7 +2666,7 @@ const LEGALITY_KEYS = [
  * have to ignore both or opening it on a request that already names a set would offer nothing
  * but that set.
  */
-type FacetSkip = "colors" | "mana" | "sets" | "formats" | "owned";
+type FacetSkip = "colors" | "mana" | "sets" | "formats" | "rarities" | "owned";
 
 /**
  * The picked-colour string after one chip is pressed — `facets::toggle_colors`, which is
@@ -4264,9 +4287,34 @@ export function readHandlers(db: FakeDb) {
        * other than the search could ever mean it.
        */
       const oracleId = nonblank(req.oracleId);
+      /**
+       * The price band, at the marketplace this request quotes from.
+       *
+       * **Here rather than in {@link matchesCardFilters}, and for `oracleId`'s reason one step
+       * further along**: the expression is a function of the marketplace, so a filter helper that
+       * has never heard of one could only guess which column to compare. `run_search` applies it
+       * in exactly the same place and out of the same expression the Price column shows
+       * ({@link priceColumnAt} is `sorting::printing_price_expr`), so a card inside the band
+       * cannot be a card the wall prices outside it.
+       *
+       * **An unpriced printing fails a bound end**, which is `NULL >= ?` being NULL rather than a
+       * decision made here: a shop that does not list a card has not offered it for nothing.
+       *
+       * `facet_cards` sends neither bound and is faceted over the unbounded corpus — the index
+       * has no price dimension, so the counts read high. Over-reading only ever leaves a control
+       * live, which is the direction the whole row fails in.
+       */
+      const priceMin = req.priceMin;
+      const priceMax = req.priceMax;
       const matched = db.cards.filter((c) => {
         if (text !== null && !cardMatchesText(c, text)) return false;
         if (oracleId !== null && c.oracleId !== oracleId) return false;
+        if (priceMin !== undefined || priceMax !== undefined) {
+          const price = priceColumnAt(db, c, mp);
+          if (price === null) return false;
+          if (priceMin !== undefined && price < priceMin) return false;
+          if (priceMax !== undefined && price > priceMax) return false;
+        }
         if (!matchesCardFilters(db, c, { ...req, text: undefined }, null)) return false;
         // An **entry**, not a copy: a row emptied to zero is a row the collection keeps, and
         // this filter counts it as owned. The wishlist's `fulfilled` is the one that counts
@@ -4356,6 +4404,7 @@ export function readHandlers(db: FakeDb) {
           manaX: 0,
           manaValues: {},
           formats: {},
+          rarities: {},
           sets: {},
           owned: { owned: 0, missing: 0 },
           total: 0,
@@ -4367,13 +4416,21 @@ export function readHandlers(db: FakeDb) {
       const text = nonblank(req.text);
       /** The result set under every filter except `skip`'s. */
       const base = (skip: FacetSkip | null): FakeCard[] => {
-        // `rarity` leaves because the in-memory index has no dimension for it, so `facets::base`
-        // cannot narrow by one and a request carrying it is faceted as though it did not —
-        // **every count reads high**. Mirrored rather than improved on, and the direction is what
-        // makes that safe: over-counting leaves a control live, where under-counting would grey
-        // out options that would have worked and hide cards nobody reports missing. A fake that
-        // counted better than the backend would hide the divergence instead of the app showing
-        // it.
+        // `rarity` — the **single**-valued field, which is the printings modal's `<select>` and
+        // not the filter tray's chips — leaves because the in-memory index has no dimension for
+        // it, so `facets::base` cannot narrow by one and a request carrying it is faceted as
+        // though it did not: **every count reads high**. Its multi-valued neighbour `rarities`
+        // *is* a dimension (`CardIndex::rarity`, `Skip::Rarities`) and stays.
+        //
+        // `priceMin`/`priceMax` are absent from a facet request altogether — `useCardSearch`'s
+        // `facetReq` does not send them, because a price is a function of the marketplace and two
+        // of the four are priced out of a table the corpus scan does not read. A bounded search
+        // is therefore faceted over the unbounded corpus.
+        //
+        // Both are mirrored rather than improved on, and the direction is what makes that safe:
+        // over-counting leaves a control live, where under-counting would grey out options that
+        // would have worked and hide cards nobody reports missing. A fake that counted better
+        // than the backend would hide the divergence instead of the app showing it.
         //
         // **The three tag fields stay**, since 2026-08-20: `run_facets` resolves each picked slug
         // through its closure into a bitset and ANDs it into every base, so the counts describe
@@ -4393,6 +4450,7 @@ export function readHandlers(db: FakeDb) {
           f.setCode = undefined;
         }
         if (skip === "formats") f.format = undefined;
+        if (skip === "rarities") f.rarities = undefined;
         return db.cards.filter((c) => {
           // Text is in every base **including its own**: it is not a facet, and a facet
           // describes the search the reader is looking at.
@@ -4447,6 +4505,14 @@ export function readHandlers(db: FakeDb) {
       const formats: Record<string, number> = {};
       for (const key of LEGALITY_KEYS) formats[key] = countWith(formatBase, { format: key });
 
+      // All four keys on every ready response, zeros included — the chips grey a counted zero and
+      // stay live on an absent key, so a key that went missing would silently stop greying. They
+      // do **not** sum to `total`: `special` and `bonus` printings are in the corpus and in no
+      // chip, so these four are a vocabulary rather than a partition.
+      const rarityBase = base("rarities");
+      const rarities: Record<string, number> = {};
+      for (const key of RARITY_KEYS) rarities[key] = countWith(rarityBase, { rarities: [key] });
+
       const colorBase = base("colors");
       const colors: Record<string, number> = {};
       const picked = nonblank(req.colors)?.toUpperCase() ?? "";
@@ -4464,6 +4530,7 @@ export function readHandlers(db: FakeDb) {
         manaValues,
         manaX,
         formats,
+        rarities,
         sets,
         owned: { owned, missing: ownedBase.length - owned },
         // **Printings, always**: `collapse` is a view mode and not a filter, so this counts

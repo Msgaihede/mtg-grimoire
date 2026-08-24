@@ -615,6 +615,8 @@ it("closes the set filter on the first Escape and the card on the second", async
 
   await userEvent.click(await screen.findByRole("button", { name: "Lightning Bolt" }));
   await screen.findByRole("complementary", { name: /card details/i });
+  // The set picker is in the filter row's tray, one press in, since the row was redesigned.
+  await userEvent.click(screen.getByRole("button", { name: /^Show filters/ }));
   const setFilter = screen.getByRole("button", { name: "Set" });
   await userEvent.click(setFilter);
   expect(await screen.findByRole("combobox", { name: /search sets/i })).toBeInTheDocument();

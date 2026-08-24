@@ -235,6 +235,29 @@ shared_cell` walks both into two databases and compares them column by column.
   Near Mint from both feeds, cheapest row wins a collision, and an unpriced finish gets
   **no row** rather than a zero.
 
+- **A price filter is built where the marketplace is known, and that is `run_search` rather than
+  `filters.rs`.** `SearchRequest::price_min`/`price_max` are applied over
+  `sorting::printing_price_expr(marketplace)` — the same expression the Price column shows and the
+  `price` sort orders by, so a card inside the band can never be one the wall prices outside it.
+  `CardFilters` is shared with the collection and the wishlist, which price a *copy* by its
+  finish; a price field on that struct would have to carry SQL to mean anything there.
+  **An unpriced printing fails a bound end**, because `NULL >= ?` is NULL — a shop that does not
+  quote a printing has not offered it for nothing. Two half-open bounds rather than a `BETWEEN`,
+  so a reader who moved one end sends one predicate, and an inverted pair narrows to nothing
+  rather than being silently reordered into a band nobody asked for.
+  **It is not a facet dimension and the counts fail open under it** — see
+  [search-faceting.md](../docs/reference/search-faceting.md) for why closing that is a price array
+  per marketplace rather than a sixth bitset.
+- **`rarities` is a field beside `rarity`, not a widening of it.** That one is single-valued and is
+  what the printings modal's `<select>` sends; the search's chip row is a multi-select, and a
+  control that can pick two has to be able to pick none — which for a `Vec` is `[]`, a value the
+  single field cannot spell. `filters::picked_rarities` is the normalisation and it is **shared
+  with `index::facets`** for `picked_sets`' reason: two copies of a normalisation that must agree
+  will not, and a facet counted over a rarity the search dropped reports an option as live the
+  search cannot reach. It lower-cases, because `cards.rarity` holds Scryfall's own lower-case word
+  and SQLite's `=` on text is case-sensitive — a `Rare` bound as sent matches nothing and reads as
+  an empty corpus.
+
 ## Hard rules — user data
 
 - `collection_entries`/`wishlist_entries`/`card_migrations`/`deck_cards` reference `cards.id`

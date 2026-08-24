@@ -269,6 +269,21 @@ Every one of these has its measurement and its story in
   at 1280×800 and 2322 vs 2297 at 2560×1400 — because the panel's width does not move with the
   window. Only a live pass finds this one; the figures and the fix are in
   [frontend-design.md](../docs/reference/frontend-design.md).
+- **The search filter row lays out by its own width, in four bands, through `@container/fb` —
+  never a media query.** The same component is the search page's bar and the deck editor's docked
+  panel, which is draggable from **206px**, so a viewport query answers about the wrong box. Four
+  controls never fold away — the search box, the colours, the mana values and the sort — and
+  everything else (set, format, owned, rarity, price, printings) is behind one `Filters`
+  disclosure, with the filters that are **on** stated as 26px chips under a rule. Thresholds are
+  640 / 900 / 1500 and each is where a *line's own contents* stop fitting, not a device.
+  Two rules carry it and both have a measured failure behind them
+  ([frontend-design.md](../docs/reference/frontend-design.md)): the arrangement is **`order` plus
+  a `basis-full` break**, never one `<div>` per breakpoint with `hidden` on the rest — that build
+  puts two mana groups and two sort pickers in the tree at once, which is two tab stops and one
+  accessible name per filter; and a `flex-1` item that shares a line with something that cannot
+  shrink is given *whatever is left*, which at a 369px container was 5px and spilled the 36px
+  sort-direction button 53px out of the panel. **jsdom applies no container query and loads no
+  stylesheet**, so every test sees the base arrangement and nothing here can go red in the suite.
 - **A surface that walks its selection with the arrow keys says so, or the card pane takes the
   caret on the first press.** `CardDetailPane` renders its body keyed on the open card and that
   body focuses the pane as it mounts — the right contract for a card a reader *pressed*, and the
