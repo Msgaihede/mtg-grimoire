@@ -106,6 +106,40 @@ using it.
   exactly the kind of change that moves a line count without moving anything else. The
   printing counts and the greying claim above are facts about the corpus and are untouched by
   it; the pixels are not.
+- **The rarity chips are a dimension of their own since the filter row was redesigned**, and they
+  are the case the `Skip` mechanism was written for and had never been spent on. `CardIndex.rarity`
+  is four bitsets — a bitset apiece rather than an ordinal array, because four is as low as
+  cardinality goes here and the module's rule is that low cardinality gets a bitset (1 047 set
+  codes were 14.3 MB and 35× slower before `set_ord` replaced them; four are ~58 KB). `Skip::Rarities`
+  drops the whole rarity question from the base its own counts are taken over, so pressing `rare`
+  does not grey `mythic` — the rule every other dimension here follows.
+  **They are a vocabulary and not a partition, and nothing may sum them.** Scryfall prints
+  `special` and `bonus` as well and the row offers neither, so a printing can be in none of the
+  four and the counts do not add up to `total`. `CardIndex::RARITY_KEYS` is the list; the frontend
+  mirrors it by hand in `FilterBar.tsx`'s `RARITIES`, in the same order, and that order is
+  `sortOptions`' *second* kind of exemption — the order **is** the information, common through
+  mythic, the way Near Mint through Damaged is on the collection's condition chips.
+  **The normalisation is shared, and that is structural rather than tidy**: `filters::picked_rarities`
+  is what both the SQL and `union_rarities` narrow by, for `picked_sets`' reason — a facet counted
+  over a rarity the search dropped reports an option as live that the search cannot reach. It
+  lower-cases, because `cards.rarity` holds Scryfall's own lower-case word and SQLite's `=` on
+  text is case-sensitive.
+- **The price band has no dimension and cannot cheaply have one — it is the newest thing on this
+  page that fails open.** `priceMin`/`priceMax` narrow the wall in `run_search`, over
+  `sorting::printing_price_expr` (the same expression the Price column shows), and
+  `useCardSearch`'s `facetReq` deliberately does **not** send them. So a price-bounded search is
+  faceted over the *unbounded* corpus and every count reads high.
+  That is the direction this whole row is built to fail in — an over-read count offers an option
+  that turns out empty, where an under-read one would hide cards nobody would think to report
+  missing — and it is the same trade `rarity` (the single-valued field, which is the printings
+  modal's `<select>`) and `oracleId` already make. **Closing it is not a sixth bitset.** A price
+  is a function of the reader's *marketplace*: two of the four are priced out of `marketplace_prices`,
+  a table the corpus scan does not read and which refreshes on its own schedule, so it would take
+  a price array per marketplace and a lifecycle hook on the feed refresh, where every other
+  dimension here is a column of `cards`.
+  **An unpriced printing fails a bound end**, which is `NULL >= ?` being NULL rather than a
+  decision: a shop that does not quote a printing has not offered it for nothing. On Card Kingdom
+  and Mana Pool that is the whole corpus until the feed has been fetched.
 - **Two filters have no dimension in the index and are resolved against the database instead:
   the FTS text and the tag terms.** `run_facets` turns each into a bitset over `cards.rowid`,
   intersects them, and hands `compute` the **one** narrowing set it takes — which is then in every

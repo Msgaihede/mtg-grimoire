@@ -540,6 +540,21 @@ async function openSearchPanel() {
 }
 
 /**
+ * The panel's card search **with its filter tray open** — Set, Format, Owned, Rarity, Price and
+ * Printings, which the filter row has kept behind a disclosure since it was redesigned.
+ *
+ * Idempotent for {@link openSearchPanel}'s reason and by the same test: it presses only when the
+ * button says the tray is shut, so no case here is a claim about which state it opens in. That
+ * claim is `FilterBar.test.tsx`'s, and making it twice would leave one of the two a copy that
+ * quietly stopped meaning anything.
+ */
+async function openFilterTray() {
+  await openSearchPanel();
+  const toggle = await screen.findByRole("button", { name: /^(Show|Hide) filters/ });
+  if (toggle.getAttribute("aria-expanded") !== "true") await userEvent.click(toggle);
+}
+
+/**
  * The own/need control, by the words on it — **opening the search column and its card-search tab
  * on the way**, because that is where the pair is drawn (2026-08-23).
  *
@@ -2517,7 +2532,7 @@ describe("DeckEditor", () => {
     // there is no Format select to read until the disclosure is pressed. The seed is applied
     // when the search mounts, which is that press — so "opens on" is literally what this
     // asserts rather than a state the editor arranged in advance.
-    await openSearchPanel();
+    await openFilterTray();
     await seeded("Modern");
 
     expect(screen.getByLabelText("Format")).toHaveValue("modern");
@@ -2540,7 +2555,7 @@ describe("DeckEditor", () => {
   it("opens on Any format for a deck whose format has no legality data", async () => {
     deckGet.mockResolvedValue(detail({ formatKey: "casual", formatName: "Casual" }, [bolt()]));
     await open();
-    await openSearchPanel();
+    await openFilterTray();
     await seeded("Casual");
 
     expect(screen.getByLabelText("Format")).toHaveValue("");
@@ -2569,7 +2584,7 @@ describe("DeckEditor", () => {
   it("opens on Any format for a deck whose format the seed does not carry", async () => {
     deckGet.mockResolvedValue(detail({ formatKey: "historic", formatName: "Historic" }, [bolt()]));
     await open();
-    await openSearchPanel();
+    await openFilterTray();
     await screen.findByText("Historic");
 
     expect(screen.getByLabelText("Format")).toHaveValue("");
@@ -2593,8 +2608,9 @@ describe("DeckEditor", () => {
       detail({ formatKey: "gladiator", formatName: "Gladiator" }, [bolt()]),
     );
     await open();
-    // The filter row lives in `OpenPanel`, which mounts on the disclosure press (2026-08-14).
-    await openSearchPanel();
+    // The filter row lives in `OpenPanel`, which mounts on the disclosure press (2026-08-14),
+    // and the Format select is one press further in — inside the row's own filter tray.
+    await openFilterTray();
     await seeded("Gladiator");
 
     const filter = screen.getByLabelText("Format") as HTMLSelectElement;
@@ -3313,7 +3329,7 @@ describe("DeckEditor", () => {
    */
   it("never has the set filter and one of the editor's own layers open at once", async () => {
     await open();
-    await openSearchPanel();
+    await openFilterTray();
     const setFilter = () => screen.getByRole("button", { name: "Set" });
     const filterOpen = () => screen.queryByRole("combobox", { name: "Search sets" });
 

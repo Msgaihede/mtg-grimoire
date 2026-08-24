@@ -172,6 +172,17 @@ function rightClick(element: HTMLElement): void {
  */
 const setPicker = () => screen.getByRole("button", { name: "Set", expanded: false });
 
+/**
+ * Open the filter tray.
+ *
+ * Set, Format, Owned, Rarity, Price and Printings live behind a disclosure since the filter row
+ * was redesigned — only the search box, the colours, the mana values and the sort are on the bar
+ * at every width. A case that drives any of the six opens it first; the others are untouched.
+ */
+async function openTray(): Promise<void> {
+  await userEvent.click(screen.getByRole("button", { name: /^Show filters/ }));
+}
+
 /** The `text` of every request the page has sent, oldest first. */
 const requestedTexts = () => searchCards.mock.calls.map((c) => (c[0] as SearchRequest).text);
 
@@ -290,6 +301,7 @@ describe("SearchPage", () => {
 
     await waitFor(() => expect(searchCards).toHaveBeenCalled());
     expect(lastRequest().collapse).toBe(true);
+    await openTray();
     expect(screen.getByRole("button", { name: "All printings" })).toHaveAttribute(
       "aria-pressed",
       "false",
@@ -299,6 +311,7 @@ describe("SearchPage", () => {
   it("stops collapsing when all printings are asked for", async () => {
     wrap(<SearchPage />);
     await waitFor(() => expect(searchCards).toHaveBeenCalled());
+    await openTray();
 
     await userEvent.click(screen.getByRole("button", { name: "All printings" }));
 
@@ -317,6 +330,7 @@ describe("SearchPage", () => {
   it("does not count All printings as a filter, and Reset all leaves it alone", async () => {
     wrap(<SearchPage />);
     await waitFor(() => expect(searchCards).toHaveBeenCalled());
+    await openTray();
 
     await userEvent.click(screen.getByRole("button", { name: "All printings" }));
     // Nothing to reset: a view mode is not a filter, so Reset all stays greyed. It is drawn
@@ -425,6 +439,7 @@ describe("SearchPage", () => {
 
   it("passes the format filter", async () => {
     wrap(<SearchPage />);
+    await openTray();
 
     await userEvent.selectOptions(screen.getByLabelText(/format/i), "modern");
 
@@ -471,6 +486,7 @@ describe("SearchPage", () => {
       ),
     );
 
+    await openTray();
     await userEvent.click(setPicker());
     await userEvent.click(await screen.findByRole("option", { name: /Alpha/ }));
 
@@ -485,6 +501,7 @@ describe("SearchPage", () => {
   it("clears every filter in one request when Reset all is clicked", async () => {
     wrap(<SearchPage />);
     await waitFor(() => expect(searchCards).toHaveBeenCalled());
+    await openTray();
 
     await userEvent.selectOptions(screen.getByLabelText(/format/i), "modern");
     await userEvent.click(screen.getByRole("button", { name: "Blue" }));
@@ -734,6 +751,7 @@ describe("SearchPage", () => {
       .mockImplementationOnce(() => new Promise<SearchResponse>(() => {}));
     wrap(<SearchPage />);
     expect(await screen.findByText("Lightning Bolt")).toBeInTheDocument();
+    await openTray();
 
     await userEvent.selectOptions(screen.getByLabelText(/format/i), "modern");
     await waitFor(() => expect(searchCards).toHaveBeenCalledTimes(2));
@@ -746,6 +764,7 @@ describe("SearchPage", () => {
   it("resets the scroll position when the search changes", async () => {
     wrap(<SearchPage />);
     await screen.findByText("Lightning Bolt");
+    await openTray();
     scrollTo.mockClear();
 
     await userEvent.selectOptions(screen.getByLabelText(/format/i), "modern");
@@ -951,30 +970,40 @@ describe("SearchPage", () => {
   });
 
   /**
-   * Three states in one chip, because the useful questions are opposites: what have I
-   * already got, and what am I still missing. The label says which one is on — an unpressed
-   * chip cannot mean "not owned" and be the same chip that means it when pressed.
+   * Three states, **two buttons** — which is what the tray bought over the one cycling chip this
+   * used to be. The useful questions are opposites (what have I already got, what am I still
+   * missing), and a single chip could only ever show the one the reader was in: the other was
+   * invisible until they had pressed through to it. Both are on screen now, and the third state
+   * is a second press on whichever is on rather than a walk through the other answer.
    */
   it("filters by what the collection holds, in three states", async () => {
     wrap(<SearchPage />);
     await waitFor(() => expect(searchCards).toHaveBeenCalled());
+    await openTray();
 
     await userEvent.click(screen.getByRole("button", { name: "Owned" }));
     await waitFor(() => expect(lastRequest().owned).toBe(true));
 
-    await userEvent.click(screen.getByRole("button", { name: "Owned" }));
+    // The opposite question is one press away, and does not go through "off" to get there.
+    await userEvent.click(screen.getByRole("button", { name: "Missing" }));
     await waitFor(() => expect(lastRequest().owned).toBe(false));
     expect(screen.getByRole("button", { name: "Missing" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: "Owned" })).toHaveAttribute("aria-pressed", "false");
 
+    // Pressing the one that is already on is how the filter comes off.
     await userEvent.click(screen.getByRole("button", { name: "Missing" }));
     // Absent, not `false`: an untouched filter row produces the same payload it always did.
     await waitFor(() => expect(lastRequest().owned).toBeUndefined());
-    expect(screen.getByRole("button", { name: "Owned" })).toHaveAttribute("aria-pressed", "false");
+    expect(screen.getByRole("button", { name: "Missing" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
   });
 
   it("counts the owned filter among what Reset all would clear", async () => {
     wrap(<SearchPage />);
     await waitFor(() => expect(searchCards).toHaveBeenCalled());
+    await openTray();
 
     await userEvent.click(screen.getByRole("button", { name: "Owned" }));
 

@@ -187,6 +187,7 @@ export const CollapsedPrintings: Story = {
       { timeout: 5000 },
     );
 
+    await userEvent.click(canvas.getByRole("button", { name: /^Show filters/ }));
     await userEvent.click(canvas.getByRole("button", { name: "All printings" }));
 
     // Two rows now, and neither claims to stand for more than itself.
@@ -226,6 +227,10 @@ export const Unplayable: Story = {
     const canvas = within(canvasElement);
     await canvas.findByText("37 cards");
 
+    await userEvent.click(canvas.getByRole("button", { name: /^Show filters/ }));
+    // Set, Format, Owned, Rarity, Price and Printings live in the filter row's tray since the
+    // row was redesigned — only the box, the colours, the mana values and the sort are on the
+    // bar at every width.
     const format = canvas.getByLabelText("Format") as HTMLSelectElement;
     await expect(format).toHaveValue("");
 
@@ -322,6 +327,10 @@ export const Empty: Story = {
     // No count in any name either — an empty corpus is "we have not counted", so `facetTitle`
     // is handed nothing and the chips keep the plain labels they had before this feature.
     await expect(canvas.getByRole("button", { name: "White" })).toBeInTheDocument();
+    await userEvent.click(canvas.getByRole("button", { name: /^Show filters/ }));
+    // Set, Format, Owned, Rarity, Price and Printings live in the filter row's tray since the
+    // row was redesigned — only the box, the colours, the mana values and the sort are on the
+    // bar at every width.
     const format = canvas.getByLabelText("Format") as HTMLSelectElement;
     await expect([...format.options].filter((o) => o.disabled)).toHaveLength(0);
   },
@@ -396,6 +405,7 @@ export const Large: Story = {
     // Collapsed — the default — the whole set fits under the cap and is counted exactly.
     await expect(await canvas.findByText("687 cards")).toBeInTheDocument();
 
+    await userEvent.click(canvas.getByRole("button", { name: /^Show filters/ }));
     await userEvent.click(canvas.getByRole("button", { name: "All printings" }));
 
     await expect(await canvas.findByText("5,000+ cards")).toBeInTheDocument();
@@ -429,6 +439,7 @@ export const CappedTotal: Story = {
       "688",
     );
 
+    await userEvent.click(canvas.getByRole("button", { name: /^Show filters/ }));
     await userEvent.click(canvas.getByRole("button", { name: "All printings" }));
 
     await canvas.findByText("5,000+ cards");
@@ -455,6 +466,7 @@ export const NarrowedToAnExactCount: Story = {
     const canvas = within(canvasElement);
     await canvas.findByText("687 cards");
     // Over printings, because that is where the cap lives — see {@link CappedTotal}.
+    await userEvent.click(canvas.getByRole("button", { name: /^Show filters/ }));
     await userEvent.click(canvas.getByRole("button", { name: "All printings" }));
     await canvas.findByText("5,000+ cards");
 
@@ -500,6 +512,7 @@ export const OwnedCountsEntries: Story = {
 
     // A prefix, because the chip's accessible name carries its facet count — "Owned — 9
     // printings" — and the label is what has to come first.
+    await userEvent.click(canvas.getByRole("button", { name: /^Show filters/ }));
     await userEvent.click(canvas.getByRole("button", { name: /^Owned\b/ }));
     await waitFor(async () => {
       await expect(canvas.getByText("9 cards")).toBeInTheDocument();

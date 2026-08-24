@@ -1,4 +1,5 @@
-import { LayoutGrid, Rows3 } from "lucide-react";
+import { LayoutGrid, Rows3, SlidersHorizontal, X } from "lucide-react";
+import { RarityGem } from "@/components/RarityGem";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { FOCUS } from "@/lib/focus";
 import { MANA_LABEL, manaSymbolClass, type ManaKey } from "@/lib/mana";
@@ -230,6 +231,7 @@ function ValueChip({
   name,
   pressed,
   disabled,
+  chipClass,
   onToggle,
 }: {
   /** What is written on the chip — `3`, `8+`, `X`. */
@@ -239,6 +241,8 @@ function ValueChip({
   pressed: boolean;
   /** Drawn dim and unpressable, without leaving the tab order — see {@link ManaChip}. */
   disabled: boolean;
+  /** The caller's own classes — see {@link ManaValueChips}, which is where they come from. */
+  chipClass: string | undefined;
   onToggle: () => void;
 }) {
   const tip = useTooltip();
@@ -259,6 +263,10 @@ function ValueChip({
         FILTER_FOCUS,
         "size-9 font-mono text-xs tabular-nums",
         filterChipState(pressed, disabled),
+        // Last, so tailwind-merge resolves a size clash in the caller's favour — which is the
+        // whole of what this prop is for. It must not be spent on the state classes above it: a
+        // caller quietly winning *that* argument is a chip that stops saying whether it is on.
+        chipClass,
       )}
     >
       {text}
@@ -294,6 +302,7 @@ export function ManaValueChips({
   onToggleX,
   xDisabled = false,
   xTitle,
+  chipClass,
 }: {
   selected: readonly number[];
   onToggle: (value: number) => void;
@@ -316,6 +325,25 @@ export function ManaValueChips({
   xDisabled?: boolean;
   /** X's tooltip and accessible name, given the label it would carry. */
   xTitle?: (label: string) => string | undefined;
+  /**
+   * Extra classes for **every chip in the group**, the ten counted alike.
+   *
+   * It exists for one caller and one measurement: the filter bar draws these at **32px** in its
+   * narrowest column and at the family's 36 everywhere else. Ten chips at `gap-1` are
+   * `10 × 36 + 9 × 4` = **396px**; at 32 they are **356**, which is what the group measured before
+   * the X chip existed and what fits the deck panel's 384px default (~371 of content). The row's
+   * own `flex-wrap` is still what keeps it safe below that — the panel is draggable down to 206 —
+   * so this is a *fit*, never a fence.
+   *
+   * **A class and not a `dense` boolean**, because the width that decides it is a *container*
+   * width: the same bar is a maximised window's and a 384px panel's, so the answer is a container
+   * query the caller writes (`size-8 @min-[640px]/fb:size-9`) and not a prop this component could
+   * be handed. A boolean would need a `ResizeObserver` above it to know which value to pass.
+   *
+   * Merged last, so a size clash resolves the caller's way; it may not reach the state classes —
+   * see {@link ValueChip}.
+   */
+  chipClass?: string;
 }) {
   return (
     // **`flex-wrap`, and it is load-bearing in exactly one place.** This row is ten `size-9`
@@ -343,6 +371,7 @@ export function ManaValueChips({
             name={title?.(value, label) ?? label}
             pressed={selected.includes(value)}
             disabled={disabled?.(value) ?? false}
+            chipClass={chipClass}
             onToggle={() => onToggle(value)}
           />
         );
@@ -353,6 +382,7 @@ export function ManaValueChips({
           name={xTitle?.(MANA_X_LABEL) ?? MANA_X_LABEL}
           pressed={xSelected}
           disabled={xDisabled}
+          chipClass={chipClass}
           onToggle={onToggleX}
         />
       )}
@@ -578,6 +608,209 @@ export function ResetAll({ count, onReset }: { count: number; onReset: () => voi
       >
         {count}
       </span>
+    </button>
+  );
+}
+
+/**
+ * The caption over one field in the filter tray.
+ *
+ * 11px, upper-cased, letter-spaced — the one place in the app where a label sits *above* its
+ * control rather than beside it, because the tray is a grid of unlike things and a row of inline
+ * labels would give every field a different width for no reason a reader could use.
+ *
+ * A class recipe rather than a component, like the three at the top of this file: a caption is a
+ * `<span>` with four utilities on it, and wrapping that would be a name to look up for nothing.
+ */
+export const FILTER_LABEL = "text-[0.6875rem] uppercase tracking-[0.08em] text-dim";
+
+/**
+ * The way into every filter that is not on the bar — a disclosure, with the number of filters
+ * that are on riding on it.
+ *
+ * **Gold at rest, which no other quiet control on the row is.** Every other treatment here says
+ * "a filter is on"; this one says "there is more in here", which a reader has to be able to see
+ * *before* they have pressed anything. The badge is what says how much is on, and it is drawn
+ * only when there is something to say — a `0` on every quiet row is chrome that teaches the eye
+ * to skip the control it is attached to.
+ *
+ * **The count is the whole search's and not the tray's**, deliberately. It is `activeCount`, the
+ * same number Reset all wears, so the two cannot disagree about how much is on. A tray-only count
+ * would leave a reader who has pressed three colours looking at a Filters button reading zero,
+ * with nothing on screen to say what it is counting.
+ *
+ * **The word is hidden by a class rather than by a prop, and that is not a style preference.**
+ * The narrow breakpoints want the icon and the badge alone, and the obvious build — a `compact`
+ * boolean, and two of these in the tree with one shown at a time — puts two buttons with one
+ * accessible name and two tab stops behind a single control. So the caller hands `labelClass` the
+ * variants for its own container and the word is hidden in CSS, where a screen reader still hears
+ * the name this component builds and a keyboard still finds exactly one button.
+ */
+export function FiltersButton({
+  open,
+  count,
+  onToggle,
+  controls,
+  labelClass,
+  className,
+}: {
+  open: boolean;
+  /** How many filters are on — the search's count, not the tray's. Zero draws no badge. */
+  count: number;
+  onToggle: () => void;
+  /** The tray's `id`, for `aria-controls`. */
+  controls: string;
+  /**
+   * Classes for the word `Filters` alone — how a caller hides it at a width of its own.
+   *
+   * A caller's container queries cannot be written here: this module is shared with the
+   * collection's row and knows nothing about anybody's `@container` name.
+   */
+  labelClass?: string;
+  /** Classes for the button, merged last. The filter bar spends it on `order` and `flex`. */
+  className?: string;
+}) {
+  const tip = useTooltip();
+  const name = `${open ? "Hide" : "Show"} filters — ${count} active`;
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={open}
+      aria-controls={controls}
+      aria-label={name}
+      // `describes: false`: identical to the `aria-label` above.
+      {...tip(name, { describes: false })}
+      className={cn(
+        FILTER_CONTROL,
+        FILTER_FOCUS,
+        "inline-flex shrink-0 items-center justify-center gap-2 border-accent px-3 text-accent",
+        // The panel below is this button's own extension, so an open tray tints the control that
+        // opened it rather than leaving it looking like one more thing to press.
+        open && "bg-accent/10",
+        className,
+      )}
+    >
+      <SlidersHorizontal className="size-4 shrink-0" aria-hidden="true" />
+      <span className={labelClass}>Filters</span>
+      {count > 0 && (
+        // `aria-hidden`, with the digit spelled into the name above — {@link ResetAll}'s rule and
+        // its measurement: left to the accname algorithm this announces as `"Filters3"`.
+        <span
+          aria-hidden="true"
+          className="rounded-full bg-accent px-1.5 font-mono text-[0.7rem] leading-4 text-accent-foreground"
+        >
+          {count}
+        </span>
+      )}
+    </button>
+  );
+}
+
+/**
+ * One rarity, as the gem the rest of the app draws it with and the word beside it.
+ *
+ * **The gem rather than a filled chip**, which is {@link RarityGem}'s rule and this row's: the
+ * colour budget is spent on mana and card art, and four filled rarity pills beside six mana chips
+ * would be two things shouting at once. The word is tinted where the rarity has a colour of its
+ * own and left dim where it has not — `RarityGem` decides that, because `special` and `bonus`
+ * have no token and a hairline-coloured word is about 1.9:1 against the background.
+ *
+ * `min-w-0` and the gem's own `truncate`, because the tray is a grid: in a one-column tray inside
+ * a 206px panel `uncommon` is wider than its cell, and a chip that cannot shrink hangs out of the
+ * panel and puts a horizontal scrollbar across the whole surface (`src/CLAUDE.md`'s
+ * narrowest-surface rule).
+ */
+export function RarityChip({
+  rarity,
+  pressed,
+  onClick,
+  disabled = false,
+  title,
+}: {
+  /** Scryfall's own lower-case word — `common`, `uncommon`, `rare`, `mythic`. */
+  rarity: string;
+  pressed: boolean;
+  onClick: () => void;
+  /** Drawn dim and unpressable, without leaving the tab order — see {@link ManaChip}. */
+  disabled?: boolean;
+  /** The tooltip and the accessible name together, with the visible word at the front. */
+  title?: string;
+}) {
+  const tip = useTooltip();
+  const name = title ?? `${rarity.replace(/^./, (c) => c.toUpperCase())} cards`;
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        if (!disabled) onClick();
+      }}
+      aria-pressed={pressed}
+      aria-disabled={disabled || undefined}
+      aria-label={name}
+      // `describes: false`: identical to the `aria-label` above.
+      {...tip(name, { describes: false })}
+      className={cn(
+        FILTER_CONTROL,
+        FILTER_FOCUS,
+        "flex min-w-0 items-center px-2.5",
+        filterChipState(pressed, disabled),
+        // The two responses `filterChipState` cannot reach from here — {@link ToggleChip} carries
+        // the same pair for the same reason.
+        disabled && "hover:text-dim active:scale-100",
+      )}
+    >
+      {/* `aria-hidden`, because `RarityGem` exposes the word to assistive tech itself and the
+          `aria-label` above already says it — without this the chip announces its rarity twice. */}
+      <span aria-hidden="true" className="flex min-w-0 items-center text-[0.8125rem]">
+        <RarityGem rarity={rarity} withLabel />
+      </span>
+    </button>
+  );
+}
+
+/**
+ * One thing this search is currently narrowed by, said in words — and pressed to take it off.
+ *
+ * The row of these under the bar is what the redesign is for. Every control above states its own
+ * filter in its own vocabulary — a gold border on a select, six chips two of which are bright —
+ * and none of that survives the tray being shut. A chip reading `Colour: Blue, Red` is the search
+ * in a sentence, at a size the eye reads before it reads any control.
+ *
+ * **26px and not the family's 36**, so a stated filter can never be mistaken for a control that
+ * sets one. It is the one deliberate exception to the shared height, and it is what tells the two
+ * bands of the bar apart at a glance.
+ *
+ * **The whole chip is the button** rather than a pill with a ✕ inside it. An 11px glyph is an
+ * 11px target; the label is already the thing the reader is looking at, so one press on the whole
+ * pill is both a bigger target and a shorter sentence than "the close button of the Colour chip".
+ */
+export function ActiveFilterChip({
+  label,
+  onRemove,
+}: {
+  /** The whole statement — `Colour: Blue, Red`. Named for the filter, never for the control. */
+  label: string;
+  onRemove: () => void;
+}) {
+  const tip = useTooltip();
+  const name = `Remove filter — ${label}`;
+  return (
+    <button
+      type="button"
+      onClick={onRemove}
+      aria-label={name}
+      // `describes: false`: identical to the `aria-label` above.
+      {...tip(name, { describes: false })}
+      className={cn(
+        PRESS,
+        FILTER_FOCUS,
+        "inline-flex h-[1.625rem] max-w-full shrink-0 items-center gap-1.5 rounded-full border",
+        "border-accent pr-1.5 pl-2.5 text-xs text-accent hover:bg-accent/10",
+      )}
+    >
+      <span className="truncate">{label}</span>
+      <X className="size-3 shrink-0" aria-hidden="true" />
     </button>
   );
 }

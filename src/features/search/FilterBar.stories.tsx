@@ -83,6 +83,19 @@ const everything: Preset = (search) => {
   search.toggleOwned();
 };
 
+/**
+ * Open the filter tray — Set, Format, Owned, Rarity, Price and Printings, which the row keeps
+ * behind one disclosure at every width.
+ *
+ * **Not something a `preset` can do**, and that is the tray working as designed: `trayOpen` is
+ * `FilterBar`'s own state rather than the hook's, because the two surfaces that draw this row are
+ * on screen together in the deck editor and a shared flag would open both at once. A preset
+ * reaches the *search*; this reaches the row.
+ */
+async function openTray(canvas: ReturnType<typeof within>): Promise<void> {
+  await userEvent.click(await canvas.findByRole("button", { name: /^Show filters/ }));
+}
+
 const meta = {
   title: "Search/FilterBar",
   // The wrapper, not `FilterBar`, so the props table below is the wrapper's three props rather
@@ -139,6 +152,12 @@ export const Default: Story = {
       "placeholder",
       "Search cards…",
     );
+    // The badge is drawn only when there is something to count, so a quiet row's Filters button
+    // is an icon and a word and nothing else.
+    await expect(canvas.getByRole("button", { name: "Show filters — 0 active" })).toHaveTextContent(
+      "Filters",
+    );
+    await openTray(canvas);
     await expect(canvas.getByLabelText("Format")).toHaveValue("");
     await expect(canvas.getByRole("button", { name: /^Reset all/ })).toHaveAttribute(
       "aria-disabled",
@@ -207,6 +226,27 @@ export const AllFiltersActive: Story = {
         canvas.getByRole("button", { name: new RegExp(`^${colour}\\b`) }),
       ).toHaveAttribute("aria-pressed", "true");
     }
+    // The count the tray's own button carries is the *search's*, not the tray's — the same six
+    // Reset all wears, so the two cannot disagree about how much is on while the tray is shut.
+    await expect(canvas.getByRole("button", { name: "Show filters — 6 active" })).toHaveTextContent(
+      "6",
+    );
+    // Six chips under the rule for six kinds on, each stating its filter in words rather than in
+    // the vocabulary of the control that set it — which is the whole point of the row: with the
+    // tray shut, four of these six filters have no control on screen at all.
+    for (const label of [
+      "Colour: White, Blue, Black",
+      "Mana value: 1",
+      "Set: LEA",
+      "Format: Modern",
+      "Owned",
+    ]) {
+      await expect(
+        canvas.getByRole("button", { name: `Remove filter — ${label}` }),
+      ).toBeInTheDocument();
+    }
+
+    await openTray(canvas);
     // The picker's label is a count of sets rather than their names: 64 codes will not fit on a
     // control that has to share a line with six colour chips.
     await expect(canvas.getByRole("button", { name: "Set" })).toHaveTextContent("1 set");
@@ -233,6 +273,7 @@ export const Cleared: Story = {
     // Waited on the count, not on the button: the button is drawn before the preset lands, and
     // pressing it then would clear nothing and prove nothing.
     const reset = await canvas.findByRole("button", { name: "Reset all — 6 filters active" });
+    await openTray(canvas);
     await userEvent.click(reset);
 
     // The button is still under the cursor that pressed it, greyed rather than gone — which is
@@ -252,12 +293,18 @@ export const Cleared: Story = {
       "false",
     );
     await expect(canvas.getByRole("button", { name: "Set" })).toHaveTextContent("Any set");
-    // The three-state chip is back to asking the first of its two questions, and the *label* is
-    // what says so — an unpressed "Owned" cannot be mistaken for a pressed "Missing".
-    await expect(canvas.getByRole("button", { name: /^Owned\b/ })).toHaveAttribute(
-      "aria-pressed",
-      "false",
-    );
+    // Both halves of the owned pair are off. Two buttons rather than one cycling chip since the
+    // tray gave them room, so "not owned" and "not missing" are two assertions and not one — the
+    // state a single chip could only report by *becoming* the other question.
+    for (const word of ["Owned", "Missing"]) {
+      await expect(canvas.getByRole("button", { name: new RegExp(`^${word}\\b`) })).toHaveAttribute(
+        "aria-pressed",
+        "false",
+      );
+    }
+    // Nothing left to state: the rule stays, because Reset all lives under it and is drawn on
+    // every row, but the caption and its chips are gone with the filters they described.
+    await expect(canvas.queryByText("Filtering by")).not.toBeInTheDocument();
   },
 };
 
@@ -331,6 +378,7 @@ export const SomeUnavailable: Story = {
 
     // The format select is the one place a real `disabled` is right — a native `<option>` is
     // not a tab stop there is anything to lose.
+    await openTray(canvas);
     const format = canvas.getByLabelText("Format") as HTMLSelectElement;
     const off = [...format.options].filter((o) => o.disabled).map((o) => o.value);
     await expect(off).toEqual(["standard"]);
@@ -407,6 +455,7 @@ export const MostlyUnavailable: Story = {
       await expect(chip).toHaveAttribute("aria-disabled", "true");
     }
 
+    await openTray(canvas);
     const format = canvas.getByLabelText("Format") as HTMLSelectElement;
     const live = [...format.options].filter((o) => !o.disabled).map((o) => o.value);
     // Neither pinned row is ever greyed: "Any format" is how a format filter is taken off, and
@@ -450,6 +499,9 @@ export const IndexCold: Story = {
     // first render now, so `/^Reset all/` would resolve against the row *before* the preset
     // and every assertion below would read a state this story is not about.
     await canvas.findByRole("button", { name: "Reset all — 1 filter active" });
+    // The tray's chips are swept too — the rarity row is faceted like the rest of the row, so a
+    // cold index has to leave those live as well.
+    await openTray(canvas);
 
     const chips = canvas.getAllByRole("button").filter((b) => b.hasAttribute("aria-pressed"));
     await expect(chips.length).toBeGreaterThan(0);
@@ -662,5 +714,132 @@ export const TagBesideFreeText: Story = {
       "aria-disabled",
       "true",
     );
+  },
+};
+
+/**
+ * **The tray, open — every filter that is not on the bar.**
+ *
+ * Six fields in three columns: the set picker, the format ladder, the owned pair, the four
+ * rarities, the price band and the printings mode. Four controls stay on the bar above it at
+ * every width — the box you type in, the colours, the mana values and the order the results come
+ * in — because those are the four a reader reaches for without looking.
+ *
+ * The counts are the fake's own `facet_cards`, so the rarity chips grey exactly as the mana chips
+ * beside them do and by the same rule: an option greys when turning it on would not change the
+ * result set.
+ */
+export const TrayOpen: Story = {
+  args: { preset: (search) => search.setText("bolt") },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await openTray(canvas);
+
+    // The six fields, by their captions — the tray's own vocabulary, which is the only place in
+    // the app a label sits above its control.
+    //
+    // `getAllByText`, because two of the six are said twice on purpose: `SetCombobox` and the
+    // format select each carry a name of their own for assistive tech (an `sr-only` span and a
+    // `<label>`), and the tray's caption is the *visible* one above it. One control, two
+    // spellings of one word, and the caption is the half a sighted reader reads.
+    for (const label of ["Set", "Format", "Owned", "Rarity", "Price (USD)", "Printings"]) {
+      await expect(canvas.getAllByText(label).length).toBeGreaterThan(0);
+    }
+    // The money is the marketplace's, never a bare dollar: the caption reads `Price (USD)` on
+    // TCGplayer and `Price (EUR)` on Cardmarket, over prices from two different tables.
+    await expect(canvas.getByLabelText("Lowest price")).toHaveValue("");
+    // Common through mythic, and **not** alphabetical: the order is the information, the way
+    // Near Mint through Damaged is on the collection's condition chips.
+    const rarities = canvas
+      .getAllByRole("button")
+      .map((b) => b.getAttribute("aria-label"))
+      .filter((n): n is string => !!n && /^(Common|Uncommon|Rare|Mythic)\b/.test(n))
+      .map((n) => n.split(/[ —]/)[0]);
+    await expect(rarities).toEqual(["Common", "Uncommon", "Rare", "Mythic"]);
+  },
+};
+
+/**
+ * The band narrowed by price, and the chip that says so.
+ *
+ * **An unpriced printing fails a bound end**, which is the one place this filter narrows more
+ * than a reader might expect and is the honest reading: a shop that does not list a card has not
+ * offered it for nothing. The number boxes are the filter and the handles are a way of reaching
+ * it — a handle can only express the prices the ladder runs over, a box can express any of them.
+ */
+export const PriceBand: Story = {
+  args: { preset: (search) => search.setPriceRange(2, 40) },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // The chip states the band before the tray is opened, which is the whole point of the row:
+    // with the tray shut this filter has no control on screen at all.
+    await canvas.findByRole("button", { name: "Remove filter — Price: $2.00 – $40.00" });
+
+    await openTray(canvas);
+    await expect(canvas.getByLabelText("Lowest price")).toHaveValue("2");
+    await expect(canvas.getByLabelText("Highest price")).toHaveValue("40");
+    // The position is the mechanism and the price is what is spoken — a screen reader reading
+    // "200" off a thousand-position track would be hearing the slider instead of the filter.
+    await expect(canvas.getByRole("slider", { name: "Lowest price, slider" })).toHaveAttribute(
+      "aria-valuetext",
+      "$2.00",
+    );
+
+    // Pressing the chip takes the whole band off — one press, one fewer on the badge.
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Remove filter — Price: $2.00 – $40.00" }),
+    );
+    await waitFor(async () => {
+      await expect(canvas.getByLabelText("Lowest price")).toHaveValue("");
+    });
+  },
+};
+
+/**
+ * **The search, said in words** — and taken apart one filter at a time.
+ *
+ * This row is what the tray is paid for. Four of the six filters behind it have no control on
+ * screen once it is shut, so without these chips a reader could be looking at a narrowed wall
+ * with nothing to say why. One chip per *kind*, which is the same arithmetic the Reset all badge
+ * prints: three colours are one chip, because a reader looking at `Reset all 3` over six chips
+ * has been told two different things about one search.
+ */
+export const StatedFilters: Story = {
+  args: { preset: everything },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await canvas.findByRole("button", { name: "Reset all — 6 filters active" });
+
+    const labels = () =>
+      canvas
+        .queryAllByRole("button", { name: /^Remove filter — / })
+        .map((b) => b.getAttribute("aria-label")!.replace("Remove filter — ", ""));
+
+    // Five chips against a badge of six: the sixth kind is the text in the box, which is on
+    // screen with the words still in it and is the one filter a chip would only repeat.
+    await expect(labels()).toEqual([
+      "Colour: White, Blue, Black",
+      "Mana value: 1",
+      "Set: LEA",
+      "Format: Modern",
+      "Owned",
+    ]);
+
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Remove filter — Colour: White, Blue, Black" }),
+    );
+
+    // The whole kind went, not one colour of it — and the badge followed.
+    await waitFor(async () => {
+      await expect(labels()).toEqual([
+        "Mana value: 1",
+        "Set: LEA",
+        "Format: Modern",
+        "Owned",
+      ]);
+    });
+    await expect(
+      canvas.getByRole("button", { name: "Reset all — 5 filters active" }),
+    ).toBeInTheDocument();
   },
 };

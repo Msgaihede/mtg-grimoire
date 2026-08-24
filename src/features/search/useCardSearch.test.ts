@@ -43,6 +43,9 @@ describe("activeFilterCount", () => {
     manaValues: [],
     manaX: false,
     owned: undefined,
+    rarities: [],
+    priceMin: undefined,
+    priceMax: undefined,
   };
 
   it("is zero when nothing is filtered", () => {
@@ -166,6 +169,7 @@ const READY: FacetResponse = {
   manaValues: { "0": 1 },
   manaX: 1,
   formats: { modern: 1 },
+  rarities: { common: 1, uncommon: 1, rare: 1, mythic: 1 },
   sets: { lea: 1 },
   owned: { owned: 1, missing: 0 },
   total: 1,

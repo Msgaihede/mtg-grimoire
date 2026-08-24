@@ -52,6 +52,15 @@ pub struct FacetResponse {
     pub mana_x: i64,
     /// Keyed by `legalities` key. Plain counts.
     pub formats: BTreeMap<String, i64>,
+    /// Keyed by [`CardIndex::RARITY_KEYS`] entry. Plain counts, and **all four are sent on
+    /// every ready response**, zeros included — the chip row greys a counted zero and leaves an
+    /// absent key live, so a key that went missing would silently stop greying.
+    ///
+    /// **These do not sum to [`Self::total`]**, and nothing may read them as though they did.
+    /// The corpus also holds `special` and `bonus` printings, which no chip offers and no
+    /// bitset counts, so the four are a vocabulary rather than a partition — the same reading
+    /// [`Self::mana_values`] needs for a fractional cost.
+    pub rarities: BTreeMap<String, i64>,
     /// Keyed by set code. Plain counts, and **every code in the corpus is sent, zeros
     /// included** — 1 047 keys on the live corpus, on every **ready** response, whatever the
     /// filters are. A cold one sends this map empty, which is the point of [`Self::ready`].
@@ -84,17 +93,19 @@ enum Skip {
     Mana,
     Sets,
     Formats,
+    Rarities,
     Owned,
 }
 
-/// The two dimensions whose bitset costs a walk to build, built once for the whole request.
+/// The three dimensions whose bitset costs a walk to build, built once for the whole request.
 ///
-/// [`base`] is called six times and neither of these depends on which dimension is being
-/// skipped, so building them per call would walk the corpus five more times than the answer
+/// [`base`] is called seven times and none of these depends on which dimension is being
+/// skipped, so building them per call would walk the corpus six more times than the answer
 /// needs — and the set walk carries a `set_codes` lookup per picked code on top.
 struct Prepared {
     sets: Option<BitSet>,
     mana: Option<BitSet>,
+    rarities: Option<BitSet>,
 }
 
 /// The result set under every filter except `skip`'s.
@@ -104,11 +115,18 @@ struct Prepared {
 /// be a fourth; they are in `narrow` now, resolved through their closures by [`run_facets`]
 /// the way the text is resolved through FTS.
 ///
-/// * `rarity` has no dimension in [`CardIndex`] to narrow by, so a rarity-filtered request
-///   is faceted as though it were unfiltered — every count reads high. Closing it means a
-///   sixth bitset dimension in the index, which is a change to the build and not to this
-///   file. Nothing in the app sends it with facets today: the search view's filter bar has
-///   no rarity control.
+/// * `rarity` — the **single**-valued field, which is the printings modal's `<select>` and
+///   not the filter row's chips — still has no dimension to narrow by, so a request carrying
+///   it is faceted as though it were unfiltered and every count reads high. Its multi-valued
+///   neighbour `rarities` *is* a dimension now ([`CardIndex::rarity`], [`Skip::Rarities`]);
+///   this one would need to fold into that base to join it, and nothing sends it with facets.
+/// * `priceMin`/`priceMax` have no dimension either, and cannot cheaply have one: a price is
+///   a function of the reader's marketplace — two of the four read a table the corpus scan
+///   does not touch and that refreshes on its own schedule — so closing this means a price
+///   array per marketplace and a lifecycle hook on the feed refresh, where every other
+///   dimension is a column of `cards`. A price-bounded request is therefore faceted over the
+///   unbounded corpus and every count reads high, which is the same fail-open direction the
+///   two entries around it take.
 /// * `oracleId` is the same shape as `rarity`: `CardIndex` has no oracle-id dimension, so a
 ///   search narrowed to one oracle card is faceted as though it were unfiltered too — every
 ///   count over-reads by the printings of every *other* card. **Fails open on purpose, not by
@@ -182,6 +200,11 @@ fn base(
             b = b.and(u);
         }
     }
+    if skip != Skip::Rarities {
+        if let Some(u) = prep.rarities.as_ref() {
+            b = b.and(u);
+        }
+    }
     if skip != Skip::Owned {
         match req.owned {
             Some(true) => b = b.and(&ix.owned),
@@ -249,6 +272,32 @@ fn union_mana(ix: &CardIndex, values: Option<&[u8]>, mana_x: bool) -> Option<Bit
     }
     if mana_x {
         ix.mana_x.for_each(|d| u.set(d));
+    }
+    Some(u)
+}
+
+/// The rarity chips as one bitset, or `None` when the request names none.
+///
+/// OR within, which is what the chip row means and what `push_card_filters` emits — so this is
+/// a union and not an intersection, unlike [`union_sets`]' two lists.
+///
+/// **Narrowed by exactly [`crate::filters::picked_rarities`]' list**, which is why that
+/// normalisation is a shared function: a facet counted over a rarity the search dropped would
+/// report options as live that the search cannot reach.
+///
+/// A word this build does not know contributes nothing, so a request naming only unknown
+/// rarities narrows to the empty set — matching the SQL, where `rarity IN ('shiny')` returns
+/// no rows. Naming *no* rarity is the different answer, and it is the `None` above.
+fn union_rarities(ix: &CardIndex, rarities: Option<&[String]>) -> Option<BitSet> {
+    let picked = crate::filters::picked_rarities(rarities?);
+    if picked.is_empty() {
+        return None;
+    }
+    let mut u = BitSet::new(ix.capacity);
+    for r in picked {
+        if let Some(i) = CardIndex::RARITY_KEYS.iter().position(|k| *k == r) {
+            ix.rarity[i].for_each(|d| u.set(d));
+        }
     }
     Some(u)
 }
@@ -355,6 +404,7 @@ pub fn compute(ix: &CardIndex, req: &SearchRequest, narrow: Option<&BitSet>) -> 
     let prep = Prepared {
         sets: union_sets(ix, req),
         mana: union_mana(ix, req.mana_values.as_deref(), req.mana_x.unwrap_or(false)),
+        rarities: union_rarities(ix, req.rarities.as_deref()),
     };
     let base = |skip| base(ix, req, narrow, &prep, skip);
 
@@ -394,6 +444,17 @@ pub fn compute(ix: &CardIndex, req: &SearchRequest, narrow: Option<&BitSet>) -> 
         out.formats.insert(
             (*key).to_owned(),
             i64::from(formats_base.and_count(&ix.formats[k])),
+        );
+    }
+
+    // Rarity: one `and_count` per chip over the base that drops the whole rarity question, so
+    // picking `rare` does not grey `mythic` — the rule every dimension here follows, that a
+    // control never re-sorts or greys under the press that is using it.
+    let rarities_base = base(Skip::Rarities);
+    for (i, key) in CardIndex::RARITY_KEYS.iter().enumerate() {
+        out.rarities.insert(
+            (*key).to_owned(),
+            i64::from(rarities_base.and_count(&ix.rarity[i])),
         );
     }
 
@@ -835,6 +896,71 @@ mod tests {
         );
     }
 
+    /// The rarity chips are a dimension of their own — **counted over a base that drops the
+    /// whole rarity question**, so picking `common` does not grey `uncommon`. The rule every
+    /// dimension here follows, stated once more because this is the newest one to get it.
+    ///
+    /// All four keys arrive whatever the search is, zeros included: a chip greys on a *counted*
+    /// zero and stays live on an absent key, so a key that went missing would silently stop
+    /// greying.
+    #[test]
+    fn the_rarity_counts_exclude_their_own_filter_and_never_go_missing() {
+        let conn = seeded();
+        let ix = crate::index::CardIndex::build(&conn).unwrap();
+
+        let none = compute(&ix, &req(|_| {}), None);
+        assert_eq!(none.rarities.len(), 4, "all four keys, always");
+        assert_eq!(none.rarities.get("common").copied(), Some(1), "Bolt");
+        assert_eq!(none.rarities.get("uncommon").copied(), Some(1), "Helix");
+        assert_eq!(
+            none.rarities.get("rare").copied(),
+            Some(0),
+            "a counted zero rather than an absent key — this is what greys the chip"
+        );
+        // **They do not sum to the total.** Sol Ring is `special`, which no chip offers and no
+        // bitset counts; three paper printings against two counted rarities.
+        assert_eq!(none.total, 3);
+        assert_eq!(none.rarities.values().sum::<i64>(), 2);
+
+        let picked = compute(
+            &ix,
+            &req(|r| r.rarities = Some(vec!["common".into()])),
+            None,
+        );
+        assert_eq!(
+            picked.rarities.get("uncommon").copied(),
+            Some(1),
+            "still offered, still counted — the dimension skips its own filter"
+        );
+    }
+
+    /// …and every other dimension **does** narrow by it, which is the other half of the same
+    /// rule and the half a `Skip` arm in the wrong place would break silently.
+    #[test]
+    fn other_dimensions_narrow_by_the_rarity_filter() {
+        let conn = seeded();
+        let ix = crate::index::CardIndex::build(&conn).unwrap();
+
+        let f = compute(
+            &ix,
+            &req(|r| r.rarities = Some(vec!["uncommon".into()])),
+            None,
+        );
+        assert_eq!(f.total, 1, "only Helix is uncommon");
+        assert_eq!(
+            f.sets.get("lea").copied(),
+            Some(0),
+            "and Helix is not in lea"
+        );
+        assert_eq!(f.sets.get("rav").copied(), Some(1));
+
+        // A word this build has never heard of narrows to nothing rather than to everything —
+        // matching the SQL, where `rarity IN ('shiny')` returns no rows. Naming *no* rarity is
+        // the different answer, and it is the unfiltered case above.
+        let unknown = compute(&ix, &req(|r| r.rarities = Some(vec!["shiny".into()])), None);
+        assert_eq!(unknown.total, 0);
+    }
+
     /// …while every OTHER dimension does narrow by it.
     #[test]
     fn other_dimensions_do_narrow_by_the_set_filter() {
@@ -1188,6 +1314,7 @@ mod tests {
         f.mana_values.insert("0".into(), 2);
         f.mana_x = 5;
         f.formats.insert("modern".into(), 3);
+        f.rarities.insert("rare".into(), 6);
         f.sets.insert("lea".into(), 4);
         f.owned = OwnedFacets {
             owned: 1,
@@ -1201,6 +1328,7 @@ mod tests {
                 // A sibling of `manaValues`, deliberately — never an `"x"` key inside it.
                 "manaX": 5,
                 "formats": {"modern": 3},
+                "rarities": {"rare": 6},
                 "sets": {"lea": 4},
                 "owned": {"owned": 1, "missing": 2},
                 "total": 3,
@@ -1788,6 +1916,7 @@ mod tests {
                 .map(|_| BitSet::new(cap))
                 .collect(),
             playable: BitSet::new(cap),
+            rarity: std::array::from_fn(|_| BitSet::new(cap)),
             set_ord: vec![0; cap],
             set_codes: (0..1047).map(|i| format!("s{i}")).collect(),
             owned: BitSet::new(cap),
@@ -1823,6 +1952,13 @@ mod tests {
                     // below measures the AND rather than a bitset that is mostly empty.
                     ix.playable.set(d);
                 }
+            }
+            // The four rarities, roughly as the corpus is shaped: commons and uncommons carry
+            // most of it, mythics a twentieth. Not a partition — one doc in twenty-five lands at
+            // none of the four, standing in for the `special` and `bonus` printings no chip
+            // offers, so the counts below cannot be summed into the total.
+            if d % 25 != 3 {
+                ix.rarity[(d % 4) as usize].set(d);
             }
             if d % 100 == 0 {
                 ix.owned.set(d);
