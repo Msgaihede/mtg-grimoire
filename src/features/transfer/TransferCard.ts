@@ -30,12 +30,41 @@ export interface TransferCard {
   signed: boolean | null;
   proxy: boolean | null;
   misprint: boolean | null;
+  /**
+   * The collection's free-text `collection_entries.tags` — **not a deck label.**
+   *
+   * The two live one field apart and mean different things, which is worth saying here rather
+   * than leaving to whoever reads the CSV header: this one is a string the reader typed on a
+   * copy they own, and {@link TransferCard.tagName} is a row of `deck_tags`. No surface has
+   * both — `SURFACE_FIELDS` gives this to the collection and the label to the deck — so the two
+   * checkboxes can never be drawn together and the two columns can never appear in one file.
+   */
   tags: string | null;
   notes: string | null;
   setName: string | null;
   rarity: string | null;
   typeLine: string | null;
   unitPrice: number | null;
+  /**
+   * The deck label this card wears — one row of `deck_tags`, by name. `null` on a surface with
+   * no labels and on a deck card wearing none.
+   *
+   * **A name, because that is what a file can carry and what an import finds a row by.** The id
+   * would be meaningless in somebody else's database, and `commit_import` matches on
+   * `schema::tag_name_key` anyway.
+   */
+  tagName: string | null;
+  /**
+   * That label's colour, `#rrggbb`.
+   *
+   * **A separate field from {@link TransferCard.tagName} because only some formats can carry it
+   * separately.** Archidekt's `^Keeper,#4aab08^` holds both in one group, so its writer reads
+   * this whether or not the reader ticked anything about a colour; a CSV has one value per cell,
+   * so it gets a `Tag colour` column of its own that the reader switches on. That asymmetry is
+   * `fields.ts`' to declare and is why `FORMAT_FIELDS.archidekt` offers `tag` and not
+   * `tagColor`.
+   */
+  tagColor: string | null;
   /**
    * This printing's `legalities` blob, JSON, verbatim — 23 keys and growing.
    *
@@ -58,7 +87,8 @@ const NOTHING = {
   condition: null, tradelistQuantity: null, purchasePrice: null, purchaseCurrency: null,
   acquiredAt: null, acquisitionSource: null, serialNumber: null, grading: null,
   altered: null, signed: null, proxy: null, misprint: null, tags: null, notes: null,
-  setName: null, rarity: null, typeLine: null, unitPrice: null, legalities: null,
+  setName: null, rarity: null, typeLine: null, unitPrice: null,
+  tagName: null, tagColor: null, legalities: null,
 } satisfies Omit<TransferCard, "name" | "quantity">;
 
 /**
@@ -84,6 +114,10 @@ export function fromDeckCard(card: DeckCard): TransferCard {
     categoryName: card.categoryName,
     categoryKind: card.categoryKind,
     categoryActive: card.categoryActive,
+    // The one surface that has a label. `deck_get` carries both halves on the row, so this costs
+    // no second read.
+    tagName: card.tagName,
+    tagColor: card.tagColor,
     setName: card.setName,
     rarity: card.rarity ?? null,
     typeLine: card.typeLine ?? null,

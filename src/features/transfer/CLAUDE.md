@@ -130,8 +130,8 @@ and `ImportDialog.tsx` (two steps, one panel, nothing written until Import).
   The Rust half — find-or-create by `name_key`, the `coalesce` that makes a merge keep a tag the
   reader put on by hand, and the undo step that sweeps the labels an import invented — is
   [`src-tauri/CLAUDE.md`](../../../src-tauri/CLAUDE.md)'s and
-  [decks-storage.md](../../../docs/reference/decks-storage.md)'s. **Not yet driven in the shipped
-  window.**
+  [decks-storage.md](../../../docs/reference/decks-storage.md)'s. The **export** half is the
+  `## Export` section below. **Not yet driven in the shipped window.**
 - **A heading _or_ a bracket naming a section word sets the _section_, not a category** — one
   mechanism for the four seeded piles, not two. `[Commander{top}]` reaches the command zone through
   the same `SECTIONS` map a `Commander` heading goes through, so nothing downstream has to know
@@ -325,6 +325,31 @@ measured on: [import-export.md](../../../docs/reference/import-export.md).
   section-writing format plus an explicit `null` for the three flat ones, **total rather than
   partial**: a `Partial` map let a future section-writing format compile with no discriminator at
   all, reproducing this same defect by omission rather than by a typo anyone would catch.
+- **The deck label goes out too, and it is the one field a format writes more of than it
+  declares** (2026-08-24). `tag` is the name and `tagColor` is the colour, and they are two fields
+  because the two media differ: Archidekt writes both as `^Keeper,#4aab08^`, so its line has room
+  for the pair and it offers **only `tag`** — a colour checkbox there would be a control that
+  changed nothing, and `writeLine` reads `card.tagColor` off the card whenever `tag` is on. A CSV
+  cell holds one value, so it spends a column each and offers both boxes. Four rules:
+  - **Archidekt and CSV, and no other format.** The trailing `#tag` shape the other writers could
+    borrow is stripped-and-discarded by `MARKERS`, so emitting it would be a channel this app
+    writes and cannot read — and `\S+` cannot hold `Cut candidate` anyway.
+  - **On by default for Archidekt, off for CSV.** Archidekt's defaults are everything the format
+    can say and the caret group is something Archidekt itself emits; CSV's are a deliberate core
+    with everything else opt-in. `exportPrefs` does not persist, so a default reaches every reader
+    on the next launch — acceptable here where the Arena filter's was not, because this adds a
+    suffix rather than dropping rows.
+  - **The label goes last on the line**, after the bracket and after `*F*` — where Archidekt puts
+    it, and the order `stripDecorations` peels from the end.
+  - **No `DISCRIMINATOR` entry**: a label is not structural, so with `tag` on it is an ordinary
+    keyed field and with it off the fold merging two labels is the fold working. Checked rather
+    than assumed, in `format.test.ts`.
+
+  **`Tag` and the collection's `Tags` are two different facts one field apart** — a `deck_tags`
+  row against `collection_entries.tags`, free text on a copy the reader owns. No surface holds
+  both, so the two boxes can never be drawn together and no file can carry both columns;
+  `fields.test.ts` asserts that emptiness rather than leaving it to the naming. Full record:
+  [import-export.md](../../../docs/reference/import-export.md).
 - **`export/scope.ts` sweeps a filter into a whole list before the dialog opens on it.** The
   collection and the wishlist are paged at 100 rows for their own views, so what is in memory at
   any moment is a scroll position rather than a decision, and exporting that would silently

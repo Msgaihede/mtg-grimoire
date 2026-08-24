@@ -19,6 +19,8 @@ export function transferCard(over: Partial<TransferCard> = {}): TransferCard {
     categoryName: null,
     categoryKind: null,
     categoryActive: null,
+    tagName: null,
+    tagColor: null,
     condition: null,
     tradelistQuantity: null,
     purchasePrice: null,

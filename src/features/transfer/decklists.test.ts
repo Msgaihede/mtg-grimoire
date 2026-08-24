@@ -21,6 +21,7 @@ import {
   omittedCount,
   type ExportFormat,
 } from "./export/format";
+import { tagNameKey } from "@/features/decks/tagNames";
 import { defaultFields } from "./fields";
 import { transferCard } from "./fixtures";
 import type { TransferCard } from "./TransferCard";
@@ -117,6 +118,10 @@ function exportCardsFor(text: string): TransferCard[] {
       .filter((pile) => pile.inactive)
       .map((pile) => pile.name),
   );
+  // The colour lives on the plan's label list rather than on the card, which is `PlannedTag`'s
+  // whole shape: a colour is a fact about the label and one label is on forty lines. This is the
+  // join `commit_import` makes with a database behind it, made here against the plan.
+  const colorFor = new Map(plan.tags.map((tag) => [tag.key, tag.color]));
   return plan.cards.map((card) =>
     transferCard({
       name: card.match.name,
@@ -129,6 +134,11 @@ function exportCardsFor(text: string): TransferCard[] {
       categoryName: card.categoryName,
       categoryKind: SEEDED_KIND[card.categoryName] ?? "main",
       categoryActive: !inactive.has(card.categoryName),
+      // Same reasoning as the finish, one channel over: `ARCHIDEKT_SECTIONED` carries 44
+      // labelled lines, so wiring these two is what puts a real corpus of labels through the
+      // fixed point rather than the hand-built pair `format.test.ts` uses.
+      tagName: card.tagName,
+      tagColor: card.tagName === null ? null : (colorFor.get(tagNameKey(card.tagName)) ?? null),
     }),
   );
 }
@@ -358,6 +368,43 @@ describe("a real decklist round-trips through every format this app can read", (
     );
 
     expect(back.lines.filter((line) => line.excluded)).toHaveLength(17);
+  });
+
+  /**
+   * The labels, out and back — 44 of the sectioned export's 105 lines carry one.
+   *
+   * **The fixed point below is silent about a channel neither writer emits**, so it would have
+   * stayed green if the caret group had never been written at all. This is what says the round
+   * trip really carries them: the same lines wear the same label with the same colour after a
+   * full cycle, counted rather than sampled.
+   */
+  it("keeps every label, and its colour, through Archidekt", () => {
+    const written = formatExport(
+      exportCardsFor(ARCHIDEKT_SECTIONED),
+      "archidekt",
+      DECK_FIELDS("archidekt"),
+    );
+    const before = parseDecklist(ARCHIDEKT_SECTIONED).lines;
+    const after = parseDecklist(written).lines;
+
+    const labels = (lines: readonly { tagName: string | null; tagColor: string | null }[]) =>
+      lines.map((line) => `${line.tagName ?? ""}|${line.tagColor ?? ""}`);
+
+    expect(after.filter((line) => line.tagName !== null)).toHaveLength(44);
+    expect(labels(after)).toEqual(labels(before));
+  });
+
+  /** And out of a CSV, which spends a column on each half rather than one group on both. */
+  it("keeps every label through a CSV carrying both of its columns", () => {
+    const fields = [...DECK_FIELDS("csv"), "tag" as const, "tagColor" as const];
+    const written = formatExport(exportCardsFor(ARCHIDEKT_SECTIONED), "csv", fields);
+    const after = parseDecklist(written).lines;
+
+    expect(after.filter((line) => line.tagName !== null)).toHaveLength(44);
+    expect(after.find((line) => line.tagName !== null)).toMatchObject({
+      tagName: "Keeper",
+      tagColor: "#4aab08",
+    });
   });
 
   /**

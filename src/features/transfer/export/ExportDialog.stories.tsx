@@ -442,6 +442,60 @@ export const Archidekt: Story = {
 };
 
 /**
+ * The same pile with the reader's own **labels** on it — `deck_tags` rows, one per card.
+ *
+ * Two of them, because one box is not a choice: the Bolt is a keeper and the Sol Ring is a cut
+ * candidate, in the two colours the reader gave them.
+ */
+const LABELLED_CARDS: TransferCard[] = [
+  transferCard({ ...CARDS[0], tagName: "Keeper", tagColor: "#4aab08" }),
+  transferCard({ ...CARDS[1], tagName: "Cut candidate", tagColor: "#d3202a" }),
+];
+
+/**
+ * **The deck's own labels, out.** Archidekt writes one per card as `^Keeper,#4aab08^`, which is
+ * exactly the group this app's parser reads back — so a deck's labels survive a full round trip
+ * through the one format that has a slot for them.
+ *
+ * **It is on by default here and nowhere else.** Archidekt's other four optional fields are on
+ * too: this format's defaults are everything Archidekt can say, and the caret group is something
+ * Archidekt itself emits. The reader unticking Tag is what the box is for — a deck exported to
+ * share is often a deck whose private "cut candidate" notes should stay at home.
+ *
+ * **There is no colour checkbox on this format, and that is not an omission.** The colour rides
+ * *inside* the group, so a box for it would be a control that changed nothing; {@link Csv} is
+ * where the colour is its own column and its own tick, because a cell holds one value.
+ *
+ * The label goes **last on the line**, after the bracket and after `*F*` — where Archidekt puts
+ * it, and the order `parse.ts` peels decorations off the end.
+ */
+export const DeckLabels: Story = {
+  args: { subject: "Atraxa", cards: LABELLED_CARDS, suggestedFileName: "Atraxa" },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(
+      async () => await expect(canvas.getByRole("radio", { name: "Archidekt" })).toBeVisible(),
+      { timeout: FRAME_WAIT },
+    );
+
+    await userEvent.click(canvas.getByRole("radio", { name: "Archidekt" }));
+    await expect(canvas.getByRole("checkbox", { name: "Tag" })).toBeChecked();
+    await expand(canvasElement);
+    await expect(preview(canvasElement)).toHaveTextContent(
+      "Ramp 2x Lightning Bolt (2x2) 117 [Ramp] ^Keeper,#4aab08^ " +
+        "1x Sol Ring (c21) 263 [Ramp] ^Cut candidate,#d3202a^",
+    );
+
+    // Unticked, the lines are what they were before labels existed — the box is a real control
+    // over the file rather than a decoration on the panel.
+    await userEvent.click(canvas.getByRole("checkbox", { name: "Tag" }));
+    await expect(preview(canvasElement)).toHaveTextContent(
+      "Ramp 2x Lightning Bolt (2x2) 117 [Ramp] 1x Sol Ring (c21) 263 [Ramp]",
+    );
+  },
+};
+
+/**
  * **TCGplayer Mass Entry** — `quantity name [SET] collectorNumber`, which is a **cart** rather
  * than a decklist, and that is what decides all three of the ways it differs from the writers
  * above it.

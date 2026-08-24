@@ -300,6 +300,22 @@ const TAG_MARKER = /\s+\^([^^]*)\^$/;
  */
 const TAG_COLOR = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i;
 
+/**
+ * A `Tag colour` **cell**, as `#rrggbb` lowercase, or `null` for anything else.
+ *
+ * **The `#` is optional here and required in {@link TAG_COLOR}, and that is not an
+ * inconsistency.** Inside `^…^` the hash is what tells the colour from the name — the split is
+ * on a comma, and a label really called `Cut, abc` would otherwise have `abc` read as `#aabbcc`
+ * and lose half its own name. A dedicated column has nothing to disambiguate from, and a reader
+ * typing `4aab08` into a spreadsheet means the colour, so this arm takes it.
+ */
+function csvTagColor(raw: string): string | null {
+  const found = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(raw.trim());
+  if (found === null) return null;
+  const digits = found[1].toLowerCase();
+  return `#${digits.length === 3 ? digits.replace(/./g, (d) => d + d) : digits}`;
+}
+
 /** One `^…^` group, read. `null` when the group was empty — a tag with no name is no tag. */
 function readTagMarker(inside: string): { name: string; color: string | null } | null {
   const comma = inside.lastIndexOf(",");
@@ -574,11 +590,12 @@ function parseCsvGrid(grid: string[][], header: readonly (TransferFieldId | null
       categoryName: knownSection === null ? categoryCell : null,
       finish: finish === "foil" ? "foil" : finish === "etched" ? "etched" : null,
       excluded: false,
-      // A CSV has no label channel. There is no `Tag` column in `TRANSFER_FIELDS` and adding one
-      // would be a second question — what a CSV's tag column is *called* — that no export in
-      // scope has asked yet.
-      tagName: null,
-      tagColor: null,
+      // A CSV says a label in two columns where Archidekt says it in one group, because a cell
+      // holds one value. Both are read — a column this app writes and cannot read back is a
+      // round trip that loses something silently, which is what `decklists.test.ts`' fixed point
+      // exists to make impossible.
+      tagName: cell("tag") === "" ? null : cell("tag"),
+      tagColor: csvTagColor(cell("tagColor")),
       extra,
     });
   }
