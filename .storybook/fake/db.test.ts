@@ -4894,7 +4894,7 @@ describe("the decklist import", () => {
       ],
     });
     // `added` is what the list **asked for**, not what the deck landed on.
-    expect(out).toEqual({ added: 5, removed: 0, categoriesCreated: 0 });
+    expect(out).toEqual({ added: 5, removed: 0, categoriesCreated: 0, tagsCreated: 0 });
     expect(db.deckCards).toHaveLength(1);
     expect(db.deckCards[0].quantity).toBe(6);
   });
@@ -4914,7 +4914,7 @@ describe("the decklist import", () => {
       items: [{ cardId: BOLT_B.id, quantity: 1, categoryName: "Main deck" }],
     });
     // Copies, not rows — the number the history's `delta` carries.
-    expect(out).toEqual({ added: 1, removed: 4, categoriesCreated: 0 });
+    expect(out).toEqual({ added: 1, removed: 4, categoriesCreated: 0, tagsCreated: 0 });
     // Replacing what is sleeved up never touches the plan.
     expect(db.deckCards.filter((dc) => dc.variant === "theory")).toHaveLength(1);
     expect(db.deckCards.filter((dc) => dc.variant === "live")).toHaveLength(1);
@@ -4923,6 +4923,62 @@ describe("the decklist import", () => {
     // One row per *effect*, never one per card.
     expect(db.deckAudit.map((a) => a.kind)).toEqual(["remove", "add"]);
     expect(db.deckAudit.map((a) => a.delta)).toEqual([-4, 1]);
+  });
+
+  /**
+   * Archidekt's `^Keeper,#4aab08^` through the fake, which is what the import dialog's stories
+   * run against — so the three rules `import::tag_for_name` holds have to hold here too, or a
+   * play would pass over behaviour the app does not have.
+   */
+  it("finds or makes the label an item names, and never touches one it finds", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckTags: [{ id: 7, name: "Keeper", color: "#d9b95c" }],
+    });
+    const out = writeHandlers(db).deck_import_commit({
+      deckId: 1,
+      variant: "live",
+      mode: "merge",
+      items: [
+        // A different case *and* a different colour, so neither match could be a coincidence.
+        { cardId: BOLT_A.id, quantity: 1, categoryName: "Ramp", tagName: "KEEPER", tagColor: "#4aab08" },
+        { cardId: BOLT_B.id, quantity: 1, categoryName: "Ramp", tagName: "Fence", tagColor: "#fffc19" },
+        { cardId: SOL_NEW.id, quantity: 1, categoryName: "Ramp" },
+      ],
+    });
+
+    expect(out.tagsCreated).toBe(1);
+    expect(db.deckTags).toEqual([
+      // Used as it stands: `tagKey` matched it, so neither the name nor the colour moved.
+      { id: 7, name: "Keeper", color: "#d9b95c" },
+      { id: 8, name: "Fence", color: "#fffc19" },
+    ]);
+    expect(db.deckCards.map((dc) => dc.tagId)).toEqual([7, 8, null]);
+  });
+
+  /** `tag_id = coalesce(deck_cards.tag_id, excluded.tag_id)` — the copies sum and the label
+   *  does not, because a label the reader put on a row by hand is a decision an import may not
+   *  overturn. */
+  it("keeps a label the deck card already wore through a merge", () => {
+    const db = makeDeckDb({
+      decks: [deck({ id: 1 })],
+      deckTags: [{ id: 3, name: "Cut candidate", color: "#d3202a" }],
+      deckCards: [
+        deckCard({ id: 1, cardId: BOLT.id, categoryKind: "main", quantity: 1, tagId: 3 }),
+      ],
+    });
+    writeHandlers(db).deck_import_commit({
+      deckId: 1,
+      variant: "live",
+      mode: "merge",
+      items: [
+        { cardId: BOLT.id, quantity: 2, categoryName: "Main deck", tagName: "Keeper", tagColor: "#4aab08" },
+      ],
+    });
+
+    expect(db.deckCards[0]).toMatchObject({ quantity: 3, tagId: 3 });
+    // The file's label is still made — it is only this row it may not claim.
+    expect(db.deckTags.map((t) => t.name)).toEqual(["Cut candidate", "Keeper"]);
   });
 
   it("creates the categories the items name", () => {

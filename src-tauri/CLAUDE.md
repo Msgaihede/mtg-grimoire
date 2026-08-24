@@ -730,6 +730,34 @@ viewState)` — absent field means "leave it". It moves **no `updated_at`**, rec
   carry the flag is TypeScript's reading of the file, not Rust's: `parse.ts` takes it off the
   bracket's **first** entry and `plan.ts` rides it to the item — Rust supplies the write, TS draws
   the conclusion.
+- **`import.rs`: `ImportItem.tag_name`/`tag_color` is Archidekt's `^Keeper,#4aab08^`, found-or-created
+  by `schema::tag_name_key` — and a label that is already there is used **exactly as it stands**.**
+  The same shape `category_name` has, one table over: a name rather than an id, because an
+  imported list names labels this app may not have yet. `tag_for_name` is the find-or-create and
+  it is deliberately **not** `deck_meta::create_tag` — that one opens its own transaction, writes
+  its own history row, records its own undo step and refuses a name that is taken, which is the
+  *ordinary* case here rather than an error. A hundred labelled lines must not be a hundred of
+  each. The memo is keyed on `tag_name_key`'s answer, so `Keeper` and `keeper` in one list are one
+  row and count as **one** creation (`ImportOutcome::tags_created`, and `tagsCreated` in the `add`
+  row's payload).
+  Three rules that would each be wrong the other way:
+  - **The found row is never renamed and never recoloured.** `inactive`'s rule over a different
+    table, and sharper: `deck_tags` has no `deck_id` since schema v21, so recolouring one from a
+    pasted decklist would recolour it in every deck the reader owns.
+  - **`tag_id` coalesces where `quantity` sums.** The `ON CONFLICT` is
+    `tag_id = coalesce(deck_cards.tag_id, excluded.tag_id)` — two copies of a card are three
+    copies, but a label the reader put on a row by hand is a decision this import may not
+    overturn. An absent `tag_name` says nothing about the card at all, which is what an unticked
+    label sends.
+  - **A name with no colour is refused, not defaulted.** `deck_tags.color` is NOT NULL and what a
+    colour *is* belongs to the webview, so `tag_for_name` bounces the pair rather than inventing
+    one. `TypeScript` sends the two together or neither.
+
+  **Undo sweeps the labels an import invented**, `push_made_tags` mirroring
+  `push_made_categories` — read `tag_ids` before, diff after, `Op::Tags` on both sides. The order
+  is load-bearing on the **redo** side: `Op::Tags` restores before `Op::Variant` inserts, because
+  `deck_cards.tag_id` is a real foreign key and `insert_cards` writes the restored rows' labels
+  through `remap.tag`.
 
 ## Scryfall and the network
 

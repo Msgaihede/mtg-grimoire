@@ -713,6 +713,45 @@ variant)`; `deck_missing_to_wishlist(deckId)`, which reads `live` and skips inac
   deserialising, and absent means the ordinary counted pile an import has always made. Rust records
   the flag and concludes nothing from it: which lines carry it is `parse.ts`'s reading of the
   bracket's **first** entry, carried to the item by `plan.ts`.
+- **`ImportItem.tag_name`/`tag_color` is the second pair this boundary grew, and it is
+  `category_name`'s shape over `deck_tags`** (2026-08-24). Archidekt writes one label per card as
+  `^Keeper,#4aab08^` and `deck_cards.tag_id` holds exactly one, so the two line up without a
+  decision. `tag_for_name` finds by `schema::tag_name_key` — `deck_tags.name_key`'s own grain — and
+  creates only when nothing answers, memoised for the list so a hundred `Keeper` lines cost one
+  lookup and count as **one** creation. Four decisions inside it:
+
+  - **A label that is already there is used exactly as it stands** — not renamed to the file's
+    capitals, not recoloured. `inactive`'s principle over a different table, and it bites harder
+    here: `deck_tags` has had no `deck_id` since schema v21, so a pasted decklist recolouring
+    `Keeper` would recolour it in every deck the reader owns. `deck_meta::create_tag` is
+    deliberately **not** the function used — it refuses a taken name (the ordinary case for an
+    import), opens its own transaction, writes its own audit row and records its own step, and a
+    hundred labelled lines must not be a hundred of each.
+  - **`tag_id` coalesces where `quantity` sums**, in the same `ON CONFLICT`:
+    `tag_id = coalesce(deck_cards.tag_id, excluded.tag_id)`. That asymmetry is what a `merge`
+    promises — two copies of a card are three copies, but a label the reader put on a row by hand
+    is a decision this import may not overturn. It is also what an *unticked* label sends: the
+    item simply carries no `tag_name`, and an item that says nothing about a label leaves the row
+    alone.
+  - **A name with no colour beside it is refused rather than defaulted.** `deck_tags.color` is
+    NOT NULL and picking what a colour *is* belongs to the webview (the Rust/TS boundary), so
+    inventing one here would be this module making a display decision. `toImportItems` sends the
+    two together or neither, and `PlannedTag` is where a group that carried no hex gets
+    `DEFAULT_TAG_COLOR` — on the *step*, so the swatch the reader sees is the colour the row
+    would really be made with.
+  - **`ImportOutcome::tags_created` counts the rows the import _made_**, and the `add` audit row
+    carries the same number as `tagsCreated`. A label the reader already had costs nothing and is
+    not counted. It is owed for a sharper reason than `categories_created` is: a tag is app-wide,
+    so three new ones is a change to a list every other deck reads from — which is why the dialog
+    says it on the way out and `auditText.ts` puts it in the history row's detail.
+
+  **The undo step sweeps them.** `record_variant` takes a third "before" — `deck_undo::tag_ids`,
+  the whole table, since a tag belongs to no deck — and `push_made_tags` diffs it exactly as
+  `push_made_categories` diffs the piles. On the **redo** side `Op::Tags` restores *before*
+  `Op::Variant` inserts, and that order is not a nicety: `deck_cards.tag_id` is a real foreign key
+  and `insert_cards` writes each restored row's label through `remap.tag`, so the cards have
+  nowhere to point until the label is back. `deck_undo::tests::undoing_an_import_sweeps_only_the_
+labels_it_made` is the proof that the reader's own tags are not swept with them.
 - **`import_resolve` is the import's read half, and it answers the one question TypeScript
   cannot**: which printing in this app's corpus a name means. Six statements, prepared once and
   reused down the list, tried narrowest first — a set **and** a collector number; the set with the

@@ -756,6 +756,39 @@ pub struct ImportItem {
     /// deserialises, and absent is the regular copy, which is what an import has always made.
     #[serde(default)]
     pub finish: Option<String>,
+    /// The label the file put on this card — Archidekt's `^Keeper,#4aab08^`, name half.
+    ///
+    /// **A name rather than an id, exactly as [`Self::category_name`] is**, and found-or-created
+    /// the same way: an imported list names labels this app may not have yet, and which cards
+    /// deserve which label is somebody else's decision arriving whole. The lookup is
+    /// [`crate::schema::tag_name_key`]'s — `deck_tags.name_key`'s own grain — so `keeper` and
+    /// `Keeper` are one row.
+    ///
+    /// **The row that is already there is never renamed and never recoloured.** That is
+    /// [`Self::inactive`]'s rule over a different table and it is the reader's own instruction:
+    /// find the tag, use it, ignore what the file said about its colour. A tag is app-wide since
+    /// schema v21, so the alternative would let a pasted decklist repaint a label in every deck
+    /// they own.
+    ///
+    /// `#[serde(default)]`, and **absent means "say nothing about this card's label"** rather
+    /// than "clear it". It is what an unticked label sends, and it is what makes a `merge` onto a
+    /// card the reader tagged by hand keep their tag — see the `ON CONFLICT` in
+    /// [`commit_import`], which coalesces rather than overwrites.
+    #[serde(default)]
+    pub tag_name: Option<String>,
+    /// That label's colour, as `deck_tags.color` stores one — `#rrggbb` from
+    /// `features/decks/tagColors.ts`, which has been hex rather than a palette token since
+    /// 2026-08-20.
+    ///
+    /// **Read only when the row has to be made.** [`crate::deck_meta::valid_color`]'s single
+    /// check (non-empty) is all this is held to, because picking what a colour *is* belongs to
+    /// the webview — CLAUDE.md's Rust/TS boundary, and the reason this column carries no CHECK.
+    ///
+    /// Required whenever [`Self::tag_name`] is present: `deck_tags.color` is `NOT NULL`. A name
+    /// with no colour beside it is refused rather than defaulted, because a default here would be
+    /// this module deciding what a colour is.
+    #[serde(default)]
+    pub tag_color: Option<String>,
 }
 
 /// What an import did, in the three numbers the "Imported 117 cards" report is written from.
@@ -771,6 +804,71 @@ pub struct ImportOutcome {
     pub added: i64,
     pub removed: i64,
     pub categories_created: i64,
+    /// The `deck_tags` rows the import had to make — [`Self::categories_created`]'s question one
+    /// table over, and owed for a sharper reason: a tag is **app-wide** since schema v21, so an
+    /// import that invents three has changed a list every other deck reads from. A label the
+    /// reader already had is used and not counted.
+    pub tags_created: i64,
+}
+
+/// The `deck_tags` row one imported label means: the one that is already there, or a new one in
+/// the colour the file asked for.
+///
+/// **Find-or-create, and the found half never changes anything** — not the name's capitals, not
+/// the colour, not `updated_at`. That is the reader's instruction stated as a function: a label
+/// they already own is a decision they made, and a decklist naming the same word is not a request
+/// to repaint it. It matters more here than the same rule does for a category, because a tag is
+/// app-wide since schema v21: recolouring one would recolour it in every deck they have.
+///
+/// `seen` memoises within the list, keyed on [`crate::schema::tag_name_key`]'s answer, so a
+/// hundred lines wearing `Keeper` cost one lookup and one creation — and, just as importantly,
+/// count as **one** in `created`.
+///
+/// **Deliberately not [`crate::deck_meta::create_tag`]**, which is the right function for a
+/// reader pressing a button and the wrong one here: it opens a transaction of its own, refuses a
+/// name that is taken (which is the ordinary case for an import, not an error), writes its own
+/// `deck_audit` row and records its own undo step. This import is one transaction, one history
+/// row and one step; a hundred labels must not be a hundred of each.
+fn tag_for_name(
+    tx: &Connection,
+    name: &str,
+    color: Option<&str>,
+    seen: &mut HashMap<String, i64>,
+    created: &mut i64,
+) -> Result<i64, String> {
+    let name = crate::deck_meta::valid_name(name, "A tag")?;
+    let key = crate::schema::tag_name_key(name);
+    if let Some(id) = seen.get(&key) {
+        return Ok(*id);
+    }
+    let existing: Option<i64> = tx
+        .query_row(
+            "SELECT id FROM deck_tags WHERE name_key = ?1",
+            params![key],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let id = match existing {
+        Some(id) => id,
+        None => {
+            // Refused rather than defaulted: `deck_tags.color` is NOT NULL and what a colour
+            // *is* belongs to the webview, so a name arriving with no colour beside it is a
+            // caller bug and not a shape this module may paper over.
+            let color = crate::deck_meta::valid_color(color.unwrap_or(""))?;
+            *created += 1;
+            tx.query_row(
+                "INSERT INTO deck_tags (name, name_key, color, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, unixepoch(), unixepoch())
+                 RETURNING id",
+                params![name, key, color],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?
+        }
+    };
+    seen.insert(key, id);
+    Ok(id)
 }
 
 /// A whole decklist into one deck, in one transaction.
@@ -829,6 +927,10 @@ pub fn commit_import(
     // command already reads the whole variant to count what it is about to clear.
     let cards_before = crate::deck_undo::read_variant(&tx, deck_id, variant)?;
     let categories_before = crate::deck_undo::category_ids(&tx, deck_id)?;
+    // The third "before", read for the piles' reason and answering about a table with no deck in
+    // it: `deck_tags` is app-wide since schema v21, so this is every tag there is, and the step
+    // sweeps whichever ones this import turns out to have invented.
+    let tags_before = crate::deck_undo::tag_ids(&tx)?;
 
     // **Copies, not rows.** `removed` becomes the `remove` row's `delta`, and that column is
     // signed *copies* — the number the day header adds up and the number a reader recognises.
@@ -856,17 +958,31 @@ pub fn commit_import(
     // and a map keyed on the raw string would count them as two categories in the history row.
     let mut categories: HashMap<&str, i64> = HashMap::new();
     let mut categories_created = 0i64;
+    // Keyed on `tag_name_key`'s answer rather than on the word, because that is what
+    // `deck_tags.name_key`'s UNIQUE index means by "the same label" — a list writing `Keeper` on
+    // one line and `keeper` on the next must not ask the database twice and must not count two
+    // creations. A `HashMap` and not SQL for `merge_tag_rows`' reason one file over: no SQLite
+    // build in this app can compute that key.
+    let mut tags: HashMap<String, i64> = HashMap::new();
+    let mut tags_created = 0i64;
     let mut added = 0i64;
     {
         // Prepared once for the whole list rather than per line — the one place a 117-line
         // import would otherwise pay 117 compilations of the same statement.
+        //
+        // **`tag_id` coalesces where `quantity` sums**, and the asymmetry is the whole of what a
+        // `merge` promises: two copies of a card are three copies of a card, but a label the
+        // reader put on a row by hand is a decision this import may not overturn. So an existing
+        // row keeps its tag and a row that has none takes the file's — which also means the
+        // second of two items landing on one grain cannot repaint the first.
         let sql = format!(
             "INSERT INTO deck_cards
                 (deck_id, category_id, variant, card_id, set_code, collector_number, lang, name,
-                 finish, quantity, created_at, updated_at)
-             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10, unixepoch(), unixepoch())
+                 finish, quantity, tag_id, created_at, updated_at)
+             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11, unixepoch(), unixepoch())
              ON CONFLICT({grain}) DO UPDATE SET
                 quantity = deck_cards.quantity + excluded.quantity,
+                tag_id = coalesce(deck_cards.tag_id, excluded.tag_id),
                 updated_at = unixepoch()",
             grain = crate::schema::DECK_CARD_GRAIN
         );
@@ -924,6 +1040,16 @@ pub fn commit_import(
             // 117-line import because one line claims a foil the corpus does not list would
             // cost the reader their paste over a fact about a marker.
             let finish = crate::deck::normalise_finish(item.finish.as_deref())?;
+            let tag_id = match item.tag_name.as_deref() {
+                None => None,
+                Some(label) => Some(tag_for_name(
+                    &tx,
+                    label,
+                    item.tag_color.as_deref(),
+                    &mut tags,
+                    &mut tags_created,
+                )?),
+            };
             insert
                 .execute(params![
                     deck_id,
@@ -935,7 +1061,8 @@ pub fn commit_import(
                     lang,
                     name,
                     finish,
-                    item.quantity
+                    item.quantity,
+                    tag_id
                 ])
                 .map_err(|e| e.to_string())?;
             // Saturating because `quantity` is an `i64` off the wire and this is the one place
@@ -970,6 +1097,10 @@ pub fn commit_import(
                 "lines": items.len(),
                 "cards": added,
                 "categories": categories.len(),
+                // The labels this import **made**, not the ones it used: a tag the reader
+                // already had is not news, and this row is app-wide news. `auditText.ts` words
+                // it, and reads an absent key as none — every row written before today.
+                "tagsCreated": tags_created,
             }
         }),
         added,
@@ -987,12 +1118,14 @@ pub fn commit_import(
         variant,
         cards_before,
         Some(categories_before),
+        Some(tags_before),
     )?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(ImportOutcome {
         added,
         removed,
         categories_created,
+        tags_created,
     })
 }
 
@@ -1655,6 +1788,10 @@ mod tests {
             // The regular copy, for the same reason and with the same escape: a test about the
             // `*F*` marker names its own item.
             finish: None,
+            // No label, and the same escape again: every test about Archidekt's `^Tag,#hex^`
+            // builds its own item.
+            tag_name: None,
+            tag_color: None,
         }
     }
 
@@ -1895,6 +2032,8 @@ mod tests {
                 category_name: "(New) Maybeboard".to_owned(),
                 inactive: true,
                 finish: None,
+                tag_name: None,
+                tag_color: None,
             }],
         )
         .unwrap();
@@ -1935,6 +2074,8 @@ mod tests {
                 category_name: "Keepers".to_owned(),
                 inactive: true,
                 finish: None,
+                tag_name: None,
+                tag_color: None,
             }],
         )
         .unwrap();
@@ -1949,6 +2090,210 @@ mod tests {
         assert!(
             active,
             "an import may not switch off a pile the reader made"
+        );
+    }
+
+    // ------------------------------------------------------------------------------------
+    // Archidekt's labels — `ImportItem::tag_name` / `tag_color`
+    // ------------------------------------------------------------------------------------
+
+    /// One line wearing a label, otherwise [`item`]'s.
+    fn labelled(card_id: &str, category_name: &str, tag: &str, color: &str) -> ImportItem {
+        ImportItem {
+            tag_name: Some(tag.to_owned()),
+            tag_color: Some(color.to_owned()),
+            ..item(card_id, 1, category_name)
+        }
+    }
+
+    /// Every `deck_tags` row, as `(name, color)`, oldest first.
+    fn tags_in(conn: &Connection) -> Vec<(String, String)> {
+        conn.prepare("SELECT name, color FROM deck_tags ORDER BY id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+    }
+
+    /// The label on one deck card, by the printing it names.
+    fn tag_on(conn: &Connection, deck_id: i64, card_id: &str) -> Option<String> {
+        conn.query_row(
+            "SELECT t.name FROM deck_cards dc
+               LEFT JOIN deck_tags t ON t.id = dc.tag_id
+              WHERE dc.deck_id = ?1 AND dc.card_id = ?2",
+            params![deck_id, card_id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn an_import_makes_the_label_the_file_named_and_wears_it() {
+        let conn = seeded();
+        let id = deck(&conn);
+
+        let outcome = commit_import(
+            &conn,
+            id,
+            "live",
+            "merge",
+            &[labelled("sol-c21", "Ramp", "Keeper", "#4aab08")],
+        )
+        .unwrap();
+
+        assert_eq!(
+            tags_in(&conn),
+            vec![("Keeper".to_owned(), "#4aab08".to_owned())]
+        );
+        assert_eq!(tag_on(&conn, id, "sol-c21").as_deref(), Some("Keeper"));
+        assert_eq!(outcome.tags_created, 1);
+    }
+
+    /// The reader's instruction, in one test: **find first, and take nothing from the file when
+    /// you find something.**
+    ///
+    /// A label they already have keeps its own capitals and its own colour. It matters more here
+    /// than the same rule does for a category, because `deck_tags` has no `deck_id` since schema
+    /// v21 — recolouring one recolours it in every deck they own.
+    #[test]
+    fn an_import_uses_an_existing_label_and_ignores_the_file_s_colour() {
+        let conn = seeded();
+        let id = deck(&conn);
+        let mine = crate::deck_meta::create_tag(&conn, id, "Keeper", "#d9b95c")
+            .unwrap()
+            .id;
+
+        let outcome = commit_import(
+            &conn,
+            id,
+            "live",
+            "merge",
+            // A different case *and* a different colour, so neither could be a coincidence.
+            &[labelled("sol-c21", "Ramp", "KEEPER", "#4aab08")],
+        )
+        .unwrap();
+
+        assert_eq!(
+            tags_in(&conn),
+            vec![("Keeper".to_owned(), "#d9b95c".to_owned())],
+            "the row is used as it stands — not renamed to the file's capitals, not recoloured"
+        );
+        assert_eq!(
+            outcome.tags_created, 0,
+            "nothing was made, so nothing is reported"
+        );
+        let worn: i64 = conn
+            .query_row(
+                "SELECT tag_id FROM deck_cards WHERE deck_id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(worn, mine);
+    }
+
+    /// `tag_name_key`'s comparison, over one list: `Keeper` and `keeper` are one label, so the
+    /// second line finds the row the first made rather than colliding with the UNIQUE index.
+    #[test]
+    fn two_spellings_of_one_label_in_one_list_are_one_row() {
+        let conn = seeded();
+        let id = deck(&conn);
+
+        let outcome = commit_import(
+            &conn,
+            id,
+            "live",
+            "merge",
+            &[
+                labelled("sol-c21", "Ramp", "Keeper", "#4aab08"),
+                labelled("sol-40k", "Ramp", "keeper", "#ff0000"),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(
+            tags_in(&conn),
+            vec![("Keeper".to_owned(), "#4aab08".to_owned())]
+        );
+        assert_eq!(outcome.tags_created, 1, "one label, counted once");
+    }
+
+    /// **A merge coalesces where quantity sums**, and that asymmetry is what a `merge` promises:
+    /// two copies of a card are three copies, but a label the reader put on a row by hand is a
+    /// decision this import may not overturn.
+    #[test]
+    fn a_merge_keeps_a_label_the_reader_put_on_by_hand() {
+        let conn = seeded();
+        let id = deck(&conn);
+        commit_import(&conn, id, "live", "merge", &[item("sol-c21", 1, "Ramp")]).unwrap();
+        let ramp: i64 = conn
+            .query_row(
+                "SELECT category_id FROM deck_cards WHERE deck_id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let mine = crate::deck_meta::create_tag(&conn, id, "Cut candidate", "#d3202a")
+            .unwrap()
+            .id;
+        crate::deck_meta::set_card_tag(&conn, id, "sol-c21", ramp, "live", None, Some(mine))
+            .unwrap();
+
+        commit_import(
+            &conn,
+            id,
+            "live",
+            "merge",
+            &[labelled("sol-c21", "Ramp", "Keeper", "#4aab08")],
+        )
+        .unwrap();
+
+        let (quantity, tag): (i64, Option<String>) = conn
+            .query_row(
+                "SELECT dc.quantity, t.name FROM deck_cards dc
+                   LEFT JOIN deck_tags t ON t.id = dc.tag_id
+                  WHERE dc.deck_id = ?1 AND dc.category_id = ?2",
+                params![id, ramp],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(quantity, 2, "the copies still sum");
+        assert_eq!(
+            tag.as_deref(),
+            Some("Cut candidate"),
+            "the reader's label survives; the file's fills in an untagged row and nothing else"
+        );
+        assert!(
+            tags_in(&conn).iter().any(|(n, _)| n == "Keeper"),
+            "the file's label is still made — it is only this row it may not claim"
+        );
+    }
+
+    /// A name with no colour beside it is a caller bug, not a shape to paper over:
+    /// `deck_tags.color` is NOT NULL and what a colour *is* belongs to the webview.
+    #[test]
+    fn a_label_with_no_colour_is_refused_rather_than_defaulted() {
+        let conn = seeded();
+        let id = deck(&conn);
+
+        let refusal = commit_import(
+            &conn,
+            id,
+            "live",
+            "merge",
+            &[ImportItem {
+                tag_name: Some("Keeper".to_owned()),
+                tag_color: None,
+                ..item("sol-c21", 1, "Ramp")
+            }],
+        )
+        .unwrap_err();
+
+        assert!(refusal.contains("colour"), "{refusal}");
+        assert!(
+            tags_in(&conn).is_empty(),
+            "the transaction rolled back, so no half-made label survives"
         );
     }
 
@@ -2004,7 +2349,12 @@ mod tests {
         assert_eq!(
             merged[0].2,
             serde_json::json!({
-                "import": { "mode": "merge", "lines": 1, "cards": 2, "categories": 1 }
+                // `tagsCreated` is 0 for a list carrying no labels, which is every format but
+                // Archidekt's — and the key is written rather than omitted, so `auditText.ts`
+                // reading an absent one as 0 is a rule about *old* rows and not about this path.
+                "import": {
+                    "mode": "merge", "lines": 1, "cards": 2, "categories": 1, "tagsCreated": 0
+                }
             })
         );
 
@@ -2034,7 +2384,9 @@ mod tests {
         assert_eq!(
             replaced[1].2,
             serde_json::json!({
-                "import": { "mode": "replace", "lines": 2, "cards": 2, "categories": 2 }
+                "import": {
+                    "mode": "replace", "lines": 2, "cards": 2, "categories": 2, "tagsCreated": 0
+                }
             })
         );
     }

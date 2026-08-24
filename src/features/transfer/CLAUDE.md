@@ -61,7 +61,9 @@ and `ImportDialog.tsx` (two steps, one panel, nothing written until Import).
 - **Four decorations and one heading rule, and the heading rule is the _only_ lookahead in the
   file.** The four are per-line and cost nothing: an **empty `()`** printing hint, an Archidekt
   `^Tag,#colour^`, the `[Category]` bracket, and the `*F*`/`*E*` finish markers it always had (a
-  trailing `#tag` rides with those). `namesASection` is the fifth rule and it reads one line past
+  trailing `#tag` rides with those). **Two of the four are read rather than merely stripped** —
+  `*F*`/`*E*` since 2026-08-17 and `^Tag,#colour^` since 2026-08-24, each because the app grew
+  somewhere to put it. `namesASection` is the fifth rule and it reads one line past
   the one in front of it, because `Anthem`, `Creature` and `Land` are indistinguishable from card
   lines to a per-line reader and a category name can be a real card (`Fog`, `Wrath`, `Duress`).
   **Its four clauses each protect a hand-written list `parse.test.ts` carries as its own test**: a
@@ -89,6 +91,47 @@ and `ImportDialog.tsx` (two steps, one panel, nothing written until Import).
   the flat export's four `[Land,Maybe (New){noDeck}{noPrice}]` lines are the later shape;
   `parse.test.ts` counts the 17 and pins the flat list at **0** excluded lines, which is the whole
   of the difference.
+- **`^Keeper,#4aab08^` is a label and the reader picks which ones come across** (2026-08-24).
+  Archidekt's caret group is per-card and this app's `deck_cards.tag_id` holds exactly one, so the
+  two line up; the parser reads `ParsedLine.tagName`/`tagColor`, the planner folds the distinct
+  ones onto `ImportPlan.tags`, `shared/ImportTags.tsx` draws a checkbox each — **all ticked**,
+  because a list that carries labels is a list somebody labelled on purpose — and
+  `toImportItems` puts the surviving name and colour on every item wearing it. Six rules, each
+  with a failure behind it:
+  - **The colour is split off at the _last_ comma, not the second.** A label's text is free —
+    `Fence (flavor)` is a real one — so a comma inside it is possible, and `/^([^,]+),(#.+)$/`
+    would be right by accident and wrong on the first `Cut, maybe`. A tail that is not a hex is
+    read as part of the name, and a group with no colour at all is still a label:
+    `ImportPlan.tags` gives it `DEFAULT_TAG_COLOR` so the swatch on the step is the colour the row
+    would really be made with.
+  - **Distinct by `tagNameKey`, never by the word** — the webview's copy of
+    `schema::tag_name_key`, which is `deck_tags.name_key`'s own grain. A file writing `Keeper` and
+    `keeper` names one label, and two boxes for it would let a reader tick one and untick the
+    other over a distinction the database does not have. First spelling and first colour win, for
+    `ImportItem.inactive`'s reason.
+  - **The picker draws what the import will _use_, not what the file said.** One
+    `deck_tag_all` read (the same `["decks", "tagsAll"]` key `useDeckMeta` holds, so an open
+    editor makes it free): a name this app already has draws that row's swatch and that row's
+    capitals and reads *already yours*. `commit_import` finds before it creates and changes
+    nothing it finds, so drawing the file's green over a reader's purple would be a preview of an
+    import that is not going to happen — and a tag is app-wide since schema v21, so a recolour
+    would reach every deck they own.
+  - **The selection is held as the labels that are _off_.** "All ticked" as a `useState` seeded
+    from the plan is derived state, stale the moment the plan changes, and repairable only with a
+    `setState` inside an effect this repo's lint refuses. Holding the exclusions makes the default
+    the empty set, which is correct for every plan without being about any of them.
+  - **`toImportItems` tells an empty tick set from `null`.** `null` is a caller that draws no
+    picker; an empty set is a reader who unticked every box. Collapsing them would make unticking
+    the last box bring every label silently back.
+  - **A label survives the commander choice**, where the pile and the `{noDeck}` flag do not. Those
+    two are filing and the command zone outranks filing; a label is what the reader thinks of the
+    card, and a commander they marked `Keeper` is still a keeper.
+
+  The Rust half — find-or-create by `name_key`, the `coalesce` that makes a merge keep a tag the
+  reader put on by hand, and the undo step that sweeps the labels an import invented — is
+  [`src-tauri/CLAUDE.md`](../../../src-tauri/CLAUDE.md)'s and
+  [decks-storage.md](../../../docs/reference/decks-storage.md)'s. **Not yet driven in the shipped
+  window.**
 - **A heading _or_ a bracket naming a section word sets the _section_, not a category** — one
   mechanism for the four seeded piles, not two. `[Commander{top}]` reaches the command zone through
   the same `SECTIONS` map a `Commander` heading goes through, so nothing downstream has to know
