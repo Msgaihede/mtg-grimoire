@@ -496,12 +496,27 @@ export const ReopensOnThePlan: Story = {
       within(canvas.getByRole("region", { name: "Cut list" })).getByText("Nothing here yet."),
     ).toBeInTheDocument();
 
-    const copter = await canvas.findByRole("button", { name: /^Smuggler's Copter/ });
-    await expect(copter).toBeInTheDocument();
+    /**
+     * Every button of that name **on the deck's side of the desk** — the docked search panel is
+     * excluded by its own landmark.
+     *
+     * Since 2026-08-24 the panel's Collection tab is a `CardGrid` like the card search beside it,
+     * and a `CardGrid` names each tile's button after the card — so a printing the reader owns is
+     * on screen twice by design, once as a deck card and once as a tile. That ambiguity is one the
+     * app already accepts for the card-search tab (`src/features/decks/CLAUDE.md`'s quick-add
+     * note); what it costs here is that "the deck no longer holds this card" has to be asked of
+     * the deck rather than of the canvas, or the wall answers for it.
+     */
+    const inDeck = () =>
+      canvas
+        .queryAllByRole("button", { name: /^Smuggler's Copter/ })
+        .filter((el) => !el.closest("[aria-label='Add cards']"));
+
+    await waitFor(async () => await expect(inDeck()).toHaveLength(1));
 
     await userEvent.click(live);
     await waitFor(async () => {
-      await expect(canvas.queryByRole("button", { name: /^Smuggler's Copter/ })).toBeNull();
+      await expect(inDeck()).toHaveLength(0);
     });
     await expect(live).toHaveAttribute("aria-pressed", "true");
   },

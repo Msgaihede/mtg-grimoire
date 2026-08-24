@@ -1,6 +1,6 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import type { CollectionFolder, CollectionRow, DeckCategory } from "@/lib/ipc";
@@ -129,6 +129,47 @@ const SPOKEN_FOR = row({
 });
 /** Already in the deck this panel is docked beside — `collection_to_deck` refuses it in words. */
 const ALREADY_HERE = row({ id: 4, folderId: THIS_GROUP.id, folderName: THIS_GROUP.name });
+/**
+ * A loose copy **recorded after** {@link SPOKEN_FOR}, so that only the desk-before-deck key can
+ * pick it.
+ *
+ * The whole point of the id: `pickCopy` ranks on `(desk, proxy, entry id)`, and every other
+ * fixture here has the desk copy at the lowest id — so a test built out of those would go on
+ * passing with the desk key deleted, picked by the tie-break instead. Proved by deleting it:
+ * `collectionTiles.test.ts` went red and this file did not.
+ */
+const LOOSE_LATER = row({ id: 9, quantity: 1 });
+
+/**
+ * jsdom lays nothing out, so the virtualiser measures a scroll container of zero height and
+ * renders an empty window — one number is the whole of what it is missing. `scrollTo` is the
+ * other thing it reaches for that jsdom does not implement.
+ *
+ * **New to this file on 2026-08-24**, because the tab became a `CardGrid` rather than a plain
+ * `<ul>`: a list needed no layout to draw its rows. `DeckSearchPanel.test.tsx` has carried the
+ * same block for its own wall since it had one, word for word.
+ *
+ * Put back afterwards: these are patches to a *global* prototype, and a file that leaves one
+ * behind is a file that decides how the next one measures the DOM.
+ */
+const patched: [string, PropertyDescriptor | undefined][] = [];
+
+beforeAll(() => {
+  for (const [name, descriptor] of [
+    ["offsetHeight", { value: 600 }],
+    ["scrollTo", { value: vi.fn() }],
+  ] as const) {
+    patched.push([name, Object.getOwnPropertyDescriptor(HTMLElement.prototype, name)]);
+    Object.defineProperty(HTMLElement.prototype, name, { configurable: true, ...descriptor });
+  }
+});
+
+afterAll(() => {
+  for (const [name, original] of patched.reverse()) {
+    if (original) Object.defineProperty(HTMLElement.prototype, name, original);
+    else delete (HTMLElement.prototype as unknown as Record<string, unknown>)[name];
+  }
+});
 
 beforeEach(() => {
   collectionList.mockReset().mockResolvedValue({ items: [LOOSE], total: 1 });
@@ -170,29 +211,71 @@ const lastQuery = () => collectionList.mock.calls[collectionList.mock.calls.leng
 
 describe("CollectionSearchTab", () => {
   /**
-   * **Collection rows, not oracle cards** — one per printing, finish and condition, saying where
-   * each copy is filed.
+   * **One tile per printing, whatever the copies behind it are** — the fold this wall replaced a
+   * list of text rows with.
    *
-   * That last part is the half a card wall could not draw at all: the same printing in two places
-   * is two rows here with two different folders, and which one the reader adds decides which deck
-   * loses a copy. `folderName` is the row's own field, joined on by `collection_list`; the root is
-   * drawn in words rather than left blank, because an empty cell reads as missing data.
+   * Three rows of one card here: loose on the desk, in a drawer, and a foil in another deck's
+   * group. A list drew three lines; the wall draws one piece of art with `×5` over it, because
+   * three drawings of one illustration read as a rendering fault rather than as three choices.
+   * Which of the three a press moves is {@link pickCopy}'s answer and is asserted below.
    */
-  it("lists one row per copy, saying where each is filed", async () => {
+  it("folds every copy of a printing into one tile", async () => {
     collectionList.mockResolvedValue({ items: [LOOSE, FILED, SPOKEN_FOR], total: 3 });
     tab();
 
-    const rows = await screen.findAllByRole("listitem");
-    expect(rows).toHaveLength(3);
-    // The printing, so two rows of one card are told apart by what is actually different.
-    expect(within(rows[0]).getByText(/LEA 161/)).toBeInTheDocument();
-    expect(within(rows[0]).getByText(/Near mint/)).toBeInTheDocument();
-    // Where the copies are — the root said in words, a drawer by its name, and a deck by its.
-    expect(within(rows[0]).getByText("Collection")).toBeInTheDocument();
-    expect(within(rows[1]).getByText("Trade binder")).toBeInTheDocument();
-    expect(within(rows[2]).getByText("Mono-Red Aggro")).toBeInTheDocument();
-    // And the finish, which is the whole of the difference between rows 1 and 3.
-    expect(within(rows[2]).getByText(/Foil/)).toBeInTheDocument();
+    // One Add button is one tile: `CardGrid` draws exactly one `action` per row it is handed.
+    const adds = await screen.findAllByRole("button", { name: /^Add Lightning Bolt/ });
+    expect(adds).toHaveLength(1);
+    // The copies of all three rows, summed — 3 loose + 1 filed + 1 foil.
+    expect(await screen.findByText("5 in your collection")).toBeInTheDocument();
+  });
+
+  /**
+   * **The safety property, kept across the fold — and the reason the fold is allowed at all.**
+   *
+   * The tile has a copy in Mono-Red Aggro behind it. Adding it must not ask about that deck and
+   * must not take its card, because the reader has a copy of their own sitting loose: a
+   * confirmation raised where none was needed teaches readers to dismiss confirmations.
+   * `pickCopy` ranks the desk before a deck, so the write names {@link LOOSE_LATER}.
+   *
+   * **{@link LOOSE_LATER} rather than {@link LOOSE}, and the id is the whole reason** — see that
+   * fixture. With the loose copy at the lowest id this test passes with the desk-before-deck key
+   * deleted, on the tie-break.
+   */
+  it("takes a free copy rather than one another deck is holding", async () => {
+    collectionList.mockResolvedValue({ items: [SPOKEN_FOR, LOOSE_LATER], total: 2 });
+    tab();
+
+    await userEvent.click(await screen.findByRole("button", { name: /^Add Lightning Bolt/ }));
+
+    await waitFor(() =>
+      expect(collectionToDeck).toHaveBeenCalledWith(LOOSE_LATER.id, DECK_ID, { id: MAIN.id }, 1),
+    );
+    expect(screen.queryByRole("group", { name: /^Move / })).not.toBeInTheDocument();
+  });
+
+  /**
+   * **Where the copy is filed reaches the button's name**, which is where the list's own "filed
+   * in" line went. The root says nothing — most copies are there and four words on every control
+   * to say "nowhere in particular" is noise — so this asserts the two places that are worth a
+   * word: a drawer the reader made, and a deck that is about to lose a card.
+   */
+  it("names the drawer a copy is coming out of", async () => {
+    collectionList.mockResolvedValue({ items: [FILED], total: 1 });
+    tab();
+
+    expect(
+      await screen.findByRole("button", { name: /Add Lightning Bolt .* — in Trade binder$/ }),
+    ).toBeInTheDocument();
+  });
+
+  /** And the root is silent, which is the other half of the same rule. */
+  it("says nothing about a copy filed at the root", async () => {
+    tab();
+
+    expect(
+      await screen.findByRole("button", { name: "Add Lightning Bolt (LEA 161, Nonfoil, Near mint) to Main deck" }),
+    ).toBeInTheDocument();
   });
 
   /**
@@ -423,8 +506,10 @@ describe("CollectionSearchTab", () => {
    */
   it("draws a copy that is missing the facts a printing carries", async () => {
     // Everything `collection_list` joins from `cards` is gone, and so are the entry's own
-    // columns — the shape a stub or a future DTO change produces.
-    const bare = { id: 7, cardId: "bolt", folderId: null } as unknown as CollectionRow;
+    // columns — the shape a stub or a future DTO change produces. **Its own `cardId`**, because
+    // the wall folds on that field: sharing one with the row below would make these two copies of
+    // a printing rather than the two independent tiles this is about.
+    const bare = { id: 7, cardId: "ghost", folderId: null } as unknown as CollectionRow;
     // And one that carries half of them, which is what says the facts are assembled rather than
     // dropped together: the printing is still named, the finish and the grade simply are not.
     const half = {
@@ -436,10 +521,14 @@ describe("CollectionSearchTab", () => {
 
     tab();
 
-    // Both rows are there, named the way an unnamed card is named, and each press still says
+    // Both tiles are there, named the way an unnamed card is named, and each press still says
     // where it would land — nothing about a copy is invented to fill the gaps, and the
     // parenthesis is dropped whole rather than drawn empty.
-    expect(await screen.findByText("Unknown card")).toBeInTheDocument();
+    //
+    // The tile's **own** button, which `CardGrid` names after the card and nothing else: on a wall
+    // the name is an accessible name rather than a line of text, so `getByText` would be asking
+    // the list this replaced a question the wall does not answer.
+    expect(await screen.findByRole("button", { name: "Unknown card" })).toBeInTheDocument();
     expect(
       screen.getByRole("button", { name: "Add Unknown card to Main deck" }),
     ).toBeInTheDocument();

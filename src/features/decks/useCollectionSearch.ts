@@ -1,20 +1,33 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   keepPreviousData,
   useInfiniteQuery,
   useMutation,
   useQueryClient,
 } from "@tanstack/react-query";
-import { nextOffset } from "@/features/collection/useCollection";
+import {
+  activeFilterCount,
+  COLLECTION_FIRST_DIR,
+  nextOffset,
+} from "@/features/collection/useCollection";
 import { useCollectionFolderList } from "@/features/collection/useCollectionFolders";
-import { DEBOUNCE_MS, type FormatFilterOption } from "@/features/search/useCardSearch";
+import {
+  colorParam,
+  DEBOUNCE_MS,
+  toggleColor,
+  toggleIn,
+  type ColorKey,
+  type FormatFilterOption,
+} from "@/features/search/useCardSearch";
 import {
   ipc,
   type CollectionFolder,
   type CollectionQuery,
   type CollectionRow,
+  type CollectionSortKey,
   type MoveOutcome,
 } from "@/lib/ipc";
+import type { SortSpec } from "@/lib/sort";
 import { useMarketplace } from "@/lib/useMarketplace";
 
 /**
@@ -161,6 +174,26 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
     setFormat(defaultFormatValue);
   }
   const [allocation, setAllocation] = useState<Allocation>(DEFAULT_ALLOCATION);
+  /**
+   * The three filters this column grew on 2026-08-24, when the tab became a wall of art rather
+   * than a list of text rows.
+   *
+   * **`CollectionQuery extends CardFilters`, so all three were already on the wire** — the tab
+   * simply never sent them. `push_card_filters` emits `colors`, `mana_values` and `mana_x` for
+   * every one of the three lists, which is what makes this state-only work rather than a
+   * schema change.
+   */
+  const [colors, setColors] = useState<readonly ColorKey[]>([]);
+  const [manaValues, setManaValues] = useState<readonly number[]>([]);
+  const [manaX, setManaX] = useState(false);
+  /**
+   * The order the wall is drawn in — **`[]` is the backend's own name order** rather than a fourth
+   * option, which is why `sortSelection` reports `"name"` for it.
+   *
+   * There are no sortable headers in this column to build a `Custom…` state out of, so unlike
+   * `useCollection` this never holds a spec its own select cannot show.
+   */
+  const [sort, setSort] = useState<SortSpec<CollectionSortKey>>([]);
   const [debouncedText, setDebouncedText] = useState("");
 
   useEffect(() => {
@@ -168,21 +201,29 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
     return () => clearTimeout(timer);
   }, [text]);
 
+  // Normalised to the app's own orders before they reach the wire or the key, exactly as
+  // `useCollection` does it: a key built from the press order would miss the cache every time the
+  // reader picked the same two colours in the other order.
+  const colorsParam = colorParam(colors);
+  const manaParam = manaValues.length > 0 ? [...manaValues].sort((a, b) => a - b) : undefined;
+
   const filters: Omit<CollectionQuery, "limit" | "offset"> = {
     // Blank strings are dropped rather than sent: the backend reads them as unset anyway, and
     // sending them would make the payload lie about intent.
     text: debouncedText || undefined,
     format: format || undefined,
+    colors: colorsParam,
+    manaValues: manaParam,
+    manaX: manaX || undefined,
     // **Sent on every request, `"all"` included.** It is a two-state control the reader can see,
     // so the payload says which state it is in rather than leaning on the backend's default for
     // one of them — `useCollection`'s "a value the backend would infer anyway is not put on the
     // wire" is the rule for a filter that is *off*, and neither of these two is off.
     allocation,
     marketplace: marketplace.id,
-    // Name order, which is what an empty sort means on the wire. There is no sort control in
-    // this column: it is a list you scan for a card you already have in mind, and the alphabet
-    // is the one order that makes scanning possible.
-    sort: undefined,
+    // `undefined` rather than `[]`: an empty array is a sort the backend would have to test for,
+    // and the absent field is what already means "your name order".
+    sort: sort.length > 0 ? sort : undefined,
   };
 
   /**
@@ -201,6 +242,13 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
     "deckSearch",
     debouncedText,
     format,
+    // Every segment is a **string**, and the normalised one where there is a normal form: a key
+    // holding an array compares by structure, so `["W","U"]` and `["U","W"]` would be two entries
+    // for one answer. `colorParam` and the sort above have already put both in order.
+    colorsParam ?? "",
+    manaParam?.join(",") ?? "",
+    manaX ? "x" : "",
+    sort.map((t) => `${t.key}:${t.dir}`).join(","),
     allocation,
     marketplace.id,
   ];
@@ -215,6 +263,11 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
   });
 
   const rows = useMemo(() => query.data?.pages.flatMap((p) => p.items) ?? [], [query.data]);
+
+  const sourceOf = useCallback(
+    (row: CollectionRow) => copySource(row, folders, deckId),
+    [folders, deckId],
+  );
 
   /**
    * Put copies of one collection row into this deck.
@@ -257,17 +310,72 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
     setText,
     format,
     setFormat,
+    colors,
+    /** `toggleColor` rather than a plain `toggleIn`, so **C excludes the five and the five exclude
+     *  C** — colourless is not a sixth colour and the search's own rule is the one to keep. */
+    toggleColor: (key: ColorKey) => setColors((picked) => toggleColor(picked, key)),
+    manaValues,
+    toggleManaValue: (value: number) => setManaValues((picked) => toggleIn(picked, value)),
+    manaX,
+    toggleManaX: () => setManaX((on) => !on),
+    sort,
+    setSortKey: (key: CollectionSortKey) => setSort([{ key, dir: COLLECTION_FIRST_DIR[key] }]),
+    /** Which row the sort select shows. `[]` is the backend's name order, which is what the
+     *  `name` option asks for — so the control never sits on a value it has no option for. */
+    sortSelection: (sort.length === 0 ? "name" : sort[0].key) as CollectionSortKey,
+    /**
+     * How many filters are narrowing the wall — the number in `Reset all`.
+     *
+     * **`allocation` is deliberately not counted, and it is the one judgement call here.** The
+     * chip is pressed by default, so counting it would open every deck showing `Reset all 1` for
+     * a state the reader has not touched — and `resetAll` leaves it pressed for the same reason:
+     * "the copies no deck is holding" is what this tab *is*, not a filter laid over it.
+     *
+     * The four `CollectionFilterState` fields this column has no control for are passed at their
+     * empty values rather than being counted from a narrower shape, so the count cannot drift
+     * from the collection page's definition of what a filter is.
+     */
+    activeCount: activeFilterCount({
+      text,
+      format,
+      colors,
+      sets: [],
+      manaValues,
+      manaX,
+      finishes: [],
+      conditions: [],
+      needsReview: undefined,
+    }),
+    resetAll: () => {
+      setText("");
+      setFormat("");
+      setColors([]);
+      setManaValues([]);
+      setManaX(false);
+      setSort([]);
+    },
     /** Which copies the list is asking for. {@link DEFAULT_ALLOCATION} until the reader presses. */
     allocation,
     setAllocation,
     /** Every folder there is, so a row can be placed. See {@link copySource}. */
     folders,
-    /** Where this row's copies are filed, in the three terms the Add button branches on. */
-    sourceOf: (row: CollectionRow) => copySource(row, folders, deckId),
+    /** Where this row's copies are filed, in the three terms the Add button branches on.
+     *
+     *  **Held still**, because the wall's fold is a `useMemo` over it: a fresh arrow every render
+     *  would refold every tile on every keystroke. */
+    sourceOf,
     query,
     rows,
-    /** Rows matching the filters, counted in full. `0` until the first page answers. */
+    /** Rows matching the filters, counted in full. `0` until the first page answers.
+     *
+     *  **A count of *rows*, which since the wall folds them is not the number of tiles drawn** —
+     *  one printing held in two finishes is two rows and one tile. The caption counts what is on
+     *  screen for that reason; this stays because it is the backend's own answer and the thing a
+     *  paging decision is made against. */
     total: query.data?.pages[0]?.total ?? 0,
+    /** The list's key as one string, for `CardGrid`'s `listKey` — a new search scrolls the wall
+     *  back to the top rather than leaving the reader wherever the last one was. */
+    queryKeyString: JSON.stringify(listKey),
     move,
   };
 }
