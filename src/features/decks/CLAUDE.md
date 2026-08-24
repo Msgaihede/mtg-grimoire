@@ -390,6 +390,39 @@ reader to configure the deck they had just made; it now asks all of them.
   table and the text columns have no art to hang a chip on and use `CardMarks`' `DeckFinishMark`
   instead, and `deckCardName` says the finish in words on **all four**, because on three of them
   the mark is decoration once the control is named.
+- **A drag carries every card the reader has picked, and the group travels *beside* the payload
+  rather than instead of it** (issue #214). `dragData(payload, rest)` writes a second key,
+  `dragGroup`, next to the primary's own fields — so `DragPayload`, `readDragData` and `dropWrite`
+  did not move, and **a drop target that has not learned about groups goes on acting on the
+  primary alone**. That is what let this land with no flag day, and it is why widening
+  `DragPayload` into a list was refused: it reads cleaner in the type and it is a rewrite of six
+  drop targets, four drag sources and every test that names a payload, to buy a property the
+  additive shape gets for free. `readDragGroup` and `dropWrites` are the plural readers; every
+  `canDrop` in the editor now asks **"does at least one member write"**, which for a single-card
+  drag is the same question `dropWrite(…) !== null` always asked.
+  - **A mixed set is not refused whole.** Four deck rows and a search tile dropped on the remove
+    tray take the four out and pass over the fifth — the alternative fails a gesture for a reason
+    nothing on screen names, since nothing marks which member is the odd one.
+  - **`Delete` takes the picked set out, and it is this editor's only keyboard verb that is not
+    undo.** Three fences, each closing a real way it goes wrong: a text field keeps the key
+    (`isTextField`, the same predicate the undo handler yields to — a reader deleting a character
+    out of the deck's name must not lose four cards), an open layer keeps it (the deck is behind a
+    scrim), and **nothing is written for a set of one** — one card already has a stepper, a menu
+    row and a tray, all visible, and a bare keystroke that silently removed whatever was last
+    clicked is one press from a deck the reader did not mean to edit. It goes through
+    `setQuantityAt(…, 0)` like every other removal here; there is still no remove mutation.
+  - **The card menu goes plural for the writes and stays singular for what cannot mean anything
+    else.** `Add N cards to`, `Move N cards to`, `Tag N cards`, `Remove N cards` act on the set;
+    `Copy card name`, `Copy card image`, `Open on`, `View all printings`, `Set as commander`,
+    `Set as companion` and `Finish` stay about the one card that was right-clicked. A finish
+    belongs to a *printing* — the toggle, the submenu and the greyed row are three shapes decided
+    by what that printing is sold in — and a deck has one commander. **The set travels into
+    `buildCardMenu` too**: it did not for one build, and the menu read `Move 2 cards to` under a
+    singular `Add to`, which is one menu answering the same question two ways.
+  - **The cost this accepts rather than solves: undo is per-audit-entry.** A four-card move writes
+    four `deck_audit` rows, so putting it back is four presses of Ctrl+Z. Batching is a change to
+    `deck_undo`'s grain in Rust and is deliberately out of scope; **do not close it by looping less
+    in TypeScript** — the loop is what makes the gesture work.
 - **There is no remove mutation.** The tray's drop, the stepper's zero **and the card menu's
   `Remove card`** are all `setQuantity(…, 0)`, because zero removes a deck row. That third caller
   (2026-08-15) is what makes the rule worth restating: a menu row called "Remove card" is exactly

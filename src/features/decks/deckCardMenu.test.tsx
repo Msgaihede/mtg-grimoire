@@ -490,3 +490,127 @@ describe("deckCardTagRows", () => {
     expect(setTag).toHaveBeenLastCalledWith(row, 9);
   });
 });
+
+/**
+ * **The plural** — issue #214. When the right-clicked card is a member of the reader's picked
+ * set, three rows act on the whole set and three deliberately do not.
+ *
+ * The set itself is decided by the *surface* and arrives as `picked`, so nothing here knows what
+ * a selection is; what these pin is the shape the builder gives one.
+ */
+describe("buildDeckCardMenu with a picked set", () => {
+  const BOLT = bolt();
+  const BEAR = card({ name: "Bear", quantity: 2 });
+  const PONDER = card({ name: "Ponder", quantity: 1 });
+  const PICKED = [BOLT, BEAR, PONDER];
+
+  /** A submenu's rows, for the two that go plural on the outer label and act on the inner one. */
+  const rowsOf = (item: MenuItem) => (item as MenuSubmenu).items;
+
+  it("counts the set in the labels of the three rows that act on it", () => {
+    const items = buildDeckCardMenu(BOLT, deps({ picked: PICKED }));
+    expect(has(items, "Move 3 cards to")).toBe(true);
+    expect(has(items, "Tag 3 cards")).toBe(true);
+    expect(has(items, "Remove 3 cards")).toBe(true);
+  });
+
+  /**
+   * **And the shared half counts it too** — found by driving the shipped window on 2026-08-24,
+   * where the menu read `Move 2 cards to` directly under a singular `Add to`.
+   *
+   * The seam is what neither existing suite could see: this file's own tests assert the deck's
+   * rows, and `cardMenu.test.tsx` builds the shared menu directly, so nothing was looking at what
+   * `buildDeckCardMenu` hands *through*. `buildCardMenu` decides for itself which of its rows a
+   * set can mean anything to; the claim here is only that it is told.
+   */
+  it("hands the set through to the card menu's own rows", () => {
+    const items = buildDeckCardMenu(BOLT, deps({ picked: PICKED }));
+    expect(has(items, "Add 3 cards to")).toBe(true);
+    // And the rows that have no plural are untouched by it.
+    expect(has(items, "Copy card name")).toBe(true);
+    expect(has(items, "View all printings")).toBe(true);
+  });
+
+  /**
+   * **A finish belongs to a printing and a command zone holds one card**, so neither has a plural
+   * that means anything. Named here rather than left as an absence, because a row that quietly
+   * acted on one card out of three would be the worst of the three options.
+   */
+  it("leaves the finish and zone rows about the one card that was right-clicked", () => {
+    const items = buildDeckCardMenu(BOLT, deps({ picked: PICKED }));
+    expect(has(items, "Set as foil")).toBe(true);
+    expect(has(items, "Set as companion")).toBe(true);
+    expect(has(items, /Set 3 cards/)).toBe(false);
+  });
+
+  /** A set of one is the card, so no label grows a `1 card` that says less than the card's name. */
+  it("stays singular for a set of one", () => {
+    const items = buildDeckCardMenu(BOLT, deps({ picked: [BOLT] }));
+    expect(labels(items).slice(5)).toEqual([
+      "Move to",
+      "Set as companion",
+      "Set as foil",
+      "Tag card",
+      "Remove card",
+    ]);
+  });
+
+  it("removes every picked card on one press", () => {
+    const remove = vi.fn();
+    const items = buildDeckCardMenu(BOLT, deps({ picked: PICKED, remove }));
+    (find(items, "Remove 3 cards") as MenuAction).onSelect();
+
+    expect(remove.mock.calls.map((call) => (call[0] as DeckCard).name)).toEqual([
+      "Lightning Bolt",
+      "Bear",
+      "Ponder",
+    ]);
+  });
+
+  it("moves every picked card on one press", () => {
+    const moveTo = vi.fn();
+    const items = buildDeckCardMenu(BOLT, deps({ picked: PICKED, moveTo }));
+    (find(rowsOf(find(items, "Move 3 cards to")), "Sideboard") as MenuAction).onSelect();
+
+    expect(moveTo).toHaveBeenCalledTimes(3);
+    expect(moveTo.mock.calls.map((call) => call[1] as number)).toEqual([2, 2, 2]);
+  });
+
+  /**
+   * **Greyed only when there is nothing left to move.** A set straddling two piles keeps the row
+   * live for both, and the loop passes over the members that are already home — `dropWrite`'s
+   * "a card dropped back in its own pile is not a move" at a second entrance.
+   */
+  it("keeps a destination live while any picked card is still elsewhere", () => {
+    const moveTo = vi.fn();
+    const here = card({ name: "Bear", quantity: 2, categoryId: 2 });
+    const items = buildDeckCardMenu(BOLT, deps({ picked: [BOLT, here], moveTo }));
+    const row = find(rowsOf(find(items, "Move 2 cards to")), "Sideboard") as MenuAction;
+
+    expect(row.disabled).toBeUndefined();
+    row.onSelect();
+    expect(moveTo.mock.calls.map((call) => (call[0] as DeckCard).name)).toEqual(["Lightning Bolt"]);
+  });
+
+  it("greys a destination every picked card is already in", () => {
+    const here = card({ name: "Bear", quantity: 2, categoryId: 2 });
+    const there = card({ name: "Ponder", quantity: 1, categoryId: 2 });
+    const items = buildDeckCardMenu(here, deps({ picked: [here, there] }));
+
+    expect((find(rowsOf(find(items, "Move 2 cards to")), "Sideboard") as MenuAction).disabled).toBe(
+      true,
+    );
+  });
+
+  it("tags every picked card on one press", () => {
+    const setTag = vi.fn();
+    const items = buildDeckCardMenu(BOLT, deps({ picked: PICKED, setTag }));
+    (find(rowsOf(find(items, "Tag 3 cards")), "Budget swap") as MenuRadio).onSelect();
+
+    expect(setTag.mock.calls.map((call) => [(call[0] as DeckCard).name, call[1] as number])).toEqual([
+      ["Lightning Bolt", 8],
+      ["Bear", 8],
+      ["Ponder", 8],
+    ]);
+  });
+});

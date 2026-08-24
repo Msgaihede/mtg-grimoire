@@ -55,6 +55,25 @@ const search = (over: Record<string, unknown> = {}) =>
  *  suite opens with and would read as "the button is not there". */
 const dirButton = () => screen.getByRole("button", { name: /^Sort direction/ });
 
+/**
+ * Records, for every Escape that reaches `window`'s bubble phase, whether something nearer the
+ * reader had already spent it.
+ *
+ * That is the whole of what a filter box's Escape rule is *about*, rather than a detail of it:
+ * every rung of `useDismissOnEscape` listens on `window` and every one of them returns early on
+ * `defaultPrevented`, so "the box consumed this press" and "the layer behind it stayed open" are
+ * one fact, readable in one place. Asserting only that `setText("")` ran would pass just as well
+ * on a handler that cleared the box *and* let the press through to close the deck behind it.
+ */
+function watchEscapeAtWindow(): { prevented: boolean[]; stop: () => void } {
+  const prevented: boolean[] = [];
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === "Escape") prevented.push(e.defaultPrevented);
+  };
+  window.addEventListener("keydown", onKey);
+  return { prevented, stop: () => window.removeEventListener("keydown", onKey) };
+}
+
 vi.mock("./SetCombobox", () => ({
   SetCombobox: () => <div data-testid="set-combobox" />,
 }));
@@ -195,6 +214,54 @@ describe("FilterBar", () => {
     await userEvent.click(reset);
 
     expect(resetAll).toHaveBeenCalled();
+  });
+
+  /**
+   * A box with text in it owns exactly one Escape — the rule `clearFieldOnEscape` states,
+   * checked here because *whether this field is wired to it* is a fact about this field.
+   *
+   * The caret is put in the box by a **click**, the way a reader puts it there, rather than by
+   * handing the field to `user.type` — a flow started from a programmatic focus tests a caret
+   * nobody can produce.
+   */
+  it("spends one Escape emptying the box, and keeps that press off the layers behind", async () => {
+    const user = userEvent.setup();
+    const setText = vi.fn();
+    const escapes = watchEscapeAtWindow();
+    try {
+      render(<FilterBar search={search({ text: "goblin", setText })} />);
+
+      await user.click(screen.getByRole("searchbox", { name: /search cards/i }));
+      await user.keyboard("{Escape}");
+
+      expect(setText).toHaveBeenCalledWith("");
+      expect(escapes.prevented).toEqual([true]);
+    } finally {
+      escapes.stop();
+    }
+  });
+
+  /**
+   * An empty box has nothing to undo, so the press is not its: it reaches `window` untouched,
+   * where the view behind — a deck to close, a folder to go up out of — is waiting for it. This
+   * half is what makes the `"navigation"` rung safe to have at all, so it is the half worth
+   * pinning even on a view that has nothing to navigate.
+   */
+  it("lets Escape through an empty box", async () => {
+    const user = userEvent.setup();
+    const setText = vi.fn();
+    const escapes = watchEscapeAtWindow();
+    try {
+      render(<FilterBar search={search({ text: "", setText })} />);
+
+      await user.click(screen.getByRole("searchbox", { name: /search cards/i }));
+      await user.keyboard("{Escape}");
+
+      expect(setText).not.toHaveBeenCalled();
+      expect(escapes.prevented).toEqual([false]);
+    } finally {
+      escapes.stop();
+    }
   });
 });
 
@@ -731,9 +798,14 @@ describe("FilterBar, its sort picker", () => {
   });
 
   /**
-   * The row a reader opens the app on. `Default order` is not one of the orders — it is the
-   * absence of one, which for this view means relevance when there is a query and name when
-   * there is not — so it is pinned above them rather than sorted in.
+   * The row a reader opens the app on. `Best match` is not one of the seven columns — it is the
+   * search's own ranking, relevance when there is a query and name when there is not — so it is
+   * pinned above them rather than sorted in.
+   *
+   * **The name is load-bearing and issue #213 is why.** It read `Default order` until then, which
+   * named the empty sort spec rather than the order it produces, and a reader on the alphabetical
+   * opening wall took it for the name of alphabetical order. `Name`, two rows below, is the one
+   * that really is alphabetical.
    *
    * **`toHaveValue`, never the text of the selected option.** A controlled `<select>` whose
    * `value` matches no `<option>` does not draw blank: `react-dom` walks the options setting
@@ -741,11 +813,28 @@ describe("FilterBar, its sort picker", () => {
    * row — so a picker that had lost its selection entirely would read exactly like one that is
    * correctly untouched.
    */
-  it("opens on Default order, pinned above the orders", () => {
+  it("opens on Best match, pinned above the orders", () => {
     render(<FilterBar search={search()} />);
 
     expect(screen.getByLabelText("Sort results")).toHaveValue("");
-    expect(sortOrder()[0]).toBe("Default order");
+    expect(sortOrder()[0]).toBe("Best match");
+  });
+
+  /**
+   * Issue #213's fix, stated as the thing that was wrong: the pinned row and the alphabetical
+   * row are two different rows with two different names, and neither of them says `Default`.
+   *
+   * A `not.toContain` over the whole list rather than a check on row 0, because the failure this
+   * guards against is the old string coming back *anywhere* — a merge restoring the option, a
+   * story fixture, a second picker copied off this one.
+   */
+  it("names the alphabetical order Name and never calls anything Default", () => {
+    render(<FilterBar search={search()} />);
+
+    const rows = sortOrder();
+    expect(rows).toContain("Name");
+    expect(rows).toContain("Best match");
+    expect(rows.some((r) => /default/i.test(r))).toBe(false);
   });
 
   /**
@@ -758,11 +847,11 @@ describe("FilterBar, its sort picker", () => {
    * assertion about one row's presence. `Mana value` and `Released` are the two orders no header
    * can reach, and they are in here as ordinary rows, pinned nowhere.
    */
-  it("offers the orders alphabetically, under the pinned Default order", () => {
+  it("offers the orders alphabetically, under the pinned Best match", () => {
     render(<FilterBar search={search()} />);
 
     expect(sortOrder()).toEqual([
-      "Default order",
+      "Best match",
       "Mana value",
       "Name",
       "Price",
@@ -792,7 +881,7 @@ describe("FilterBar, its sort picker", () => {
    *  that clears one is a press on a table header the grid does not draw. Selected by element
    *  rather than by value, because `""` as a value string is not a match Testing Library can
    *  resolve unambiguously. */
-  it("sends the empty key when the reader picks Default order back", async () => {
+  it("sends the empty key when the reader picks Best match back", async () => {
     const setSortKey = vi.fn();
     render(
       <FilterBar
@@ -805,7 +894,7 @@ describe("FilterBar, its sort picker", () => {
     );
 
     const select = screen.getByLabelText("Sort results");
-    const back = within(select).getByRole("option", { name: "Default order" });
+    const back = within(select).getByRole("option", { name: "Best match" });
     await userEvent.selectOptions(select, back);
 
     expect(setSortKey).toHaveBeenCalledWith("");
@@ -821,12 +910,12 @@ describe("FilterBar, its sort picker", () => {
    * order shrinks the row out from under a keyboard caret. This one can only grey from the
    * select beside it, which is where the caret already is when it happens.
    */
-  it("disables the direction button while the list is in its default order", () => {
+  it("disables the direction button while the list is ranked by Best match", () => {
     render(<FilterBar search={search()} />);
 
     const button = dirButton();
     expect(button).toBeDisabled();
-    expect(button).toHaveAccessibleName("Sort direction — no order picked");
+    expect(button).toHaveAccessibleName("Sort direction — Best match has no direction");
   });
 
   /**
@@ -855,7 +944,7 @@ describe("FilterBar, its sort picker", () => {
       timeout: TOOLTIP_OPEN_MS + 1000,
     });
     expect(document.getElementById(TOOLTIP_PANEL_ID)).toHaveTextContent(
-      "Sort direction — no order picked",
+      "Sort direction — Best match has no direction",
     );
   });
 

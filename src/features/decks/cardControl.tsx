@@ -51,9 +51,10 @@ import {
   cardDraggable,
   deckCardSlot,
   DECK_CARD_ATTR,
-  dropWrite,
-  readDragData,
+  dropWrites,
+  readDragGroup,
   type DeckWrite,
+  type DragPayload,
 } from "./dnd";
 
 /**
@@ -394,6 +395,67 @@ export function deckCardProps(card: DeckCard) {
 }
 
 /**
+ * Whether a card wears the gold mark — **the pane's card, or a member of the picked set**.
+ *
+ * Two facts, one mark, and that is issue #214's answer rather than an economy. Gold already means
+ * *picked* on every wall in this app; a reader who has Ctrl-clicked four cards has picked four
+ * cards, and giving the fifth kind of gold a fourth shape would be a vocabulary lesson in return
+ * for a distinction they did not ask for. The pane shows the last card they opened, which is what
+ * a pane has always shown.
+ *
+ * `selectedSlot` stays exactly what it was — the row the detail pane is anchored to — so a view
+ * given no `actions` marks precisely the card it marked before this existed.
+ *
+ * Written here because all four views ask it and `views/views.test.tsx` sweeps all four for the
+ * answer; four copies is four chances for the table and the stack to disagree about what gold
+ * means.
+ */
+export function deckCardMarked(
+  card: DeckCard,
+  selectedSlot: string | null | undefined,
+  actions?: DeckCardActions,
+): boolean {
+  const slot = deckCardSlot(card.categoryId, card.cardId, card.finish);
+  return slot === selectedSlot || actions?.isPicked?.(slot) === true;
+}
+
+/**
+ * The press handler a view hangs on a card — the one place a chord is told from a plain click.
+ *
+ * `actions.pick` answers whether the press was a *selection*; when it was, the view does nothing
+ * else and the detail pane holds still. When it was not, the set has already collapsed to this
+ * one card and `onSelect` runs exactly as it always did.
+ *
+ * **The `mousedown` half is not decoration.** A Shift-click drags a text selection across
+ * everything between the two presses — the whole point of Shift in a browser — which on
+ * `TextView`'s rows is a deck highlighted blue from the press to the pointer. Refusing the
+ * default *only when Shift is held* leaves every other press untouched, so an ordinary drag still
+ * begins the way it does today.
+ *
+ * Returns `undefined` when there is nothing to do, so a view can spread it unconditionally and a
+ * read-only mount grows no handler.
+ */
+export function deckCardPress(
+  card: DeckCard,
+  onSelect: ((card: DeckCard) => void) | undefined,
+  actions?: DeckCardActions,
+): { onClick: (event: ReactMouseEvent) => void; onMouseDown?: (event: ReactMouseEvent) => void } | undefined {
+  const pick = actions?.pick;
+  if (!onSelect && !pick) return undefined;
+  return {
+    onClick: (event) => {
+      if (pick?.(card, event) === true) return;
+      onSelect?.(card);
+    },
+    onMouseDown: pick
+      ? (event) => {
+          if (event.shiftKey) event.preventDefault();
+        }
+      : undefined,
+  };
+}
+
+/**
  * What a view can do to a card, handed down from the editor — or `undefined`, which is a view
  * with nothing but an `onSelect`.
  *
@@ -419,8 +481,43 @@ export interface DeckCardActions {
    * Its presence is also what makes cards **draggable**: a deck that can be dropped into is a
    * deck that can be picked up out of, and the two halves of a move-by-drag are never useful
    * apart.
+   *
+   * **A list since issue #214**, because a drag can carry a multi-select group. One card is a
+   * list of one rather than a second shape, so no view and no target has two paths through it —
+   * `dropWrites` already answers in this shape for both cases.
    */
-  drop?: (write: DeckWrite) => void;
+  drop?: (writes: DeckWrite[]) => void;
+  /**
+   * The picked set, as the question a drag asks it — {@link DeckCardGroupDrag}, or `undefined` on
+   * a surface with no selection behind it (a story, a read-only mount).
+   *
+   * It rides in this bag beside `drop` because it travels the same three components deep and is
+   * useless without it: a group that can be picked up needs somewhere the group can land.
+   */
+  groupDrag?: DeckCardGroupDrag;
+  /**
+   * Whether this card wears the picked mark — issue #214.
+   *
+   * A predicate over the **slot** rather than a set on each card, because the four views hand
+   * this bag down through their group components and a set would be a second thing to thread. The
+   * slot is `dnd.ts`'s `deckCardSlot`, which every view already stamps through
+   * {@link deckCardProps}.
+   *
+   * Absent is a view where nothing is picked, which is what a story or a read-only mount gets.
+   */
+  isPicked?: (slot: string) => boolean;
+  /**
+   * A press on a card, with the chords it was holding — issue #214.
+   *
+   * **It returns whether the press was a selection gesture**, and a view that gets `true` does
+   * nothing else: the card was Ctrl- or Shift-clicked, so it joined a set rather than opening the
+   * pane. `false` is an ordinary click, already collapsed to this one card, and the view then
+   * calls its `onSelect` exactly as it always did.
+   *
+   * A single seam so that no view branches on modifiers itself — four copies of "which chord
+   * means what" is four chances for the table and the stack to disagree.
+   */
+  pick?: (card: DeckCard, event: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) => boolean;
   /**
    * What this card offers on a right-click — **the handlers already built**, never a list of
    * rows.
@@ -612,12 +709,11 @@ export function focusDeckGroup(categoryId: number): boolean {
  * safe here for a reason worth stating: the payload is read at `dragstart`, and a drag cannot
  * begin before the paint the effect runs after.
  */
-export function useDeckCardDrag(card: DeckCard, enabled: boolean) {
+export function useDeckCardDrag(card: DeckCard, enabled: boolean, group?: DeckCardGroupDrag) {
   const latest = useRef(card);
   useEffect(() => {
     latest.current = card;
   }, [card]);
-
   return useCallback(
     (element: HTMLElement | null) => {
       if (!element || !enabled) return;
@@ -630,10 +726,41 @@ export function useDeckCardDrag(card: DeckCard, enabled: boolean) {
           fromCategoryId: latest.current.categoryId,
           finish: latest.current.finish,
         }),
+        // `undefined` rather than a function answering `[]` when no group was handed down, so a
+        // view mounted without a selection (a story, a read-only deck) registers no preview
+        // callback at all and behaves exactly as it did before groups existed.
+        rest: group
+          ? () =>
+              group.rest(
+                deckCardSlot(
+                  latest.current.categoryId,
+                  latest.current.cardId,
+                  latest.current.finish,
+                ),
+              )
+          : undefined,
       });
     },
-    [enabled],
+    [enabled, group],
   );
+}
+
+/**
+ * How a deck card asks what else its drag is carrying — issue #214.
+ *
+ * One function rather than the selection itself, and the difference matters twice over. The
+ * answer depends on the **card**: a drag from *outside* the picked set takes only itself and
+ * throws the set away, which is `useCardSelection`'s `dragsAll` rule and is decided per gesture
+ * rather than per render. And it depends on the set *at `dragstart`*, not at mount.
+ *
+ * **Hold the object still** — the editor memoises one and reads the live selection off a ref
+ * inside it. A fresh object per render would land in {@link useDeckCardDrag}'s dependency list
+ * and tear every card's drag registration down each time the reader Ctrl-clicked, which is a
+ * source unregistering mid-gesture and a drop that never arrives.
+ */
+export interface DeckCardGroupDrag {
+  /** The **other** members this slot's drag carries, empty for an ordinary one-card drag. */
+  rest: (slot: string) => DragPayload[];
 }
 
 /**
@@ -667,7 +794,7 @@ export function useDeckCardDrag(card: DeckCard, enabled: boolean) {
  * four views to disagree again. `canMonitor` is `canDrop`'s own question, so "eligible" means
  * this pile really would take *this* card and not merely that something is being dragged.
  */
-export function useCategoryDrop(categoryId: number | null, onDrop?: (write: DeckWrite) => void) {
+export function useCategoryDrop(categoryId: number | null, onDrop?: (writes: DeckWrite[]) => void) {
   const [over, setOver] = useState(false);
   const [eligible, setEligible] = useState(false);
   const enabled = categoryId !== null && onDrop !== undefined;
@@ -675,10 +802,8 @@ export function useCategoryDrop(categoryId: number | null, onDrop?: (write: Deck
   useEffect(() => {
     if (categoryId === null || !onDrop) return;
     return monitorForElements({
-      canMonitor: ({ source }) => {
-        const payload = readDragData(source.data);
-        return payload !== null && dropWrite(payload, { kind: "category", categoryId }) !== null;
-      },
+      canMonitor: ({ source }) =>
+        dropWrites(readDragGroup(source.data), { kind: "category", categoryId }).length > 0,
       onDragStart: () => setEligible(true),
       // Fires for a cancelled drag as well as a completed one — the platform ends both the same
       // way — so the ring stands down on Escape without this hearing a keypress.
@@ -698,19 +823,19 @@ export function useCategoryDrop(categoryId: number | null, onDrop?: (write: Deck
       // The rule, asked twice: once in `canDrop`, so a drop that would mean nothing never
       // lights up and never accepts the card, and again on the drop itself, because the two
       // questions can be a second apart and only the second one writes.
-      const writeFor = (data: Record<string, unknown>) => {
-        const payload = readDragData(data);
-        return payload && dropWrite(payload, { kind: "category", categoryId });
-      };
+      const writesFor = (data: Record<string, unknown>) =>
+        dropWrites(readDragGroup(data), { kind: "category", categoryId });
       return dropTargetForElements({
         element,
-        canDrop: ({ source }) => writeFor(source.data) !== null,
+        // "At least one member writes" — `dropWrites`' rule, which for a single-card drag is the
+        // same question `dropWrite(…) !== null` asked before groups existed.
+        canDrop: ({ source }) => writesFor(source.data).length > 0,
         onDragEnter: () => setOver(true),
         onDragLeave: () => setOver(false),
         onDrop: ({ source }) => {
           setOver(false);
-          const write = writeFor(source.data);
-          if (write) onDrop(write);
+          const writes = writesFor(source.data);
+          if (writes.length > 0) onDrop(writes);
         },
       });
     },

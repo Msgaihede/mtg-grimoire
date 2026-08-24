@@ -271,6 +271,11 @@ export function WishlistGrid({
       // This wall's own zoom, kept apart from the collection's and the search's: the three lists
       // are read one after the other, and a size settled on one is not an answer about another.
       zoomSection="wishlist"
+      // Ctrl and Shift build a set of tiles (issue #214). A *pinned* wish drags as a card like
+      // any other tile and carries the set with it; an any-printing wish carries only the wish
+      // mark, so it contributes no card payload to a group — `CardGrid`'s `dragRest` reads that
+      // back through `readDragData` rather than inventing one.
+      selectionScope="wishlist"
       selectedId={selectedCardId}
       onSelect={selectCard}
       // The same arrow-key walk the other two page-walls take, on the same terms: `selectedId`

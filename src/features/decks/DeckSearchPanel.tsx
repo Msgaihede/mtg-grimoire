@@ -348,11 +348,14 @@ export interface DeckSearchPanelProps {
    *
    * Absent is a panel with no menu, which is what a story or `DeckSearchPanel.test.tsx` mounts.
    */
-  cardMenu?: (card: CardSummary) => (e: ReactMouseEvent) => void;
+  cardMenu?: (card: CardSummary, picked: readonly CardSummary[]) => (e: ReactMouseEvent) => void;
   /** The same menu from the keyboard — Shift+F10 and the ContextMenu key, anchored at the
    *  tile's own corner. Its own slot rather than something derived from the one above, because
    *  a keypress has no coordinates; see `CardGrid`'s `cardMenuKey`. */
-  cardMenuKey?: (card: CardSummary) => (e: ReactKeyboardEvent) => void;
+  cardMenuKey?: (
+    card: CardSummary,
+    picked: readonly CardSummary[],
+  ) => (e: ReactKeyboardEvent) => void;
   /**
    * The widest this panel may be drawn or dragged, in px — the editor's answer, because the
    * editor is what holds the two measurements it is made of.
@@ -1275,6 +1278,15 @@ function OpenPanel({
           // asked for and had no way to undo separately. `deckSearch` is this column's alone;
           // the deck's two views share `deck`. See `CardGrid`'s `zoomSection`.
           zoomSection="deckSearch"
+          // Ctrl and Shift build a set of tiles here, and a drag from any member carries all of
+          // them into a category column beside it (issue #214).
+          //
+          // **A constant rather than a per-deck string, and that is `deckCardSlot`'s rule read
+          // across**: one editor is mounted at a time, so this column belongs to whichever deck is
+          // open and cannot be confused with another's. What matters is only that it differs from
+          // the deck's own `deck:<id>` — which is what makes a press on a tile in here put the
+          // deck's selection down, since a pick in a new scope replaces the whole set.
+          selectionScope="deck-panel"
           baseTileWidth={TILE_BASE}
           selectedId={selectedCardId}
           onSelect={selectCard}

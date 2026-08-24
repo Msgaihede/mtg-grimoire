@@ -883,6 +883,70 @@ clicked.** That is the design — the pane covers what the reader was not lookin
 a CDP pass that opens a deck card and then reaches for a search tile is aiming at the pane. Close
 the card first.
 
+## Multi-select (#214) — 2026-08-24, `npm run tauri dev` (debug), 1920×1080, a copy of the real db
+
+Driven against the `Azula` deck — 122 rows across 13 piles — and the search wall over the real
+116 700-card corpus. Everything below is a reading from the shipped window, not a test.
+
+### What worked
+
+| Gesture | Reading |
+| --- | --- |
+| Plain click a deck card | `1` `[data-deck-card-selected]` |
+| Ctrl-click a second | `2` marked, `2` `.ring-accent`, both the cards aimed at |
+| Shift-click a third | store `cardSelection` = `{ scope: "deck:3", keys: 3 }`, anchor held on the Ctrl-clicked card |
+| Drag one picked card onto another pile | all **3** moved, `41 → 39`, one gesture |
+| After the drop | `cardSelection` `null`, one ring left (the pane's own card) |
+| The drag preview | a chip reading **`3 cards`**, `color: oklch(0.75 0.12 85)` — `--color-accent` exactly |
+| Right-click a picked card | `Add 2 cards to · Move 2 cards to · Tag 2 cards · Remove 2 cards`, with `Copy card name`, `Copy card image`, `Open on`, `View all printings`, `Set as commander`, `Set as companion`, `Set as foil` singular |
+| `Delete` with 2 picked | `122 → 120` rows, both named cards gone, set stood down |
+| `Delete` with the caret in **Deck name** | `118 → 118`, the set of 2 survived |
+| Ctrl-click in Stacks / Table / Grid | `2` keys and `2` marked in all three |
+| Search wall, Ctrl then Shift | `{ scope: "search", keys: 3 }`, `4` rings — three picked plus the pane's card |
+| Drag 3 picked tiles onto the sidebar's **Wishlist** | chip `3 cards`, `Added to wishlist.`, and the wishlist drew **3** tiles |
+
+**The fourth ring is the design and not an off-by-one.** `deckCardMarked` answers
+`slot === selectedSlot || isPicked(slot)`, so the card the pane is open on keeps its ring whether
+or not it is in the set — which is the ring meaning exactly what it meant before multi-select
+existed.
+
+### What the pass found
+
+**The deck card menu's shared half stayed singular.** With two cards picked the menu read
+`Move 2 cards to` directly under a singular `Add to` — one menu answering the same question two
+ways. `buildDeckCardMenu` was passing `picked` to its own rows and not into `buildCardMenu`'s
+deps. Fixed in the same pass and re-read: `Add 2 cards to`. **Nothing in the suite could have
+caught it** — the deck-menu tests assert this file's own rows and `cardMenu.test.tsx` builds the
+shared menu directly, so neither one ever sees the seam between them.
+
+### The harness trap this cost twenty minutes to
+
+**A stacked deck card cannot be clicked at its centre.** `CardStack` overlaps every card by 285px,
+so a collapsed one's only hittable part is its 34px reveal strip — and `cdp.mjs click <css>` aims
+at rect centres. A Ctrl-click aimed at one card marked a *third* one, twice, and read exactly like
+the chord not reaching the app. Switching the toolbar's view select to `grid` answered it in one
+command. Hovering first makes it worse rather than better: the dwell fans a card open and reflows
+the pile under the pointer. Written up in
+[live-ui-verification.md](live-ui-verification.md) beside the `key` vocabulary.
+
+**And the target has to hit-test.** The first multi-drag reported `outcome: "dropped"` and moved
+nothing: the target pile's centre was at `y: -24`, off the top of the window. `elementFromPoint`
+at the centre before the drag is the check, and it is the same lesson the category-reorder pass
+paid for on 2026-08-17.
+
+### Two things this pass did not cover
+
+**A `deck-panel` set dragged into a category column.** The panel's tiles carry the scope and the
+group travels the same way the wall's does, but the gesture was not driven — the sidebar drop was
+exercised instead, through the Wishlist entry, because navigating away from a deck clears
+`openDeckId` and the Decks entry then refuses in words.
+
+**The count chip at reduced motion, and its position against the pointer.** The chip was caught
+with a `MutationObserver` on `document.body` — the container `setCustomNativeDragPreview` appends
+for one frame is removed by its own monitor on `dragstart`, so `cdp.mjs drag --probe`, which fires
+between `dragOver` and `drop`, is too late to see it. What was read is the text and the colour;
+the 12px offset is unmeasured.
+
 ## The three-line header, at all four of its widths — 2026-08-24, `npm run tauri dev` (debug), 1920×1080
 
 The 2026-08-24 redesign, driven against the main checkout's real corpus (116 700 cards) on a

@@ -50,7 +50,9 @@ import {
 import { PRESS, statusLine } from "@/lib/motion";
 import { sortOptions } from "@/lib/options";
 import { useMarketplace } from "@/lib/useMarketplace";
+import { clearFieldOnEscape, useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { useAppStore, type PaneDeckContext } from "@/lib/store";
+import { useCardSelection } from "@/lib/useCardSelection";
 import { cn } from "@/lib/utils";
 import { newestWrite, writeFailure } from "@/lib/writes";
 import {
@@ -58,6 +60,7 @@ import {
   focusDeckGroup,
   keepsSelection,
   type DeckCardActions,
+  type DeckCardGroupDrag,
 } from "./cardControl";
 import { AUTO_CATEGORY } from "./autoCategory";
 import { CategoriesDialog, DeleteCategory } from "./CategoriesDialog";
@@ -65,7 +68,7 @@ import { movedTo } from "./categoryDrag";
 import { buildCategoryMenu } from "./categoryMenu";
 import { ClearCategory } from "./ClearCategory";
 import { buildDeckCardMenu } from "./deckCardMenu";
-import { deckWalkStops } from "./deckWalk";
+import { deckSlotOrder, deckWalkStops } from "./deckWalk";
 import { Dialog } from "@/components/Dialog";
 import { DeckHistoryDialog } from "./DeckHistoryDialog";
 import { DeckBracket } from "./DeckBracket";
@@ -837,11 +840,50 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const paneDeckContext = useAppStore((s) => s.paneDeckContext);
   const openCardFromDeck = useAppStore((s) => s.openCardFromDeck);
   /**
+   * The picked set's clear, taken straight off the store rather than from `useCardSelection`
+   * below it.
+   *
+   * The hook is measured along `groups`, which is derived near the bottom of this component, and
+   * two writes up here need to stand a set down — a drop that has just moved every member, and
+   * the Delete that has just removed them. Neither needs the set's *contents*, only the clear,
+   * and the store's setter is the same function the hook would have handed back.
+   */
+  const setCardSelection = useAppStore((s) => s.setCardSelection);
+  /**
    * Which of the desk's two columns the card pane is drawn **over** — see the pane host at the
    * end of the desk row, and {@link useAppStore}'s `paneFromDeckSearch` for why this is a field
    * of its own rather than `paneDeckContext !== null` read backwards.
    */
   const paneFromDeckSearch = useAppStore((s) => s.paneFromDeckSearch);
+
+  /**
+   * Close the deck — the ribbon's `Back to decks` button and Escape's floor, as one callback.
+   *
+   * **Two entrances to one act, so there is one function rather than two spellings of it.** The
+   * button and the key must not be able to drift: whatever closing a deck comes to mean — a
+   * confirmation, a last write flushed, a note left for the gallery — is written here and both
+   * paths get it.
+   */
+  const closeDeck = useCallback(() => setOpenDeckId(null), [setOpenDeckId]);
+  /**
+   * **Escape's floor on this screen: the deck closes.**
+   *
+   * `"navigation"` is the bottom rung, so this fires only on a press nothing nearer wanted — the
+   * card pane docked beside the desk is `"outer"` and outranks it, every dialog and popup here is
+   * `"inner"` and outranks both, and a filter box with text in it spends the press before any of
+   * them (see {@link clearFieldOnEscape} on the toolbar's field below). One press closes one
+   * thing, all the way down.
+   *
+   * **Always enabled**, because an open editor always has somewhere to go: the gallery it was
+   * opened from. There is no state in which this rung would be a listener with nothing to do.
+   *
+   * **The caret is handed back by the same route the button's press uses**, and that is
+   * {@link closeDeck} doing exactly one thing: `setOpenDeckId(null)` writes `returnToDeckId` in
+   * the store, and `DecksPage` reads it to open the folder the deck is filed in and put the caret
+   * on the deck's own tile. So Escape lands the reader precisely where `Back to decks` does —
+   * which is what "Escape hands the caret to the opener" means at this rung, one view up.
+   */
+  useDismissOnEscape({ layer: "navigation", onDismiss: closeDeck });
 
   const row = deck.deck;
   const spec = row ? formatSpecFor(row.formatKey) : null;
@@ -1948,6 +1990,48 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     if (!focusDeckGroup(categoryId)) editorRef.current?.focus();
   }, []);
   const cards = deck.cards;
+
+  /**
+   * **The cards the reader has Ctrl- and Shift-clicked**, as rows of this deck — issue #214.
+   *
+   * The one derivation of "which cards are picked", and it is here rather than beside
+   * `useCardSelection` below because three things above that hook need it: the card menu (built at
+   * `deckCardMenu` a few hundred lines down), the Delete key, and the group a drag carries. What
+   * the hook adds on top is the *gestures* — which chord means what, and the range order — and
+   * those genuinely need `groups`, which is derived near the bottom of this component.
+   *
+   * **Read off the store rather than off the hook** for exactly that reason, and scoped by the
+   * same string the hook writes under, so the two can never answer about different decks.
+   *
+   * **A slot that names no row is dropped**, which is `pruneSelection`'s rule reached by a second
+   * road and needed here for its own sake: a set outlives the list it was made in, so between a
+   * removal landing and the next render the keys can address rows that are gone — and a
+   * `Remove 4 cards` that removes three is worse than one that says three.
+   */
+  const cardSelection = useAppStore((s) => s.cardSelection);
+  const pickedCards = useMemo(() => {
+    const scope = `deck:${deckId}`;
+    if (cardSelection === null || cardSelection.scope !== scope) return [];
+    const bySlot = new Map(
+      cards.map((card) => [deckCardSlot(card.categoryId, card.cardId, card.finish), card]),
+    );
+    return cardSelection.keys.flatMap((slot) => {
+      const card = bySlot.get(slot);
+      return card ? [card] : [];
+    });
+  }, [cardSelection, cards, deckId]);
+
+  /**
+   * The same list read at a moment rather than at a render — the Delete key's and a drag's copy.
+   *
+   * Both are handlers registered once and asked later: a `keydown` listener that had the set in
+   * its dependency list would be torn down and re-added on every Ctrl-click, and a drag
+   * registration doing the same would unregister the source under the reader's pointer.
+   */
+  const pickedRef = useRef(pickedCards);
+  useEffect(() => {
+    pickedRef.current = pickedCards;
+  }, [pickedCards]);
   useEffect(() => {
     const owed = owedFocus.current;
     if (owed === null) return;
@@ -2079,6 +2163,29 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       else setQuantityAt(write.cardId, write.categoryId, write.finish, 0);
     },
     [addTo, moveTo, refile, setQuantityAt],
+  );
+
+  /**
+   * A whole drop — **every card it was carrying** (issue #214), and the picked set stood down
+   * afterwards.
+   *
+   * One write per card rather than a batched command, and that is a cost this feature accepts
+   * rather than hides. Each `mutate` is its own `deck_audit` row, so a four-card move is four
+   * entries and four presses of Ctrl+Z to reverse. Batching would be a Rust change to `deck_undo`
+   * — a grain the audit log does not have — and it is worth having the gesture before the tidier
+   * undo rather than neither.
+   *
+   * **The set is cleared once the drop is applied.** The cards have moved, so a set still
+   * pointing at where they *were* is a set whose next drag carries slots that no longer exist —
+   * `pruneSelection` would empty it on the next render anyway, and clearing here is what stops
+   * the ring standing on a pile the cards have left for the frame in between.
+   */
+  const applyDrops = useCallback(
+    (writes: DeckWrite[]) => {
+      for (const write of writes) applyDrop(write);
+      if (writes.length > 1) setCardSelection(null);
+    },
+    [applyDrop, setCardSelection],
   );
 
   /**
@@ -2251,6 +2358,17 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           tags: deck.tags,
           addTag: openAddTag,
           remove: removeCard,
+          // **Only when this card is in the set** — `dragsWholeSelection`'s rule for a press
+          // instead of a drag. A right-click on a card the reader has not picked is about that
+          // card, so `[]` goes over and the menu is the singular one it has always been.
+          picked: pickedCards.some(
+            (row) =>
+              row.cardId === card.cardId &&
+              row.categoryId === card.categoryId &&
+              row.finish === card.finish,
+          )
+            ? pickedCards
+            : [],
         });
       return { onContextMenu: menu(build), onKeyDown: menuKey(build) };
     },
@@ -2268,6 +2386,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       setFinishAt,
       openAddTag,
       removeCard,
+      pickedCards,
     ],
   );
 
@@ -2370,47 +2489,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   );
 
   /**
-   * What every view is handed, and the whole of what a card **and a pile** can be made to do.
-   *
-   * One object rather than six props, because it travels three components deep — the view, the
-   * group, the card — and a bag that is passed on whole cannot be passed on incompletely. The
-   * views spend it differently (a table gets columns, the other three get a bar over the card),
-   * and every control inside it is `cardControl.tsx`'s.
-   *
-   * It carries two pile-level members beside the card's three, which is what `drop` always was:
-   * the heading's own menu, and the rename field for the pile being renamed.
-   */
-  const actions = useMemo<DeckCardActions>(
-    () => ({
-      setQuantity,
-      drop: applyDrop,
-      menu: deckCardMenu,
-      categoryMenu,
-      renameCategory: (categoryId) =>
-        categoryId === null ? null : renameCategoryField(categoryId),
-      // **Only while the deck is grouped by category**, and absent is the whole of the off
-      // switch — a view draws no grip without it. Under `manaValue` and `type` the headings on
-      // the desk are buckets the app derived, so there is no order of the reader's on screen to
-      // change; the piles that *are* real there are the switched-off ones `buildGroups` appends
-      // and the command zones it heads the list with, and neither is in the flow — the first is
-      // in the rail, the second in the box `splitRail` answers `command` for, whose piles are
-      // drawn without a `flowWidth` and so register no grip whatever this prop says. That second
-      // exemption is not this gate's doing and does not want to be: a zone pinned to the head of
-      // every grouping has no position for a drag to change, under `category` least of all.
-      moveCategory: groupBy === "category" ? moveCategory : undefined,
-    }),
-    [
-      setQuantity,
-      applyDrop,
-      deckCardMenu,
-      categoryMenu,
-      renameCategoryField,
-      groupBy,
-      moveCategory,
-    ],
-  );
-
-  /**
    * The docked panel's tiles, which are **not** deck cards: a search result is a printing the
    * reader has not filed anywhere, so none of the four deck rows means anything about it and it
    * gets the plain card menu every other wall in the app draws.
@@ -2424,18 +2502,22 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * which is what a reader who is not editing this row asked for.
    */
   const panelCardBuild = useCallback(
-    (card: CardSummary) => () => buildCardMenu(searchCardTarget(card), cardMenuDeps),
+    (card: CardSummary, picked: readonly CardSummary[] = []) => () =>
+      buildCardMenu(searchCardTarget(card), {
+        ...cardMenuDeps,
+        picked: picked.map(searchCardTarget),
+      }),
     [cardMenuDeps],
   );
   const panelCardMenu = useCallback(
-    (card: CardSummary) => menu(panelCardBuild(card)),
+    (card: CardSummary, picked: readonly CardSummary[] = []) => menu(panelCardBuild(card, picked)),
     [menu, panelCardBuild],
   );
   /** The keyboard's own door to the same rows. `CardGrid` takes it in a slot of its own because
    *  a keypress has no coordinates — the panel is anchored at the tile's corner rather than at a
    *  pointer that was never there. */
   const panelCardMenuKey = useCallback(
-    (card: CardSummary) => menuKey(panelCardBuild(card)),
+    (card: CardSummary, picked: readonly CardSummary[] = []) => menuKey(panelCardBuild(card, picked)),
     [menuKey, panelCardBuild],
   );
 
@@ -2472,10 +2554,16 @@ export function DeckEditor({ deckId }: { deckId: number }) {
 
   const dropSelection = useCallback(
     (event: React.MouseEvent) => {
-      if (selectedCardId === null || keepsSelection(event.target)) return;
+      if (keepsSelection(event.target)) return;
+      // **The picked set goes down with the pane** (issue #214), and the guard above is why it is
+      // safe to clear it here: a click on a card or on one of a card's controls never reaches
+      // this, so the press that *made* a selection cannot be the press that throws it away. A
+      // click on the desk is the reader putting everything down.
+      setCardSelection(null);
+      if (selectedCardId === null) return;
       setSelectedCardId(null);
     },
-    [selectedCardId, setSelectedCardId],
+    [selectedCardId, setSelectedCardId, setCardSelection],
   );
 
   // The drag's two monitors and the remove tray's drop target are not here: `QuickZones` owns
@@ -2817,6 +2905,175 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       ? null
       : (categories.find((c) => c.id === targetCategoryId)?.name ?? "this deck");
 
+  /**
+   * The deck's rows as a flat list of slots, in the order the desk draws them — what a
+   * Shift-click measures a range along (issue #214).
+   *
+   * `deckSlotOrder` and not `deckWalk` beside it, though the two walk the same groups in the same
+   * order: the walk drops orphaned rows because it steps *through printings*, and an orphan is
+   * still a card the reader can see and pick. A range that silently skipped a row on screen is
+   * the one failure this list cannot have.
+   */
+  const slotOrder = useMemo(() => deckSlotOrder(groups), [groups]);
+
+  /**
+   * The cards the reader has Ctrl- and Shift-clicked, scoped to **this deck**.
+   *
+   * A deck id in the scope because two decks are two surfaces: the slots are
+   * `<category>:<card>:<finish>` and a category id is per-deck, so a set carried across a close
+   * and an open would address piles of a deck that is no longer on screen.
+   */
+  const picked = useCardSelection(`deck:${deckId}`, slotOrder);
+
+  /**
+   * What a card's drag asks the selection — {@link DeckCardGroupDrag}, held still on purpose.
+   *
+   * Both live values it reads come off refs, which is what lets this object keep one identity for
+   * the life of the editor: it lands in every card's `useDeckCardDrag` dependency list, and a
+   * fresh one per render would tear four hundred drag registrations down each time the reader
+   * Ctrl-clicked — a source unregistering mid-gesture is a drop that never arrives.
+   *
+   * `dragsAll` is asked first and has a side effect by design: a card picked up from *outside* the
+   * set throws the set away, so a stray drag can never rearrange cards the reader had forgotten
+   * were picked.
+   */
+  const dragsAllRef = useRef(picked.dragsAll);
+  useEffect(() => {
+    dragsAllRef.current = picked.dragsAll;
+  }, [picked.dragsAll]);
+  const groupDrag = useMemo<DeckCardGroupDrag>(
+    () => ({
+      rest: (slot) => {
+        if (!dragsAllRef.current(slot)) return [];
+        return pickedRef.current
+          .filter((card) => deckCardSlot(card.categoryId, card.cardId, card.finish) !== slot)
+          .map(
+            (card): DragPayload => ({
+              kind: "deck-card",
+              cardId: card.cardId,
+              name: card.name,
+              fromCategoryId: card.categoryId,
+              finish: card.finish,
+            }),
+          );
+      },
+    }),
+    [],
+  );
+
+  /**
+   * **Delete takes the picked cards out of the deck** — issue #214, and the one keyboard verb this
+   * editor has that is not undo.
+   *
+   * ## Why it exists here and nowhere else in the app
+   *
+   * "Remove" is a defined act on a deck row and is not one anywhere else a card is drawn: on a
+   * search wall Delete would name nothing, and on the collection it would mean destroying a record
+   * of cardboard the reader owns. So the key is bound by the editor, for the editor's own scope,
+   * and the walls get multi-select without it.
+   *
+   * ## Three fences, each closing a real way this goes wrong
+   *
+   * **A text field keeps the key**, through the same `isTextField` the undo handler one screen up
+   * yields to and the native context menu's carve-out turns on — a reader deleting a character out
+   * of the deck's name must not lose four cards. **A layer takes it too**: with a dialog or a
+   * confirmation open the deck is behind a scrim, and a key that reached past it would act on a
+   * surface the reader cannot see. And **nothing is written for a set of one**, which is the
+   * deliberate asymmetry — one card has a stepper, a menu row and a tray, all of them visible, and
+   * a bare Delete that silently removed whatever was last clicked is a keystroke away from a deck
+   * the reader did not mean to edit.
+   *
+   * It goes through `setQuantityAt(…, 0)` like every other removal in this editor — the stepper's
+   * zero, the menu's `Remove card`, the tray's drop — so it inherits the optimistic patch, the
+   * rollback, and the collection write that files the copies into `Recently removed`. There is no
+   * remove mutation and this is not the place to add one.
+   *
+   * **What it costs is one press of Ctrl+Z per card**, because `deck_audit` has a row per write.
+   * Named rather than hidden: batching is a Rust change to `deck_undo`'s grain.
+   */
+  const layerOpen = layer !== null;
+  useEffect(() => {
+    if (layerOpen) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Delete") return;
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      if (isTextField(event.target)) return;
+      const held = pickedRef.current;
+      if (held.length < 2) return;
+      event.preventDefault();
+      for (const card of held) setQuantityAt(card.cardId, card.categoryId, card.finish, 0);
+      setCardSelection(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [layerOpen, setQuantityAt, setCardSelection]);
+
+  /**
+   * A press on a deck card, with the chords it was holding — the seam every view calls before it
+   * opens the pane.
+   *
+   * It answers `true` for a chord, and the view then does nothing else. A plain click has already
+   * collapsed the set to this one card by the time this returns `false`, which is what keeps the
+   * ring and the pane agreeing without the views knowing either exists.
+   */
+  const pickCard = useCallback(
+    (card: DeckCard, event: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) =>
+      picked.pick(deckCardSlot(card.categoryId, card.cardId, card.finish), event),
+    [picked],
+  );
+
+  /**
+   * What every view is handed, and the whole of what a card **and a pile** can be made to do.
+   *
+   * One object rather than six props, because it travels three components deep — the view, the
+   * group, the card — and a bag that is passed on whole cannot be passed on incompletely. The
+   * views spend it differently (a table gets columns, the other three get a bar over the card),
+   * and every control inside it is `cardControl.tsx`'s.
+   *
+   * It carries two pile-level members beside the card's three, which is what `drop` always was:
+   * the heading's own menu, and the rename field for the pile being renamed.
+   *
+   * **It is built here, below `groups`, rather than beside the writes it is made of** — moved for
+   * issue #214, because three of its members are about the picked set and the set is measured
+   * along the order `groups` decides. Nothing reads it before this point; `viewProps` below is
+   * its only consumer.
+   */
+  const actions = useMemo<DeckCardActions>(
+    () => ({
+      setQuantity,
+      drop: applyDrops,
+      menu: deckCardMenu,
+      categoryMenu,
+      groupDrag,
+      isPicked: picked.selected,
+      pick: pickCard,
+      renameCategory: (categoryId) =>
+        categoryId === null ? null : renameCategoryField(categoryId),
+      // **Only while the deck is grouped by category**, and absent is the whole of the off
+      // switch — a view draws no grip without it. Under `manaValue` and `type` the headings on
+      // the desk are buckets the app derived, so there is no order of the reader's on screen to
+      // change; the piles that *are* real there are the switched-off ones `buildGroups` appends
+      // and the command zones it heads the list with, and neither is in the flow — the first is
+      // in the rail, the second in the box `splitRail` answers `command` for, whose piles are
+      // drawn without a `flowWidth` and so register no grip whatever this prop says. That second
+      // exemption is not this gate's doing and does not want to be: a zone pinned to the head of
+      // every grouping has no position for a drag to change, under `category` least of all.
+      moveCategory: groupBy === "category" ? moveCategory : undefined,
+    }),
+    [
+      setQuantity,
+      applyDrops,
+      deckCardMenu,
+      categoryMenu,
+      groupDrag,
+      picked.selected,
+      pickCard,
+      renameCategoryField,
+      groupBy,
+      moveCategory,
+    ],
+  );
+
   const viewProps = {
     groups,
     marketplace,
@@ -2895,7 +3152,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           is {@link PriceStrip}'s since 2026-08-16, not this file's — the argument is the same
           one read at the other end of the gesture, so both ends of a drag now re-render
           themselves rather than the editor.) */}
-      <QuickZones categories={categories} onDrop={applyDrop} onNewCategory={openQuickCategory} />
+      <QuickZones categories={categories} onDrop={applyDrops} onNewCategory={openQuickCategory} />
 
       {/**
        * **The card pane, drawn over one of this editor's own columns rather than beside them**
@@ -3014,7 +3271,9 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 py-1.5">
         <button
           type="button"
-          onClick={() => setOpenDeckId(null)}
+          // {@link closeDeck}, shared with Escape's `"navigation"` rung — one act, one function,
+          // so the key and the button can never come to mean different things.
+          onClick={closeDeck}
           aria-label="Back to decks"
           // The words go and the chevron stays, at the width where every other word on the row
           // goes. The tooltip is bound only then, for the reason it is bound at all: at any
@@ -3487,30 +3746,30 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               aria-label="Filter by tag"
               className={cn("flex flex-wrap items-center gap-1.5", tightHeader && "order-3")}
             >
-                {deck.tags.map((tag) => {
-                  const on = tagIds.includes(tag.id);
-                  return (
-                    <button
-                      key={tag.id}
-                      type="button"
-                      aria-pressed={on}
-                      onClick={() =>
-                        setTagIds((held) =>
-                          held.includes(tag.id)
-                            ? held.filter((id) => id !== tag.id)
-                            : [...held, tag.id],
-                        )
-                      }
-                      className={cn(
-                        FILTER_CONTROL,
-                        FILTER_FOCUS,
-                        // `FILTER_CONTROL`'s own 36px, which the `h-8` here used to override
-                        // back down to the toolbar's old height. Only the type size is still
-                        // overridden: a deck's tags are a row of arbitrary user strings, and
-                        // 14px of them is a line that pushes the filter field off the end.
-                        "px-2.5 text-xs",
-                        filterChipState(on),
-                      )}
+              {deck.tags.map((tag) => {
+                const on = tagIds.includes(tag.id);
+                return (
+                  <button
+                    key={tag.id}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() =>
+                      setTagIds((held) =>
+                        held.includes(tag.id)
+                          ? held.filter((id) => id !== tag.id)
+                          : [...held, tag.id],
+                      )
+                    }
+                    className={cn(
+                      FILTER_CONTROL,
+                      FILTER_FOCUS,
+                      // `FILTER_CONTROL`'s own 36px, which the `h-8` here used to override
+                      // back down to the toolbar's old height. Only the type size is still
+                      // overridden: a deck's tags are a row of arbitrary user strings, and
+                      // 14px of them is a line that pushes the filter field off the end.
+                      "px-2.5 text-xs",
+                      filterChipState(on),
+                    )}
                   >
                     {tag.name}
                   </button>
@@ -3536,6 +3795,13 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               placeholder="Filter this deck…"
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
+              // **A box with text in it owns one Escape, and an empty one owns none.** Without
+              // this the press would empty the box *and* close the deck behind it: Chromium
+              // clears an `<input type="search">` on Escape by itself and does **not** set
+              // `defaultPrevented`, so the `"navigation"` rung above would take the same press.
+              // jsdom implements no native clear, so only the second half of that is visible to
+              // this suite — the reason is on {@link clearFieldOnEscape}.
+              onKeyDown={(e) => clearFieldOnEscape(e, filter, () => setFilter(""))}
               className={cn(
                 "h-9 min-w-0 flex-1 rounded-md border border-border bg-bg px-2.5 text-xs",
                 FOCUS,
@@ -3715,7 +3981,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           column's — one box further in and the number would be measuring nothing. It owns its
           own drag monitor for `QuickZones`' reason, which is why no `dragging` state reaches
           this file any more: see {@link PriceStrip}. */}
-      <PriceStrip marketplace={marketplace} variant={variant} onRemove={applyDrop} />
+      <PriceStrip marketplace={marketplace} variant={variant} onRemove={applyDrops} />
 
       {row && (
         // What the deck adds up to — the foot of the page, and the last thing under the deck.

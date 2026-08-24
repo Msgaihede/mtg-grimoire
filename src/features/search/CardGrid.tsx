@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
@@ -11,7 +12,13 @@ import { useVirtualizer } from "@tanstack/react-virtual";
 import { CardArt } from "@/components/CardArt";
 import { GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
 import { RarityGem } from "@/components/RarityGem";
-import { cardDraggable, composedDraggable, type DragPayload } from "@/features/decks/dnd";
+import {
+  cardDraggable,
+  composedDraggable,
+  readDragData,
+  withDragGroup,
+  type DragPayload,
+} from "@/features/decks/dnd";
 import { cardScaleVars, CONTROL_SHRINK, scaled, type ZoomSection } from "@/lib/cardZoom";
 import { keepCaretForCard } from "@/lib/caretWalk";
 import { FINISH_LABEL, type Finish } from "@/lib/finish";
@@ -19,6 +26,7 @@ import { type Treatment, treatmentTitle } from "@/lib/treatment";
 import { FOCUS } from "@/lib/focus";
 import { LAYER } from "@/lib/layers";
 import { useAppStore } from "@/lib/store";
+import { NO_SELECTION, suppressRangeSelection, useCardSelection } from "@/lib/useCardSelection";
 import { useCardZoomGesture } from "@/lib/useCardZoomGesture";
 import { cn } from "@/lib/utils";
 import { nextGridIndex } from "./gridNav";
@@ -259,6 +267,7 @@ export function CardGrid<T extends GridCard>({
   dragPayload,
   dragRecord,
   arrowNav = false,
+  selectionScope,
   baseTileWidth = TILE_BASE_WIDTH,
 }: {
   rows: T[];
@@ -400,7 +409,13 @@ export function CardGrid<T extends GridCard>({
    * link to or record a copy of, so it is offered no menu at all — the rule its table already
    * applies per row, applied here to the same rows.
    */
-  cardMenu?: (card: T) => ((e: ReactMouseEvent) => void) | undefined;
+  /**
+   * The **whole picked set** reaches the builder as a second argument (issue #214), so a surface
+   * whose menu acts on several cards has them in hand — and only when the right-clicked card is
+   * one of them, which is what makes a right-click outside the set about the card under the
+   * pointer. Empty for every ordinary press, and a caller that takes one argument is unchanged.
+   */
+  cardMenu?: (card: T, picked: readonly T[]) => ((e: ReactMouseEvent) => void) | undefined;
   /**
    * The same menu, from the keyboard — `menuKey`'s handler, for Shift+F10 and the ContextMenu
    * key.
@@ -416,7 +431,7 @@ export function CardGrid<T extends GridCard>({
    * the tile holds the caret. The primitive decides which presses count and leaves a text field
    * alone.
    */
-  cardMenuKey?: (card: T) => ((e: ReactKeyboardEvent) => void) | undefined;
+  cardMenuKey?: (card: T, picked: readonly T[]) => ((e: ReactKeyboardEvent) => void) | undefined;
   /**
    * Each drawn tile's root element, as it mounts — the seam a caller needs to make tiles
    * draggable, since a drag library is handed elements and this wall builds its own.
@@ -506,6 +521,25 @@ export function CardGrid<T extends GridCard>({
    * rather than an absence.
    */
   arrowNav?: boolean;
+  /**
+   * **Which surface this wall is, for the purpose of multi-select** — issue #214. Ctrl/⌘-click
+   * builds a set of tiles, Shift-click takes a range, and a drag from any member carries the whole
+   * set. Absent, and none of that exists: a plain click opens the card exactly as it always did.
+   *
+   * Opt-in, exactly as {@link arrowNav} is opt-in, and **`AllPrintingsDialog` passes none** for
+   * that prop's own reason: a press inside the printings modal is a swap or a look, the modal
+   * closes on it, and a set of printings is not a thing anything downstream can act on.
+   *
+   * The string is the surface's own (`search`, `collection`, `wishlist`, `tags`, `deck-panel:12`)
+   * and is what keeps a set made here invisible to every other wall — see `lib/store.ts`'s
+   * `cardSelection`. Two walls that could be on screen at once **must** pass different scopes:
+   * that is what makes clicking a tile in the deck editor's docked panel put the deck's own
+   * selection down, since a pick in a new scope replaces the whole set.
+   *
+   * The keys are printing ids, which is what `onSelect` already takes, so a caller passes a name
+   * and nothing else.
+   */
+  selectionScope?: string;
   /**
    * How wide a tile is here at 100%, overriding {@link TILE_BASE_WIDTH}.
    *
@@ -654,16 +688,103 @@ export function CardGrid<T extends GridCard>({
    * printings modal *needs* to: a press there is a swap or a look, the modal closes on it, and a
    * caret left on a tile of a wall that no longer exists is a caret on `<body>`.
    */
+  /**
+   * The picked set for this wall — issue #214.
+   *
+   * The hook is called unconditionally (it is a hook) with {@link NO_SELECTION} standing in for a
+   * wall that opted out; nothing writes under that scope, because {@link select} below asks
+   * `selectionScope` before it picks anything. So an opted-out wall reads an empty set forever and
+   * behaves exactly as it did before this existed.
+   *
+   * The order is the rows as drawn, which is what a Shift range measures along. Memoised because
+   * `useCardSelection` prunes against it on every render and because a fresh array would make its
+   * callbacks new every time — and one of those callbacks ends up in a drag registration.
+   */
+  const selectionOrder = useMemo(() => rows.map((card) => card.id), [rows]);
+  const picked = useCardSelection(selectionScope ?? NO_SELECTION, selectionOrder);
+
   const select = useCallback(
-    (cardId: string) => {
+    (cardId: string, event?: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }) => {
       // A tile with no printing selects nothing — see {@link GridCard.id}. The walk still steps
       // onto it, because a tile the arrows refuse to enter is a hole in the wall; what it does
       // not do is empty the pane on the way past, which is what `onSelect("")` would ask for.
       if (!cardId) return;
+      // A chord means the reader is building a set, not opening a card: the pane holds still and
+      // nothing below this line runs. `pick` has already collapsed the set to this one tile when
+      // it answers `false`, which is what keeps the ring and the pane agreeing.
+      if (selectionScope !== undefined && event && picked.pick(cardId, event)) return;
       if (arrowNav) keepCaretForCard(cardId);
       onSelect(cardId);
     },
-    [arrowNav, onSelect],
+    [arrowNav, onSelect, picked, selectionScope],
+  );
+
+  /**
+   * What else a drag from one tile is carrying — the picked set less the tile itself, as payloads
+   * (issue #214).
+   *
+   * **Held still across renders**, because it lands in every tile's drag-registration dependency
+   * list: a fresh function per render would tear four hundred registrations down each time the
+   * reader Ctrl-clicked, and a source that unregisters mid-gesture is a drop that never arrives.
+   * The two live values it reads — the selection and the rows — come off refs for that reason.
+   *
+   * `dragsAll` is asked first and has a side effect by design: a tile picked up from *outside* the
+   * set throws the set away, so a stray drag can never carry four cards the reader had forgotten
+   * were picked.
+   *
+   * `undefined` on a wall that cannot be dragged from or has no scope, so nothing there registers
+   * a preview callback and every existing wall behaves exactly as it did.
+   */
+  const dragRef = useRef({ picked, rows, dragPayload, dragRecord });
+  useEffect(() => {
+    dragRef.current = { picked, rows, dragPayload, dragRecord };
+  }, [picked, rows, dragPayload, dragRecord]);
+  const draggableWall = selectionScope !== undefined && (dragPayload ?? dragRecord) !== undefined;
+  const dragRest = useMemo(
+    () =>
+      draggableWall
+        ? (card: T) => {
+            const { picked: held, rows: drawn, ...seams } = dragRef.current;
+            if (!held.dragsAll(card.id)) return [];
+            const wanted = new Set(held.keys);
+            return drawn.flatMap((row) => {
+              if (row.id === card.id || !wanted.has(row.id)) return [];
+              // Whichever seam this wall uses. On a `dragRecord` wall the payload is read back
+              // out of the composed record through the same fence a drop target reads it
+              // through, so a tile carrying only a non-card mark — an any-printing wish —
+              // contributes nothing rather than an invented payload.
+              const payload =
+                seams.dragPayload?.(row) ??
+                (seams.dragRecord ? readDragData(seams.dragRecord(row) ?? {}) : null);
+              return payload ? [payload] : [];
+            });
+          }
+        : undefined,
+    [draggableWall],
+  );
+
+  /**
+   * The picked rows, in the order the wall draws them — what a menu built on a set acts on.
+   *
+   * `rows` order rather than pick order, because everything downstream of it is a *list of cards*
+   * rather than a history of presses: `Add 4 cards to → Wishlist` writes four wishes, and the one
+   * order a reader could check it against is the one on screen.
+   *
+   * Identity churn is free here in a way it is not for the drag: these two slots are read on
+   * render rather than registered, so nothing is torn down when they change — `cardMenu`'s own doc
+   * says so.
+   */
+  const pickedRows = useMemo(
+    () => (picked.count > 1 ? rows.filter((card) => picked.selected(card.id)) : []),
+    [rows, picked],
+  );
+  const tileMenu = useCallback(
+    (card: T) => cardMenu?.(card, picked.selected(card.id) ? pickedRows : []),
+    [cardMenu, picked, pickedRows],
+  );
+  const tileMenuKey = useCallback(
+    (card: T) => cardMenuKey?.(card, picked.selected(card.id) ? pickedRows : []),
+    [cardMenuKey, picked, pickedRows],
   );
 
   const virtualRows = virtualizer.getVirtualItems();
@@ -796,7 +917,12 @@ export function CardGrid<T extends GridCard>({
     e.preventDefault();
     // `select` rather than `onSelect`: the caret note lives in there, so a *press* on a tile gets
     // it too and the reader's first arrow after clicking has somewhere to move from.
-    select(rows[next].id);
+    //
+    // **The event travels, so Shift+Arrow extends the picked set** (issue #214) exactly as
+    // Shift+click does, and a plain arrow collapses it onto the tile the walk landed on — which
+    // is what keeps the ring and the pane agreeing all the way along the walk. On a wall with no
+    // `selectionScope` the chords reach nothing and the press is the walk it always was.
+    select(rows[next].id, e);
     // Scroll first, focus later. The tile may not be drawn yet — see `pendingIndex` — and the
     // virtualiser is the only thing that can put it on screen, since it owns this scroller's
     // offset outright.
@@ -861,7 +987,12 @@ export function CardGrid<T extends GridCard>({
                 width={tileWidth}
                 zoom={cardZoom}
                 onSelect={select}
-                selected={card.id === selectedId}
+                // **The pane's card, or a member of the picked set** — one gold ring for both,
+                // which is issue #214's answer rather than an economy: gold already means
+                // *picked* on this wall, and a reader who has Ctrl-clicked four tiles has picked
+                // four. The pane shows the last one they opened, as a pane always has.
+                selected={card.id === selectedId || picked.selected(card.id)}
+                dragRest={dragRest}
                 badge={badge}
                 topLeft={topLeft}
                 finish={finish}
@@ -869,8 +1000,8 @@ export function CardGrid<T extends GridCard>({
                 gameChanger={gameChanger}
                 action={action}
                 caption={caption}
-                cardMenu={cardMenu}
-                cardMenuKey={cardMenuKey}
+                cardMenu={tileMenu}
+                cardMenuKey={tileMenuKey}
                 tileRef={tileRef}
                 dragPayload={dragPayload}
                 dragRecord={dragRecord}
@@ -909,6 +1040,7 @@ function Tile<T extends GridCard>({
   tileRef,
   dragPayload,
   dragRecord,
+  dragRest,
 }: {
   card: T;
   /**
@@ -931,7 +1063,7 @@ function Tile<T extends GridCard>({
    * `MARK_SCALE_VAR` in `lib/cardZoom.ts`.
    */
   zoom: number;
-  onSelect: (id: string) => void;
+  onSelect: (id: string, event: ReactMouseEvent) => void;
   selected: boolean;
   badge?: (card: T) => ReactNode;
   topLeft?: (card: T) => ReactNode;
@@ -945,6 +1077,12 @@ function Tile<T extends GridCard>({
   tileRef?: (card: T, element: HTMLElement | null) => void | (() => void);
   dragPayload?: (card: T) => DragPayload | null;
   dragRecord?: (card: T) => Record<string, unknown> | null;
+  /**
+   * The **other** cards a drag from this tile carries — issue #214, and empty for every ordinary
+   * drag. Hold it still, like the two slots above it: its identity is in the registration's
+   * dependency list.
+   */
+  dragRest?: (card: T) => DragPayload[];
 }) {
   const mark = badge?.(card);
   const corner = topLeft?.(card);
@@ -960,7 +1098,7 @@ function Tile<T extends GridCard>({
    * printing to open. One binding for all three places a press opens the card (the art and
    * both corner marks), so a wall cannot end up half-live.
    */
-  const open = card.id ? () => onSelect(card.id) : undefined;
+  const open = card.id ? (event: ReactMouseEvent) => onSelect(card.id, event) : undefined;
 
   // Held still, because React detaches and re-runs a callback ref whose identity changed —
   // so an inline arrow here would tear the caller's registration down and build it again on
@@ -989,7 +1127,23 @@ function Tile<T extends GridCard>({
       if (dragRecord) {
         const record = dragRecord(card);
         if (record === null) return detach;
-        const stop = composedDraggable({ element, data: () => dragRecord(card) ?? record });
+        const stop = composedDraggable({
+          element,
+          data: () => {
+            const now = dragRecord(card) ?? record;
+            // **The group is added to the composed record rather than built into it** — this is
+            // the seam for a tile whose drag means more than one thing (the wishlist's, which
+            // carries a wish mark beside the card one), so the record is the caller's and only
+            // the group is ours. The primary is recovered through `readDragData` instead of
+            // being passed a second time, so the head of the group and the flat payload beside
+            // it can never name different cards. A record with no readable card payload — an
+            // any-printing wish — gets no group, which is right: there is no card in it to
+            // carry others alongside.
+            const primary = readDragData(now);
+            return primary === null ? now : withDragGroup(now, primary, dragRest?.(card) ?? []);
+          },
+          count: dragRest ? () => dragRest(card).length + 1 : undefined,
+        });
         return () => {
           stop();
           detach?.();
@@ -998,13 +1152,17 @@ function Tile<T extends GridCard>({
       if (!dragPayload) return detach;
       const carried = dragPayload(card);
       if (carried === null) return detach;
-      const stop = cardDraggable({ element, payload: () => dragPayload(card) ?? carried });
+      const stop = cardDraggable({
+        element,
+        payload: () => dragPayload(card) ?? carried,
+        rest: dragRest ? () => dragRest(card) : undefined,
+      });
       return () => {
         stop();
         detach?.();
       };
     },
-    [tileRef, dragPayload, dragRecord, card],
+    [tileRef, dragPayload, dragRecord, dragRest, card],
   );
 
   return (
@@ -1069,6 +1227,11 @@ function Tile<T extends GridCard>({
       // scroll is computed in, so the correction is a fraction of the ring's room rather than
       // something needing a frame of its own.
       className="group flex shrink-0 scroll-m-1.5 flex-col gap-[calc(0.25rem*var(--mark-scale,1))]"
+      // A Shift-click is a range (issue #214), and Shift in a browser also drags a text selection
+      // across everything between the two presses — on a wall of forty tiles, every caption from
+      // the anchor to the pointer painted blue for the length of the gesture. On the tile's root
+      // rather than on the art button, because the press can land on any of its four parts.
+      onMouseDown={suppressRangeSelection}
     >
       {/* The badge is a *sibling* of the button, not a child of it: inside, its text would
           join the button's accessible name, and a wall of forty cards would be forty

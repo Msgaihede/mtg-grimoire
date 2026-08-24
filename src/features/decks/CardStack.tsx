@@ -24,6 +24,8 @@ import {
   deckCardBodyProps,
   deckCardName,
   deckCardMenuProps,
+  deckCardMarked,
+  deckCardPress,
   deckCardProps,
   deckCardSelectedProps,
   DeckCardControls,
@@ -701,7 +703,11 @@ export function CardStack({
           currency={currency}
           index={index}
           open={index === open}
-          selected={index === picked}
+          // **`picked` decides which card fans open and this decides which wear the ring**, and
+          // since issue #214 they are two questions. A stack fans one card — the one the pane is
+          // on — because fanning four would be a pile with no shape left; the gold ring is worn
+          // by every card the reader has Ctrl-clicked, which is what `deckCardMarked` answers.
+          selected={deckCardMarked(card, selectedSlot, actions)}
           landedKey={landed.get(card.id)}
           zoom={zoom}
           onArm={arm}
@@ -799,7 +805,7 @@ function StackedCard({
   actions?: DeckCardActions;
 }) {
   const tip = useTooltip();
-  const dragRef = useDeckCardDrag(card, actions?.drop !== undefined);
+  const dragRef = useDeckCardDrag(card, actions?.drop !== undefined, actions?.groupDrag);
   // The whole card (`grid`, 488×680), not the `art` crop. Fed `null` for an orphan, whose
   // printing has left the card database — nothing tries to draw a picture of a card that is not
   // there, and the hook's null story is "no state machine at all".
@@ -913,7 +919,7 @@ function StackedCard({
         aria-label={deckCardName(card, ruleBreakText, inTheory)}
         // How the card pane hands the caret back after a printing swap replaces this card.
         {...deckCardProps(card)}
-        onClick={onSelect ? () => onSelect(card) : undefined}
+        {...deckCardPress(card, onSelect, actions)}
         // Inset, because the button *is* the card face: its edge sits 1px inside the card's own
         // border with the data line butted against its bottom, so an outline standing 2px off
         // it is drawn over both and reads as a thicker card rather than as focus.

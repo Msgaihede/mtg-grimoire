@@ -22,11 +22,12 @@ Then from another shell, `scripts/cdp.mjs` (no dependencies, Node's built-in Web
 `media prefers-reduced-motion reduce "<expr>"` · `shot out.png [w h]` · `console out.jsonl`
 (stays attached; records `Log.entryAdded` **and** `Runtime.consoleAPICalled` — a run that
 watches only one reports a clean console it never looked at).
-**`--shift` on `click`, `text` and `press`** holds Shift down for that one gesture
-(Chromium's modifier bitmask, `8`) — which is how a multi-key table sort is built, and the
-only honest way to check it: a `dispatchEvent({shiftKey:true})` out of `eval` skips the
-input pipeline the real modifier state comes from. On `press` it lands on the click Chromium
-synthesises, so one `onClick` reading `e.shiftKey` serves the mouse and the keyboard both.
+**`--shift` and `--ctrl` on `click`, `text` and `press`** hold that modifier down for the one
+gesture (Chromium's modifier bitmask, `8` and `2`) — which is how a multi-key table sort is
+built and, since issue #214, how a card is added to a picked set. It is the only honest way to
+check either: a `dispatchEvent({shiftKey:true})` out of `eval` skips the input pipeline the real
+modifier state comes from. On `press` it lands on the click Chromium synthesises, so one
+`onClick` reading `e.shiftKey` serves the mouse and the keyboard both.
 **A recorder dies with the window it is attached to**, and says nothing about it — restart
 the app mid-pass and every later interaction goes unwatched while the file still exists and
 still holds its `attached` line. Re-attach after any relaunch, and check the line count.
@@ -144,8 +145,18 @@ index-<hash>.js` — and then cargo sees no Rust source change, skips the crate,
   written with `\"` inside a PowerShell double-quoted string splits into extra positionals, `dy`
   becomes `NaN`, and CDP rejects the call with `Failed to deserialize params.y` — measured. Single
   quotes only, inside.
+- **A stacked deck card cannot be clicked at its centre, and `click <css>` aims at centres.**
+  `CardStack` overlaps every card by 285px, so a collapsed one's only hittable part is its 34px
+  reveal strip — a click at the rect's middle lands on whichever card is painted *over* it, and
+  the pass reads as "the chord did nothing" while the app is working. Measured 2026-08-24 driving
+  multi-select: a Ctrl-click aimed at one card marked a third one, twice, before the geometry was
+  the suspect. Two ways out, and both are cheap: switch the toolbar's view select to `grid` or
+  `table`, where a card's centre is its own; or aim at the **last** card of a pile, which nothing
+  is drawn over. Hovering first makes it worse rather than better — the dwell fans a card open and
+  reflows the pile under the pointer.
 - **`key` knows `ArrowLeft`/`ArrowRight`/`Home`/`End`** as well as Escape, Enter, Tab and the
-  vertical arrows. The four were added for the app's one `separator`, whose whole keyboard contract
+  vertical arrows, and **`Delete`** since issue #214 — the deck editor's one keyboard verb that
+  is not undo, which takes the picked set out of the deck and yields inside a text field. The four were added for the app's one `separator`, whose whole keyboard contract
   is them; `rawKeyDown` is the right event for all of these, which is `press`'s distinction below.
   **It also knows `F10` and `ContextMenu`, and `--shift` applies to `key` as well**, which is how
   a card menu is opened from the keyboard: `useContextMenu` answers `ContextMenu` or `Shift+F10`,

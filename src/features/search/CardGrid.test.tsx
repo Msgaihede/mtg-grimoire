@@ -4,7 +4,7 @@ import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vite
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { monitorForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import type { ReactElement } from "react";
-import { readDragData } from "@/features/decks/dnd";
+import { readDragData, readDragGroup, type DragPayload } from "@/features/decks/dnd";
 import { IMAGE_RETRY_FLOOR_MS, IMAGE_RETRY_SPREAD_MS, WALL_CARD_VARIANT } from "@/lib/images";
 import type { CardSummary, WishInput } from "@/lib/ipc";
 import { startDrag } from "@/test-drag";
@@ -1463,5 +1463,190 @@ describe("the arrow-key walk", () => {
 
     rerender(<CardGrid rows={THREE} onSelect={vi.fn()} {...base} arrowNav={false} />);
     expect(indices()).toEqual(["0", "1", "2"]);
+  });
+});
+
+/**
+ * **Multi-select on a wall** — issue #214.
+ *
+ * The arithmetic is `lib/multiSelect.ts`'s truth table and the drag contract is
+ * `features/decks/dndGroup.test.ts`'s; what is left here is the wall's own seam: that the chord
+ * decides between "open this card" and "add it to the set", that the ring follows the set, and
+ * that a wall which passed no `selectionScope` is exactly the wall it was before any of this.
+ */
+describe("CardGrid multi-select", () => {
+  const ROWS = [
+    card("aaa", "Lightning Bolt"),
+    card("bbb", "Lightning Helix"),
+    card("ccc", "Ponder"),
+    card("ddd", "Brainstorm"),
+  ];
+
+  /** Every card whose art is wearing the picked ring — `CardArt`'s `selected` recipe, which is
+   *  the same gold the deck editor draws and the one thing both walls agree on. */
+  const ringed = () => [...document.querySelectorAll(".ring-accent")];
+
+  /**
+   * A chord press on a tile's art.
+   *
+   * **One `setup()` session for the three calls.** The direct `userEvent.click` and
+   * `userEvent.keyboard` helpers each open a session of their own, so a modifier held by one is
+   * released before the next runs — the press lands as a plain click and a test written the naive
+   * way passes while asserting about a gesture it never made.
+   */
+  async function pressWith(name: string, key: "Control" | "Shift") {
+    const user = userEvent.setup();
+    await user.keyboard(`{${key}>}`);
+    await user.click(screen.getByRole("button", { name }));
+    await user.keyboard(`{/${key}}`);
+  }
+
+  function wall(props: Partial<Parameters<typeof CardGrid<CardSummary>>[0]> = {}) {
+    const onSelect = vi.fn();
+    render(
+      <CardGrid
+        rows={ROWS}
+        onSelect={onSelect}
+        onNeedNextPage={vi.fn()}
+        listKey="k"
+        zoomSection="search"
+        selectionScope="search"
+        {...props}
+      />,
+    );
+    return onSelect;
+  }
+
+  beforeEach(() => useAppStore.setState({ cardSelection: null }));
+
+  /** The whole of what makes a chord a selection: the card does not open. */
+  it("adds a tile to the set on Ctrl-click without opening it", async () => {
+    const onSelect = wall();
+
+    await userEvent.click(screen.getByRole("button", { name: "Lightning Bolt" }));
+    expect(onSelect).toHaveBeenCalledTimes(1);
+
+    await pressWith("Ponder", "Control");
+
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(useAppStore.getState().cardSelection?.keys).toEqual(["aaa", "ccc"]);
+  });
+
+  it("rings every tile in the set", async () => {
+    wall();
+    await userEvent.click(screen.getByRole("button", { name: "Lightning Bolt" }));
+    await pressWith("Ponder", "Control");
+
+    expect(ringed()).toHaveLength(2);
+  });
+
+  /** Shift takes the run between the anchor and the press, in the order the wall draws them. */
+  it("takes a range on Shift-click", async () => {
+    wall();
+    await userEvent.click(screen.getByRole("button", { name: "Lightning Bolt" }));
+
+    await pressWith("Brainstorm", "Shift");
+
+    expect(useAppStore.getState().cardSelection?.keys).toEqual(["aaa", "bbb", "ccc", "ddd"]);
+  });
+
+  /** Ctrl-clicking a member again takes it back out — the toggle, at the wall's own seam. */
+  it("takes a tile back out of the set", async () => {
+    wall();
+    await userEvent.click(screen.getByRole("button", { name: "Lightning Bolt" }));
+    await pressWith("Ponder", "Control");
+    await pressWith("Ponder", "Control");
+
+    expect(useAppStore.getState().cardSelection?.keys).toEqual(["aaa"]);
+  });
+
+  /** A plain click puts the set back down to the one card it opened. */
+  it("collapses the set on a plain click", async () => {
+    wall();
+    await userEvent.click(screen.getByRole("button", { name: "Lightning Bolt" }));
+    await pressWith("Ponder", "Control");
+
+    await userEvent.click(screen.getByRole("button", { name: "Brainstorm" }));
+
+    expect(useAppStore.getState().cardSelection?.keys).toEqual(["ddd"]);
+  });
+
+  /**
+   * **A wall that passed no scope is the wall it always was.** The printings modal is the case
+   * this exists for: a press there is a swap or a look, and a set of printings is not a thing
+   * anything downstream can act on.
+   */
+  it("opens the card on Ctrl-click when the wall has no selection scope", async () => {
+    const onSelect = wall({ selectionScope: undefined });
+
+    await pressWith("Ponder", "Control");
+
+    expect(onSelect).toHaveBeenCalledWith("ccc");
+    expect(useAppStore.getState().cardSelection).toBeNull();
+  });
+
+  /**
+   * A drag from a member carries the whole set, primary first — read back through the same fence
+   * a drop target reads it through.
+   */
+  it("carries the whole set in a drag from one of its members", async () => {
+    const payload = (c: CardSummary): DragPayload => ({
+      kind: "card",
+      cardId: c.id,
+      name: c.name,
+      typeLine: c.typeLine,
+    });
+    wall({ dragPayload: payload });
+    await userEvent.click(screen.getByRole("button", { name: "Lightning Bolt" }));
+    await pressWith("Ponder", "Control");
+
+    const carried: Record<string, unknown>[] = [];
+    const stop = monitorForElements({ onDragStart: ({ source }) => carried.push(source.data) });
+    const tile = screen.getByRole("button", { name: "Lightning Bolt" }).closest("[draggable]")!;
+    const held = await startDrag(tile);
+    await held.cancel();
+    stop();
+
+    expect(readDragGroup(carried[0]).map((p) => p.cardId)).toEqual(["aaa", "ccc"]);
+  });
+
+  /** And a drag from outside the set carries one card and throws the set away. */
+  it("carries one card when the drag starts outside the set", async () => {
+    const payload = (c: CardSummary): DragPayload => ({
+      kind: "card",
+      cardId: c.id,
+      name: c.name,
+      typeLine: c.typeLine,
+    });
+    wall({ dragPayload: payload });
+    await userEvent.click(screen.getByRole("button", { name: "Lightning Bolt" }));
+    await pressWith("Ponder", "Control");
+
+    const carried: Record<string, unknown>[] = [];
+    const stop = monitorForElements({ onDragStart: ({ source }) => carried.push(source.data) });
+    const tile = screen.getByRole("button", { name: "Brainstorm" }).closest("[draggable]")!;
+    const held = await startDrag(tile);
+    await held.cancel();
+    stop();
+
+    expect(readDragGroup(carried[0]).map((p) => p.cardId)).toEqual(["ddd"]);
+    expect(useAppStore.getState().cardSelection).toBeNull();
+  });
+
+  /** The menu slot is handed the set, so a surface can put its rows in the plural — and is
+   *  handed nothing at all for a card outside it. */
+  it("hands the card menu the picked rows, and only for a card inside the set", async () => {
+    const seen: Record<string, string[]> = {};
+    wall({
+      cardMenu: (c: CardSummary, picked: readonly CardSummary[]) => {
+        seen[c.id] = picked.map((p) => p.id);
+        return () => {};
+      },
+    });
+    await userEvent.click(screen.getByRole("button", { name: "Lightning Bolt" }));
+    await pressWith("Ponder", "Control");
+
+    expect(seen["aaa"]).toEqual(["aaa", "ccc"]);
+    expect(seen["ddd"]).toEqual([]);
   });
 });

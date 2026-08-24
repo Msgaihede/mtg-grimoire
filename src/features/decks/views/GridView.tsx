@@ -24,6 +24,8 @@ import {
   deckCardBodyProps,
   deckCardName,
   deckCardMenuProps,
+  deckCardMarked,
+  deckCardPress,
   deckCardProps,
   deckCardSelectedProps,
   DeckCardControls,
@@ -37,7 +39,6 @@ import {
   useDeckCardDrag,
   type DeckCardActions,
 } from "../cardControl";
-import { deckCardSlot } from "../dnd";
 import { matchesTheory } from "../theoryMatch";
 import { DropIndicator } from "../DropIndicator";
 import type { CardGroup } from "../grouping";
@@ -260,7 +261,7 @@ function GridGroup({
               inTheory={matchesTheory(theoryMatches, card)}
               onSelect={onSelect}
               actions={actions}
-              selected={deckCardSlot(card.categoryId, card.cardId, card.finish) === selectedSlot}
+              selected={deckCardMarked(card, selectedSlot, actions)}
               landedKey={landed?.get(card.id)}
               zoom={zoom}
             />
@@ -325,7 +326,7 @@ function GridCard({
    *  {@link atLeast}. */
   zoom: number;
 }) {
-  const dragRef = useDeckCardDrag(card, actions?.drop !== undefined);
+  const dragRef = useDeckCardDrag(card, actions?.drop !== undefined, actions?.groupDrag);
   // The foot and its type, which move with the tile in both directions now — see {@link atLeast},
   // which no longer governs either of them. Computed once here because three things read the
   // height: the strip itself, the type inside it, and the controls that sit directly above it.
@@ -376,7 +377,7 @@ function GridCard({
         type="button"
         aria-label={deckCardName(card, ruleBreakText, inTheory)}
         {...deckCardProps(card)}
-        onClick={onSelect ? () => onSelect(card) : undefined}
+        {...deckCardPress(card, onSelect, actions)}
         // Inset, for the stacked card's reason: the button holds a face that clips its own
         // corners, and an outline standing off its edge lands on the tile's own gap.
         className={cn("block w-full cursor-pointer text-left", FOCUS_INSET)}
