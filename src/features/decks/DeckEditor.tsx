@@ -2307,7 +2307,15 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       // every grouping has no position for a drag to change, under `category` least of all.
       moveCategory: groupBy === "category" ? moveCategory : undefined,
     }),
-    [setQuantity, applyDrop, deckCardMenu, categoryMenu, renameCategoryField, groupBy, moveCategory],
+    [
+      setQuantity,
+      applyDrop,
+      deckCardMenu,
+      categoryMenu,
+      renameCategoryField,
+      groupBy,
+      moveCategory,
+    ],
   );
 
   /**
@@ -2784,7 +2792,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       // position is still inside *this* column's scrolled content, so the phantom bar moved rather
       // than went. The rule that generalises is "a scroll container is the containing block for
       // its own absolutely positioned content", and the scroller here is this element.
-      className={cn("relative flex h-full min-h-0 flex-col gap-3 overflow-y-auto", FOCUS)}
+      className={cn("relative flex h-full min-h-0 flex-col gap-3", FOCUS)}
     >
       {/* The four quick destinations, drawn across the top of this scroller for the length of a
           drag and at no other time. **The first child on purpose**: it is `sticky top-0`, so it
@@ -2873,8 +2881,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
             paneFromDeckSearch
               ? {
                   right: dockWidth > 0 ? dockWidth + DESK_GAP : 0,
-                  width:
-                    deskWidth > 0 ? Math.max(0, deskWidth - dockWidth - DESK_GAP) : undefined,
+                  width: deskWidth > 0 ? Math.max(0, deskWidth - dockWidth - DESK_GAP) : undefined,
                 }
               : { right: 0, width: deskWidth > 0 ? deskWidth : undefined }
           }
@@ -3204,9 +3211,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                 rather than from a typed name. */}
             <QuickAdd
               targetName={targetName}
-              onAdd={(card) =>
-                addTo(card.id, targetCategoryId, card.typeLine, addMode === "own")
-              }
+              onAdd={(card) => addTo(card.id, targetCategoryId, card.typeLine, addMode === "own")}
             />
           </div>
 
@@ -3510,7 +3515,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               maxWidth={maxPanelWidth}
             />
           </div>
-
         </div>
       )}
 

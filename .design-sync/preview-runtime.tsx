@@ -25,6 +25,10 @@ import { useEffect, useLayoutEffect, useMemo, type ReactNode } from "react";
 
 import { QueryClientProvider } from "@tanstack/react-query";
 import { installWorld, type FakeParams } from "../.storybook/fake/world";
+import { MotionConfig } from "motion/react";
+import { ContextMenuProvider } from "../src/components/menu/ContextMenuProvider";
+import { TooltipProvider } from "../src/components/tooltip/TooltipProvider";
+import { CardToDeckProvider } from "../src/features/card/cardMenu";
 import { setArtMode } from "../.storybook/fake/images";
 
 export * from "../.storybook/fake/core";
@@ -32,6 +36,7 @@ export * from "../.storybook/fake/scope";
 export * from "../.storybook/fake/world";
 export * from "../.storybook/fake/images";
 export * from "../.storybook/fake/event";
+export * from "../.storybook/fake/window";
 export * from "../.storybook/fake/fixtures";
 export * from "../.storybook/fake/cards";
 
@@ -74,11 +79,29 @@ export function GrimoireWorld({
   const world = useMemo(() => installWorld({ seed, fault }, { resetStore: true }), [seed, fault]);
   useEffect(() => world.mount(), [world]);
 
+  // **The app's provider stack, mirrored from `.storybook/preview.tsx`'s `withFake`** — which
+  // mirrors `src/App.tsx` in turn. Four of these joined storybook after this file was written,
+  // and their absence is not a soft degradation: `AppShell` calls `useCardToDeckRefusal`, which
+  // throws "A card menu needs <CardToDeckProvider>" outright, so all eleven of its cells died and
+  // the card rendered an empty root until this stack was restored.
+  //
+  // Order is load-bearing and copied, not invented. `CardToDeckProvider` and `TooltipProvider`
+  // sit ABOVE `ContextMenuProvider` because that provider draws its panel as a *sibling* of its
+  // children: mounted inside it, a context reaches every view and none of the menu's own rows.
+  // Both files write the reasoning out at length; read `src/App.tsx` before reordering these.
+  //
+  // Inside `QueryClientProvider` because `CardToDeckProvider` mounts `useDeck`, a query.
   return (
-    <QueryClientProvider client={world.client}>
-      <Activate world={world} />
-      {children}
-    </QueryClientProvider>
+    <MotionConfig reducedMotion="user">
+      <QueryClientProvider client={world.client}>
+        <Activate world={world} />
+        <TooltipProvider>
+          <CardToDeckProvider>
+            <ContextMenuProvider>{children}</ContextMenuProvider>
+          </CardToDeckProvider>
+        </TooltipProvider>
+      </QueryClientProvider>
+    </MotionConfig>
   );
 }
 

@@ -547,7 +547,7 @@ it("opens the editor on the deck a tile was picked from, and comes back to that 
 it("opens the tag browser on the tags entry", async () => {
   render(<App />);
 
-  await userEvent.click(screen.getByRole("button", { name: "Tags" }));
+  await userEvent.click(screen.getByRole("button", { name: "Tagger" }));
 
   expect(
     await screen.findByRole("heading", { name: "Browse cards by tag", level: 2 }),

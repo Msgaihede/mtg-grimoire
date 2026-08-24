@@ -9,8 +9,12 @@
   "storybookStatic": ".design-sync/sb-reference",
   "readmeHeader": ".design-sync/conventions.md",
   "buildCmd": "npx tsc -p .design-sync/tsconfig.dts.json && npx storybook build -c .storybook -o .design-sync/sb-reference",
-  "extraEntries": ["./.design-sync/preview-runtime.tsx"],
-  "provider": { "component": "GrimoirePreviewProvider" },
+  "extraEntries": [
+    "./.design-sync/preview-runtime.tsx"
+  ],
+  "provider": {
+    "component": "GrimoirePreviewProvider"
+  },
   "extraFonts": [
     "node_modules/mana-font/css/mana.css",
     "node_modules/keyrune/css/keyrune.css",
@@ -24,25 +28,75 @@
       "cardMode": "single",
       "primaryStory": "Search",
       "viewport": "1280x800",
-      "skip": ["chrome-appshell--update-available"]
+      "skip": [
+        "chrome-appshell--update-available"
+      ]
     },
-    "CardImage": { "skip": ["primitives-cardimage--swap-card"] },
-    "ManaText": { "skip": ["primitives-manatext--nothing"] },
-    "OwnedBadge": { "skip": ["primitives-ownedbadge--nothing"] },
-    "Ribbon": { "cardMode": "column" },
-    "SortableHeader": { "cardMode": "column", "skip": ["table-sortableheader--live"] },
-    "VirtualTable": { "cardMode": "column" },
+    "CardImage": {
+      "skip": [
+        "primitives-cardimage--swap-card"
+      ]
+    },
+    "ManaText": {
+      "skip": [
+        "primitives-manatext--nothing"
+      ]
+    },
+    "OwnedBadge": {
+      "skip": [
+        "primitives-ownedbadge--nothing"
+      ]
+    },
+    "Ribbon": {
+      "cardMode": "column"
+    },
+    "SortableHeader": {
+      "cardMode": "column",
+      "skip": [
+        "table-sortableheader--live"
+      ]
+    },
+    "VirtualTable": {
+      "cardMode": "column"
+    },
     "ToggleChip": {
       "cardMode": "column",
       "primaryStory": "Toggle",
-      "skip": ["primitives-filterchips--nothing-to-reset"]
+      "skip": [
+        "primitives-filterchips--nothing-to-reset"
+      ]
     },
-    "SyncProgress": { "cardMode": "single", "primaryStory": "Ingesting" }
+    "SyncProgress": {
+      "cardMode": "single",
+      "primaryStory": "Ingesting"
+    },
+    "Dialog": {
+      "cardMode": "single",
+      "primaryStory": "Default",
+      "skip": [
+        "decks-dialog-shell--closed"
+      ],
+      "viewport": "960x700"
+    },
+    "CardZoomIndicator": {
+      "cardMode": "single",
+      "primaryStory": "Enlarged"
+    },
+    "TitleBar": {
+      "cardMode": "column"
+    }
   },
   "storyImports": {
-    "shim": ["/components/FilterChips", "/lib/store", ".storybook/fake/"]
+    "shim": [
+      "/components/FilterChips",
+      "/lib/store",
+      ".storybook/fake/",
+      "@tanstack/react-query"
+    ]
   },
   "titleMap": {
+    "Contextmenu": "ContextMenu",
+    "Dialogshell": "Dialog",
     "FilterChips": "ToggleChip",
     "Designsystem": null,
     "DetailPane": null,

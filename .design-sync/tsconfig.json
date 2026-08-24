@@ -17,6 +17,7 @@
     "paths": {
       "@tauri-apps/api/core": ["../.storybook/fake/core.ts"],
       "@tauri-apps/api/event": ["../.storybook/fake/event.ts"],
+      "@tauri-apps/api/window": ["../.storybook/fake/window.ts"],
       "@/lib/images": ["../.storybook/fake/images.ts"],
       "@/*": ["../src/*"]
     }

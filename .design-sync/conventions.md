@@ -33,7 +33,12 @@ invent parallel names or hard-code hex values.
 | Surface | page, panels | `bg-bg` · `bg-surface` · `bg-muted` |
 | Text | body, secondary, gold | `text-text` · `text-dim` · `text-accent` |
 | Border | every rule and edge | `border-border` |
-| Type | display, body, data | `font-heading` · `font-sans` · `font-mono` |
+| Type | display, data | `font-heading` · `font-mono` |
+
+Body type needs no class: `body` is `font-sans` already, and because nothing in the app writes
+that utility Tailwind never compiles a `.font-sans` rule — verified absent from the shipped CSS
+on 2026-08-24. Inside a `font-heading` or `font-mono` subtree, return to body type with
+`style={{ fontFamily: "var(--font-sans)" }}`; the token ships, the utility does not.
 
 Two traps that silently produce near-invisible UI:
 

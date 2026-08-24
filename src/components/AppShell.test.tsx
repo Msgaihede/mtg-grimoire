@@ -222,11 +222,23 @@ it("renders nav and refresh button", async () => {
 
   // By role, not by text: the ribbon now renders the active view's title with the same
   // word the nav item uses, so a bare `getByText("Search")` is ambiguous.
-  expect(screen.getByRole("button", { name: "Search" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Collection" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Wishlist" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Decks" })).toBeInTheDocument();
-  expect(screen.getByRole("button", { name: "Settings" })).toBeInTheDocument();
+  //
+  // **In DOM order, because the order is a decision rather than the array's history** — the two
+  // ways into the database, then the three lists the reader owns, then Settings. Six separate
+  // `getByRole` calls stayed green through any shuffle of the column, which is the one thing
+  // about this list a reader would notice from across the room. `within` the rail keeps the
+  // ribbon's own title out of the answer, and the toggle at the rail's foot is the seventh
+  // button inside it.
+  const nav = screen.getByRole("navigation", { name: "Views" });
+  expect(within(nav).getAllByRole("button").map((b) => b.textContent)).toEqual([
+    "Search",
+    "Tagger",
+    "Decks",
+    "Collection",
+    "Wishlist",
+    "Settings",
+    "Collapse",
+  ]);
   expect(await screen.findByRole("button", { name: /refresh/i })).toBeInTheDocument();
   expect(screen.getByText("content")).toBeInTheDocument();
 });
@@ -570,7 +582,7 @@ describe("collapsing the sidebar", () => {
     render(<AppShell update={noUpdate}>{null}</AppShell>);
     await screen.findByRole("button", { name: "Expand sidebar" });
 
-    for (const label of ["Search", "Tags", "Collection", "Wishlist", "Decks", "Settings"]) {
+    for (const label of ["Search", "Tagger", "Decks", "Collection", "Wishlist", "Settings"]) {
       expect(screen.getByRole("button", { name: label })).toBeInTheDocument();
     }
 
@@ -673,7 +685,7 @@ describe("collapsing the sidebar", () => {
     render(<AppShell update={noUpdate}>{null}</AppShell>);
     const collapse = await screen.findByRole("button", { name: "Collapse sidebar" });
     const entries = () =>
-      ["Search", "Tags", "Collection", "Wishlist", "Decks", "Settings"].map((label) =>
+      ["Search", "Tagger", "Decks", "Collection", "Wishlist", "Settings"].map((label) =>
         screen.getByRole("button", { name: label }),
       );
     for (const entry of [...entries(), collapse]) {
