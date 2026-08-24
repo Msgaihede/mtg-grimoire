@@ -7,6 +7,7 @@ import {
   type ZoomSection,
 } from "./cardZoom";
 import type { Condition } from "./conditions";
+import { applySelect, EMPTY_SELECTION, type Selection, type SelectModifiers } from "./multiSelect";
 import { defaultFields } from "@/features/transfer/fields";
 import type { TransferFieldId, TransferSurface } from "@/features/transfer/fields";
 import type { ExportFormat } from "@/features/transfer/formats";
@@ -14,6 +15,19 @@ import type { DeckFinish, DeckVariant } from "./ipc";
 
 /** The six top-level destinations in the sidebar. */
 export type ViewId = "search" | "tags" | "collection" | "wishlist" | "decks" | "settings";
+
+/**
+ * A set of picked cards **and the surface it belongs to** — `lib/multiSelect.ts`'s
+ * {@link Selection} with the one field that module deliberately has no opinion about.
+ *
+ * The scope is a plain string rather than a union, and that is the point rather than laziness: a
+ * deck's is `deck:${id}` and a tag wall's is `tags:${tag}`, so the set of legal values is open by
+ * construction. What a union would buy — an exhaustive switch — nothing here wants; what it would
+ * cost is every new surface editing this file to say it exists.
+ */
+export interface CardSelection extends Selection {
+  scope: string;
+}
 
 /**
  * The deck row the open card was opened *from* — which is the whole of what the card pane
@@ -216,6 +230,51 @@ interface AppState {
   /** The printing the detail pane is showing, or `null` when it is closed. */
   selectedCardId: string | null;
   setSelectedCardId: (id: string | null) => void;
+  /**
+   * The cards a reader has picked with Ctrl and Shift, and **which surface they picked them on**.
+   *
+   * `null` is nothing picked anywhere. The keys are opaque strings whose meaning belongs to the
+   * scope: the deck editor's are slots (`dnd.ts`'s `deckCardSlot`) and a wall's are printing ids.
+   * `lib/multiSelect.ts` is the arithmetic; this is only where the answer is kept.
+   *
+   * ## Why one selection app-wide, scoped, rather than one per surface
+   *
+   * A per-surface map would let a reader leave four cards picked in the collection, walk to a
+   * deck, pick three there, and come back to a wall still holding a set they had forgotten —
+   * which is the state every stray multi-drag comes out of. One slice with a `scope` makes
+   * leaving a surface *discard* the set structurally: any write naming a different scope replaces
+   * the whole object, so no component has to remember to clear it on the way out. The scope
+   * strings are the surface's own (`deck:12`, `search`, `collection`, `wishlist`, `tags`,
+   * `deck-panel:12`), and a deck id is in there because two decks are two surfaces.
+   *
+   * ## Why the store rather than component state
+   *
+   * Three unrelated components read one selection: the drag registration in `cardControl.tsx`
+   * (which is a ref callback, not a render), the editor's Delete handler, and the menu builders.
+   * The nearest common ancestor of those three is `App`.
+   */
+  cardSelection: CardSelection | null;
+  /**
+   * Pick a card — the one write, and the only way the set changes.
+   *
+   * `order` is the surface's keys in the order the reader sees them, read for Shift ranges and
+   * for nothing else. A write whose `scope` differs from what is held throws the old set away
+   * before applying, which is what makes the scoping above structural.
+   */
+  pickCard: (
+    scope: string,
+    key: string,
+    order: readonly string[],
+    mods: SelectModifiers,
+  ) => void;
+  /**
+   * Replace a scope's set outright — what pruning calls, and what a surface calls to clear.
+   *
+   * Separate from {@link pickCard} because it is not a *press*: no modifier decides anything, so
+   * routing it through the algebra would mean inventing a chord for "the query answered and two
+   * of these rows are gone".
+   */
+  setCardSelection: (selection: CardSelection | null) => void;
   /**
    * The deck row the open card came from, or `null` — which is every card opened from
    * anywhere else, and every card at all when no pane is open.
@@ -524,10 +583,16 @@ export const useAppStore = create<AppState>((set) => ({
   // The open deck goes with it, for the same reason read the other way round: an editor is
   // the Decks view, so a deck left open through a trip to Settings would be waiting behind
   // the sidebar with the gallery it was opened from nowhere in sight.
+  // The picked set goes with them, and belt-and-braces is the honest description: the scope
+  // string already means a set made on one wall can never be read by another, so this clears
+  // nothing that could have been acted on. What it buys is that the reader who comes back to a
+  // wall finds it as they left every *other* wall — unpicked — rather than holding four cards
+  // from before a trip to Settings.
   setActiveView: (activeView) =>
     set({
       activeView,
       selectedCardId: null,
+      cardSelection: null,
       paneDeckContext: null,
       paneFromDeckSearch: false,
       openDeckId: null,
@@ -595,6 +660,15 @@ export const useAppStore = create<AppState>((set) => ({
   // the one surface that does mean it says so through `openCardFromDeck`.
   setSelectedCardId: (selectedCardId) =>
     set({ selectedCardId, paneDeckContext: null, paneFromDeckSearch: false }),
+  cardSelection: null,
+  // A press in a scope the held set does not name starts a new set rather than adding to one the
+  // reader made on another surface — see the field's doc for why that is the whole scoping rule.
+  pickCard: (scope, key, order, mods) =>
+    set((s) => {
+      const held = s.cardSelection?.scope === scope ? s.cardSelection : EMPTY_SELECTION;
+      return { cardSelection: { scope, ...applySelect(held, key, order, mods) } };
+    }),
+  setCardSelection: (cardSelection) => set({ cardSelection }),
   paneDeckContext: null,
   openCardFromDeck: (paneDeckContext) =>
     set({
@@ -621,6 +695,10 @@ export const useAppStore = create<AppState>((set) => ({
   setOpenDeckId: (openDeckId) =>
     set((s) => ({
       openDeckId,
+      // And the picked set, for `setActiveView`'s reason one floor down: opening or closing an
+      // editor is a navigation, and a deck's set is addressed by slots that mean nothing outside
+      // the deck they were picked in.
+      cardSelection: null,
       paneDeckContext: null,
       // Beside the context and for a sharper version of its reason: the flag is about a column
       // that only exists inside an editor, so carrying it across an open or a close would aim

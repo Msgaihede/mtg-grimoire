@@ -218,7 +218,47 @@ export interface CardMenuDeps {
    * printings list", which is true of every other one.
    */
   printingsOracleId?: string | null;
-  DeckTargetSubmenu: ComponentType<{ target: CardMenuTarget; onDone: () => void }>;
+  DeckTargetSubmenu: ComponentType<{ targets: readonly CardMenuTarget[]; onDone: () => void }>;
+  /**
+   * **The whole picked set, when the right-clicked card is in it** — issue #214. Absent, empty, or
+   * holding one card, and this menu is about the tile that was right-clicked, exactly as it was
+   * before multi-select existed.
+   *
+   * The *surface* decides membership rather than this builder, because the answer is a rule about
+   * a press: a right-click on a tile outside the set is about that tile, not about four others the
+   * reader had picked and forgotten. Passing `[]` there is what says so.
+   *
+   * ## Which rows read it
+   *
+   * The **writes** do: `Add to → Collection`, `Add to → Wishlist`, `Add to → Deck`, and the
+   * collection's `Move to`. Each is a per-card write over an address the target already carries,
+   * so plural is a loop and the label is the only thing that has to change.
+   *
+   * **`Copy card name`, `Copy card image`, `Open on` and `View all printings` stay about the one
+   * card, and that is a statement rather than an omission.** A clipboard holds one image; a
+   * browser tab opens one page; a printings modal lists one oracle card. There is no plural of
+   * any of them that is not a different feature.
+   *
+   * **`Add to → Collection` drops its finish level for a group**, which is the one place the
+   * plural is narrower than the singular — see {@link collectionItem}.
+   */
+  picked?: readonly CardMenuTarget[];
+}
+
+/**
+ * The cards this press is about: the picked set, or the one card that was right-clicked.
+ *
+ * A set of one is the card, which is not merely equivalent — it is what stops every label growing
+ * a `1 card` that says less than the card's own name.
+ */
+function menuTargets(target: CardMenuTarget, deps: CardMenuDeps): readonly CardMenuTarget[] {
+  const picked = deps.picked ?? [];
+  return picked.length > 1 ? picked : [target];
+}
+
+/** `4 cards` — the plural half of the labels below, never reached for a set of one. */
+function manyCards(n: number): string {
+  return `${n} cards`;
 }
 
 /**
@@ -229,12 +269,14 @@ const COPIED_IMAGE_VARIANT = "display" as const;
 
 export function buildCardMenu(target: CardMenuTarget, deps: CardMenuDeps): MenuItem[] {
   const { marketplace, DeckTargetSubmenu } = deps;
+  const rows = menuTargets(target, deps);
+  const many = rows.length > 1;
 
   /** The `lazy` row's component, closed over the card. Named rather than inline so its identity
    *  is stable for the life of the built array, which is what keeps React from remounting the
    *  picker — and re-reading the deck list — on every render of the open panel. */
   function DeckPicker({ onDone }: { onDone: () => void }) {
-    return <DeckTargetSubmenu target={target} onDone={onDone} />;
+    return <DeckTargetSubmenu targets={rows} onDone={onDone} />;
   }
 
   return [
@@ -294,11 +336,13 @@ export function buildCardMenu(target: CardMenuTarget, deps: CardMenuDeps): MenuI
     {
       kind: "submenu",
       id: "add-to",
-      label: "Add to",
+      // `Add 4 cards to → Wishlist` (issue #214). The count is on the outer row rather than on
+      // each destination, because it is a fact about what is being filed and not about where.
+      label: many ? `Add ${manyCards(rows.length)} to` : "Add to",
       Icon: Plus,
       items: [
-        collectionItem(target, deps),
-        wishlistItem(target, deps),
+        collectionItem(target, rows, deps),
+        wishlistItem(rows, deps),
         // `lazy` and not `submenu`: the folder tree and the deck list are two queries, and a
         // right-click on a card in a wall of forty must not fire either of them.
         { kind: "lazy", id: "add-deck", label: "Deck", Icon: Layers, Content: DeckPicker },
@@ -308,7 +352,7 @@ export function buildCardMenu(target: CardMenuTarget, deps: CardMenuDeps): MenuI
     // as one question — where does this card go — asked of a card the reader does not have yet
     // and of one they do. Absent entirely on every surface that cannot name a row; see
     // {@link CardMenuTarget.entryId} for why that is an absence rather than a greyed row.
-    ...toItems(moveItem(target, deps)),
+    ...toItems(moveItem(rows, deps)),
   ];
 }
 
@@ -423,9 +467,45 @@ function printingsItem(target: CardMenuTarget, deps: CardMenuDeps): MenuAction {
  * Nonfoil" over a picker whose whole job is to be read at a glance. `src/CLAUDE.md` states the
  * test the exemptions are granted by; it deliberately keeps no list of them.
  */
-function collectionItem(target: CardMenuTarget, deps: CardMenuDeps): MenuItem {
+function collectionItem(
+  target: CardMenuTarget,
+  rows: readonly CardMenuTarget[],
+  deps: CardMenuDeps,
+): MenuItem {
   const folders = userFolders(deps.collectionFolders);
   const { addToCollection } = deps;
+
+  /**
+   * **A group is recorded in each card's own plain finish, and the finish level is dropped.**
+   *
+   * This is the one row where the plural is narrower than the singular, and it is deliberate. A
+   * finish belongs to a *printing*: the choices differ card by card, so a group has no one list to
+   * offer — and a submenu built from the right-clicked card's finishes would either refuse the
+   * members that are not sold that way or, worse, record them in a finish nobody said they had.
+   * The collection is a record of cardboard the reader physically owns; inventing a foil in it is
+   * the one kind of wrong they cannot check against anything.
+   *
+   * So the group files each card in `finishChoices`' first answer — `nonfoil` for all but the
+   * 13 515 foil-only and 892 etched-only printings, which get their own only finish — and a reader
+   * who wants the shiny copy records that card on its own. The folder question survives whole,
+   * because a folder is about the reader's cabinet rather than about the cardboard.
+   */
+  if (rows.length > 1) {
+    const fileAll = (folderId: number | null) => {
+      for (const row of rows) {
+        addToCollection(row, row.finish ?? finishChoices(row.finishes)[0], folderId);
+      }
+    };
+    if (folders.length === 0) return collectionRow(() => fileAll(null));
+    return {
+      kind: "submenu",
+      id: "add-collection",
+      label: "Collection",
+      Icon: LibraryBig,
+      items: buildCollectionTargetItems(folders, fileAll),
+    };
+  }
+
   // A finish the surface named is the whole list: it is what that row **is**, and offering the
   // printing's other two would be asking a question the surface has already answered.
   const named = target.finish;
@@ -499,17 +579,23 @@ function collectionRow(onSelect: () => void): MenuAction {
  * would mean every collection surface handing this file a `folderId` it has no other use for,
  * for a fence the backend does not need.
  */
-function moveItem(target: CardMenuTarget, deps: CardMenuDeps): MenuItem | null {
-  const { entryId } = target;
+function moveItem(rows: readonly CardMenuTarget[], deps: CardMenuDeps): MenuItem | null {
   const move = deps.moveToFolder;
   const folders = userFolders(deps.collectionFolders);
-  if (entryId === undefined || move === undefined || folders.length === 0) return null;
+  // **Only the members that name a row.** A picked set on the collection wall is tiles, and a tile
+  // is a printing the page summed several entries into — `entryId` is what says a target really is
+  // one stored copy. A group with none of them has nothing to move and gets no row at all, which
+  // is the same absence a single tile has always had.
+  const entryIds = rows.flatMap((row) => (row.entryId === undefined ? [] : [row.entryId]));
+  if (entryIds.length === 0 || move === undefined || folders.length === 0) return null;
   return {
     kind: "submenu",
     id: "move-to",
-    label: "Move to",
+    label: entryIds.length > 1 ? `Move ${manyCards(entryIds.length)} to` : "Move to",
     Icon: FolderInput,
-    items: buildCollectionTargetItems(folders, (folderId) => move(entryId, folderId)),
+    items: buildCollectionTargetItems(folders, (folderId) => {
+      for (const entryId of entryIds) move(entryId, folderId);
+    }),
   };
 }
 
@@ -531,17 +617,22 @@ function moveItem(target: CardMenuTarget, deps: CardMenuDeps): MenuItem | null {
  * the rows are in hand before the menu is built and the whole `lazy` machinery — a component, a
  * mount, a note while it loads — would buy a fetch that has already happened.
  */
-function wishlistItem(target: CardMenuTarget, deps: CardMenuDeps): MenuItem {
+function wishlistItem(rows: readonly CardMenuTarget[], deps: CardMenuDeps): MenuItem {
   const row = { id: "add-wishlist", label: "Wishlist", Icon: Heart } as const;
+  // **The plural is a clean loop here and needs no note about finishes**, unlike the collection
+  // row above: a wish is oracle-grained and finish-blind by design (`add_wish` upserts, so two
+  // lines of one card fold into one wish), so filing four cards is four writes and nothing about
+  // any of them is a guess.
+  const wishAll = (folderId: number | null) => {
+    for (const target of rows) deps.addToWishlist(target, folderId);
+  };
   if (deps.wishlistFolders.length === 0) {
-    return { kind: "action", ...row, onSelect: () => deps.addToWishlist(target, null) };
+    return { kind: "action", ...row, onSelect: () => wishAll(null) };
   }
   return {
     kind: "submenu",
     ...row,
-    items: buildWishlistTargetItems(deps.wishlistFolders, (folderId) =>
-      deps.addToWishlist(target, folderId),
-    ),
+    items: buildWishlistTargetItems(deps.wishlistFolders, wishAll),
   };
 }
 
@@ -614,16 +705,27 @@ function run(work: Promise<unknown>): void {
  * the time any row of this body runs, and calling it too would be a double close. It is for a
  * body that finishes without a row being pressed, which this one cannot do.
  */
-export function DeckTargetSubmenu(props: { target: CardMenuTarget; onDone: () => void }) {
-  const { target } = props;
+export function DeckTargetSubmenu(props: {
+  /**
+   * The cards to file — one for an ordinary press, several when the reader right-clicked a member
+   * of a picked set (issue #214). A list rather than a single target because the picker is one
+   * tree of decks whichever it is, and the only thing a group changes is how many writes a press
+   * on a deck makes.
+   */
+  targets: readonly CardMenuTarget[];
+  onDone: () => void;
+}) {
+  const { targets } = props;
   const addToDeck = useAddCardToDeck();
   const { decks, query: deckQuery } = useDecks();
   const { folders, query: folderQuery } = useDeckFolders();
 
   const items = useMemo(
     () =>
-      buildDeckTargetItems(folders, decks, (deckId, variant) => addToDeck(target, deckId, variant)),
-    [folders, decks, addToDeck, target],
+      buildDeckTargetItems(folders, decks, (deckId, variant) => {
+        for (const target of targets) addToDeck(target, deckId, variant);
+      }),
+    [folders, decks, addToDeck, targets],
   );
 
   // A gallery with nothing in it and a gallery that has not answered yet are told apart by

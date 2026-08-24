@@ -352,6 +352,10 @@ export function CollectionSearchTab({
           // one press apart, so a reader who sized the cards on one has sized the cards they are
           // looking at — a second key here would make switching tabs resize the wall.
           zoomSection="deckSearch"
+          // Its **own** scope, where the zoom above is deliberately shared: a size is a fact about
+          // the column, and a picked set is a fact about a particular list of cards. Switching
+          // tabs puts the other tab's set down, which is right — the rows are different rows.
+          selectionScope="deck-collection"
           baseTileWidth={TILE_BASE}
           selectedId={selectedCardId}
           onSelect={selectCard}

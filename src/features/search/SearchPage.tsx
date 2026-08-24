@@ -450,13 +450,17 @@ function Results({ search }: { search: CardSearch }) {
   /** One row's or one tile's handler. The item list is a **thunk** inside `menu`, so a wall of
    *  forty pays for nothing until a reader actually right-clicks one of them. */
   const cardMenu = useCallback(
-    (card: CardSummary) => menu(() => buildCardMenu(cardTarget(card), menuDeps)),
+    (card: CardSummary, picked: readonly CardSummary[] = []) =>
+      menu(() => buildCardMenu(cardTarget(card), { ...menuDeps, picked: picked.map(cardTarget) })),
     [menu, menuDeps],
   );
   /** The same menu on Shift+F10 and the ContextMenu key. Wired everywhere `cardMenu` is, because
    *  a menu only a mouse can open is a menu half this app's readers do not have. */
   const cardMenuKey = useCallback(
-    (card: CardSummary) => menuKey(() => buildCardMenu(cardTarget(card), menuDeps)),
+    (card: CardSummary, picked: readonly CardSummary[] = []) =>
+      menuKey(() =>
+        buildCardMenu(cardTarget(card), { ...menuDeps, picked: picked.map(cardTarget) }),
+      ),
     [menuKey, menuDeps],
   );
 
@@ -530,6 +534,11 @@ function Results({ search }: { search: CardSearch }) {
             // the results up here has not touched the collection or the deck editor's column —
             // see `CardGrid`'s `zoomSection` for why it is required rather than defaulted.
             zoomSection="search"
+            // Ctrl and Shift build a set of tiles here, and a drag from any member carries all
+            // of them into a deck (issue #214). Its own scope, so a set made on this wall is
+            // invisible to the collection and the wishlist — and is discarded the moment the
+            // reader picks a card on either.
+            selectionScope="search"
             selectedId={selectedCardId}
             onSelect={selectCard}
             // The arrow keys walk the wall, and the selection walks with them — which on this

@@ -139,13 +139,17 @@ export function TagResults({ search }: { search: CardSearch }) {
   /** One row's or one tile's handler. The item list is a **thunk** inside `menu`, so a wall of
    *  forty pays for nothing until a reader actually right-clicks one of them. */
   const cardMenu = useCallback(
-    (card: CardSummary) => menu(() => buildCardMenu(cardTarget(card), menuDeps)),
+    (card: CardSummary, picked: readonly CardSummary[] = []) =>
+      menu(() => buildCardMenu(cardTarget(card), { ...menuDeps, picked: picked.map(cardTarget) })),
     [menu, menuDeps],
   );
   /** The same menu on Shift+F10 and the ContextMenu key. Wired everywhere `cardMenu` is, because
    *  a menu only a mouse can open is a menu half this app's readers do not have. */
   const cardMenuKey = useCallback(
-    (card: CardSummary) => menuKey(() => buildCardMenu(cardTarget(card), menuDeps)),
+    (card: CardSummary, picked: readonly CardSummary[] = []) =>
+      menuKey(() =>
+        buildCardMenu(cardTarget(card), { ...menuDeps, picked: picked.map(cardTarget) }),
+      ),
     [menuKey, menuDeps],
   );
 
@@ -227,6 +231,9 @@ export function TagResults({ search }: { search: CardSearch }) {
             // illustrations up to look at them has not resized the card search — see `CardGrid`'s
             // `zoomSection` for why it is required rather than defaulted.
             zoomSection="tags"
+            // Ctrl and Shift build a set of tiles, and a drag from any member carries all of
+            // them (issue #214) — the same wall the search page draws, so the same gestures.
+            selectionScope="tags"
             selectedId={selectedCardId}
             onSelect={selectCard}
             // The arrow keys walk the wall, and the selection walks with them — which on this page

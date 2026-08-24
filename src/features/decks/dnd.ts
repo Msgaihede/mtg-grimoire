@@ -1,4 +1,5 @@
 import { draggable } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
+import { setCardCountPreview } from "@/lib/dragPreview";
 import type { DeckFinish } from "@/lib/ipc";
 
 /**
@@ -134,6 +135,32 @@ const MARK = "mtg-grimoire/deck-drag";
 const MARK_KEY = "dragSource";
 
 /**
+ * Where a **multi-card** drag keeps the rest of what it is carrying — issue #214.
+ *
+ * ## Beside the primary payload rather than instead of it
+ *
+ * A group drag writes `dragSource`, the primary payload's own fields, **and** this key. That
+ * ordering is the whole design: {@link readDragData} is untouched and still answers with the one
+ * card the drag started on, so **every drop target that has not learned about groups keeps
+ * working exactly as it does today** and acts on that card alone. There is no flag day, no
+ * target that has to be converted before the feature can land, and no version of this app in
+ * which a group drag over an unconverted target does something surprising — it does the old
+ * thing, which is a card being moved.
+ *
+ * The alternative considered and rejected was making `DragPayload` itself a list. It reads
+ * cleaner in the type and it is a rewrite of six drop targets, four drag sources and every test
+ * that names a payload, all at once, to buy a shape the first paragraph gets for free.
+ *
+ * ## The primary is a member, and it is first
+ *
+ * `readDragGroup` returns the whole set with the picked-up card at the head. Every consumer
+ * either loops the lot ({@link dropWrites}) or wants the one the reader actually grabbed
+ * ({@link readDragData}), and putting the primary first is what makes "the first one" mean the
+ * second thing without a second key to say so.
+ */
+const GROUP_KEY = "dragGroup";
+
+/**
  * Whether a value could be a `deck_categories.id`.
  *
  * Schema v8 turned the fixed five-word zone into a row the user owns, so the fence that used
@@ -154,10 +181,18 @@ function isId(value: unknown): value is string {
   return typeof value === "string" && value.length > 0;
 }
 
-/** What a draggable hands the adapter. Flat, so `canDrop` can read the kind without
- *  unwrapping anything. */
-export function dragData(payload: DragPayload): Record<string, unknown> {
-  return { [MARK_KEY]: MARK, ...payload };
+/**
+ * What a draggable hands the adapter. Flat, so `canDrop` can read the kind without
+ * unwrapping anything.
+ *
+ * `rest` is the other cards a multi-card drag is carrying, **not including** `payload` — the
+ * caller passes the members it picked and this puts the grabbed one at the head, so no call site
+ * has to remember the ordering {@link GROUP_KEY} depends on. Omitted, or empty, and the record is
+ * byte for byte what it was before groups existed.
+ */
+export function dragData(payload: DragPayload, rest: readonly DragPayload[] = []): Record<string, unknown> {
+  const base = { [MARK_KEY]: MARK, ...payload };
+  return rest.length === 0 ? base : { ...base, [GROUP_KEY]: [payload, ...rest] };
 }
 
 /**
@@ -257,6 +292,7 @@ export function composedDraggable({
   element,
   data,
   notFrom = NOT_A_DRAG,
+  count,
 }: {
   element: HTMLElement;
   /** Read at `dragstart`, so a row that has been renumbered — or re-filed — since it mounted
@@ -264,6 +300,15 @@ export function composedDraggable({
   data: () => Record<string, unknown>;
   /** Overridable for the one case where the default is wrong — nothing today. */
   notFrom?: string;
+  /**
+   * How many cards this drag is carrying, for the count chip — issue #214.
+   *
+   * A function for {@link data}'s reason and read a moment earlier: `onGenerateDragPreview` fires
+   * *before* `dragstart`, so a selection that changed since the element mounted is still answered
+   * correctly. Absent, or answering below two, and the drag keeps the native preview it has today
+   * — which is every single-card drag in the app.
+   */
+  count?: () => number;
 }): () => void {
   let onControl = false;
   const press = (event: Event) => {
@@ -275,6 +320,19 @@ export function composedDraggable({
     element,
     canDrag: () => !onControl,
     getInitialData: () => data(),
+    // Registered unconditionally when a caller passed a `count`, because the *number* is what
+    // decides whether a chip is drawn and the number is not known until the gesture starts.
+    // `setCardCountPreview` returning without touching `nativeSetDragImage` is what leaves the
+    // browser to draw its own ghost, which is the documented way to decline.
+    ...(count
+      ? {
+          onGenerateDragPreview: ({
+            nativeSetDragImage,
+          }: {
+            nativeSetDragImage: Parameters<typeof setCardCountPreview>[1];
+          }) => setCardCountPreview(count(), nativeSetDragImage),
+        }
+      : {}),
   });
   return () => {
     element.removeEventListener("mousedown", press, true);
@@ -295,6 +353,7 @@ export function cardDraggable({
   element,
   payload,
   notFrom,
+  rest,
 }: {
   element: HTMLElement;
   /** Read at `dragstart`, so a row that has been renumbered since it mounted still carries
@@ -303,8 +362,24 @@ export function cardDraggable({
   /** Overridable for the one case where the default is wrong — nothing today. Defaulted by
    *  {@link composedDraggable}, so the selector is spelled in one place. */
   notFrom?: string;
+  /**
+   * The **other** cards a multi-select drag is carrying — issue #214. A function, read at
+   * `dragstart` like the payload beside it, and empty (or absent) for an ordinary drag.
+   *
+   * It is here rather than folded into `payload` because the two are answered by different
+   * things: the payload is what *this element* is, and this is what the reader's selection says
+   * is coming with it. A caller that has no selection to consult passes nothing and the record it
+   * produces is unchanged — see {@link dragData}.
+   */
+  rest?: () => readonly DragPayload[];
 }): () => void {
-  return composedDraggable({ element, data: () => dragData(payload()), notFrom });
+  return composedDraggable({
+    element,
+    data: () => dragData(payload(), rest?.() ?? []),
+    notFrom,
+    // `+ 1` for the card the pointer went down on, which `rest` deliberately excludes.
+    count: rest ? () => rest().length + 1 : undefined,
+  });
 }
 
 /**
@@ -336,6 +411,92 @@ export function readDragData(data: Record<string, unknown>): DragPayload | null 
     return { kind, cardId, name, fromCategoryId, finish: readFinish(finish) };
   }
   return null;
+}
+
+/**
+ * Add a multi-card group to a record that has **already been composed** — the `dragRecord` path.
+ *
+ * {@link dragData} covers every drag whose whole meaning is one {@link DragPayload}. This is for
+ * the one that is genuinely two things at once: the wishlist's tile, which merges this module's
+ * keys with `wishDrag.ts`'s so a folder and a deck column can each read their own. That record is
+ * the caller's to build, so the group has to be added to it rather than through the builder.
+ *
+ * `primary` is written into the group's head and is expected to be the payload already flat in
+ * `record` — recover it with {@link readDragData} rather than passing a second copy, so the two
+ * cannot name different cards.
+ *
+ * An empty `rest` returns the record untouched, by identity, so an ordinary drag is unchanged.
+ */
+export function withDragGroup(
+  record: Record<string, unknown>,
+  primary: DragPayload,
+  rest: readonly DragPayload[],
+): Record<string, unknown> {
+  return rest.length === 0 ? record : { ...record, [GROUP_KEY]: [primary, ...rest] };
+}
+
+/**
+ * **Every** card the drag is carrying, primary first — one entry for an ordinary drag, several
+ * for a multi-select one, and none at all for something that is not this app's card drag.
+ *
+ * ## It re-reads the members through {@link readDragData} rather than trusting them
+ *
+ * The group arrives from the same untyped store the primary does, so the same sentence applies:
+ * this is the app's boundary with the drag library, and the one place where "it type-checked"
+ * means nothing at all. Each member goes through the field-by-field check, and one that fails is
+ * **dropped rather than fatal** — which is the difference between this and the primary. A bad
+ * primary means the drop cannot be understood at all; a bad member means one card of five is
+ * unreadable, and refusing the other four over it would be a gesture that fails for a reason the
+ * reader cannot see.
+ *
+ * ## A group whose primary is unreadable is nothing
+ *
+ * Checked first and answered `[]`, because the mark itself lives on the primary's keys: a record
+ * carrying a `dragGroup` but no valid `dragSource` is not a drag this module wrote, and reading
+ * its group would be trusting an array because it had the right key name.
+ *
+ * ## Duplicates
+ *
+ * Not deduped here. A group is built from a {@link ../../lib/multiSelect} selection, whose keys
+ * are unique by construction, and the two key spaces that reach it (a deck slot, a printing id)
+ * both address one row. Deduping would be a second guard over an invariant the producer already
+ * holds, and it would hide the one case where two identical members would be a real bug worth
+ * seeing in a test.
+ */
+export function readDragGroup(data: Record<string, unknown>): DragPayload[] {
+  const primary = readDragData(data);
+  if (primary === null) return [];
+  const group = data[GROUP_KEY];
+  if (!Array.isArray(group)) return [primary];
+  const members = group.flatMap((member) => {
+    if (typeof member !== "object" || member === null) return [];
+    // The members are stored *without* the mark — it is on the record they travel in — so it is
+    // put back for the read. That keeps `readDragData` the single field-by-field check rather
+    // than growing a second, laxer one for members.
+    const read = readDragData({ ...(member as Record<string, unknown>), [MARK_KEY]: MARK });
+    return read === null ? [] : [read];
+  });
+  return members.length === 0 ? [primary] : members;
+}
+
+/**
+ * Every write a drop means, refusals dropped — {@link dropWrite} over a whole group.
+ *
+ * **A mixed set is not refused whole.** Drag four cards from a deck plus one from the search
+ * panel onto the remove tray and the four come out; the fifth is a printing rather than a row, so
+ * it yields nothing and is passed over. The alternative — refusing unless every member yields —
+ * makes a gesture fail for a reason the reader cannot see, since nothing on screen says which of
+ * the five is the odd one.
+ *
+ * That also settles what `canDrop` should ask, and every target here asks it: **at least one
+ * member writes**. An empty answer is a drop that would do nothing, which is exactly the drop
+ * {@link dropWrite}'s `null` already refuses for one card.
+ */
+export function dropWrites(payloads: readonly DragPayload[], target: DropTarget): DeckWrite[] {
+  return payloads.flatMap((payload) => {
+    const write = dropWrite(payload, target);
+    return write === null ? [] : [write];
+  });
 }
 
 /** The drag store's `finish`, as {@link DeckFinish}. Anything that is not one of the two

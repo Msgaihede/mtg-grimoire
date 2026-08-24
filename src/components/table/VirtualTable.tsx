@@ -52,7 +52,9 @@ export interface RowRenderProps {
   role: "row";
   "aria-rowindex": number;
   tabIndex?: number;
-  onClick?: () => void;
+  /** Takes the event since issue #214 — a caller reads the chords off it to tell "open this row"
+   *  from "add it to the picked set". */
+  onClick?: (e: React.MouseEvent) => void;
   onKeyDown?: (e: React.KeyboardEvent) => void;
   className: string;
   style: CSSProperties;
@@ -105,8 +107,15 @@ export function VirtualTable<Row>({
   onSort: (key: string, additive: boolean) => void;
   /** Extra px this row needs beyond {@link TABLE_ROW_HEIGHT}. */
   extraHeight?: (row: Row) => number;
-  /** Click, Enter and Space on a row. Omitted makes rows inert. */
-  onActivate?: (row: Row) => void;
+  /**
+   * Click, Enter and Space on a row. Omitted makes rows inert.
+   *
+   * **The event travels since issue #214** — a caller needs the chords the press was holding, so
+   * that Ctrl and Shift can mean "add this row to the picked set" rather than "open it". Both
+   * kinds of activation carry the four modifier booleans, so the keyboard path is not a second
+   * case. A caller with no use for it takes one argument and is unchanged.
+   */
+  onActivate?: (row: Row, event: React.MouseEvent | React.KeyboardEvent) => void;
   isSelected?: (row: Row) => boolean;
   rowClassName?: (row: Row) => string | undefined;
   /** Wraps the row. The default is a plain `div`; two callers make it a drag source. */
@@ -234,14 +243,14 @@ export function VirtualTable<Row>({
             role: "row",
             "aria-rowindex": v.index + 2,
             tabIndex: onActivate ? 0 : undefined,
-            onClick: onActivate ? () => onActivate(row) : undefined,
+            onClick: onActivate ? (e) => onActivate(row, e) : undefined,
             onKeyDown: onActivate
               ? (e) => {
                   if (e.key !== "Enter" && e.key !== " ") return;
                   // Space scrolls the container it is pressed in, which would jump the list
                   // by a screen at the same time as opening the card.
                   e.preventDefault();
-                  onActivate(row);
+                  onActivate(row, e);
                 }
               : undefined,
             className: cn(

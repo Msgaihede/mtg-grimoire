@@ -74,7 +74,7 @@ function Source({ payload }: { payload: DragPayload }) {
   return <div ref={ref}>the card</div>;
 }
 
-const onDrop = vi.fn<(write: DeckWrite) => void>();
+const onDrop = vi.fn<(writes: DeckWrite[]) => void>();
 const onNewCategory = vi.fn<(payload: DragPayload) => void>();
 
 function mount(payload: DragPayload) {
@@ -131,11 +131,13 @@ describe("QuickZones", () => {
     await held.over(zone("Auto"));
     await held.drop();
 
-    expect(onDrop).toHaveBeenCalledWith({
-      write: "auto-add",
-      cardId: "c-bolt",
-      typeLine: "Instant",
-    });
+    expect(onDrop).toHaveBeenCalledWith([
+      {
+        write: "auto-add",
+        cardId: "c-bolt",
+        typeLine: "Instant",
+      },
+    ]);
   });
 
   /** A fixed zone is an ordinary category drop — the same write a drop onto that pile's own
@@ -147,7 +149,7 @@ describe("QuickZones", () => {
     await held.over(zone("Sideboard"));
     await held.drop();
 
-    expect(onDrop).toHaveBeenCalledWith({ write: "add", cardId: "c-bolt", categoryId: SIDE });
+    expect(onDrop).toHaveBeenCalledWith([{ write: "add", cardId: "c-bolt", categoryId: SIDE }]);
   });
 
   /**
@@ -161,13 +163,15 @@ describe("QuickZones", () => {
     await held.over(zone("Maybeboard"));
     await held.drop();
 
-    expect(onDrop).toHaveBeenCalledWith({
-      write: "move",
-      finish: null,
-      cardId: "c-bolt",
-      from: MAIN,
-      to: MAYBE,
-    });
+    expect(onDrop).toHaveBeenCalledWith([
+      {
+        write: "move",
+        finish: null,
+        cardId: "c-bolt",
+        from: MAIN,
+        to: MAYBE,
+      },
+    ]);
   });
 
   /**
@@ -184,12 +188,14 @@ describe("QuickZones", () => {
     await held.over(zone("Auto"));
     await held.drop();
 
-    expect(onDrop).toHaveBeenCalledWith({
-      write: "auto-refile",
-      cardId: "c-bolt",
-      from: MAIN,
-      finish: null,
-    });
+    expect(onDrop).toHaveBeenCalledWith([
+      {
+        write: "auto-refile",
+        cardId: "c-bolt",
+        from: MAIN,
+        finish: null,
+      },
+    ]);
   });
 
   /** A row dropped on the pile it is already in is not a move — `dropWrite` says so, and the

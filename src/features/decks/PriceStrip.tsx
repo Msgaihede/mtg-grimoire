@@ -9,7 +9,13 @@ import { LAYER } from "@/lib/layers";
 import type { Marketplace } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
 import { cn } from "@/lib/utils";
-import { dropWrite, readDragData, type DeckWrite, type DragPayload } from "./dnd";
+import {
+  dropWrites,
+  readDragData,
+  readDragGroup,
+  type DeckWrite,
+  type DragPayload,
+} from "./dnd";
 
 /**
  * What a reader should know that is true of the whole deck rather than of one card in it, said
@@ -112,7 +118,7 @@ export function PriceStrip({
    * an object-literal key creates no binding — but only after a reader has proved it to
    * themselves.
    */
-  onRemove: (write: DeckWrite) => void;
+  onRemove: (writes: DeckWrite[]) => void;
 }): ReactElement {
   /**
    * The card a **card** drag is carrying, or `null` when nothing is being dragged out of the
@@ -154,19 +160,20 @@ export function PriceStrip({
   useEffect(() => {
     const element = trayRef.current;
     if (!element) return;
-    const writeFor = (data: Record<string, unknown>) => {
-      const payload = readDragData(data);
-      return payload && dropWrite(payload, { kind: "remove" });
-    };
+    const writesFor = (data: Record<string, unknown>) =>
+      dropWrites(readDragGroup(data), { kind: "remove" });
     return dropTargetForElements({
       element,
-      canDrop: ({ source }) => writeFor(source.data) !== null,
+      canDrop: ({ source }) => writesFor(source.data).length > 0,
       onDragEnter: () => setOverTray(true),
       onDragLeave: () => setOverTray(false),
       onDrop: ({ source }) => {
         setOverTray(false);
-        const write = writeFor(source.data);
-        if (write) onRemove(write);
+        // Every deck row the drag was carrying. A group holding a card from another wall drops
+        // the four this tray *can* take and passes over the rest — `dropWrites`' rule, and the
+        // reason `canDrop` above asks for one rather than for all.
+        const writes = writesFor(source.data);
+        if (writes.length > 0) onRemove(writes);
       },
     });
   }, [trayShown, onRemove]);

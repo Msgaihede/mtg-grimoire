@@ -37,6 +37,7 @@ import {
   TheoryMatchBadge,
 } from "../CardMarks";
 import {
+  deckCardMarked,
   deckCardProps,
   deckCardSelectedProps,
   DeckCardControls,
@@ -48,7 +49,6 @@ import {
   useDeckCardDrag,
   type DeckCardActions,
 } from "../cardControl";
-import { deckCardSlot } from "../dnd";
 import { DropIndicator } from "../DropIndicator";
 import type { CardGroup } from "../grouping";
 import { matchesTheory } from "../theoryMatch";
@@ -360,11 +360,7 @@ export function TableView({
         marketplace={marketplace}
         actions={actions}
         onDrop={drop}
-        selected={
-          row.kind === "card" &&
-          selectedSlot != null &&
-          deckCardSlot(row.card.categoryId, row.card.cardId, row.card.finish) === selectedSlot
-        }
+        selected={row.kind === "card" && deckCardMarked(row.card, selectedSlot, actions)}
         landedKey={row.kind === "card" ? landed?.get(row.card.id) : undefined}
       />
     ),
@@ -387,12 +383,22 @@ export function TableView({
         onSort={() => {}}
         // A band whose pile is being renamed is taller than a row — see {@link RENAME_HEIGHT}.
         extraHeight={extraHeight}
-        onActivate={onSelect ? (row) => row.kind === "card" && onSelect(row.card) : undefined}
-        isSelected={(row) =>
-          row.kind === "card" &&
-          selectedSlot != null &&
-          deckCardSlot(row.card.categoryId, row.card.cardId, row.card.finish) === selectedSlot
+        // The chords reach `deckCardPress` here as they do in the other three views; what differs
+        // is that a press arrives through `VirtualTable`'s own row handler rather than through a
+        // button of this view's own, so the mousedown half has nowhere to hang. A Shift-click on
+        // a table row therefore drags a text selection where the other three views refuse one —
+        // the price of not owning the element, and small enough to be worth naming rather than
+        // fixing by pushing another handler into the table primitive for one caller.
+        onActivate={
+          onSelect || actions?.pick
+            ? (row, event) => {
+                if (row.kind !== "card") return;
+                if (actions?.pick?.(row.card, event) === true) return;
+                onSelect?.(row.card);
+              }
+            : undefined
         }
+        isSelected={(row) => row.kind === "card" && deckCardMarked(row.card, selectedSlot, actions)}
         renderRow={renderRow}
       />
     </div>
@@ -441,6 +447,7 @@ function DeckTableRow({
   const dragRef = useDeckCardDrag(
     row.kind === "card" ? row.card : EMPTY_CARD,
     row.kind === "card" && actions?.drop !== undefined,
+    actions?.groupDrag,
   );
   // One element, two registrations — a row is both the thing that can be picked up and the
   // place a card can be let go. React 19 calls the returned function as the cleanup, so the
