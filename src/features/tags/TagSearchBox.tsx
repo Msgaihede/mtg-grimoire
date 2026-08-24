@@ -7,6 +7,7 @@ import {
 } from "@/components/FilterChips";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import type { TagNamespace } from "@/lib/ipc";
+import { clearFieldOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { TAG_NAMESPACE_HINT, TAG_NAMESPACE_LABEL } from "./namespaces";
 
@@ -71,6 +72,15 @@ export function TagSearchBox({ value, onChange, namespace, onNamespaceChange }: 
         type="search"
         value={value}
         onChange={(e) => onChange(e.target.value)}
+        // Escape empties the box while there is something in it to empty, and falls through when
+        // there is not — the same one press a filter box owns anywhere else in the app. The Tags
+        // page has nothing behind it for the fall-through to reach today; the handler is here so
+        // that "a filter box owns one Escape while it has text" is true of every filter box
+        // rather than of the ones that happened to need it. Chromium clears an
+        // `<input type="search">` natively but leaves `defaultPrevented` false, and jsdom does
+        // not clear it at all, so this handler is what makes the press both deterministic and
+        // testable. The rule is {@link clearFieldOnEscape}'s.
+        onKeyDown={(e) => clearFieldOnEscape(e, value, () => onChange(""))}
         // Three examples rather than a category, because "Search tags" leaves a reader arriving
         // from the search page typing a card name — and because one art motif, a second, and one
         // rules effect teaches what the two taxonomies are in the width of a placeholder.

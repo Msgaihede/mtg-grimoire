@@ -1007,7 +1007,8 @@ export function useCardSearch(options: CardSearchOptions = {}) {
     setSortKey: (key: SearchSortKey | "") =>
       setSort(key === "" ? [] : [{ key, dir: SEARCH_FIRST_DIR[key] }]),
     /**
-     * What the select shows: the sort's first term, or `""` for the view's own order.
+     * What the select shows: the sort's first term, or `""` — the `Best match` row — for the
+     * view's own order.
      *
      * The *first* term rather than a requirement that there be only one, because "sorted
      * primarily by Name" is true of a Shift-built two-key sort and is what a reader glancing

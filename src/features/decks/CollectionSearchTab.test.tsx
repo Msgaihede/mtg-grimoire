@@ -547,4 +547,42 @@ describe("CollectionSearchTab", () => {
     // immediately and carries "Reading your collection…". The wait is for the *answer*.
     await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent(/No copies/));
   });
+
+  /**
+   * **The box empties on Escape, and owns the press only while it has something to empty.**
+   *
+   * This column is *docked* rather than modal, so a press it does not take falls through to the
+   * editor's `"navigation"` rung and closes the deck — which is right for an empty box and wrong
+   * for one the reader is filtering with. Both halves are the test: consumed with text, free
+   * without, and it is the second that can fail silently, because a field that ate every Escape
+   * would look identical on screen and leave the deck uncloseable from this column.
+   *
+   * Chromium's own clear of an `<input type="search">` — the other half of why this handler
+   * exists, and the reason it must `preventDefault` rather than merely set the state — is not
+   * implemented by jsdom and cannot be seen here at all.
+   */
+  it("empties its search box on Escape, and only spends a press while it has text", async () => {
+    tab();
+    const box = await screen.findByRole("searchbox", { name: "Search your collection" });
+    const heard: boolean[] = [];
+    const listen = (e: KeyboardEvent) => {
+      if (e.key === "Escape") heard.push(e.defaultPrevented);
+    };
+    window.addEventListener("keydown", listen);
+
+    try {
+      await userEvent.type(box, "bolt");
+      expect(box).toHaveValue("bolt");
+
+      await userEvent.keyboard("{Escape}");
+      expect(box).toHaveValue("");
+
+      // …and now there is nothing left to undo, so the press is the deck's.
+      await userEvent.keyboard("{Escape}");
+    } finally {
+      window.removeEventListener("keydown", listen);
+    }
+
+    expect(heard).toEqual([true, false]);
+  });
 });

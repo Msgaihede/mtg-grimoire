@@ -157,6 +157,24 @@ Every one of these has its measurement and its story in
   no longer a bug; and **a design that keeps two layers exclusive needs a reason of its own now**
   (they overlap on screen, they are one piece of state, one would draw over the other), because
   "Escape cannot order them" has stopped being one.
+- **The bottom rung is `"navigation"`, and it is the view itself rather than a layer over it.**
+  Escape closes the open deck, or walks one folder up — in decks, the collection and the wishlist
+  alike. It is bubble-phase like `"outer"` and **ranked below it**, which is the half worth
+  remembering: a view is mounted long before the card pane that docks beside it, so in
+  registration order the floor acted first and walked a reader out of a folder with their card
+  still open. That is the capture stack's 2026-08-14 bug read backwards, and `bubbleStack` is the
+  same cure on the other side of the event. A view with nowhere to go passes `enabled: false` and
+  does not `preventDefault`, so a root folder never swallows a press it has no use for.
+- **A filter box owns one Escape while it has text in it — and that is load-bearing, not a
+  courtesy.** Every filter box in the app is an `<input type="search">`, and Chromium clears one
+  on Escape by itself **without setting `defaultPrevented`**; the moment Escape also means "close
+  the deck", one press in a box with text does both. `clearFieldOnEscape` is the fix, and the
+  guard is `value !== ""` — an empty box has nothing to undo, so the press falls through to the
+  view. It is `DeckNameField`'s rule (revert a draft, and only while there _is_ a draft) stated
+  once for the boxes that share it. **jsdom does not implement the native clear**, so the suite
+  can never see the half this exists to prevent; the shipped window is the only witness. Not for
+  a field inside a dialog or a popup — an `"inner"` layer consumes the press in the capture phase
+  before the field's own handler runs, so a call there is a line that cannot execute.
 - **A surface opened from a view is a centred modal over a scrim, not a docked column — unless
   the reader works _out of_ it while editing beside it.** Width is the scarce thing in this app:
   the deck editor's desk row measures **602px** at the app's own 1280×800 with the card pane
@@ -640,7 +658,9 @@ markup of its own. Every rule below has a failure behind it that shipped or near
   the arrow keys would strand the caret on a control they do nothing to. Widening one to serve both
   decides the other question by accident.
 - **Escape means "back"; Tab means "forward".** Escape closes one level and hands the caret to the
-  opener — one press per rung, through `useDismissOnEscape`'s capture stack. Tab focuses the
+  opener — one press per rung, through `useDismissOnEscape`'s two stacks, and **the last rung is
+  the view**: with nothing left to dismiss, Escape closes the open deck or climbs one folder.
+  "Back" is therefore the whole way back, not as far as the last popup. Tab focuses the
   opener, closes the menu and **lets the press through**, so the browser carries on from the opener
   to whatever follows it. The menu is deliberately **not** a focus trap: rows are `tabIndex={-1}`,
   so a panel's only tab stop is a field a lazy body drew, and a trap with one stop cycles it to

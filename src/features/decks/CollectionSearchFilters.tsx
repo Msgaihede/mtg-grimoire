@@ -11,6 +11,7 @@ import { COLLECTION_SORTS, type CollectionSort } from "@/features/collection/use
 import { FORMATS } from "@/features/search/useCardSearch";
 import { MANA_KEYS } from "@/lib/mana";
 import { sortOptions } from "@/lib/options";
+import { clearFieldOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import type { CollectionSearch } from "./useCollectionSearch";
 
@@ -66,6 +67,13 @@ export function CollectionSearchFilters({ search }: { search: CollectionSearch }
         type="search"
         value={search.text}
         onChange={(e) => search.setText(e.target.value)}
+        // **A box with text in it owns one Escape, and an empty one owns none.** This column is
+        // docked rather than modal, so a press this box does not take falls through to the
+        // editor's `"navigation"` rung and closes the deck — which is right for an empty box and
+        // wrong for one the reader was filtering with, since Chromium clears an
+        // `<input type="search">` on Escape itself and never sets `defaultPrevented`. The whole
+        // argument, and why jsdom can only ever see half of it, is on {@link clearFieldOnEscape}.
+        onKeyDown={(e) => clearFieldOnEscape(e, search.text, () => search.setText(""))}
         placeholder="Search your collection…"
         // `FILTER_FIELD` rather than `FILTER_CONTROL`: a box the reader types into must not dip
         // under the press, or Chromium's own ✕ slides out from under the pointer clearing it
