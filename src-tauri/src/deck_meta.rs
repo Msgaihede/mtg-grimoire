@@ -256,7 +256,7 @@ pub struct GlobalTag {
 /// A name good enough for a category, a tag or a folder — trimmed, non-empty.
 /// [`crate::deck::valid_name`]'s discipline, generalised to the three more places a blank
 /// string would end up on a tile no one can read. `what` is what the refusal names.
-fn valid_name<'a>(name: &'a str, what: &str) -> Result<&'a str, String> {
+pub(crate) fn valid_name<'a>(name: &'a str, what: &str) -> Result<&'a str, String> {
     let name = name.trim();
     (!name.is_empty())
         .then_some(name)
@@ -267,7 +267,7 @@ fn valid_name<'a>(name: &'a str, what: &str) -> Result<&'a str, String> {
 /// no CHECK: it names a token from the app's fixed palette (schema.rs's own words), and
 /// picking from that palette is the webview's job, not this module's — the boundary CLAUDE.md
 /// draws between Rust's data plumbing and TypeScript's domain logic.
-fn valid_color(color: &str) -> Result<&str, String> {
+pub(crate) fn valid_color(color: &str) -> Result<&str, String> {
     let color = color.trim();
     (!color.is_empty())
         .then_some(color)

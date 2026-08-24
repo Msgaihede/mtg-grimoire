@@ -10,7 +10,7 @@ const OPTIONS = { finish: null };
 const line = (over: Partial<ParsedLine> = {}): ParsedLine => ({
   lineNumber: 1, raw: "1 Sol Ring", quantity: 1, name: "Sol Ring", setCode: null,
   collectorNumber: null, section: "deck", categoryName: null, finish: null, excluded: false,
-  extra: {}, ...over,
+  tagName: null, tagColor: null, extra: {}, ...over,
 });
 
 const listOf = (...lines: ParsedLine[]): ParsedList => ({

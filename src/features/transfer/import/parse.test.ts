@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { parseDecklist } from "./parse";
 import {
   ARCHIDEKT_FLAT,
+  ARCHIDEKT_LABELLED,
   ARCHIDEKT_SECTIONED,
   ARENA_LIST,
   EMPTY_HINT_LIST,
@@ -185,6 +186,76 @@ describe("parseDecklist", () => {
       "1x Mona Lisa, Science Geek (tmt) 123 ^Fence (flavor),#fa890d^",
     );
     expect(lines[0]!.name).toBe("Mona Lisa, Science Geek");
+  });
+
+  it("reads an Archidekt tag's name and colour, not just strips them", () => {
+    const { lines } = parseDecklist("1x Sol Ring (fic) 358 [Ramp] ^Keeper,#4aab08^");
+    expect(lines[0]).toMatchObject({ tagName: "Keeper", tagColor: "#4aab08" });
+  });
+
+  it("splits a tag at its LAST comma, so a comma in the name survives", () => {
+    // `/^([^,]+),(#.+)$/` — the obvious spelling — would answer `Cut` here and lose the rest.
+    const { lines } = parseDecklist("1x Sol Ring ^Cut, maybe,#d00dfa^");
+    expect(lines[0]).toMatchObject({ tagName: "Cut, maybe", tagColor: "#d00dfa" });
+  });
+
+  it("keeps the name when the group carries no colour", () => {
+    // Not a shape Archidekt writes; a hand-edited list is what this parser exists to keep
+    // reading, and a label with no colour is still a label.
+    const { lines } = parseDecklist("1x Sol Ring ^Keeper^");
+    expect(lines[0]).toMatchObject({ tagName: "Keeper", tagColor: null });
+  });
+
+  it("reads a tail that is not a hex as part of the name", () => {
+    const { lines } = parseDecklist("1x Sol Ring ^Buy, later^");
+    expect(lines[0]).toMatchObject({ tagName: "Buy, later", tagColor: null });
+  });
+
+  it("expands a three-digit colour, so one colour has one spelling", () => {
+    const { lines } = parseDecklist("1x Sol Ring ^Keeper,#F00^");
+    expect(lines[0]!.tagColor).toBe("#ff0000");
+  });
+
+  it("carries no tag on a line that has none, and on every other format", () => {
+    expect(parseDecklist("1x Sol Ring (fic) 358 [Ramp]").lines[0]).toMatchObject({
+      tagName: null,
+      tagColor: null,
+    });
+    expect(parseDecklist(ARENA_LIST).lines.every((l) => l.tagName === null)).toBe(true);
+  });
+
+  it("keeps the rightmost tag when a line writes two", () => {
+    // `deck_cards.tag_id` holds one label, so a choice has to be made; the nearer naming is the
+    // one on the line, exactly as it is for the bracket.
+    const { lines } = parseDecklist("1x Sol Ring ^Fence,#fffc19^ ^Keeper,#4aab08^");
+    expect(lines[0]).toMatchObject({ name: "Sol Ring", tagName: "Keeper" });
+  });
+
+  it("reads the labelled export's five distinct tags, on the right lines", () => {
+    const { lines, issues, totalCards } = parseDecklist(ARCHIDEKT_LABELLED);
+    expect(issues).toEqual([]);
+    expect(lines).toHaveLength(19);
+    expect(totalCards).toBe(46);
+    const labelled = lines.filter((l) => l.tagName !== null);
+    expect(labelled).toHaveLength(13);
+    expect([...new Set(labelled.map((l) => `${l.tagName}${l.tagColor}`))]).toEqual([
+      "Keeper#4aab08",
+      "Fence#fffc19",
+      "Replace Art#d00dfa",
+      "Getting#2ccce4",
+      "Fence (flavor)#fa890d",
+    ]);
+    // The commander line keeps its label through the bracket and the `*F*` beside it.
+    expect(lines[0]).toMatchObject({
+      name: "Bruna, the Fading Light",
+      section: "commander",
+      finish: "foil",
+      tagName: "Keeper",
+    });
+    // And a `{noDeck}` line does too: a pile that counts toward nothing still holds labelled
+    // cards.
+    const arkenstone = lines.find((l) => l.name.startsWith("The Arkenstone"));
+    expect(arkenstone).toMatchObject({ excluded: true, tagName: "Getting" });
   });
 
   it("reads a bracket as the line's category", () => {

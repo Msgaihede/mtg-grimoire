@@ -689,11 +689,11 @@ describe("the filter bar's sort picker", () => {
   });
 
   /**
-   * `Default order` is a real row of that select and the only way back to it: an empty spec is
+   * `Best match` is a real row of that select and the only way back to it: an empty spec is
    * relevance when there is a query, and nothing else on the page can ask for that again once
    * a key has been picked.
    */
-  it("empties the spec on the default row", async () => {
+  it("empties the spec on the Best match row", async () => {
     const { result } = renderHook(() => useCardSearch(), { wrapper });
     await waitFor(() => expect(searchCards).toHaveBeenCalled());
 

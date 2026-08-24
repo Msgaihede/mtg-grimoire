@@ -687,6 +687,38 @@ export function WishlistPage() {
 
   useDismissOnEscape({ layer: "inner", onDismiss: dismiss, enabled: openPanel !== null });
 
+  /**
+   * The floor: Escape walks the reader **up one drawer**, once nothing nearer has wanted the
+   * press. A folder panel takes it first (the `"inner"` rung above, capture phase), an open card
+   * pane takes it next (`"outer"`), and what is left arrives here.
+   *
+   * **The parent is read off {@link trail}, not walked out of `folders.folders` again.** That
+   * memo is already root-most-first and already without the root, so the segment before the last
+   * one *is* the way out and its absence *is* the root — the same two facts the breadcrumb draws
+   * from, which is what keeps the key and the pointer walking the same cabinet. A second walk
+   * here would be `trailOf` written twice, and the two would disagree the day one of them learns
+   * something new about a missing parent (which it already has: a broken `parentId` ends the
+   * trail early, so Escape climbs to wherever the breadcrumb says the reader is, and a
+   * `folderId` naming nothing at all answers the empty trail and therefore the root).
+   *
+   * `enabled` is what keeps the root silent. At the top of the cabinet there is no level above,
+   * so the press is not this page's and must fall through untouched rather than be consumed into
+   * a no-op.
+   *
+   * **Flatten is deliberately not a rung of this, and that is a decision rather than an
+   * oversight** — do not "fix" it by toggling the chip off here. Flatten is not a place the
+   * reader walked into; it is the cabinet's filing being ignored, which is why the breadcrumb
+   * draws `Wishlist · all folders` in inert words and no level is on screen to leave. With it on
+   * Escape does nothing at all — including when a `folderId` is still set underneath, because
+   * walking a level the reader cannot see would silently move where un-flattening puts them back.
+   * The chip is one press away and says which state it is in.
+   */
+  useDismissOnEscape({
+    layer: "navigation",
+    onDismiss: () => wishlist.openFolder(trail.length > 1 ? trail[trail.length - 2].id : null),
+    enabled: !flatten && folderId !== null,
+  });
+
   const open = useCallback((next: NonNullable<Panel>, opener: HTMLElement | null) => {
     openerRef.current = opener;
     setPanel(next);

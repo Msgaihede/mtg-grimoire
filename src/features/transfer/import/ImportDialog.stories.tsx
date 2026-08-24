@@ -249,6 +249,52 @@ export const IntoExistingDeck: Story = {
 };
 
 /**
+ * An Archidekt export carrying labels — `^Keeper,#4aab08^` — and the picker that decides which
+ * of them come across.
+ *
+ * **All ticked**, because a list that carries labels is a list somebody labelled on purpose: the
+ * boxes are there for the one they have finished with, not as a decision to make before every
+ * import.
+ *
+ * **Two rows, drawn two ways, and that is the whole story.** `Cut candidate` is one the fake's
+ * database already has, so it reads *already yours* and its swatch is the colour the reader gave
+ * it — the file's `#ff0000` is discarded, because `commit_import` finds that row and uses it as
+ * it stands. `Keeper` is one this app has never heard of, so it reads *new tag* in the file's own
+ * green, which is the colour the row will really be made with. That asymmetry is not cosmetic: a
+ * tag is app-wide since schema v21, so recolouring one from a pasted decklist would recolour it
+ * in every deck the reader owns.
+ *
+ * The count on each row is **copies**, like every other number on this step.
+ */
+export const WithArchidektTags: Story = {
+  args: { deckId: 2 },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await userEvent.click(await canvas.findByLabelText("Decklist"));
+    await userEvent.paste(
+      "2x Sol Ring [Ramp] ^Keeper,#4aab08^\n" +
+        "1x Rhystic Study [Draw] ^Keeper,#4aab08^\n" +
+        "1x Lightning Bolt [Removal] ^Cut candidate,#ff0000^\n" +
+        "1x Counterspell [Counters]",
+    );
+    await userEvent.click(canvas.getByRole("button", { name: "Preview" }));
+
+    const keeper = await canvas.findByRole("checkbox", { name: "Keeper" });
+    await expect(keeper).toBeChecked();
+    await expect(canvas.getByRole("checkbox", { name: "Cut candidate" })).toBeChecked();
+    // The label the reader already has says so, and the one they do not says the other thing.
+    await expect(canvas.getByText("already yours")).toBeInTheDocument();
+    await expect(canvas.getByText("new tag")).toBeInTheDocument();
+
+    // Unticking is what the boxes are for, and the sentence above them counts what is left.
+    await userEvent.click(keeper);
+    await expect(keeper).not.toBeChecked();
+    await expect(canvas.getByText(/1 of them will be brought across\./)).toBeInTheDocument();
+  },
+};
+
+/**
  * A write the database refuses, in its own words.
  *
  * The dialog stays open holding what was pasted — Back still has the list — so the retry is one

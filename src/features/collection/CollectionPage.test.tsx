@@ -2072,3 +2072,164 @@ describe("the collection's folders", () => {
     expect(within(dialog).getByText(/ignoring the filters and folders/)).toBeInTheDocument();
   });
 });
+
+/**
+ * **Escape is the way back out of a drawer** — the floor of the dismiss ladder, and the same step
+ * the breadcrumb's last pressable segment takes.
+ *
+ * Two halves, and the second is what makes the first safe. The page registers a `"navigation"`
+ * rung that walks one level up, `enabled` only while the reader is *inside* something — at the
+ * root the press is nobody's here and has to fall through. And the filter box owns the press while
+ * it has text in it (`clearFieldOnEscape`), because Chromium empties an `<input type="search">` on
+ * Escape by itself **without** marking the press handled, so without that half one press would
+ * clear the box and walk the reader up a folder at the same time.
+ *
+ * jsdom implements neither the native clear nor its missing `preventDefault`, so what is driven
+ * below is the JS behaviour alone: the box's own handler, and what the page does with a press it
+ * is left.
+ */
+describe("Escape walks out of a folder", () => {
+  /**
+   * A real press at the caret — never `window.dispatchEvent`, which collapses the capture phase
+   * into registration order and reports a ladder this app does not have.
+   *
+   * The return value is the load-bearing half: `fireEvent` hands back `dispatchEvent`'s own
+   * boolean, so `false` means something called `preventDefault()` and **took** the press. That is
+   * the only way to tell "the rung was disabled" from "the rung ran and had nowhere to go", which
+   * are the same picture on screen and opposite facts about every other layer in the app.
+   */
+  const escape = (on: Element = document.body) =>
+    fireEvent.keyDown(on, { key: "Escape", code: "Escape" });
+
+  const filterBox = () => screen.getByRole("searchbox", { name: "Search your collection" });
+
+  /** One level, not all the way out: the parent is the trail's second-to-last segment, which is
+   *  the breadcrumb's own last pressable one. */
+  it("goes up one level, and the breadcrumb says so", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, FOILS]);
+    wrap(<CollectionPage />);
+    await userEvent.click(await screen.findByRole("button", { name: /^Trade binder folder/ }));
+    await waitFor(() => expect(lastQuery().folderId).toBe(3));
+    await userEvent.click(await screen.findByRole("button", { name: /^Foils folder/ }));
+    await waitFor(() => expect(lastQuery().folderId).toBe(9));
+
+    expect(escape()).toBe(false);
+
+    await waitFor(() => expect(lastQuery().folderId).toBe(3));
+    expect(screen.getByText("Trade binder")).toHaveAttribute("aria-current", "page");
+  });
+
+  /**
+   * **At the root the press is not this page's**, and `enabled` is the whole of that.
+   *
+   * A registered layer takes the press whether or not it has anywhere to go, so a rung left on at
+   * the top of the cabinet would be a floor with nothing under it — every Escape on this page
+   * would stop here and reach nothing else that might one day want the last one. Which is why the
+   * assertion is `defaultPrevented` and not the folder: `openFolder(null)` at the root is a no-op,
+   * so a rung that wrongly consumed the press would draw exactly the same screen.
+   */
+  it("leaves the press alone at the root", async () => {
+    collectionFolderList.mockResolvedValue([BINDER]);
+    wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+
+    expect(escape()).toBe(true);
+
+    expect(lastQuery().folderId).toBeUndefined();
+  });
+
+  /**
+   * **A deck group and `Recently removed` need no branch of their own**, and that is a fact about
+   * `trailOf` rather than luck: it is handed every folder where the *tree* beside it is handed
+   * only the reader's, so a pinned folder has a one-segment trail and the step up is the root —
+   * the same place its breadcrumb goes. Schema v25 writes `parent_id` `NULL` on every pinned row
+   * and no command can nest anything under one, so one segment is the only shape either can take.
+   */
+  it("walks back out of a deck group", async () => {
+    collectionFolderList.mockResolvedValue([DECK_GROUP, REMOVED]);
+    wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+    await userEvent.click(await screen.findByRole("button", { name: /^Mono-Red Aggro deck/ }));
+    await waitFor(() => expect(lastQuery().folderId).toBe(20));
+
+    expect(escape()).toBe(false);
+
+    await waitFor(() => expect(lastQuery().folderId).toBeUndefined());
+  });
+
+  /** The holding area is the other pinned kind, and the reader leaves it the same way. */
+  it("walks back out of Recently removed", async () => {
+    collectionFolderList.mockResolvedValue([DECK_GROUP, REMOVED]);
+    wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+    await userEvent.click(await screen.findByRole("button", { name: /^Recently removed folder/ }));
+    await waitFor(() => expect(lastQuery().folderId).toBe(21));
+
+    expect(escape()).toBe(false);
+
+    await waitFor(() => expect(lastQuery().folderId).toBeUndefined());
+  });
+
+  /**
+   * **The filter box owns one press, and only while it has something to spend it on.**
+   *
+   * The folder assertion is the point rather than the cleared box: a reader filtering inside a
+   * drawer presses Escape to undo the filter, and a press that did both would take the drawer out
+   * from under the list they were looking at.
+   */
+  it("empties the filter box first, and walks out on the next press", async () => {
+    collectionFolderList.mockResolvedValue([BINDER]);
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await user.click(await screen.findByRole("button", { name: /^Trade binder folder/ }));
+    await waitFor(() => expect(lastQuery().folderId).toBe(3));
+    await user.type(filterBox(), "bolt");
+
+    await user.keyboard("{Escape}");
+
+    expect(filterBox()).toHaveValue("");
+    expect(lastQuery().folderId).toBe(3);
+
+    await user.keyboard("{Escape}");
+
+    await waitFor(() => expect(lastQuery().folderId).toBeUndefined());
+  });
+
+  /** An empty box has nothing to undo, so the press is not its — the reader who cleared the filter
+   *  with the ✕ and pressed again goes up a level, from the same caret. */
+  it("lets an empty filter box hand the press on", async () => {
+    collectionFolderList.mockResolvedValue([BINDER]);
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await user.click(await screen.findByRole("button", { name: /^Trade binder folder/ }));
+    await waitFor(() => expect(lastQuery().folderId).toBe(3));
+    await user.click(filterBox());
+
+    await user.keyboard("{Escape}");
+
+    await waitFor(() => expect(lastQuery().folderId).toBeUndefined());
+  });
+
+  /**
+   * **The folder strip is the nearer thing and takes the press first.** It is an `"inner"` rung
+   * and therefore capture-phase, so it is ahead of the floor whatever order the two mounted in —
+   * and a reader half-way through naming a folder must not be walked out of the drawer they are
+   * naming it in.
+   */
+  it("closes the new-folder field without leaving the folder", async () => {
+    collectionFolderList.mockResolvedValue([BINDER]);
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await user.click(await screen.findByRole("button", { name: /^Trade binder folder/ }));
+    await waitFor(() => expect(lastQuery().folderId).toBe(3));
+    await user.click(screen.getByRole("button", { name: "+ New folder" }));
+    expect(screen.getByRole("textbox", { name: "New folder name" })).toBeInTheDocument();
+
+    expect(escape()).toBe(false);
+
+    await waitFor(() =>
+      expect(screen.queryByRole("textbox", { name: "New folder name" })).not.toBeInTheDocument(),
+    );
+    expect(lastQuery().folderId).toBe(3);
+  });
+});

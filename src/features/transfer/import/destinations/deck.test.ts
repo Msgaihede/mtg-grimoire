@@ -7,10 +7,11 @@ import type {
   PrintingTags,
 } from "@/lib/ipc";
 import { PREDEFINED_CATEGORY_NAMES, UNCATEGORIZED } from "@/features/decks/autoCategory";
+import { DEFAULT_TAG_COLOR } from "@/features/decks/tagColors";
 import { spec } from "@/features/decks/validation/fixtures";
 // `match` is the stubbed resolver, and it lives beside the corpus because `decklists.test.ts`
 // needs the same one — see its doc for what it claims and what it refuses to claim.
-import { ARCHIDEKT_SECTIONED, match } from "../fixtures";
+import { ARCHIDEKT_LABELLED, ARCHIDEKT_SECTIONED, REFERENCE_LIST, match } from "../fixtures";
 import { parseDecklist } from "../parse";
 import {
   SECTION_CATEGORY,
@@ -646,6 +647,114 @@ describe("filing an imported line by the pile its file named", () => {
     // rename is exactly the event that hollows out a string-literal assertion with nothing
     // going red.
     expect(items.filter((i) => i.categoryName === UNCATEGORIZED)).toHaveLength(0);
+  });
+});
+
+/**
+ * Archidekt's labels — `^Keeper,#4aab08^` — from the parsed line to the item the backend writes.
+ *
+ * The three questions this side owns: which distinct labels a list carries, what the reader's
+ * ticks do to them, and which of the two channels a label survives. `commit_import` owns the
+ * fourth — find or create — and its tests are in `import.rs`, because "is that the same label" is
+ * `deck_tags.name_key`'s question and the UNIQUE index is the authority on it.
+ */
+describe("imported tags", () => {
+  const labelled = (text: string, format: FormatSpec | null = null) => {
+    const parsed = parseDecklist(text);
+    const rows: ImportResolveRow[] = parsed.lines.map((line, index) => ({
+      index,
+      matched: match({ name: line.name }),
+      hintMissed: false,
+    }));
+    return buildImportPlan(parsed, rows, format);
+  };
+
+  it("folds the labelled export into five tags, in the order the file first named each", () => {
+    const plan = labelled(ARCHIDEKT_LABELLED);
+    expect(plan.tags).toEqual([
+      // 28 Snow-Covered Plains and four singles — **copies, not lines**, which is the whole of
+      // why the fixture carries a 28× line.
+      { key: "keeper", name: "Keeper", color: "#4aab08", copies: 32 },
+      { key: "fence", name: "Fence", color: "#fffc19", copies: 1 },
+      { key: "replace art", name: "Replace Art", color: "#d00dfa", copies: 4 },
+      { key: "getting", name: "Getting", color: "#2ccce4", copies: 2 },
+      // Not a restatement of `Fence`: two labels, two keys, two rows in the picker.
+      { key: "fence (flavor)", name: "Fence (flavor)", color: "#fa890d", copies: 1 },
+    ]);
+  });
+
+  it("folds two spellings of one label onto one row, keeping the first", () => {
+    // `deck_tags.name_key` is the grain, so `Keeper` and `keeper` are one label — and offering
+    // the reader two boxes for it would let them tick one and untick the other over a
+    // distinction the database does not have.
+    const plan = labelled("1 Sol Ring ^Keeper,#4aab08^\n2 Shock ^keeper,#ff0000^");
+    expect(plan.tags).toEqual([{ key: "keeper", name: "Keeper", color: "#4aab08", copies: 3 }]);
+  });
+
+  it("gives a label with no colour the app's own first one", () => {
+    // `deck_tags.color` is NOT NULL and picking what a colour *is* belongs to the webview, so
+    // the default is applied here rather than at the write — which is what makes the swatch on
+    // the step the colour the row would really be made with.
+    const plan = labelled("1 Sol Ring ^Keeper^");
+    expect(plan.tags).toEqual([
+      { key: "keeper", name: "Keeper", color: DEFAULT_TAG_COLOR.hex, copies: 1 },
+    ]);
+  });
+
+  it("offers no tag for a line nothing resolved", () => {
+    const parsed = parseDecklist("1 Sol Ring ^Keeper,#4aab08^\n1 Nonesuch ^Ghost,#ffffff^");
+    const rows: ImportResolveRow[] = parsed.lines.map((line, index) => ({
+      index,
+      matched: line.name === "Sol Ring" ? SOL_RING : null,
+      hintMissed: false,
+    }));
+    // A label worn only by lines nothing matched is not a label this import can bring across.
+    expect(buildImportPlan(parsed, rows, null).tags.map((t) => t.key)).toEqual(["keeper"]);
+  });
+
+  it("carries no tags at all for a list that has none", () => {
+    expect(labelled(REFERENCE_LIST).tags).toEqual([]);
+  });
+
+  it("sends the name and colour on every item wearing a ticked label", () => {
+    const plan = labelled("1 Sol Ring ^Keeper,#4aab08^\n1 Lightning Bolt");
+    const [ring, bolt] = toImportItems(plan, []);
+    expect(ring).toMatchObject({ tagName: "Keeper", tagColor: "#4aab08" });
+    // Absent, not null: an item that says nothing about a label is one `commit_import` leaves
+    // alone, which is what makes a merge keep a tag the reader put on by hand.
+    expect(bolt.tagName).toBeUndefined();
+    expect(bolt.tagColor).toBeUndefined();
+  });
+
+  it("drops the label off every item when the reader unticks it", () => {
+    const plan = labelled("1 Sol Ring ^Keeper,#4aab08^\n1 Lightning Bolt ^Fence,#fffc19^");
+    const items = toImportItems(plan, [], new Set(["fence"]));
+    expect(items.map((i) => i.tagName)).toEqual([undefined, "Fence"]);
+  });
+
+  it("tells an empty tick set from nobody having been asked", () => {
+    // The distinction `toImportItems` refuses to collapse: `null` is a caller that draws no
+    // picker, an empty set is a reader who unticked every box.
+    const plan = labelled("1 Sol Ring ^Keeper,#4aab08^");
+    expect(toImportItems(plan, [], null)[0].tagName).toBe("Keeper");
+    expect(toImportItems(plan, [], new Set())[0].tagName).toBeUndefined();
+  });
+
+  it("keeps a commander's label when the command zone takes the card", () => {
+    // The pile and the `{noDeck}` flag are filing and the command zone outranks filing; a label
+    // is what the reader thinks of the card, and a commander they marked `Keeper` is still a
+    // keeper.
+    const plan = labelled("1 Captain Sisay ^Keeper,#4aab08^", spec("commander"));
+    const [item] = toImportItems(plan, [plan.cards[0].match.cardId]);
+    expect(item).toMatchObject({ categoryName: "Commander", tagName: "Keeper" });
+  });
+
+  it("labels a card in a pile that counts toward nothing", () => {
+    const plan = labelled(ARCHIDEKT_LABELLED);
+    const arkenstone = toImportItems(plan, []).find(
+      (i) => plan.cards.find((c) => c.match.cardId === i.cardId)?.tagName === "Getting",
+    );
+    expect(arkenstone).toMatchObject({ inactive: true, tagName: "Getting" });
   });
 });
 

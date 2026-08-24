@@ -173,9 +173,12 @@ reader to configure the deck they had just made; it now asks all of them.
 
 - **The game is a filter that is also a stored field, and both halves are deliberate**
   (2026-08-17). `decks.game_key` (schema v18) is `any | paper | arena | mtgo`, drawn as a select
-  on **every surface that picks a format** — `DeckSettingsForm` (so both dialogs), the import
-  dialog's `FormatSelect`, and the editor header's `Deck game` — and the only thing it *does* is
-  narrow that format list to the formats whose seeded `games` cell carries it. Five rules hold it:
+  on **every surface that picks a format** — `DeckSettingsForm` (so both dialogs) and the import
+  dialog's `FormatSelect` — and the only thing it *does* is narrow that format list to the formats
+  whose seeded `games` cell carries it. **The deck editor's header drew a third copy of that pair
+  until 2026-08-24** and draws neither now: both questions were already asked in Deck settings, so
+  the header was spending ~250px of a row that already wrapped on printing the answers. What it
+  keeps is the *answer* — the ledger's read-only `Format` term. Five rules hold it:
   - **The narrowing is one function.** `pickerFormats(specs, keep, game)` — the third argument
     defaults to `ANY_GAME`, which narrows nothing, so no caller that had not thought about games
     changed. `playableIn` reads `spec.games`, the seeded cell, and never a list of keys spelled
@@ -387,6 +390,39 @@ reader to configure the deck they had just made; it now asks all of them.
   table and the text columns have no art to hang a chip on and use `CardMarks`' `DeckFinishMark`
   instead, and `deckCardName` says the finish in words on **all four**, because on three of them
   the mark is decoration once the control is named.
+- **A drag carries every card the reader has picked, and the group travels *beside* the payload
+  rather than instead of it** (issue #214). `dragData(payload, rest)` writes a second key,
+  `dragGroup`, next to the primary's own fields — so `DragPayload`, `readDragData` and `dropWrite`
+  did not move, and **a drop target that has not learned about groups goes on acting on the
+  primary alone**. That is what let this land with no flag day, and it is why widening
+  `DragPayload` into a list was refused: it reads cleaner in the type and it is a rewrite of six
+  drop targets, four drag sources and every test that names a payload, to buy a property the
+  additive shape gets for free. `readDragGroup` and `dropWrites` are the plural readers; every
+  `canDrop` in the editor now asks **"does at least one member write"**, which for a single-card
+  drag is the same question `dropWrite(…) !== null` always asked.
+  - **A mixed set is not refused whole.** Four deck rows and a search tile dropped on the remove
+    tray take the four out and pass over the fifth — the alternative fails a gesture for a reason
+    nothing on screen names, since nothing marks which member is the odd one.
+  - **`Delete` takes the picked set out, and it is this editor's only keyboard verb that is not
+    undo.** Three fences, each closing a real way it goes wrong: a text field keeps the key
+    (`isTextField`, the same predicate the undo handler yields to — a reader deleting a character
+    out of the deck's name must not lose four cards), an open layer keeps it (the deck is behind a
+    scrim), and **nothing is written for a set of one** — one card already has a stepper, a menu
+    row and a tray, all visible, and a bare keystroke that silently removed whatever was last
+    clicked is one press from a deck the reader did not mean to edit. It goes through
+    `setQuantityAt(…, 0)` like every other removal here; there is still no remove mutation.
+  - **The card menu goes plural for the writes and stays singular for what cannot mean anything
+    else.** `Add N cards to`, `Move N cards to`, `Tag N cards`, `Remove N cards` act on the set;
+    `Copy card name`, `Copy card image`, `Open on`, `View all printings`, `Set as commander`,
+    `Set as companion` and `Finish` stay about the one card that was right-clicked. A finish
+    belongs to a *printing* — the toggle, the submenu and the greyed row are three shapes decided
+    by what that printing is sold in — and a deck has one commander. **The set travels into
+    `buildCardMenu` too**: it did not for one build, and the menu read `Move 2 cards to` under a
+    singular `Add to`, which is one menu answering the same question two ways.
+  - **The cost this accepts rather than solves: undo is per-audit-entry.** A four-card move writes
+    four `deck_audit` rows, so putting it back is four presses of Ctrl+Z. Batching is a change to
+    `deck_undo`'s grain in Rust and is deliberately out of scope; **do not close it by looping less
+    in TypeScript** — the loop is what makes the gesture work.
 - **There is no remove mutation.** The tray's drop, the stepper's zero **and the card menu's
   `Remove card`** are all `setQuantity(…, 0)`, because zero removes a deck row. That third caller
   (2026-08-15) is what makes the rule worth restating: a menu row called "Remove card" is exactly
@@ -754,35 +790,91 @@ reader to configure the deck they had just made; it now asks all of them.
   **Every width on this page was measured with _five_ buttons in that block**; `Export deck` made
   it six and none of them has been re-taken, so the standing claim is "it already wrapped", not a
   number for what it costs now.
-- **The format check on that block is a glyph in a 36px box, and it is a glyph because the deck
-  has two lists** (2026-08-18). Live and Theory hold different cards and so fail different rules,
-  so the readout's two states are one press of the variant switch apart — and while it was
-  `No issues · Modern` against `3 issues` that press changed its width and slid `Built` and all
-  six action buttons along with it, on a block that already wraps at the app's own window. It is
-  `CircleCheck` in `--color-ok` for a clean deck and `TriangleAlert` in `--destructive` for a
-  broken one, with the count in a bubble that is `absolute` — **out of the box's flow, which is
-  the whole mechanism**: nothing inside a 36px square may change its width, so 0, 3 and 47
-  findings draw the same control. Three rules hold it:
+- **The header is three fixed lines since 2026-08-24 — actions, ledger, toolbar — and the widths
+  it reasons about are the _editor column's_, not the window's.** What the redesign answered is the
+  bullet above: six worded buttons became six glyphs with a word beside each, and each word is
+  dropped — never the control — as the column narrows. `DeckEditor.tsx`'s `WIDE_HEADER_PX` (1400),
+  `SETTINGS_ICON_PX` (1100) and `TIGHT_HEADER_PX` (900) are the three thresholds, read off
+  `deskWidth` because the desk row and the header are both full-width children of one flex column,
+  so the box already measured for the search panel's floor is the box the header is drawn in — no
+  fourth observer and no extra re-render. **Zero is unmeasured and reads as the roomy middle**,
+  which is `roomForPanel`'s own convention: the first paint of a wide window must not flash a
+  narrow header, and jsdom (which lays nothing out and whose `ResizeObserver` never fires) draws
+  the state every test is written against. Five things this settled, each of which is a decision:
+  - **The two selects are gone**, `Deck game` and `Deck format`. Both questions were already asked
+    in `DeckSettingsForm`, so this row was printing answers at ~250px on a row that already
+    wrapped. What had to stay is the answer, and it is the ledger's first term (see below).
+    Reaching one from a test is a dialog and four presses now; the header's remaining one-act
+    `deck_update` is the **name field**, which is what every "any deck write would do" test drives.
+  - **`Compare` is a `Scale` glyph inside the Live/Theory group**, between the two lists it weighs.
+    A verb between two nouns needs no word of its own.
+  - **`Import cards` and `Export deck` are one joined pair** (`TRANSFER`), drawn as lucide's mirror
+    pair `SquareArrowRightEnter`/`SquareArrowRightExit`. Their visible words are `Import` and
+    `Export` — each *contained in* the accessible name beside it, which is what WCAG 2.5.3 asks
+    for — and both disappear below `WIDE_HEADER_PX`.
+  - **`Deck settings` is the first word to go**, at `SETTINGS_ICON_PX`, because it is the longest
+    in the row. The other three follow at `TIGHT_HEADER_PX`, along with the back link's `Decks`.
+  - **A tooltip is bound exactly when the word is not there to be read**, and never otherwise: a
+    hint that repeats the label printed beside it is noise. The name is the same string at every
+    width, so nothing a test or a screen reader addresses moves. It costs one artifact, taken
+    knowingly and written down at the live pass: resize the column while the pointer rests on one
+    of these buttons and the open tooltip is orphaned, because the re-render takes away the
+    `onPointerLeave` that would have closed it. It clears on the next hover of anything that binds
+    one.
+
+  **Driven in the shipped window 2026-08-24** (`npm run tauri dev`, a debug build, 1920×1080,
+  against the real corpus) at all four of the design's column widths, with the toolbar's split read
+  off the y coordinates and both anchored layers opened — and with the breakpoint arithmetic
+  confirmed from the other end: `deskWidth` and the editor column measured the same number, and
+  `1920 − 208 − 40 − 15` is the design's 1657 exactly. Every figure:
+  [decks-live-findings.md](../../../docs/reference/decks-live-findings.md).
+- **The format check says its count in words again, and it is on the _ledger_ line now**
+  (2026-08-24). It went glyph-only on 2026-08-18 for a reason about the **action** row: Live and
+  Theory hold different cards and so fail different rules, so the two states were one press of the
+  variant switch apart, and while it read `No issues · Modern` against `3 issues` that press
+  changed its width and slid `Built` and all six action buttons along with it — at widths where it
+  could also change which line they were on. It sits at the right-hand end of the ledger's
+  `ml-auto` group now, with nothing after it, so a change of width moves this control and the two
+  chips beside it and reflows nothing else. **The argument expired with the position; the words
+  came back with it**, and the count bubble went — there is no fixed box left for it to hang off.
+  It is still `CircleCheck` in `--color-ok` for a clean deck and `TriangleAlert` in
+  `--destructive` for a broken one, and at `TIGHT_HEADER_PX` it keeps the count and drops the
+  word — a *deletion* rather than a second string, so the two can never drift. Three rules hold
+  it:
   - **`--color-ok` is the app's first success colour and had to be a new token.** The palette's
     two greens are `--color-mana-g` ("Mana UI only — chips, pips, the line. Never a panel, never
     a border, never text") and `--color-pie-g`, a colour-identity deep that reads as grey at
     16px on this background; a check mark in either says "green cards" to the one reader who has
     learned what those colours mean here. It is a peer of `--destructive` — same lightness, less
     chroma — and like it, it colours a glyph and never a panel.
-  - **The bubble hangs off the _top_ and never off the right**, and that asymmetry is a
-    scrollbar. The block is `flex-wrap justify-end`, so every folded line ends flush against the
-    editor's own right edge, and the editor is the page scroller — where `overflow-y: auto`
-    computes `overflow-x` to `auto` as well. A bubble 4px past that edge, at whatever width the
-    wrap happens to fall right there, is 4px of horizontal scroll on the page this folder has
-    twice gone looking for phantom scrollbars on. Up costs nothing: the header's `py-1.5` leaves
-    6px and the bubble asks for 3.
+  - **Nothing on this line may hang outside its own box, and that is a scrollbar rather than a
+    taste.** The count used to be a bubble `absolute -top-1 right-0`, and the *right* half of that
+    was forbidden: the block it was in ended flush against the editor's own right edge, and that
+    editor is the page scroller — where `overflow-y: auto` computes `overflow-x` to `auto` too, so
+    4px past the edge is 4px of horizontal scroll on the page this folder has twice gone looking
+    for phantom scrollbars on. The bubble is gone with the fixed box; the rule it was obeying is
+    what a new mark on this line inherits.
   - **The accessible name names the format in both states** — `No issues · Modern`,
-    `3 issues · Modern` — and is the `title` as well, because a glyph says nothing to a screen
-    reader or to a pointer. It used to carry the format only when there was nothing to count,
-    where there was nothing else to print; now that the name is the only place either fact
-    exists, withholding the ruleset for a broken deck would answer "checked against what?"
-    exactly when the question stops being worth asking. **It is what every test and story
-    addresses this control by**, so a reworded label is a red suite.
+    `3 issues · Modern` — and is the `title` as well. The count is visible text again, but the
+    ruleset is not: the ledger's own `Format` term says it, and that term is the first thing to go
+    when the column is narrow, so the name is the one place both facts are always true. **It is
+    what every test and story addresses this control by**, so a reworded label is a red suite.
+- **The bracket estimate is a readout of its own on that same line** (2026-08-24, `DeckBracket`),
+  where it used to be an advisory stapled to the bottom of the check's panel. The two answer
+  different questions — the check says what is broken, this says how strong the deck is, and a
+  bracket cannot make a deck illegal — so an advisory a reader had to open a list of *findings* to
+  reach was one nobody went looking for. Three things travel with the move:
+  - **It is a `Layer` arm** (`{ kind: "bracket" }`), so the check's findings and this advisory can
+    never be open over each other at the two ends of one line. Anchored like `check` and not a
+    full-window overlay.
+  - **It costs a pass of `estimateBracket` on every edit**, which the panel-gated version did not:
+    the *button* prints the number, so it cannot wait to be read. Memoised on the rows, and drawn
+    only where `spec.commanderRule` is not null — a bracket is the Commander conversation, and a
+    Standard deck must not pay for an answer it has no use for.
+  - **The edge is accent and it is not a state.** It is the one figure on that line that is a
+    *reading* rather than a count, and the edge says the number came from somewhere the reader can
+    go and look. The check beside it colours a glyph instead, because red and green there mean
+    broken and clean and there is no such pair here — a bracket 5 deck is not a worse deck.
 - **Four views** — `Stacks | Table | Text | Grid` (`DeckEditor`'s `VIEWS`) — crossed with three
   `Group by` modes (`category | manaValue | type`) and four sorts (`alphabetical | manaCost |
 price | type`). An **inactive category stays its own group in all three grouping modes** — as long
@@ -832,6 +924,15 @@ price | type`). An **inactive category stays its own group in all three grouping
     closes it by accident in one surface: the counting argument above is an argument about a
     number, and the chart is a number, so whether the curve should drop the commander too is a
     question somebody has to ask the reader rather than infer from this rule.
+- **At `TIGHT_HEADER_PX` the toolbar reads as two sentences rather than one long run**
+  (2026-08-24): the three pickers that decide how the deck is *drawn*, then the tools that
+  *change* it — quick add, undo/redo and the filter. `order` does the regrouping and a
+  zero-height `basis-full` child forces the break, so **the DOM order is unchanged** and a caret
+  walking the row is unaffected by which line a control is painted on. It is one flex line
+  becoming two, not a reordering anybody reads: within each line the groups are in the order they
+  are written. The filter box went from a fixed `w-44` to `min-w-40 max-w-[25rem] flex-1` in the
+  same change — the design's own shape, and the reason for the ceiling is that a search box as
+  wide as a maximised window is a box whose text sits alone in the middle of the desk.
 - **The toolbar asks those three questions with three identical `<select>`s** (changed
   2026-08-15). `View` was a four-button segmented group beside two selects, which made the control
   a reader reaches for most the one that looked unlike its neighbours and spent four buttons'
@@ -845,8 +946,28 @@ price | type`). An **inactive category stays its own group in all three grouping
   (debug build, 1280×800): all three selects at `top: 182`, 36px tall, on one line, and each of
   the four rows drew its own view with no horizontal overflow — the figures are in
   [frontend-design.md](../../../docs/reference/frontend-design.md).
-- **The deck stats are a band at the foot of the editor, and there is no control that hides
-  them** (changed 2026-08-14). They were a 280px aside on the desk row with a `Stats` toggle in
+- **The five figures that headed that band are the header's ledger line, and are drawn exactly
+  once** (2026-08-24, `DeckLedger`). Cards, lands, average mana value, price and owned were
+  `DeckStats`' `FigureRow`, under four charts at the bottom of a scroller a hundred-card deck is
+  two screens tall — the wrong end of the page for the numbers a reader edits *against*. Four
+  things about the move:
+  - **Both surfaces call `deckStats` over the same `DeckCard[]`**, so this could only ever have
+    left a duplicate rather than a disagreement — and the duplicate is what was deleted. The
+    `marketplace` prop went with the Price figure; `DeckStats` takes none now.
+  - **The ledger does not take `separateXGroup` and must not**: that flag moves cards between
+    *curve buckets*, and this line draws no curve. The one figure it could reach —
+    `averageManaValue` — is the one the flag is documented never to move (CR 202.3b), so passing it
+    would be a way for the two to start disagreeing about a number neither should.
+  - **It is a `<dl>` whose children are all `div`s**, hairline separators included. The design
+    draws those separators as `span`s, which is not a valid description list.
+  - **The ruleset is its first term**, and that is what the dropped `Deck format` select left
+    behind: a ledger that says `2 issues` without saying issues *with what* is a count with no
+    scope. Read-only — changing it is a Deck settings trip — and it is the first thing to go at
+    `TIGHT_HEADER_PX`, where the check button's own name still carries it. With no spec in hand it
+    falls back to the deck row's `formatName`.
+- **What is left in the band is what needs the room**: the pips, the shortfall and the press that
+  acts on it, and the four charts. **The deck stats are a band at the foot of the editor, and there
+  is no control that hides them** (changed 2026-08-14). They were a 280px aside on the desk row with a `Stats` toggle in
   the toolbar, and the aside's width was subtracted from `DECK_FLOOR` before the docked search
   panel was asked whether it fit — so opening Stats at 1280 with a card pane docked cost the
   reader their search, and the toggle existed to give that width back. Full width under the deck
@@ -998,7 +1119,15 @@ price | type`). An **inactive category stays its own group in all three grouping
   one holding cards and `live` is the column that fills as the reader acquires them. Reading
   left to right is then plan → reality, which is the direction the difference beside it is taken
   in.
-- **`Compare` is a button, and the editor no longer counts anything itself** (2026-08-20). It read
+- **`Compare` is a `Scale` glyph inside the Live/Theory group since 2026-08-24**, between the two
+  lists it weighs against each other — a verb between two nouns needs no word of its own, and the
+  row it stood on had no width to spare. **The order inside that group is unchanged**: Theory,
+  Compare, Live. The design this row was rebuilt from draws Live first; that ordering is kept
+  because the argument for it is about where a press lands (turning the switch on *moves* the deck
+  into theory and leaves `lastVariant` there, so the reader arrives on the tab their cards are now
+  under) and a mock is not.
+- **`Compare` stopped being a count, and the editor no longer counts anything itself**
+  (2026-08-20). It read
   "N cards differ" and the number came from a `useMemo` in `DeckEditor` over a *second* `useDeck`
   of the opposite variant — a second implementation of a comparison `deck_theory_diff` already
   owns, and one that gave a different answer: it keyed rows on `` `${categoryId}:${cardId}` ``

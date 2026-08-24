@@ -25,6 +25,7 @@ import { sortOptions } from "@/lib/options";
 import { formatPrice } from "@/lib/prices";
 import type { SortDir } from "@/lib/sort";
 import { useAppStore } from "@/lib/store";
+import { clearFieldOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { colorDisabled, countDisabled, facetTitle, optionDisabled } from "./facets";
 import { SetCombobox } from "./SetCombobox";
@@ -41,8 +42,9 @@ import { ANY_CARD, SEARCH_SORT_OPTIONS, type CardSearch } from "./useCardSearch"
  * `SEARCH_SORT_OPTIONS` is declared in the order the orders were reasoned about, which is the
  * author's notes rather than anything a reader can see.
  *
- * `Default order` is deliberately not in this list. It is pinned above it in the markup, because
- * it is not an order to pick but the absence of one.
+ * `Best match` is deliberately not in this list. It is pinned above it in the markup, because it
+ * is not a column to order by: it is the search's own ranking, and on a browse — with nothing to
+ * be relevant to — the name order that stands in for it.
  */
 const SORT_ROWS = sortOptions(SEARCH_SORT_OPTIONS, (s) => s.label);
 
@@ -72,15 +74,19 @@ const RARITIES = ["common", "uncommon", "rare", "mythic"] as const;
  * up" by the next. There is no visible text at all, so WCAG 2.5.3's "the name contains the
  * label" has nothing here to bind to.
  *
- * The out-of-reach reading names its reason instead of claiming a direction. At `Default order`
- * the list is in the view's own order — relevance when there is a query, name when there is not
- * — which is neither ascending nor descending by any column, and a button announcing "ascending"
- * over it would be describing a sort that is not there. **A `getByRole` on the exact enabled
- * string therefore fails on that row and reads as "the button is missing"**; match this name on
- * a prefix.
+ * The out-of-reach reading names its reason instead of claiming a direction. At `Best match` the
+ * list is ranked by relevance — and on a browse, with no query to rank against, by name — which
+ * is neither ascending nor descending by any column the reader picked, and a button announcing
+ * "ascending" over it would be describing a sort that is not there. **A `getByRole` on the exact
+ * enabled string therefore fails on that row and reads as "the button is missing"**; match this
+ * name on a prefix.
+ *
+ * It names the *row* and not "no order picked", which is what it said while that row was called
+ * `Default order`. `Best match` is a row a reader deliberately picks, so "no order picked" would
+ * be the button contradicting the select beside it.
  */
 function sortDirectionName(dir: SortDir | undefined): string {
-  if (!dir) return "Sort direction — no order picked";
+  if (!dir) return "Sort direction — Best match has no direction";
   return dir === "asc"
     ? "Sort direction: ascending — press for descending"
     : "Sort direction: descending — press for ascending";
@@ -383,6 +389,13 @@ export function FilterBar({
           type="search"
           value={search.text}
           onChange={(e) => search.setText(e.target.value)}
+          // Escape empties the box while there is something in it to empty, and falls through
+          // when there is not. Chromium clears an `<input type="search">` by itself but leaves
+          // `defaultPrevented` false, so on a view where Escape also means "go back" the same
+          // press would do both — and this row is the deck editor's docked panel as well as the
+          // search page's. jsdom implements no native clear at all, so the handler is also the
+          // only half of the behaviour a test can see. The rule is {@link clearFieldOnEscape}'s.
+          onKeyDown={(e) => clearFieldOnEscape(e, search.text, () => search.setText(""))}
           placeholder="Search cards…"
           // `FILTER_FIELD` and not `FILTER_CONTROL`: the row's chips dip 3% under the press and
           // a box the reader types into must not, or the native ✕ slides out from under the
@@ -476,7 +489,17 @@ export function FilterBar({
             The pair is boxed rather than left to the row's own gap, which would stand the arrow
             12px off the order it belongs to and let `flex-wrap` break the two onto separate lines
             — a direction with its order on the line above is a button about nothing. 4px apart,
-            like the layout pair at the far end of the row. */}
+            like the layout pair at the far end of the row.
+
+            It costs the docked panel nothing at its 206px floor. A `<select>` is as wide as its
+            widest option, and this one's widest rows are `Best match` and `Mana value` at ten
+            characters each — the same count as the `Any format` in the tray. The `Default order`
+            rename **shrank** it: 119px with that as the widest row against 111px with `Best
+            match`, measured against the built stylesheet with the app's own fonts loaded
+            (2026-08-24), so nothing that fitted before can stop fitting now. **Below 640 it does
+            not have to fit anything** — the select is `flex-1` on a line of its own, so the
+            measurement is what the *widest* layouts spend rather than what the narrowest survives,
+            and the break at `order-[28]` above is what makes that line its own. */}
         <div className="order-[30] flex min-w-0 flex-1 items-center gap-1 @min-[640px]/fb:flex-none @min-[1500px]/fb:order-[7]">
           {/* **`Sort results`, and never shortened back to `Sort`.** The collection's twin is a bare
               `Sort` and this one may not copy it, because this row is drawn on two surfaces and one
@@ -509,17 +532,33 @@ export function FilterBar({
               "min-w-0 flex-1 border-border bg-surface px-2 text-dim @min-[640px]/fb:flex-none",
             )}
           >
-            {/* Pinned first and outside the sorted list, for the reason `Any format` is: it is not
-                an order to pick but the absence of one, and a reader reaching for the way back
-                reaches for it blind.
+            {/* Pinned first and outside the sorted list, for the reason `Any format` is: it is
+                not a column to order by, and a reader reaching for the way back reaches for it
+                blind.
+
+                **`Best match`, and never `Default order` again** (issue #213). That name said
+                what the row *was* in the state machine — the empty sort spec — instead of what it
+                does, so a reader browsing the alphabetical opening wall read it as the name of
+                alphabetical order and reported the label as wrong. It is not: with text in the
+                box this row is FTS5's `bm25` with the name column weighted ten times the type
+                line and oracle text, and a search for `human` opens on `Human Frailty` rather
+                than on `A Girl and Her Dogs`. `Name` is the row that really is alphabetical, and
+                it sits two below this one — which is the whole of the fix: name each row for the
+                order it produces, and let the reader pick between them.
+
+                The one state the name overshoots is the empty box, where there is no query to be
+                relevant to and the search falls back to name order (`search.rs`'s `ORDER_NAME`).
+                Kept anyway: a row whose label changed as the reader typed would be a control
+                moving under them, and `Name` is right there for anyone who wants alphabetical
+                said out loud.
 
                 Pickable, and **not** `disabled` like the collection's `Custom…` — the two rows
                 look alike and are opposites. That one is a state the control can only be *put*
                 into, from a header this select has no option for. This one is a real destination:
-                it is how a reader who sorted by accident gets the view's own order back, and on
-                the grid it is the only way, because the third press that clears a sort is a press
-                on a header the grid does not draw. */}
-            <option value="">Default order</option>
+                it is how a reader who sorted by accident gets the ranking back, and on the grid
+                it is the only way, because the third press that clears a sort is a press on a
+                header the grid does not draw. */}
+            <option value="">Best match</option>
             {SORT_ROWS.map((s) => (
               <option key={s.value} value={s.value}>
                 {s.label}
@@ -542,7 +581,7 @@ export function FilterBar({
               **The real `disabled`, and the row's `aria-disabled` rule does not bind.** That rule
               is about a filter row greying *as the reader types*, where a control leaving the tab
               order would shrink the row out from under a keyboard caret. This one can only grey
-              when the reader themselves puts the select back to `Default order`, and their caret
+              when the reader themselves puts the select back to `Best match`, and their caret
               is on that select when they do it — the button never vanishes from under the thing
               focusing it. */}
           {/* **Wrapped, for the same reason `AllPrintingsDialog`'s end-of-walk chevron is.**

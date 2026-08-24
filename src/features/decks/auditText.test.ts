@@ -428,6 +428,26 @@ describe("auditSentence", () => {
     expect(added).toEqual({ text: "Imported 117 cards into 9 categories", detail: null });
   });
 
+  /**
+   * The labels an import **made**, in the detail — news exactly when it is not zero, and
+   * app-wide news, since `deck_tags` has no `deck_id` since schema v21.
+   *
+   * The zero arm and the absent arm are one branch on purpose: `tagsCreated` is written on every
+   * import row from 2026-08-24, so an absent key is a row from before that date and a list that
+   * carried no labels reads the same either way. Neither draws a detail.
+   */
+  it("says how many labels an import invented, and nothing when it invented none", () => {
+    const imported = (payload: Record<string, unknown>) =>
+      auditSentence(entry("add", { import: payload }, { cardId: null, cardName: null }));
+    const base = { mode: "merge", lines: 105, cards: 117, categories: 9 };
+
+    expect(imported({ ...base, tagsCreated: 2 }).detail).toBe("2 new tags");
+    expect(imported({ ...base, tagsCreated: 1 }).detail).toBe("1 new tag");
+    expect(imported({ ...base, tagsCreated: 0 }).detail).toBeNull();
+    // A row written before the field existed.
+    expect(imported(base).detail).toBeNull();
+  });
+
   it("says one card, not 1 cards", () => {
     const imported = (payload: Record<string, unknown>) =>
       auditSentence(entry("add", { import: payload }, { cardId: null, cardName: null })).text;

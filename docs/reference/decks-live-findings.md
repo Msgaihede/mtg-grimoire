@@ -882,3 +882,164 @@ beside it re-packed 965 → 617 → 965 on the way past.
 clicked.** That is the design — the pane covers what the reader was not looking at — but it means
 a CDP pass that opens a deck card and then reaches for a search tile is aiming at the pane. Close
 the card first.
+
+## Multi-select (#214) — 2026-08-24, `npm run tauri dev` (debug), 1920×1080, a copy of the real db
+
+Driven against the `Azula` deck — 122 rows across 13 piles — and the search wall over the real
+116 700-card corpus. Everything below is a reading from the shipped window, not a test.
+
+### What worked
+
+| Gesture | Reading |
+| --- | --- |
+| Plain click a deck card | `1` `[data-deck-card-selected]` |
+| Ctrl-click a second | `2` marked, `2` `.ring-accent`, both the cards aimed at |
+| Shift-click a third | store `cardSelection` = `{ scope: "deck:3", keys: 3 }`, anchor held on the Ctrl-clicked card |
+| Drag one picked card onto another pile | all **3** moved, `41 → 39`, one gesture |
+| After the drop | `cardSelection` `null`, one ring left (the pane's own card) |
+| The drag preview | a chip reading **`3 cards`**, `color: oklch(0.75 0.12 85)` — `--color-accent` exactly |
+| Right-click a picked card | `Add 2 cards to · Move 2 cards to · Tag 2 cards · Remove 2 cards`, with `Copy card name`, `Copy card image`, `Open on`, `View all printings`, `Set as commander`, `Set as companion`, `Set as foil` singular |
+| `Delete` with 2 picked | `122 → 120` rows, both named cards gone, set stood down |
+| `Delete` with the caret in **Deck name** | `118 → 118`, the set of 2 survived |
+| Ctrl-click in Stacks / Table / Grid | `2` keys and `2` marked in all three |
+| Search wall, Ctrl then Shift | `{ scope: "search", keys: 3 }`, `4` rings — three picked plus the pane's card |
+| Drag 3 picked tiles onto the sidebar's **Wishlist** | chip `3 cards`, `Added to wishlist.`, and the wishlist drew **3** tiles |
+
+**The fourth ring is the design and not an off-by-one.** `deckCardMarked` answers
+`slot === selectedSlot || isPicked(slot)`, so the card the pane is open on keeps its ring whether
+or not it is in the set — which is the ring meaning exactly what it meant before multi-select
+existed.
+
+### What the pass found
+
+**The deck card menu's shared half stayed singular.** With two cards picked the menu read
+`Move 2 cards to` directly under a singular `Add to` — one menu answering the same question two
+ways. `buildDeckCardMenu` was passing `picked` to its own rows and not into `buildCardMenu`'s
+deps. Fixed in the same pass and re-read: `Add 2 cards to`. **Nothing in the suite could have
+caught it** — the deck-menu tests assert this file's own rows and `cardMenu.test.tsx` builds the
+shared menu directly, so neither one ever sees the seam between them.
+
+### The harness trap this cost twenty minutes to
+
+**A stacked deck card cannot be clicked at its centre.** `CardStack` overlaps every card by 285px,
+so a collapsed one's only hittable part is its 34px reveal strip — and `cdp.mjs click <css>` aims
+at rect centres. A Ctrl-click aimed at one card marked a *third* one, twice, and read exactly like
+the chord not reaching the app. Switching the toolbar's view select to `grid` answered it in one
+command. Hovering first makes it worse rather than better: the dwell fans a card open and reflows
+the pile under the pointer. Written up in
+[live-ui-verification.md](live-ui-verification.md) beside the `key` vocabulary.
+
+**And the target has to hit-test.** The first multi-drag reported `outcome: "dropped"` and moved
+nothing: the target pile's centre was at `y: -24`, off the top of the window. `elementFromPoint`
+at the centre before the drag is the check, and it is the same lesson the category-reorder pass
+paid for on 2026-08-17.
+
+### Two things this pass did not cover
+
+**A `deck-panel` set dragged into a category column.** The panel's tiles carry the scope and the
+group travels the same way the wall's does, but the gesture was not driven — the sidebar drop was
+exercised instead, through the Wishlist entry, because navigating away from a deck clears
+`openDeckId` and the Decks entry then refuses in words.
+
+**The count chip at reduced motion, and its position against the pointer.** The chip was caught
+with a `MutationObserver` on `document.body` — the container `setCustomNativeDragPreview` appends
+for one frame is removed by its own monitor on `dragstart`, so `cdp.mjs drag --probe`, which fires
+between `dragOver` and `drop`, is too late to see it. What was read is the text and the colour;
+the 12px offset is unmeasured.
+
+## The three-line header, at all four of its widths — 2026-08-24, `npm run tauri dev` (debug), 1920×1080
+
+The 2026-08-24 redesign, driven against the main checkout's real corpus (116 700 cards) on a
+100-card Commander deck with a theory list, a sideboard and an inactive Maybeboard. The design's
+four artboards are **editor-column** widths, so the pass drove the column rather than the window:
+`section[aria-label^="Deck editor"]` was given each width in turn and the header re-measured after
+a frame, which is what `deskWidth`'s `ResizeObserver` answers on.
+
+### The arithmetic the breakpoints rest on is exact
+
+The header reads `deskWidth` — the desk row's `clientWidth` — because the desk row and the three
+header lines are all full-width children of one flex column. **Measured both ways and they agree
+to the pixel**: with the rail collapsed at a 1920 window the column and the desk row both read
+**1797**, which is 1920 less the collapsed rail (68), `main`'s `p-5` (40) and the page scrollbar
+(15) — **123** exactly. With the rail expanded, one press later, both read **1657**, which is the
+same sum with the rail at 208. So the design's artboard numbers and this app's own measurement are
+the same number, and `1280 − 208 − 40 − 15 = 1017` is the app's default column without anything
+having to be re-derived.
+
+### Every artboard, reproduced
+
+Heights are the three lines' own — 50 / 38 / 49 is one line each, and a wrapped line is visibly
+taller. `documentElement.scrollWidth` equalled `clientWidth` (1920) at **every** width: no
+horizontal scroll at any of them, which is the one thing the 1024px floor forbids.
+
+| Column | actions | ledger | toolbar | Import/Export | Deck settings | back | `Format` term | check |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1657 | 50 | 38 | 49 | `Import` (78px) | `Deck settings` (119px) | `Decks` (76px) | drawn | `1 issue` |
+| 1157 | 50 | 38 | 49 | icon (36px) | `Deck settings` (119px) | `Decks` (76px) | drawn | `1 issue` |
+| 1017 | 50 | 38 | 49 | icon (36px) | icon (36px) | `Decks` (76px) | drawn | `1 issue` |
+| 761 | 50 | 38 | **97** | icon (36px) | icon (36px) | chevron (36px) | dropped | `1` |
+
+**The ledger holds on one line at the app's own 1017 with the `Format` term on it**, which is the
+question the term was added under: `dl.scrollWidth` and `dl.clientWidth` both read 1017 and the
+row measured 38px. The whole line read
+`Format Commander · Cards 100+3 · Lands 32 · Avg. mana 2.58 · Price $948.94 · Owned 0 / 103
+missing` with `1 issue · 6 game changers · Bracket ~4` in the right-hand group at **297px**.
+
+### The toolbar's split, read off the y coordinates
+
+At 761 the toolbar is two lines and they are the right two. Read off `getBoundingClientRect`:
+
+- **y 224** — View (111px), Group by (156px), Sort (138px). The three pickers.
+- **y 266** — the break: the zero-height child, **761px** wide, filling the rest of its line.
+- **y 272** — Quick add (271px), undo/redo (76px), the filter (390px). The tools.
+
+**The DOM order is untouched**, which is the whole point of doing it with `order`: quick add,
+undo/redo, the pickers, the break, the filter — so a caret walks the row in the order it is
+written whichever line each control is painted on.
+
+At 1657 the same six sit on one line at y 224, and **the filter measures exactly 400px with its
+right edge on the row's right edge (1745 = 1745)** — `flex-1` growing into the leftover up to
+`max-w-[25rem]`, then `ml-auto` taking what is left, which is the design's own shape.
+
+### The two anchored layers
+
+- **The bracket**: `Bracket ~4` at 28px tall, name `Bracket 4, an estimate`. Pressing it opened a
+  288px `role="dialog"` named `Bracket estimate`, **pinned by its right edge exactly on the
+  button's (1745 = 1745)**, which took the caret. It read
+  `Bracket ~4 · 6 game changers` over the advisory sentence, and `What this read` disclosed
+  `Gifts Ungiven, Mystical Tutor, Fierce Guardianship, Jeska's Will, Rhystic Study, Cyclonic Rift`
+  — six game changers off `cards.game_changer`, no mass-land-denial or extra-turns line.
+  **Escape closed it and handed the caret back** (`aria-expanded` `false`, focus on the button).
+- **The check**: `1 issue` at 28px, name `1 issue · Commander`. Its panel is 320px, right edge on
+  the button's (1532 = 1532), reading `Sideboard — Error: Commander decks have no sideboard.` and
+  **no bracket anywhere in it**, which is the half of the split worth pinning live.
+- **The variant group** read `Theory` (58px) · `Compare` (36px, no text, `aria-label` only) ·
+  `Live` (42px) — the Scale glyph between the two lists it weighs.
+
+### The tooltips are bound exactly where the word is not
+
+Hovering the icon-only `Deck settings` at 1017 opened the shared panel with `Deck settings` in it,
+8px under the button. At 1657, where the button prints those words, no binding is spread at all.
+
+**One artifact, and it is the price of that conditional.** Resize the column *while* the pointer
+is resting on one of these buttons and the open tooltip is orphaned: the re-render removes the
+`onPointerLeave` that would have closed it, so the panel stays up until the next hover of anything
+that binds one, which re-points it (measured — hovering Undo replaced the text immediately). The
+alternative is binding the tooltip at every width, which pays a redundant hint on every hover of a
+labelled button for ever; this pays a stale panel only to a reader resizing the window mid-hover,
+and it clears itself. Left as it is, deliberately.
+
+### Two traps this pass paid for
+
+- **Port 6006 answered from another worktree while the `storybook` lock read `FREE`.** A Storybook
+  from `default-search-filter-order` had been bound since 06:59; `npm run storybook` here then sat
+  on an interactive *"Would you like to run on 6007?"* prompt for ever, and the recipe's
+  `Get-NetTCPConnection -LocalPort 6006` loop found **their** pid and adopted it into this
+  worktree's lock. The tell was a Vite error overlay naming a path in the other worktree. Releasing
+  would have killed their server: re-`adopt` the lock onto your own dispatcher pid first, then
+  release. The `app` lock's `FREE`-is-not-empty rule applies to this one too.
+- **`querySelector` cannot carry a quoted attribute value through the PowerShell hop** into
+  `cdp.mjs eval` — `section[aria-label^="Deck editor"]` arrives as
+  `section[aria-label^= Deck editor]` and throws. Filter a `querySelectorAll` in JS instead, then
+  stamp the element and address it by a bare attribute.
+

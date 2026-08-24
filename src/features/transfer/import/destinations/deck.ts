@@ -36,6 +36,12 @@ import {
 } from "@/features/decks/autoCategory";
 import { commanderIneligibility } from "@/features/decks/validation/commanders";
 import type { CardIdentity } from "@/features/decks/validation/types";
+// The webview's copy of `schema::tag_name_key` and the app's own first colour. Both belong to
+// `features/decks/` because that is where a tag is edited by hand; this module is the same
+// question asked of a file, and asking it with a second definition is how the picker would come
+// to offer a row the backend then folds into one it already had.
+import { tagNameKey } from "@/features/decks/tagNames";
+import { DEFAULT_TAG_COLOR } from "@/features/decks/tagColors";
 import type { ParseIssue, ParsedLine, ParsedList, SectionKind } from "../parse";
 
 /**
@@ -107,6 +113,49 @@ export interface PlannedCard {
   /** The line's `*F*` / `*E*` marker. Carried straight through: a finish is a fact about the
    *  object, so nothing in this module decides anything about it. */
   finish: DeckFinish;
+  /**
+   * The label the file put on this card — Archidekt's `^Keeper,#4aab08^`, name half, verbatim.
+   *
+   * **A name and never a colour**, because the colour is a fact about the *label* rather than
+   * about this card and one label may be on forty lines. It lives on {@link PlannedTag}, which is
+   * also where the reader's tick lives; this field is only the join between the two, keyed
+   * through `tagNameKey`.
+   */
+  tagName: string | null;
+}
+
+/**
+ * One distinct label the file carried — the row the reader ticks, and the whole of what the
+ * picker draws.
+ *
+ * **Distinct by `tagNameKey`, not by the word**, because that is what `deck_tags.name_key`'s
+ * UNIQUE index means by "the same label": a file writing `Keeper` on one line and `keeper` on
+ * the next is naming one thing, and offering the reader two boxes for it would let them tick one
+ * and untick the other over a distinction the database does not have.
+ */
+export interface PlannedTag {
+  /** `tagNameKey`'s answer — the identity, never shown. */
+  key: string;
+  /** The first spelling the file used, capitals and all. What the picker prints, and what
+   *  `commit_import` writes if it has to make the row. */
+  name: string;
+  /**
+   * The colour the file asked for, as `#rrggbb`.
+   *
+   * **Never `null`** — a group that carried no colour, or carried something that is not a hex,
+   * falls back to {@link DEFAULT_TAG_COLOR} here rather than at the write, so that the swatch on
+   * the step is the colour the row would actually be made with.
+   *
+   * **It is a request and not a promise.** A name this app already knows keeps the colour the
+   * reader gave it and this value is discarded — the rule `commit_import` enforces, and what
+   * {@link PlannedTag} carries no `existing` field for: whether the row is already there is a
+   * fact about the *database*, which this module cannot read and does not guess. The picker asks
+   * `deck_tag_all` and says so on the step.
+   */
+  color: string;
+  /** Copies wearing it, over the lines that resolved. Copies and not lines, like every other
+   *  count on this step. */
+  copies: number;
 }
 
 /** A line no printing answered. Quoted back, never an error: the import proceeds without it. */
@@ -189,6 +238,19 @@ export interface ImportPlan {
   /** Copies that will actually land. **Not {@link ParsedList.totalCards}**, which counts every
    *  line the parser read, including the ones nothing resolved. */
   totalCards: number;
+  /**
+   * Every distinct label the file carried, in the order the file first named each — which is
+   * reading order, and the only order this can honestly offer: copies-descending would reorder
+   * the picker under a reader between two previews of the same list.
+   *
+   * Empty for every list that carries none, which is every format but Archidekt's — and empty is
+   * what makes the picker draw nothing at all rather than an empty box.
+   *
+   * **Counted over the cards that resolved**, like {@link totalCards} and unlike
+   * `ParsedList.totalCards`: a label worn only by lines nothing matched is not a label this
+   * import can bring across, so it is not offered.
+   */
+  tags: PlannedTag[];
 }
 
 /**
@@ -358,6 +420,13 @@ export function buildImportPlan(
   const unmatched: UnmatchedLine[] = [];
   const hintMisses: HintMiss[] = [];
   const slugs = slugsById(tags);
+  // Filled beside `cards` rather than folded out of them afterwards, which is what keeps
+  // `PlannedCard` carrying a name and no colour: the colour is a fact about the label, the label
+  // is on the plan, and a card only ever needs to say which one it wears. `tags_` because `tags`
+  // is this function's Oracle-tag parameter — an unrelated taxonomy that happens to share the
+  // word, and the collision is worth an underscore rather than a rename that would touch every
+  // caller.
+  const tags_ = new Map<string, PlannedTag>();
 
   for (const row of rows) {
     // Annotated rather than inferred: `noUncheckedIndexedAccess` is off, so an out-of-range
@@ -382,7 +451,9 @@ export function buildImportPlan(
       categoryName: categoryFor(line, row.matched, slugs, forcedCategoryName),
       excluded: line.excluded,
       finish: line.finish,
+      tagName: line.tagName,
     });
+    noteTag(tags_, line);
   }
 
   return {
@@ -392,7 +463,39 @@ export function buildImportPlan(
     parseIssues: parsed.issues,
     commander: commanderChoice(cards, spec),
     totalCards: cards.reduce((sum, card) => sum + card.quantity, 0),
+    tags: [...tags_.values()],
   };
+}
+
+/**
+ * Fold one planned line's label into the plan's list of them.
+ *
+ * **First spelling and first colour win**, which is {@link ImportItem.inactive}'s rule one
+ * channel over and for its reason: a file that names one label two ways has no better answer
+ * available, and the reader is owed one row rather than an arbitrated pair. Archidekt is
+ * consistent about it — every line wearing `Keeper` writes the same `#4aab08` — so this decides
+ * only for hand-edited lists.
+ *
+ * The `Map`'s **insertion order is load-bearing**: it is what makes {@link ImportPlan.tags} read
+ * in the order the file first named each, at no sort.
+ */
+function noteTag(byKey: Map<string, PlannedTag>, line: ParsedLine): void {
+  if (line.tagName === null) return;
+  const key = tagNameKey(line.tagName);
+  // A label of nothing but whitespace: `valid_name` refuses it on the way in, so there is no row
+  // it could ever find or make. Dropped here rather than offered and then refused.
+  if (key === "") return;
+  const held = byKey.get(key);
+  if (held === undefined) {
+    byKey.set(key, {
+      key,
+      name: line.tagName.trim(),
+      color: line.tagColor ?? DEFAULT_TAG_COLOR.hex,
+      copies: line.quantity,
+    });
+  } else {
+    held.copies += line.quantity;
+  }
 }
 
 /**
@@ -494,10 +597,31 @@ function commanderChoice(cards: readonly PlannedCard[], spec: FormatSpec | null)
  * to go with it. A commander filed into a switched-off category is a deck with no commander —
  * `is_active = 0` counts toward nothing, the command zone included.
  */
-export function toImportItems(plan: ImportPlan, commanderIds: readonly string[]): ImportItem[] {
+export function toImportItems(
+  plan: ImportPlan,
+  commanderIds: readonly string[],
+  /**
+   * The `PlannedTag.key`s the reader left ticked, or `null` for all of them.
+   *
+   * **`null` and an empty set are different answers and must stay so.** `null` is "nobody has
+   * been asked" — every test in this file predating the picker, and the honest default for a
+   * caller that draws no picker — while an empty set is a reader who unticked every box, which
+   * imports the cards with no labels at all. Collapsing the two would make unticking the last
+   * box silently bring every label back.
+   */
+  chosenTagKeys: ReadonlySet<string> | null = null,
+): ImportItem[] {
   const chosen = new Set(commanderIds);
+  // One lookup for the whole list rather than a `plan.tags.find` per card: the colour lives on
+  // the plan's tag row and the item needs it, and a decklist has ~100 lines to ~5 labels.
+  const colors = new Map(plan.tags.map((tag) => [tag.key, tag]));
   return plan.cards.map((card) => {
     const isCommander = chosen.has(card.match.cardId);
+    // **The label survives the commander choice**, unlike the pile and the `{noDeck}` flag: those
+    // two are filing and the command zone outranks filing, while a label is what the reader
+    // thinks of the card. A commander they marked `Keeper` is still a keeper.
+    const key = card.tagName === null ? "" : tagNameKey(card.tagName);
+    const tag = chosenTagKeys !== null && !chosenTagKeys.has(key) ? undefined : colors.get(key);
     return {
       cardId: card.match.cardId,
       quantity: card.quantity,
@@ -509,6 +633,11 @@ export function toImportItems(plan: ImportPlan, commanderIds: readonly string[])
       // The command zone outranks the pile, so the flag that came with the pile goes with it —
       // a commander in a switched-off category is a deck with no commander.
       inactive: isCommander ? false : card.excluded,
+      // Absent rather than `null` for a card wearing none, and absent rather than `null` for a
+      // label the reader unticked: `ImportItem.tag_name` is `#[serde(default)]` on the Rust side,
+      // so an item that says nothing about a tag is one `commit_import` leaves alone — which is
+      // also what makes a merge onto an already-tagged card keep the reader's own label.
+      ...(tag === undefined ? {} : { tagName: tag.name, tagColor: tag.color }),
     };
   });
 }

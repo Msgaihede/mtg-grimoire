@@ -9126,6 +9126,11 @@ export function writeHandlers(db: FakeDb) {
       // and a map keyed on the raw string would count them as two in the history row.
       const categories = new Map<string, FakeDeckCategory>();
       let categoriesCreated = 0;
+      // `import::tag_for_name`'s memo, keyed on {@link tagKey}'s answer for that function's
+      // reason: `deck_tags.name_key` is the grain, so a list writing `Keeper` and `keeper` names
+      // one label and must count as one creation.
+      const tags = new Map<string, FakeDeckTag>();
+      let tagsCreated = 0;
       let added = 0;
       for (const item of args.items) {
         const name = item.categoryName.trim();
@@ -9150,11 +9155,34 @@ export function writeHandlers(db: FakeDb) {
         // part of the grain, so a list naming the same printing foil on one line and plain on
         // another lands as two rows rather than one summed.
         const finish = normaliseFinish(item.finish);
+        // Archidekt's `^Keeper,#4aab08^`: find the label by {@link tagKey}, or make it in the
+        // colour the file asked for. **A label that already exists is used unchanged** — not
+        // renamed to the file's capitals and not recoloured — which is `import::tag_for_name`'s
+        // rule and matters because a tag is app-wide.
+        let tagId: number | null = null;
+        if (item.tagName !== undefined) {
+          const name = validMetaName(item.tagName, "A tag");
+          const key = tagKey(name);
+          let tag = tags.get(key);
+          if (!tag) {
+            tag = db.deckTags.find((t) => tagKey(t.name) === key);
+            if (!tag) {
+              tag = { id: nextId(db.deckTags), name, color: validColor(item.tagColor ?? "") };
+              db.deckTags.push(tag);
+              tagsCreated += 1;
+            }
+            tags.set(key, tag);
+          }
+          tagId = tag.id;
+        }
         const existing = deckCardAt(db, deck.id, item.cardId, category.id, variant, finish);
         if (existing) {
           // `DECK_CARD_GRAIN`'s `ON CONFLICT … DO UPDATE`: a list naming a card on two lines
           // lands as one row with the sum, and a merge folds onto what the deck already held.
           existing.quantity += item.quantity;
+          // `tag_id = coalesce(deck_cards.tag_id, excluded.tag_id)` — the label a reader put on
+          // a row by hand survives a merge that quantity does not.
+          existing.tagId ??= tagId;
         } else {
           db.deckCards.push({
             id: nextId(db.deckCards),
@@ -9162,7 +9190,7 @@ export function writeHandlers(db: FakeDb) {
             categoryId: category.id,
             variant,
             cardId: item.cardId,
-            tagId: null,
+            tagId,
             quantity: item.quantity,
             name: card.name,
             setCode: card.setCode,
@@ -9202,12 +9230,13 @@ export function writeHandlers(db: FakeDb) {
             lines: args.items.length,
             cards: added,
             categories: categories.size,
+            tagsCreated,
           },
         },
         added,
       );
       deck.updatedAt = stamp(db);
-      return { added, removed, categoriesCreated };
+      return { added, removed, categoriesCreated, tagsCreated };
     },
 
     /* ------------------------------------------------- categories, tags and folders ---- */

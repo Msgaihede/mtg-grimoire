@@ -157,6 +157,14 @@ export function DecksPage() {
    * a detached node and the caret would land on `<body>`. So the id is remembered and the row
    * is found after the render that redraws it, which is why this is read from an effect and
    * `dismiss` cannot do it inline.
+   *
+   * **Two writers now, and the second is the same fact rather than a borrowed slot**
+   * ({@link upOneFolder}): Escape walking up a level lands the caret on the row of the folder it
+   * just left, and a *keypress* has no element behind it at all — `openerRef` is written by a
+   * control that was pressed, and this one was not. An id resolved after the render is the only
+   * thing either case can say, which is why it is one note rather than two. `null` still means
+   * nothing is owed; there is no id for "All decks", which is the tree's root and not a folder,
+   * and no press of either kind ever asks for one.
    */
   const refocusFolderRef = useRef<number | null>(null);
 
@@ -313,6 +321,39 @@ export function DecksPage() {
       panel.kind !== "importDeck" &&
       panel.kind !== "deckSettings",
   });
+
+  /**
+   * **Escape's floor on this screen: one folder level up.**
+   *
+   * `"navigation"` is the bottom rung, so this fires only on a press nothing nearer wanted —
+   * every panel above is `"inner"` and takes its own press first, and the card pane a reader may
+   * have open beside this wall is `"outer"` and outranks this. One press closes one thing.
+   *
+   * **`openNode`, never `selectedFolderId`.** A folder deleted by another surface leaves that
+   * number naming nothing, and this screen's whole answer to a stale id is to *derive* it away —
+   * see {@link openNode}. Reading the id here instead would mean asking a tree that no longer
+   * holds it for a `parentId`, which is a throw where the reader can already see themselves at
+   * the top level. `openNode` is the resolved answer, so "up" from a folder that has gone is the
+   * root, which is where the wall already is.
+   *
+   * **`enabled` is the same test, and that is what makes "All decks" quiet.** At the root there
+   * is nowhere above to go, so the rung is not registered at all and the press is neither
+   * consumed nor `preventDefault`ed — it falls through to whatever the app puts below this,
+   * exactly as it did before this existed. A rung that registered and did nothing would swallow
+   * the press and look identical on screen.
+   *
+   * **The caret follows, onto the row of the folder being left** — which is the row that opened
+   * it, so this is the app's "Escape hands the caret to the opener" rule at the navigation rung,
+   * and it is the same hand-back the editor makes when it closes onto the deck's own tile. The
+   * tree draws every folder flat, so that row is on screen at the new level too; {@link
+   * refocusFolderRef} and the effect above are the mechanism, unchanged.
+   */
+  const upOneFolder = useCallback(() => {
+    if (openNode === null) return;
+    refocusFolderRef.current = openNode.folder.id;
+    setSelectedFolderId(openNode.folder.parentId);
+  }, [openNode]);
+  useDismissOnEscape({ layer: "navigation", onDismiss: upOneFolder, enabled: openNode !== null });
 
   const openCreate = useCallback(() => {
     // A refusal from the last attempt is not news about this one.

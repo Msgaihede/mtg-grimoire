@@ -1,9 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, fn, userEvent, within } from "storybook/test";
+import { expect, fn, within } from "storybook/test";
 import type { DeckCard } from "@/lib/ipc";
 import { deckCard, orphanDeckCard, printing } from "../../../.storybook/fake/fixtures";
-import { TOOLTIP_OPEN_MS } from "@/components/tooltip/TooltipProvider";
-import { MARKETPLACES } from "@/lib/marketplace";
 import { DeckStats } from "./DeckStats";
 
 /**
@@ -34,10 +32,6 @@ const meta = {
   component: DeckStats,
   tags: ["autodocs"],
   args: {
-    // The default, and what every dollar figure in this file is a claim about. The strip takes
-    // the marketplace rather than reading it, so the Price figure, its label and its as-of
-    // sentence are decided in one place and cannot disagree with the deck list beside them.
-    marketplace: MARKETPLACES.tcgplayer,
     // The narrowed `useDeck().missingToWishlist`, idle. Narrowed rather than passed whole so the
     // strip can be rendered without a query client, and so the one write it makes is visible in
     // its own signature.
@@ -191,9 +185,10 @@ export const ManaCurveWithX: Story = {
     // All four X spells in the numeric bucket their mana value names.
     await expect(canvas.getByText("4 cards at mana value 3")).toBeInTheDocument();
     await expect(canvas.queryByText(/with X in their cost/)).toBeNull();
-    await expect(
-      canvas.getByText("Avg. mana value", { selector: "dt" }).closest("div"),
-    ).toHaveTextContent("2.00");
+    // The average this pair of stories is about is the header's ledger since 2026-08-24 — it is
+    // 2.00 in both arms, and `Decks/DeckLedger` is where that is asserted. What this strip is
+    // still the place for is which *bar* the four copies are drawn in, above.
+    await expect(canvas.queryByText("Avg. mana value")).toBeNull();
   },
 };
 
@@ -210,10 +205,11 @@ export const ManaCurveWithX: Story = {
  * nonland count and the chart is still addable — a card in both places would look exactly like a
  * deck with four more spells in it.
  *
- * **And the average does not move.** 2.00 in both stories: an X spell costs what it costs with X
- * at zero whichever bar it is drawn in, and this toggle is a display choice about piles rather
- * than a claim about the cardboard. It is the one thing on this strip that "X gets its own pile"
- * must not propagate to.
+ * **And the average does not move.** An X spell costs what it costs with X at zero whichever bar
+ * it is drawn in, so this toggle is a display choice about piles rather than a claim about the
+ * cardboard — the one number "X gets its own pile" must not propagate to. That figure left this
+ * strip for the header's ledger on 2026-08-24, and the ledger cannot move it at all: it calls
+ * `deckStats` without the flag, because a line that draws no curve has no use for it.
  *
  * The cells are 20px in both arms. They were 18 in this one for an afternoon, while the stats
  * block was a 280px aside that drew its own scrollbar and a tenth bar had to be bought out of
@@ -230,10 +226,8 @@ export const ManaCurveSplitX: Story = {
     await expect(canvas.getByText("4 cards with X in their cost")).toBeInTheDocument();
     // The bucket they left, drawn at zero rather than dropped: a gap in a curve is a fact.
     await expect(canvas.getByText("0 cards at mana value 3")).toBeInTheDocument();
-    // Unmoved, which is the claim this pair of stories exists to make.
-    await expect(
-      canvas.getByText("Avg. mana value", { selector: "dt" }).closest("div"),
-    ).toHaveTextContent("2.00");
+    // Unmoved, and no longer drawn here: see the note above and `Decks/DeckLedger`.
+    await expect(canvas.queryByText("Avg. mana value")).toBeNull();
   },
 };
 
@@ -320,15 +314,14 @@ export const TypeBreakdown: Story = {
   },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    // 20 lands by type line against an 18-card Land bar, in one assertion apiece. The gap is
-    // Urza's Saga's two copies, and it is a fact about the deck rather than a rounding error —
-    // the tracks and the fills are `aria-hidden`, so the two numbers are all a reader has.
-    //
-    // `selector: "dt"` because **"Lands" is on this strip twice**: it is a figure's label and the
-    // land pie's caption, and an unqualified match finds both and throws.
-    await expect(canvas.getByText("Lands", { selector: "dt" }).closest("div")).toHaveTextContent(
-      "20",
-    );
+    // 20 lands by type line against an 18-card Land bar. The gap is Urza's Saga's two copies,
+    // and it is a fact about the deck rather than a rounding error — the tracks and the fills
+    // are `aria-hidden`, so the numbers in the legends are all a reader has. The 20 is the land
+    // pie's own total, read off its two wedges; the *figure* that used to be checked here is the
+    // header's ledger now (`Decks/DeckLedger`), and this strip no longer draws it.
+    const pie = canvas.getByRole("list", { name: "Lands" });
+    await expect(within(pie).getByText("Island").closest("li")).toHaveTextContent("18");
+    await expect(within(pie).getByText("Other lands").closest("li")).toHaveTextContent("2");
     const bars = canvas.getByRole("list", { name: "Card types" });
     await expect(within(bars).getByText("Land").closest("li")).toHaveTextContent("18");
     await expect(within(bars).getByText("Enchantment").closest("li")).toHaveTextContent("3");
@@ -443,24 +436,10 @@ export const CommanderDeck: Story = {
   },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    // 39 sized against 40 copies. The note is what makes the smaller number honest rather than
-    // wrong, and it names the category in the reader's own words.
-    const cards = canvas.getByText("Cards", { selector: "dt" }).closest("div");
-    await expect(cards).toHaveTextContent("39");
-    // The pile's own name, lower-cased — "Companion" here, and whatever the reader called it
-    // in a deck of their own.
-    await expect(cards).toHaveTextContent("+ 1 companion");
-    // The sentence a figure has no room for, as a tooltip bound on the same wrapper — the same
-    // place the price figure keeps its as-of line. Describing (the default `describes: true`),
-    // so the panel carries `role="tooltip"` once hovered.
-    await userEvent.hover(cards!);
-    const cardsTooltip = await canvas.findByRole("tooltip", undefined, {
-      timeout: TOOLTIP_OPEN_MS + 1000,
-    });
-    await expect(cardsTooltip).toHaveTextContent(
-      "The cards a format's size rule counts — every switched-on pile except the sideboard.",
-    );
-    // The companion *is* counted everywhere else: 40 copies owned, not 39.
+    // The headline figure that counts 39 of these 40 copies is the header's ledger
+    // (`Decks/DeckLedger`), which is where that assertion went. What this strip says about the
+    // same deck is the half the size rule does *not* govern: the companion is counted
+    // everywhere else, so it is 40 copies owned, not 39.
     await expect(canvas.getByText("All 40 owned.")).toBeInTheDocument();
   },
 };
@@ -505,12 +484,8 @@ export const WithMaybePile: Story = {
   },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    const cards = canvas.getByText("Cards", { selector: "dt" }).closest("div");
-    // 60, not 68: the Maybeboard is switched off, and the note beside the figure accounts for
-    // the sideboard and says nothing about a pile that counts toward nothing.
-    await expect(cards).toHaveTextContent("60");
-    await expect(cards).toHaveTextContent("+ 15 sideboard");
-    // The load-bearing absence, and the reason those two cards were chosen: 4 Emrakul at 15 and 4
+    // The 60-against-68 the Maybeboard does not move is the ledger's figure and is asserted
+    // there. The load-bearing absence, and the reason those two cards were chosen: 4 Emrakul at 15 and 4
     // Avacyn at 8 are the only cards on this page that could reach the open-ended bucket, and it
     // reads zero. A curve missing eight cards looks exactly like a curve that never had them.
     await expect(canvas.getByText("0 cards at mana value 8 or more")).toBeInTheDocument();

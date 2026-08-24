@@ -566,7 +566,7 @@ export const SortedDescending: Story = {
 
     // `toHaveValue`, never the text of the selected option. A controlled `<select>` whose value
     // matches no `<option>` does not draw blank — `react-dom` picks the first row that is not
-    // disabled, which here is `Default order` — so a picker that had lost its selection entirely
+    // disabled, which here is `Best match` — so a picker that had lost its selection entirely
     // would read exactly like one nobody has touched.
     const sort = canvas.getByLabelText("Sort results") as HTMLSelectElement;
     await expect(sort).toHaveValue("released");

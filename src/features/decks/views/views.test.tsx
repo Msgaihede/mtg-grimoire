@@ -732,13 +732,17 @@ describe.each(VIEWS)("$name editing", ({ render: renderView }) => {
 
     await dragOnto(marked.closest("li") ?? marked, target);
 
-    expect(spies.drop).toHaveBeenCalledWith({
-      write: "move",
-      finish: null,
-      cardId: "c-Sol Ring",
-      from: RAMP.id,
-      to: MAYBE.id,
-    });
+    // A list of one, because a drop carries every card it was picked up with (issue #214) and an
+    // ordinary drag carries one. The array is the shape, not the count.
+    expect(spies.drop).toHaveBeenCalledWith([
+      {
+        write: "move",
+        finish: null,
+        cardId: "c-Sol Ring",
+        from: RAMP.id,
+        to: MAYBE.id,
+      },
+    ]);
   });
 
   /**
@@ -1717,13 +1721,15 @@ describe("StackView command zone", () => {
 
     await dragOnto(marked.closest("li") ?? marked, target!);
 
-    expect(drop).toHaveBeenCalledWith({
-      write: "move",
-      finish: null,
-      cardId: "c-Sol Ring",
-      from: RAMP.id,
-      to: COMMANDER.id,
-    });
+    expect(drop).toHaveBeenCalledWith([
+      {
+        write: "move",
+        finish: null,
+        cardId: "c-Sol Ring",
+        from: RAMP.id,
+        to: COMMANDER.id,
+      },
+    ]);
   });
 
   /**
@@ -2265,13 +2271,15 @@ describe.each(COLUMN_VIEWS)(
 
       await dragOnto(marked.closest("li") ?? marked, target!);
 
-      expect(drop).toHaveBeenCalledWith({
-        write: "move",
-        finish: null,
-        cardId: "c-Sol Ring",
-        from: RAMP.id,
-        to: id,
-      });
+      expect(drop).toHaveBeenCalledWith([
+        {
+          write: "move",
+          finish: null,
+          cardId: "c-Sol Ring",
+          from: RAMP.id,
+          to: id,
+        },
+      ]);
     });
   },
 );
@@ -2991,13 +2999,15 @@ describe("StackView reordering", () => {
     // The whole write, spelled as the sibling case above spells it: this is a claim that the
     // card drop is **untouched** by the reorder target sitting inside its section, so a field
     // quietly lost on the way through would be exactly the regression to catch.
-    expect(drop).toHaveBeenCalledWith({
-      write: "move",
-      finish: null,
-      cardId: "c-Sol Ring",
-      from: RAMP.id,
-      to: DRAW.id,
-    });
+    expect(drop).toHaveBeenCalledWith([
+      {
+        write: "move",
+        finish: null,
+        cardId: "c-Sol Ring",
+        from: RAMP.id,
+        to: DRAW.id,
+      },
+    ]);
   });
 });
 

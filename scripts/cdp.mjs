@@ -110,12 +110,14 @@ async function evaluate(cdp, expression) {
  * Chromium's modifier bitmask, as `Input.dispatch*Event` takes it: Alt 1, Ctrl 2, Meta 4,
  * **Shift 8**.
  *
- * Only Shift is wired up, and it is here because a multi-key table sort is built by holding
- * it down. `dispatchEvent({shiftKey: true})` out of `eval` proves nothing about that — it
- * skips the browser's own input pipeline, which is where the modifier state a real hand
- * produces actually comes from.
+ * Shift is here because a multi-key table sort is built by holding it down, and **Ctrl since
+ * issue #214**, where it is the chord that adds one card to a picked set. Both for the same
+ * reason: `dispatchEvent({ shiftKey: true })` out of `eval` proves nothing about either, because
+ * it skips the browser's own input pipeline — which is where the modifier state a real hand
+ * produces actually comes from, and the one thing a live pass exists to exercise.
  */
 const SHIFT = 8;
+const CTRL = 2;
 
 /** A real user gesture, not `el.click()`: React's synthetic events and `:active` want one. */
 async function clickSelector(cdp, selector, modifiers = 0) {
@@ -155,6 +157,11 @@ const KEYS = {
   ArrowRight: { windowsVirtualKeyCode: 39, key: "ArrowRight", code: "ArrowRight" },
   Home: { windowsVirtualKeyCode: 36, key: "Home", code: "Home" },
   End: { windowsVirtualKeyCode: 35, key: "End", code: "End" },
+  // Added for issue #214: Delete takes the deck editor's picked set out, and it is the only
+  // keyboard verb in this app that is not undo. A `dispatchEvent` cannot prove it — the handler
+  // yields inside a text field, so what is being exercised is the browser deciding where the
+  // press lands.
+  Delete: { windowsVirtualKeyCode: 46, key: "Delete", code: "Delete" },
   // The two ways into a context menu from the keyboard, which `useContextMenu` answers and
   // nothing else here could reach: `key ContextMenu` and `key F10 --shift`. Added 2026-08-20
   // for the Tags page's live pass — a menu only a mouse can open is a menu half the readers do
@@ -180,12 +187,13 @@ const boxOf = (selector) => `(() => {
 
 async function main() {
   const [cmd, ...argv] = process.argv.slice(2);
-  // `--shift` on `click`, `text`, `press` and `key`, because a multi-key sort is built with it
+  // `--shift` and `--ctrl` on `click`, `text`, `press` and `key`, because a multi-key sort is built with Shift held
   // held down and Shift+F10 is one of the two keyboard routes into a context menu — and there is
   // no other way to say so through this script. Stripped before the positional arguments are
   // read, so it can be written anywhere after the command.
-  const modifiers = argv.includes("--shift") ? SHIFT : 0;
-  const args = argv.filter((a) => a !== "--shift");
+  const modifiers =
+    (argv.includes("--shift") ? SHIFT : 0) | (argv.includes("--ctrl") ? CTRL : 0);
+  const args = argv.filter((a) => a !== "--shift" && a !== "--ctrl");
   const cdp = await connect();
   try {
     switch (cmd) {
@@ -735,7 +743,7 @@ async function main() {
         console.error(
           "usage: cdp.mjs <eval|click|text|key|press|hover|type|drag|size|media|shot|console> " +
             "[args]\n" +
-            "  --shift on click/text/press/key holds Shift down for that gesture\n" +
+            "  --shift / --ctrl on click/text/press/key hold that modifier for the gesture\n" +
             `  key takes one of: ${Object.keys(KEYS).join(", ")}\n` +
             "  the app must be running with --remote-debugging-port=9222",
         );

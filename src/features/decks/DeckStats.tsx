@@ -1,14 +1,11 @@
 import { useEffect, useId, useMemo, useRef, useState, type RefObject } from "react";
 import { AnimatePresence, motion } from "motion/react";
-import { Figure, FigureRow } from "@/components/Figure";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { count } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
 import { ipcError, type CategoryKind, type DeckCard } from "@/lib/ipc";
 import { hasVariableCost, MANA_LABEL, MANA_LINE_KEYS } from "@/lib/mana";
-import type { Marketplace } from "@/lib/marketplace";
 import { statusLine } from "@/lib/motion";
-import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { cn } from "@/lib/utils";
 import { manaValueOf, SIZE_KINDS } from "./validation/engine";
 
@@ -530,18 +527,20 @@ export interface MissingWrite {
  * outside the mana line: a deck's colours *are* Magic meaning. Nothing here animates, nothing
  * here is a chart library, and every chart carries its numbers as text — the drawing is
  * `aria-hidden` and the words beside it are the whole accessible story.
+ *
+ * **The four figures that headed this band are the header's ledger line now** (2026-08-24), and
+ * the `marketplace` prop went with the one of them that quoted money. Cards, lands, average mana
+ * value and price were drawn under two screens of deck, which is the wrong end of the page for
+ * the numbers a reader edits *against*; `DeckLedger` draws them from a `deckStats` call of its
+ * own over the same rows, so there is still one definition of each. What stays here is what
+ * needs the room: the pips, the shortfall and the press that acts on it, and the charts.
  */
 export function DeckStats({
   cards,
-  marketplace,
   send,
   separateXGroup = false,
 }: {
   cards: readonly DeckCard[];
-  /** Which marketplace the Price figure quotes — its currency for the formatter and its label
-   *  for the as-of sentence on the figure's tooltip. The arithmetic needs neither: the rows
-   *  arrived priced. */
-  marketplace: Marketplace;
   send: MissingWrite;
   /**
    * The deck's own `separateXGroup`, and it has to be **the same value the grouping beside this
@@ -610,54 +609,8 @@ export function DeckStats({
   const added = spent && send.isSuccess ? (send.data ?? 0) : null;
   const failure = send.isError ? ipcError(send.error) : null;
 
-  // Where the rest of the deck is, for the headline figure's note. Every pile names itself, so
-  // the note names the columns the reader is looking at — and a companion is named as a
-  // companion rather than folded into the sideboard, because in the singleton formats there is
-  // no sideboard for it to be part of. Which piles those are is `deckStats`'s answer and not a
-  // second reading of the size rule here: the figure above the note counts the others.
-  // Lower-cased, because the note is the tail of a sentence rather than a heading of its own.
-  const elsewhere = stats.elsewhere
-    .map((category) => `${count(category.quantity)} ${category.name.toLowerCase()}`)
-    .join(" + ");
-
   return (
     <div className="flex shrink-0 flex-col gap-3">
-      <FigureRow>
-        {/* The number the format check is talking about, from the engine's own `SIZE_KINDS` —
-            `main`, `commander` **and `maybe`**, in categories that are switched on. The last of
-            those three is this branch's governing ruling and the one worth saying out loud: an
-            *active* category of kind `maybe` counts toward size exactly like `main`, because
-            the switch is the whole of "counts toward nothing" and the kind is not. (The
-            Maybeboard the migration seeds is switched off, which is why the default deck
-            behaves as a reader expects.) The sideboard and the companion are real cards and are
-            counted by the price, the shortfall and every chart; they are just not what "a
-            60-card deck" means, and the chip beside this says so in a sentence. */}
-        {/* `Figure` (`components/Figure.tsx`) owns turning its `title` prop into a
-            `useTooltip()` binding internally — that file is outside this bucket, but the
-            prop's name and shape are unchanged, so neither call below needed an edit. */}
-        <Figure
-          label="Cards"
-          value={count(stats.sized)}
-          note={elsewhere ? `+ ${elsewhere}` : undefined}
-          title="The cards a format's size rule counts — every switched-on pile except the sideboard."
-        />
-        <Figure label="Lands" value={count(stats.lands)} />
-        <Figure
-          label="Avg. mana value"
-          value={stats.averageManaValue === null ? "—" : stats.averageManaValue.toFixed(2)}
-          note="nonlands"
-        />
-        {/* The currency is in the label because the figure changes denomination in Settings,
-            and a bare "Price" over a number that does is a number with no units. The unpriced
-            note is the one for *this* currency: `eur_etched` does not exist, so an etched
-            deck reads fully priced on TCGplayer and entirely unpriced on Cardmarket. */}
-        <Figure
-          label={`Price (${marketplace.currency.toUpperCase()})`}
-          value={formatPrice(stats.price, marketplace.currency)}
-          note={stats.unpriced > 0 ? `${count(stats.unpriced)} unpriced` : undefined}
-          title={pricesAsOf(marketplace)}
-        />
-      </FigureRow>
 
       <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
         <Pips pips={stats.pips} />

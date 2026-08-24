@@ -586,25 +586,40 @@ async function openAddTo() {
 const group = (name: string) => screen.getByRole("region", { name });
 
 /**
- * Wait until `format_specs` has answered.
+ * Wait until `format_specs` has answered, for the deck under test.
  *
  * The seed is a query, so on the first deck of a session the editor mounts before it lands and
  * the docked panel's format default is `null` for a render or two — which looks exactly like a
  * deck the fence deliberately left unfiltered. Anything asserting on that default has to be past
  * this line or it is testing a query in flight.
  *
- * **The sentinel has to be a `PICKER` format the deck under test is _not_ on**: `pickerFormats`
- * folds a deck's own format into the header's list whether or not anything has loaded, so that
- * option is there from the first paint and waiting for it would gate on nothing. `Gladiator` is
- * the default because every deck fixture here is on something else; the one test whose deck *is*
- * Gladiator passes another of `PICKER`'s four.
+ * **It waited on an option of the header's `Deck format` select until 2026-08-24**, and that
+ * select is gone — the question is Deck settings' now. The ledger's check button is the tell that
+ * replaced it, and it is a *stronger* one: it is drawn only once a spec is in hand and it names
+ * the ruleset it checked against, where the old sentinel merely proved that some other row of the
+ * same table had arrived.
+ *
+ * So it takes the deck's own format rather than a sentinel — and the one fixture whose key the
+ * seed does not carry (`historic`) can never satisfy it, which is honest: there is no spec for
+ * that deck, so there is nothing for this to wait for. That test says so at its own site.
  */
-const seeded = (sentinel = "Gladiator") =>
-  waitFor(() =>
-    expect(
-      within(screen.getByLabelText("Deck format")).getByRole("option", { name: sentinel }),
-    ).toBeInTheDocument(),
-  );
+const seeded = (format: string) =>
+  screen.findByRole("button", { name: new RegExp(`· ${format}$`) });
+
+/**
+ * Make a deck-row write, in the fewest acts a test can spend.
+ *
+ * **The header's `Deck game` select was this and is gone** (2026-08-24): both selects are Deck
+ * settings' now, and reaching one from here would be a dialog and four presses for a write whose
+ * *field* no caller cares about. The name field is the header's remaining one-act `deck_update` —
+ * Enter commits without waiting for the caret to leave — and it goes through exactly the same
+ * mutation, so the refusal banner, the re-read and the gone message are reached the same way.
+ */
+async function writeToDeck(name = "Sunday burn") {
+  const field = screen.getByLabelText("Deck name");
+  await userEvent.clear(field);
+  await userEvent.type(field, `${name}{Enter}`);
+}
 
 /** What the stepper on the fixture's Bolt is called. Named by the **slot** — the card and the
  *  pile — because the same printing sits in two categories often enough that a name without one
@@ -818,92 +833,36 @@ describe("DeckEditor", () => {
     );
   });
 
-  /** The header is the deck: what it is called and what it is for. */
-  it("heads the editor with the deck's name and format", async () => {
+  /**
+   * The header is the deck: what it is called and what it is judged by.
+   *
+   * **The format is a word on the ledger and no longer a select** (2026-08-24). Both of the
+   * header's selects moved out — `DeckSettingsDialog` had been asking the same two questions all
+   * along, and this row was printing the answers at the cost of ~250px on a row that already
+   * wrapped. What had to stay is the *answer*: a ledger that says `2 issues` without saying issues
+   * with what is a count with no scope.
+   */
+  it("heads the editor with the deck's name and the ruleset it is judged by", async () => {
     await open();
 
     expect(screen.getByLabelText("Deck name")).toHaveValue("Burn");
-    expect(screen.getByLabelText("Deck format")).toHaveValue("modern");
-  });
-
-  /**
-   * **Alphabetically by display name, not in the `sortOrder` Rust answers in.** The seed ranks
-   * the formats by how the game groups them and the mock keeps that ranking — Modern,
-   * Commander, Gladiator, Casual — so the sequence below is the picker's own doing. A reader
-   * changing a deck's format looks for Modern under M, not in seventh place.
-   *
-   * The whole sequence rather than one position: an ordering asserted a row at a time still
-   * passes once somebody adds a format that lands in the wrong half of it.
-   */
-  it("offers the formats alphabetically, whatever order the table answered in", async () => {
-    await open();
-
-    const format = screen.getByLabelText("Deck format");
+    // Scoped to the term, because `Modern` is also an `<option>` of the docked panel's own
+    // format filter — which is the pair the four tests further down are about.
     expect(
-      within(format)
-        .getAllByRole("option")
-        .map((o) => o.textContent),
-    ).toEqual(["Casual", "Commander", "Gladiator", "Modern"]);
-  });
-
-  /**
-   * A deck on a format the seed no longer offers still shows its own format — `decks.format_key`
-   * is deliberately not a foreign key, so this state can exist, and a select that cannot show
-   * its own value would silently re-format the deck on the first other change.
-   *
-   * **The row is folded into the alphabet rather than pinned first**: it is an option like any
-   * other, and the select's own `value` is what marks it as the current one. Historic sits
-   * between Gladiator and Modern here, which is the whole assertion — pinned, it would be
-   * first, and the list would be telling the reader something the `value` already says.
-   */
-  it("folds a deck's own format into the list when the seed no longer offers it", async () => {
-    deckGet.mockResolvedValue(detail({ formatKey: "historic", formatName: "Historic" }, [bolt()]));
-    await open();
-
-    const format = screen.getByLabelText("Deck format");
-    expect(format).toHaveValue("historic");
-    expect(
-      within(format)
-        .getAllByRole("option")
-        .map((o) => o.textContent),
-    ).toEqual(["Casual", "Commander", "Gladiator", "Historic", "Modern"]);
-  });
-
-  /**
-   * The game select, and **the two things it does are one write and one filter**.
-   *
-   * The write is an ordinary `deckUpdate` on `gameKey` alone — no `formatKey` rides with it,
-   * which is what "setting a game never re-formats a deck" means on the wire. The filter is
-   * `pickerFormats`': Arena keeps Gladiator and Casual out of `PICKER`'s four and drops
-   * Commander, and **Modern is still there because it is this deck's own** — folded back in by
-   * `keep`, which is the whole reason a Modern deck can say Arena at all.
-   *
-   * The list is read after the write rather than in the same act, because the deck row is what
-   * feeds it: the mock has to answer before the header can redraw.
-   */
-  it("narrows the format list to the deck's game, keeping the deck's own format", async () => {
-    await open();
-    const game = screen.getByLabelText("Deck game");
-    expect(game).toHaveValue("any");
-    expect(
-      within(game)
-        .getAllByRole("option")
-        .map((o) => o.textContent),
-    ).toEqual(["Any", "Paper", "Arena", "MTGO"]);
-
-    deckGet.mockResolvedValue(detail({ gameKey: "arena" }, [bolt()]));
-    deckUpdate.mockResolvedValue({ ...DECK, gameKey: "arena" });
-    await userEvent.selectOptions(game, "arena");
-
-    expect(deckUpdate).toHaveBeenCalledWith(DECK.id, { gameKey: "arena" });
-    await waitFor(() =>
-      expect(
-        within(screen.getByLabelText("Deck format"))
-          .getAllByRole("option")
-          .map((o) => o.textContent),
-      ).toEqual(["Casual", "Gladiator", "Modern"]),
+      await screen.findByText("Format", { selector: "dt" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Format", { selector: "dt" }).closest("div")).toHaveTextContent(
+      "Modern",
     );
-    expect(screen.getByLabelText("Deck format")).toHaveValue("modern");
+  });
+
+  /** Changing either is a Deck settings trip, and this row draws neither control. Asserted as an
+   *  absence, which is the only thing that would catch one creeping back. */
+  it("draws no format or game select of its own", async () => {
+    await open();
+
+    expect(screen.queryByLabelText("Deck format")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Deck game")).not.toBeInTheDocument();
   });
 
   /** The caret starts in the editor rather than on `<body>`: the gallery's New deck button —
@@ -934,7 +893,13 @@ describe("DeckEditor", () => {
    *   pixels of the control beside it (then a "N cards differ" readout, now Compare) hit-tested
    *   to the format select.
    *
-   * Reverting any one of the three brings the collapse back, so all three are asserted.
+   * **The third of those is deliberately reversed since 2026-08-24, and the reversal is safe for
+   * a reason the old shape did not have.** The controls are `shrink-0 flex-nowrap` again — but
+   * the block gives width back *itself* now, dropping the four labelled buttons to their icons as
+   * the column narrows, so it is a fixed run whose fixed width is a function of the column. What
+   * catches the width below which even the narrow run does not fit is the row's own `flex-wrap`:
+   * the whole block folds to a line of its own rather than crushing the name. The wrapper that
+   * used to sit between the field and this row went with the Compare button that made it a group.
    */
   it("keeps the deck name from collapsing between the controls beside it", async () => {
     await open();
@@ -946,14 +911,16 @@ describe("DeckEditor", () => {
     // …and an intrinsic width small enough that the floor is the only floor.
     expect(name).toHaveAttribute("size", "1");
 
-    const identity = name.parentElement!;
-    expect(identity.className).toContain("flex-wrap");
-    expect(identity.className).not.toContain("min-w-0");
+    // The field is the row's own flexible child: no wrapper between it and the wrapping row.
+    const row = name.parentElement!;
+    expect(row.className).toContain("flex-wrap");
+    expect(row.className).not.toContain("min-w-0");
 
-    // The controls: shrinkable, so they fold rather than pushing the name out of the window.
-    const controls = identity.parentElement!.lastElementChild!;
-    expect(controls.className).toContain("flex-wrap");
-    expect(controls.className).not.toContain("shrink-0");
+    // The controls are the row's last child, pinned to the right and never squeezed.
+    const controls = row.lastElementChild!;
+    expect(controls.className).toContain("shrink-0");
+    expect(controls.className).toContain("ml-auto");
+    expect(controls.className).not.toContain("flex-wrap");
   });
 
   /**
@@ -1082,14 +1049,6 @@ describe("DeckEditor", () => {
     await userEvent.click(screen.getByRole("button", { name: /back to decks/i }));
 
     expect(useAppStore.getState().openDeckId).toBeNull();
-  });
-
-  it("re-formats the deck from the header select", async () => {
-    await open();
-
-    await userEvent.selectOptions(screen.getByLabelText("Deck format"), "commander");
-
-    await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { formatKey: "commander" }));
   });
 
   /**
@@ -1664,7 +1623,6 @@ describe("DeckEditor", () => {
 
     const stats = screen.getByRole("region", { name: "Deck stats" });
     // Four Bolts and two Bears, both nonlands, both mana value 1.
-    expect(within(stats).getByText("Cards").nextElementSibling).toHaveTextContent("6");
     expect(
       within(within(stats).getByRole("list", { name: "Mana curve" })).getByText(
         "6 cards at mana value 1",
@@ -1672,6 +1630,25 @@ describe("DeckEditor", () => {
     ).toBeInTheDocument();
 
     expect(screen.queryByRole("button", { name: "Stats" })).not.toBeInTheDocument();
+  });
+
+  /**
+   * **The five figures are the header's ledger and are drawn exactly once** (2026-08-24). They
+   * were the band's `FigureRow` until then, under two screens of deck — the wrong end of the page
+   * for the numbers a reader edits against — and both surfaces derive them from `deckStats` over
+   * the same rows, so moving them could only ever have left a duplicate rather than a
+   * disagreement. The absence below is what pins that it did not.
+   */
+  it("heads the deck with a ledger of what it adds up to, and draws it once", async () => {
+    await open();
+
+    // Four Bolts and two Bears, none of them lands.
+    const cards = screen.getByText("Cards", { selector: "dt" });
+    expect(cards.closest("div")).toHaveTextContent("6");
+    expect(screen.getAllByText("Cards", { selector: "dt" })).toHaveLength(1);
+    expect(
+      within(screen.getByRole("region", { name: "Deck stats" })).queryByText("Cards"),
+    ).not.toBeInTheDocument();
   });
 
   /**
@@ -1855,9 +1832,9 @@ describe("DeckEditor", () => {
     await screen.findByRole("complementary", { name: "Card details" });
 
     // The deck goes, and the editor's own re-read is what tells it. Any deck write would do it;
-    // the format select is the cheapest one to press.
+    // the name field is the cheapest one left in this header.
     deckGet.mockResolvedValue(null);
-    await userEvent.selectOptions(screen.getByLabelText("Deck format"), "modern");
+    await writeToDeck();
 
     expect(
       await screen.findByText(/this deck is not there any more\. it may have been deleted/i),
@@ -2082,14 +2059,23 @@ describe("DeckEditor", () => {
   /**
    * The half of the Escape protocol a component test would never think to check, and the
    * running app found in a minute: with no layer open, the press has to reach the **window**,
-   * because that is where the card detail pane listens.
+   * because that is where every rung below this editor's own controls listens.
    *
    * React's synthetic `stopPropagation` stops the *native* event at the root container — so a
    * cell that stops `keydown` to keep Enter off its row also stops every Escape pressed inside
-   * it from ever leaving the app's own tree. The pane then cannot be closed from a card or a
-   * toolbar field at all, and nothing on screen says why.
+   * it from ever leaving the app's own tree. Nothing below could then be closed from a card or a
+   * toolbar field at all, and nothing on screen would say why.
+   *
+   * **What arrives at `window` is now consumed rather than free, and that is the change rather
+   * than a weakening.** The editor registers a `"navigation"` rung — Escape closes the deck —
+   * and it is a bubble listener registered when this editor mounted, which is before the probe
+   * below. So the probe hearing `true` three times says both halves at once: the press reached
+   * `window` (nothing in React's tree ate it) and something already on `window` spent it. Which
+   * something is the second assertion's job — `openDeckId` back to `null` is the floor acting,
+   * and it is re-armed between presses so each of the three entry points is proved on its own
+   * rather than by the first one that worked.
    */
-  it("lets Escape through to the card pane when no layer of its own is open", async () => {
+  it("lets Escape reach the window from every field, where the deck's own floor takes it", async () => {
     await open();
     const heard: boolean[] = [];
     const listen = (e: KeyboardEvent) => {
@@ -2097,19 +2083,82 @@ describe("DeckEditor", () => {
     };
     window.addEventListener("keydown", listen);
 
-    screen.getByRole("button", { name: /^Lightning Bolt/ }).focus();
-    await userEvent.keyboard("{Escape}");
-    screen.getByLabelText("Quick add a card").focus();
-    await userEvent.keyboard("{Escape}");
+    const closed: (number | null)[] = [];
+    const press = async (from: HTMLElement) => {
+      // Re-armed rather than read once at the end: a single `null` at the end would be satisfied
+      // by *any* one of the three presses having worked.
+      useAppStore.setState({ openDeckId: 4 });
+      from.focus();
+      await userEvent.keyboard("{Escape}");
+      closed.push(useAppStore.getState().openDeckId);
+    };
+
+    await press(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+    await press(screen.getByLabelText("Quick add a card"));
     // The name field is the third way in, and the one that *does* consume a press — but only
-    // while it is holding something to revert.
-    screen.getByLabelText("Deck name").focus();
-    await userEvent.keyboard("{Escape}");
+    // while it is holding something to revert, which it is not here.
+    await press(screen.getByLabelText("Deck name"));
 
     window.removeEventListener("keydown", listen);
-    // Heard every time, and consumed by nothing: the pane's bubble-phase listener acts on
-    // exactly this.
-    expect(heard).toEqual([false, false, false]);
+    expect(heard).toEqual([true, true, true]);
+    expect(closed).toEqual([null, null, null]);
+  });
+
+  /**
+   * **Escape closes the deck, and it closes it the way the back button does.**
+   *
+   * The two assertions are one claim: not merely that `openDeckId` went to `null`, but that
+   * `returnToDeckId` was written with it — that note is the whole of the hand-back, and
+   * `DecksPage` reads it to open the folder the deck is filed in and put the caret on its tile.
+   * A close that dropped it would land the reader on the top level with the caret on `<body>`,
+   * which looks like working software until they try to press anything.
+   *
+   * Both routes are driven in one case on purpose: the point is that they are the *same*
+   * callback, so a test that only pressed the key could not tell a shared one from a copy that
+   * agrees today.
+   */
+  it("closes the deck on Escape, exactly as the back button does", async () => {
+    await open();
+
+    screen.getByRole("button", { name: /^Lightning Bolt/ }).focus();
+    await userEvent.keyboard("{Escape}");
+    const byKey = useAppStore.getState();
+
+    useAppStore.setState({ openDeckId: 4, returnToDeckId: null });
+    await userEvent.click(screen.getByRole("button", { name: "Back to decks" }));
+    const byButton = useAppStore.getState();
+
+    expect([byKey.openDeckId, byKey.returnToDeckId]).toEqual([null, 4]);
+    expect([byButton.openDeckId, byButton.returnToDeckId]).toEqual([null, 4]);
+  });
+
+  /**
+   * **The deck's own filter box owns one press while it has something to empty, and the deck
+   * closes on the next one.**
+   *
+   * This is the hazard the `"navigation"` rung arrived with rather than a nicety on top of it:
+   * Chromium clears an `<input type="search">` on Escape by itself and does **not** set
+   * `defaultPrevented`, so without the field's own handler one press would empty the box *and*
+   * close the deck the reader was filtering. jsdom implements no native clear, so the half this
+   * suite can see is the half that matters — the field consuming the press and the box coming
+   * out empty by the app's own hand.
+   */
+  it("empties the deck filter on Escape before the deck itself can close", async () => {
+    await open();
+
+    const box = screen.getByRole("searchbox", { name: "Filter this deck" });
+    await userEvent.type(box, "bolt");
+    expect(box).toHaveValue("bolt");
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(box).toHaveValue("");
+    expect(useAppStore.getState().openDeckId).toBe(4);
+
+    // …and the next press is the deck's, because an empty box owns nothing.
+    await userEvent.keyboard("{Escape}");
+
+    expect(useAppStore.getState().openDeckId).toBeNull();
   });
 
   describe("undo and redo", () => {
@@ -2202,9 +2251,17 @@ describe("DeckEditor", () => {
 
   /**
    * The other side of it: a field that has been typed in owns one press, and one only. The
-   * second is the pane's again — otherwise a reader who half-typed a name and pressed Escape
-   * twice would find the second press had gone nowhere, with the pane still open beside them
-   * and nothing on screen to say why.
+   * second belongs to whatever is open behind it — otherwise a reader who half-typed a name and
+   * pressed Escape twice would find the second press had gone nowhere, with nothing on screen to
+   * say why.
+   *
+   * **`fireEvent`'s answer stopped being able to tell the two apart, so the store is what
+   * separates them now.** It reports `false` whenever *something* consumed the press, and since
+   * the editor took a `"navigation"` rung both presses are consumed — the first by the field,
+   * the second by the floor. The evidence for "one and only one" is therefore that the deck is
+   * still open after the first and closed after the second: a field that ate both would leave
+   * `openDeckId` at 4 throughout, and a field that ate neither would close the deck on the
+   * first press and never revert the name.
    */
   it("spends exactly one Escape on reverting the name", async () => {
     await open();
@@ -2216,9 +2273,14 @@ describe("DeckEditor", () => {
     // when the press was consumed. Read off the state rather than the ref, the second press
     // sees a draft React has not cleared yet and eats a press it has nothing to spend.
     const first = fireEvent.keyDown(name, { key: "Escape" });
+    const afterFirst = useAppStore.getState().openDeckId;
     const second = fireEvent.keyDown(name, { key: "Escape" });
 
-    expect([first, second]).toEqual([false, true]);
+    expect([first, second]).toEqual([false, false]);
+    // The field spent the first press and nothing behind it moved…
+    expect(afterFirst).toBe(4);
+    // …and the second went past it, to the floor.
+    expect(useAppStore.getState().openDeckId).toBeNull();
     expect(name).toHaveValue("Burn");
     expect(deckUpdate).not.toHaveBeenCalled();
   });
@@ -2445,7 +2507,7 @@ describe("DeckEditor", () => {
         CATEGORIES.filter((c) => c.id !== SIDE),
       ),
     );
-    await userEvent.selectOptions(screen.getByLabelText("Deck game"), "paper");
+    await writeToDeck();
 
     // Read off the Add button, which is where the answer is visible: `Creature` is what
     // `autoCategoryFor` makes of this card, so the editor is on Auto.
@@ -2455,11 +2517,14 @@ describe("DeckEditor", () => {
   });
 
   /**
-   * The editor draws **two** format controls and they ask different questions about the same
-   * word: the header's `Deck format` says what the deck *is* and writes it, and the panel's
-   * `Format` narrows what the search *offers* and writes nothing. Both are read in each of the
-   * three tests below, so a rename that collapsed the two names into one fails here rather than
-   * passing by matching whichever control the query happened to reach first.
+   * The docked panel's `Format` narrows what the search *offers* and writes nothing; what the
+   * deck **is** is a word on the ledger and a control in Deck settings.
+   *
+   * **The editor drew two format controls until 2026-08-24 and the three tests below read both**,
+   * so that a rename collapsing the two names into one failed here rather than passing by
+   * matching whichever the query reached first. There is one control called `Format` on this
+   * screen now, which retires the ambiguity rather than the tests: each still reads the deck's own
+   * format off the ledger beside the filter, which is the pair that could disagree.
    */
   it("opens the docked panel's format filter on the deck's own format", async () => {
     await open();
@@ -2468,10 +2533,12 @@ describe("DeckEditor", () => {
     // when the search mounts, which is that press — so "opens on" is literally what this
     // asserts rather than a state the editor arranged in advance.
     await openFilterTray();
-    await seeded();
+    await seeded("Modern");
 
     expect(screen.getByLabelText("Format")).toHaveValue("modern");
-    expect(screen.getByLabelText("Deck format")).toHaveValue("modern");
+    expect(screen.getByText("Format", { selector: "dt" }).closest("div")).toHaveTextContent(
+      "Modern",
+    );
   });
 
   /**
@@ -2489,10 +2556,12 @@ describe("DeckEditor", () => {
     deckGet.mockResolvedValue(detail({ formatKey: "casual", formatName: "Casual" }, [bolt()]));
     await open();
     await openFilterTray();
-    await seeded();
+    await seeded("Casual");
 
     expect(screen.getByLabelText("Format")).toHaveValue("");
-    expect(screen.getByLabelText("Deck format")).toHaveValue("casual");
+    expect(screen.getByText("Format", { selector: "dt" }).closest("div")).toHaveTextContent(
+      "Casual",
+    );
   });
 
   /**
@@ -2504,15 +2573,22 @@ describe("DeckEditor", () => {
    * `null`, whatever made it do so.) There is no `hasLegalityData` cell to read then — and
    * inferring one from the key would be this file guessing at what the database can answer — so
    * the panel opens unfiltered rather than on a filter nothing behind it has heard of.
+   *
+   * **This is the one test `seeded` cannot gate**, and the reason is the state it is about: there
+   * is no spec for this deck, so the ledger's check button — the thing that says a spec has
+   * arrived — is never drawn at all. Nothing is lost by waiting on the ledger's own `Format` term
+   * instead, because the fence's answer here is `Any format` before the seed lands and after it:
+   * the wait was never what made the assertion true. What that term reads is a second claim worth
+   * having — with no spec to name the ruleset, it falls back to the deck row's own `formatName`.
    */
   it("opens on Any format for a deck whose format the seed does not carry", async () => {
     deckGet.mockResolvedValue(detail({ formatKey: "historic", formatName: "Historic" }, [bolt()]));
     await open();
     await openFilterTray();
-    await seeded();
+    await screen.findByText("Historic");
 
     expect(screen.getByLabelText("Format")).toHaveValue("");
-    expect(screen.getByLabelText("Deck format")).toHaveValue("historic");
+    expect(screen.queryByRole("button", { name: /issues? ·|No issues ·/ })).not.toBeInTheDocument();
   });
 
   /**
@@ -2526,9 +2602,6 @@ describe("DeckEditor", () => {
    * that is not disabled, and the panel would say `Any format` over a wall already narrowed to
    * Gladiator. Both assertions are made for that reason: `value` reads back `""` under the bug
    * and the option's text is the whole of what the reader sees.
-   *
-   * The sentinel is `Commander` here rather than the helper's `Gladiator`, because this deck's
-   * own format is folded into the header's list before the seed lands.
    */
   it("draws a deck format the filter row's own list has never carried", async () => {
     deckGet.mockResolvedValue(
@@ -2538,12 +2611,11 @@ describe("DeckEditor", () => {
     // The filter row lives in `OpenPanel`, which mounts on the disclosure press (2026-08-14),
     // and the Format select is one press further in — inside the row's own filter tray.
     await openFilterTray();
-    await seeded("Commander");
+    await seeded("Gladiator");
 
     const filter = screen.getByLabelText("Format") as HTMLSelectElement;
     expect(filter).toHaveValue("gladiator");
     expect(filter.selectedOptions[0]).toHaveTextContent("Gladiator");
-    expect(screen.getByLabelText("Deck format")).toHaveValue("gladiator");
   });
 
   /**
@@ -2683,8 +2755,17 @@ describe("DeckEditor", () => {
 
   /**
    * The panel is a fixture of the editor, not a dismissible layer: Escape pressed in its search
-   * box belongs to the card pane, which listens on `window` in the bubble phase. A panel that
-   * consumed the press would leave a card pinned open with nothing to close it.
+   * box belongs to whatever is open behind it — a card pane, and failing that the editor's own
+   * `"navigation"` floor. A panel that consumed the press would leave a card pinned open with
+   * nothing to close it, and a deck that could not be left from the one control a reader spends
+   * the most time in.
+   *
+   * **The probe listens in the _capture_ phase, which is what makes the claim narrow.** An
+   * `"inner"` layer — which is what the panel would be if somebody made it dismissible — consumes
+   * in capture, so a probe registered after it reads `true`. Every rung below is a *bubble*
+   * listener and has not run yet, so `false` here means precisely "no layer of this panel's own
+   * took it" rather than "nothing took it at all". The floor did take it, which is the second
+   * assertion.
    */
   it("lets Escape through from the docked search panel", async () => {
     await open();
@@ -2693,13 +2774,14 @@ describe("DeckEditor", () => {
     const listen = (e: KeyboardEvent) => {
       if (e.key === "Escape") heard.push(e.defaultPrevented);
     };
-    window.addEventListener("keydown", listen);
+    window.addEventListener("keydown", listen, true);
 
     screen.getByRole("searchbox", { name: "Search cards" }).focus();
     await userEvent.keyboard("{Escape}");
 
-    window.removeEventListener("keydown", listen);
+    window.removeEventListener("keydown", listen, true);
     expect(heard).toEqual([false]);
+    expect(useAppStore.getState().openDeckId).toBeNull();
   });
 
   /**
@@ -3202,12 +3284,22 @@ describe("DeckEditor", () => {
    * its own press for the next one. One press, one layer.
    */
   it("closes the import dialog on Escape and leaves the card pane open", async () => {
+    cardDetail.mockResolvedValue(detailOf("Lightning Bolt"));
     await open();
     const heard: boolean[] = [];
     const listen = (e: KeyboardEvent) => {
       if (e.key === "Escape") heard.push(e.defaultPrevented);
     };
+    // Registered *before* the pane mounts and after the editor did, which is what makes the two
+    // readings below different: the editor's `"navigation"` rung is ahead of this probe on
+    // `window` and the pane's `"outer"` rung is behind it.
     window.addEventListener("keydown", listen);
+
+    // **A card really is open**, which this case used to only say. Without it the second press
+    // has no pane to belong to and the floor takes it — a passing test about a ladder with one
+    // rung in it.
+    await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+    await screen.findByRole("complementary", { name: "Card details" });
 
     await userEvent.click(screen.getByRole("button", { name: "Import cards" }));
     await screen.findByRole("dialog", { name: "Import a decklist" });
@@ -3219,7 +3311,12 @@ describe("DeckEditor", () => {
     await userEvent.keyboard("{Escape}");
 
     window.removeEventListener("keydown", listen);
+    // `true` from an `"inner"` rung that ran in capture, then `false` because the rung that owns
+    // the second press is *behind* this probe — the pane, which outranks the floor.
     expect(heard).toEqual([true, false]);
+    await waitFor(() => expect(useAppStore.getState().selectedCardId).toBeNull());
+    // And the deck the pane was open over is still open: three presses, three rungs, in order.
+    expect(useAppStore.getState().openDeckId).toBe(4);
   });
 
   /**
@@ -3274,7 +3371,7 @@ describe("DeckEditor", () => {
     // before the press would take the deck away on the way in rather than on the write.
     deckUpdate.mockRejectedValue("That deck is not there any more.");
     deckGet.mockResolvedValue(null);
-    await userEvent.selectOptions(screen.getByLabelText("Deck game"), "paper");
+    await writeToDeck();
 
     expect(await screen.findByText(/this deck is not there any more/i)).toBeInTheDocument();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
@@ -3282,9 +3379,15 @@ describe("DeckEditor", () => {
     const listen = (e: KeyboardEvent) => {
       if (e.key === "Escape") heard.push(e.defaultPrevented);
     };
-    window.addEventListener("keydown", listen);
+    // **Capture, because that is the phase the phantom would be in.** An `"inner"` layer consumes
+    // the press before it has descended to its target, so a probe registered after one reads
+    // `true`; every rung below is a bubble listener that has not run yet. `false` here is
+    // therefore the exact claim — no undrawn layer took the press — where a bubble probe would
+    // now read the editor's own `"navigation"` floor and say `true` whether or not the bug was
+    // back.
+    window.addEventListener("keydown", listen, true);
     await userEvent.keyboard("{Escape}");
-    window.removeEventListener("keydown", listen);
+    window.removeEventListener("keydown", listen, true);
     expect(heard).toEqual([false]);
   });
 
@@ -3357,17 +3460,28 @@ describe("DeckEditor", () => {
     );
   }
 
-  /** The two tabs, and which of them the reader's eye lands on first. **Theory before Live**:
-   *  the plan is the list a deck is built in, and it is where turning the switch on now puts
-   *  the cards. Asserted as a sequence, because both being present says nothing about that. */
-  it("draws the plan's tab before the deck's", async () => {
+  /**
+   * The two tabs, and which of them the reader's eye lands on first. **Theory before Live**: the
+   * plan is the list a deck is built in, and it is where turning the switch on now puts the
+   * cards. Asserted as a sequence, because both being present says nothing about that.
+   *
+   * **Compare is the third control in this group since 2026-08-24** — a `Scale` glyph between the
+   * two lists it weighs against each other, which is where the redesign puts it and is why it
+   * stopped being a worded button. So the sequence is asserted over the *names*, and the middle
+   * one has no text at all.
+   */
+  it("draws the plan's tab before the deck's, with Compare between them", async () => {
     withPlan();
     await open();
 
     const tabs = within(await screen.findByRole("group", { name: "Deck list" })).getAllByRole(
       "button",
     );
-    expect(tabs.map((b) => b.textContent)).toEqual(["Theory", "Live"]);
+    expect(tabs.map((b) => b.getAttribute("aria-label") ?? b.textContent)).toEqual([
+      "Theory",
+      "Compare",
+      "Live",
+    ]);
   });
 
   /**
@@ -3643,7 +3757,7 @@ describe("DeckEditor", () => {
     deckGet.mockResolvedValueOnce(detail({}, [bolt()])).mockResolvedValue(null);
 
     await open();
-    await userEvent.selectOptions(screen.getByLabelText("Deck game"), "paper");
+    await writeToDeck();
 
     expect(await screen.findByText(/this deck is not there any more/i)).toBeInTheDocument();
   });
@@ -3712,7 +3826,7 @@ describe("DeckEditor", () => {
     deckUpdate.mockRejectedValue("The database is busy with a sync — try again in a moment.");
 
     await open();
-    await userEvent.selectOptions(screen.getByLabelText("Deck game"), "paper");
+    await writeToDeck();
 
     expect(await screen.findByRole("alert")).toHaveTextContent("The database is busy with a sync");
   });
@@ -3835,10 +3949,15 @@ describe("DeckEditor drag and drop", () => {
    * The platform cancels a drag itself — in Chromium the keypress goes to the drag operation
    * and the page is told by a `dragend`, which is what takes the tray down here. jsdom has no
    * drag to cancel, so what this pins is the app's half of that contract: while a card is in
-   * the air the editor is listening for no keys at all, so an Escape that reaches the window
-   * arrives with nothing consumed and the card detail pane behind this view still closes on its
-   * own press. An editor that treated a drag as a dismissible layer would eat that press and
-   * leave a card pinned open.
+   * the air the editor registers no layer of its own, so an Escape that reaches the window
+   * arrives with nothing consumed above the floor and the card detail pane behind this view
+   * still closes on its own press. An editor that treated a drag as a dismissible layer would
+   * eat that press and leave a card pinned open.
+   *
+   * **Capture, so the drag is the only thing being asked about.** A dismissible drag would be an
+   * `"inner"` layer and would consume in capture; the editor's `"navigation"` floor is a bubble
+   * rung and has not run when this probe fires. The deck closing is the other half — nothing
+   * outranking the floor took it either.
    */
   it("takes the tray away on the drag's own end, without spending the app's Escape", async () => {
     await open();
@@ -3846,12 +3965,13 @@ describe("DeckEditor drag and drop", () => {
     const listen = (e: KeyboardEvent) => {
       if (e.key === "Escape") heard.push(e.defaultPrevented);
     };
-    window.addEventListener("keydown", listen);
+    window.addEventListener("keydown", listen, true);
 
     const held = await startDrag(card_("Lightning Bolt"));
     expect(screen.getByText("Remove from deck")).toBeInTheDocument();
     await userEvent.keyboard("{Escape}");
     expect(heard).toEqual([false]);
+    expect(useAppStore.getState().openDeckId).toBeNull();
 
     await held.cancel();
 
@@ -3859,7 +3979,7 @@ describe("DeckEditor drag and drop", () => {
     expect(deckSetCardQuantity).not.toHaveBeenCalled();
     expect(deckToCollection).not.toHaveBeenCalled();
     expect(deckMoveCard).not.toHaveBeenCalled();
-    window.removeEventListener("keydown", listen);
+    window.removeEventListener("keydown", listen, true);
   });
 
   /**
@@ -4327,7 +4447,7 @@ describe("DeckEditor — a card's menu", () => {
   /** Modern has no command zone, so neither zone row is a thing this deck can be asked about. */
   it("offers no commander row in a format with no command zone", async () => {
     await open();
-    await seeded();
+    await seeded("Modern");
     await rightClickCard("Lightning Bolt");
 
     expect(screen.queryByRole("menuitem", { name: /Set as commander/ })).not.toBeInTheDocument();
@@ -4352,7 +4472,7 @@ describe("DeckEditor — a card's menu", () => {
       detail({ formatKey: "commander", formatName: "Commander" }, [bolt()]),
     );
     await open();
-    await seeded("Modern");
+    await seeded("Commander");
 
     await rightClickCard("Lightning Bolt");
     const row = await screen.findByRole("menuitem", { name: /Set as commander/ });
@@ -4379,7 +4499,7 @@ describe("DeckEditor — a card's menu", () => {
       detail({ formatKey: "commander", formatName: "Commander" }, [atraxa]),
     );
     await open();
-    await seeded("Modern");
+    await seeded("Commander");
 
     await rightClickCard("Atraxa, Praetors' Voice");
     const row = await screen.findByRole("menuitem", { name: /Set as commander/ });
@@ -5473,5 +5593,240 @@ describe("DeckEditor — the walk it publishes", () => {
     view.unmount();
 
     expect(walk()).toEqual([]);
+  });
+});
+
+/**
+ * **Multi-select** — issue #214. Ctrl and Shift build a set of deck rows, and every gesture that
+ * acts on one card acts on the set.
+ *
+ * The arithmetic behind it is `lib/multiSelect.ts`'s and is tested there as a truth table; the
+ * drag contract is `dndGroup.test.ts`'s. What is left for this file is the only thing neither can
+ * see: that the editor's four views, its drop targets, its Delete key and its card menu are all
+ * reading the *same* set, over the real registrations, through `src/test-drag.ts`.
+ */
+describe("DeckEditor multi-select", () => {
+  /** The two cards the default fixture puts in the main deck, as the `<li>` each view makes a
+   *  drag handle of. */
+  const row = (name: string) =>
+    screen.getByRole("button", { name: new RegExp(`^${name}`) }).closest("li")!;
+  const marked = () => document.querySelectorAll(`[${SELECTED_ATTR}]`);
+
+  /**
+   * A chord press on a card, through the button the reader actually presses.
+   *
+   * **The modifier is held on the keyboard rather than passed as a click option**, and that is
+   * not a style choice: `userEvent.click`'s options are *pointer* options and carry no modifier
+   * state, so `{ ctrlKey: true }` there sets nothing at all — the press would be a plain click
+   * and the test would pass while asserting about a gesture it never made. Held this way the flag
+   * is on the real `mousedown`/`click` pair, which is what `readModifiers` reads.
+   */
+  async function pressWith(name: string, mods: { ctrl?: boolean; shift?: boolean }) {
+    // **One `setup()` session for the three calls**, and this is the part that is easy to get
+    // wrong: the direct `userEvent.click` / `userEvent.keyboard` helpers each open a session of
+    // their own, so a modifier held by one is released before the next runs — the press lands as
+    // a plain click and the test passes while asserting about a gesture it never made. It did,
+    // for one run of this suite.
+    const user = userEvent.setup();
+    const key = mods.ctrl ? "Control" : "Shift";
+    await user.keyboard(`{${key}>}`);
+    await user.click(screen.getByRole("button", { name: new RegExp(`^${name}`) }));
+    await user.keyboard(`{/${key}}`);
+  }
+
+  /**
+   * A plain click opens the card and a Ctrl-click **does not** — the whole of what makes the
+   * chord a selection rather than a second way to open the pane. Both cards wear the ring, and
+   * the pane is still showing the first.
+   */
+  it("marks a second card on Ctrl-click without opening it", async () => {
+    await open();
+
+    await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+    expect(marked()).toHaveLength(1);
+
+    await pressWith("Bear", { ctrl: true });
+
+    expect(marked()).toHaveLength(2);
+    expect(useAppStore.getState().selectedCardId).toBe("c-Lightning Bolt");
+  });
+
+  /** And a plain click puts the set back down to one, which is what keeps the ring and the pane
+   *  agreeing after a reader has finished with a selection. */
+  it("collapses the set on a plain click", async () => {
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+    await pressWith("Bear", { ctrl: true });
+    expect(marked()).toHaveLength(2);
+
+    await userEvent.click(screen.getByRole("button", { name: /^Bear/ }));
+
+    expect(marked()).toHaveLength(1);
+  });
+
+  /** Shift takes the run between the anchor and the press — two cards here, which is the whole
+   *  of the fixture's main deck. */
+  it("takes a range on Shift-click", async () => {
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+
+    await pressWith("Bear", { shift: true });
+
+    expect(marked()).toHaveLength(2);
+  });
+
+  /**
+   * **The gesture the issue asked for**: one drag, every picked card moved.
+   *
+   * Driven over the library's own code path — a real `dragstart` on the card's `<li>`, a real
+   * `drop` on the Sideboard's group — so what this pins is the group surviving the trip through
+   * the untyped drag store and out the other side, not a function call.
+   */
+  it("moves every picked card when one of them is dragged", async () => {
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+    await pressWith("Bear", { ctrl: true });
+
+    await dragOnto(row("Lightning Bolt"), group("Sideboard"));
+
+    await waitFor(() => expect(deckMoveCard).toHaveBeenCalledTimes(2));
+    expect(deckMoveCard).toHaveBeenCalledWith(
+      4,
+      "c-Lightning Bolt",
+      MAIN,
+      SIDE,
+      null,
+      "live",
+      null,
+    );
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Bear", MAIN, SIDE, null, "live", null);
+  });
+
+  /**
+   * **A card picked up from outside the set takes only itself, and throws the set away.**
+   *
+   * Every file manager's rule, and the one thing about multi-drag a reader will get wrong if it
+   * is not true: a stray drag would otherwise rearrange cards they had forgotten were picked.
+   */
+  it("carries one card when the drag starts outside the set", async () => {
+    deckGet.mockResolvedValue(
+      detail({}, [
+        bolt(),
+        card({ name: "Bear", typeLine: "Creature — Bear", quantity: 2 }),
+        card({ name: "Ponder", typeLine: "Sorcery", quantity: 1 }),
+      ]),
+    );
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+    await pressWith("Bear", { ctrl: true });
+
+    await dragOnto(row("Ponder"), group("Sideboard"));
+
+    await waitFor(() => expect(deckMoveCard).toHaveBeenCalledTimes(1));
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Ponder", MAIN, SIDE, null, "live", null);
+    // The set is thrown away by the drag itself. Asserted on the store rather than by counting
+    // rings, because the pane is still open on Lightning Bolt and `selectedSlot` goes on marking
+    // that one card — which is the ring meaning what it has always meant.
+    await waitFor(() => expect(useAppStore.getState().cardSelection).toBeNull());
+  });
+
+  /**
+   * Delete takes the set out — the only keyboard verb this editor has that is not undo, and the
+   * same `setQuantity(…, 0)` the stepper's zero, the tray's drop and the menu's row all make.
+   */
+  it("removes every picked card on Delete", async () => {
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+    await pressWith("Bear", { ctrl: true });
+
+    await userEvent.keyboard("{Delete}");
+
+    await waitFor(() => expect(deckToCollection).toHaveBeenCalledTimes(2));
+  });
+
+  /**
+   * **A set of one gets no Delete**, deliberately: one card already has a stepper, a menu row and
+   * a tray, all of them visible, and a bare keystroke that silently removed whatever was last
+   * clicked is one press away from a deck the reader did not mean to edit.
+   */
+  it("writes nothing on Delete with a single card picked", async () => {
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+
+    await userEvent.keyboard("{Delete}");
+
+    expect(deckToCollection).not.toHaveBeenCalled();
+    expect(deckSetCardQuantity).not.toHaveBeenCalled();
+  });
+
+  /** The other fence: a reader deleting a character out of the deck's name must not lose the
+   *  cards they had picked. `isTextField` is the same predicate the undo handler yields to. */
+  it("leaves Delete alone inside a text field", async () => {
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+    await pressWith("Bear", { ctrl: true });
+
+    await userEvent.click(screen.getByLabelText("Deck name"));
+    await userEvent.keyboard("{Delete}");
+
+    expect(deckToCollection).not.toHaveBeenCalled();
+    expect(marked()).toHaveLength(2);
+  });
+
+  /**
+   * The card menu goes plural for the three rows that are per-row writes, and the count is on the
+   * label so the reader can see what the press is about before they make it.
+   */
+  it("puts the card menu in the plural for a picked set", async () => {
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+    await pressWith("Bear", { ctrl: true });
+
+    const el = document.querySelector<HTMLElement>(
+      `[${DECK_CARD_ATTR}="${deckCardSlot(MAIN, "c-Bear", null)}"]`,
+    );
+    fireEvent.contextMenu(el as HTMLElement);
+    await screen.findByRole("menu");
+
+    expect(screen.getByRole("menuitem", { name: /^Remove 2 cards/ })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /^Move 2 cards to/ })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /^Tag 2 cards/ })).toBeInTheDocument();
+  });
+
+  /** A right-click on a card **outside** the set is about that card — the press rule that
+   *  matches the drag's. */
+  it("keeps the card menu singular on a card outside the set", async () => {
+    deckGet.mockResolvedValue(
+      detail({}, [
+        bolt(),
+        card({ name: "Bear", typeLine: "Creature — Bear", quantity: 2 }),
+        card({ name: "Ponder", typeLine: "Sorcery", quantity: 1 }),
+      ]),
+    );
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+    await pressWith("Bear", { ctrl: true });
+
+    const el = document.querySelector<HTMLElement>(
+      `[${DECK_CARD_ATTR}="${deckCardSlot(MAIN, "c-Ponder", null)}"]`,
+    );
+    fireEvent.contextMenu(el as HTMLElement);
+    await screen.findByRole("menu");
+
+    expect(screen.getByRole("menuitem", { name: /^Remove card/ })).toBeInTheDocument();
+  });
+
+  /** A picked set belongs to the deck it was made in — leaving the editor puts it down, so a
+   *  reader coming back finds the deck as they find every other surface. */
+  it("puts the set down when the editor closes", async () => {
+    const view = await open();
+    await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+    await pressWith("Bear", { ctrl: true });
+    expect(useAppStore.getState().cardSelection?.keys).toHaveLength(2);
+
+    view.unmount();
+    useAppStore.getState().setOpenDeckId(null);
+
+    expect(useAppStore.getState().cardSelection).toBeNull();
   });
 });

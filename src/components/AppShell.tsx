@@ -23,7 +23,7 @@ import { CabinetFiling, Cards } from "@/components/icons";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { useSidebarDrops, type SidebarDrop } from "@/components/useSidebarDrops";
 import { useCardToDeckRefusal } from "@/features/card/cardMenu";
-import { readDragData } from "@/features/decks/dnd";
+import { readDragGroup } from "@/features/decks/dnd";
 import {
   ACTIVITY_DELAY_MS,
   marketplaceFeedActivity,
@@ -507,22 +507,23 @@ function NavItem({
   useEffect(() => {
     const element = ref.current;
     if (!element || latest.current === null) return;
-    const taken = (data: Record<string, unknown>) => {
-      const payload = readDragData(data);
-      return payload !== null && latest.current?.eligible === true ? payload : null;
-    };
+    // **Every card the drag is carrying** (issue #214) — `readDragGroup`, which answers with one
+    // payload for an ordinary drag and several for a multi-select one. The entry's own rule is
+    // unchanged and is still asked once for the whole gesture: both entries take every kind of
+    // card payload, so "may this land here" has never been a per-card question.
+    const taken = (data: Record<string, unknown>) =>
+      latest.current?.eligible === true ? readDragGroup(data) : [];
     return dropTargetForElements({
       element,
       // No `getData`: what a drop writes is decided by the entry, and the entry is already
       // here. A payload this app did not put in the air, or an entry that cannot take one,
       // never enters — so `over` below is only ever true for a drop that will happen.
-      canDrop: ({ source }) => taken(source.data) !== null,
+      canDrop: ({ source }) => taken(source.data).length > 0,
       onDragEnter: () => setOver(true),
       onDragLeave: () => setOver(false),
       onDrop: ({ source }) => {
         setOver(false);
-        const payload = taken(source.data);
-        if (payload) latest.current?.onDrop(payload);
+        for (const payload of taken(source.data)) latest.current?.onDrop(payload);
       },
     });
   }, []);

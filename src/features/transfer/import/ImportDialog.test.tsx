@@ -210,7 +210,7 @@ const DETAIL: DeckDetail = {
 
 const MADE: DeckRow = { ...DECK, id: 12, name: "Burn", formatKey: "modern" };
 
-const OUTCOME: ImportOutcome = { added: 6, removed: 0, categoriesCreated: 2 };
+const OUTCOME: ImportOutcome = { added: 6, removed: 0, categoriesCreated: 2, tagsCreated: 0 };
 
 const IDLE: SyncStatus = {
   cardCount: 116_695,

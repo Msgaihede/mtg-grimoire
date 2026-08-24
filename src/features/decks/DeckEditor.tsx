@@ -1,7 +1,27 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { autoScrollForElements } from "@atlaskit/pragmatic-drag-and-drop-auto-scroll/element";
 import { useQuery } from "@tanstack/react-query";
-import { ChevronLeft, Redo2, Undo2 } from "lucide-react";
+import {
+  ChevronLeft,
+  Columns3Cog,
+  History,
+  Redo2,
+  Scale,
+  SquareArrowRightEnter,
+  SquareArrowRightExit,
+  Tag,
+  Undo2,
+  Wrench,
+  type LucideIcon,
+} from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import {
   FILTER_CONTROL,
@@ -25,13 +45,14 @@ import {
   type DeckCard,
   type DeckCategory,
   type DeckFinish,
-  type DeckGame,
   type DeckVariant,
 } from "@/lib/ipc";
 import { PRESS, statusLine } from "@/lib/motion";
 import { sortOptions } from "@/lib/options";
 import { useMarketplace } from "@/lib/useMarketplace";
+import { clearFieldOnEscape, useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { useAppStore, type PaneDeckContext } from "@/lib/store";
+import { useCardSelection } from "@/lib/useCardSelection";
 import { cn } from "@/lib/utils";
 import { newestWrite, writeFailure } from "@/lib/writes";
 import {
@@ -39,6 +60,7 @@ import {
   focusDeckGroup,
   keepsSelection,
   type DeckCardActions,
+  type DeckCardGroupDrag,
 } from "./cardControl";
 import { AUTO_CATEGORY } from "./autoCategory";
 import { CategoriesDialog, DeleteCategory } from "./CategoriesDialog";
@@ -46,9 +68,11 @@ import { movedTo } from "./categoryDrag";
 import { buildCategoryMenu } from "./categoryMenu";
 import { ClearCategory } from "./ClearCategory";
 import { buildDeckCardMenu } from "./deckCardMenu";
-import { deckWalkStops } from "./deckWalk";
+import { deckSlotOrder, deckWalkStops } from "./deckWalk";
 import { Dialog } from "@/components/Dialog";
 import { DeckHistoryDialog } from "./DeckHistoryDialog";
+import { DeckBracket } from "./DeckBracket";
+import { DeckLedger } from "./DeckLedger";
 import { DeckNameField } from "./DeckNameField";
 import { DeckSearchPanel, MIN_PANEL_WIDTH_PX } from "./DeckSearchPanel";
 import { DeckSettingsDialog } from "./DeckSettingsDialog";
@@ -81,7 +105,7 @@ import { TheoryDiffDialog } from "./TheoryDiffDialog";
 import { theoryMatchSet } from "./theoryMatch";
 import { useDeck, type Deck } from "./useDeck";
 import { useDeckMeta } from "./useDeckMeta";
-import { ANY_GAME, GAME_OPTIONS, pickerFormats, useFormatSpecs } from "./useFormatSpecs";
+import { useFormatSpecs } from "./useFormatSpecs";
 import { useRecentAdds } from "./useRecentAdds";
 import { ValidationPanel } from "./ValidationPanel";
 import { validateForMarks } from "./validation/engine";
@@ -530,6 +554,18 @@ const VIEW_PICKER = sortOptions(VIEWS, (v) => v.label);
  */
 type Layer =
   | { kind: "check" }
+  /**
+   * The bracket estimate, anchored to its own readout on the ledger — the second arm that is not
+   * a full-window overlay, and it is in this union for the reason every other member is: at most
+   * one of these is up, so the check's findings and the bracket's advisory can never be open over
+   * each other at the two ends of one line.
+   *
+   * **It rode inside `check` until 2026-08-24.** A bracket cannot make a deck illegal, so an
+   * advisory printed under a list of findings was a second answer nobody had asked the first
+   * question to get to; it is a press of its own now, and `DeckBracket` is where the estimate and
+   * its copy live.
+   */
+  | { kind: "bracket" }
   | { kind: "categories" }
   | { kind: "tags" }
   | { kind: "history" }
@@ -650,18 +686,71 @@ export function layerMatches(open: Layer, target: NonNullable<Layer>): boolean {
  *
  * **Every row here costs width on a row that already wraps.** This block measured **825px** at
  * 1280×800 against the ~729 the ribbon can spare (2026-08-14, a debug build) with five buttons on
- * it; `Export deck` is the sixth and the figure has not been re-measured. The wrap is pre-existing
- * either way — what a live pass would answer is how much worse it got, and whether the deck's
- * 44px of height is still the whole of the cost.
+ * it; `Export deck` was the sixth and the figure was never re-measured.
+ *
+ * **What answered that measurement is the 2026-08-24 header** rather than a seventh argument about
+ * wording. Six words became six glyphs with a word beside each: the two transfer buttons moved
+ * into {@link TRANSFER}'s joined pair, the four that are left carry an icon, and each word is
+ * dropped — never the control — as the column narrows (see {@link TIGHT_HEADER_PX}). Two selects
+ * went with it, `Deck game` and `Deck format`, whose questions were already asked in Deck settings
+ * and whose only job here was to be read; the ledger line below says which format the deck is on.
+ * The row still wraps rather than overflows, and every control is reachable at every width —
+ * nothing here is ever put behind a menu.
  */
-const ACTIONS: readonly { layer: NonNullable<Layer>; label: string }[] = [
-  { layer: { kind: "import" }, label: "Import cards" },
-  { layer: { kind: "export", categoryId: null }, label: "Export deck" },
-  { layer: { kind: "categories" }, label: "Categories" },
-  { layer: { kind: "tags" }, label: "Tags" },
-  { layer: { kind: "history" }, label: "History" },
-  { layer: { kind: "settings" }, label: "Deck settings" },
+interface HeaderAction {
+  layer: NonNullable<Layer>;
+  /** The accessible name, the tooltip, and — for {@link ACTIONS} — the word on the button. */
+  label: string;
+  Icon: LucideIcon;
+}
+
+/**
+ * The two transfer buttons, drawn as one joined pair.
+ *
+ * **A pair rather than two loose buttons, because they are one idea read in two directions** —
+ * cards into this deck, this deck out to a file — and joining them says so in the width of one
+ * control and a hairline. The glyphs are lucide's own mirror pair, so the direction is the
+ * picture rather than a word the reader has to find.
+ *
+ * **The visible word is shorter than the name, deliberately and legally.** `Import` and `Export`
+ * are each contained in the accessible name beside them, which is what WCAG 2.5.3 asks for, and
+ * the names are the ones {@link ACTIONS}' own doc argues at length. Both words disappear below
+ * {@link WIDE_HEADER_PX}, where the buttons are their glyphs and the name is the tooltip.
+ */
+const TRANSFER: readonly HeaderAction[] = [
+  { layer: { kind: "import" }, label: "Import cards", Icon: SquareArrowRightEnter },
+  { layer: { kind: "export", categoryId: null }, label: "Export deck", Icon: SquareArrowRightExit },
 ];
+
+const ACTIONS: readonly HeaderAction[] = [
+  { layer: { kind: "categories" }, label: "Categories", Icon: Columns3Cog },
+  { layer: { kind: "tags" }, label: "Tags", Icon: Tag },
+  { layer: { kind: "history" }, label: "History", Icon: History },
+  { layer: { kind: "settings" }, label: "Deck settings", Icon: Wrench },
+];
+
+/**
+ * The three widths this header reasons about, measured on **the editor column** rather than on
+ * the window — which is what `deskWidth` already is (see the observer that sets it), so nothing
+ * new is measured and nothing new re-renders.
+ *
+ * The numbers are the column a window leaves once the sidebar, the shell's padding and the page
+ * scrollbar are taken off: **1017** at the app's own 1280x800 with the rail expanded, 1157 with
+ * it collapsed, 1657 at 1920, and **761** at the narrowest window the shell reasons about. So
+ * {@link SETTINGS_ICON_PX} sits above the app's default and below the collapsed-rail width — the
+ * longest word in the row, `Deck settings`, is the first to go — and {@link TIGHT_HEADER_PX} sits
+ * between 761 and the default, which is where every remaining word goes and the toolbar splits in
+ * two. {@link WIDE_HEADER_PX} is above 1157: `Import` and `Export` say themselves only where
+ * there is room to spare.
+ *
+ * **Zero means unmeasured and reads as the middle**, which is `roomForPanel`'s convention one row
+ * up: the first paint of a wide window must not flash a narrow header, and jsdom — which lays
+ * nothing out and whose `ResizeObserver` never fires — draws the state every test is written
+ * against.
+ */
+const WIDE_HEADER_PX = 1400;
+const SETTINGS_ICON_PX = 1100;
+const TIGHT_HEADER_PX = 900;
 
 /**
  * How long the quick zones' "nothing to do" sentence stays up.
@@ -726,7 +815,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * default rather than the other one.
    */
   const { mode: addMode, setMode: setAddMode } = useAddMode(deckId);
-  const { specs, formatSpecFor } = useFormatSpecs();
+  const { formatSpecFor } = useFormatSpecs();
   /**
    * The right-click, and everything a card menu needs that is not the card.
    *
@@ -751,11 +840,50 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   const paneDeckContext = useAppStore((s) => s.paneDeckContext);
   const openCardFromDeck = useAppStore((s) => s.openCardFromDeck);
   /**
+   * The picked set's clear, taken straight off the store rather than from `useCardSelection`
+   * below it.
+   *
+   * The hook is measured along `groups`, which is derived near the bottom of this component, and
+   * two writes up here need to stand a set down — a drop that has just moved every member, and
+   * the Delete that has just removed them. Neither needs the set's *contents*, only the clear,
+   * and the store's setter is the same function the hook would have handed back.
+   */
+  const setCardSelection = useAppStore((s) => s.setCardSelection);
+  /**
    * Which of the desk's two columns the card pane is drawn **over** — see the pane host at the
    * end of the desk row, and {@link useAppStore}'s `paneFromDeckSearch` for why this is a field
    * of its own rather than `paneDeckContext !== null` read backwards.
    */
   const paneFromDeckSearch = useAppStore((s) => s.paneFromDeckSearch);
+
+  /**
+   * Close the deck — the ribbon's `Back to decks` button and Escape's floor, as one callback.
+   *
+   * **Two entrances to one act, so there is one function rather than two spellings of it.** The
+   * button and the key must not be able to drift: whatever closing a deck comes to mean — a
+   * confirmation, a last write flushed, a note left for the gallery — is written here and both
+   * paths get it.
+   */
+  const closeDeck = useCallback(() => setOpenDeckId(null), [setOpenDeckId]);
+  /**
+   * **Escape's floor on this screen: the deck closes.**
+   *
+   * `"navigation"` is the bottom rung, so this fires only on a press nothing nearer wanted — the
+   * card pane docked beside the desk is `"outer"` and outranks it, every dialog and popup here is
+   * `"inner"` and outranks both, and a filter box with text in it spends the press before any of
+   * them (see {@link clearFieldOnEscape} on the toolbar's field below). One press closes one
+   * thing, all the way down.
+   *
+   * **Always enabled**, because an open editor always has somewhere to go: the gallery it was
+   * opened from. There is no state in which this rung would be a listener with nothing to do.
+   *
+   * **The caret is handed back by the same route the button's press uses**, and that is
+   * {@link closeDeck} doing exactly one thing: `setOpenDeckId(null)` writes `returnToDeckId` in
+   * the store, and `DecksPage` reads it to open the folder the deck is filed in and put the caret
+   * on the deck's own tile. So Escape lands the reader precisely where `Back to decks` does —
+   * which is what "Escape hands the caret to the opener" means at this rung, one view up.
+   */
+  useDismissOnEscape({ layer: "navigation", onDismiss: closeDeck });
 
   const row = deck.deck;
   const spec = row ? formatSpecFor(row.formatKey) : null;
@@ -901,9 +1029,11 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * would only have moved the same lookup earlier and made it stale.
    */
   const handBackRef = useRef<(() => void) | null>(null);
-  /** The format check's chip, which owns its own trigger ref because `ValidationPanel` draws
-   *  the chip itself. */
+  /** The format check's button, which owns its own trigger ref because `ValidationPanel` draws
+   *  the button itself. */
   const chipRef = useRef<HTMLButtonElement>(null);
+  /** The bracket readout beside it, for the same reason — `DeckBracket` draws its own trigger. */
+  const bracketRef = useRef<HTMLButtonElement>(null);
   const tookFocus = useRef(false);
 
   /**
@@ -1713,6 +1843,10 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     () => openLayer({ kind: "check" }, () => chipRef.current?.focus()),
     [openLayer],
   );
+  const openBracket = useCallback(
+    () => openLayer({ kind: "bracket" }, () => bracketRef.current?.focus()),
+    [openLayer],
+  );
 
   /**
    * **Tag card ▸ New tag…** — the one layer opened from a *card's* menu rather than a pile's or
@@ -1856,6 +1990,48 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     if (!focusDeckGroup(categoryId)) editorRef.current?.focus();
   }, []);
   const cards = deck.cards;
+
+  /**
+   * **The cards the reader has Ctrl- and Shift-clicked**, as rows of this deck — issue #214.
+   *
+   * The one derivation of "which cards are picked", and it is here rather than beside
+   * `useCardSelection` below because three things above that hook need it: the card menu (built at
+   * `deckCardMenu` a few hundred lines down), the Delete key, and the group a drag carries. What
+   * the hook adds on top is the *gestures* — which chord means what, and the range order — and
+   * those genuinely need `groups`, which is derived near the bottom of this component.
+   *
+   * **Read off the store rather than off the hook** for exactly that reason, and scoped by the
+   * same string the hook writes under, so the two can never answer about different decks.
+   *
+   * **A slot that names no row is dropped**, which is `pruneSelection`'s rule reached by a second
+   * road and needed here for its own sake: a set outlives the list it was made in, so between a
+   * removal landing and the next render the keys can address rows that are gone — and a
+   * `Remove 4 cards` that removes three is worse than one that says three.
+   */
+  const cardSelection = useAppStore((s) => s.cardSelection);
+  const pickedCards = useMemo(() => {
+    const scope = `deck:${deckId}`;
+    if (cardSelection === null || cardSelection.scope !== scope) return [];
+    const bySlot = new Map(
+      cards.map((card) => [deckCardSlot(card.categoryId, card.cardId, card.finish), card]),
+    );
+    return cardSelection.keys.flatMap((slot) => {
+      const card = bySlot.get(slot);
+      return card ? [card] : [];
+    });
+  }, [cardSelection, cards, deckId]);
+
+  /**
+   * The same list read at a moment rather than at a render — the Delete key's and a drag's copy.
+   *
+   * Both are handlers registered once and asked later: a `keydown` listener that had the set in
+   * its dependency list would be torn down and re-added on every Ctrl-click, and a drag
+   * registration doing the same would unregister the source under the reader's pointer.
+   */
+  const pickedRef = useRef(pickedCards);
+  useEffect(() => {
+    pickedRef.current = pickedCards;
+  }, [pickedCards]);
   useEffect(() => {
     const owed = owedFocus.current;
     if (owed === null) return;
@@ -1987,6 +2163,29 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       else setQuantityAt(write.cardId, write.categoryId, write.finish, 0);
     },
     [addTo, moveTo, refile, setQuantityAt],
+  );
+
+  /**
+   * A whole drop — **every card it was carrying** (issue #214), and the picked set stood down
+   * afterwards.
+   *
+   * One write per card rather than a batched command, and that is a cost this feature accepts
+   * rather than hides. Each `mutate` is its own `deck_audit` row, so a four-card move is four
+   * entries and four presses of Ctrl+Z to reverse. Batching would be a Rust change to `deck_undo`
+   * — a grain the audit log does not have — and it is worth having the gesture before the tidier
+   * undo rather than neither.
+   *
+   * **The set is cleared once the drop is applied.** The cards have moved, so a set still
+   * pointing at where they *were* is a set whose next drag carries slots that no longer exist —
+   * `pruneSelection` would empty it on the next render anyway, and clearing here is what stops
+   * the ring standing on a pile the cards have left for the frame in between.
+   */
+  const applyDrops = useCallback(
+    (writes: DeckWrite[]) => {
+      for (const write of writes) applyDrop(write);
+      if (writes.length > 1) setCardSelection(null);
+    },
+    [applyDrop, setCardSelection],
   );
 
   /**
@@ -2159,6 +2358,17 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           tags: deck.tags,
           addTag: openAddTag,
           remove: removeCard,
+          // **Only when this card is in the set** — `dragsWholeSelection`'s rule for a press
+          // instead of a drag. A right-click on a card the reader has not picked is about that
+          // card, so `[]` goes over and the menu is the singular one it has always been.
+          picked: pickedCards.some(
+            (row) =>
+              row.cardId === card.cardId &&
+              row.categoryId === card.categoryId &&
+              row.finish === card.finish,
+          )
+            ? pickedCards
+            : [],
         });
       return { onContextMenu: menu(build), onKeyDown: menuKey(build) };
     },
@@ -2176,6 +2386,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       setFinishAt,
       openAddTag,
       removeCard,
+      pickedCards,
     ],
   );
 
@@ -2278,47 +2489,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   );
 
   /**
-   * What every view is handed, and the whole of what a card **and a pile** can be made to do.
-   *
-   * One object rather than six props, because it travels three components deep — the view, the
-   * group, the card — and a bag that is passed on whole cannot be passed on incompletely. The
-   * views spend it differently (a table gets columns, the other three get a bar over the card),
-   * and every control inside it is `cardControl.tsx`'s.
-   *
-   * It carries two pile-level members beside the card's three, which is what `drop` always was:
-   * the heading's own menu, and the rename field for the pile being renamed.
-   */
-  const actions = useMemo<DeckCardActions>(
-    () => ({
-      setQuantity,
-      drop: applyDrop,
-      menu: deckCardMenu,
-      categoryMenu,
-      renameCategory: (categoryId) =>
-        categoryId === null ? null : renameCategoryField(categoryId),
-      // **Only while the deck is grouped by category**, and absent is the whole of the off
-      // switch — a view draws no grip without it. Under `manaValue` and `type` the headings on
-      // the desk are buckets the app derived, so there is no order of the reader's on screen to
-      // change; the piles that *are* real there are the switched-off ones `buildGroups` appends
-      // and the command zones it heads the list with, and neither is in the flow — the first is
-      // in the rail, the second in the box `splitRail` answers `command` for, whose piles are
-      // drawn without a `flowWidth` and so register no grip whatever this prop says. That second
-      // exemption is not this gate's doing and does not want to be: a zone pinned to the head of
-      // every grouping has no position for a drag to change, under `category` least of all.
-      moveCategory: groupBy === "category" ? moveCategory : undefined,
-    }),
-    [
-      setQuantity,
-      applyDrop,
-      deckCardMenu,
-      categoryMenu,
-      renameCategoryField,
-      groupBy,
-      moveCategory,
-    ],
-  );
-
-  /**
    * The docked panel's tiles, which are **not** deck cards: a search result is a printing the
    * reader has not filed anywhere, so none of the four deck rows means anything about it and it
    * gets the plain card menu every other wall in the app draws.
@@ -2332,18 +2502,22 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * which is what a reader who is not editing this row asked for.
    */
   const panelCardBuild = useCallback(
-    (card: CardSummary) => () => buildCardMenu(searchCardTarget(card), cardMenuDeps),
+    (card: CardSummary, picked: readonly CardSummary[] = []) => () =>
+      buildCardMenu(searchCardTarget(card), {
+        ...cardMenuDeps,
+        picked: picked.map(searchCardTarget),
+      }),
     [cardMenuDeps],
   );
   const panelCardMenu = useCallback(
-    (card: CardSummary) => menu(panelCardBuild(card)),
+    (card: CardSummary, picked: readonly CardSummary[] = []) => menu(panelCardBuild(card, picked)),
     [menu, panelCardBuild],
   );
   /** The keyboard's own door to the same rows. `CardGrid` takes it in a slot of its own because
    *  a keypress has no coordinates — the panel is anchored at the tile's corner rather than at a
    *  pointer that was never there. */
   const panelCardMenuKey = useCallback(
-    (card: CardSummary) => menuKey(panelCardBuild(card)),
+    (card: CardSummary, picked: readonly CardSummary[] = []) => menuKey(panelCardBuild(card, picked)),
     [menuKey, panelCardBuild],
   );
 
@@ -2380,10 +2554,16 @@ export function DeckEditor({ deckId }: { deckId: number }) {
 
   const dropSelection = useCallback(
     (event: React.MouseEvent) => {
-      if (selectedCardId === null || keepsSelection(event.target)) return;
+      if (keepsSelection(event.target)) return;
+      // **The picked set goes down with the pane** (issue #214), and the guard above is why it is
+      // safe to clear it here: a click on a card or on one of a card's controls never reaches
+      // this, so the press that *made* a selection cannot be the press that throws it away. A
+      // click on the desk is the reader putting everything down.
+      setCardSelection(null);
+      if (selectedCardId === null) return;
       setSelectedCardId(null);
     },
-    [selectedCardId, setSelectedCardId],
+    [selectedCardId, setSelectedCardId, setCardSelection],
   );
 
   // The drag's two monitors and the remove tray's drop target are not here: `QuickZones` owns
@@ -2422,21 +2602,21 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     [deck.update],
   );
 
-  /** The picker narrowed to the deck's game, plus the deck's own format when that narrowing —
-   *  or a seed that no longer carries it — would leave it out. A select that cannot show its
-   *  own value would silently re-format the deck on the first other change, and switching a
-   *  Modern deck to Arena is now the ordinary way that happens rather than the edge case.
-   *  Every half is `pickerFormats`', including that the deck's own row is *folded into* the
-   *  alphabet rather than pinned in front of it. */
-  const formats = useMemo(
-    () =>
-      pickerFormats(
-        specs,
-        row && { key: row.formatKey, name: row.formatName ?? row.formatKey },
-        row?.gameKey ?? ANY_GAME,
-      ),
-    [specs, row],
-  );
+  /**
+   * How much room the header has, in the three answers it asks for.
+   *
+   * **`deskWidth` and not a fourth observer**: the desk row and the header are both full-width
+   * children of this one flex column, so the box already measured for the search panel's floor is
+   * the box this header is drawn in. Zero is unmeasured and reads as the roomy middle — see
+   * {@link TIGHT_HEADER_PX}, where the three numbers are argued.
+   *
+   * **The picker these replaced is gone with the two selects that drew it.** `pickerFormats` and
+   * its game narrowing are still exactly what `DeckSettingsDialog` mounts them for; what this file
+   * no longer does is ask a question it was only ever printing the answer to.
+   */
+  const wideHeader = deskWidth >= WIDE_HEADER_PX;
+  const settingsIcon = deskWidth > 0 && deskWidth < SETTINGS_ICON_PX;
+  const tightHeader = deskWidth > 0 && deskWidth < TIGHT_HEADER_PX;
 
   /**
    * What the docked panel's **format filter** opens on — this deck's format, or `null` for
@@ -2725,6 +2905,175 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       ? null
       : (categories.find((c) => c.id === targetCategoryId)?.name ?? "this deck");
 
+  /**
+   * The deck's rows as a flat list of slots, in the order the desk draws them — what a
+   * Shift-click measures a range along (issue #214).
+   *
+   * `deckSlotOrder` and not `deckWalk` beside it, though the two walk the same groups in the same
+   * order: the walk drops orphaned rows because it steps *through printings*, and an orphan is
+   * still a card the reader can see and pick. A range that silently skipped a row on screen is
+   * the one failure this list cannot have.
+   */
+  const slotOrder = useMemo(() => deckSlotOrder(groups), [groups]);
+
+  /**
+   * The cards the reader has Ctrl- and Shift-clicked, scoped to **this deck**.
+   *
+   * A deck id in the scope because two decks are two surfaces: the slots are
+   * `<category>:<card>:<finish>` and a category id is per-deck, so a set carried across a close
+   * and an open would address piles of a deck that is no longer on screen.
+   */
+  const picked = useCardSelection(`deck:${deckId}`, slotOrder);
+
+  /**
+   * What a card's drag asks the selection — {@link DeckCardGroupDrag}, held still on purpose.
+   *
+   * Both live values it reads come off refs, which is what lets this object keep one identity for
+   * the life of the editor: it lands in every card's `useDeckCardDrag` dependency list, and a
+   * fresh one per render would tear four hundred drag registrations down each time the reader
+   * Ctrl-clicked — a source unregistering mid-gesture is a drop that never arrives.
+   *
+   * `dragsAll` is asked first and has a side effect by design: a card picked up from *outside* the
+   * set throws the set away, so a stray drag can never rearrange cards the reader had forgotten
+   * were picked.
+   */
+  const dragsAllRef = useRef(picked.dragsAll);
+  useEffect(() => {
+    dragsAllRef.current = picked.dragsAll;
+  }, [picked.dragsAll]);
+  const groupDrag = useMemo<DeckCardGroupDrag>(
+    () => ({
+      rest: (slot) => {
+        if (!dragsAllRef.current(slot)) return [];
+        return pickedRef.current
+          .filter((card) => deckCardSlot(card.categoryId, card.cardId, card.finish) !== slot)
+          .map(
+            (card): DragPayload => ({
+              kind: "deck-card",
+              cardId: card.cardId,
+              name: card.name,
+              fromCategoryId: card.categoryId,
+              finish: card.finish,
+            }),
+          );
+      },
+    }),
+    [],
+  );
+
+  /**
+   * **Delete takes the picked cards out of the deck** — issue #214, and the one keyboard verb this
+   * editor has that is not undo.
+   *
+   * ## Why it exists here and nowhere else in the app
+   *
+   * "Remove" is a defined act on a deck row and is not one anywhere else a card is drawn: on a
+   * search wall Delete would name nothing, and on the collection it would mean destroying a record
+   * of cardboard the reader owns. So the key is bound by the editor, for the editor's own scope,
+   * and the walls get multi-select without it.
+   *
+   * ## Three fences, each closing a real way this goes wrong
+   *
+   * **A text field keeps the key**, through the same `isTextField` the undo handler one screen up
+   * yields to and the native context menu's carve-out turns on — a reader deleting a character out
+   * of the deck's name must not lose four cards. **A layer takes it too**: with a dialog or a
+   * confirmation open the deck is behind a scrim, and a key that reached past it would act on a
+   * surface the reader cannot see. And **nothing is written for a set of one**, which is the
+   * deliberate asymmetry — one card has a stepper, a menu row and a tray, all of them visible, and
+   * a bare Delete that silently removed whatever was last clicked is a keystroke away from a deck
+   * the reader did not mean to edit.
+   *
+   * It goes through `setQuantityAt(…, 0)` like every other removal in this editor — the stepper's
+   * zero, the menu's `Remove card`, the tray's drop — so it inherits the optimistic patch, the
+   * rollback, and the collection write that files the copies into `Recently removed`. There is no
+   * remove mutation and this is not the place to add one.
+   *
+   * **What it costs is one press of Ctrl+Z per card**, because `deck_audit` has a row per write.
+   * Named rather than hidden: batching is a Rust change to `deck_undo`'s grain.
+   */
+  const layerOpen = layer !== null;
+  useEffect(() => {
+    if (layerOpen) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Delete") return;
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      if (isTextField(event.target)) return;
+      const held = pickedRef.current;
+      if (held.length < 2) return;
+      event.preventDefault();
+      for (const card of held) setQuantityAt(card.cardId, card.categoryId, card.finish, 0);
+      setCardSelection(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [layerOpen, setQuantityAt, setCardSelection]);
+
+  /**
+   * A press on a deck card, with the chords it was holding — the seam every view calls before it
+   * opens the pane.
+   *
+   * It answers `true` for a chord, and the view then does nothing else. A plain click has already
+   * collapsed the set to this one card by the time this returns `false`, which is what keeps the
+   * ring and the pane agreeing without the views knowing either exists.
+   */
+  const pickCard = useCallback(
+    (card: DeckCard, event: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) =>
+      picked.pick(deckCardSlot(card.categoryId, card.cardId, card.finish), event),
+    [picked],
+  );
+
+  /**
+   * What every view is handed, and the whole of what a card **and a pile** can be made to do.
+   *
+   * One object rather than six props, because it travels three components deep — the view, the
+   * group, the card — and a bag that is passed on whole cannot be passed on incompletely. The
+   * views spend it differently (a table gets columns, the other three get a bar over the card),
+   * and every control inside it is `cardControl.tsx`'s.
+   *
+   * It carries two pile-level members beside the card's three, which is what `drop` always was:
+   * the heading's own menu, and the rename field for the pile being renamed.
+   *
+   * **It is built here, below `groups`, rather than beside the writes it is made of** — moved for
+   * issue #214, because three of its members are about the picked set and the set is measured
+   * along the order `groups` decides. Nothing reads it before this point; `viewProps` below is
+   * its only consumer.
+   */
+  const actions = useMemo<DeckCardActions>(
+    () => ({
+      setQuantity,
+      drop: applyDrops,
+      menu: deckCardMenu,
+      categoryMenu,
+      groupDrag,
+      isPicked: picked.selected,
+      pick: pickCard,
+      renameCategory: (categoryId) =>
+        categoryId === null ? null : renameCategoryField(categoryId),
+      // **Only while the deck is grouped by category**, and absent is the whole of the off
+      // switch — a view draws no grip without it. Under `manaValue` and `type` the headings on
+      // the desk are buckets the app derived, so there is no order of the reader's on screen to
+      // change; the piles that *are* real there are the switched-off ones `buildGroups` appends
+      // and the command zones it heads the list with, and neither is in the flow — the first is
+      // in the rail, the second in the box `splitRail` answers `command` for, whose piles are
+      // drawn without a `flowWidth` and so register no grip whatever this prop says. That second
+      // exemption is not this gate's doing and does not want to be: a zone pinned to the head of
+      // every grouping has no position for a drag to change, under `category` least of all.
+      moveCategory: groupBy === "category" ? moveCategory : undefined,
+    }),
+    [
+      setQuantity,
+      applyDrops,
+      deckCardMenu,
+      categoryMenu,
+      groupDrag,
+      picked.selected,
+      pickCard,
+      renameCategoryField,
+      groupBy,
+      moveCategory,
+    ],
+  );
+
   const viewProps = {
     groups,
     marketplace,
@@ -2803,7 +3152,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           is {@link PriceStrip}'s since 2026-08-16, not this file's — the argument is the same
           one read at the other end of the gesture, so both ends of a drag now re-render
           themselves rather than the editor.) */}
-      <QuickZones categories={categories} onDrop={applyDrop} onNewCategory={openQuickCategory} />
+      <QuickZones categories={categories} onDrop={applyDrops} onNewCategory={openQuickCategory} />
 
       {/**
        * **The card pane, drawn over one of this editor's own columns rather than beside them**
@@ -2913,20 +3262,32 @@ export function DeckEditor({ deckId }: { deckId: number }) {
        * actions past the toolbar row beneath them and past the deck itself, and the ring has
        * room on that axis already — `gap-x-3` is 12px either side of the field's box, which is
        * three times what the ring asks for.
+       *
+       * **Three lines since 2026-08-24, and this is the first of them**: what the deck is and
+       * what can be done to it, then the ledger of what it adds up to, then the toolbar that
+       * decides how it is drawn. The two selects that used to sit at the right of this row are
+       * gone — see {@link ACTIONS}.
        */}
       <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 py-1.5">
         <button
           type="button"
-          onClick={() => setOpenDeckId(null)}
+          // {@link closeDeck}, shared with Escape's `"navigation"` rung — one act, one function,
+          // so the key and the button can never come to mean different things.
+          onClick={closeDeck}
           aria-label="Back to decks"
+          // The words go and the chevron stays, at the width where every other word on the row
+          // goes. The tooltip is bound only then, for the reason it is bound at all: at any
+          // other width it would repeat the word printed beside it.
+          {...(tightHeader ? tip("Back to decks", { describes: false }) : {})}
           className={cn(
-            "inline-flex h-9 shrink-0 items-center gap-1 rounded-md px-2 text-sm text-dim",
+            "inline-flex h-9 shrink-0 items-center rounded-md text-sm text-dim",
+            tightHeader ? "w-9 justify-center px-0" : "gap-1 px-2",
             "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
             FOCUS,
           )}
         >
-          <ChevronLeft className="size-4" aria-hidden="true" />
-          Decks
+          <ChevronLeft className="size-4 shrink-0" aria-hidden="true" />
+          {!tightHeader && "Decks"}
         </button>
 
         {row && (
@@ -2935,8 +3296,13 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                 rather than twice — the ribbon's `h1` says "Decks", and this says which one. */}
             <h2 className="sr-only">{row.name}</h2>
             {/**
-             * The deck's identity: what it is called, which of its two lists is being read, and
-             * how far apart they are.
+             * The deck's name, and it is the row's one flexible child.
+             *
+             * **The wrapper that used to hold it is gone** (2026-08-24). It grouped the field
+             * with the Live/Theory switch and the Compare button, which was right while those
+             * three were the row's left-hand half; the switch is part of the actions block now
+             * and Compare is a glyph inside it, so the group had one child left. The field is
+             * therefore the flex item this row's layout was always about.
              *
              * **`flex-wrap` and a floor on the field, because this row overflowed in the shipped
              * window and no test could see it.** Measured over CDP with Theory on: the field was
@@ -2947,58 +3313,97 @@ export function DeckEditor({ deckId }: { deckId: number }) {
              * Compare button) hit-tested to the *format select*: a reader aiming at the
              * difference re-formatted their deck.
              *
-             * So the narrowest things yield first, which is `DECK_FLOOR`'s rule one row up. The
-             * field keeps its own floor (`NAME_FLOOR`, in {@link DeckNameField}); the switch and
-             * the Compare button drop to a second line when they no longer fit beside it.
-             * Nothing overlaps at any width, because nothing is squeezed past its own content
-             * any more.
+             * So the narrowest things yield first. The field keeps its own floor
+             * (`NAME_FLOOR`, in {@link DeckNameField}) and the actions block wraps to a second
+             * line when it no longer fits beside it; nothing overlaps at any width, because
+             * nothing is squeezed past its own content any more.
              *
              * **The field is the bare `<input>` this box's flex layout expects**, which is why
              * {@link DeckNameField} draws no wrapper of its own — see it.
              */}
-            <div className="flex flex-1 flex-wrap items-center gap-x-2.5 gap-y-1.5">
-              <DeckNameField name={row.name} onRename={renameDeck} />
+            <DeckNameField name={row.name} onRename={renameDeck} />
 
+            {/**
+             * Everything that can be done to this deck, in one block against the right edge.
+             *
+             * **`ml-auto` and `flex-nowrap`, which is the reverse of what this block used to
+             * carry and is safe for a reason the old shape did not have.** It was
+             * `flex-wrap justify-end` and deliberately shrinkable, because `shrink-0` on it had
+             * pinned it at its max-content width — **692px, at every window size** — and every
+             * pixel of the squeeze fell on the deck's name. What has changed is that the block
+             * now gives width back *itself*: the four labelled buttons drop to their icons, and
+             * `Deck settings` goes first (see {@link SETTINGS_ICON_PX}). So it is a fixed run
+             * whose fixed width is a function of the column, and the outer row's `flex-wrap` is
+             * what catches the width below which even the narrow run does not fit — the whole
+             * block folds to a line of its own rather than crushing the name.
+             */}
+            <div className="ml-auto flex shrink-0 flex-nowrap items-center gap-2">
               {/* Only for a deck that keeps a plan. A two-way switch over a deck with one list
                   is a control whose other half is empty by construction — the way to get one is
                   Deck settings, where the toggle that creates it lives. */}
               {theoryEnabled && (
-                <>
-                  <div
-                    role="group"
-                    aria-label="Deck list"
-                    className="flex shrink-0 overflow-hidden rounded-md border border-border"
-                  >
-                    {/* The words are written out rather than `capitalize`d off the value, for
-                        WCAG 2.5.3's reason read the other way: `text-transform` changes what is
-                        drawn and not what the control is *called*, so a `capitalize` switch is
-                        one a reader sees as "Live" and voice control has to be asked for as
-                        "live". */}
-                    {/* **Theory first, Live second.** The plan is the list a reader building a
-                        deck is in; the live list is what they come back to when they sleeve it
-                        up. It is also what makes turning the switch on land somewhere that reads
-                        right — the write *moves* the deck into theory and leaves `lastVariant`
-                        there, so the reader arrives on the tab their cards are now under, with
-                        the empty one beside it rather than under their pointer. */}
-                    {(
-                      [
-                        { id: "theory", label: "Theory" },
-                        { id: "live", label: "Live" },
-                      ] as const
-                    ).map(({ id, label }) => (
+                <div
+                  role="group"
+                  aria-label="Deck list"
+                  className="flex shrink-0 overflow-hidden rounded-md border border-border"
+                >
+                  {/* The words are written out rather than `capitalize`d off the value, for
+                      WCAG 2.5.3's reason read the other way: `text-transform` changes what is
+                      drawn and not what the control is *called*, so a `capitalize` switch is
+                      one a reader sees as "Live" and voice control has to be asked for as
+                      "live". */}
+                  {/* **Theory first, Live second.** The plan is the list a reader building a
+                      deck is in; the live list is what they come back to when they sleeve it
+                      up. It is also what makes turning the switch on land somewhere that reads
+                      right — the write *moves* the deck into theory and leaves `lastVariant`
+                      there, so the reader arrives on the tab their cards are now under, with
+                      the empty one beside it rather than under their pointer. The design this
+                      row was rebuilt from draws Live first; the order is kept because that
+                      argument is about where a press lands and the mock is not. */}
+                  {(
+                    [
+                      { id: "theory", label: "Theory" },
+                      { id: "live", label: "Live" },
+                    ] as const
+                  ).map(({ id, label }, at) => (
+                    <Fragment key={id}>
+                      {/* **Compare sits between the two lists it compares**, which is where the
+                          2026-08-24 design puts it and is the whole of why it stopped being a
+                          worded button: a verb between two nouns needs no word of its own, and
+                          the row it used to sit on had no width to spare. The scales are
+                          lucide's `Scale` — the picture of two things weighed against each
+                          other. */}
+                      {at === 1 && (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            const trigger = e.currentTarget;
+                            openLayer({ kind: "theoryDiff" }, () => trigger.focus());
+                          }}
+                          aria-expanded={layer?.kind === "theoryDiff"}
+                          aria-haspopup="dialog"
+                          aria-label="Compare"
+                          {...tip("Compare", { describes: false })}
+                          className={cn(
+                            "grid size-9 shrink-0 place-items-center border-x border-border",
+                            "text-dim transition-colors duration-150 hover:text-accent",
+                            "motion-reduce:transition-none",
+                            FOCUS,
+                          )}
+                        >
+                          <Scale className="size-4" aria-hidden="true" />
+                        </button>
+                      )}
                       <button
-                        key={id}
                         type="button"
                         onClick={() => pickVariant(id)}
                         aria-pressed={variant === id}
                         className={cn(
                           // 36px like every other press in this ribbon — the back button and
-                          // {@link CONTROL}. (It was measured against the header's `Built` chip
-                          // too; that chip is gone, and the number stands on the app-wide
-                          // agreement rather than on it.) At 28px this segmented pair was
-                          // the shortest thing in the row by eight pixels and read as a
-                          // secondary control, which is the opposite of what it is: it says
-                          // which of the deck's two lists is on screen.
+                          // {@link CONTROL}. At 28px this segmented pair was the shortest thing
+                          // in the row by eight pixels and read as a secondary control, which is
+                          // the opposite of what it is: it says which of the deck's two lists is
+                          // on screen.
                           "h-9 px-2.5 text-xs",
                           "transition-colors duration-150 motion-reduce:transition-none",
                           variant === id
@@ -3009,139 +3414,168 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                       >
                         {label}
                       </button>
-                    ))}
-                  </div>
-                  {/* **A button that says what it does, where a count used to sit.** The
-                      readout it replaces ("N cards differ") was computed in this file over a
-                      second read of the other list, by a rule that disagreed with the dialog it
-                      opened — so the two surfaces routinely gave a reader two different numbers
-                      for one question. A verb needs no rule, needs no second `deck_get`, and
-                      cannot go stale; the count that matters is the dialog's own figure strip,
-                      one press away. Sized like the switch beside it rather than like the
-                      hyperlink it used to imitate: it is a control. */}
+                    </Fragment>
+                  ))}
+                </div>
+              )}
+
+              {/* The joined pair — see {@link TRANSFER}, which is where both names are argued
+                  and where the widths they keep or lose are decided. */}
+              <div
+                role="group"
+                aria-label="Import and export"
+                className="flex shrink-0 overflow-hidden rounded-md border border-border bg-surface"
+              >
+                {TRANSFER.map(({ layer: target, label, Icon }, at) => (
                   <button
+                    key={label}
                     type="button"
                     onClick={(e) => {
                       const trigger = e.currentTarget;
-                      openLayer({ kind: "theoryDiff" }, () => trigger.focus());
+                      openLayer(target, () => trigger.focus());
                     }}
-                    aria-expanded={layer?.kind === "theoryDiff"}
+                    aria-expanded={layerMatches(layer, target)}
                     aria-haspopup="dialog"
+                    aria-label={label}
+                    {...(wideHeader ? {} : tip(label, { describes: false }))}
                     className={cn(
-                      "h-9 shrink-0 rounded-md border border-border px-2.5 text-xs text-dim",
-                      "transition-colors duration-150 hover:border-accent hover:text-accent",
-                      "motion-reduce:transition-none",
+                      "inline-flex h-9 shrink-0 items-center justify-center whitespace-nowrap",
+                      "text-xs text-dim",
+                      at === 1 && "border-l border-border",
+                      wideHeader ? "gap-1.5 px-2.5" : "w-9 px-0",
+                      "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
                       FOCUS,
                     )}
                   >
-                    Compare
+                    <Icon className="size-4 shrink-0" aria-hidden="true" />
+                    {wideHeader && label.split(" ")[0]}
                   </button>
-                </>
-              )}
-            </div>
-
-            {/**
-             * The deck's controls. **Not `shrink-0`**, which is what made the row above
-             * collapse: `flex-shrink: 0` on a `flex-wrap` container pins it at its
-             * *max-content* width — measured at **692px, at every window size** — so it never
-             * wrapped and every pixel of the squeeze fell on the deck's name instead.
-             *
-             * Shrinkable and wrapping, it gives way when there is nothing left to give: the
-             * chips fold onto a second line rather than pushing the name out of the window.
-             * `justify-end` so a folded line stays against the edge it belongs to.
-             */}
-            <div className="flex flex-wrap items-center justify-end gap-2">
-              <select
-                // "Deck game" for "Deck format"'s reason one control along: this row is beside a
-                // docked panel that filters cards, so a bare "Game" would be a second control
-                // with a name nothing distinguishes.
-                //
-                // **It sits before the format select because it narrows it.** The row is
-                // `flex-wrap` and already folds at the app's own window width, which is what
-                // makes a seventh control affordable here at all — it gives way with the rest
-                // rather than squeezing the deck's name.
-                aria-label="Deck game"
-                value={row.gameKey}
-                onChange={(e) => deck.update.mutate({ gameKey: e.target.value as DeckGame })}
-                className={cn(CONTROL, FILTER_FOCUS)}
-              >
-                {GAME_OPTIONS.map((g) => (
-                  <option key={g.key} value={g.key}>
-                    {g.name}
-                  </option>
                 ))}
-              </select>
-
-              <select
-                // "Deck format", not "Format": the docked search panel offers a format *filter*
-                // of its own, and two controls called Format in one view are two controls a
-                // screen reader — and a test — cannot tell apart.
-                aria-label="Deck format"
-                value={row.formatKey}
-                onChange={(e) => deck.update.mutate({ formatKey: e.target.value })}
-                disabled={formats.length === 0}
-                className={cn(CONTROL, FILTER_FOCUS)}
-              >
-                {formats.map((f) => (
-                  <option key={f.key} value={f.key}>
-                    {f.name}
-                  </option>
-                ))}
-              </select>
-
-              {/* What the rules make of the deck, in the ribbon of chips that governs it — and
-                  nothing at all while the seeded rules are not in hand. A format the seed no
-                  longer carries has no rules to judge against, and a chip that said "No issues"
-                  because nothing was checked would be the one sentence this panel must never
-                  write. */}
-              {spec && (
-                <ValidationPanel
-                  cards={deck.cards}
-                  spec={spec}
-                  open={layer?.kind === "check"}
-                  buttonRef={chipRef}
-                  onOpen={openCheck}
-                  onDismiss={dismiss}
-                  onClose={close}
-                  onSelectCard={setSelectedCardId}
-                />
-              )}
-
-              {/* Beside the check rather than inside it, because the two answer different
-                  questions: the chip counts what is *wrong*, and this counts what is
-                  *powerful*. A game changer is legal by definition — it is the bracket
-                  conversation, not the legality one — so folding the number into a chip that
-                  reads "4 issues" would invent four problems. */}
-              {gameChangers > 0 && (
-                <span className="shrink-0 font-mono text-[0.6875rem] text-dim">
-                  {gameChangers === 1 ? "1 game changer" : `${gameChangers} game changers`}
-                </span>
-              )}
+              </div>
 
               {/* Each row carries the layer it opens rather than a kind — see {@link ACTIONS},
-                  which is where every one of these buttons' names is argued. */}
-              {ACTIONS.map(({ layer: target, label }) => (
-                <button
-                  key={label}
-                  type="button"
-                  onClick={(e) => {
-                    const trigger = e.currentTarget;
-                    openLayer(target, () => trigger.focus());
-                  }}
-                  aria-expanded={layerMatches(layer, target)}
-                  aria-haspopup="dialog"
-                  className={cn(CONTROL, FILTER_FOCUS, "hover:text-text")}
-                >
-                  {label}
-                </button>
-              ))}
+                  which is where every one of these buttons' names is argued. The word is what
+                  gives way as the column narrows, never the control, and the tooltip is bound
+                  exactly when the word is not there to be read. */}
+              {ACTIONS.map(({ layer: target, label, Icon }) => {
+                // `Deck settings` is the longest word in the row, so it is the first to go.
+                const bare = tightHeader || (settingsIcon && target.kind === "settings");
+                return (
+                  <button
+                    key={label}
+                    type="button"
+                    onClick={(e) => {
+                      const trigger = e.currentTarget;
+                      openLayer(target, () => trigger.focus());
+                    }}
+                    aria-expanded={layerMatches(layer, target)}
+                    aria-haspopup="dialog"
+                    aria-label={label}
+                    {...(bare ? tip(label, { describes: false }) : {})}
+                    className={cn(
+                      CONTROL,
+                      FILTER_FOCUS,
+                      "inline-flex shrink-0 items-center justify-center whitespace-nowrap",
+                      bare ? "w-9 px-0" : "gap-1.5",
+                      "hover:text-text",
+                    )}
+                  >
+                    <Icon className="size-4 shrink-0" aria-hidden="true" />
+                    {!bare && label}
+                  </button>
+                );
+              })}
             </div>
           </>
         )}
       </div>
 
       {row && (
-        <div className="flex shrink-0 flex-wrap items-center gap-x-4 gap-y-2.5 border-b border-border pb-3">
+        // What the deck adds up to, and what the rules make of it — the second of the header's
+        // three lines. See {@link DeckLedger}, which owns the figures; the three controls at its
+        // right end are this file's, because each opens one of its layers.
+        <DeckLedger
+          cards={deck.cards}
+          marketplace={marketplace}
+          formatName={spec?.displayName ?? row.formatName ?? null}
+          gameChangers={gameChangers}
+          tight={tightHeader}
+          check={
+            // Nothing at all while the seeded rules are not in hand. A format the seed no longer
+            // carries has no rules to judge against, and a button that said "No issues" because
+            // nothing was checked would be the one sentence this panel must never write.
+            spec && (
+              <ValidationPanel
+                cards={deck.cards}
+                spec={spec}
+                open={layer?.kind === "check"}
+                tight={tightHeader}
+                buttonRef={chipRef}
+                onOpen={openCheck}
+                onDismiss={dismiss}
+                onClose={close}
+                onSelectCard={setSelectedCardId}
+              />
+            )
+          }
+          bracket={
+            // Only where the format has a command zone: a bracket is the Commander
+            // conversation, and `estimateBracket` is a per-edit pass over every face of every
+            // card that must not be paid by a Standard deck that has no use for the answer.
+            spec?.commanderRule != null && (
+              <DeckBracket
+                cards={deck.cards}
+                open={layer?.kind === "bracket"}
+                buttonRef={bracketRef}
+                onOpen={openBracket}
+                onDismiss={dismiss}
+                onClose={close}
+              />
+            )
+          }
+        />
+      )}
+
+      {row && (
+        /**
+         * The third of the header's lines: how the deck is drawn, and the two controls that
+         * change it.
+         *
+         * **At {@link TIGHT_HEADER_PX} it reads as two sentences rather than one long run** —
+         * the three pickers that decide how the deck is *drawn*, then the tools that *change*
+         * it. `order` does the regrouping and a zero-height full-width child forces the break,
+         * so **the DOM order is unchanged** — quick add, undo/redo, the pickers, the filter —
+         * and a caret walking the row is unaffected by which line a control is painted on.
+         * `order` is deliberately not a reordering anybody reads: it is one flex line becoming
+         * two, and the groups within each are in the order they were written.
+         */
+        <div
+          className={cn(
+            "flex shrink-0 flex-wrap items-center gap-x-3 border-b border-border pb-3",
+            tightHeader ? "gap-y-1.5" : "gap-y-2.5",
+          )}
+        >
+          {/* The fastest way to put a card in a deck you already know the name of. Where it
+              lands is the deck's own `defaultCategoryId`, chosen in deck settings — one place
+              for one decision, rather than a select of the same categories on this row and
+              another on the panel's. This field draws no control for it and never did: it was
+              the panel's select that answered for both, which is the asymmetry that made the
+              choice worth moving out to a *setting*. What the field shows instead is the answer,
+              in its own label ({@link targetName}). */}
+          <div className={cn("flex shrink-0 items-center gap-1.5", tightHeader && "order-3")}>
+            <span className="text-[0.6875rem] text-dim">Quick add</span>
+            {/* The field, its suggestions and its status line are one control and live in one
+                component. What stays here is the *decision* — which pile an add lands in, and
+                the write that puts it there — because that is the editor's, and because the
+                search answered a whole `CardSummary`: the type line is already in hand, so the
+                auto arm costs nothing extra, which is the point of filing from a *found* card
+                rather than from a typed name. */}
+            <QuickAdd
+              targetName={targetName}
+              onAdd={(card) => addTo(card.id, targetCategoryId, card.typeLine, addMode === "own")}
+            />
+          </div>
+
           {/* **Icons rather than words, and on this row rather than in the header.** The
               header's actions block measured 825px against the ~729 a 1280px window can spare
               (2026-08-14, a debug build, **five** buttons — `Export deck` is a sixth and nothing
@@ -3153,7 +3587,11 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               The name is the whole sentence — "Undo — Removed 2 × Lightning Bolt" — which is
               what a caret and a pointer both get, since the glyph says nothing. It comes from
               `auditText`, the same module the history drawer words its lines with. */}
-          <div role="group" aria-label="Undo and redo" className="flex items-center gap-1">
+          <div
+            role="group"
+            aria-label="Undo and redo"
+            className={cn("flex shrink-0 items-center gap-1", tightHeader && "order-3")}
+          >
             {(
               [
                 {
@@ -3194,27 +3632,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
             ))}
           </div>
 
-          {/* The fastest way to put a card in a deck you already know the name of. Where it
-              lands is the deck's own `defaultCategoryId`, chosen in deck settings — one place
-              for one decision, rather than a select of the same categories on this row and
-              another on the panel's. This field draws no control for it and never did: it was
-              the panel's select that answered for both, which is the asymmetry that made the
-              choice worth moving out to a *setting*. What the field shows instead is the answer,
-              in its own label ({@link targetName}). */}
-          <div className="flex items-center gap-1.5">
-            <span className="text-[0.6875rem] text-dim">Quick add</span>
-            {/* The field, its suggestions and its status line are one control and live in one
-                component. What stays here is the *decision* — which pile an add lands in, and
-                the write that puts it there — because that is the editor's, and because the
-                search answered a whole `CardSummary`: the type line is already in hand, so the
-                auto arm costs nothing extra, which is the point of filing from a *found* card
-                rather than from a typed name. */}
-            <QuickAdd
-              targetName={targetName}
-              onAdd={(card) => addTo(card.id, targetCategoryId, card.typeLine, addMode === "own")}
-            />
-          </div>
-
           {/* **The own/need toggle stood here for a day and is on the search panel's card-search
               tab now** (2026-08-23). It was drawn on this row because `DeckSearchPanel.tsx`
               belonged to another agent while it was built, and the prose left behind argued the
@@ -3228,7 +3645,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
 
           {/* The first of the row's three pickers, and the one that says how a card is drawn.
               It is the same control as the two beside it on purpose — see {@link VIEW_PICKER}. */}
-          <div className="flex items-center gap-1.5">
+          <div className={cn("flex shrink-0 items-center gap-1.5", tightHeader && "order-1")}>
             <label htmlFor="deck-view" className="text-[0.6875rem] text-dim">
               View
             </label>
@@ -3246,7 +3663,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
             </select>
           </div>
 
-          <div className="flex items-center gap-1.5">
+          <div className={cn("flex shrink-0 items-center gap-1.5", tightHeader && "order-1")}>
             <label htmlFor="deck-group-by" className="text-[0.6875rem] text-dim">
               Group by
             </label>
@@ -3292,7 +3709,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
             )}
           </div>
 
-          <div className="flex items-center gap-1.5">
+          <div className={cn("flex shrink-0 items-center gap-1.5", tightHeader && "order-1")}>
             <label htmlFor="deck-sort-by" className="text-[0.6875rem] text-dim">
               Sort
             </label>
@@ -3310,51 +3727,86 @@ export function DeckEditor({ deckId }: { deckId: number }) {
             </select>
           </div>
 
-          <div className="ml-auto flex flex-wrap items-center gap-2">
+          {/* The break, and it is `aria-hidden` because it is a line ending rather than a
+              control. `flex-basis: 100%` on a zero-height child fills the rest of the line it
+              lands on, so everything after it starts a new one — `order-2` puts it between the
+              pickers and the tools without moving either in the DOM. */}
+          {tightHeader && <span aria-hidden="true" className="order-2 h-0 basis-full" />}
+
+          {/* The deck's own labels, as filters. Nothing at all for a deck with no tags — an
+              empty group with a name is a control that says there is something to press.
+
+              **A toolbar item of its own, and it was inside the filter's box until 2026-08-24.**
+              That box grew a `max-w-[25rem]` ceiling in the same change — the field's, and a good
+              one — and a row of arbitrary user strings crammed into 400px is not what the ceiling
+              was for. */}
+          {deck.tags.length > 0 && (
+            <div
+              role="group"
+              aria-label="Filter by tag"
+              className={cn("flex flex-wrap items-center gap-1.5", tightHeader && "order-3")}
+            >
+              {deck.tags.map((tag) => {
+                const on = tagIds.includes(tag.id);
+                return (
+                  <button
+                    key={tag.id}
+                    type="button"
+                    aria-pressed={on}
+                    onClick={() =>
+                      setTagIds((held) =>
+                        held.includes(tag.id)
+                          ? held.filter((id) => id !== tag.id)
+                          : [...held, tag.id],
+                      )
+                    }
+                    className={cn(
+                      FILTER_CONTROL,
+                      FILTER_FOCUS,
+                      // `FILTER_CONTROL`'s own 36px, which the `h-8` here used to override
+                      // back down to the toolbar's old height. Only the type size is still
+                      // overridden: a deck's tags are a row of arbitrary user strings, and
+                      // 14px of them is a line that pushes the filter field off the end.
+                      "px-2.5 text-xs",
+                      filterChipState(on),
+                    )}
+                  >
+                    {tag.name}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          <div
+            className={cn(
+              // The design's own shape: the field takes the line's leftover between a floor and
+              // a ceiling, rather than the fixed 176px it drew before. `ml-auto` is inert while
+              // there is anything left to grow into and pins the box right once the ceiling
+              // binds — a search box as wide as a maximised window is a box whose text sits
+              // alone in the middle of the desk.
+              "ml-auto flex min-w-40 max-w-[25rem] flex-1 items-center",
+              tightHeader && "order-3",
+            )}
+          >
             <input
               type="search"
               aria-label="Filter this deck"
               placeholder="Filter this deck…"
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
-              className={cn("h-9 w-44 rounded-md border border-border bg-bg px-2.5 text-xs", FOCUS)}
+              // **A box with text in it owns one Escape, and an empty one owns none.** Without
+              // this the press would empty the box *and* close the deck behind it: Chromium
+              // clears an `<input type="search">` on Escape by itself and does **not** set
+              // `defaultPrevented`, so the `"navigation"` rung above would take the same press.
+              // jsdom implements no native clear, so only the second half of that is visible to
+              // this suite — the reason is on {@link clearFieldOnEscape}.
+              onKeyDown={(e) => clearFieldOnEscape(e, filter, () => setFilter(""))}
+              className={cn(
+                "h-9 min-w-0 flex-1 rounded-md border border-border bg-bg px-2.5 text-xs",
+                FOCUS,
+              )}
             />
-
-            {/* The deck's own labels, as filters. Nothing at all for a deck with no tags — an
-                empty group with a name is a control that says there is something to press. */}
-            {deck.tags.length > 0 && (
-              <div role="group" aria-label="Filter by tag" className="flex flex-wrap gap-1.5">
-                {deck.tags.map((tag) => {
-                  const on = tagIds.includes(tag.id);
-                  return (
-                    <button
-                      key={tag.id}
-                      type="button"
-                      aria-pressed={on}
-                      onClick={() =>
-                        setTagIds((held) =>
-                          held.includes(tag.id)
-                            ? held.filter((id) => id !== tag.id)
-                            : [...held, tag.id],
-                        )
-                      }
-                      className={cn(
-                        FILTER_CONTROL,
-                        FILTER_FOCUS,
-                        // `FILTER_CONTROL`'s own 36px, which the `h-8` here used to override
-                        // back down to the toolbar's old height. Only the type size is still
-                        // overridden: a deck's tags are a row of arbitrary user strings, and
-                        // 14px of them is a line that pushes the filter field off the end.
-                        "px-2.5 text-xs",
-                        filterChipState(on),
-                      )}
-                    >
-                      {tag.name}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
           </div>
         </div>
       )}
@@ -3529,7 +3981,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           column's — one box further in and the number would be measuring nothing. It owns its
           own drag monitor for `QuickZones`' reason, which is why no `dragging` state reaches
           this file any more: see {@link PriceStrip}. */}
-      <PriceStrip marketplace={marketplace} variant={variant} onRemove={applyDrop} />
+      <PriceStrip marketplace={marketplace} variant={variant} onRemove={applyDrops} />
 
       {row && (
         // What the deck adds up to — the foot of the page, and the last thing under the deck.
@@ -3580,7 +4032,6 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               at their categories. */}
           <DeckStats
             cards={deck.cards}
-            marketplace={marketplace}
             send={deck.missingToWishlist}
             separateXGroup={separateX}
           />
