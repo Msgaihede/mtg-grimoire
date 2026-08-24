@@ -1014,7 +1014,10 @@ right edge on the row's right edge (1745 = 1745)** — `flex-1` growing into the
   the button's (1532 = 1532), reading `Sideboard — Error: Commander decks have no sideboard.` and
   **no bracket anywhere in it**, which is the half of the split worth pinning live.
 - **The variant group** read `Theory` (58px) · `Compare` (36px, no text, `aria-label` only) ·
-  `Live` (42px) — the Scale glyph between the two lists it weighs.
+  `Live` (42px) — the Scale glyph between the two lists it weighs. **The two words were swapped
+  after this pass** (2026-08-24, the reader's call): the group is `Live | Compare | Theory` now.
+  The widths are the same three numbers in the other order and the glyph is still in the middle,
+  so nothing measured here was re-taken.
 
 ### The tooltips are bound exactly where the word is not
 

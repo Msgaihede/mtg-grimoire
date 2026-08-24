@@ -3461,16 +3461,17 @@ describe("DeckEditor", () => {
   }
 
   /**
-   * The two tabs, and which of them the reader's eye lands on first. **Theory before Live**: the
-   * plan is the list a deck is built in, and it is where turning the switch on now puts the
-   * cards. Asserted as a sequence, because both being present says nothing about that.
+   * The two tabs and the comparison between them, in the order they are painted. Asserted as a
+   * sequence, because all three being present says nothing about that — and over the *names*,
+   * because the middle one has no text at all.
    *
-   * **Compare is the third control in this group since 2026-08-24** — a `Scale` glyph between the
-   * two lists it weighs against each other, which is where the redesign puts it and is why it
-   * stopped being a worded button. So the sequence is asserted over the *names*, and the middle
-   * one has no text at all.
+   * **Live before Theory** since 2026-08-24, which reverses the order this test was written for.
+   * The old one argued that the plan is the list a deck is built in and so the tab the eye should
+   * land on first; what that argument is really about is where the caret lands when the switch is
+   * *turned on*, and that is `lastVariant`'s doing rather than this order's — the test below
+   * ("opens on the list the reader left it on") is the one that would catch it moving.
    */
-  it("draws the plan's tab before the deck's, with Compare between them", async () => {
+  it("draws the deck's tab before the plan's, with Compare between them", async () => {
     withPlan();
     await open();
 
@@ -3478,9 +3479,9 @@ describe("DeckEditor", () => {
       "button",
     );
     expect(tabs.map((b) => b.getAttribute("aria-label") ?? b.textContent)).toEqual([
-      "Theory",
-      "Compare",
       "Live",
+      "Compare",
+      "Theory",
     ]);
   });
 
