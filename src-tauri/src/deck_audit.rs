@@ -480,6 +480,9 @@ mod tests {
                 // out of scope for the same reason.
                 inactive: false,
                 finish: None,
+                // No label, which is what every format but Archidekt's says.
+                tag_name: None,
+                tag_color: None,
             }
         }
 

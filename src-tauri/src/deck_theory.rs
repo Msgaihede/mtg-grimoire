@@ -622,7 +622,7 @@ pub fn copy_from_live(conn: &Connection, deck_id: i64) -> Result<usize, String> 
     )?;
     // `None` for the pile diff: `seed_from_live` re-labels rows into categories the deck
     // already has, so this command cannot invent one.
-    crate::deck_undo::record_variant(&tx, audit_id, deck_id, THEORY, cards_before, None)?;
+    crate::deck_undo::record_variant(&tx, audit_id, deck_id, THEORY, cards_before, None, None)?;
     tx.commit().map_err(|e| e.to_string())?;
     Ok(rows)
 }

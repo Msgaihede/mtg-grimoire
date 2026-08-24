@@ -40,6 +40,19 @@ headings are the reader's own words rather than a fixed vocabulary, and the only
 `{noDeck}` — the flag that is what makes an Archidekt export and a re-import agree about a
 maybeboard.
 
+**Archidekt's `^Tag,#colour^` is read on import and written by nobody, and the asymmetry is
+deliberate rather than an omission.** The parser has read the caret group since 2026-08-24 —
+`ParsedLine.tagName`/`tagColor`, `ImportPlan.tags`, the picker on the import step,
+`ImportItem.tag_name`/`tag_color` — so a deck brought over from Archidekt arrives with its labels.
+The **exporter** still writes none, which means an export → import round trip through this app
+loses them. What stops that being a bug worth chasing today is the field table above: a tag is a
+seventh channel with exactly one format able to carry it, so it would need a `TRANSFER_FIELDS`
+entry, a `SURFACE_FIELDS` answer per surface, an `ACTIVE_ONLY`-style decision for the six formats
+that cannot say it, and a `DISCRIMINATOR` thought (two rows differing only in their label must not
+fold). None of that is hard; none of it has a reader asking for it yet. `decklists.test.ts`'s
+fixed-point claim is unaffected — it compares export → import → export, and a channel neither
+writer emits cannot break a fixed point.
+
 ## The Arena filter — what "in MTG Arena" is measured as
 
 Issue #192. The Arena format offers one checkbox no other format does — **Only cards MTG Arena

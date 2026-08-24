@@ -143,6 +143,26 @@ export interface ParsedLine {
   /** The file said this card counts toward nothing — Archidekt's `{noDeck}`, which is this app's
    *  `is_active = 0`. */
   excluded: boolean;
+  /**
+   * The label the file put on this card — Archidekt's `^Keeper,#4aab08^`, name half. `null` for a
+   * line carrying none, which is every line of every other format this reads.
+   *
+   * **Verbatim, including its capitals**, because `deck_tags.name` keeps whatever capitals the
+   * reader chose and this is a reader's word arriving from somewhere else. Whether it is the
+   * *same* label as one they already have is `tagNameKey`'s question, asked in the planner and
+   * again — authoritatively — by the UNIQUE index behind `deck_tags.name_key`.
+   */
+  tagName: string | null;
+  /**
+   * That label's colour as `#rrggbb` lowercase, or `null` when the group carried none.
+   *
+   * **It is a suggestion and not a fact about the card**, which is the whole of what separates
+   * this field from {@link finish}: the colour is used only if this app has never heard of the
+   * name, and a label the reader already owns keeps the colour they gave it. That rule is
+   * enforced in `commit_import`, where the find-or-create is, and it is the same rule
+   * {@link excluded} obeys one channel over.
+   */
+  tagColor: string | null;
   /** Every column a CSV named that this app recognises, verbatim. `{}` for every other format —
    *  a decklist line has no channel for a condition or a purchase price. */
   extra: Partial<Record<TransferFieldId, string>>;
@@ -243,9 +263,61 @@ const LINE =
  * parentheses in it — `^Fence (flavor),#fa890d^` is one of them.
  *
  * **The bracket is no longer here**, because it is read rather than discarded: see
- * {@link stripDecorations}.
+ * {@link stripDecorations}. The `^…^` arm is still here for {@link FINISH_MARKER}'s reason: it
+ * is {@link TAG_MARKER} that reads one, and this is what takes off a shape that one cannot read.
  */
 const MARKERS = [/\s+\*[A-Z]\*$/, /\s+\^[^^]*\^$/, /\s+#\S+$/];
+
+/**
+ * Archidekt's label, **read** rather than merely stripped (2026-08-24) — `^Keeper,#4aab08^`.
+ *
+ * It was thrown away for as long as this app had nowhere to put it. `deck_cards.tag_id` is that
+ * somewhere, and `deck_tags` has been one app-wide row per name since schema v21, so a label in
+ * a file is a label this app can find or make.
+ *
+ * **The colour is the last comma-separated field, not the second**, and that is the whole of why
+ * this is a split rather than a two-group regex. A tag's text may itself contain a comma —
+ * nothing in Archidekt forbids one, and `Fence (flavor)` shows the field is free text — so
+ * `/^(.+),(#.+)$/` would be right by accident and `/^([^,]+),(#.+)$/` wrong on the first label
+ * somebody names `Cut, maybe`. Splitting at the **last** comma and checking the tail is a colour
+ * is right either way.
+ *
+ * **A group with no colour in it is still a tag.** `^Keeper^` is not a shape any export in scope
+ * writes, but a hand-edited list is exactly what this parser exists to keep reading; the name is
+ * the half that matters and {@link ParsedLine.tagColor} answering `null` is what the planner
+ * reads as "pick a colour for me".
+ */
+const TAG_MARKER = /\s+\^([^^]*)\^$/;
+
+/**
+ * A colour Archidekt wrote, as `#rrggbb` lowercase, or `null` for a tail that is not one.
+ *
+ * **Deliberately not `normalizeTagColor` from `features/decks/tagColors.ts`**, which this could
+ * import and must not: that function also reads the six retired palette *tokens*, so a label
+ * literally called `gold` would have its own name read as its colour. This is the narrower
+ * question — did the exporter write a hex here — and the two answers must not be the same
+ * function.
+ */
+const TAG_COLOR = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i;
+
+/** One `^…^` group, read. `null` when the group was empty — a tag with no name is no tag. */
+function readTagMarker(inside: string): { name: string; color: string | null } | null {
+  const comma = inside.lastIndexOf(",");
+  const tail = comma === -1 ? "" : inside.slice(comma + 1).trim();
+  const found = TAG_COLOR.exec(tail);
+  const name = (found === null ? inside : inside.slice(0, comma)).trim();
+  if (name === "") return null;
+  const digits = found === null ? null : found[1].toLowerCase();
+  return {
+    name,
+    // `#f00` and `#ff0000` are the same colour, and `deck_tags.color` holds one shape of it —
+    // `tagColors.ts` expands the shorthand exactly this way for exactly this reason.
+    color:
+      digits === null
+        ? null
+        : `#${digits.length === 3 ? digits.replace(/./g, (d) => d + d) : digits}`,
+  };
+}
 
 /**
  * The `*F*` / `*E*` marker, **read** rather than merely stripped (2026-08-17).
@@ -319,6 +391,8 @@ interface Decorations {
   bracket: string | null;
   /** The `*F*` / `*E*` marker as a finish, or `null` for the regular copy. */
   finish: DeckFinish;
+  /** Archidekt's `^Name,#rrggbb^`, read — `null` for a line carrying none. */
+  tag: { name: string; color: string | null } | null;
 }
 
 /**
@@ -337,6 +411,7 @@ function stripDecorations(line: string): Decorations {
   let body = line;
   let bracket: string | null = null;
   let finish: DeckFinish = null;
+  let tag: { name: string; color: string | null } | null = null;
   for (;;) {
     const before = body;
     const found = BRACKET.exec(body);
@@ -349,8 +424,15 @@ function stripDecorations(line: string): Decorations {
     // two, and a line that did would be naming a finish twice.
     const marked = FINISH_MARKER.exec(body);
     if (marked !== null) finish ??= marked[1] === "F" ? "foil" : "etched";
+    // The same discipline one channel over, and the `??=` is doing more work here than it does
+    // for the finish: a card can wear several labels in Archidekt and `deck_cards.tag_id` holds
+    // exactly one, so a line writing two `^…^` groups keeps the **rightmost**, which is the one
+    // nearest what it labels. That is a choice rather than a fact about the format, and it is
+    // stated here because nothing else in the pipeline can see that a second group existed.
+    const labelled = TAG_MARKER.exec(body);
+    if (labelled !== null) tag ??= readTagMarker(labelled[1]);
     for (const marker of MARKERS) body = body.replace(marker, "");
-    if (body === before) return { body, bracket, finish };
+    if (body === before) return { body, bracket, finish, tag };
   }
 }
 
@@ -492,6 +574,11 @@ function parseCsvGrid(grid: string[][], header: readonly (TransferFieldId | null
       categoryName: knownSection === null ? categoryCell : null,
       finish: finish === "foil" ? "foil" : finish === "etched" ? "etched" : null,
       excluded: false,
+      // A CSV has no label channel. There is no `Tag` column in `TRANSFER_FIELDS` and adding one
+      // would be a second question — what a CSV's tag column is *called* — that no export in
+      // scope has asked yet.
+      tagName: null,
+      tagColor: null,
       extra,
     });
   }
@@ -691,6 +778,8 @@ export function parseDecklist(text: string): ParsedList {
       categoryName,
       finish: decorated.finish,
       excluded,
+      tagName: decorated.tag?.name ?? null,
+      tagColor: decorated.tag?.color ?? null,
       // A decklist line has no channel for a condition or a purchase price — only a CSV's
       // column reader ever fills this.
       extra: {},

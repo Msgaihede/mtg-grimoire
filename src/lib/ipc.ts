@@ -2735,6 +2735,35 @@ export interface ImportItem {
    * is unchanged, the Storybook fake's literals included.
    */
   inactive?: boolean;
+  /**
+   * The label to put on this card — Archidekt's `^Keeper,#4aab08^`, name half.
+   *
+   * **A name, not an id**, for {@link ImportItem.categoryName}'s reason exactly: an imported list
+   * names labels the app may not have yet. Found-or-created by `schema::tag_name_key`, which is
+   * `deck_tags.name_key`'s own grain — so `keeper` and `Keeper` are one row and the reader's
+   * capitals win, because the row that is already there is not renamed.
+   *
+   * **Absent is "say nothing about this card's label"**, and that is load-bearing rather than an
+   * encoding detail. It is what an unticked label sends, and it is what makes a `merge` onto a
+   * card the reader already tagged by hand keep their tag: the write is
+   * `tag_id = coalesce(deck_cards.tag_id, excluded.tag_id)`, so a row that has one keeps it and a
+   * row that has none takes the file's.
+   */
+  tagName?: string;
+  /**
+   * That label's colour, `#rrggbb`. Ignored unless the import has to **make** the row.
+   *
+   * A name the app already knows keeps the colour the reader gave it — {@link ImportItem.inactive}'s
+   * rule over a different table, and for the same reason: an import must not reach into a
+   * decision somebody made by hand. `deck_tags.color` has held hex rather than a palette token
+   * since 2026-08-20 (`features/decks/tagColors.ts`), which is what lets Archidekt's own colour be
+   * stored verbatim instead of snapped to a palette of six.
+   *
+   * Required by the backend whenever {@link ImportItem.tagName} is present, since `deck_tags.color`
+   * is `NOT NULL` and `valid_color` refuses a blank. `toImportItems` sends the two together or
+   * neither.
+   */
+  tagColor?: string;
 }
 
 /**
@@ -2752,6 +2781,16 @@ export interface ImportOutcome {
   /** The piles the import had to make — the part of the outcome a reader could not have
    *  predicted from the file. A section name their deck already had costs nothing. */
   categoriesCreated: number;
+  /**
+   * The labels the import had to make — {@link ImportOutcome.categoriesCreated}'s question over
+   * `deck_tags`, and a number the reader is owed for a sharper reason than that one: a tag is
+   * **app-wide**, so an import that invents three of them has changed a list every other deck of
+   * theirs reads from.
+   *
+   * A name they already had costs nothing and is not counted, which is the same sentence the
+   * picker on the import step prints before the press.
+   */
+  tagsCreated: number;
 }
 
 /**
