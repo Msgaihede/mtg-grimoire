@@ -1,0 +1,3 @@
+Quantity,Name,Set,Collector number,Category,Finish
+1,Sol Ring,LTC,284,Cuts,
+2,Mana Vault,2XM,271,Cuts,foil
