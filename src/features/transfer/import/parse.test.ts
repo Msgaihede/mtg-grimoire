@@ -515,6 +515,37 @@ describe("a CSV", () => {
     expect(list.lines[0].finish).toBe("foil");
   });
 
+  /** A CSV says a label in two columns where Archidekt says it in one group — and both are
+   *  read, because a column this app writes and cannot read back loses something silently. */
+  it("reads the label out of its own two columns", () => {
+    const list = parseDecklist("Quantity,Name,Tag,Tag colour\n1,Sol Ring,Keeper,#4aab08\n");
+    expect(list.lines[0]).toMatchObject({ tagName: "Keeper", tagColor: "#4aab08" });
+  });
+
+  it("takes a colour cell with or without its hash, and expands a short one", () => {
+    // Looser than the `^…^` arm on purpose: inside a caret group the hash is what tells the
+    // colour from the name, and a column has nothing to disambiguate from.
+    const bare = parseDecklist("Quantity,Name,Tag,Tag colour\n1,Sol Ring,Keeper,4aab08\n");
+    expect(bare.lines[0].tagColor).toBe("#4aab08");
+    const short = parseDecklist("Quantity,Name,Tag,Tag colour\n1,Sol Ring,Keeper,#F00\n");
+    expect(short.lines[0].tagColor).toBe("#ff0000");
+  });
+
+  it("keeps the label when the colour cell is empty or unreadable", () => {
+    const blank = parseDecklist("Quantity,Name,Tag,Tag colour\n1,Sol Ring,Keeper,\n");
+    expect(blank.lines[0]).toMatchObject({ tagName: "Keeper", tagColor: null });
+    const junk = parseDecklist("Quantity,Name,Tag,Tag colour\n1,Sol Ring,Keeper,greenish\n");
+    expect(junk.lines[0]).toMatchObject({ tagName: "Keeper", tagColor: null });
+  });
+
+  /** `Tag` and the collection's `Tags` are two different columns for two different facts, and
+   *  `HEADER_TO_FIELD` matches the whole header — so neither can be read as the other. */
+  it("does not read the collection's Tags column as a deck label", () => {
+    const list = parseDecklist("Quantity,Name,Tags\n1,Sol Ring,traded from Ada\n");
+    expect(list.lines[0].tagName).toBeNull();
+    expect(list.lines[0].extra).toMatchObject({ tags: "traded from Ada" });
+  });
+
   it("leaves a list whose first line is not a header exactly as it was", () => {
     // The one file-level judgement this parser makes, and it is made on the header alone.
     const list = parseDecklist("2 Lightning Bolt\n1 Sol Ring\n");
