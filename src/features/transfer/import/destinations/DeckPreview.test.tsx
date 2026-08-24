@@ -34,6 +34,7 @@ const deckGet = vi.hoisted(() => vi.fn());
 const formatSpecs = vi.hoisted(() => vi.fn());
 const syncStatus = vi.hoisted(() => vi.fn());
 const collectionFolderList = vi.hoisted(() => vi.fn());
+const deckTagAll = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -45,6 +46,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     formatSpecs,
     syncStatus,
     collectionFolderList,
+    deckTagAll,
   },
 }));
 
@@ -139,7 +141,7 @@ const DECK: DeckRow = {
 
 const DETAIL: DeckDetail = { deck: DECK, cards: [] as DeckCard[], categories: [], tags: [] };
 
-const OUTCOME: ImportOutcome = { added: 3, removed: 0, categoriesCreated: 1 };
+const OUTCOME: ImportOutcome = { added: 3, removed: 0, categoriesCreated: 1, tagsCreated: 0 };
 const OWNED: ImportCommitOutcome = { added: 2, updated: 0, removed: 0 };
 
 const IDLE: SyncStatus = {
@@ -173,6 +175,9 @@ beforeEach(() => {
   formatSpecs.mockReset().mockResolvedValue([spec("commander")]);
   syncStatus.mockReset().mockResolvedValue(IDLE);
   collectionFolderList.mockReset().mockResolvedValue(FOLDERS);
+  // The app-wide tag list. Empty by default, so every label a list carries reads as new — the
+  // one case about an existing tag overrides it.
+  deckTagAll.mockReset().mockResolvedValue([]);
   onDone.mockReset();
   onBack.mockReset();
 });
@@ -317,5 +322,126 @@ describe("Add cards to collection, on a new deck", () => {
 
     await waitFor(() => expect(deckImportCommit).toHaveBeenCalled());
     expect(collectionImportCommit).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Archidekt's labels on the step that sends them — the picker, and the wiring between its ticks
+ * and `deck_import_commit`'s items.
+ *
+ * **Mounted in the real preview rather than on its own**, which is this file's own argument one
+ * control over: `ImportTags` could be perfect and unreached, exactly as the collection box was
+ * fully tested at the hook and completely unwired at the surface. What is under test here is
+ * that a tick reaches the command.
+ */
+describe("Archidekt tags", () => {
+  /** Three labelled lines and one bare one — two distinct labels, and one of them on two copies
+   *  so the count on the row is visibly copies. */
+  const LABELLED = parseDecklist(
+    "2 Sol Ring ^Keeper,#4aab08^\n1 Lightning Bolt ^Fence,#fffc19^\n1 Path to Exile\n",
+  );
+  const PATH = match({ name: "Path to Exile", typeLine: "Instant" });
+  const LABELLED_ROWS: ImportResolveRow[] = [
+    { index: 0, matched: SOL_RING, hintMissed: false },
+    { index: 1, matched: BOLT, hintMissed: false },
+    { index: 2, matched: PATH, hintMissed: false },
+  ];
+
+  function labelledPreview() {
+    return mount(
+      <DeckPreview
+        list={LABELLED}
+        resolved={LABELLED_ROWS}
+        tags={[]}
+        onDone={onDone}
+        onBack={onBack}
+        deckId={4}
+        variant="live"
+      />,
+    );
+  }
+
+  /** The items the press sent — the only thing that decides what lands. */
+  const sentItems = () => deckImportCommit.mock.calls[0][3] as { tagName?: string }[];
+
+  const MY_KEEPER = { id: 9, name: "KEEPER", color: "#d9b95c", cardCount: 4, deckCount: 2 };
+
+  it("draws nothing at all for a list carrying no labels", () => {
+    deckPreview();
+    expect(screen.queryByRole("heading", { name: "Tags" })).toBeNull();
+    // And makes no read either: a paste with no labels has no question to ask.
+    expect(deckTagAll).not.toHaveBeenCalled();
+  });
+
+  it("offers one box per distinct label, ticked", async () => {
+    labelledPreview();
+    expect(await screen.findByRole("checkbox", { name: "Keeper" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: "Fence" })).toBeChecked();
+  });
+
+  it("sends every label while nothing is unticked", async () => {
+    labelledPreview();
+    await screen.findByRole("checkbox", { name: "Keeper" });
+    await userEvent.click(importButton());
+
+    await waitFor(() => expect(deckImportCommit).toHaveBeenCalled());
+    expect(sentItems().map((i) => i.tagName)).toEqual(["Keeper", "Fence", undefined]);
+  });
+
+  it("drops a label the reader unticks and keeps the rest", async () => {
+    labelledPreview();
+    await userEvent.click(await screen.findByRole("checkbox", { name: "Keeper" }));
+    await userEvent.click(importButton());
+
+    await waitFor(() => expect(deckImportCommit).toHaveBeenCalled());
+    expect(sentItems().map((i) => i.tagName)).toEqual([undefined, "Fence", undefined]);
+  });
+
+  it("still imports every card when every label is unticked", async () => {
+    labelledPreview();
+    await userEvent.click(await screen.findByRole("checkbox", { name: "Keeper" }));
+    await userEvent.click(screen.getByRole("checkbox", { name: "Fence" }));
+    await userEvent.click(importButton());
+
+    await waitFor(() => expect(deckImportCommit).toHaveBeenCalled());
+    expect(sentItems()).toHaveLength(3);
+    expect(sentItems().every((i) => i.tagName === undefined)).toBe(true);
+  });
+
+  /**
+   * The reader's own row is the row the import will use, so it is the row the step draws — the
+   * whole of "show what you'll actually get". Their capitals, not the file's.
+   */
+  it("draws an existing label as the reader spelled it, and says it is theirs", async () => {
+    deckTagAll.mockResolvedValue([MY_KEEPER]);
+    labelledPreview();
+
+    // `KEEPER` and not the file's `Keeper` — matched through `tagNameKey`, which is what
+    // `commit_import` matches on.
+    await screen.findByRole("checkbox", { name: "KEEPER" });
+    expect(screen.getByText("already yours")).toBeInTheDocument();
+    expect(screen.getByText("new tag")).toBeInTheDocument();
+  });
+
+  /** The colour still rides along: whether to ignore it is `commit_import`'s decision, and
+   *  nothing in the webview may make it on the backend's behalf. */
+  it("sends the file's colour even for a label the reader already has", async () => {
+    deckTagAll.mockResolvedValue([MY_KEEPER]);
+    labelledPreview();
+    await screen.findByRole("checkbox", { name: "KEEPER" });
+    await userEvent.click(importButton());
+
+    await waitFor(() => expect(deckImportCommit).toHaveBeenCalled());
+    expect(sentItems()[0]).toMatchObject({ tagName: "Keeper", tagColor: "#4aab08" });
+  });
+
+  it("says how many new tags landed when the import made some", async () => {
+    deckImportCommit.mockResolvedValue({ ...OUTCOME, tagsCreated: 2 });
+    labelledPreview();
+    await screen.findByRole("checkbox", { name: "Keeper" });
+    await userEvent.click(importButton());
+
+    await waitFor(() => expect(onDone).toHaveBeenCalled());
+    expect(onDone.mock.calls[0][0]).toBe("3 cards imported, 2 new tags.");
   });
 });

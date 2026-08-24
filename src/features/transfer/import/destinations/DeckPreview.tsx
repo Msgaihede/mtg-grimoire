@@ -32,6 +32,7 @@ import { useFormatSpecs } from "@/features/decks/useFormatSpecs";
 import type { DestinationPreviewProps } from "../destination";
 import { useImport } from "../useImport";
 import { CommitBar } from "../shared/CommitBar";
+import { ImportTags, useTagChoice } from "../shared/ImportTags";
 import { planCollectionImport } from "./collection";
 import {
   buildImportPlan,
@@ -172,7 +173,13 @@ export function DeckPreview({
   );
 
   const commanderIds = commanderIdsOf(plan, picked);
-  const items = useMemo(() => toImportItems(plan, commanderIds), [plan, commanderIds]);
+  /** Which of the file's labels are coming across — all of them until the reader says otherwise.
+   *  Held here beside `mode` and `picked`, and it dies on Back with both of them. */
+  const { dropped, chosen, toggle } = useTagChoice(plan.tags);
+  const items = useMemo(
+    () => toImportItems(plan, commanderIds, chosen),
+    [plan, commanderIds, chosen],
+  );
   /**
    * The piles, counted over the items that are about to be sent and **not** over the plan.
    *
@@ -225,6 +232,9 @@ export function DeckPreview({
         <Headline totalCards={plan.totalCards} categories={categories} />
         <Tally categories={categories} />
         <Commander plan={plan} picked={picked} onPick={setPicked} labelId={`${id}-commander`} />
+        {/* After the commander and before the problems: a label is filing, like the tally above
+            it, and the problems are about lines that are not landing at all. */}
+        <ImportTags tags={plan.tags} dropped={dropped} onToggle={toggle} />
         <Problems plan={plan} blameSync={blameSync} />
         <Mode
           value={mode}
@@ -341,7 +351,13 @@ export function reportOf(
   owned: ImportCommitOutcome | null = null,
   ownRefusal: string | null = null,
 ): string {
-  const imported = `${plural(outcome.added, "card")} imported.`;
+  // The labels the import **made**, said because a tag is app-wide: three new rows in the Tags
+  // dialog is a consequence of this press that reaches every other deck, and the dialog is
+  // closing. A label the reader already had is used and costs no sentence.
+  const imported =
+    outcome.tagsCreated > 0
+      ? `${plural(outcome.added, "card")} imported, ${plural(outcome.tagsCreated, "new tag")}.`
+      : `${plural(outcome.added, "card")} imported.`;
   if (ownRefusal !== null) {
     return `${imported} The copies could not be added to your collection — ${ownRefusal}`;
   }

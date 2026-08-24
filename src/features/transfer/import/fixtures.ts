@@ -313,6 +313,67 @@ Maybeboard
 1x Yoshimaru, Ever Faithful (nec) 32 [Maybeboard{noDeck}{noPrice}]`;
 
 /**
+ * A second Archidekt export, kept for one thing the other two cannot show: **five different
+ * labels on one list.**
+ *
+ * `ARCHIDEKT_SECTIONED` and `ARCHIDEKT_FLAT` between them carry `Keeper` on 86 lines and
+ * `Fence (flavor)` on one, which is enough to prove the marker is read and nothing at all about a
+ * *picker* — one box is not a choice, and a fixture with one label can never catch the fold that
+ * collapses two.
+ *
+ * Copied from a real export (a Bruna, the Fading Light deck, 2026-08-24) and trimmed to
+ * **19 card lines and 46 copies**, 13 of them labelled, keeping every shape that decides
+ * something:
+ *
+ * * **Five distinct labels** — `Keeper`, `Fence`, `Replace Art`, `Getting`, `Fence (flavor)` —
+ *   each with its own hex.
+ * * **`Fence` and `Fence (flavor)` are two labels**, not one and its restatement. They fold to
+ *   different `tagNameKey`s, which is the case a `startsWith` or a loose comparison would get
+ *   wrong.
+ * * **A label on the commander line**, so the "does a label survive the commander choice"
+ *   question has a card to ask it about.
+ * * **A label on a `{noDeck}` maybeboard line**, because a pile that counts toward nothing is
+ *   still a pile whose cards wear labels.
+ * * **`28x Snow-Covered Plains`**, so a label's copy count is visibly copies rather than lines.
+ * * **Untagged lines throughout**, which is what most of any list is.
+ *
+ * Every one of those numbers is asserted in `parse.test.ts` and `destinations/deck.test.ts`
+ * rather than remembered here.
+ */
+export const ARCHIDEKT_LABELLED = `Commander
+1x Bruna, the Fading Light (sld) 1336 *F* [Commander{top}] ^Keeper,#4aab08^
+
+Draw
+1x Battle Angels of Tyr (sld) 875 *F* [Draw]
+1x Chimil, the Inner Sun (lcc) 106 *F* [Draw] ^Fence,#fffc19^
+1x Herald's Horn (m3c) 296 [Draw] ^Replace Art,#d00dfa^
+1x The One Ring (ltr) 451 *F* [Draw]
+1x Trouble in Pairs (mkc) 15 [Draw] ^Replace Art,#d00dfa^
+
+Land
+1x Ancient Tomb (puma) U31 *F* [Land] ^Keeper,#4aab08^
+1x Cavern of Souls (2x2) 402 *F* [Land] ^Keeper,#4aab08^
+1x Minas Tirith (ltr) 752 *F* [Land]
+28x Snow-Covered Plains (sld) 1473★ *F* [Land] ^Keeper,#4aab08^
+
+Ramp
+1x Arcane Signet (lcc) 104 *F* [Ramp]
+1x Land Tax (cmm) 464 *E* [Ramp] ^Keeper,#4aab08^
+1x Starnheim Aspirant (khm) 380 [Ramp] ^Replace Art,#d00dfa^
+
+Removal
+1x Generous Gift (cmm) 624 *F* [Removal]
+1x Stroke of Midnight (tdc) 132 [Removal] ^Replace Art,#d00dfa^
+
+(New) Maybeboard
+1x Seluma, Light of Aysen (mbc) 4 [(New) Maybeboard{noDeck}{noPrice},Sideboard] ^Getting,#2ccce4^
+1x The Arkenstone // Seek the Heart (hob) 170 [(New) Maybeboard{noDeck}{noPrice},Sideboard] ^Getting,#2ccce4^
+
+Maybeboard
+1x Esper Sentinel (mh2) 12 [Maybeboard{noDeck}{noPrice}]
+1x The Mind Stone (msh) 21 [Maybeboard{noDeck}{noPrice},(New) Maybeboard{noDeck}{noPrice},Sideboard] ^Fence (flavor),#fa890d^`;
+
+/**
  * The same deck out of Archidekt with no headings at all: one flat alphabetical list, every line
  * carrying its `[Category]`. **88 lines and 100 copies** — `ARCHIDEKT_SECTIONED` less its 17
  * `{noDeck}` cards, which is the arithmetic that ties the two together.

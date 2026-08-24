@@ -422,6 +422,88 @@ fn push_made_categories(
     Ok(())
 }
 
+/// Add the labels a write invented to both sides of a step — [`push_made_categories`]'s job over
+/// `deck_tags`.
+///
+/// **The order is that function's, and it is load-bearing for the same reason at one remove.** On
+/// the undo side the delete goes *after* the cards: `deck_cards.tag_id` is `ON DELETE SET NULL`,
+/// so deleting an invented label first would be harmless for the rows being restored (none of
+/// them wore it — it did not exist when they were read) but would leave the ordering rule
+/// different from the categories' for no reason anybody could reconstruct. On the redo side the
+/// restore goes **first**, and there it is not a nicety: `tag_id` is a real foreign key and
+/// `insert_cards` writes the redo rows' labels through `remap.tag`, so the rows have nowhere to
+/// point until the label is back.
+///
+/// **No `deck_id` anywhere in here**, unlike its sibling: a tag has belonged to no deck since
+/// schema v21, so "every tag there is" is the only list there is to diff.
+fn push_made_tags(
+    tx: &Connection,
+    made: Option<Vec<i64>>,
+    undo: &mut Vec<Op>,
+    redo: &mut Vec<Op>,
+) -> Result<(), String> {
+    let Some(before_ids) = made else {
+        return Ok(());
+    };
+    let invented: Vec<TagRow> = read_tags(tx)?
+        .into_iter()
+        .filter(|t| !before_ids.contains(&t.id))
+        .collect();
+    if invented.is_empty() {
+        return Ok(());
+    }
+    undo.push(Op::Tags {
+        restore: vec![],
+        patch: vec![],
+        delete: invented.iter().map(|t| t.id).collect(),
+        // None: the cards wearing these labels are being replaced wholesale by the `Op::Variant`
+        // beside this one, which carries each row's own `tag_id`. A carrier list would be a
+        // second, weaker statement about the same rows.
+        carriers: vec![],
+    });
+    redo.insert(
+        0,
+        Op::Tags {
+            restore: invented,
+            patch: vec![],
+            delete: vec![],
+            carriers: vec![],
+        },
+    );
+    Ok(())
+}
+
+/// Every `deck_tags` row — the whole table, because a tag belongs to no deck.
+pub fn read_tags(conn: &Connection) -> Result<Vec<TagRow>, String> {
+    let mut stmt = conn
+        .prepare("SELECT id, name, color FROM deck_tags ORDER BY id")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(TagRow {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                color: r.get(2)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())
+}
+
+/// Every tag id there is — the "before" half of [`push_made_tags`]' diff, and
+/// [`category_ids`]' opposite number.
+pub fn tag_ids(conn: &Connection) -> Result<Vec<i64>, String> {
+    let mut stmt = conn
+        .prepare("SELECT id FROM deck_tags")
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| r.get(0))
+        .map_err(|e| e.to_string())?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())
+}
+
 /// The deck's category ids as they are now — the "before" half of the diff above.
 pub fn category_ids(conn: &Connection, deck_id: i64) -> Result<Vec<i64>, String> {
     let mut stmt = conn
@@ -442,6 +524,10 @@ pub fn record_variant(
     variant: &str,
     before: Vec<CardRow>,
     made: Option<Vec<i64>>,
+    // The `deck_tags` ids as they stood before the write, or `None` for a caller that cannot
+    // invent one — the theory move, which files cards that already exist. Every id not in this
+    // list afterwards is a label the write made, and undoing it takes that label away again.
+    made_tags: Option<Vec<i64>>,
 ) -> Result<(), String> {
     let after = read_variant(tx, deck_id, variant)?;
     let mut undo = vec![Op::Variant {
@@ -453,6 +539,7 @@ pub fn record_variant(
         rows: after,
     }];
     push_made_categories(tx, deck_id, made, &mut undo, &mut redo)?;
+    push_made_tags(tx, made_tags, &mut undo, &mut redo)?;
     record_step(tx, audit_id, deck_id, &Step::new(undo, redo))
 }
 
@@ -1800,6 +1887,27 @@ mod tests {
                     .unwrap();
                 },
             ),
+            (
+                // Archidekt's `^Keeper,#4aab08^`. `snapshot` reads **every** `deck_tags` row, so
+                // this case is what proves a step sweeps the labels the import invented — a
+                // reversal that left them behind would restore the deck and fail here on two
+                // extra `tag` lines.
+                "deck_import_commit (inventing tags)",
+                nothing,
+                |c, id| {
+                    crate::import::commit_import(
+                        c,
+                        id,
+                        "live",
+                        "merge",
+                        &[
+                            labelled("bolt-m10", "Ramp", "Keeper", "#4aab08"),
+                            labelled("serra-lea", "Ramp", "Fence", "#fffc19"),
+                        ],
+                    )
+                    .unwrap();
+                },
+            ),
         ]
     }
 
@@ -1943,6 +2051,24 @@ mod tests {
             // about restoring rows has no opinion about that, nor about the finish.
             inactive: false,
             finish: None,
+            // No label. The tag half of an import's step has its own tests below, which name
+            // their own items for the reason this helper names none.
+            tag_name: None,
+            tag_color: None,
+        }
+    }
+
+    /// One imported line wearing Archidekt's `^Name,#rrggbb^`.
+    fn labelled(
+        card_id: &str,
+        category: &str,
+        tag: &str,
+        color: &str,
+    ) -> crate::import::ImportItem {
+        crate::import::ImportItem {
+            tag_name: Some(tag.to_owned()),
+            tag_color: Some(color.to_owned()),
+            ..imported(card_id, 1, category)
         }
     }
 
@@ -2002,6 +2128,70 @@ mod tests {
             redo(&conn, id, audit_id).unwrap();
             assert_eq!(snapshot(&conn, id), after, "`{name}` must redo exactly");
         }
+    }
+
+    /// The half `drive_cases` cannot show: undoing an import sweeps the labels it **invented**
+    /// and leaves the reader's own alone.
+    ///
+    /// The sweep above starts from `fresh`, whose one tag predates the write, so it proves the
+    /// invented ones go and says nothing about the difference. Here there is a label of the
+    /// reader's *and* two of the file's, and only the two go — which is `push_made_tags`' whole
+    /// job and matters because `deck_tags` is app-wide since schema v21.
+    #[test]
+    fn undoing_an_import_sweeps_only_the_labels_it_made() {
+        let (conn, id) = fresh();
+        let names = |c: &Connection| {
+            let mut stmt = c
+                .prepare("SELECT name FROM deck_tags ORDER BY name")
+                .unwrap();
+            let rows = stmt
+                .query_map([], |r| r.get::<_, String>(0))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect::<Vec<_>>();
+            rows
+        };
+        let mine = names(&conn);
+        assert_eq!(mine.len(), 1, "`fresh` makes exactly one tag");
+
+        crate::import::commit_import(
+            &conn,
+            id,
+            "live",
+            "merge",
+            &[
+                labelled("bolt-m10", "Ramp", "Keeper", "#4aab08"),
+                labelled("serra-lea", "Ramp", "Fence", "#fffc19"),
+            ],
+        )
+        .unwrap();
+        let audit_id = next_undo(&conn, id).unwrap().unwrap();
+        assert_eq!(names(&conn).len(), 3);
+
+        undo(&conn, id).unwrap();
+        assert_eq!(
+            names(&conn),
+            mine,
+            "the reader's label is not the import's to sweep"
+        );
+
+        redo(&conn, id, audit_id).unwrap();
+        assert_eq!(names(&conn).len(), 3, "and redo puts the two back");
+        let worn: Option<String> = conn
+            .query_row(
+                "SELECT t.name FROM deck_cards dc
+                   JOIN deck_tags t ON t.id = dc.tag_id
+                  WHERE dc.deck_id = ?1 AND dc.card_id = 'bolt-m10'",
+                params![id],
+                |r| r.get(0),
+            )
+            .optional()
+            .unwrap();
+        assert_eq!(
+            worn.as_deref(),
+            Some("Keeper"),
+            "the card wears it again — `Op::Tags` restores before `Op::Variant` inserts, and              `insert_cards` remaps the id"
+        );
     }
 
     /// The primitive the whole module rests on: a scope is exact in both directions — every

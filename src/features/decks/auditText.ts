@@ -282,7 +282,16 @@ function importLine(kind: DeckAuditKind, p: Record<string, unknown>): AuditLine 
     case "add": {
       const cards = plural(numberField(p.cards), "card");
       const categories = plural(numberField(p.categories), "category", "categories");
-      return { text: `Imported ${cards} into ${categories}`, detail: null };
+      // The labels the import **made**, in the detail rather than the sentence: it is news
+      // exactly when it is not zero, and it is app-wide news — a tag belongs to no deck, so an
+      // import that invented three changed a list every other deck reads from. `numberField`
+      // reads an absent key as 0, which is every import row written before 2026-08-24 and every
+      // list that carried no labels, and a zero draws no detail at all.
+      const made = numberField(p.tagsCreated);
+      return {
+        text: `Imported ${cards} into ${categories}`,
+        detail: made > 0 ? `${plural(made, "new tag")}` : null,
+      };
     }
     default:
       return null;
