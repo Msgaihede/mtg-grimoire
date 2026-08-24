@@ -89,6 +89,9 @@ export const Search = withWorld(S, "Search");
 export const Collection = withWorld(S, "Collection");
 export const Wishlist = withWorld(S, "Wishlist");
 export const Decks = withWorld(S, "Decks");
+// `Collapsed` opens with the rail down to icons — added with the collapsible rail (issue #177)
+// and mirrored here on 2026-08-24, when compare reported it unpaired.
+export const Collapsed = withWorld(S, "Collapsed");
 export const Settings = withWorld(S, "Settings");
 // `UpdateAvailable` is deliberately absent: the story is skipped in cfg.overrides (its `play`
 // clicks the gold update button and storybook captures the Settings view that click opens, which
@@ -100,3 +103,4 @@ export const FirstRunFailedMidRun = withWorld(S, "FirstRunFailedMidRun");
 export const DropTargetsLive = withWorld(S, "DropTargetsLive");
 export const DecksDropTargetInert = withWorld(S, "DecksDropTargetInert");
 export const DroppedOnWishlist = withWorld(S, "DroppedOnWishlist");
+export const DroppedOnCollapsedRail = withWorld(S, "DroppedOnCollapsedRail");

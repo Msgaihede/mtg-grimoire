@@ -35,11 +35,20 @@ export * from "../src/components/ManaText";
 export * from "../src/components/OwnedBadge";
 export * from "../src/components/QuantityStepper";
 export * from "../src/components/RarityGem";
+// Added 2026-08-24, when the storybook roster had grown from 34 titles to 71 and these seven
+// had no module here to resolve against — they were being dropped as [TITLE_UNMAPPED].
+export * from "../src/components/CountTag";
+export * from "../src/components/GrimoireMark";
+export * from "../src/components/CardArt";
+export * from "../src/components/Dialog";
 
 // ── Chrome ───────────────────────────────────────────────────────────────────
 export * from "../src/components/AppShell";
 export * from "../src/components/Ribbon";
 export * from "../src/components/SyncProgress";
+export * from "../src/components/TitleBar";
+export * from "../src/components/CardZoomIndicator";
+export * from "../src/components/menu/ContextMenu";
 
 // ── Table ────────────────────────────────────────────────────────────────────
 export * from "../src/components/table/SortableHeader";
@@ -56,3 +65,19 @@ export * from "../src/lib/rarity";
 export * from "../src/lib/sort";
 export * from "../src/lib/layers";
 export * from "../src/lib/utils";
+
+// ── react-query, as a singleton ──────────────────────────────────────────────
+// **Identity, not convenience** — the same reason `store` is called out above.
+//
+// A story file is the one module `lib/story-imports.mjs` never redirects (its rule 2 exempts
+// story files by construction), so `AppShell.stories.tsx`'s own `useQueryClient` import compiled
+// a *second* copy of `@tanstack/react-query` into `_preview/AppShell.js`. `QueryClientProvider`
+// then set its context on the bundle's copy while the story's `Shell` read the preview's, and a
+// plain React context lookup across two module instances finds nothing: every one of AppShell's
+// eleven cells died with "No QueryClient set" and the card rendered an empty root.
+//
+// Exporting it here puts the one instance on `window.MtgGrimoire`, and the matching
+// `cfg.storyImports.shim` entry points preview-side imports at it. **The two are one mechanism
+// in two files** — a shim without this re-export resolves to `undefined` and calls it, which is
+// the silent failure NOTES.md already records for the fake.
+export * from "@tanstack/react-query";
