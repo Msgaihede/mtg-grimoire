@@ -1260,10 +1260,24 @@ price | type`). An **inactive category stays its own group in all three grouping
     changer's `[data-card-marks]` chip computed `inset: 4px 4px …` (top-right) with the copy count
     in the opposite corner and no overlap. Every `<img>` kept `loading="lazy"` and an `alt` of the
     card's own name, where the panel's carries neither by design.
+- **The editor is no longer a scroller at all — `AppShell`'s `main` is the one that scrolls**
+  (changed 2026-08-24, `f02b284` "fix scroll"). The `<section>` is `relative flex h-full min-h-0
+  flex-col gap-3` and carries no `overflow`, where it carried `overflow-y-auto` from 2026-08-14
+  until then. `main` is `relative min-h-0 flex-1 overflow-auto p-5` and has been throughout, so
+  what the change removes is a scroller **nested inside another one** — two scrollbars an inch
+  apart moving different things, which is the same complaint the bullet below records the views'
+  own boxes being flattened to avoid, one level further out. `DeckEditor.test.tsx` asserts the
+  absence from this end and `AppShell.test.tsx` pins `relative` + `overflow-auto` together on the
+  box that now carries them; the containing-block rule is unchanged and simply belongs to `main`.
+  **Everything below this line still describes the editor as the page scroller and has not been
+  re-driven** — the phrase recurs in the sticky panel's height, the drag-zone bar, `DECK_FLOOR`'s
+  arithmetic and the two `relative` paragraphs, and every measurement in them was taken while it
+  was true. Read them as the record of that arrangement, and re-measure before quoting one.
 - **The deck's views are given no height, and the page is the only thing in this editor that
-  scrolls** (changed 2026-08-14, later the same day than the two bullets below). Stacks, Grid and
+  scrolls** (changed 2026-08-14, later the same day than the two bullets below; see the bullet
+  above for what "the page" now means). Stacks, Grid and
   Text grow to hold their content: piles overflow **down**, the box expands, the desk row expands
-  with it and `DeckEditor`'s `overflow-y-auto` page takes the scroll. What that replaced was a
+  with it and the page takes the scroll. What that replaced was a
   view drawn as a `flex-1` item of a `min-h-0` desk with `overflow-auto` on it — so a deck with
   more piles than the window was tall was letterboxed inside the deck builder with the editor's
   own scrollbar an inch away, two scrollbars moving different things and nothing on screen saying
@@ -1297,11 +1311,17 @@ price | type`). An **inactive category stays its own group in all three grouping
   scrolled column, and were clipped by nothing: `DeckStats`' `"0 cards at mana value 8 or more"`
   sat at y **1703** and stretched the **document** to 1704 against an 800px window. The reader saw
   the editor's scrollbar with the window's beside it, and an `h-screen` app that slid up off its
-  own window leaving page background under it. One class took it to **800 / 0**, and it belongs on
+  own window leaving page background under it. One class took it to **800 / 0**, and it belonged on
   this section rather than on `AppShell`'s `main` — there the phantom scroll merely moved
   (`main.scrollHeight` 742 → 1646). The general rule and both measurements are in
   [`src/CLAUDE.md`](../../CLAUDE.md) and
   [frontend-design.md](../../../docs/reference/frontend-design.md).
+  **Past tense since 2026-08-24**, and the rule is what survives rather than the placement: this
+  section stopped carrying the `overflow`, so it is no longer the box the rule points at, and
+  `main` — which carries `relative` and always did — is. The "belongs here rather than on `main`"
+  half was true of an arrangement where *this* element scrolled and `main` scrolled around it; with
+  one scroller there is no second box for the phantom to move to. `relative` stays on the section,
+  inert, because removing an inert class is a second edit with its own way to be wrong.
   **`min-h-96` moved from the desk row to the view box, and that is the load-bearing half.** A
   flex item's automatic minimum size is what stops it being squeezed below its content, and a
   `min-height` number _replaces_ that `auto` — so on the row it was a ceiling as well as a floor:
