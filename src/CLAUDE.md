@@ -495,6 +495,15 @@ Every one of these has its measurement and its story in
   tokens stay in charge; `logos/` is the artwork's source of truth. It is `aria-hidden` unless
   given a `label` — the inverse of `GameChangerMark`'s "the mark names itself", because this mark
   is always a duplicate of a name already set in type beside it.
+- **An icon lucide does not draw is copied into `components/icons.ts`, never installed.**
+  `createLucideIcon(name, nodes)` returns exactly the `LucideIcon` that `import { Heart }` does,
+  so a call site keeps its type and `className="size-5"`, `aria-hidden` and an inherited
+  `strokeWidth` all still land where they land on the rest. One glyph does not justify a whole
+  icon set or a second icon runtime as a dependency. **Copy the licence notice with the paths** —
+  the two there today are Tabler (MIT) and Lucide Lab (ISC), and both permit the copy on exactly
+  that condition. This is not the place for artwork that _is_ this app: `GrimoireMark`,
+  `FinishMark` and `GameChangerMark` take a size and pick a variant rather than being one glyph
+  at any size.
 - **The window's caption is the app's, not Windows'** — `tauri.conf.json` sets
   `decorations: false` and `components/TitleBar.tsx` draws a 34px row above the sidebar and the
   ribbon (2026-08-20). Four rules it does not share with the rest of the chrome, each because the
