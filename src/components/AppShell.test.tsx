@@ -264,6 +264,44 @@ it("draws the window's own caption, because Windows no longer does", () => {
   expect(screen.getByRole("button", { name: "Close" })).toBeInTheDocument();
 });
 
+/**
+ * **`main` is the app's one scroller, and `relative` on it is a whole second scrollbar.**
+ *
+ * `overflow` clips a descendant only when the scroller sits between it and that descendant's
+ * *containing block*. Tailwind's `.sr-only` is `position: absolute`, so a screen-reader label with
+ * no positioned ancestor resolves to the **initial** containing block: laid out at its static
+ * position deep inside the scrolled column, clipped by nothing, and stretching the *document* —
+ * a window scrollbar beside the app's own, and an `h-screen` shell that slides up off its own
+ * window when you use it.
+ *
+ * Measured in the shipped window 2026-08-15 (`tauri dev`, a debug build, 1280×800, a 24-card deck)
+ * against the deck editor, which was a scroller of its own at the time:
+ * `documentElement.scrollHeight` **1704** against a `clientHeight` of 800, with
+ * `window.innerWidth - documentElement.clientWidth` reading **15** — while `body.scrollHeight` and
+ * the `h-screen` shell root both read 800 and the shell's `overflow-hidden` reported nothing
+ * overflowing, which is why no box in the tree named the culprit. The deepest escapee was
+ * `DeckStats`' curve label `"0 cards at mana value 8 or more"` at y **1703**.
+ *
+ * **The rule is that the class belongs on whichever box carries the `overflow`, and since
+ * 2026-08-24 that box is this one and only this one.** `f02b284` ("fix scroll") took
+ * `overflow-y-auto` off the deck editor's section, which had made it a scroller *nested* inside
+ * this element; `DeckEditor.test.tsx` asserts that absence from the other end. The two classes are
+ * pinned **together** here, in one assertion, because either alone is the bug: `overflow` without
+ * `relative` is the phantom scroll above, and `relative` without `overflow` is an inert class on a
+ * box that clips nothing.
+ *
+ * **jsdom has no layout engine, so none of it is checkable** — this is a class assertion and the
+ * numbers are the record of where the rule came from.
+ */
+it("scrolls in main, which is the containing block for its own absolute content", () => {
+  render(<AppShell update={noUpdate}>{null}</AppShell>);
+
+  const main = document.querySelector("main");
+  expect(main).not.toBeNull();
+  expect(main!.className).toContain("overflow-auto");
+  expect(main!.className).toContain("relative");
+});
+
 describe("the status line", () => {
   it("counts the cards and dates the data", async () => {
     render(<AppShell update={noUpdate}>{null}</AppShell>);
