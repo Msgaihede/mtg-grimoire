@@ -1080,7 +1080,11 @@ describe("DeckSearchPanel tabs", () => {
   it("draws the reader's own copies, and asks only for the free ones", async () => {
     panel();
 
-    expect(await screen.findByText(/LEA 161/)).toBeInTheDocument();
+    // The tile's Add button rather than a line of text: since 2026-08-24 this tab is a wall of
+    // art, so the copy it is about is said in an accessible **name** — see `CollectionSearchTab`.
+    expect(
+      await screen.findByRole("button", { name: /^Add Lightning Bolt \(LEA 161/ }),
+    ).toBeInTheDocument();
     expect(collectionList.mock.calls[0][0].allocation).toBe("unallocated");
   });
 
@@ -1117,10 +1121,16 @@ describe("DeckSearchPanel tabs", () => {
     const asked = collectionList.mock.calls.length;
 
     await userEvent.click(tab(ALL_CARDS));
-    await screen.findByRole("button", { name: "Lightning Bolt" });
+    await screen.findByRole("searchbox", { name: "Search cards" });
 
     expect(collectionList.mock.calls.length).toBe(asked);
-    expect(screen.queryByText(/LEA 161/)).not.toBeInTheDocument();
+    // **The two tabs are told apart by their search boxes, not by a card.** Both are walls of the
+    // same `CardGrid` since 2026-08-24, and the fixture behind each is the same printing — so a
+    // query for the card's name, or for its caption, matches whichever tab is up and proves
+    // nothing about which one that is. Each tab's box is named for what it searches.
+    expect(
+      screen.queryByRole("searchbox", { name: "Search your collection" }),
+    ).not.toBeInTheDocument();
   });
 
   /**
@@ -1139,17 +1149,25 @@ describe("DeckSearchPanel tabs", () => {
 
     expect(tab(ALL_CARDS)).toHaveAttribute("aria-pressed", "true");
     expect(tab(COLLECTION)).toHaveAttribute("aria-pressed", "false");
-    expect(await screen.findByRole("button", { name: "Lightning Bolt" })).toBeInTheDocument();
-    expect(screen.getByRole("searchbox", { name: "Search cards" })).toBeInTheDocument();
+    // **Each tab is identified by its own search box and never by a card**: both bodies draw the
+    // same `CardGrid` over the same fixture printing since 2026-08-24, so a tile named
+    // "Lightning Bolt" is on screen either way and asserting on it would pass whichever tab were
+    // mounted. The boxes are named for what they search, which is the difference itself.
+    expect(await screen.findByRole("searchbox", { name: "Search cards" })).toBeInTheDocument();
+    expect(
+      screen.queryByRole("searchbox", { name: "Search your collection" }),
+    ).not.toBeInTheDocument();
     const asked = searchCards.mock.calls.length;
     expect(asked).toBeGreaterThan(0);
 
     await userEvent.click(tab(COLLECTION));
 
     expect(tab(COLLECTION)).toHaveAttribute("aria-pressed", "true");
-    expect(screen.queryByRole("button", { name: "Lightning Bolt" })).not.toBeInTheDocument();
     // Unmounted, not hidden: the wall's own filter row goes with it.
     expect(screen.queryByRole("searchbox", { name: "Search cards" })).not.toBeInTheDocument();
+    expect(
+      await screen.findByRole("searchbox", { name: "Search your collection" }),
+    ).toBeInTheDocument();
     expect(searchCards.mock.calls.length).toBe(asked);
   });
 
@@ -1214,32 +1232,50 @@ describe("DeckSearchPanel tabs", () => {
   });
 
   /**
-   * **The strip has to wrap, because this panel is 206px wide when the reader drags it there**
-   * ({@link MIN_PANEL_WIDTH_PX}), and 206 is ~193px of content box.
+   * **The strip is a line of its own, above the search box and below the disclosure** — moved off
+   * the header row on 2026-08-24, when it stopped being a gold segmented pill and became an
+   * underlined tab bar. `TabStrip`'s own doc carries why; this is the placement, which is the half
+   * a class assertion can hold onto.
    *
-   * The row holds the disclosure (**99px** of icon, gap and "Search cards") and the strip
-   * (**141px** of two `text-xs` labels inside their own padding and border) — 248px with the row's
-   * `gap-2`, which is 55px more than there is. Unwrapped that is not a squeeze but an *overhang*:
-   * a flex item cannot shrink below its own min-content, and `DeckEditor`'s page section is
-   * `overflow-y-auto`, which computes `overflow-x` to `auto` — so the overflow becomes a
-   * horizontal scrollbar across the whole deck builder, which the app's 1024px floor forbids.
-   * That is `src/CLAUDE.md`'s rule, and it shipped once already through `ManaValueChips`.
-   *
-   * **jsdom lays nothing out, so the class is the assertion.** The wrap itself was driven headless
-   * over the built stylesheet on 2026-08-23 — at 206 the row reads `scrollWidth` **193** against a
-   * `clientWidth` of **193** on two lines, and at the panel's 384px opening width one line inside
-   * 371. This is what keeps the class from being deleted by someone tidying the row at 1280, where
-   * it is invisible.
+   * Two claims, and the second is the one that would fail a tidy that folded it back: it is **not**
+   * inside the header row, and it is a **sibling** that comes after it — a bar drawn below the
+   * filters would be a tab bar under the thing it switches.
    */
-  it("wraps the header row, so the strip cannot hang out of a narrow panel", async () => {
+  it("draws the strip on its own line under the header row", async () => {
     await openPanel();
 
     const strip = screen.getByRole("group", { name: "Search in" });
-    const row = strip.parentElement!;
-    expect(row).toHaveClass("flex-wrap");
-    // Both children of that row, so the wrap is a wrap of the two of them rather than of
-    // whatever else happens to be in the panel.
-    expect(row).toContainElement(screen.getByRole("button", { name: "Search cards" }));
+    const disclosure = screen.getByRole("button", { name: "Search cards" });
+    const header = disclosure.parentElement!;
+
+    expect(header).not.toContainElement(strip);
+    expect(strip.parentElement).toBe(header.parentElement);
+    // `compareDocumentPosition` rather than an index: it says "the strip follows the header" in
+    // the DOM's own terms, and survives anything else being added to the panel between them.
+    expect(
+      header.compareDocumentPosition(strip) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  /**
+   * **It still cannot hang out of a panel dragged to its floor** ({@link MIN_PANEL_WIDTH_PX}),
+   * which is 206px — a ~193px content box.
+   *
+   * The pill it replaced measured **141px** and had to be two short words, because a segmented
+   * pair cannot wrap inside the one rounded box it is drawn as. This is two plain flex items on a
+   * `flex-wrap` row, whose min-content is one word — so the constraint is met structurally rather
+   * than by keeping the labels short. Unwrapped, a row like this is not a squeeze but an
+   * *overhang*: a flex item cannot shrink below its own min-content, and `DeckEditor`'s page
+   * section is `overflow-y-auto`, which computes `overflow-x` to `auto` — a horizontal scrollbar
+   * across the whole deck builder, which the app's 1024px floor forbids. That is `src/CLAUDE.md`'s
+   * rule, and it shipped once already through `ManaValueChips`.
+   *
+   * **jsdom lays nothing out, so the class is the assertion.**
+   */
+  it("wraps the strip, so it cannot hang out of a narrow panel", async () => {
+    await openPanel();
+
+    expect(screen.getByRole("group", { name: "Search in" })).toHaveClass("flex-wrap");
   });
 });
 
@@ -1325,17 +1361,18 @@ describe("DeckSearchPanel add mode", () => {
   });
 
   /**
-   * **Three controls on the header row now, and the wrap is what keeps them inside a dragged-down
+   * **Two controls on the header row, and the wrap is what keeps them inside a dragged-down
    * panel** ({@link MIN_PANEL_WIDTH_PX}).
    *
-   * Driven headless over the built stylesheet on 2026-08-23, the way the strip's own labels were:
-   * at 206px the content box is **193**, the disclosure is **99**, the strip **141** and this pair
-   * **175** — so each takes a line of its own and the row reads `scrollWidth` **193** against a
-   * `clientWidth` of **193**, with the panel at 205/205. No overhang, and the cost is height: the
-   * row is **100px** at the floor against 62 with the strip alone, **68** at the panel's 384px
-   * opening width, and one 30px line by ~1000px. Shorter labels buy nothing at the floor —
-   * `Own`/`Need` measures 95 and the strip above already forces the wrap — so the reader's own
-   * words stay.
+   * Driven headless over the built stylesheet on 2026-08-23, when there were three: at 206px the
+   * content box is **193**, the disclosure is **99**, the tab strip was **141** and this pair is
+   * **175** — so each took a line of its own and the row read `scrollWidth` **193** against a
+   * `clientWidth` of **193**, at 100px tall. **The strip left this row on 2026-08-24**, so those
+   * three lines are two: the pair still takes its own at the floor, and shares line one with the
+   * 99px disclosure by the panel's 384px opening width. Shorter labels buy nothing at the floor —
+   * `Own`/`Need` measures 95 and the disclosure alone already forces the wrap there — so the
+   * reader's own words stay. **The 2026-08-24 heights have not been re-driven**; the widths above
+   * are per-control and did not move.
    *
    * **jsdom lays nothing out, so the class is the assertion** and the numbers are the record of
    * where they came from.
@@ -1346,8 +1383,10 @@ describe("DeckSearchPanel add mode", () => {
     const modes = await screen.findByRole("group", { name: "Adding" });
     const row = modes.parentElement!;
     expect(row).toHaveClass("flex-wrap");
-    expect(row).toContainElement(screen.getByRole("group", { name: "Search in" }));
     expect(row).toContainElement(screen.getByRole("button", { name: "Search cards" }));
+    // **The tab strip is no longer on this row** — its own test above owns where it went, and
+    // this is the half that would catch it being folded back in beside the pair.
+    expect(row).not.toContainElement(screen.getByRole("group", { name: "Search in" }));
   });
 });
 

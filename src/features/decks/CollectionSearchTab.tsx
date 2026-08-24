@@ -1,34 +1,36 @@
-import { useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Plus } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
-import { FILTER_CONTROL, FILTER_FIELD, FILTER_FOCUS, ToggleChip } from "@/components/FilterChips";
+import { OwnedBadge } from "@/components/OwnedBadge";
 import { useTooltip } from "@/components/tooltip/useTooltip";
-import { FORMATS, type FormatFilterOption } from "@/features/search/useCardSearch";
+import { CardGrid } from "@/features/search/CardGrid";
+import type { FormatFilterOption } from "@/features/search/useCardSearch";
 import { CONDITION_LABEL, type Condition } from "@/lib/conditions";
 import { plural } from "@/lib/counts";
 import { FINISH_LABEL, type Finish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
 import { ipcError, type CollectionRow, type DeckCategory } from "@/lib/ipc";
 import { statusLine } from "@/lib/motion";
-import { sortOptions } from "@/lib/options";
+import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { AUTO_CATEGORY, autoCategoryFor } from "./autoCategory";
+import { CollectionSearchFilters } from "./CollectionSearchFilters";
+import { foldCopies, type CopyTile } from "./collectionTiles";
 import { CONFIRM_CANCEL, CONFIRM_DESTRUCTIVE, useConfirmFocus } from "./metaRows";
-import { useCollectionSearch, type CopySource } from "./useCollectionSearch";
-
-/** What the root of the collection is called on a row, in words. **Never a blank cell** — an
- *  empty "where is this filed" line reads as data that failed to arrive, where the root is a
- *  real and extremely ordinary place for a copy to be. */
-const ROOT_LABEL = "Collection";
+import { useCollectionSearch } from "./useCollectionSearch";
 
 /**
- * What a card with no name is called — the collection page's `—` said in words, because this one
- * goes into an Add button's accessible name rather than into a cell.
+ * How wide a tile is at 100 %, in px.
+ *
+ * `DeckSearchPanel`'s `TILE_BASE` for the card-search tab, spelled again here rather than
+ * imported across, because the two tabs are two components and the shared value is the *panel's*
+ * — see the note on the tab strip. Both walls also pass `zoomSection="deckSearch"`, so the reader
+ * sizes this column once and gets that size on whichever tab they are on.
  */
-const UNKNOWN_CARD = "Unknown card";
+const TILE_BASE = 150;
 
 /**
- * As much of a row as the two things below read, **with every field optional**.
+ * As much of a row as the naming below reads, **with every field optional**.
  *
  * The optionality is the point rather than a convenience: `CollectionRow` types these as present,
  * and a type is a claim about the wire rather than a guarantee about the object in hand. Writing
@@ -50,8 +52,7 @@ type PartialCopy = Partial<
  *
  * **Reading them defensively is not only about a stub.** `row.setCode.toUpperCase()` threw during
  * render until 2026-08-23, and this is the tab the panel *opens* on — so one unexpected row was
- * the whole deck editor rather than one line. The collection page has always drawn an orphan
- * instead of crashing on one (`CollectionTable`'s `—`); this list now agrees with it.
+ * the whole deck editor rather than one line.
  */
 function copyFacts(row: PartialCopy): string[] {
   const printing = [row.setCode?.toUpperCase(), row.collectorNumber].filter(Boolean).join(" ");
@@ -63,26 +64,25 @@ function copyFacts(row: PartialCopy): string[] {
 }
 
 /**
- * One copy, named the way a *press* has to name it.
+ * The copy a press is about, named the way a press has to name it.
  *
- * The list's grain is the printing, its finish and its condition, so two rows of one card differ
- * only in the parenthesis — and the Add buttons on those two rows are two controls a screen reader
- * would otherwise be unable to tell apart. `CardGrid`'s "Add \<card\> to \<pile\>" rule, over a
- * row that carries three more facts than a search tile does.
+ * The wall's grain is the printing, so two tiles never differ only in a parenthesis the way the
+ * list this replaced did — but the **button** still names the copy rather than the tile, because
+ * what it moves is one entry with a finish, a grade and a place, and that is the half of the press
+ * a wall of art cannot draw.
  *
  * The parenthesis is dropped **whole** where there is nothing to put in it rather than drawn
  * empty: "Unknown card ()" reads as a rendering fault, where "Unknown card" reads as a row about a
  * card nothing knows the name of.
  */
-function copyLabel(row: PartialCopy): string {
-  const name = row.name ?? UNKNOWN_CARD;
+function copyLabel(name: string, row: PartialCopy): string {
   const facts = copyFacts(row);
   return facts.length > 0 ? `${name} (${facts.join(", ")})` : name;
 }
 
 /**
- * Which pile a press on this row files into — **decided before the press and named on the button**,
- * which is the promise the card-search tab's Add button already makes.
+ * Which pile a press on this tile files into — **decided before the press and named on the
+ * button**, which is the promise the card-search tab's Add button already makes.
  *
  * Three steps. A named `targetCategoryId` the deck actually carries is the deck setting and is used
  * as it stands. Otherwise it is `autoCategoryFor`'s answer over the one fact a collection row
@@ -90,11 +90,11 @@ function copyLabel(row: PartialCopy): string {
  * been downloaded — matched against the piles the deck **already has**. Then the deck's main pile.
  *
  * **The third step exists only here, and it is the backend's doing rather than a shortcut.**
- * `deck_add_card` takes a category *name* and finds-or-creates; `collection_to_deck` takes a
- * category **id** and refuses one that is not there (`CATEGORY_GONE`), so there is no id to send for
- * a pile that does not exist yet. What makes the fallback honest rather than a surprise is that the
- * button names it: a reader adding an Instant to a deck with no Instant pile is told "to Main deck"
- * before they press.
+ * `deck_add_card` takes a category *name* and finds-or-creates; the id arm of `collection_to_deck`
+ * refuses one that is not there (`CATEGORY_GONE`), so there is no id to send for a pile that does
+ * not exist yet. What makes the fallback honest rather than a surprise is that the button names
+ * it: a reader adding an Instant to a deck with no Instant pile is told "to Main deck" before they
+ * press.
  *
  * `null` only for a deck with no categories at all, which `deck_create` makes impossible — it seeds
  * four piles in the same transaction as the deck — so it is the fence for a story or a test
@@ -127,26 +127,32 @@ export function landingCategory(
  * The reader's own binder, in the column beside the deck — **the tab this panel opens on**, and
  * the first thing in the app to call `collection_to_deck`.
  *
- * ## What it draws, and why it is not `CardGrid`
+ * ## It is the card search's wall, over the collection
  *
- * A wall of art answers "which card", and this list answers "**which copy**". The grain is the
- * printing, its finish, its condition and the folder it sits in, and the last of those is the whole
- * point: the same printing filed in two places is two rows, and which one the reader adds decides
- * whether another deck loses a card. None of that survives a tile, so this is a list of text rows.
+ * Until 2026-08-24 this was a list of text rows, on the argument that a wall of art answers "which
+ * card" while this tab has to answer "**which copy**": the grain was the printing, its finish, its
+ * condition and the folder it sat in, and the last of those decides whether pressing Add costs
+ * another deck a card. The argument was sound and the conclusion was wrong, for a reason no amount
+ * of reasoning about grain reaches — **a reader picks a card by looking at it**. Two searches an
+ * inch apart, one a wall of illustrations and one a column of 11px type, read as two different
+ * applications rather than as two scopes of one search, and the tab this panel *opens* on was the
+ * one that did not look like the app.
+ *
+ * So the wall is `CardGrid` — the same component, the same zoom section, the same tile — and the
+ * grain question is answered where it can be answered without a picture: {@link foldCopies} folds
+ * the copies of a printing into one tile and **{@link pickCopy} chooses which of them a press
+ * moves**, desk before deck, real card before proxy, oldest entry first. What the reader loses is
+ * picking between two copies they hold; what they keep is the guarantee that mattered, which is
+ * that a copy another deck is holding is never taken silently.
  *
  * ## Why it does not draw `FilterBar`
  *
  * `FilterBar`'s prop is a `CardSearch` — `ReturnType<typeof useCardSearch>` — and that hook *is* a
  * `search_cards`, with no `enabled` to switch it off. Drawing it here would run the 116 k-row card
  * search for every reader who never leaves their binder, which is the exact cost the two-component
- * split in `DeckSearchPanel` exists to have removed. So this row is built out of
- * `@/components/FilterChips`, which is the sanctioned reuse: that module owns the controls, and
- * each surface owns which of them it offers and how they lay out. `CollectionFilterBar` is the
- * other surface that does this, for the same reason.
- *
- * The row is deliberately three controls rather than the collection page's thirty: this column is
- * ~193px wide at {@link MIN_PANEL_WIDTH_PX} and the reader is looking for a card they already have
- * in mind. It wraps, which is what makes that width safe (`src/CLAUDE.md`).
+ * split in `DeckSearchPanel` exists to have removed. {@link CollectionSearchFilters} is the row
+ * this draws instead, built out of `@/components/FilterChips`, and it carries the argument for
+ * which controls it offers.
  */
 export function CollectionSearchTab({
   categories,
@@ -171,23 +177,38 @@ export function CollectionSearchTab({
   /** The deck's `default_category_id` — {@link AUTO_CATEGORY} for "by what the card does". See
    *  {@link landingCategory} for the one way this tab's resolution differs from an ordinary add. */
   targetCategoryId: number;
-  /** The format the list opens on — the deck's, already fenced by `spec.hasLegalityData` in
+  /** The format the wall opens on — the deck's, already fenced by `spec.hasLegalityData` in
    *  `DeckEditor`. A default and never a constraint. */
   defaultFormat?: FormatFilterOption | null;
 }) {
+  const tip = useTooltip();
   const search = useCollectionSearch({ deckId, defaultFormat });
-  const { query, rows, move } = search;
+  const { query, rows, move, sourceOf } = search;
 
   /**
-   * The row whose copies are in **another deck**, waiting on an answer — `null` when nothing is
-   * being asked.
+   * Read here rather than handed down: the root's own `selectedCardId` is for the caret effect,
+   * and this is the wall's selection. One field, two subscriptions, no round trip either side.
+   */
+  const selectedCardId = useAppStore((s) => s.selectedCardId);
+  /**
+   * **`openCardFromDeckSearch`, not `setSelectedCardId`** — the one write in the app that says a
+   * card was opened from *this* column, so the editor draws the card pane over the **deck**
+   * attached to this column's left edge rather than over the search itself (issue #183). The
+   * card-search tab beside this one has always done it; a wall that covered its own results when
+   * you pressed a tile would be the same failure on the other tab.
+   */
+  const selectCard = useAppStore((s) => s.openCardFromDeckSearch);
+
+  /**
+   * The printing whose copies are all in **other decks**, waiting on an answer — `null` when
+   * nothing is being asked.
    *
    * One at a time, by construction: a second press replaces the question rather than opening a
    * second one, which is the context menu's rule and the right one here for the same reason. The
-   * row itself rather than its id, so the question can quote the copy without looking it back up
-   * in a list the answer is about to change.
+   * tile itself rather than its id, so the question can quote the copy and the deck without
+   * looking either back up in a list the answer is about to change.
    */
-  const [asking, setAsking] = useState<CollectionRow | null>(null);
+  const [asking, setAsking] = useState<CopyTile | null>(null);
 
   /**
    * What the last move took, and from where — `MoveOutcome.fromDeck` and `.quantity`, read rather
@@ -201,13 +222,31 @@ export function CollectionSearchTab({
 
   const failure = move.isError ? ipcError(move.error) : null;
   const listFailure = query.isError ? ipcError(query.error) : null;
-  const empty = rows.length === 0;
+
+  /**
+   * The wall's rows — every copy folded to one tile per printing.
+   *
+   * A memo because `CardGrid` virtualises off this array's identity, and because `sourceOf` is one
+   * `find` over the folder census per row. Both inputs are held still by the hook, so this refolds
+   * when a page lands or the census answers and not on every keystroke.
+   */
+  const tiles = useMemo(() => foldCopies(rows, sourceOf), [rows, sourceOf]);
+  const empty = tiles.length === 0;
 
   /** Send it. The confirm — where there is one — has already been answered by the time this runs. */
-  const commit = (row: CollectionRow, categoryId: number) => {
+  const commit = (tile: CopyTile, categoryId: number) => {
     setAsking(null);
-    move.mutate({ row, categoryId, quantity: 1 });
+    if (tile.add) move.mutate({ row: tile.add, categoryId, quantity: 1 });
   };
+
+  /**
+   * Every tile's finish, as `CardArt`'s chip reads it.
+   *
+   * Module-scope-stable through `useCallback` with no dependencies, which `CardGrid` asks for at
+   * this prop: a fresh arrow per render tears down and rebuilds every tile's drag registration on
+   * every scrolled row.
+   */
+  const tileFinish = useCallback((tile: CopyTile) => tile.finish, []);
 
   return (
     // A fragment, so these stay flex children of the panel's own column — `OpenPanel`'s rule, and
@@ -231,74 +270,39 @@ export function CollectionSearchTab({
         )}
       </AnimatePresence>
 
-      {/* `flex-wrap` is what makes this row safe at the panel's 206px floor, where the content box
-          is ~193px: a flex item cannot shrink below its own min-content, so unwrapped this is an
-          *overhang*, and `DeckEditor`'s page section computes `overflow-x` to `auto` — a
-          horizontal scrollbar across the whole deck builder, which the app's 1024px floor forbids.
-          `src/CLAUDE.md` carries the rule; `ManaValueChips` shipped it once already. */}
-      <div className="flex shrink-0 flex-wrap items-center gap-2">
-        <label htmlFor="deck-collection-text" className="sr-only">
-          Search your collection
-        </label>
-        <input
-          id="deck-collection-text"
-          type="search"
-          value={search.text}
-          onChange={(e) => search.setText(e.target.value)}
-          placeholder="Search your collection…"
-          // `FILTER_FIELD` rather than `FILTER_CONTROL`: a box the reader types into must not dip
-          // under the press, or Chromium's own ✕ slides out from under the pointer clearing it
-          // (issue #179 — the reason is on the constant).
-          className={cn(
-            FILTER_FIELD,
-            FILTER_FOCUS,
-            "min-w-32 flex-1 border-border bg-surface px-3 placeholder:text-dim focus:border-accent",
-          )}
-        />
+      <CollectionSearchFilters search={search} />
 
-        {/* **The toggle this tab exists for.** Pressed is the default and means "only the copies
-            no deck is holding" — the root, a drawer the reader made, and `Recently removed`, which
-            are the three places a card is still on the desk. Unpressed shows the spoken-for copies
-            too, and pressing Add on one of those is what the confirmation below is for.
-
-            One chip rather than a segmented pair: it is one axis with two ends and `aria-pressed`
-            is how this app says that (`ToggleChip`, `TabStrip`, the Owned chip). The `hint` is
-            folded into the accessible name, so the visible words are contained in it (WCAG
-            2.5.3). */}
-        <ToggleChip
-          label="Not in a deck"
-          hint="only the copies no deck is holding"
-          pressed={search.allocation === "unallocated"}
-          onClick={() =>
-            search.setAllocation(search.allocation === "unallocated" ? "all" : "unallocated")
-          }
-        />
-
-        <label htmlFor="deck-collection-format" className="sr-only">
-          Format
-        </label>
-        <select
-          id="deck-collection-format"
-          value={search.format}
-          onChange={(e) => search.setFormat(e.target.value)}
-          className={cn(
-            FILTER_CONTROL,
-            FILTER_FOCUS,
-            "bg-surface px-2",
-            search.format ? "border-accent text-accent" : "border-border text-dim",
-          )}
-        >
-          {/* Pinned above the sorted list because it is the *absence* of this filter rather than a
-              format — `CollectionFilterBar`'s own note, and the same trap: it happens to sort
-              first today, so nothing on screen tells the two apart. */}
-          <option value="">Any format</option>
-          {sortOptions(FORMATS, (f) => f.label).map((f) => (
-            <option key={f.value} value={f.value}>
-              {f.label}
-            </option>
-          ))}
-        </select>
-      </div>
+      {/**
+       * The question, **above the wall rather than under the tile it was asked from**.
+       *
+       * It was drawn under its own row while this tab was a list, which is `ClearCategory`'s shape
+       * and the better place for it — a confirmation belongs next to the thing it is about. A
+       * folded tile has no row to sit under: putting it inside the grid would reflow the wall
+       * around the card the reader is aiming at, and `CardGrid` virtualises, so a tile scrolled out
+       * from under an open question would unmount it mid-answer.
+       *
+       * So it takes the banner's place, in the same `statusLine` grow-in the failure above uses,
+       * and **quotes the copy and the deck by name** — which is what makes the position survivable:
+       * the question never depended on the reader remembering which tile they pressed, because it
+       * has always had to say whose card it is taking.
+       *
+       * This app's confirmations carry no `dialog` or `alertdialog` role at all, and the caret goes
+       * into the *question* rather than onto a button in it — the reader has not decided yet and a
+       * stray Enter must not decide for them.
+       */}
+      <AnimatePresence initial={false}>
+        {asking && (
+          <motion.div {...statusLine} className="shrink-0 overflow-hidden">
+            <Confirm
+              tile={asking}
+              lands={landingCategory(categories, targetCategoryId, asking)}
+              pending={move.isPending}
+              onCancel={() => setAsking(null)}
+              onConfirm={(categoryId) => commit(asking, categoryId)}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/**
        * One live region, mounted for as long as this tab is — a region that appears together with
@@ -328,169 +332,166 @@ export function CollectionSearchTab({
             ? "Reading your collection…"
             : empty
               ? "No copies match"
-              : // **Matches, not copies and not cards**, and the word is chosen rather than
-                // loose: `CollectionPage.total` counts *rows*, and a row here is one printing in
-                // one finish, one condition and one folder — so it is neither a card (two rows
-                // can be one card) nor a copy (one row can hold four). The second half appears
-                // only while there is more to fetch, so a fully loaded list reads as one number.
-                rows.length < search.total
-                ? `${plural(search.total, "match", "matches")} — ${rows.length} shown`
-                : plural(search.total, "match", "matches")}
+              : // **Cards, and the word changed with the fold.** It counted *matches* while a row
+                // was one printing in one finish, one condition and one folder; a tile is a
+                // printing, so what is drawn is cards and `search.total` — which is still the
+                // backend's row count — is no longer the same number. Saying "N cards" over a
+                // total of rows would be two units in one sentence, so the caption counts what is
+                // on screen and says whether there is more.
+                `${plural(tiles.length, "card", "cards")}${query.hasNextPage ? " — scroll for more" : ""}`}
       </p>
 
       {!empty && (
-        // `min-h-0` so the list is what scrolls rather than the panel: a flex item's default
-        // `min-height: auto` is its content, which would push the column past its own height.
-        // `relative` because a scroll container has to be the containing block for its own
-        // absolutely positioned content — `.sr-only` is `position: absolute`, and one with no
-        // positioned ancestor stretches the *document* (`src/CLAUDE.md`).
-        <ul className="relative min-h-0 flex-1 space-y-1 overflow-y-auto">
-          {rows.map((row) => (
-            <CopyRow
-              key={row.id}
-              row={row}
-              source={search.sourceOf(row)}
-              lands={landingCategory(categories, targetCategoryId, row)}
-              asking={asking?.id === row.id}
+        <CardGrid
+          rows={tiles}
+          label="Your collection"
+          // The panel's own search, so a new one starts at the top of the wall rather than
+          // wherever the last one was scrolled to.
+          listKey={search.queryKeyString}
+          // **The card-search tab's section, shared deliberately.** The two tabs are one column and
+          // one press apart, so a reader who sized the cards on one has sized the cards they are
+          // looking at — a second key here would make switching tabs resize the wall.
+          zoomSection="deckSearch"
+          baseTileWidth={TILE_BASE}
+          selectedId={selectedCardId}
+          onSelect={selectCard}
+          finish={tileFinish}
+          // The copies behind the art, in the corner the collection page's own wall marks them in.
+          // No `wishlisted`: this wall shows what is owned and has no opinion about what is wanted.
+          badge={(tile) => <OwnedBadge owned={tile.copies} />}
+          action={(tile) => (
+            <AddButton
+              tile={tile}
+              lands={landingCategory(categories, targetCategoryId, tile)}
+              tip={tip}
               onAsk={setAsking}
               onCommit={commit}
-              pending={move.isPending}
             />
-          ))}
-        </ul>
+          )}
+          onNeedNextPage={() => {
+            if (query.hasNextPage && !query.isFetchingNextPage && !query.isFetchNextPageError) {
+              void query.fetchNextPage();
+            }
+          }}
+        />
       )}
 
-      {/* One press rather than a scroll sentinel: this column is sixty rows deep before it needs
-          asking again, and a reader who has not found their card by then narrows the filter. */}
-      {query.hasNextPage && (
-        <button
-          type="button"
-          onClick={() => void query.fetchNextPage()}
-          disabled={query.isFetchingNextPage}
-          className={cn(
-            "shrink-0 rounded-md border border-border px-2 py-1 text-xs text-dim",
-            "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
-            FOCUS,
-          )}
-        >
-          Show more
-        </button>
+      {/* **The failure that arrives with rows still on screen.** query-core keeps the pages it has
+          when a fetch fails, so this is drawn under the wall rather than instead of it — the same
+          split the card tab makes, and the reason the caption above cannot carry it. */}
+      {!empty && listFailure && (
+        <p role="alert" className="shrink-0 text-xs text-destructive">
+          {query.isFetchNextPageError ? "Could not load more copies" : "Could not refresh these"} —{" "}
+          {listFailure}
+        </p>
       )}
     </>
   );
 }
 
 /**
- * One copy, with the press that puts it in the deck.
+ * One tile's press — the control that puts a copy in the deck.
  *
- * Its own component so the confirmation can be a piece of state per row without the list holding a
- * map of them — and so the three sources ({@link CopySource}) are branched on in exactly one place.
+ * Its own component so the two names it carries are built in one place, and so the three
+ * {@link CopySource} answers are branched on exactly once.
  */
-function CopyRow({
-  row,
-  source,
+function AddButton({
+  tile,
   lands,
-  asking,
+  tip,
   onAsk,
   onCommit,
-  pending,
 }: {
-  row: CollectionRow;
-  source: CopySource;
+  tile: CopyTile;
   lands: DeckCategory | null;
-  asking: boolean;
-  onAsk: (row: CollectionRow | null) => void;
-  onCommit: (row: CollectionRow, categoryId: number) => void;
-  pending: boolean;
+  tip: ReturnType<typeof useTooltip>;
+  onAsk: (tile: CopyTile) => void;
+  onCommit: (tile: CopyTile, categoryId: number) => void;
 }) {
-  const tip = useTooltip();
-  const copy = copyLabel(row);
-  /**
-   * The row's own line of facts — {@link copyFacts} plus how many copies it holds.
-   *
-   * Joined here rather than drawn as separate children, which is what lets a missing fact be
-   * *absent* rather than leave a stranded separator: "LEA 161 · · NM" is worse than "LEA 161 ·
-   * NM", and both are worse than the crash this used to be.
-   */
-  const facts = [
-    ...copyFacts(row),
-    typeof row.quantity === "number" ? `×${row.quantity}` : null,
-  ].filter((fact): fact is string => fact !== null);
+  const copy = tile.add ? copyLabel(tile.name, tile.add) : tile.name;
 
   /**
-   * Why this row cannot be pressed, or `null`.
+   * Why this tile cannot be pressed, or `null`.
    *
    * Two of them, and both are said in the button's **name** rather than only in a tooltip: a
    * greyed control whose name has not changed reads as a control that broke, and a hover sentence
    * is not something a keyboard reader can produce (`src/CLAUDE.md`'s greyed-row rule).
    */
   const refusal =
-    source.kind === "here"
-      ? `${copy} is already in this deck`
+    tile.add === null
+      ? `${tile.name} is already in this deck`
       : lands === null
-        ? `${copy} — this deck has no pile to file it in`
+        ? `${tile.name} — this deck has no pile to file it in`
         : null;
 
+  /**
+   * **Where the copy is coming from** — the fact the list this replaced drew on every row, and the
+   * one thing about this press that a picture cannot show.
+   *
+   * It is on the button rather than in the caption because the caption is `SET · number` on both
+   * tabs and that parity is the whole point of the wall; and because this is a fact about the
+   * *press* rather than about the card. Two shapes, and the difference is what the press costs:
+   * a deck's group is named as a **taking** (`from Mono-Red Aggro`), because that deck loses the
+   * card, and a drawer the reader made is named as a place (`in Serah`), because nothing loses
+   * anything.
+   *
+   * **The root says nothing at all, which reverses the list's rule rather than forgetting it.**
+   * That list drew the place in a *cell*, where blank reads as data that failed to arrive, so the
+   * root was written out in words. This is a button's **name**, where there is no cell to leave
+   * empty — and the root is where most copies sit, so naming it would add four words to nearly
+   * every control on the wall to say "filed nowhere in particular".
+   */
+  const place =
+    tile.from === null || tile.add === null
+      ? null
+      : tile.from.kind === "otherDeck"
+        ? { taking: true, name: tile.from.deckName ?? "another deck" }
+        : tile.add.folderName
+          ? { taking: false, name: tile.add.folderName }
+          : null;
+
+  const where = place ? (place.taking ? `taking it from ${place.name}` : `in ${place.name}`) : null;
+
   return (
-    <li className="rounded-md border border-border px-2 py-1.5">
-      <div className="flex items-start gap-2">
-        <div className="min-w-0 flex-1">
-          {/* Direct text children on each line, no wrapping spans: they are read as one string by
-              a screen reader and are the row's whole content. */}
-          <p className="truncate text-xs">{row.name ?? UNKNOWN_CARD}</p>
-          <p className="truncate text-[0.6875rem] text-dim">{facts.join(" · ")}</p>
-          {/* **Where the copies are filed** — the half of this list a wall of art could not draw,
-              and the fact that decides whether pressing Add costs another deck a card. */}
-          <p className="truncate text-[0.6875rem] text-dim">{row.folderName ?? ROOT_LABEL}</p>
-        </div>
-
-        <button
-          type="button"
-          // `aria-disabled`, never `disabled`: a disabled button leaves the tab order, which would
-          // put the reason on a hover a keyboard reader cannot perform.
-          aria-disabled={refusal ? true : undefined}
-          aria-label={refusal ?? `Add ${copy} to ${lands?.name}`}
-          {...tip(refusal ?? `Add to ${lands?.name}`, { describes: false })}
-          // **Never disabled while a write is in flight**, exactly as the card tab's Add button is
-          // not: `collection_to_deck` folds into the deck row it finds, so pressing twice is two
-          // copies — and "press it again for another one" is how a deck gets built.
-          onClick={() => {
-            if (refusal || !lands) return;
-            // The one branch this whole tab is about: a copy another deck is holding is asked
-            // about first, because confirming takes it out of that deck's *list* as well as its
-            // group — and that deck is not on screen.
-            if (source.kind === "otherDeck") onAsk(row);
-            else onCommit(row, lands.id);
-          }}
-          className={cn(
-            "grid size-6 shrink-0 place-items-center rounded-md border border-border text-dim",
-            "transition-colors duration-150 motion-reduce:transition-none",
-            refusal ? "cursor-not-allowed opacity-45" : "hover:border-accent hover:text-accent",
-            FOCUS,
-          )}
-        >
-          <Plus className="size-3.5" aria-hidden="true" />
-        </button>
-      </div>
-
-      {/**
-       * The question, drawn **under the row it was asked from** and not as a layer.
-       *
-       * `ClearCategory`'s shape, and this app's confirmations carry no `dialog` or `alertdialog`
-       * role at all — the caret goes into the *question* rather than onto a button in it, because
-       * the reader has not decided yet and a stray Enter must not decide for them.
-       */}
-      {asking && lands && (
-        <Confirm
-          copy={copy}
-          deckName={source.deckName}
-          pile={lands.name}
-          pending={pending}
-          onCancel={() => onAsk(null)}
-          onConfirm={() => onCommit(row, lands.id)}
-        />
+    <button
+      type="button"
+      // The tile is draggable and this is its one control: a press that slips a few pixels is a
+      // press, not a drag (`cardDraggable`).
+      data-no-drag=""
+      // `aria-disabled`, never `disabled`: a disabled button leaves the tab order, which would put
+      // the reason on a hover a keyboard reader cannot perform.
+      aria-disabled={refusal ? true : undefined}
+      aria-label={refusal ?? `Add ${copy} to ${lands?.name}${where ? ` — ${where}` : ""}`}
+      {...tip(
+        refusal ??
+          (place
+            ? place.taking
+              ? `Take from ${place.name} → ${lands?.name}`
+              : `Add to ${lands?.name} — your copy in ${place.name}`
+            : `Add to ${lands?.name}`),
+        { describes: false },
       )}
-    </li>
+      // **Never disabled while a write is in flight**, exactly as the card tab's Add button is
+      // not: `collection_to_deck` folds into the deck row it finds, so pressing twice is two
+      // copies — and "press it again for another one" is how a deck gets built.
+      onClick={() => {
+        if (refusal || !lands || !tile.add) return;
+        // The one branch this whole tab is about: a copy another deck is holding is asked about
+        // first, because confirming takes it out of that deck's *list* as well as its group — and
+        // that deck is not on screen. `pickCopy` has already preferred a desk copy where the
+        // reader has one, so this is reached only when every copy is spoken for.
+        if (tile.from?.kind === "otherDeck") onAsk(tile);
+        else onCommit(tile, lands.id);
+      }}
+      className={cn(
+        "grid size-6 shrink-0 place-items-center rounded-md border border-border text-dim",
+        "transition-colors duration-150 motion-reduce:transition-none",
+        refusal ? "cursor-not-allowed opacity-45" : "hover:border-accent hover:text-accent",
+        FOCUS,
+      )}
+    >
+      <Plus className="size-3.5" aria-hidden="true" />
+    </button>
   );
 }
 
@@ -502,40 +503,51 @@ function CopyRow({
  * a deck they have not opened is one card shorter afterwards. A question that said only "are you
  * sure" would be asking about a consequence it had not stated.
  *
+ * **It names the card too, which the row-anchored version did not have to.** Drawn above the wall
+ * it is no longer adjacent to the tile it was asked from, so the sentence carries the identity the
+ * position used to.
+ *
  * `CONFIRM_DESTRUCTIVE` on the affirmative, which reads oddly for an *add* and is right: what is
  * being confirmed is the subtraction from the other deck, and that is the part that cannot be
  * undone by pressing something else on this screen.
  */
 function Confirm({
-  copy,
-  deckName,
-  pile,
+  tile,
+  lands,
   pending,
   onCancel,
   onConfirm,
 }: {
-  copy: string;
-  deckName: string | null;
-  pile: string;
+  tile: CopyTile;
+  lands: DeckCategory | null;
   pending: boolean;
   onCancel: () => void;
-  onConfirm: () => void;
+  onConfirm: (categoryId: number) => void;
 }) {
-  const confirm = useConfirmFocus(`Move ${copy} into this deck`);
+  const confirm = useConfirmFocus(`Move ${tile.name} into this deck`);
+  const deckName = tile.from?.deckName ?? "another deck";
 
   return (
-    <div {...confirm}>
+    <div
+      {...confirm}
+      className="rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1.5"
+    >
       <p className="text-[0.6875rem] leading-relaxed text-destructive">
-        This copy is in “{deckName ?? "another deck"}”. Moving it here takes it off that deck’s
-        list too.
+        Your copy of “{tile.name}” is in “{deckName}”. Moving it here takes it off that deck’s list
+        too.
       </p>
-      <p className="mt-1 text-[0.6875rem] leading-relaxed text-dim">It lands in {pile}.</p>
+      {lands && <p className="mt-1 text-[0.6875rem] leading-relaxed text-dim">It lands in {lands.name}.</p>}
 
       <div className="mt-2 flex flex-wrap gap-2">
         <button
           type="button"
-          disabled={pending}
-          onClick={onConfirm}
+          // `aria-disabled` rather than the attribute, so the button that is about to be pressed
+          // again does not leave the tab order under the reader's caret mid-write.
+          aria-disabled={pending || !lands ? true : undefined}
+          onClick={() => {
+            if (pending || !lands) return;
+            onConfirm(lands.id);
+          }}
           className={CONFIRM_DESTRUCTIVE}
         >
           Move it here

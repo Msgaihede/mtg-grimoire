@@ -57,7 +57,7 @@ export const COLLECTION_SORTS = [
  * Descending on the money and count columns, because "highest first" is what pressing one
  * of those means, and on `added` because "recently added" is what the select calls it.
  */
-const COLLECTION_FIRST_DIR: Record<CollectionSortKey, SortDir> = {
+export const COLLECTION_FIRST_DIR: Record<CollectionSortKey, SortDir> = {
   name: "asc",
   set: "asc",
   finish: "asc",

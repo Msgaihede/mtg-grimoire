@@ -659,26 +659,37 @@ export function DeckSearchPanel({
             Nothing on this row replaced it: every Add button below already names the pile it
             files into, per card, which is where the question is actually being asked.
 
-            **The free space that left is where the tab strip went** (2026-08-23). The row was
-            one small button on a 384px column for eight days, which is what made it the honest
-            place to ask which of the two searches this column is showing. */}
+            **The tab strip was here from 2026-08-23 to 2026-08-24 and is a line of its own now.**
+            It sat here because the row had the space; what that cost is on {@link TabStrip} —
+            three segmented pairs of grey and gold pills, wrapping to two lines at the panel's own
+            opening width, met before the search box. The row is back to the disclosure and, on one
+            tab, the own/need pair. */}
         {toggle}
-        {shown && <TabStrip tab={tab} onPick={setTab} />}
         {/* **On the card-search tab and nowhere else**, because that is the only tab whose Add
             button it decides. A copy filed in the reader's own binder is a copy they *have*, so
             the collection tab's press has nothing to ask — a mode control drawn beside it would
             be a switch with one meaning, which reads as a control that does not work.
 
-            Measured at the panel's floor rather than reasoned about, the way the strip beside it
-            was: 206px is a **193px** content box, the pair is **175** at these labels, and the
-            row is `flex-wrap` — so it drops to a line of its own at **193/193** with 18px to
-            spare and no overhang. What it costs is height: the row is **100px** at the floor
-            (three lines) against 62 with the strip alone, **68** at the panel's 384px opening
-            width, and back to one 30px line by ~1000. Shorter words buy nothing at the floor —
-            `Own`/`Need` measures 95 and the tabs alone already force the wrap — so the reader's
-            own words stay. */}
+            Measured at the panel's floor rather than reasoned about: 206px is a **193px** content
+            box, the pair is **175** at these labels, and the row is `flex-wrap` — so it drops to a
+            line of its own at **193/193** with 18px to spare and no overhang. **The strip leaving
+            this row bought back a line at every width below ~1000**, where the two of them used to
+            wrap past each other; the pair alone now shares line one with the 99px disclosure at
+            the 384px opening width. Shorter words buy nothing at the floor — `Own`/`Need` measures
+            95 and the disclosure alone already forces the wrap there — so the reader's own words
+            stay. */}
         {shown && tab === "all" && <AddModeStrip mode={mode} onMode={onMode} />}
       </div>
+
+      {/* **Above the body rather than inside it**, which is what makes it the panel's own chrome
+          rather than one tab's: it is drawn for both tabs, it does not move when they switch, and
+          it survives the railing that merely *hides* the body below (see {@link OpenPanel}) — so
+          a width change cannot take the reader's tab away any more than it takes their query.
+
+          Gated on `shown` alone: `open` is what decides whether there is a search at all, and a
+          tab bar over nothing would be two words offering to switch between two things that are
+          not mounted. Collapsed, this column is a 36px rail and draws neither. */}
+      {shown && <TabStrip tab={tab} onPick={setTab} />}
 
       {/* Everything below the row, and only once the reader has asked for it — see
           {@link OpenPanel}. One gate where there were five, which is what makes the search a
@@ -756,7 +767,29 @@ export function DeckSearchPanel({
 }
 
 /**
- * Which of the two searches this column is showing — one segmented pair on the header row.
+ * Which of the two searches this column is showing — **a full-width tab bar above the search
+ * box**, the active tab marked by a rule under its own word.
+ *
+ * ## Why it stopped being a gold pill (2026-08-24)
+ *
+ * It was a 141px segmented pair sharing the header row with the disclosure and the own/need pair,
+ * and it was reported as unsightly. Two things were wrong with it and neither was the shape:
+ *
+ * - **Gold is what this panel already uses to mean "this filter is on"** — the format select goes
+ *   `border-accent text-accent` when it is narrowing, `ToggleChip` fills when pressed, `ResetAll`
+ *   carries a gold count. A filled gold block for *which search you are in* put the loudest paint
+ *   on the page on the one control that is not a filter, so the eye read the tab bar before the
+ *   thing it was filtering.
+ * - **Three segmented pairs on one wrapping row** read as one undifferentiated bank of chrome —
+ *   measured at the panel's 384px opening width, the disclosure and this sat on line one and the
+ *   own/need pair took line two, so the reader met two rows of grey pills before the search box.
+ *
+ * A rule under a word is the quietest thing that can say "you are here", it needs no box of its
+ * own, and it puts the two words on the panel's own left margin where the reader's eye already is.
+ * **The own/need pair keeps its pill** and is now alone beside the disclosure: it is a control that
+ * changes what a press *writes*, which is exactly the kind of state gold means here.
+ *
+ * ## What did not change
  *
  * **`aria-pressed` over a `.map`, and deliberately not `role="tab"`.** That role is a contract
  * rather than a name: roving focus on the arrow keys, `aria-controls` pointing at a `tabpanel`,
@@ -765,27 +798,40 @@ export function DeckSearchPanel({
  * buttons — so adopting it here would either be half-built (a `tab` role with no keyboard
  * behaviour is worse than no role at all, because a screen reader announces a contract the control
  * does not honour) or would make the one control that picks a *search* behave unlike the control
- * that picks a *list* two feet away. Two buttons, one pressed.
+ * that picks a *list* two feet away. Two buttons, one pressed. **The bar looking like tabs is not
+ * a claim that it is one** — the words say which search you are in either way, and what a screen
+ * reader is told is the pressed state, which is honoured.
  *
  * **The words are written out rather than derived**, for the reason the Theory/Live switch gives:
  * `text-transform` changes what is drawn and not what a control is *called*, so a capitalised
  * label is one voice control has to be asked for in the uncapitalised word (WCAG 2.5.3).
  *
- * `FOCUS_INSET` rather than `FOCUS`, which is the one place this differs from the switch it is
- * modelled on: the pair is drawn as a single `overflow-hidden` box so the two buttons meet with no
- * seam, and an outline standing 2px *off* a control that fills a clipped box is painted entirely
- * in the clipped region — no focus indicator at all, which is a WCAG 2.4.7 failure and invisible
- * to anyone testing with a mouse.
+ * `FOCUS` rather than `FOCUS_INSET`, and that reverses with the box: the pair was drawn as a
+ * single `overflow-hidden` box so the two buttons met with no seam, which clipped an outline
+ * standing 2px *off* a control filling it — no focus indicator at all. There is no clipping box
+ * now, so the outline is drawn where it belongs, and the `pb-1.5` under the row is what keeps it
+ * off the search field below.
+ *
+ * ## The width
+ *
+ * Safe at {@link MIN_PANEL_WIDTH_PX} without measuring anything, which the pill it replaced was
+ * not: a segmented pair cannot wrap inside the one rounded box it is drawn as — that is why the
+ * labels had to be two short words — and this is two plain flex items on a `flex-wrap` row, whose
+ * min-content is one word.
  */
 function TabStrip({ tab, onPick }: { tab: DeckSearchTab; onPick: (tab: DeckSearchTab) => void }) {
   return (
     // Named for the question rather than for the control: "Search in — Collection" is what the
     // pair says, and `role="group"` is what holds the two buttons together for a reader stepping
     // through the panel.
+    //
+    // The hairline is on the *row* and the accent rule is on the button, so the inactive tab sits
+    // on a continuous border rather than in a gap — one line across the panel with a lit segment
+    // in it, which is what makes this read as a bar instead of as two underlined words.
     <div
       role="group"
       aria-label="Search in"
-      className="flex shrink-0 overflow-hidden rounded-md border border-border"
+      className="flex shrink-0 flex-wrap gap-x-4 border-b border-border"
     >
       {TABS.map(({ id, label }) => (
         <button
@@ -796,12 +842,18 @@ function TabStrip({ tab, onPick }: { tab: DeckSearchTab; onPick: (tab: DeckSearc
           className={cn(
             // 28px rather than the 36 of `DeckEditor`'s ribbon: that row's height is the app's
             // agreement about a *toolbar* press, and this is chrome on a column whose own
-            // disclosure is a `text-xs` line and whose Add buttons are 24px squares. A 36px pair
-            // here would be the tallest thing on the panel by eight pixels.
-            "h-7 px-2.5 text-xs",
+            // disclosure is a `text-xs` line and whose Add buttons are 24px squares.
+            "h-7 text-xs",
+            // The rule is a `border-bottom` on the button and is drawn **transparent** when the
+            // tab is not active rather than left off: a border that appears on press would move
+            // the word up by two pixels every time the reader switched tabs. `-mb-px` pulls it
+            // over the row's own hairline so the two are one line rather than two.
+            "-mb-px border-b-2",
             "transition-colors duration-150 motion-reduce:transition-none",
-            tab === id ? "bg-accent font-medium text-accent-fg" : "text-dim hover:text-text",
-            FOCUS_INSET,
+            tab === id
+              ? "border-accent font-medium text-accent"
+              : "border-transparent text-dim hover:text-text",
+            FOCUS,
           )}
         >
           {label}
