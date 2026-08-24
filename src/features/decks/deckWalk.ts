@@ -27,6 +27,7 @@
  * from stack 2", which is the stacks' order, and the stacks are what `splitRail` answers for.
  */
 import type { CardWalkStop, PaneDeckContext } from "@/lib/store";
+import { deckCardSlot } from "./dnd";
 import type { CardGroup } from "./grouping";
 import { splitRail } from "./views/columns";
 
@@ -108,6 +109,42 @@ export function deckWalkStops(groups: readonly CardGroup[], deckId: number): Car
   }
 
   return stops;
+}
+
+/**
+ * The same drawn order as {@link deckWalkStops}, as **slots** — what a Shift-click measures a
+ * range along (issue #214).
+ *
+ * ## Two differences from the walk, and both are deliberate
+ *
+ * **An orphan is on this list.** A row whose printing has left the corpus is skipped by the walk
+ * because that walk steps *through printings* and an orphan has none — but it is a card the
+ * reader can see, click and drag, so it is a card a range must be able to run over. Leaving it
+ * out would make a Shift-click silently skip a row on screen, which is the one failure a range
+ * cannot have.
+ *
+ * **It is slots rather than stops**, which is the key space `lib/multiSelect` is handed here and
+ * the same string `cardControl`'s `deckCardProps` stamps on every drawn card. One spelling on
+ * both sides of the lookup is `deckCardSlot`'s own rule.
+ *
+ * ## What order this actually is
+ *
+ * `splitRail`'s — command, then flow, then rail — which is what `StackView` and `TextView` draw.
+ * `GridView` and `TableView` map `groups` straight through and never split a rail, so in those
+ * two a range that *crosses* the rail boundary follows the stacks' order rather than the order of
+ * the tiles under the pointer. That is the same honest caveat {@link deckWalkStops} carries, and
+ * it is bounded the same way: inside a pile, and between piles that are all in the flow, the two
+ * orders are identical, which is every range a reader is likely to draw.
+ */
+export function deckSlotOrder(groups: readonly CardGroup[]): string[] {
+  const { command, flow, rail } = splitRail(groups);
+  const slots: string[] = [];
+  for (const group of [...command, ...flow, ...rail]) {
+    for (const card of group.cards) {
+      slots.push(deckCardSlot(card.categoryId, card.cardId, card.finish));
+    }
+  }
+  return slots;
 }
 
 /**

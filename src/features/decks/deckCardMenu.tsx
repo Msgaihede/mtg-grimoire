@@ -146,11 +146,68 @@ export interface DeckCardMenuDeps {
    * to rebuild, and the two rows differ by exactly that.
    */
   remove: (card: DeckCard) => void;
+  /**
+   * **The whole picked set, when the right-clicked card is in it** — issue #214. Empty, absent, or
+   * holding one card, and this menu is about the row that was right-clicked, exactly as it was
+   * before multi-select existed.
+   *
+   * The *surface* decides membership rather than this builder, because the answer is
+   * `dragsWholeSelection`'s rule for a press instead of a drag: a right-click on a card outside
+   * the set is about that card, not about four others the reader had picked and forgotten. Passing
+   * `[]` there is what says so, and it keeps this file free of any notion of a selection.
+   *
+   * **Three rows read it and three deliberately do not** — see {@link buildDeckCardMenu}.
+   */
+  picked?: readonly DeckCard[];
 }
 
+/**
+ * The rows this press is about: the picked set, or the one card that was right-clicked.
+ *
+ * A set of one is the card, which is not merely equivalent but is what stops every label in the
+ * menu growing a `1 card` that says less than the card's own name.
+ */
+function targets(card: DeckCard, deps: DeckCardMenuDeps): readonly DeckCard[] {
+  const picked = deps.picked ?? [];
+  return picked.length > 1 ? picked : [card];
+}
+
+/** `4 cards` — the plural half of every label below. Never reached for a set of one, which reads
+ *  as the singular sentence it always did. */
+function manyCards(n: number): string {
+  return `${n} cards`;
+}
+
+/**
+ * A deck card's menu.
+ *
+ * ## Which rows go plural, and which cannot
+ *
+ * `Move to`, `Tag` and `Remove` act on **every** picked card when the right-clicked one is in the
+ * set (issue #214). All three are per-row writes over an address the row already carries, so
+ * plural is a loop and the label is the only thing that has to change.
+ *
+ * **`Finish`, `Set as commander` and `Set as companion` stay about the one card, and that is a
+ * statement rather than an omission.** A finish is a property of a *printing* — the two-finish
+ * toggle, the three-finish submenu and the greyed row are three different shapes decided by what
+ * *this* printing is sold in, so a mixed set has no one shape to draw and a plural row would
+ * silently skip whichever members could not take the finish it named. The two zone rows are
+ * narrower still: a deck has one commander and one companion, so "set 4 cards as commander" names
+ * a thing that cannot happen.
+ *
+ * Everything above the first separator is `cardMenu.tsx`'s and is about the printing rather than
+ * about this deck; it is singular for that reason and not for this one.
+ */
 export function buildDeckCardMenu(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
+  const rows = targets(card, deps);
+  const many = rows.length > 1;
   return [
-    ...buildCardMenu(deckCardTarget(card), deps.card),
+    // **The set travels into the shared half too** — found by driving the shipped window
+    // (2026-08-24): with two cards picked the deck's own rows read `Move 2 cards to` while
+    // `Add to` directly above them stayed singular, which is one menu answering the same
+    // question two ways. `buildCardMenu` decides for itself which of its rows a set can mean
+    // anything to; what this has to do is hand the set over.
+    ...buildCardMenu(deckCardTarget(card), { ...deps.card, picked: rows.map(deckCardTarget) }),
     // The rule is where "this card" stops and "this card in this deck" starts. Everything above
     // it is true of the same printing in a search wall; nothing below it means anything there.
     { kind: "separator", id: "sep-deck" },
@@ -162,10 +219,12 @@ export function buildDeckCardMenu(card: DeckCard, deps: DeckCardMenuDeps): MenuI
     {
       kind: "submenu",
       id: "tag-card",
-      label: "Tag card",
+      label: many ? `Tag ${manyCards(rows.length)}` : "Tag card",
       Icon: Tag,
       items: [
-        ...deckCardTagRows(card, deps.tags, deps.setTag),
+        ...deckCardTagRows(card, deps.tags, (_card, tagId) => {
+          for (const row of rows) deps.setTag(row, tagId);
+        }),
         // The line between putting a label on and making one. Above it every row is a press and
         // the card is tagged; below it the menu closes and a dialog opens, which is a different
         // kind of act and is drawn as one.
@@ -190,11 +249,18 @@ export function buildDeckCardMenu(card: DeckCard, deps: DeckCardMenuDeps): MenuI
     {
       kind: "action",
       id: "remove-card",
-      label: "Remove card",
+      label: many ? `Remove ${manyCards(rows.length)}` : "Remove card",
       // `CircleMinus`, not `Trash2`: the trash can means "delete the thing itself" across these
       // menus — a deck, a folder, a pile — and this takes a card out of a pile that stays.
       Icon: CircleMinus,
-      onSelect: () => deps.remove(card),
+      // **Still no confirmation, and the plural is where that is worth re-arguing.** One card is
+      // one add to put back; four is four, and four presses of Ctrl+Z, because `deck_audit` has a
+      // row per write. What keeps it unconfirmed is that the reader picked those four themselves,
+      // one Ctrl-click at a time, and every one of them is wearing a gold ring while they read
+      // this row — the pile's `Clear stack…` asks because a pile is a column nobody enumerated.
+      onSelect: () => {
+        for (const row of rows) deps.remove(row);
+      },
     },
   ];
 }
@@ -221,13 +287,20 @@ export function buildDeckCardMenu(card: DeckCard, deps: DeckCardMenuDeps): MenuI
  * readable, which is what a greyed row in this app is for.
  */
 function moveItem(card: DeckCard, deps: DeckCardMenuDeps): MenuItem {
+  const rows = targets(card, deps);
   return {
     kind: "submenu",
     id: "move-to",
-    label: "Move to",
+    label: rows.length > 1 ? `Move ${manyCards(rows.length)} to` : "Move to",
     Icon: FolderInput,
     items: deps.categories.map((category): MenuItem => {
-      if (category.id === card.categoryId) {
+      // **Greyed only when there is nothing left to move** — every picked card already in this
+      // pile — which for a set of one is the rule this row has always had, spelled to cover the
+      // plural. A set straddling two piles keeps the row live for both of them, and the loop
+      // below passes over the members that are already home: `dropWrite` refuses a move from a
+      // pile to itself for the same reason, so this is that rule at a second entrance rather
+      // than a second rule.
+      if (rows.every((row) => row.categoryId === category.id)) {
         return {
           kind: "action",
           id: `move-${category.id}`,
@@ -241,7 +314,12 @@ function moveItem(card: DeckCard, deps: DeckCardMenuDeps): MenuItem {
         kind: "action",
         id: `move-${category.id}`,
         label: category.name,
-        onSelect: () => deps.moveTo(card, category.id),
+        onSelect: () => {
+          for (const row of rows) {
+            if (row.categoryId === category.id) continue;
+            deps.moveTo(row, category.id);
+          }
+        },
       };
     }),
   };

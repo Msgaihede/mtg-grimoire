@@ -9,6 +9,7 @@ import {
 import { FOCUS } from "@/lib/focus";
 import { sortOptions } from "@/lib/options";
 import { useAppStore } from "@/lib/store";
+import { clearFieldOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { WISHLIST_SORTS, type Wishlist, type WishlistSort } from "./useWishlist";
 
@@ -59,6 +60,14 @@ export function WishlistFilterBar({
         type="search"
         value={wishlist.text}
         onChange={(e) => wishlist.setText(e.target.value)}
+        // **Required, not a courtesy.** Escape is the wishlist's way *out of a folder* now, and
+        // Chromium empties an `<input type="search">` on Escape all by itself **without** setting
+        // `defaultPrevented` — so one press in a box with a name in it would clear the box *and*
+        // walk the reader up a drawer, and the list they were filtering would be gone with the
+        // filter. `clearFieldOnEscape` claims the press only while there is something to empty:
+        // a full box owns one press, an empty box owns none and the folder rung gets it. jsdom
+        // does not implement the native clear, so only this half of it can go red here.
+        onKeyDown={(e) => clearFieldOnEscape(e, wishlist.text, () => wishlist.setText(""))}
         placeholder="Search your wishlist…"
         // Capped where the other two views let it take the whole row: they fill what is left
         // with chips, and this one has two controls — 780px of empty search box over a list

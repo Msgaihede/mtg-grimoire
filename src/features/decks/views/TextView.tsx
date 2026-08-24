@@ -23,6 +23,8 @@ import {
   deckCardBodyProps,
   deckCardName,
   deckCardMenuProps,
+  deckCardMarked,
+  deckCardPress,
   deckCardProps,
   deckCardSelectedProps,
   DeckCardControls,
@@ -36,7 +38,6 @@ import {
   useDeckCardDrag,
   type DeckCardActions,
 } from "../cardControl";
-import { deckCardSlot } from "../dnd";
 import { DropIndicator } from "../DropIndicator";
 import type { CardGroup } from "../grouping";
 import { matchesTheory } from "../theoryMatch";
@@ -326,7 +327,7 @@ function TextGroup({
               inTheory={matchesTheory(theoryMatches, card)}
               onSelect={onSelect}
               actions={actions}
-              selected={deckCardSlot(card.categoryId, card.cardId, card.finish) === selectedSlot}
+              selected={deckCardMarked(card, selectedSlot, actions)}
               landedKey={landed?.get(card.id)}
             />
           ))}
@@ -369,7 +370,7 @@ function TextRow({
   landedKey: number | undefined;
 }) {
   const tip = useTooltip();
-  const dragRef = useDeckCardDrag(card, actions?.drop !== undefined);
+  const dragRef = useDeckCardDrag(card, actions?.drop !== undefined, actions?.groupDrag);
 
   return (
     // The controls are drawn *over* the end of the line rather than in it, so this view stays
@@ -404,7 +405,7 @@ function TextRow({
         // accessible name above, so a default binding would describe it twice.
         {...tip(ruleBreakText ?? undefined, { describes: false })}
         {...deckCardProps(card)}
-        onClick={onSelect ? () => onSelect(card) : undefined}
+        {...deckCardPress(card, onSelect, actions)}
         className={cn(
           "flex h-[22px] w-full cursor-pointer items-center gap-1.5 rounded px-1 text-xs",
           "transition-colors duration-150 hover:bg-surface motion-reduce:transition-none",
