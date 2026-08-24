@@ -537,8 +537,10 @@ describe("buildDeckTargetItems", () => {
       choose,
     );
     const row = find(items, "Burn") as MenuSubmenu;
-    // Theory first, and deliberately not alphabetical: it is the order the editor's own
-    // variant tabs read in, and the list a deck's cards are in once theory is switched on.
+    // Theory first, and deliberately not alphabetical: it is the list a deck's cards are in
+    // once theory is switched on, so it is the likelier target of the two. **Not the editor's
+    // tab order any more** — that reads `Live | Theory` since 2026-08-24, and this did not follow
+    // it: a ranked guess and a strip a reader reads left to right are different questions.
     expect(labels(row.items)).toEqual(["Theory", "Live"]);
     (row.items[0] as MenuAction).onSelect();
     expect(choose).toHaveBeenCalledWith(10, "theory");

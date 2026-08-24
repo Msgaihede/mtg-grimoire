@@ -487,13 +487,15 @@ export const ReopensOnThePlan: Story = {
     const canvas = within(canvasElement);
     const tabs = within(await canvas.findByRole("group", { name: "Deck list" }));
 
-    // Theory first, Live second — read off the DOM order, because "on the left" is the claim.
-    // Compare is the third control in this group since 2026-08-24, a `Scale` glyph between the
+    // Live first, Theory second — read off the DOM order, because "on the left" is the claim.
+    // Compare is the middle control in this group since 2026-08-24, a `Scale` glyph between the
     // two lists it weighs, so the sequence is read off the names rather than the text.
-    const [theory, compare, live] = tabs.getAllByRole("button");
+    const [live, compare, theory] = tabs.getAllByRole("button");
     await expect(
-      [theory, compare, live].map((b) => b.getAttribute("aria-label") ?? b.textContent),
-    ).toEqual(["Theory", "Compare", "Live"]);
+      [live, compare, theory].map((b) => b.getAttribute("aria-label") ?? b.textContent),
+    ).toEqual(["Live", "Compare", "Theory"]);
+    // **The story's own claim is the pressed one, not the leftmost one**: this deck was left on
+    // its plan, so Theory is what it reopens on wherever that tab is drawn.
     await expect(theory).toHaveAttribute("aria-pressed", "true");
 
     await expect(canvas.getByLabelText("Group by")).toHaveValue("type");
