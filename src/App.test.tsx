@@ -963,8 +963,12 @@ it("stops offering swaps into a deck the read says is gone", async () => {
   expect(within(pane).getByText("In deck")).toBeInTheDocument();
 
   // The deck goes, and the editor's own re-read is what tells both surfaces. Any deck write
-  // would do it; the format select is the cheapest one to press that is not the swap.
-  await userEvent.selectOptions(screen.getByLabelText("Deck format"), "modern");
+  // would do it; the name field is the cheapest one left in that header that is not the swap.
+  // (It was the `Deck format` select until 2026-08-24, when both of the header's selects moved
+  // to Deck settings — the same one-act `deck_update` either way.)
+  const name = screen.getByLabelText("Deck name");
+  await userEvent.clear(name);
+  await userEvent.type(name, "Sunday burn{Enter}");
   expect(
     await screen.findByText(/this deck is not there any more\. it may have been deleted/i),
   ).toBeInTheDocument();
