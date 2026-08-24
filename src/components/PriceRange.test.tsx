@@ -161,6 +161,41 @@ describe("PriceRange", () => {
   });
 
   /**
+   * **The filled span is gold only when the band is a filter**, which a screenshot is the only
+   * thing that would have caught: with both ends open the span covers the whole track, so an
+   * unconditional accent draws a full-width gold bar across a tray nobody has touched — and gold
+   * means *this is on* everywhere else on this row. Found in the shipped window on 2026-08-24;
+   * every number about this control was already right.
+   *
+   * The class rather than the colour, because jsdom loads no stylesheet and computes every
+   * `background-color` as `rgba(0, 0, 0, 0)` — the same reason the row's other paint rules are
+   * swept as classes.
+   */
+  it("paints the band gold only once an end is bound", () => {
+    const fill = () =>
+      document.querySelector('input[type="range"]')!.parentElement!.querySelectorAll(
+        '[aria-hidden="true"]',
+      )[1];
+
+    range();
+    expect(fill().className).toContain("bg-border");
+    expect(fill().className).not.toContain("bg-accent");
+
+    range({ min: 5 });
+    const bound = document.querySelectorAll('input[type="range"]')[2].parentElement!.querySelectorAll(
+      '[aria-hidden="true"]',
+    )[1];
+    expect(bound.className).toContain("bg-accent");
+
+    // …and a *ceiling* alone is a filter too, which is the arm a `min`-only test would miss.
+    range({ max: 5 });
+    const capped = document.querySelectorAll('input[type="range"]')[4].parentElement!.querySelectorAll(
+      '[aria-hidden="true"]',
+    )[1];
+    expect(capped.className).toContain("bg-accent");
+  });
+
+  /**
    * The number, spoken. A screen reader reading "480" off a thousand-position track would be
    * hearing the mechanism instead of the filter, so the position is the value and the price is
    * the `aria-valuetext`.

@@ -140,6 +140,15 @@ using it.
   **An unpriced printing fails a bound end**, which is `NULL >= ?` being NULL rather than a
   decision: a shop that does not quote a printing has not offered it for nothing. On Card Kingdom
   and Mana Pool that is the whole corpus until the feed has been fetched.
+  **Both halves were driven in the shipped window 2026-08-24** (debug build, the real
+  116 700-printing corpus, TCGplayer). A `$200` floor took the wall from `5,000+ cards` to **486**
+  and filled it with Power, Reserved List and serialised printings — so the filter works end to
+  end — while the four rarity counts stayed at their *unfiltered* figures (27 886 / 23 816 /
+  37 107 / 9 123), which is the fail-open above, visible. The rarity dimension itself is not
+  fail-open and the same pass shows it: pressing Blue moved those four to 6 544 / 6 275 / 9 108 /
+  1 912, and Blue + Mythic answered **542 cards**. **The four never summed to the total in either
+  reading** — 97 932 against a playable paper corpus of ~98 314, and 23 839 against Blue's own
+  23 989 — which is the `special`/`bonus` printings no chip offers, measured rather than argued.
 - **Two filters have no dimension in the index and are resolved against the database instead:
   the FTS text and the tag terms.** `run_facets` turns each into a bitset over `cards.rowid`,
   intersects them, and hands `compute` the **one** narrowing set it takes — which is then in every
