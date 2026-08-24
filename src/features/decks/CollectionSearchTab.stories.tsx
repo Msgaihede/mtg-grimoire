@@ -64,11 +64,16 @@ const meta = {
         component:
           "The deck search panel's **Collection** tab — the reader's own binder, beside the deck, " +
           "and the first thing in the app to call `collection_to_deck`.\n\n" +
-          "It lists collection **rows** rather than oracle cards: one per printing, finish and " +
-          "condition, each saying **where that copy is filed**. That last fact is what a wall of " +
-          "art cannot draw and what this whole tab turns on — the same printing filed in two " +
-          "places is two rows, and which one is added decides whether another deck loses a card." +
-          "\n\n" +
+          "**It is the card search's own wall, scoped to what the reader owns** (2026-08-24): the " +
+          "same `CardGrid`, the same zoom section, the same tile, over `collection_list` instead " +
+          "of `search_cards`. It was a list of text rows until then, on the argument that a wall " +
+          "of art answers *which card* while this tab has to answer *which copy* — sound, and it " +
+          "made the tab the panel opens on look like a different application from the tab beside " +
+          "it.\n\n" +
+          "The grain question is answered where a picture cannot help: `foldCopies` folds the " +
+          "copies of a printing into one tile and **`pickCopy` chooses which of them a press " +
+          "moves** — the desk before a deck, a real card before a proxy, the oldest entry first. " +
+          "So a copy another deck is holding is still never taken silently.\n\n" +
           "Driven end to end by `.storybook/fake/`. The `starter` seed was built with this screen " +
           "in mind: deck 1's group holds three copies (drawn as **already in this deck**), and " +
           "exactly one row sits in **deck 2's** group — the one press on this page that takes a " +
@@ -95,10 +100,13 @@ export const Default: Story = {
 
     const toggle = await canvas.findByRole("button", { name: /^Not in a deck/ });
     await expect(toggle).toHaveAttribute("aria-pressed", "true");
-    // Rows, and each one says where its copies live — the root in words rather than as a blank.
-    const rows = await canvas.findAllByRole("listitem");
-    await expect(rows.length).toBeGreaterThan(0);
-    await expect(canvas.getAllByText("Collection").length).toBeGreaterThan(0);
+    // Tiles, found by the one control each carries: a wall says the copy in an accessible **name**
+    // rather than in a line of text, so this is the query a wall answers.
+    const adds = await canvas.findAllByRole("button", { name: /^Add / });
+    await expect(adds.length).toBeGreaterThan(0);
+    // And the filter row is the card search's, which is what the change was for.
+    await expect(canvas.getByRole("group", { name: "Color identity" })).toBeInTheDocument();
+    await expect(canvas.getByRole("group", { name: "Mana value" })).toBeInTheDocument();
   },
 };
 
@@ -119,8 +127,19 @@ export const EveryCopy: Story = {
       "aria-pressed",
       "false",
     );
-    // The `starter` seed's one row filed under a deck the reader is **not** standing in.
-    await expect(await canvas.findByText("Kenrith Two-Drops")).toBeInTheDocument();
+
+    // **Narrowed to the card, because the wall virtualises.** `stories.test.tsx` mounts a 600px
+    // scroll container, so a play may assert the presence of a tile *near the top* and never a
+    // count — and with every copy shown, the seed's one cross-deck row is well down the list. The
+    // text box is how a reader would reach it too.
+    await userEvent.type(await canvas.findByRole("searchbox"), "Sol Ring");
+
+    // The `starter` seed's one row filed under a deck the reader is **not** standing in, found by
+    // what its Add button promises: since the wall folds copies, "which deck this would take from"
+    // is a fact about the *press* and is said in that button's name.
+    await expect(
+      await canvas.findByRole("button", { name: /taking it from Kenrith Two-Drops$/ }),
+    ).toBeInTheDocument();
   },
 };
 
@@ -134,18 +153,24 @@ export const EveryCopy: Story = {
  * This app's confirmations carry **no** `dialog` or `alertdialog` role: the box is a
  * `role="group"` that takes the caret (`useConfirmFocus`), because the reader has not decided yet
  * and a stray Enter must not decide for them.
+ *
+ * **It is drawn above the wall rather than under the tile it was asked from** (2026-08-24). A
+ * folded tile has no row to sit under, and `CardGrid` virtualises — a tile scrolled out from under
+ * an open question would unmount it mid-answer. So it quotes the card as well as the deck, which
+ * is what makes the position survivable.
  */
 export const CrossDeckConfirm: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
     await userEvent.click(await canvas.findByRole("button", { name: /^Not in a deck/ }));
-    await canvas.findByText("Kenrith Two-Drops");
+    // Narrowed for {@link EveryCopy}'s reason — the wall virtualises and this row is not near the
+    // top of the whole binder.
+    await userEvent.type(await canvas.findByRole("searchbox"), "Sol Ring");
 
-    const rows = await canvas.findAllByRole("listitem");
-    const spokenFor = rows.find((r) => within(r).queryByText("Kenrith Two-Drops"));
-    await expect(spokenFor).toBeTruthy();
-    await userEvent.click(within(spokenFor!).getByRole("button"));
+    await userEvent.click(
+      await canvas.findByRole("button", { name: /taking it from Kenrith Two-Drops$/ }),
+    );
 
     const question = await canvas.findByRole("group", { name: /^Move / });
     await expect(within(question).getByText(/Kenrith Two-Drops/)).toBeInTheDocument();
@@ -159,11 +184,16 @@ export const CrossDeckConfirm: Story = {
  * The tab at the narrowest the panel goes — `MIN_PANEL_WIDTH_PX` is **206**, whose content box is
  * ~193px.
  *
- * The filter row is three controls and `flex-wrap`, and the wrap is the whole of what makes this
- * width safe: a flex item cannot shrink below its own min-content, so an unwrapped row would be an
- * *overhang* rather than a squeeze — and `DeckEditor`'s page section computes `overflow-x` to
- * `auto`, so that overhang becomes a horizontal scrollbar across the whole deck builder.
- * `ManaValueChips` shipped exactly that once (`src/CLAUDE.md`).
+ * **The filter row grew from three controls to five groups on 2026-08-24**, so this is the story
+ * that matters most of the set: the colour pips and the mana-value chips are the two that have
+ * actually overflowed a panel before. Every group is `flex-wrap`, and the wrap is the whole of what
+ * makes this width safe: a flex item cannot shrink below its own min-content, so an unwrapped row
+ * would be an *overhang* rather than a squeeze — and `DeckEditor`'s page section computes
+ * `overflow-x` to `auto`, so that overhang becomes a horizontal scrollbar across the whole deck
+ * builder. `ManaValueChips` shipped exactly that once, and it is on this row (`src/CLAUDE.md`).
+ *
+ * The wall under it is the other half: `CardGrid`'s `tileWidthFor` caps a tile at the wall's own
+ * width, so 193px draws one column rather than a tile hanging out of it.
  *
  * **jsdom lays nothing out, so the suite cannot see any of it** — this story is where a person
  * looks.

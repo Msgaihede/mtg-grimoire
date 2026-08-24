@@ -999,36 +999,44 @@ describe("DeckEditor", () => {
   });
 
   /**
-   * **The page scroller is `relative`, and that one word is a whole second scrollbar.**
+   * **The editor does not scroll; `AppShell`'s `main` does** — one scroller, not two nested
+   * (changed 2026-08-24 by `f02b284`, "fix scroll").
    *
-   * `overflow` clips a descendant only when the scroller sits between it and that descendant's
-   * *containing block*. Tailwind's `.sr-only` is `position: absolute`, so every screen-reader
-   * label in this editor with no positioned ancestor resolved to the **initial** containing block:
-   * laid out at its static position deep inside the scrolled column, and clipped by nothing. The
-   * label stretched the *document*, which is a window scrollbar beside this editor's own and an
-   * `h-screen` app that slides up off its own window when you use it.
+   * This section carried `overflow-y-auto` and was therefore a scroll container *inside* `main`,
+   * which is `relative min-h-0 flex-1 overflow-auto p-5` and has been for as long as the shell has
+   * had that element. Two nested scrollers is two scrollbars an inch apart moving different
+   * things, with nothing on screen saying which — the complaint the deck views' own boxes were
+   * given no height to avoid, one level further out.
    *
-   * Measured in the shipped window 2026-08-15 (`tauri dev`, a debug build, 1280×800, a 24-card
-   * deck): `documentElement.scrollHeight` **1704** against a `clientHeight` of 800, with
-   * `window.innerWidth - documentElement.clientWidth` reading **15** — while `body.scrollHeight`
-   * and the `h-screen` shell root both read 800 and the shell's `overflow-hidden` reported nothing
-   * overflowing, which is why no box in the tree named the culprit. The deepest escapee was
-   * `DeckStats`' curve label `"0 cards at mana value 8 or more"` at y **1703**. This class took it
-   * to **800 / 0**, and the editor to one scrollbar in Stacks, Grid and Text.
+   * **What this asserts is the absence, because the absence is the fix** and an absence is exactly
+   * what a tidy re-adds. A `overflow-y-auto` put back on this element would look right in every
+   * other test in this file and would silently restore the pair.
    *
-   * **jsdom has no layout engine, so none of that is checkable here** — and the same is true of
-   * the wrong fix, which is the reason this test exists rather than a comment. `relative` on
-   * `AppShell`'s `main` looks identical in every DOM assertion and is *not* the same repair: the
-   * label is then contained by main but its static position is still inside this column's scrolled
-   * content, so the phantom scroll moved rather than went (`main.scrollHeight` **742 → 1646**,
-   * same pass). The rule is that a scroll container is the containing block for its own absolutely
-   * positioned content, so the class belongs on whichever box carries the `overflow`.
+   * `relative` stays and is asserted with it. It is inert on a box that clips nothing — but the
+   * rule it comes from is about whichever box carries the `overflow`, so leaving it here costs
+   * nothing and removing it would be a second edit nobody asked for. **The rule itself is pinned
+   * on the box that now scrolls**, in `AppShell.test.tsx`.
+   *
+   * **The measurement that produced the old class belongs to the old arrangement** and is kept
+   * because it is the reason the rule exists at all: 2026-08-15, `tauri dev`, a debug build,
+   * 1280×800, a 24-card deck — `documentElement.scrollHeight` **1704** against a `clientHeight` of
+   * 800, `window.innerWidth - documentElement.clientWidth` **15**, while `body.scrollHeight` and
+   * the `h-screen` shell root both read 800 and the shell's `overflow-hidden` reported nothing
+   * overflowing. The deepest escapee was `DeckStats`' curve label
+   * `"0 cards at mana value 8 or more"` at y **1703**. `relative` on the scroller took it to
+   * **800 / 0**; `relative` on `main` *instead* moved the phantom scroll rather than removing it
+   * (`main.scrollHeight` **742 → 1646**, same pass) — which was true while this element was the
+   * scroller and is the case that no longer arises, since `main` is now both.
+   *
+   * **None of that is checkable here** — jsdom has no layout engine — which is why this is a class
+   * assertion and why the numbers are the record of where the rule came from.
    */
-  it("makes the page scroller the containing block for its own absolute content", async () => {
+  it("does not nest a scroller inside the shell's own", async () => {
     await open();
 
     const page = screen.getByRole("region", { name: /^Deck editor:/ });
-    expect(page.className).toContain("overflow-y-auto");
+    expect(page.className).not.toContain("overflow-y-auto");
+    expect(page.className).not.toContain("overflow-auto");
     expect(page.className).toContain("relative");
   });
 
