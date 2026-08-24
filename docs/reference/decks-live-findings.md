@@ -946,3 +946,100 @@ with a `MutationObserver` on `document.body` — the container `setCustomNativeD
 for one frame is removed by its own monitor on `dragstart`, so `cdp.mjs drag --probe`, which fires
 between `dragOver` and `drop`, is too late to see it. What was read is the text and the colour;
 the 12px offset is unmeasured.
+
+## The three-line header, at all four of its widths — 2026-08-24, `npm run tauri dev` (debug), 1920×1080
+
+The 2026-08-24 redesign, driven against the main checkout's real corpus (116 700 cards) on a
+100-card Commander deck with a theory list, a sideboard and an inactive Maybeboard. The design's
+four artboards are **editor-column** widths, so the pass drove the column rather than the window:
+`section[aria-label^="Deck editor"]` was given each width in turn and the header re-measured after
+a frame, which is what `deskWidth`'s `ResizeObserver` answers on.
+
+### The arithmetic the breakpoints rest on is exact
+
+The header reads `deskWidth` — the desk row's `clientWidth` — because the desk row and the three
+header lines are all full-width children of one flex column. **Measured both ways and they agree
+to the pixel**: with the rail collapsed at a 1920 window the column and the desk row both read
+**1797**, which is 1920 less the collapsed rail (68), `main`'s `p-5` (40) and the page scrollbar
+(15) — **123** exactly. With the rail expanded, one press later, both read **1657**, which is the
+same sum with the rail at 208. So the design's artboard numbers and this app's own measurement are
+the same number, and `1280 − 208 − 40 − 15 = 1017` is the app's default column without anything
+having to be re-derived.
+
+### Every artboard, reproduced
+
+Heights are the three lines' own — 50 / 38 / 49 is one line each, and a wrapped line is visibly
+taller. `documentElement.scrollWidth` equalled `clientWidth` (1920) at **every** width: no
+horizontal scroll at any of them, which is the one thing the 1024px floor forbids.
+
+| Column | actions | ledger | toolbar | Import/Export | Deck settings | back | `Format` term | check |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1657 | 50 | 38 | 49 | `Import` (78px) | `Deck settings` (119px) | `Decks` (76px) | drawn | `1 issue` |
+| 1157 | 50 | 38 | 49 | icon (36px) | `Deck settings` (119px) | `Decks` (76px) | drawn | `1 issue` |
+| 1017 | 50 | 38 | 49 | icon (36px) | icon (36px) | `Decks` (76px) | drawn | `1 issue` |
+| 761 | 50 | 38 | **97** | icon (36px) | icon (36px) | chevron (36px) | dropped | `1` |
+
+**The ledger holds on one line at the app's own 1017 with the `Format` term on it**, which is the
+question the term was added under: `dl.scrollWidth` and `dl.clientWidth` both read 1017 and the
+row measured 38px. The whole line read
+`Format Commander · Cards 100+3 · Lands 32 · Avg. mana 2.58 · Price $948.94 · Owned 0 / 103
+missing` with `1 issue · 6 game changers · Bracket ~4` in the right-hand group at **297px**.
+
+### The toolbar's split, read off the y coordinates
+
+At 761 the toolbar is two lines and they are the right two. Read off `getBoundingClientRect`:
+
+- **y 224** — View (111px), Group by (156px), Sort (138px). The three pickers.
+- **y 266** — the break: the zero-height child, **761px** wide, filling the rest of its line.
+- **y 272** — Quick add (271px), undo/redo (76px), the filter (390px). The tools.
+
+**The DOM order is untouched**, which is the whole point of doing it with `order`: quick add,
+undo/redo, the pickers, the break, the filter — so a caret walks the row in the order it is
+written whichever line each control is painted on.
+
+At 1657 the same six sit on one line at y 224, and **the filter measures exactly 400px with its
+right edge on the row's right edge (1745 = 1745)** — `flex-1` growing into the leftover up to
+`max-w-[25rem]`, then `ml-auto` taking what is left, which is the design's own shape.
+
+### The two anchored layers
+
+- **The bracket**: `Bracket ~4` at 28px tall, name `Bracket 4, an estimate`. Pressing it opened a
+  288px `role="dialog"` named `Bracket estimate`, **pinned by its right edge exactly on the
+  button's (1745 = 1745)**, which took the caret. It read
+  `Bracket ~4 · 6 game changers` over the advisory sentence, and `What this read` disclosed
+  `Gifts Ungiven, Mystical Tutor, Fierce Guardianship, Jeska's Will, Rhystic Study, Cyclonic Rift`
+  — six game changers off `cards.game_changer`, no mass-land-denial or extra-turns line.
+  **Escape closed it and handed the caret back** (`aria-expanded` `false`, focus on the button).
+- **The check**: `1 issue` at 28px, name `1 issue · Commander`. Its panel is 320px, right edge on
+  the button's (1532 = 1532), reading `Sideboard — Error: Commander decks have no sideboard.` and
+  **no bracket anywhere in it**, which is the half of the split worth pinning live.
+- **The variant group** read `Theory` (58px) · `Compare` (36px, no text, `aria-label` only) ·
+  `Live` (42px) — the Scale glyph between the two lists it weighs.
+
+### The tooltips are bound exactly where the word is not
+
+Hovering the icon-only `Deck settings` at 1017 opened the shared panel with `Deck settings` in it,
+8px under the button. At 1657, where the button prints those words, no binding is spread at all.
+
+**One artifact, and it is the price of that conditional.** Resize the column *while* the pointer
+is resting on one of these buttons and the open tooltip is orphaned: the re-render removes the
+`onPointerLeave` that would have closed it, so the panel stays up until the next hover of anything
+that binds one, which re-points it (measured — hovering Undo replaced the text immediately). The
+alternative is binding the tooltip at every width, which pays a redundant hint on every hover of a
+labelled button for ever; this pays a stale panel only to a reader resizing the window mid-hover,
+and it clears itself. Left as it is, deliberately.
+
+### Two traps this pass paid for
+
+- **Port 6006 answered from another worktree while the `storybook` lock read `FREE`.** A Storybook
+  from `default-search-filter-order` had been bound since 06:59; `npm run storybook` here then sat
+  on an interactive *"Would you like to run on 6007?"* prompt for ever, and the recipe's
+  `Get-NetTCPConnection -LocalPort 6006` loop found **their** pid and adopted it into this
+  worktree's lock. The tell was a Vite error overlay naming a path in the other worktree. Releasing
+  would have killed their server: re-`adopt` the lock onto your own dispatcher pid first, then
+  release. The `app` lock's `FREE`-is-not-empty rule applies to this one too.
+- **`querySelector` cannot carry a quoted attribute value through the PowerShell hop** into
+  `cdp.mjs eval` — `section[aria-label^="Deck editor"]` arrives as
+  `section[aria-label^= Deck editor]` and throws. Filter a `querySelectorAll` in JS instead, then
+  stamp the element and address it by a bare attribute.
+
