@@ -241,7 +241,7 @@ function Bench({ payload }: { payload: DragPayload }) {
     <div className="flex h-64 w-[52rem] flex-col gap-3 overflow-y-auto">
       <QuickZones
         categories={CATEGORIES}
-        onDrop={(write: DeckWrite) => setWrote(JSON.stringify(write))}
+        onDrop={(writes: DeckWrite[]) => setWrote(JSON.stringify(writes.length === 1 ? writes[0] : writes))}
         onNewCategory={(p) => setWrote(`new category for ${p.name}`)}
       />
       <div className="flex flex-col gap-3 pt-16">

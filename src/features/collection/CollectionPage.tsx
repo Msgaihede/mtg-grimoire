@@ -599,11 +599,15 @@ export function CollectionPage() {
     [menuKey, menuDeps],
   );
   const tileMenu = useCallback(
-    (tile: CollectionTile) => menu(() => buildCardMenu(tileTarget(tile), menuDeps)),
+    (tile: CollectionTile, picked: readonly CollectionTile[] = []) =>
+      menu(() => buildCardMenu(tileTarget(tile), { ...menuDeps, picked: picked.map(tileTarget) })),
     [menu, menuDeps],
   );
   const tileMenuKey = useCallback(
-    (tile: CollectionTile) => menuKey(() => buildCardMenu(tileTarget(tile), menuDeps)),
+    (tile: CollectionTile, picked: readonly CollectionTile[] = []) =>
+      menuKey(() =>
+        buildCardMenu(tileTarget(tile), { ...menuDeps, picked: picked.map(tileTarget) }),
+      ),
     [menuKey, menuDeps],
   );
 
@@ -1254,6 +1258,11 @@ export function CollectionPage() {
               // search is not asking for a binder at 2× as well. `CardGrid`'s `zoomSection`
               // carries why it is required rather than defaulted.
               zoomSection="collection"
+              // Ctrl and Shift build a set of tiles (issue #214). This wall passes no
+              // `dragPayload` — see `CardGrid` for why the collection's *rows* are the drag
+              // source and its tiles are not — so what a set does here is put the card menu in
+              // the plural rather than start a multi-card drag.
+              selectionScope="collection"
               selectedId={selectedCardId}
               onSelect={selectCard}
               // The same arrow-key walk the search wall takes, on the same terms: `selectedId`

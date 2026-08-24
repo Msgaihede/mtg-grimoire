@@ -9,7 +9,15 @@ import type { DeckCategory } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { cn } from "@/lib/utils";
 import { Dialog } from "@/components/Dialog";
-import { dropWrite, readDragData, type DeckWrite, type DragPayload, type DropTarget } from "./dnd";
+import {
+  dropWrite,
+  dropWrites,
+  readDragData,
+  readDragGroup,
+  type DeckWrite,
+  type DragPayload,
+  type DropTarget,
+} from "./dnd";
 import { META_FIELD, META_SUBMIT } from "./metaRows";
 
 /**
@@ -105,7 +113,7 @@ export function QuickZones({
    *  the drawn groups. Only the two fixed zones are read out of it. */
   categories: readonly DeckCategory[];
   /** What a drop writes. `DeckEditor`'s `applyDrop`, which is stable — see it. */
-  onDrop: (write: DeckWrite) => void;
+  onDrop: (writes: DeckWrite[]) => void;
   /**
    * The card was thrown at **New category**, and the drag is over.
    *
@@ -191,7 +199,7 @@ export function QuickZoneBar({
   /** The card in the air. Not nullable — a bar with no card is not a state this draws. */
   payload: DragPayload;
   categories: readonly DeckCategory[];
-  onDrop: (write: DeckWrite) => void;
+  onDrop: (writes: DeckWrite[]) => void;
   onNewCategory: (payload: DragPayload) => void;
 }): ReactElement {
   const maybeboard = categories.find((c) => c.kind === "maybe");
@@ -217,14 +225,13 @@ export function QuickZoneBar({
     // same thing about a pile.
     // `held` rather than the `payload` above it, and the difference is the point: that one is
     // what this render was drawn for, and this is what the library is holding *now*.
-    accepts: (data) => {
-      const held = readDragData(data);
-      return held !== null && dropWrite(held, target) !== null;
-    },
+    accepts: (data) => dropWrites(readDragGroup(data), target).length > 0,
     drop: (data) => {
-      const held = readDragData(data);
-      const write = held && dropWrite(held, target);
-      if (write) onDrop(write);
+      // Every card the drag was carrying — `dropWrites`' rule that a mixed set is not refused
+      // whole, so four deck rows and one search tile dropped on `Auto` file the four and pass
+      // over the fifth rather than failing for a reason nothing on screen names.
+      const writes = dropWrites(readDragGroup(data), target);
+      if (writes.length > 0) onDrop(writes);
     },
   });
 

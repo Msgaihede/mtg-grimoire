@@ -690,7 +690,7 @@ describe("DeckTargetSubmenu", () => {
     render(
       <QueryClientProvider client={client}>
         <CardToDeckProvider>
-          <DeckTargetSubmenu target={{ ...BOLT, typeLine: "Instant" }} onDone={vi.fn()} />
+          <DeckTargetSubmenu targets={[{ ...BOLT, typeLine: "Instant" }]} onDone={vi.fn()} />
         </CardToDeckProvider>
       </QueryClientProvider>,
     );
@@ -726,7 +726,7 @@ describe("DeckTargetSubmenu", () => {
     expect(() =>
       render(
         <QueryClientProvider client={client}>
-          <DeckTargetSubmenu target={BOLT} onDone={vi.fn()} />
+          <DeckTargetSubmenu targets={[BOLT]} onDone={vi.fn()} />
         </QueryClientProvider>,
       ),
     ).toThrow(/CardToDeckProvider/);
@@ -1068,5 +1068,125 @@ describe("the Collection row", () => {
 
     const row = await screen.findByRole("menuitem", { name: "Collection" });
     expect(row).not.toHaveAttribute("aria-disabled");
+  });
+});
+
+/**
+ * **The plural** — issue #214. When the right-clicked tile is a member of the reader's picked set,
+ * the rows that are *writes* act on the whole set and the rest deliberately do not.
+ *
+ * The set is decided by the surface and arrives as `picked`, so nothing here knows what a
+ * selection is; these pin the shape the builder gives one.
+ */
+describe("buildCardMenu with a picked set", () => {
+  const HELIX: CardMenuTarget = {
+    cardId: "helix-arn",
+    name: "Lightning Helix",
+    setCode: "arn",
+    collectorNumber: "5",
+    oracleId: "o-helix",
+    finishes: '["nonfoil"]',
+  };
+  const PONDER: CardMenuTarget = {
+    cardId: "ponder-chk",
+    name: "Ponder",
+    setCode: "chk",
+    collectorNumber: "9",
+    oracleId: "o-ponder",
+    finishes: '["nonfoil","foil"]',
+  };
+  const PICKED = [BOLT, HELIX, PONDER];
+
+  const rowsOf = (item: MenuItem) => (item as MenuSubmenu).items;
+
+  it("counts the set on the Add to row", () => {
+    expect(labels(buildCardMenu(BOLT, deps({ picked: PICKED })))).toContain("Add 3 cards to");
+  });
+
+  /**
+   * **A clipboard holds one image, a browser tab opens one page, a printings modal lists one
+   * oracle card.** None of the three has a plural that is not a different feature, so all three
+   * stay about the tile that was right-clicked — said here rather than left as an absence.
+   */
+  it("leaves the one-card rows alone", () => {
+    const shown = labels(buildCardMenu(BOLT, deps({ picked: PICKED })));
+    expect(shown).toContain("Copy card name");
+    expect(shown).toContain("Copy card image");
+    expect(shown).toContain("Open on");
+    expect(shown).toContain("View all printings");
+    expect(shown.filter((l) => /3 cards/.test(l))).toEqual(["Add 3 cards to"]);
+  });
+
+  it("stays singular for a set of one", () => {
+    expect(labels(buildCardMenu(BOLT, deps({ picked: [BOLT] })))).toContain("Add to");
+  });
+
+  it("wishes every picked card on one press", () => {
+    const addToWishlist = vi.fn();
+    const items = buildCardMenu(BOLT, deps({ picked: PICKED, addToWishlist }));
+    (find(rowsOf(find(items, "Add 3 cards to")), "Wishlist") as MenuAction).onSelect();
+
+    expect(addToWishlist.mock.calls.map((call) => (call[0] as CardMenuTarget).name)).toEqual([
+      "Lightning Bolt",
+      "Lightning Helix",
+      "Ponder",
+    ]);
+  });
+
+  /**
+   * **A group is recorded in each card's own plain finish, and the finish level is dropped** —
+   * the one row whose plural is narrower than its singular. A finish belongs to a printing, so a
+   * submenu built from the right-clicked card's finishes would record the others in a finish
+   * nobody said they had, and the collection is a record of cardboard the reader physically owns.
+   */
+  it("files every picked card into the collection in its own plain finish", () => {
+    const addToCollection = vi.fn();
+    const items = buildCardMenu(BOLT, deps({ picked: PICKED, addToCollection }));
+    const row = find(rowsOf(find(items, "Add 3 cards to")), "Collection") as MenuAction;
+
+    // One press, no finish question — where a single Ponder would have offered its two.
+    expect(row.kind).toBe("action");
+    row.onSelect();
+    expect(addToCollection.mock.calls.map((call) => call[1] as string)).toEqual([
+      "nonfoil",
+      "nonfoil",
+      "nonfoil",
+    ]);
+  });
+
+  /** A foil-only printing keeps its own only finish rather than being recorded as plain — the
+   *  13 515 printings for which `nonfoil` is not an answer at all. */
+  it("records a foil-only printing as foil inside a group", () => {
+    const addToCollection = vi.fn();
+    const foilOnly: CardMenuTarget = { ...HELIX, finishes: '["foil"]' };
+    const items = buildCardMenu(
+      BOLT,
+      deps({ picked: [BOLT, foilOnly], addToCollection }),
+    );
+    (find(rowsOf(find(items, "Add 2 cards to")), "Collection") as MenuAction).onSelect();
+
+    expect(addToCollection.mock.calls.map((call) => call[1] as string)).toEqual([
+      "nonfoil",
+      "foil",
+    ]);
+  });
+
+  /** The collection's `Move to` counts only the members that name a stored row — a tile is a
+   *  printing the page summed several entries into, and `entryId` is what says otherwise. */
+  it("moves only the picked cards that name a collection row", () => {
+    const moveToFolder = vi.fn();
+    const filed = { ...HELIX, entryId: 7 };
+    const items = buildCardMenu(
+      { ...BOLT, entryId: 3 },
+      deps({
+        picked: [{ ...BOLT, entryId: 3 }, filed, PONDER],
+        moveToFolder,
+        collectionFolders: [binder(1, "Binder")],
+      }),
+    );
+    const move = find(items, "Move 2 cards to");
+    (find(rowsOf(move), "Binder") as MenuAction).onSelect();
+
+    expect(moveToFolder.mock.calls.map((call) => call[0] as number)).toEqual([3, 7]);
   });
 });

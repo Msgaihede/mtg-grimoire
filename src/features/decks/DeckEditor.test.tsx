@@ -5459,3 +5459,238 @@ describe("DeckEditor — the walk it publishes", () => {
     expect(walk()).toEqual([]);
   });
 });
+
+/**
+ * **Multi-select** — issue #214. Ctrl and Shift build a set of deck rows, and every gesture that
+ * acts on one card acts on the set.
+ *
+ * The arithmetic behind it is `lib/multiSelect.ts`'s and is tested there as a truth table; the
+ * drag contract is `dndGroup.test.ts`'s. What is left for this file is the only thing neither can
+ * see: that the editor's four views, its drop targets, its Delete key and its card menu are all
+ * reading the *same* set, over the real registrations, through `src/test-drag.ts`.
+ */
+describe("DeckEditor multi-select", () => {
+  /** The two cards the default fixture puts in the main deck, as the `<li>` each view makes a
+   *  drag handle of. */
+  const row = (name: string) =>
+    screen.getByRole("button", { name: new RegExp(`^${name}`) }).closest("li")!;
+  const marked = () => document.querySelectorAll(`[${SELECTED_ATTR}]`);
+
+  /**
+   * A chord press on a card, through the button the reader actually presses.
+   *
+   * **The modifier is held on the keyboard rather than passed as a click option**, and that is
+   * not a style choice: `userEvent.click`'s options are *pointer* options and carry no modifier
+   * state, so `{ ctrlKey: true }` there sets nothing at all — the press would be a plain click
+   * and the test would pass while asserting about a gesture it never made. Held this way the flag
+   * is on the real `mousedown`/`click` pair, which is what `readModifiers` reads.
+   */
+  async function pressWith(name: string, mods: { ctrl?: boolean; shift?: boolean }) {
+    // **One `setup()` session for the three calls**, and this is the part that is easy to get
+    // wrong: the direct `userEvent.click` / `userEvent.keyboard` helpers each open a session of
+    // their own, so a modifier held by one is released before the next runs — the press lands as
+    // a plain click and the test passes while asserting about a gesture it never made. It did,
+    // for one run of this suite.
+    const user = userEvent.setup();
+    const key = mods.ctrl ? "Control" : "Shift";
+    await user.keyboard(`{${key}>}`);
+    await user.click(screen.getByRole("button", { name: new RegExp(`^${name}`) }));
+    await user.keyboard(`{/${key}}`);
+  }
+
+  /**
+   * A plain click opens the card and a Ctrl-click **does not** — the whole of what makes the
+   * chord a selection rather than a second way to open the pane. Both cards wear the ring, and
+   * the pane is still showing the first.
+   */
+  it("marks a second card on Ctrl-click without opening it", async () => {
+    await open();
+
+    await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+    expect(marked()).toHaveLength(1);
+
+    await pressWith("Bear", { ctrl: true });
+
+    expect(marked()).toHaveLength(2);
+    expect(useAppStore.getState().selectedCardId).toBe("c-Lightning Bolt");
+  });
+
+  /** And a plain click puts the set back down to one, which is what keeps the ring and the pane
+   *  agreeing after a reader has finished with a selection. */
+  it("collapses the set on a plain click", async () => {
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+    await pressWith("Bear", { ctrl: true });
+    expect(marked()).toHaveLength(2);
+
+    await userEvent.click(screen.getByRole("button", { name: /^Bear/ }));
+
+    expect(marked()).toHaveLength(1);
+  });
+
+  /** Shift takes the run between the anchor and the press — two cards here, which is the whole
+   *  of the fixture's main deck. */
+  it("takes a range on Shift-click", async () => {
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+
+    await pressWith("Bear", { shift: true });
+
+    expect(marked()).toHaveLength(2);
+  });
+
+  /**
+   * **The gesture the issue asked for**: one drag, every picked card moved.
+   *
+   * Driven over the library's own code path — a real `dragstart` on the card's `<li>`, a real
+   * `drop` on the Sideboard's group — so what this pins is the group surviving the trip through
+   * the untyped drag store and out the other side, not a function call.
+   */
+  it("moves every picked card when one of them is dragged", async () => {
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+    await pressWith("Bear", { ctrl: true });
+
+    await dragOnto(row("Lightning Bolt"), group("Sideboard"));
+
+    await waitFor(() => expect(deckMoveCard).toHaveBeenCalledTimes(2));
+    expect(deckMoveCard).toHaveBeenCalledWith(
+      4,
+      "c-Lightning Bolt",
+      MAIN,
+      SIDE,
+      null,
+      "live",
+      null,
+    );
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Bear", MAIN, SIDE, null, "live", null);
+  });
+
+  /**
+   * **A card picked up from outside the set takes only itself, and throws the set away.**
+   *
+   * Every file manager's rule, and the one thing about multi-drag a reader will get wrong if it
+   * is not true: a stray drag would otherwise rearrange cards they had forgotten were picked.
+   */
+  it("carries one card when the drag starts outside the set", async () => {
+    deckGet.mockResolvedValue(
+      detail({}, [
+        bolt(),
+        card({ name: "Bear", typeLine: "Creature — Bear", quantity: 2 }),
+        card({ name: "Ponder", typeLine: "Sorcery", quantity: 1 }),
+      ]),
+    );
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+    await pressWith("Bear", { ctrl: true });
+
+    await dragOnto(row("Ponder"), group("Sideboard"));
+
+    await waitFor(() => expect(deckMoveCard).toHaveBeenCalledTimes(1));
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Ponder", MAIN, SIDE, null, "live", null);
+    // The set is thrown away by the drag itself. Asserted on the store rather than by counting
+    // rings, because the pane is still open on Lightning Bolt and `selectedSlot` goes on marking
+    // that one card — which is the ring meaning what it has always meant.
+    await waitFor(() => expect(useAppStore.getState().cardSelection).toBeNull());
+  });
+
+  /**
+   * Delete takes the set out — the only keyboard verb this editor has that is not undo, and the
+   * same `setQuantity(…, 0)` the stepper's zero, the tray's drop and the menu's row all make.
+   */
+  it("removes every picked card on Delete", async () => {
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+    await pressWith("Bear", { ctrl: true });
+
+    await userEvent.keyboard("{Delete}");
+
+    await waitFor(() => expect(deckToCollection).toHaveBeenCalledTimes(2));
+  });
+
+  /**
+   * **A set of one gets no Delete**, deliberately: one card already has a stepper, a menu row and
+   * a tray, all of them visible, and a bare keystroke that silently removed whatever was last
+   * clicked is one press away from a deck the reader did not mean to edit.
+   */
+  it("writes nothing on Delete with a single card picked", async () => {
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+
+    await userEvent.keyboard("{Delete}");
+
+    expect(deckToCollection).not.toHaveBeenCalled();
+    expect(deckSetCardQuantity).not.toHaveBeenCalled();
+  });
+
+  /** The other fence: a reader deleting a character out of the deck's name must not lose the
+   *  cards they had picked. `isTextField` is the same predicate the undo handler yields to. */
+  it("leaves Delete alone inside a text field", async () => {
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+    await pressWith("Bear", { ctrl: true });
+
+    await userEvent.click(screen.getByLabelText("Deck name"));
+    await userEvent.keyboard("{Delete}");
+
+    expect(deckToCollection).not.toHaveBeenCalled();
+    expect(marked()).toHaveLength(2);
+  });
+
+  /**
+   * The card menu goes plural for the three rows that are per-row writes, and the count is on the
+   * label so the reader can see what the press is about before they make it.
+   */
+  it("puts the card menu in the plural for a picked set", async () => {
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+    await pressWith("Bear", { ctrl: true });
+
+    const el = document.querySelector<HTMLElement>(
+      `[${DECK_CARD_ATTR}="${deckCardSlot(MAIN, "c-Bear", null)}"]`,
+    );
+    fireEvent.contextMenu(el as HTMLElement);
+    await screen.findByRole("menu");
+
+    expect(screen.getByRole("menuitem", { name: /^Remove 2 cards/ })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /^Move 2 cards to/ })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: /^Tag 2 cards/ })).toBeInTheDocument();
+  });
+
+  /** A right-click on a card **outside** the set is about that card — the press rule that
+   *  matches the drag's. */
+  it("keeps the card menu singular on a card outside the set", async () => {
+    deckGet.mockResolvedValue(
+      detail({}, [
+        bolt(),
+        card({ name: "Bear", typeLine: "Creature — Bear", quantity: 2 }),
+        card({ name: "Ponder", typeLine: "Sorcery", quantity: 1 }),
+      ]),
+    );
+    await open();
+    await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+    await pressWith("Bear", { ctrl: true });
+
+    const el = document.querySelector<HTMLElement>(
+      `[${DECK_CARD_ATTR}="${deckCardSlot(MAIN, "c-Ponder", null)}"]`,
+    );
+    fireEvent.contextMenu(el as HTMLElement);
+    await screen.findByRole("menu");
+
+    expect(screen.getByRole("menuitem", { name: /^Remove card/ })).toBeInTheDocument();
+  });
+
+  /** A picked set belongs to the deck it was made in — leaving the editor puts it down, so a
+   *  reader coming back finds the deck as they find every other surface. */
+  it("puts the set down when the editor closes", async () => {
+    const view = await open();
+    await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+    await pressWith("Bear", { ctrl: true });
+    expect(useAppStore.getState().cardSelection?.keys).toHaveLength(2);
+
+    view.unmount();
+    useAppStore.getState().setOpenDeckId(null);
+
+    expect(useAppStore.getState().cardSelection).toBeNull();
+  });
+});

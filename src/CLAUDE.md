@@ -269,6 +269,36 @@ Every one of these has its measurement and its story in
   at 1280×800 and 2322 vs 2297 at 2560×1400 — because the panel's width does not move with the
   window. Only a live pass finds this one; the figures and the fix are in
   [frontend-design.md](../docs/reference/frontend-design.md).
+- **Ctrl/⌘-click adds a card to a picked set and Shift-click takes a range, and the whole of what
+  a modified click means is `src/lib/multiSelect.ts`** (issue #214). Four cases and no others —
+  plain collapses to one and anchors there, Ctrl toggles, Shift replaces with the run from the
+  anchor, Ctrl+Shift adds that run; **Shift outranks Ctrl**, which is Explorer's rule and the one
+  a reader already has. It is pure over an ordered key list, so it is checkable as a truth table
+  with no DOM, no store and no query behind it, and **no surface may branch on modifiers itself** —
+  `useCardSelection`'s `pick` returns *whether the press was a selection*, and a view that gets
+  `true` does nothing else.
+  - **One selection app-wide, scoped by a string the surface owns** (`deck:12`, `search`,
+    `collection`, `wishlist`, `tags`, `deck-panel`). A write naming a different scope replaces the
+    whole thing, so leaving a surface discards the set **structurally** rather than by each
+    component remembering to clear it — and that is also what makes clicking a tile in the deck
+    editor's docked panel put the deck's own selection down. Two walls that can be on screen at
+    once must therefore pass different scopes.
+  - **A set outlives the list it was made in** — a refetch, a filter, a sibling surface's delete —
+    so every consumer prunes against the order it is currently drawing. `pruneSelection` returns
+    its argument unchanged when nothing went missing, so a wall with nothing picked pays nothing.
+  - **One gold ring for the whole set, and the pane still shows the last card opened.** Gold
+    already means *picked* on every wall here; a fifth kind of gold would be a vocabulary lesson
+    in exchange for a distinction nobody asked for. `deckCardMarked` is the deck's spelling of it.
+  - **A drag from a card *outside* the set carries that card alone and throws the set away.** Every
+    file manager's rule, and the one thing about multi-drag a reader will get wrong if it is not
+    true: a stray drag would otherwise rearrange cards they had forgotten were picked.
+  - **`CardGrid` takes `selectionScope` opt-in, exactly as `arrowNav` is opt-in**, and
+    `AllPrintingsDialog` passes none — a press there is a swap or a look, and a set of printings is
+    not a thing anything downstream can act on.
+  - **A `userEvent` test must hold the chord in one `setup()` session.** The direct
+    `userEvent.click`/`userEvent.keyboard` helpers each open a session of their own, so a modifier
+    held by one is released before the next runs and the press lands as a plain click — the test
+    then passes while asserting about a gesture it never made. It did, for one run of this suite.
 - **A surface that walks its selection with the arrow keys says so, or the card pane takes the
   caret on the first press.** `CardDetailPane` renders its body keyed on the open card and that
   body focuses the pane as it mounts — the right contract for a card a reader *pressed*, and the
