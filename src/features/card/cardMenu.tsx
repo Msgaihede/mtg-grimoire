@@ -1186,10 +1186,15 @@ function collectionLevel(
  *
  * A deck that keeps no theory list is a single row that adds to `live` — offering a plan the
  * deck does not have would be a second press for a choice with one answer. A deck that keeps
- * one asks, **Theory then Live**, which is the order the editor's own variant tabs read in and
- * is deliberately not alphabetical: enabling the theory list *moves* the live deck into the
- * plan, so theory is where a deck's cards are and live is the column that fills as the reader
- * acquires them. Reading plan → reality is the direction the difference readout counts in.
+ * one asks, **Theory then Live**, and is deliberately not alphabetical: enabling the theory list
+ * *moves* the live deck into the plan, so theory is where a deck's cards are and live is the
+ * column that fills as the reader acquires them. This is a menu that has to guess which of two
+ * lists a card is meant for, and the likelier one goes first.
+ *
+ * **It used to cite the editor's own variant tabs and no longer can** (2026-08-24): those read
+ * `Live | Theory` now. The order here did not follow them, because the two are not the same
+ * question — a tab strip is two places a reader chooses between and reads left to right, and this
+ * is a ranked guess. What is gone is the cross-reference, not the reason under it.
  */
 function deckItem(deck: DeckRow, choose: (deckId: number, variant: DeckVariant) => void): MenuItem {
   if (!deck.theoryEnabled) {

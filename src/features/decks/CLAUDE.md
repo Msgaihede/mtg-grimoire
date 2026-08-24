@@ -1114,18 +1114,22 @@ price | type`). An **inactive category stays its own group in all three grouping
   reader who clears the filter and then picks the deck's own format back off the select reads as
   having asked nothing, so an empty answer there is captioned "waiting for the sync". Remembering
   the press instead would buy a caption in a case that also needs the database to be empty.
-- **The variant tabs read `Theory | Live`, theory on the left.** That is where a deck now starts:
-  switching the theory list on **moves** the live deck into the plan, so the left-hand tab is the
-  one holding cards and `live` is the column that fills as the reader acquires them. Reading
-  left to right is then plan → reality, which is the direction the difference beside it is taken
-  in.
+- **The variant tabs read `Live | Theory`, live on the left** (2026-08-24, the design's order and
+  the reader's call). It reverses "theory on the left", whose argument was that switching the
+  theory list on **moves** the live deck into the plan, so the left-hand tab is the one holding
+  cards. **That argument survives the reversal untouched, because it was never about this
+  order**: where a reader lands after enabling theory is `lastVariant`'s doing — the write leaves
+  the deck on `theory` and the editor restores it — and that is as true of a tab drawn second as
+  of one drawn first. What is decided here is only the order the two words are painted in, and
+  left to right now reads reality → plan with `Compare` between them.
+  **Two things did not follow it**, each because it answers a different question: the card menu's
+  `Add to ▸ <deck> ▸` submenu still ranks Theory first (a guess at which list a card is for, not a
+  strip to read), and `deck_theory_diff` still counts plan → reality (a subtraction, and which way
+  round it goes is what the shopping list *means*).
 - **`Compare` is a `Scale` glyph inside the Live/Theory group since 2026-08-24**, between the two
   lists it weighs against each other — a verb between two nouns needs no word of its own, and the
-  row it stood on had no width to spare. **The order inside that group is unchanged**: Theory,
-  Compare, Live. The design this row was rebuilt from draws Live first; that ordering is kept
-  because the argument for it is about where a press lands (turning the switch on *moves* the deck
-  into theory and leaves `lastVariant` there, so the reader arrives on the tab their cards are now
-  under) and a mock is not.
+  row it stood on had no width to spare. The group reads **`Live | Compare | Theory`**; the bullet
+  above is where that order is argued.
 - **`Compare` stopped being a count, and the editor no longer counts anything itself**
   (2026-08-20). It read
   "N cards differ" and the number came from a `useMemo` in `DeckEditor` over a *second* `useDeck`

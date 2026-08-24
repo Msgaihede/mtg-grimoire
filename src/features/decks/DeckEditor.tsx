@@ -3352,18 +3352,21 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                       drawn and not what the control is *called*, so a `capitalize` switch is
                       one a reader sees as "Live" and voice control has to be asked for as
                       "live". */}
-                  {/* **Theory first, Live second.** The plan is the list a reader building a
-                      deck is in; the live list is what they come back to when they sleeve it
-                      up. It is also what makes turning the switch on land somewhere that reads
-                      right — the write *moves* the deck into theory and leaves `lastVariant`
-                      there, so the reader arrives on the tab their cards are now under, with
-                      the empty one beside it rather than under their pointer. The design this
-                      row was rebuilt from draws Live first; the order is kept because that
-                      argument is about where a press lands and the mock is not. */}
+                  {/* **Live first, Theory second** — the design's order, and the reader's call
+                      (2026-08-24). It reverses "Theory first", which had argued that the plan is
+                      the list a deck is built in and so the one the eye should land on first.
+                      **That argument was never about this order and does not fall with it**: what
+                      it was really about is where the caret lands when the switch is *turned on*,
+                      and that is `lastVariant`'s doing — the write moves the deck into theory and
+                      leaves the deck there, so the reader arrives on the tab their cards are now
+                      under whichever end of the group it is drawn at. Nothing about which tab is
+                      pressed, remembered or restored is decided here; this is the order the two
+                      words are painted in, and left to right it now reads reality → plan, with
+                      the comparison between them. */}
                   {(
                     [
-                      { id: "theory", label: "Theory" },
                       { id: "live", label: "Live" },
+                      { id: "theory", label: "Theory" },
                     ] as const
                   ).map(({ id, label }, at) => (
                     <Fragment key={id}>
