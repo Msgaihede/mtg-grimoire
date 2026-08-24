@@ -20,6 +20,24 @@ function openBox(overrides: Partial<Parameters<typeof TagSearchBox>[0]> = {}) {
   return { onChange, onNamespaceChange };
 }
 
+/**
+ * Records, for every Escape that reaches `window`'s bubble phase, whether something nearer the
+ * reader had already spent it.
+ *
+ * Every rung of `useDismissOnEscape` listens on `window` and every one returns early on
+ * `defaultPrevented`, so "the box consumed this press" and "whatever is open behind it stayed
+ * open" are one fact read in one place. Asserting only that `onChange("")` ran would pass just
+ * as well on a handler that emptied the box *and* let the press through behind it.
+ */
+function watchEscapeAtWindow(): { prevented: boolean[]; stop: () => void } {
+  const prevented: boolean[] = [];
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === "Escape") prevented.push(e.defaultPrevented);
+  };
+  window.addEventListener("keydown", onKey);
+  return { prevented, stop: () => window.removeEventListener("keydown", onKey) };
+}
+
 describe("TagSearchBox", () => {
   /**
    * **The one control on this page with a real hazard.** A reader parked on the wrong taxonomy
@@ -68,6 +86,46 @@ describe("TagSearchBox", () => {
     // character it added — the field's own value stays "".
     expect(onChange).toHaveBeenCalledTimes(3);
     expect(onChange).toHaveBeenLastCalledWith("r");
+  });
+
+  /**
+   * A box with text in it owns exactly one Escape, here as in every other filter box — the rule
+   * is `clearFieldOnEscape`'s and what this pins is that *this* field is wired to it.
+   *
+   * The Tags page has nothing behind it that Escape navigates today, which is the point: the
+   * rule has to be true of every filter box or the next one written will guess.
+   */
+  it("spends one Escape emptying the box, and keeps that press off the layers behind", async () => {
+    const user = userEvent.setup();
+    const escapes = watchEscapeAtWindow();
+    try {
+      const { onChange } = openBox({ value: "dragon" });
+
+      await user.click(screen.getByRole("searchbox", { name: /tags/i }));
+      await user.keyboard("{Escape}");
+
+      expect(onChange).toHaveBeenCalledWith("");
+      expect(escapes.prevented).toEqual([true]);
+    } finally {
+      escapes.stop();
+    }
+  });
+
+  /** An empty box has nothing to undo, so the press is not its and travels on untouched. */
+  it("lets Escape through an empty box", async () => {
+    const user = userEvent.setup();
+    const escapes = watchEscapeAtWindow();
+    try {
+      const { onChange } = openBox();
+
+      await user.click(screen.getByRole("searchbox", { name: /tags/i }));
+      await user.keyboard("{Escape}");
+
+      expect(onChange).not.toHaveBeenCalled();
+      expect(escapes.prevented).toEqual([false]);
+    } finally {
+      escapes.stop();
+    }
   });
 
   /** A field with no visible caption still has to have a name. */

@@ -31,6 +31,7 @@ import {
 import { PRESS, statusLine } from "@/lib/motion";
 import { sortOptions } from "@/lib/options";
 import { useMarketplace } from "@/lib/useMarketplace";
+import { clearFieldOnEscape, useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { useAppStore, type PaneDeckContext } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { newestWrite, writeFailure } from "@/lib/writes";
@@ -756,6 +757,35 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * of its own rather than `paneDeckContext !== null` read backwards.
    */
   const paneFromDeckSearch = useAppStore((s) => s.paneFromDeckSearch);
+
+  /**
+   * Close the deck — the ribbon's `Back to decks` button and Escape's floor, as one callback.
+   *
+   * **Two entrances to one act, so there is one function rather than two spellings of it.** The
+   * button and the key must not be able to drift: whatever closing a deck comes to mean — a
+   * confirmation, a last write flushed, a note left for the gallery — is written here and both
+   * paths get it.
+   */
+  const closeDeck = useCallback(() => setOpenDeckId(null), [setOpenDeckId]);
+  /**
+   * **Escape's floor on this screen: the deck closes.**
+   *
+   * `"navigation"` is the bottom rung, so this fires only on a press nothing nearer wanted — the
+   * card pane docked beside the desk is `"outer"` and outranks it, every dialog and popup here is
+   * `"inner"` and outranks both, and a filter box with text in it spends the press before any of
+   * them (see {@link clearFieldOnEscape} on the toolbar's field below). One press closes one
+   * thing, all the way down.
+   *
+   * **Always enabled**, because an open editor always has somewhere to go: the gallery it was
+   * opened from. There is no state in which this rung would be a listener with nothing to do.
+   *
+   * **The caret is handed back by the same route the button's press uses**, and that is
+   * {@link closeDeck} doing exactly one thing: `setOpenDeckId(null)` writes `returnToDeckId` in
+   * the store, and `DecksPage` reads it to open the folder the deck is filed in and put the caret
+   * on the deck's own tile. So Escape lands the reader precisely where `Back to decks` does —
+   * which is what "Escape hands the caret to the opener" means at this rung, one view up.
+   */
+  useDismissOnEscape({ layer: "navigation", onDismiss: closeDeck });
 
   const row = deck.deck;
   const spec = row ? formatSpecFor(row.formatKey) : null;
@@ -2917,7 +2947,9 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       <div className="flex shrink-0 flex-wrap items-center gap-x-3 gap-y-2 py-1.5">
         <button
           type="button"
-          onClick={() => setOpenDeckId(null)}
+          // {@link closeDeck}, shared with Escape's `"navigation"` rung — one act, one function,
+          // so the key and the button can never come to mean different things.
+          onClick={closeDeck}
           aria-label="Back to decks"
           className={cn(
             "inline-flex h-9 shrink-0 items-center gap-1 rounded-md px-2 text-sm text-dim",
@@ -3317,6 +3349,13 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               placeholder="Filter this deck…"
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
+              // **A box with text in it owns one Escape, and an empty one owns none.** Without
+              // this the press would empty the box *and* close the deck behind it: Chromium
+              // clears an `<input type="search">` on Escape by itself and does **not** set
+              // `defaultPrevented`, so the `"navigation"` rung above would take the same press.
+              // jsdom implements no native clear, so only the second half of that is visible to
+              // this suite — the reason is on {@link clearFieldOnEscape}.
+              onKeyDown={(e) => clearFieldOnEscape(e, filter, () => setFilter(""))}
               className={cn("h-9 w-44 rounded-md border border-border bg-bg px-2.5 text-xs", FOCUS)}
             />
 

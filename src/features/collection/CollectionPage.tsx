@@ -722,6 +722,48 @@ export function CollectionPage() {
 
   useDismissOnEscape({ layer: "inner", onDismiss: dismiss, enabled: panel !== null });
 
+  /**
+   * One level up — **the breadcrumb's own second-to-last segment, read rather than re-derived**.
+   *
+   * {@link trailOf} ends with the folder the reader is standing in, so the step before it is the
+   * one the breadcrumb draws as the last *pressable* segment, and an empty step is the root. That
+   * is `null`, which for this cabinet is every folder rather than the copies filed nowhere
+   * (`useCollection.folderId`) — so the two ways out land in the same place by construction rather
+   * than by two pieces of arithmetic that happen to agree.
+   *
+   * **A deck group and `Recently removed` need no branch here, and that is a fact about `trailOf`
+   * rather than luck.** It is handed `folders.folders` — every kind — where the *tree* above it is
+   * handed `userFolders`, so a reader standing in a pinned folder has a one-segment trail and this
+   * answers the root. Schema v25 writes `parent_id` `NULL` on every pinned row and no command can
+   * nest anything under one, so a one-segment trail is the only shape either can take.
+   *
+   * A `folderId` naming a folder this list no longer carries answers the root too — `trailOf`
+   * resolves a broken parent *towards* the root for exactly the reason this reads it: the
+   * alternative strands the reader inside a drawer with no way out.
+   */
+  const parentFolderId = trail.length >= 2 ? trail[trail.length - 2].id : null;
+
+  /**
+   * Escape walks the reader out of a drawer — the floor rung, and the same step the breadcrumb's
+   * last pressable segment takes.
+   *
+   * **`enabled` on `folderId !== null` is what keeps the press from being swallowed at the root.**
+   * A registered layer takes the press whether or not it has anywhere to go, and a `"navigation"`
+   * rung that consumed Escape at the top of the cabinet would be a floor with nothing under it:
+   * every press a reader made on this page would stop here and reach nothing else that might one
+   * day want the last one.
+   *
+   * The filter box is what makes this safe to have at all rather than a courtesy laid over it —
+   * `clearFieldOnEscape` in `CollectionFilterBar` — because Chromium empties an
+   * `<input type="search">` on Escape by itself and does **not** mark the press handled, so
+   * without it one press would clear the box *and* walk the reader up a level.
+   */
+  useDismissOnEscape({
+    layer: "navigation",
+    onDismiss: () => collection.openFolder(parentFolderId),
+    enabled: folderId !== null,
+  });
+
   const open = useCallback((next: NonNullable<Panel>, opener: HTMLElement | null) => {
     openerRef.current = opener;
     setPanel(next);

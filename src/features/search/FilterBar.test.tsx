@@ -55,6 +55,25 @@ const search = (over: Record<string, unknown> = {}) =>
  *  suite opens with and would read as "the button is not there". */
 const dirButton = () => screen.getByRole("button", { name: /^Sort direction/ });
 
+/**
+ * Records, for every Escape that reaches `window`'s bubble phase, whether something nearer the
+ * reader had already spent it.
+ *
+ * That is the whole of what a filter box's Escape rule is *about*, rather than a detail of it:
+ * every rung of `useDismissOnEscape` listens on `window` and every one of them returns early on
+ * `defaultPrevented`, so "the box consumed this press" and "the layer behind it stayed open" are
+ * one fact, readable in one place. Asserting only that `setText("")` ran would pass just as well
+ * on a handler that cleared the box *and* let the press through to close the deck behind it.
+ */
+function watchEscapeAtWindow(): { prevented: boolean[]; stop: () => void } {
+  const prevented: boolean[] = [];
+  const onKey = (e: KeyboardEvent) => {
+    if (e.key === "Escape") prevented.push(e.defaultPrevented);
+  };
+  window.addEventListener("keydown", onKey);
+  return { prevented, stop: () => window.removeEventListener("keydown", onKey) };
+}
+
 vi.mock("./SetCombobox", () => ({
   SetCombobox: () => <div data-testid="set-combobox" />,
 }));
@@ -195,6 +214,54 @@ describe("FilterBar", () => {
     await userEvent.click(reset);
 
     expect(resetAll).toHaveBeenCalled();
+  });
+
+  /**
+   * A box with text in it owns exactly one Escape — the rule `clearFieldOnEscape` states,
+   * checked here because *whether this field is wired to it* is a fact about this field.
+   *
+   * The caret is put in the box by a **click**, the way a reader puts it there, rather than by
+   * handing the field to `user.type` — a flow started from a programmatic focus tests a caret
+   * nobody can produce.
+   */
+  it("spends one Escape emptying the box, and keeps that press off the layers behind", async () => {
+    const user = userEvent.setup();
+    const setText = vi.fn();
+    const escapes = watchEscapeAtWindow();
+    try {
+      render(<FilterBar search={search({ text: "goblin", setText })} />);
+
+      await user.click(screen.getByRole("searchbox", { name: /search cards/i }));
+      await user.keyboard("{Escape}");
+
+      expect(setText).toHaveBeenCalledWith("");
+      expect(escapes.prevented).toEqual([true]);
+    } finally {
+      escapes.stop();
+    }
+  });
+
+  /**
+   * An empty box has nothing to undo, so the press is not its: it reaches `window` untouched,
+   * where the view behind — a deck to close, a folder to go up out of — is waiting for it. This
+   * half is what makes the `"navigation"` rung safe to have at all, so it is the half worth
+   * pinning even on a view that has nothing to navigate.
+   */
+  it("lets Escape through an empty box", async () => {
+    const user = userEvent.setup();
+    const setText = vi.fn();
+    const escapes = watchEscapeAtWindow();
+    try {
+      render(<FilterBar search={search({ text: "", setText })} />);
+
+      await user.click(screen.getByRole("searchbox", { name: /search cards/i }));
+      await user.keyboard("{Escape}");
+
+      expect(setText).not.toHaveBeenCalled();
+      expect(escapes.prevented).toEqual([false]);
+    } finally {
+      escapes.stop();
+    }
   });
 });
 

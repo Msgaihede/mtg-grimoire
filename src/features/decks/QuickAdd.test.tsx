@@ -333,14 +333,20 @@ describe("QuickAdd", () => {
   });
 
   /**
-   * Escape closes the list and spends exactly one press doing it.
+   * **Three presses, three answers, and the third is the one that leaves.**
    *
-   * The second half is the whole of what `enabled: listOpen` buys: with no list up, the press
-   * belongs to the card detail pane, which listens on `window` in the bubble phase — and a
-   * capture-phase listener here would consume it first and close nothing at all.
-   * `DeckEditor.test.tsx` watches the same press arrive at the window from the editor.
+   * The list, then the text, then nothing — one rung per press, all the way out of the field. The
+   * first is `enabled: listOpen`'s, in the capture phase; the second is the field's own
+   * `clearFieldOnEscape`, in the target phase, which owns the press only while there is something
+   * to empty; the third is nobody's here at all and reaches `window` untouched, where in the
+   * shipped app the deck editor's `"navigation"` rung closes the deck. `DeckEditor.test.tsx`
+   * watches that last press arrive from this very field.
+   *
+   * **The third assertion is the one that can fail quietly.** A field that consumed every Escape
+   * would look identical on screen — the list gone, the box empty — and would have made the deck
+   * uncloseable from the one control a reader spends the most time in.
    */
-  it("closes the list on Escape, and leaves a press it has nothing to spend it on", async () => {
+  it("spends one Escape on the list, one on the text, and lets the third go", async () => {
     searchCards.mockResolvedValue(page("Goblin Guide", "Goblin Bushwhacker"));
     const { field } = mount();
     const heard: boolean[] = [];
@@ -359,12 +365,47 @@ describe("QuickAdd", () => {
       expect(field).toHaveValue("goblin");
 
       await userEvent.keyboard("{Escape}");
+      expect(field).toHaveValue("");
+      // …and the list does not come back with the emptying, which would hand the next press
+      // straight back to the rung that has just finished with it.
+      expect(field).toHaveAttribute("aria-expanded", "false");
+
+      await userEvent.keyboard("{Escape}");
     } finally {
       window.removeEventListener("keydown", listen);
     }
 
-    // Consumed while there was a list, and untouched once there was not.
-    expect(heard).toEqual([true, false]);
+    expect(heard).toEqual([true, true, false]);
+  });
+
+  /**
+   * **A field can hold a name with no list under it at all**, and those are the presses the
+   * clearing rule exists for: the whole first 300ms of typing, and every miss.
+   *
+   * This is what fails if the Escape branch is written *below* the handler's `options.length`
+   * guard — the arrows' early return, which is right for the arrows and would silently make the
+   * commonest case of all fall through and close the deck instead.
+   */
+  it("clears a field that has text and no suggestions", async () => {
+    const { field } = mount();
+    const heard: boolean[] = [];
+    const listen = (e: KeyboardEvent) => {
+      if (e.key === "Escape") heard.push(e.defaultPrevented);
+    };
+    window.addEventListener("keydown", listen);
+
+    try {
+      await userEvent.type(field, "Blakc Lotus{Enter}");
+      await screen.findByText("No card found for “Blakc Lotus”.", {}, SETTLE);
+      expect(screen.queryAllByRole("option")).toHaveLength(0);
+
+      await userEvent.keyboard("{Escape}");
+    } finally {
+      window.removeEventListener("keydown", listen);
+    }
+
+    expect(field).toHaveValue("");
+    expect(heard).toEqual([true]);
   });
 
   /** Tab past the field and the list should not still be hanging over the deck with the caret

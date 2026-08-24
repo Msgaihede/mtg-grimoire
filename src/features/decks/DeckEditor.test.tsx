@@ -2067,14 +2067,23 @@ describe("DeckEditor", () => {
   /**
    * The half of the Escape protocol a component test would never think to check, and the
    * running app found in a minute: with no layer open, the press has to reach the **window**,
-   * because that is where the card detail pane listens.
+   * because that is where every rung below this editor's own controls listens.
    *
    * React's synthetic `stopPropagation` stops the *native* event at the root container — so a
    * cell that stops `keydown` to keep Enter off its row also stops every Escape pressed inside
-   * it from ever leaving the app's own tree. The pane then cannot be closed from a card or a
-   * toolbar field at all, and nothing on screen says why.
+   * it from ever leaving the app's own tree. Nothing below could then be closed from a card or a
+   * toolbar field at all, and nothing on screen would say why.
+   *
+   * **What arrives at `window` is now consumed rather than free, and that is the change rather
+   * than a weakening.** The editor registers a `"navigation"` rung — Escape closes the deck —
+   * and it is a bubble listener registered when this editor mounted, which is before the probe
+   * below. So the probe hearing `true` three times says both halves at once: the press reached
+   * `window` (nothing in React's tree ate it) and something already on `window` spent it. Which
+   * something is the second assertion's job — `openDeckId` back to `null` is the floor acting,
+   * and it is re-armed between presses so each of the three entry points is proved on its own
+   * rather than by the first one that worked.
    */
-  it("lets Escape through to the card pane when no layer of its own is open", async () => {
+  it("lets Escape reach the window from every field, where the deck's own floor takes it", async () => {
     await open();
     const heard: boolean[] = [];
     const listen = (e: KeyboardEvent) => {
@@ -2082,19 +2091,82 @@ describe("DeckEditor", () => {
     };
     window.addEventListener("keydown", listen);
 
-    screen.getByRole("button", { name: /^Lightning Bolt/ }).focus();
-    await userEvent.keyboard("{Escape}");
-    screen.getByLabelText("Quick add a card").focus();
-    await userEvent.keyboard("{Escape}");
+    const closed: (number | null)[] = [];
+    const press = async (from: HTMLElement) => {
+      // Re-armed rather than read once at the end: a single `null` at the end would be satisfied
+      // by *any* one of the three presses having worked.
+      useAppStore.setState({ openDeckId: 4 });
+      from.focus();
+      await userEvent.keyboard("{Escape}");
+      closed.push(useAppStore.getState().openDeckId);
+    };
+
+    await press(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+    await press(screen.getByLabelText("Quick add a card"));
     // The name field is the third way in, and the one that *does* consume a press — but only
-    // while it is holding something to revert.
-    screen.getByLabelText("Deck name").focus();
-    await userEvent.keyboard("{Escape}");
+    // while it is holding something to revert, which it is not here.
+    await press(screen.getByLabelText("Deck name"));
 
     window.removeEventListener("keydown", listen);
-    // Heard every time, and consumed by nothing: the pane's bubble-phase listener acts on
-    // exactly this.
-    expect(heard).toEqual([false, false, false]);
+    expect(heard).toEqual([true, true, true]);
+    expect(closed).toEqual([null, null, null]);
+  });
+
+  /**
+   * **Escape closes the deck, and it closes it the way the back button does.**
+   *
+   * The two assertions are one claim: not merely that `openDeckId` went to `null`, but that
+   * `returnToDeckId` was written with it — that note is the whole of the hand-back, and
+   * `DecksPage` reads it to open the folder the deck is filed in and put the caret on its tile.
+   * A close that dropped it would land the reader on the top level with the caret on `<body>`,
+   * which looks like working software until they try to press anything.
+   *
+   * Both routes are driven in one case on purpose: the point is that they are the *same*
+   * callback, so a test that only pressed the key could not tell a shared one from a copy that
+   * agrees today.
+   */
+  it("closes the deck on Escape, exactly as the back button does", async () => {
+    await open();
+
+    screen.getByRole("button", { name: /^Lightning Bolt/ }).focus();
+    await userEvent.keyboard("{Escape}");
+    const byKey = useAppStore.getState();
+
+    useAppStore.setState({ openDeckId: 4, returnToDeckId: null });
+    await userEvent.click(screen.getByRole("button", { name: "Back to decks" }));
+    const byButton = useAppStore.getState();
+
+    expect([byKey.openDeckId, byKey.returnToDeckId]).toEqual([null, 4]);
+    expect([byButton.openDeckId, byButton.returnToDeckId]).toEqual([null, 4]);
+  });
+
+  /**
+   * **The deck's own filter box owns one press while it has something to empty, and the deck
+   * closes on the next one.**
+   *
+   * This is the hazard the `"navigation"` rung arrived with rather than a nicety on top of it:
+   * Chromium clears an `<input type="search">` on Escape by itself and does **not** set
+   * `defaultPrevented`, so without the field's own handler one press would empty the box *and*
+   * close the deck the reader was filtering. jsdom implements no native clear, so the half this
+   * suite can see is the half that matters — the field consuming the press and the box coming
+   * out empty by the app's own hand.
+   */
+  it("empties the deck filter on Escape before the deck itself can close", async () => {
+    await open();
+
+    const box = screen.getByRole("searchbox", { name: "Filter this deck" });
+    await userEvent.type(box, "bolt");
+    expect(box).toHaveValue("bolt");
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(box).toHaveValue("");
+    expect(useAppStore.getState().openDeckId).toBe(4);
+
+    // …and the next press is the deck's, because an empty box owns nothing.
+    await userEvent.keyboard("{Escape}");
+
+    expect(useAppStore.getState().openDeckId).toBeNull();
   });
 
   describe("undo and redo", () => {
@@ -2187,9 +2259,17 @@ describe("DeckEditor", () => {
 
   /**
    * The other side of it: a field that has been typed in owns one press, and one only. The
-   * second is the pane's again — otherwise a reader who half-typed a name and pressed Escape
-   * twice would find the second press had gone nowhere, with the pane still open beside them
-   * and nothing on screen to say why.
+   * second belongs to whatever is open behind it — otherwise a reader who half-typed a name and
+   * pressed Escape twice would find the second press had gone nowhere, with nothing on screen to
+   * say why.
+   *
+   * **`fireEvent`'s answer stopped being able to tell the two apart, so the store is what
+   * separates them now.** It reports `false` whenever *something* consumed the press, and since
+   * the editor took a `"navigation"` rung both presses are consumed — the first by the field,
+   * the second by the floor. The evidence for "one and only one" is therefore that the deck is
+   * still open after the first and closed after the second: a field that ate both would leave
+   * `openDeckId` at 4 throughout, and a field that ate neither would close the deck on the
+   * first press and never revert the name.
    */
   it("spends exactly one Escape on reverting the name", async () => {
     await open();
@@ -2201,9 +2281,14 @@ describe("DeckEditor", () => {
     // when the press was consumed. Read off the state rather than the ref, the second press
     // sees a draft React has not cleared yet and eats a press it has nothing to spend.
     const first = fireEvent.keyDown(name, { key: "Escape" });
+    const afterFirst = useAppStore.getState().openDeckId;
     const second = fireEvent.keyDown(name, { key: "Escape" });
 
-    expect([first, second]).toEqual([false, true]);
+    expect([first, second]).toEqual([false, false]);
+    // The field spent the first press and nothing behind it moved…
+    expect(afterFirst).toBe(4);
+    // …and the second went past it, to the floor.
+    expect(useAppStore.getState().openDeckId).toBeNull();
     expect(name).toHaveValue("Burn");
     expect(deckUpdate).not.toHaveBeenCalled();
   });
@@ -2667,8 +2752,17 @@ describe("DeckEditor", () => {
 
   /**
    * The panel is a fixture of the editor, not a dismissible layer: Escape pressed in its search
-   * box belongs to the card pane, which listens on `window` in the bubble phase. A panel that
-   * consumed the press would leave a card pinned open with nothing to close it.
+   * box belongs to whatever is open behind it — a card pane, and failing that the editor's own
+   * `"navigation"` floor. A panel that consumed the press would leave a card pinned open with
+   * nothing to close it, and a deck that could not be left from the one control a reader spends
+   * the most time in.
+   *
+   * **The probe listens in the _capture_ phase, which is what makes the claim narrow.** An
+   * `"inner"` layer — which is what the panel would be if somebody made it dismissible — consumes
+   * in capture, so a probe registered after it reads `true`. Every rung below is a *bubble*
+   * listener and has not run yet, so `false` here means precisely "no layer of this panel's own
+   * took it" rather than "nothing took it at all". The floor did take it, which is the second
+   * assertion.
    */
   it("lets Escape through from the docked search panel", async () => {
     await open();
@@ -2677,13 +2771,14 @@ describe("DeckEditor", () => {
     const listen = (e: KeyboardEvent) => {
       if (e.key === "Escape") heard.push(e.defaultPrevented);
     };
-    window.addEventListener("keydown", listen);
+    window.addEventListener("keydown", listen, true);
 
     screen.getByRole("searchbox", { name: "Search cards" }).focus();
     await userEvent.keyboard("{Escape}");
 
-    window.removeEventListener("keydown", listen);
+    window.removeEventListener("keydown", listen, true);
     expect(heard).toEqual([false]);
+    expect(useAppStore.getState().openDeckId).toBeNull();
   });
 
   /**
@@ -3186,12 +3281,22 @@ describe("DeckEditor", () => {
    * its own press for the next one. One press, one layer.
    */
   it("closes the import dialog on Escape and leaves the card pane open", async () => {
+    cardDetail.mockResolvedValue(detailOf("Lightning Bolt"));
     await open();
     const heard: boolean[] = [];
     const listen = (e: KeyboardEvent) => {
       if (e.key === "Escape") heard.push(e.defaultPrevented);
     };
+    // Registered *before* the pane mounts and after the editor did, which is what makes the two
+    // readings below different: the editor's `"navigation"` rung is ahead of this probe on
+    // `window` and the pane's `"outer"` rung is behind it.
     window.addEventListener("keydown", listen);
+
+    // **A card really is open**, which this case used to only say. Without it the second press
+    // has no pane to belong to and the floor takes it — a passing test about a ladder with one
+    // rung in it.
+    await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
+    await screen.findByRole("complementary", { name: "Card details" });
 
     await userEvent.click(screen.getByRole("button", { name: "Import cards" }));
     await screen.findByRole("dialog", { name: "Import a decklist" });
@@ -3203,7 +3308,12 @@ describe("DeckEditor", () => {
     await userEvent.keyboard("{Escape}");
 
     window.removeEventListener("keydown", listen);
+    // `true` from an `"inner"` rung that ran in capture, then `false` because the rung that owns
+    // the second press is *behind* this probe — the pane, which outranks the floor.
     expect(heard).toEqual([true, false]);
+    await waitFor(() => expect(useAppStore.getState().selectedCardId).toBeNull());
+    // And the deck the pane was open over is still open: three presses, three rungs, in order.
+    expect(useAppStore.getState().openDeckId).toBe(4);
   });
 
   /**
@@ -3266,9 +3376,15 @@ describe("DeckEditor", () => {
     const listen = (e: KeyboardEvent) => {
       if (e.key === "Escape") heard.push(e.defaultPrevented);
     };
-    window.addEventListener("keydown", listen);
+    // **Capture, because that is the phase the phantom would be in.** An `"inner"` layer consumes
+    // the press before it has descended to its target, so a probe registered after one reads
+    // `true`; every rung below is a bubble listener that has not run yet. `false` here is
+    // therefore the exact claim — no undrawn layer took the press — where a bubble probe would
+    // now read the editor's own `"navigation"` floor and say `true` whether or not the bug was
+    // back.
+    window.addEventListener("keydown", listen, true);
     await userEvent.keyboard("{Escape}");
-    window.removeEventListener("keydown", listen);
+    window.removeEventListener("keydown", listen, true);
     expect(heard).toEqual([false]);
   });
 
@@ -3819,10 +3935,15 @@ describe("DeckEditor drag and drop", () => {
    * The platform cancels a drag itself — in Chromium the keypress goes to the drag operation
    * and the page is told by a `dragend`, which is what takes the tray down here. jsdom has no
    * drag to cancel, so what this pins is the app's half of that contract: while a card is in
-   * the air the editor is listening for no keys at all, so an Escape that reaches the window
-   * arrives with nothing consumed and the card detail pane behind this view still closes on its
-   * own press. An editor that treated a drag as a dismissible layer would eat that press and
-   * leave a card pinned open.
+   * the air the editor registers no layer of its own, so an Escape that reaches the window
+   * arrives with nothing consumed above the floor and the card detail pane behind this view
+   * still closes on its own press. An editor that treated a drag as a dismissible layer would
+   * eat that press and leave a card pinned open.
+   *
+   * **Capture, so the drag is the only thing being asked about.** A dismissible drag would be an
+   * `"inner"` layer and would consume in capture; the editor's `"navigation"` floor is a bubble
+   * rung and has not run when this probe fires. The deck closing is the other half — nothing
+   * outranking the floor took it either.
    */
   it("takes the tray away on the drag's own end, without spending the app's Escape", async () => {
     await open();
@@ -3830,12 +3951,13 @@ describe("DeckEditor drag and drop", () => {
     const listen = (e: KeyboardEvent) => {
       if (e.key === "Escape") heard.push(e.defaultPrevented);
     };
-    window.addEventListener("keydown", listen);
+    window.addEventListener("keydown", listen, true);
 
     const held = await startDrag(card_("Lightning Bolt"));
     expect(screen.getByText("Remove from deck")).toBeInTheDocument();
     await userEvent.keyboard("{Escape}");
     expect(heard).toEqual([false]);
+    expect(useAppStore.getState().openDeckId).toBeNull();
 
     await held.cancel();
 
@@ -3843,7 +3965,7 @@ describe("DeckEditor drag and drop", () => {
     expect(deckSetCardQuantity).not.toHaveBeenCalled();
     expect(deckToCollection).not.toHaveBeenCalled();
     expect(deckMoveCard).not.toHaveBeenCalled();
-    window.removeEventListener("keydown", listen);
+    window.removeEventListener("keydown", listen, true);
   });
 
   /**
