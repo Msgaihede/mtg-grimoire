@@ -214,6 +214,72 @@ describe("ExportDialog", () => {
    * these are about the control: that it draws for one format, that ticking it changes the file,
    * and that what it left out is said out loud before Copy is pressed.
    */
+  /**
+   * The deck label's checkboxes, in the dialog — because a field can be perfectly declared in
+   * `fields.ts`, perfectly written by `format.ts`, and unreachable from the one surface a reader
+   * has. The field row is `availableFields(format, surface)` and nothing else, so what these
+   * assert is that the two declarations meet where a reader can press them.
+   */
+  describe("the deck label", () => {
+    const KEEPER = exportCard({
+      name: "Lightning Bolt",
+      quantity: 2,
+      setCode: "lea",
+      collectorNumber: "161",
+      tagName: "Keeper",
+      tagColor: "#4aab08",
+    });
+    const tagBox = () => screen.getByRole("checkbox", { name: "Tag" });
+
+    it("is ticked on Archidekt and offers no colour box of its own", async () => {
+      const user = userEvent.setup();
+      render(<ExportDialog {...props} cards={[KEEPER]} />);
+
+      await user.click(await screen.findByRole("radio", { name: "Archidekt" }));
+      expect(tagBox()).toBeChecked();
+      // The colour rides inside `^Keeper,#4aab08^`, so a box for it here would change nothing.
+      expect(screen.queryByRole("checkbox", { name: "Tag colour" })).not.toBeInTheDocument();
+    });
+
+    it("writes the label into the Archidekt preview, and stops when it is unticked", async () => {
+      const user = userEvent.setup();
+      render(<ExportDialog {...props} cards={[KEEPER]} />);
+      await user.click(await screen.findByRole("radio", { name: "Archidekt" }));
+      await showList(user);
+
+      expect(screen.getByText(/\^Keeper,#4aab08\^/)).toBeInTheDocument();
+
+      await user.click(tagBox());
+      expect(screen.queryByText(/\^Keeper/)).not.toBeInTheDocument();
+    });
+
+    it("offers both columns on CSV, off until the reader asks", async () => {
+      const user = userEvent.setup();
+      render(<ExportDialog {...props} cards={[KEEPER]} />);
+      await user.click(await screen.findByRole("radio", { name: "CSV" }));
+
+      const colourBox = screen.getByRole("checkbox", { name: "Tag colour" });
+      // CSV's defaults are a deliberate core; the label and its colour are both opt-in there.
+      expect(tagBox()).not.toBeChecked();
+      expect(colourBox).not.toBeChecked();
+
+      await user.click(tagBox());
+      await user.click(colourBox);
+      await showList(user);
+      expect(screen.getByText(/Tag,Tag colour/)).toBeInTheDocument();
+      expect(screen.getByText(/Keeper,#4aab08/)).toBeInTheDocument();
+    });
+
+    it("is offered by no format that has nowhere to put it", async () => {
+      const user = userEvent.setup();
+      render(<ExportDialog {...props} cards={[KEEPER]} />);
+      for (const format of ["Plain text", "MTGO", "Arena", "Moxfield", "TCGplayer"]) {
+        await user.click(await screen.findByRole("radio", { name: format }));
+        expect(screen.queryByRole("checkbox", { name: "Tag" }), format).not.toBeInTheDocument();
+      }
+    });
+  });
+
   describe("the Arena filter", () => {
     /** In Arena (Timeless) and not in Arena (paper-only), as the real blobs read. */
     const IN_ARENA = '{"timeless":"legal","historic":"banned"}';

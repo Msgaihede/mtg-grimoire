@@ -40,18 +40,58 @@ headings are the reader's own words rather than a fixed vocabulary, and the only
 `{noDeck}` — the flag that is what makes an Archidekt export and a re-import agree about a
 maybeboard.
 
-**Archidekt's `^Tag,#colour^` is read on import and written by nobody, and the asymmetry is
-deliberate rather than an omission.** The parser has read the caret group since 2026-08-24 —
-`ParsedLine.tagName`/`tagColor`, `ImportPlan.tags`, the picker on the import step,
-`ImportItem.tag_name`/`tag_color` — so a deck brought over from Archidekt arrives with its labels.
-The **exporter** still writes none, which means an export → import round trip through this app
-loses them. What stops that being a bug worth chasing today is the field table above: a tag is a
-seventh channel with exactly one format able to carry it, so it would need a `TRANSFER_FIELDS`
-entry, a `SURFACE_FIELDS` answer per surface, an `ACTIVE_ONLY`-style decision for the six formats
-that cannot say it, and a `DISCRIMINATOR` thought (two rows differing only in their label must not
-fold). None of that is hard; none of it has a reader asking for it yet. `decklists.test.ts`'s
-fixed-point claim is unaffected — it compares export → import → export, and a channel neither
-writer emits cannot break a fixed point.
+## The deck label, both directions
+
+`^Keeper,#4aab08^` — a `deck_tags` row on a deck card. Read on import since 2026-08-24
+(`ParsedLine.tagName`/`tagColor` → `ImportPlan.tags` → the picker on the import step →
+`ImportItem.tag_name`/`tag_color`), and **written on export since the same day**, so a deck
+survives a full round trip through the one text format with a slot for it.
+
+**Two fields, not one, and the split is forced by the media.** `tag` is the name; `tagColor` is
+the colour. Archidekt writes the pair as one group, so its line has room for both and it offers
+only `tag` — a colour checkbox there would be a control that changed nothing, and `writeLine`
+reads `card.tagColor` off the card whenever `tag` is on. A CSV cell holds one value, so it spends
+a column each and offers both boxes. That is the only place in `fields.ts` where a format
+deliberately declares fewer fields than it writes.
+
+| | Carries a label? | Colour |
+| --- | --- | --- |
+| Archidekt | `^Name,#rrggbb^`, last on the line | inside the group; no box of its own |
+| CSV | `Tag` column | `Tag colour` column, its own box, **off** by default |
+| plain · MTGO · Arena · Moxfield · TCGplayer | no | — |
+
+**On by default for Archidekt and off for CSV.** Archidekt's other four optional fields are on
+too — its defaults are everything the format can say, and the caret group is something Archidekt
+itself emits. CSV's defaults are a deliberate core (printing, category, finish, condition) with
+everything else opt-in, so both boxes join the opt-in side there. `exportPrefs` is session state
+and not persisted (`store.ts`), so a default really does reach every reader on their next launch;
+what makes that acceptable here and not for the Arena filter is that this **adds a suffix** where
+that one **drops rows**, and the tickbox is on screen saying so.
+
+**The trailing `#tag` shape is deliberately not used.** `parse.ts`'s `MARKERS` strips `\s+#\S+$`
+and reads nothing out of it, so writing a label that way into a plain or Moxfield line would be a
+channel this app emits and cannot read back — and `\S+` cannot hold `Cut candidate` anyway.
+Archidekt and CSV are the whole list.
+
+**No `DISCRIMINATOR` entry, and that is checked rather than assumed.** A label is not structural:
+with `tag` on it is an ordinary keyed field, so two differently-labelled rows are two lines; with
+it off the file cannot tell them apart and folding them is the fold doing its job.
+`format.test.ts`'s "keeps two labels apart while Tag is on, and folds them when it is off" is that
+pair.
+
+**`Tag` and the collection's `Tags` are two different columns for two different facts** — one row
+of `deck_tags` against `collection_entries.tags`, which is free text the reader typed on a copy
+they own. The near-collision is safe rather than survived: `SURFACE_FIELDS` gives one to the deck
+and the other to the collection, so no surface offers both and no file can hold both.
+`fields.test.ts` asserts that emptiness directly, over every format × surface pair.
+
+The round trip is measured rather than claimed. `decklists.test.ts` wires `tagName`/`tagColor`
+into `exportCardsFor`, so `ARCHIDEKT_SECTIONED`'s **44 labelled lines of 105** go out through the
+writer and back through the parser: "keeps every label, and its colour, through Archidekt"
+compares the label on every line before and after, and the CSV twin does the same over both
+columns. The `it.each(READABLE)` fixed point would have stayed green if the caret group had never
+been written at all — a channel neither writer emits cannot break a fixed point — which is why
+those two exist beside it.
 
 ## The Arena filter — what "in MTG Arena" is measured as
 

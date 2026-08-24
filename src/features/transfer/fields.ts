@@ -22,6 +22,11 @@ export const TRANSFER_FIELD_IDS = [
   "collectorNumber",
   "category",
   "finish",
+  // After the first six on purpose: those are today's deck CSV header, spelled in today's order,
+  // and inserting into them would change every existing CSV's column order for a field that is
+  // switched off by default there.
+  "tag",
+  "tagColor",
   "condition",
   "lang",
   "tradelistQuantity",
@@ -66,6 +71,29 @@ export const TRANSFER_FIELDS: Record<TransferFieldId, TransferField> = {
     read: (c) => c.collectorNumber ?? "",
   },
   category: { label: "Category", csvHeader: "Category", read: (c) => c.categoryName ?? "" },
+  /**
+   * The deck label — `deck_tags` by name.
+   *
+   * **`Tag` against the collection's `Tags` one row down, and the near-collision is deliberate
+   * rather than survived.** They are two different facts (a `deck_tags` row against
+   * `collection_entries.tags`, free text), and no surface holds both — `SURFACE_FIELDS` gives
+   * this one to the deck and that one to the collection — so the two boxes can never be drawn
+   * together and the two headers can never be in one file. Renaming either to something further
+   * apart would cost every reader who already has a `Tags` column, for a confusion the field row
+   * cannot actually produce.
+   */
+  tag: { label: "Tag", csvHeader: "Tag", read: (c) => c.tagName ?? "" },
+  /**
+   * That label's colour, and **a field only because a CSV cell holds one value.**
+   *
+   * Archidekt writes the pair as `^Keeper,#4aab08^`, so its writer reads `tagColor` off the card
+   * whenever `tag` is on and offers no box of its own — a checkbox there would be a control that
+   * changes nothing. A CSV has to spend a column, so it gets one, off by default: the colour
+   * repeats down every row wearing that label, and it only decides anything on the way back in
+   * for a label the importing database has never seen. Ticking it is what makes a CSV round trip
+   * lossless into a fresh install.
+   */
+  tagColor: { label: "Tag colour", csvHeader: "Tag colour", read: (c) => c.tagColor ?? "" },
   // The word rather than the letter: a column somebody opens in a spreadsheet should say `foil`.
   finish: { label: "Finish", csvHeader: "Finish", read: (c) => c.finish ?? "" },
   condition: { label: "Condition", csvHeader: "Condition", read: (c) => c.condition ?? "" },
@@ -127,9 +155,13 @@ export const FORMAT_FIELDS: Record<ExportFormat, FormatFields> = {
   mtgo: { optional: [], defaultOn: [] },
   arena: { optional: PRINTING, defaultOn: PRINTING },
   moxfield: { optional: [...PRINTING, "finish"], defaultOn: [...PRINTING, "finish"] },
+  // **`tag` and not `tagColor`**: the colour rides inside `^Keeper,#4aab08^`, so it is part of
+  // what `tag` writes here rather than a channel of its own. On by default like this format's
+  // other four — Archidekt's defaults are everything Archidekt can say, and the caret group is
+  // something Archidekt itself emits.
   archidekt: {
-    optional: [...PRINTING, "finish", "category"],
-    defaultOn: [...PRINTING, "finish", "category"],
+    optional: [...PRINTING, "finish", "category", "tag"],
+    defaultOn: [...PRINTING, "finish", "category", "tag"],
   },
   tcgplayer: { optional: PRINTING, defaultOn: PRINTING },
   // Everything, and the surface is what narrows it. `condition` is in the defaults so a
@@ -145,8 +177,8 @@ export type TransferSurface = "deck" | "collection" | "wishlist";
 
 export const SURFACE_FIELDS: Record<TransferSurface, readonly TransferFieldId[]> = {
   deck: [
-    "quantity", "name", "setCode", "collectorNumber", "category", "finish", "lang",
-    "setName", "rarity", "typeLine", "unitPrice",
+    "quantity", "name", "setCode", "collectorNumber", "category", "finish", "tag", "tagColor",
+    "lang", "setName", "rarity", "typeLine", "unitPrice",
   ],
   collection: [
     "quantity", "name", "setCode", "collectorNumber", "finish", "condition", "lang",
