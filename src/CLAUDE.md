@@ -401,6 +401,13 @@ Every one of these has its measurement and its story in
   fix — `relative` on `main` instead moved the phantom scroll into `main` (`scrollHeight`
   742 → 1646) rather than removing it. Both figures, and the four-view scrollbar count after:
   [frontend-design.md](../docs/reference/frontend-design.md).
+  **Since 2026-08-24 that box is `AppShell`'s `main`, and it is the only one.** `f02b284`
+  ("fix scroll") took `overflow-y-auto` off the deck editor's `<section>`, which had made it a
+  scroller nested inside `main` — so the example above is the history of the rule rather than
+  where it currently applies. Nothing about the rule changed; what changed is that there is one
+  scroller to apply it to. `AppShell.test.tsx` pins `relative` and `overflow-auto` **together** on
+  `main` (either alone is a bug: `overflow` without `relative` is the phantom scroll, `relative`
+  without `overflow` is inert), and `DeckEditor.test.tsx` asserts the editor does not re-add one.
 - **A scroller has to leave room for the marks its own targets draw _outside_ their border box,
   because `overflow` clips at the scroller's padding box.** A ring is a box shadow and a focus
   outline is painted outside the border box, so neither is part of the box that laid the target
