@@ -1542,6 +1542,26 @@ clientWidth` at 1024, 1280 and 1920, and the deck view's own scroller matched it
   narrowest surface that draws it* — and both would have reached a reader as a horizontal
   scrollbar across the whole deck builder, because `DeckEditor`'s section computes `overflow-x`
   to `auto`.
+  **Driven in the shipped window 2026-08-24** (`npm run tauri dev`, a **debug** build, against the
+  real 116 700-card corpus), which is what turns the sweep above from a model into a reading. The
+  sidebar was collapsed, so the bar is the window less 108px:
+
+  | window | bar | top row | tray | Filters |
+  | --- | --- | --- | --- | --- |
+  | 1920 | 1812 | one line: search · colours · mana · Filters · sort · layout | 3 col | with word |
+  | 1400 / 1300 / 1100 | 1292 / 1192 / 992 | search · colours · Filters · layout, then mana · sort | 3 col | with word |
+  | 1000 / 900 | 892 / 792 | the same two lines | 2 col | icon + badge |
+  | deck panel, default | **371** | search / colours + Filters / mana / sort | 1 col | icon + badge |
+  | deck panel, **floor** | **193** | search / colours / Filters / mana / sort | 1 col | icon + badge |
+
+  The word drops between a bar of 992 and 892 and the tray halves with it, which is the 900
+  threshold read from the outside. At both panel widths the mana chips measured **32px** and the
+  rarity cell a **2-column grid**; at the floor the price row wrapped its second box onto a line of
+  its own, which is the `flex-wrap` above doing exactly what it was added for. **Every one of those
+  seven widths reported `scrollWidth === clientWidth` on the bar, on `main` and on the document** —
+  no horizontal scrollbar anywhere, which is the failure the two fixes exist to prevent and the one
+  a screenshot alone cannot rule out.
+
   **jsdom applies no container queries and loads no stylesheet at all**, so none of this can go
   red in the suite: every test there sees the base (narrowest) arrangement, and the numbers come
   from a browser.

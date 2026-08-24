@@ -169,6 +169,8 @@ export function PriceRange({
 
   const lowPos = min === undefined ? 0 : positionOfPrice(min);
   const highPos = max === undefined ? PRICE_POSITIONS : positionOfPrice(max);
+  /** Whether either end is a real bound — what tells a filter from a control at rest. */
+  const bounded = min !== undefined || max !== undefined;
   const spoken = (value: number | undefined, open: string) =>
     value === undefined ? open : formatPrice(value, currency);
 
@@ -235,7 +237,18 @@ export function PriceRange({
         <div aria-hidden="true" className="absolute inset-x-0 h-[3px] rounded-full bg-border" />
         <div
           aria-hidden="true"
-          className="absolute h-[3px] rounded-full bg-accent"
+          className={cn(
+            "absolute h-[3px] rounded-full",
+            // **Gold only when the band is a filter.** With both ends open the span covers the
+            // whole track, so an unconditional accent draws a full-width gold bar across a tray
+            // nobody has touched — and gold means *this is on* everywhere else on this row, which
+            // makes it the one control that claims to be filtering when it is not. Found by
+            // looking at the shipped window; every number about this control was already right.
+            //
+            // The two thumbs stay gold either way: they are where the reader presses, and a
+            // hairline thumb on a hairline track is a control with nothing to aim at.
+            bounded ? "bg-accent" : "bg-border",
+          )}
           style={{
             left: `${(lowPos / PRICE_POSITIONS) * 100}%`,
             right: `${100 - (highPos / PRICE_POSITIONS) * 100}%`,
