@@ -946,6 +946,23 @@ export interface CollectionQuery extends CardFilters {
    * serde error at runtime and a type error nowhere.
    */
   allocation?: "all" | "unallocated";
+  /**
+   * The band one **copy** has to cost, at {@link marketplace} — the deck builder's Collection
+   * Search tab is the one sender (2026-08-25).
+   *
+   * **The entry's own per-finish price, which is not {@link SearchRequest.priceMin}'s
+   * expression.** This is what the row already reports as {@link CollectionRow.unitPrice} and
+   * what the `price` sort orders by, so a copy inside the band is a copy the wall prices inside
+   * it; the search filters by the printing's `usd → usd_foil → usd_etched` fallback chain
+   * instead, which prices a plain copy at its foil's rate whenever that is the only listing.
+   *
+   * A copy that marketplace has no price for is `NULL` and fails both bounds, so it drops out of
+   * a banded list — the same statement the `NULLS LAST` sort and the summary's `unpriced` count
+   * make. Two independent bounds: sending only one asks nothing about the other end, and an
+   * inverted pair narrows to nothing rather than being reordered.
+   */
+  priceMin?: number;
+  priceMax?: number;
   /** How to order the list, first column deciding. Empty or absent is name order. */
   sort?: SortSpec<CollectionSortKey>;
   /** Which marketplace every price is quoted from, and therefore what the `value` and `price`

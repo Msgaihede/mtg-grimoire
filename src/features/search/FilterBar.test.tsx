@@ -47,11 +47,17 @@ const search = (over: Record<string, unknown> = {}) =>
     flipSortDir: vi.fn(),
     activeCount: 0,
     resetAll: vi.fn(),
-    // The tray's own three filters. `owned` and `allPrintings` are left off deliberately —
-    // `undefined` is the unfiltered value of both, and the row reads them as such.
+    // The tray's own filters. **Every setter is here, and since 2026-08-25 that is structural
+    // rather than tidy**: `FilterSurface`'s optional half is what tells a surface that *cannot*
+    // ask a question from one that is not currently asking it, so `FilterTray` draws a cell only
+    // when its own setter is — and a stub missing one would silently lose the cell rather than the
+    // assertion. `owned` and `allPrintings` keep their unfiltered *values* (`undefined` and
+    // `false`), which is what the row reads them as.
     rarities: [] as string[],
     toggleRarity: vi.fn(),
     setOwned: vi.fn(),
+    allPrintings: false,
+    toggleAllPrintings: vi.fn(),
     priceMin: undefined as number | undefined,
     priceMax: undefined as number | undefined,
     setPriceRange: vi.fn(),
@@ -61,6 +67,24 @@ const search = (over: Record<string, unknown> = {}) =>
     // what it did the first time this row grew a price filter.
     marketplace: { id: "tcgplayer", label: "TCGplayer", currency: "usd", feed: false },
     ...over,
+    /**
+     * **Which way the list runs — the *hook's* answer since 2026-08-25, not the row's.**
+     *
+     * `FilterBar` derived this from `sortSelection === ""` until the deck editor's Collection tab
+     * started drawing the same row. That test is a rule about the **card search's** empty spec,
+     * which is `Best match` and has no direction; the collection's empty spec is name order,
+     * which has one — so derived in the component, one of the two surfaces is drawn with a dead
+     * arrow. `useCardSearch` and `useCollectionSearch` each answer for themselves now.
+     *
+     * **Computed after the spread rather than defaulted before it**, which is what keeps the
+     * cases below unchanged: every one of them says which way the list runs by overriding `sort`,
+     * exactly as it did when the row read that array itself. An explicit `sortDir` still wins,
+     * for the case that wants the two to disagree.
+     */
+    sortDir:
+      "sortDir" in over
+        ? over.sortDir
+        : ((over.sort ?? []) as SortSpec<SearchSortKey>)[0]?.dir,
   }) as unknown as Parameters<typeof FilterBar>[0]["search"];
 
 /**

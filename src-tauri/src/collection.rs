@@ -1280,6 +1280,22 @@ pub struct CollectionQuery {
     /// Whether to leave out the copies a deck holds. Absent is [`Allocation::All`], which is
     /// what every caller written before folders existed asked for without saying so.
     pub allocation: Option<Allocation>,
+    /// The band one **copy** has to cost, at the marketplace this query names — the deck
+    /// builder's Collection Search tab is the one sender (2026-08-25), and it draws the same
+    /// control the card search has drawn since the tray landed.
+    ///
+    /// **The entry's own per-finish price and never the printing's fallback chain**: the
+    /// expression is [`crate::sorting::price_expr`] over [`ENTRY_FINISH`], which is the figure
+    /// this list already reports as `unit_price` and the one the `price` sort orders by. A row
+    /// inside the band is therefore a row the wall prices inside it — where
+    /// [`crate::sorting::printing_price_expr`], which the *search* filters by, would price a
+    /// plain copy at its foil's price whenever that is the only listing.
+    ///
+    /// A copy that marketplace has no price for is `NULL`, so it fails both bounds and drops out
+    /// of a banded list. That is the same statement the price sort makes with `NULLS LAST` and
+    /// the summary makes with its `unpriced` count: no price is not a price of zero.
+    pub price_min: Option<f64>,
+    pub price_max: Option<f64>,
     /// How to order the list: columns in priority order, the first deciding and the rest
     /// breaking its ties. Empty or absent is name order. Keys outside [`COLLECTION_SORTS`]
     /// are dropped, never interpolated.
@@ -1506,6 +1522,33 @@ fn scope(q: &CollectionQuery) -> crate::filters::Predicates {
               OR (SELECT f.kind FROM collection_folders f WHERE f.id = e.folder_id) <> 'deck')"
                 .to_owned(),
         );
+    }
+    // **Built here rather than in `filters.rs` because the expression is the marketplace's**, and
+    // [`crate::sorting::price_expr`] is the one place that mapping is written — the same
+    // expression this list reports as `unit_price` and the `price` sort reads, so a copy inside
+    // the band is a copy the wall prices inside it. `search::scope` says the same thing about
+    // `printing_price_expr`; the two differ only in which price a row *has*, and that difference
+    // is [`ENTRY_FINISH`]'s whole reason.
+    //
+    // Interpolated as SQL and bound as a parameter: `price_expr` returns a *fragment* built from
+    // a closed enum and a constant column name with no user text anywhere in it, and the numbers
+    // are bound.
+    //
+    // Two half-open bounds rather than a `BETWEEN`, so a reader who has moved only one end sends
+    // only one predicate — and so an inverted pair (`min` above `max`) narrows to nothing rather
+    // than being silently reordered into a range nobody asked for.
+    //
+    // In `scope` rather than in `list_entries`, which is what keeps the header honest: the page,
+    // the full count beside it and `summary`'s value all read this one predicate list, so a band
+    // cannot leave a total describing rows the list does not draw.
+    if q.price_min.is_some() || q.price_max.is_some() {
+        let price = crate::sorting::price_expr(q.marketplace, ENTRY_FINISH);
+        if let Some(min) = q.price_min {
+            p.push(format!("{price} >= ?"), Box::new(min));
+        }
+        if let Some(max) = q.price_max {
+            p.push(format!("{price} <= ?"), Box::new(max));
+        }
     }
     p
 }
@@ -4020,6 +4063,195 @@ mod tests {
         assert_eq!(
             ids(&format!(r#"{{{sort},"marketplace":"manapool"}}"#)),
             C("dear-usd,etched,cheap-usd")
+        );
+    }
+
+    /// **A price band narrows the page, the count beside it and the summary together**, which
+    /// is the whole reason the predicate is pushed in [`scope`] rather than in
+    /// [`list_entries`]: those three read one predicate list, and a band written into only the
+    /// page would leave a header counting rows the wall does not draw.
+    #[test]
+    fn a_price_band_narrows_the_list_the_count_and_the_summary_together() {
+        let conn = seeded();
+        // 400.50, 12.00 and 1.00 at TCGplayer — one above the band, one inside it, one below.
+        add_entry(&conn, &input("bolt-lea", "nonfoil", 1)).unwrap();
+        add_entry(&conn, &input("bolt-jp", "nonfoil", 1)).unwrap();
+        add_entry(&conn, &input("card-1", "nonfoil", 1)).unwrap();
+
+        let q = CollectionQuery {
+            price_min: Some(1.50),
+            price_max: Some(100.00),
+            ..Default::default()
+        };
+        let page = list_entries(&conn, &q).unwrap();
+        assert_eq!(
+            page.items
+                .iter()
+                .map(|r| r.card_id.clone())
+                .collect::<Vec<_>>(),
+            C("bolt-jp"),
+            "12.00 is inside the band; 400.50 and 1.00 are outside its two ends"
+        );
+        assert_eq!(
+            page.total, 1,
+            "the count is of the banded rows, not of the table"
+        );
+        let s = summarise(&conn, &q).unwrap();
+        assert_eq!(s.unique_cards, 1, "and the header describes the same rows");
+    }
+
+    /// **The band reads the entry's own finish, which is what makes it agree with the Price
+    /// column** — and is exactly where the card search's filter would answer differently.
+    ///
+    /// `bolt-jp` is 12.00 nonfoil and 90.00 foil. A 50–100 band keeps the foil copy and drops
+    /// the plain one. [`crate::sorting::printing_price_expr`], which the *search* filters by, is
+    /// a `usd → usd_foil → usd_etched` fallback chain and would price **both** rows at 12.00 —
+    /// so both would fall out of a band the Price column beside them says one of them is in.
+    #[test]
+    fn a_price_band_reads_the_entrys_own_finish_and_not_a_fallback_chain() {
+        let conn = seeded();
+        add_entry(&conn, &input("bolt-jp", "nonfoil", 1)).unwrap();
+        add_entry(&conn, &input("bolt-jp", "foil", 1)).unwrap();
+
+        let rows = list_entries(
+            &conn,
+            &CollectionQuery {
+                price_min: Some(50.00),
+                price_max: Some(100.00),
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .items;
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].finish, "foil");
+        assert_eq!(
+            rows[0].unit_price,
+            Some(90.00),
+            "the figure the band tested"
+        );
+    }
+
+    /// One bound on its own is one predicate — a reader who has moved only one end of the
+    /// slider has not asked anything about the other.
+    #[test]
+    fn one_end_of_a_price_band_is_one_predicate() {
+        let conn = seeded();
+        add_entry(&conn, &input("bolt-lea", "nonfoil", 1)).unwrap();
+        add_entry(&conn, &input("card-1", "nonfoil", 1)).unwrap();
+
+        let ids = |q: CollectionQuery| {
+            list_entries(&conn, &q)
+                .unwrap()
+                .items
+                .into_iter()
+                .map(|r| r.card_id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            ids(CollectionQuery {
+                price_min: Some(100.00),
+                ..Default::default()
+            }),
+            C("bolt-lea"),
+            "from 100 up"
+        );
+        assert_eq!(
+            ids(CollectionQuery {
+                price_max: Some(100.00),
+                ..Default::default()
+            }),
+            C("card-1"),
+            "up to 100"
+        );
+    }
+
+    /// **An inverted pair lists nothing, rather than being tidied into a range nobody asked
+    /// for.** Two half-open bounds is what makes that true with no line to enforce it, and an
+    /// empty wall is the honest report of a band with nothing in it.
+    #[test]
+    fn an_inverted_price_band_lists_nothing() {
+        let conn = seeded();
+        add_entry(&conn, &input("bolt-lea", "nonfoil", 1)).unwrap();
+        add_entry(&conn, &input("bolt-jp", "nonfoil", 1)).unwrap();
+
+        let page = list_entries(
+            &conn,
+            &CollectionQuery {
+                price_min: Some(100.00),
+                price_max: Some(10.00),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert!(page.items.is_empty());
+        assert_eq!(page.total, 0);
+    }
+
+    /// **A copy the marketplace has no price for fails both bounds and drops out**, which is
+    /// the statement `NULLS LAST` makes in the sort and `unpriced` makes in the summary: no
+    /// price is not a price of zero, and it is not the nonfoil rate either.
+    ///
+    /// `bolt-jp`'s blob names no `$.eur` at all, so it is unpriced in euros while `bolt-lea` is
+    /// 320.00 — the neighbour is what proves the NULL is about that card rather than about the
+    /// marketplace having no rows here.
+    #[test]
+    fn a_copy_the_marketplace_cannot_price_drops_out_of_a_band() {
+        let conn = seeded();
+        add_entry(&conn, &input("bolt-lea", "nonfoil", 1)).unwrap();
+        add_entry(&conn, &input("bolt-jp", "nonfoil", 1)).unwrap();
+
+        let rows = list_entries(
+            &conn,
+            &CollectionQuery {
+                marketplace: crate::sorting::Marketplace::Cardmarket,
+                price_min: Some(0.00),
+                price_max: Some(1_000_000.00),
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .items;
+        assert_eq!(
+            rows.iter().map(|r| r.card_id.clone()).collect::<Vec<_>>(),
+            C("bolt-lea"),
+            "a band as wide as the data still cannot hold a NULL"
+        );
+    }
+
+    /// The feed arm of [`crate::sorting::price_expr`] is a correlated scalar subquery, so this
+    /// is the one shape of the expression whose behaviour in a `WHERE` is worth pinning apart
+    /// from its behaviour in a `SELECT`.
+    #[test]
+    fn a_price_band_on_a_feed_marketplace_reads_that_feed() {
+        let conn = seeded_marketplaces();
+
+        // Per copy: Card Kingdom quotes $3 / $20 / — and TCGplayer $1 / $50 / $9, so one 2–10
+        // band picks a **different** card at each shop out of the same three rows — and the
+        // etched copy Card Kingdom has never listed is unpriced there rather than cheap.
+        let band = |marketplace| CollectionQuery {
+            marketplace,
+            price_min: Some(2.00),
+            price_max: Some(10.00),
+            ..Default::default()
+        };
+        let ids = |q: CollectionQuery| {
+            list_entries(&conn, &q)
+                .unwrap()
+                .items
+                .into_iter()
+                .map(|r| r.card_id)
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            ids(band(crate::sorting::Marketplace::Cardkingdom)),
+            C("cheap-usd"),
+            "$3 is in the band at this feed; $20 is over it and the etched row has no row here"
+        );
+        assert_eq!(
+            ids(band(crate::sorting::Marketplace::Tcgplayer)),
+            C("etched"),
+            "and at Scryfall's prices the same band holds only the $9 etched copy"
         );
     }
 

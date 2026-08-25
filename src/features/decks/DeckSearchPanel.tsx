@@ -8,7 +8,7 @@ import {
   type MouseEvent as ReactMouseEvent,
 } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus, Search } from "lucide-react";
+import { ChevronLeft, Plus } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { OwnedBadge } from "@/components/OwnedBadge";
 import { useTooltip } from "@/components/tooltip/useTooltip";
@@ -16,15 +16,14 @@ import { CardGrid } from "@/features/search/CardGrid";
 import { FilterBar } from "@/features/search/FilterBar";
 import { summaryOf } from "@/features/search/SearchPage";
 import { useCardSearch, type FormatFilterOption } from "@/features/search/useCardSearch";
-import { FOCUS, FOCUS_INSET } from "@/lib/focus";
+import { FOCUS } from "@/lib/focus";
 import { ipcError, type CardSummary, type DeckCategory } from "@/lib/ipc";
-import { statusLine } from "@/lib/motion";
+import { statusLine, TRANSITION } from "@/lib/motion";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { AUTO_CATEGORY, autoCategoryFor } from "./autoCategory";
 import { CollectionSearchTab } from "./CollectionSearchTab";
 import { cardDraggable } from "./dnd";
-import { ADD_MODES, type AddMode } from "./NormalSearchAdd";
 import type { Deck } from "./useDeck";
 import { useDeckSearchOpen } from "./useDeckSearchOpen";
 
@@ -244,25 +243,22 @@ export interface DeckSearchPanelProps {
    * Optional, so a story or a test can mount this panel with a mutation and nothing else.
    */
   onAdded?: (entryId: number) => void;
-  /**
-   * What a press on the **All cards** tab's Add button means — a copy the reader has, or one
-   * they are putting on the list in order to buy it. `NormalSearchAdd.ts` is the rule, the two
-   * labels and the memory; this panel draws the control and states neither.
+  /*
+   * **The own/need pair stood here from 2026-08-23 to 2026-08-25 and is gone.**
    *
-   * **Held by the editor and drawn here**, which is the split this pair exists for. The answer
-   * is the editor's because it governs the toolbar's quick-add field as well, and it is kept per
-   * deck for the length of the window (`useAddMode`); the *control* is here because the mode is
-   * a fact about this tab's Add button, and a reader looking at a wall of search results should
-   * not have to look across the desk to see which kind of add they are about to make.
+   * It was `mode`/`onMode`, drawn as a segmented pair beside the disclosure, and it decided what
+   * this tab's Add button *wrote*: a `deck_cards` row that reads as missing, or a move of a copy
+   * the reader already had. Two things retired it. It was reported as clutter on the one row this
+   * column can least afford, and — the reason it is a deletion rather than a relocation — the
+   * **Collection tab is the better answer to the question it asked**: it searches the copies the
+   * reader actually holds, names the deck a spoken-for copy would be taken from, and asks before
+   * taking it. "I own this" done from a wall of Scryfall printings was the same write with none
+   * of that.
    *
-   * **It shipped on the toolbar for a day and that was a workaround rather than a placement**:
-   * this file belonged to another agent when the toggle was built. The prose it left behind
-   * argued the toolbar was right because the mode governs two controls — which is an argument
-   * for where the *state* lives, and this pair is what separates the two.
+   * Every add from this panel therefore means "I need this" — `DEFAULT_ADD_MODE`, which is what
+   * a reader who never pressed the pair already got. `useDeck.addCard`'s `owned` arm and
+   * `NormalSearchAdd`'s hunt for a free copy went with it.
    */
-  mode: AddMode;
-  /** The press. See {@link DeckSearchPanelProps.mode} — the panel owns no memory of its own. */
-  onMode: (mode: AddMode) => void;
   /**
    * Where a card may be put, in the order the select offers them — the editor's own list of
    * the open deck's categories, so this panel offers exactly the columns beside it.
@@ -403,8 +399,6 @@ export interface DeckSearchPanelProps {
 export function DeckSearchPanel({
   add,
   onAdded,
-  mode,
-  onMode,
   categories,
   deckId,
   targetCategoryId,
@@ -564,6 +558,17 @@ export function DeckSearchPanel({
       type="button"
       aria-expanded={shown}
       aria-disabled={!roomy || undefined}
+      // **An `aria-label`, which the words on the button used to be** (2026-08-25). This was an
+      // icon *and* the text `Search cards`, so the visible words were the accessible name and a
+      // label differing from them would have been a control voice control cannot reach (WCAG
+      // 2.5.3). The words are a heading beside it now and this button draws nothing but a
+      // chevron, so there is no visible text for a name to have to contain — and a name of its
+      // own is owed, because "chevron" is not what pressing it does.
+      //
+      // It names the **result** rather than the state, which is the same rule the direction
+      // arrow on the filter bar follows: `aria-expanded` already says which way round it is, and
+      // a reader who has just heard "collapsed" wants to know what the press will do about it.
+      aria-label={shown ? "Collapse card search" : "Expand card search"}
       {...tip(roomy ? null : NO_ROOM)}
       // `setOpen(!open)` rather than an updater, because the answer is a *query's* now rather
       // than a `useState`'s and there is no functional form to take one. Safe for the same
@@ -572,20 +577,45 @@ export function DeckSearchPanel({
       // next press can be made.
       onClick={() => roomy && setOpen(!open)}
       className={cn(
-        "flex shrink-0 items-center gap-1.5 rounded-md text-xs text-dim",
+        "flex size-7 shrink-0 items-center justify-center rounded-md text-dim",
         "transition-colors duration-150 motion-reduce:transition-none",
         roomy ? "hover:text-text" : "cursor-not-allowed opacity-60",
-        shown ? "px-1 py-1" : "w-9 flex-col justify-start border border-border py-2",
+        // Collapsed the rail's own border is on this button, exactly as it was: at 36px a
+        // hairline beside a bordered control would be two lines saying one thing, and the button
+        // is the only thing in the rail that can carry it.
+        shown || "w-9 border border-border",
         FOCUS,
       )}
     >
-      <Search className="size-3.5 shrink-0" aria-hidden="true" />
-      {/* Down the rail when the panel is shut, so 36px of chrome still says what it is
-          rather than leaving a bare icon to be guessed at. The words are the button's
-          accessible name either way — `aria-label` would be a second, invisible copy of
-          them, and a name that differs from the visible text is a control voice control
-          cannot reach (WCAG 2.5.3). */}
-      <span style={shown ? undefined : { writingMode: "vertical-rl" }}>Search cards</span>
+      {/* **The chevron points where the panel is going**, which is what makes it readable
+          without the words: right when the panel is open, because pressing it slides this column
+          away to the right edge it is docked against, and left when it is a rail, because
+          pressing it brings the column back out.
+
+          **One icon turned over, never `ChevronRight` swapped in for `ChevronLeft`.** That is
+          `SortableHeader.tsx:51-55`'s rule and the filter bar's sort arrow follows it for the
+          same reason: a different element in the same slot is unmounted and remounted, so the
+          indicator *teleports*, and the whole of what the press means is that the direction
+          reversed. Half a turn is that fact, drawn.
+
+          `initial={false}`, so a panel that mounts already open draws its chevron turned rather
+          than spinning it on first paint. `rotate` is a transform prop, so `MotionConfig
+          reducedMotion="user"` reaches it and no `useReducedMotion` opt-out is owed here
+          (`docs/reference/motion.md` — the trap there is the *non*-positional properties, and
+          this animates none).
+
+          `flex` on the span is load-bearing and not decoration: a bare `<span>` is a
+          non-replaced inline box, a transform does not apply to one at all, and the rotation
+          would silently do nothing. */}
+      <motion.span
+        aria-hidden="true"
+        initial={false}
+        animate={{ rotate: shown ? 180 : 0 }}
+        transition={TRANSITION.fast}
+        className="flex"
+      >
+        <ChevronLeft className="size-4" />
+      </motion.span>
     </button>
   );
 
@@ -630,27 +660,28 @@ export function DeckSearchPanel({
           onResize={resize}
         />
       )}
-      {/* Collapsed, this row *is* the panel, so it takes the height and lets the rail stretch
-          down it — a 36px strip reads as an edge, an 80px one reads as a stray button. */}
+      {/* **The panel's title bar** — the chevron at the left edge and the name of the column
+          centred over the rest of it.
+
+          Collapsed, this row *is* the panel, so it takes the height and lets the rail stretch
+          down it — a 36px strip reads as an edge, an 80px one reads as a stray button. Drawn, it
+          is a heading row and `items-center` is what keeps the 28px chevron and the title on one
+          baseline.
+
+          **No `flex-wrap` any more, and nothing here can overhang without it.** That class was
+          load-bearing while this row held three controls — the disclosure at 99px, the tab strip
+          at 141 and the own/need pair at 175, none of which shared a line inside the panel's
+          **193px** content box at its floor, so unwrapped they became a horizontal scrollbar
+          across the whole deck builder (`src/CLAUDE.md`, and `ManaValueChips` shipped that bug
+          once already). The strip is a line of its own and the pair is deleted; what is left is a
+          28px square and a text node that can shrink to a word, so there is nothing here with a
+          min-content wider than the panel. The title carries `truncate` rather than wrapping,
+          because a two-line heading over a search box is a heading that moves when the reader
+          drags the edge. */}
       <div
         className={cn(
           "flex gap-2",
-          // **`flex-wrap` is the whole of what makes this row safe at this panel's floor**, and
-          // it is invisible at every width anybody designs at. Measured headless over the built
-          // stylesheet: 206px is a **193px** content box, the disclosure is **99**, the strip
-          // **141** and the own/need pair **175**, so no two of them share a line — each drops
-          // below the last, and the row is 62px with two controls on it and **100** with three
-          // against 30 for one line. At the panel's 384px opening width the disclosure and the
-          // strip sit on one line inside 371 and the pair takes the second (68px); by ~1000px all
-          // three are one 30px line. A flex item cannot shrink below its own min-content,
-          // so unwrapped this is not a squeeze but an *overhang* — and `DeckEditor`'s page section
-          // is `overflow-y-auto`, which computes `overflow-x` to `auto`, so the overhang becomes a
-          // horizontal scrollbar across the whole deck builder. That is the one thing the app's
-          // 1024px floor forbids, and `ManaValueChips` shipped it once already (`src/CLAUDE.md`).
-          //
-          // Only in the drawn state: the rail is one vertical child and a wrap there would be a
-          // wrap of nothing.
-          shown ? "shrink-0 flex-wrap items-center" : "min-h-0 flex-1 items-stretch",
+          shown ? "shrink-0 items-center" : "min-h-0 flex-1 flex-col items-stretch",
         )}
       >
         {/* **The "Add to" select was here until 2026-08-15 and is now in deck settings.** It
@@ -663,25 +694,38 @@ export function DeckSearchPanel({
             files into, per card, which is where the question is actually being asked.
 
             **The tab strip was here from 2026-08-23 to 2026-08-24 and is a line of its own now.**
-            It sat here because the row had the space; what that cost is on {@link TabStrip} —
-            three segmented pairs of grey and gold pills, wrapping to two lines at the panel's own
-            opening width, met before the search box. The row is back to the disclosure and, on one
-            tab, the own/need pair. */}
-        {toggle}
-        {/* **On the card-search tab and nowhere else**, because that is the only tab whose Add
-            button it decides. A copy filed in the reader's own binder is a copy they *have*, so
-            the collection tab's press has nothing to ask — a mode control drawn beside it would
-            be a switch with one meaning, which reads as a control that does not work.
+            It sat here because the row had the space; what that cost is on {@link TabStrip}.
 
-            Measured at the panel's floor rather than reasoned about: 206px is a **193px** content
-            box, the pair is **175** at these labels, and the row is `flex-wrap` — so it drops to a
-            line of its own at **193/193** with 18px to spare and no overhang. **The strip leaving
-            this row bought back a line at every width below ~1000**, where the two of them used to
-            wrap past each other; the pair alone now shares line one with the 99px disclosure at
-            the 384px opening width. Shorter words buy nothing at the floor — `Own`/`Need` measures
-            95 and the disclosure alone already forces the wrap there — so the reader's own words
-            stay. */}
-        {shown && tab === "all" && <AddModeStrip mode={mode} onMode={onMode} />}
+            **The own/need pair was here from 2026-08-23 to 2026-08-25 and is deleted** — see
+            {@link DeckSearchPanelProps} for why the Collection tab is the better answer to the
+            question it asked. */}
+        {toggle}
+        {/* The column's name, centred over the row — **a `<span>` and not the button's label**,
+            which is the change of 2026-08-25. The two used to be one control: an icon and the
+            words inside the disclosure, which made the heading a thing you could press by
+            accident and put the panel's name hard against its left edge. Split, the button is an
+            icon with an `aria-label` of its own and this is a heading a reader's eye lands on.
+
+            `flex-1 text-center` plus the spacer below is how it is centred over the *panel*
+            rather than over what the chevron leaves: without the spacer the midpoint of a
+            `flex-1` text node sits 14px right of the panel's own. Cheaper than absolute
+            positioning and it keeps the title in flow, so `truncate` still has a box to work
+            against at the 193px floor.
+
+            Down the rail when the panel is shut, so 36px of chrome still says what it is rather
+            than leaving a bare icon to be guessed at. */}
+        <span
+          className={cn(
+            "min-w-0 truncate text-sm font-medium text-text",
+            shown ? "flex-1 text-center" : "text-center",
+          )}
+          style={shown ? undefined : { writingMode: "vertical-rl" }}
+        >
+          Search cards
+        </span>
+        {/* The chevron's own width given back on the other side, so the title's centre is the
+            panel's centre. `aria-hidden` and no text: it is a shim, not a control. */}
+        {shown && <span aria-hidden="true" className="size-7 shrink-0" />}
       </div>
 
       {/* **Above the body rather than inside it**, which is what makes it the panel's own chrome
@@ -819,8 +863,15 @@ export function DeckSearchPanel({
  *
  * Safe at {@link MIN_PANEL_WIDTH_PX} without measuring anything, which the pill it replaced was
  * not: a segmented pair cannot wrap inside the one rounded box it is drawn as — that is why the
- * labels had to be two short words — and this is two plain flex items on a `flex-wrap` row, whose
- * min-content is one word.
+ * labels had to be two short words.
+ *
+ * **Full width since 2026-08-25** — `flex-1` apiece, so each tab is half the panel and the lit
+ * rule is half the bar. Still safe at the floor and for a stronger reason than the `flex-wrap`
+ * row it replaced: two items each asking for half a line cannot wrap past each other, and the
+ * wider word is ~68px against the 96 that half of a 193px content box gives it. `min-w-0` is what
+ * keeps that true if the labels ever grow — without it a flex item's floor is its own min-content
+ * and a long word would push the pair into an overhang, which in this editor is a horizontal
+ * scrollbar across the whole deck builder.
  */
 function TabStrip({ tab, onPick }: { tab: DeckSearchTab; onPick: (tab: DeckSearchTab) => void }) {
   return (
@@ -834,7 +885,13 @@ function TabStrip({ tab, onPick }: { tab: DeckSearchTab; onPick: (tab: DeckSearc
     <div
       role="group"
       aria-label="Search in"
-      className="flex shrink-0 flex-wrap gap-x-4 border-b border-border"
+      // **No `gap-x` and no `flex-wrap` since the tabs went full width** (2026-08-25). The gap
+      // was what separated two words sitting on the panel's left margin; halves of a bar meet at
+      // its midpoint instead, and a gap there would be a break in the hairline. `flex-wrap` went
+      // with it for a reason of its own: a wrapped tab bar is two bars, and two `flex-1` items
+      // cannot wrap — each is already asking for half a line, and the min-content of the wider
+      // word (`Collection`, ~68px) fits half of even the 193px floor.
+      className="flex shrink-0 border-b border-border"
     >
       {TABS.map(({ id, label }) => (
         <button
@@ -845,8 +902,13 @@ function TabStrip({ tab, onPick }: { tab: DeckSearchTab; onPick: (tab: DeckSearc
           className={cn(
             // 28px rather than the 36 of `DeckEditor`'s ribbon: that row's height is the app's
             // agreement about a *toolbar* press, and this is chrome on a column whose own
-            // disclosure is a `text-xs` line and whose Add buttons are 24px squares.
+            // title row is a `text-sm` line and whose Add buttons are 24px squares.
             "h-7 text-xs",
+            // **Half the panel each, and the lit rule under the active one is therefore half the
+            // bar.** Two words on the left margin read as a pair of links; two halves of a
+            // bordered row read as tabs, which is what they are — and it puts the target where
+            // the reader's pointer already is rather than making them aim at a word.
+            "min-w-0 flex-1",
             // The rule is a `border-bottom` on the button and is drawn **transparent** when the
             // tab is not active rather than left off: a border that appears on press would move
             // the word up by two pixels every time the reader switched tabs. `-mb-px` pulls it
@@ -857,64 +919,6 @@ function TabStrip({ tab, onPick }: { tab: DeckSearchTab; onPick: (tab: DeckSearc
               ? "border-accent font-medium text-accent"
               : "border-transparent text-dim hover:text-text",
             FOCUS,
-          )}
-        >
-          {label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-/**
- * **What a press on the card search's Add button _means_** — a card the reader has, or one they
- * are putting on the list in order to buy it.
- *
- * Since schema v25 those are two different writes rather than a flag: "I need this" is a
- * `deck_cards` row with nothing behind it, which reads as *missing* and drives the deck→wishlist
- * sweep, and "I own this" is a collection row that physically moves into this deck's group.
- *
- * **A control rather than a guess**, because there is nothing to guess from. A card found in
- * Scryfall's data says nothing about whether the reader has one, and asking per card would put a
- * dialog in front of a button whose whole value is that it can be pressed three times for three
- * copies.
- *
- * {@link TabStrip}'s shape, deliberately, down to `aria-pressed` over `role="tab"` and
- * `FOCUS_INSET` inside the `overflow-hidden` box — two segmented pairs on one row that were drawn
- * two ways would read as two different kinds of control. The 28px height is that strip's for that
- * strip's reason: this is chrome on a column, not a press on the editor's toolbar.
- *
- * The tooltips are what keep the mode from ever being invisible: `aria-pressed` says which way
- * round it is and each sentence says what that way round costs.
- */
-function AddModeStrip({ mode, onMode }: { mode: AddMode; onMode: (mode: AddMode) => void }) {
-  const tip = useTooltip();
-  return (
-    // Named for the question, exactly as the strip beside it is: "Adding — Cards I need" is what
-    // the pair says, and `role="group"` is what holds the two buttons together for a reader
-    // stepping through the panel.
-    <div
-      role="group"
-      aria-label="Adding"
-      className="flex shrink-0 overflow-hidden rounded-md border border-border"
-    >
-      {ADD_MODES.map(({ id, label }) => (
-        <button
-          key={id}
-          type="button"
-          onClick={() => onMode(id)}
-          aria-pressed={mode === id}
-          {...tip(
-            id === "own"
-              ? "A copy you already have is moved into this deck"
-              : "Added to the list only — it reads as missing until you get one",
-            { describes: false },
-          )}
-          className={cn(
-            "h-7 px-2.5 text-xs",
-            "transition-colors duration-150 motion-reduce:transition-none",
-            mode === id ? "bg-accent font-medium text-accent-fg" : "text-dim hover:text-text",
-            FOCUS_INSET,
           )}
         >
           {label}

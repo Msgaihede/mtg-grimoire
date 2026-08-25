@@ -3,8 +3,9 @@ import { TagChips } from "@/features/tags/TagChips";
 import { TAG_NAMESPACE_LABEL } from "@/features/tags/namespaces";
 import { useTagSearch } from "@/features/tags/useTagSearch";
 import { cn } from "@/lib/utils";
+import type { TagChip } from "@/features/tags/tagFilters";
+import type { TagNamespace } from "@/lib/ipc";
 import type { TagToken } from "./tagQuery";
-import type { CardSearch } from "./useCardSearch";
 
 /**
  * What the tagger syntax in the search box turned into — the tags it found, and the names it
@@ -23,9 +24,27 @@ import type { CardSearch } from "./useCardSearch";
  * word it could not find and offers the tags that *are* called something like it, from
  * `tag_search` — which substring-matches, deliberately, and is therefore the one command in the
  * app that can find `removal` from `remov`.
+ *
+ * # Why every field is optional
+ *
+ * `FilterBar` draws this unconditionally under the stated filters, and since 2026-08-25 that bar
+ * is drawn over two searches: the card search, which parses tagger syntax out of its box, and the
+ * deck editor's collection list, which does not. A surface with no tag query answers none of these
+ * fields and this renders `null` — the same nothing it renders for a card search with no tag in
+ * the box. The alternative was a flag on the bar saying which surface it was over, which is the
+ * bar knowing about its callers to decide something its caller has already answered by what it
+ * passes.
  */
-export function TagQueryRow({ search }: { search: CardSearch }) {
-  const { tagChips, tagNotFound } = search;
+export interface TagQuerySurface {
+  tagChips?: readonly TagChip[];
+  tagNotFound?: readonly TagToken[];
+  removeTagChip?: (slug: string, namespace: TagNamespace) => void;
+  toggleTagChipMode?: (slug: string, namespace: TagNamespace) => void;
+  replaceTagToken?: (token: TagToken, value: string) => void;
+}
+
+export function TagQueryRow({ search }: { search: TagQuerySurface }) {
+  const { tagChips = [], tagNotFound = [] } = search;
   if (tagChips.length === 0 && tagNotFound.length === 0) return null;
   return (
     <div className="flex flex-col gap-1.5">
@@ -36,8 +55,8 @@ export function TagQueryRow({ search }: { search: CardSearch }) {
           // Nothing to invite: this row is not drawn at all until a tag is in it, so an empty
           // state here could only ever be a sentence about a row nobody can see.
           emptyMessage={null}
-          onRemove={search.removeTagChip}
-          onToggleMode={search.toggleTagChipMode}
+          onRemove={(slug, namespace) => search.removeTagChip?.(slug, namespace)}
+          onToggleMode={(slug, namespace) => search.toggleTagChipMode?.(slug, namespace)}
           // No weight floor. The syntax has no keyword for one — Scryfall has none to borrow —
           // and a control here that the query language cannot express would be a setting the
           // reader could not write down.
@@ -49,7 +68,7 @@ export function TagQueryRow({ search }: { search: CardSearch }) {
         <UnknownTagNote
           key={`${token.start}-${token.end}`}
           token={token}
-          onPick={(value) => search.replaceTagToken(token, value)}
+          onPick={(value) => search.replaceTagToken?.(token, value)}
         />
       ))}
     </div>

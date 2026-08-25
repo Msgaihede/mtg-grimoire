@@ -4,7 +4,10 @@ import { AnimatePresence, motion } from "motion/react";
 import { OwnedBadge } from "@/components/OwnedBadge";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { CardGrid } from "@/features/search/CardGrid";
+import { FilterBar, type TrayCell } from "@/features/search/FilterBar";
 import type { FormatFilterOption } from "@/features/search/useCardSearch";
+import { COLLECTION_SORTS } from "@/features/collection/useCollection";
+import { sortOptions } from "@/lib/options";
 import { CONDITION_LABEL, type Condition } from "@/lib/conditions";
 import { plural } from "@/lib/counts";
 import { FINISH_LABEL, type Finish } from "@/lib/finish";
@@ -14,7 +17,6 @@ import { statusLine } from "@/lib/motion";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { AUTO_CATEGORY, autoCategoryFor } from "./autoCategory";
-import { CollectionSearchFilters } from "./CollectionSearchFilters";
 import { foldCopies, type CopyTile } from "./collectionTiles";
 import { CONFIRM_CANCEL, CONFIRM_DESTRUCTIVE, useConfirmFocus } from "./metaRows";
 import { useCollectionSearch } from "./useCollectionSearch";
@@ -28,6 +30,50 @@ import { useCollectionSearch } from "./useCollectionSearch";
  * sizes this column once and gets that size on whichever tab they are on.
  */
 const TILE_BASE = 150;
+
+/**
+ * Which of `FilterBar`'s tray cells this tab offers, and the three absences are each a fact about
+ * a collection rather than a shortcut.
+ *
+ * - **No `owned`** — every row here is a copy the reader has. A filter whose two states select the
+ *   same list is a control that reads as broken.
+ * - **No `printings`** — that switch asks whether to fold a card's printings together, and these
+ *   *are* the reader's printings. Folding them would hide which piece of cardboard is being moved.
+ *   (The wall folds by *finish* through {@link foldCopies}, which is a different question and one
+ *   the reader cannot get wrong: a tile's press picks the copy.)
+ * - **`decks` in their place**, which is the one cell no other surface has and the whole of what
+ *   this tab is for. See `FilterBar`'s own note on it.
+ *
+ * `set`, `format`, `rarity` and `price` are the card search's, drawn here over the reader's own
+ * binder — the first three were already on the wire (`CollectionQuery extends CardFilters`) and
+ * the band is `collection::scope`'s, banding the copy's own finish rather than the printing's
+ * fallback chain.
+ */
+const COLLECTION_TRAY: readonly TrayCell[] = ["set", "format", "decks", "rarity", "price"];
+
+/**
+ * The orders this column can act on, alphabetically by the word on screen.
+ *
+ * **No pinned row, where the card search pins `Best match`.** There are no sortable headers here
+ * to build a `Custom…` state out of — that option exists on the collection page because its
+ * table's headers write the same state from the other end — and this list has no ranking to fall
+ * back to: every value `sortSelection` can hold is one of these options, and the empty sort spec
+ * reports as `name`, which is the row it really means.
+ */
+const COLLECTION_SORT_ROWS = sortOptions(COLLECTION_SORTS, (s) => s.label);
+
+/**
+ * What this tab calls its search box, and the `id` stem its labels bind through.
+ *
+ * **`Search your collection`, never `Search cards`** — the box beside it on the other tab is over
+ * every printing Scryfall has published and this one is over the reader's own binder, so one name
+ * on both would be the control lying about which list it narrows and a `getByLabelText` that
+ * cannot tell the two apart. The words are the ones this tab drew before it shared `FilterBar`.
+ *
+ * The stem keeps the two rows' `id`s apart. Only one is mounted at a time — the panel's tabs are
+ * two components — so it is a fence rather than a fix, which is the right time to build one.
+ */
+const COLLECTION_LABELS = { idStem: "deck-collection", search: "Search your collection" };
 
 /**
  * As much of a row as the naming below reads, **with every field optional**.
@@ -145,14 +191,22 @@ export function landingCategory(
  * picking between two copies they hold; what they keep is the guarantee that mattered, which is
  * that a copy another deck is holding is never taken silently.
  *
- * ## Why it does not draw `FilterBar`
+ * ## Why it draws `FilterBar` (2026-08-25)
  *
- * `FilterBar`'s prop is a `CardSearch` — `ReturnType<typeof useCardSearch>` — and that hook *is* a
- * `search_cards`, with no `enabled` to switch it off. Drawing it here would run the 116 k-row card
- * search for every reader who never leaves their binder, which is the exact cost the two-component
- * split in `DeckSearchPanel` exists to have removed. {@link CollectionSearchFilters} is the row
- * this draws instead, built out of `@/components/FilterChips`, and it carries the argument for
- * which controls it offers.
+ * It did not, for two days, and the reason was a type: `FilterBar`'s prop was a `CardSearch` —
+ * `ReturnType<typeof useCardSearch>` — and that hook *is* a `search_cards` with no `enabled` to
+ * switch it off, so reaching for the component would have run the 116 k-row card search for every
+ * reader who never leaves their binder. That is the exact cost `DeckSearchPanel`'s two-component
+ * split exists to have removed, and it is still removed: the hook here is
+ * {@link useCollectionSearch} and nothing on this tab touches the card search.
+ *
+ * What was wrong was the *fence*, not the conclusion. The row this drew instead was built out of
+ * `@/components/FilterChips` the sanctioned way — which is still the right module boundary, and is
+ * still how `CollectionFilterBar` is built — but it was the same arrangement of the same controls
+ * as the tab next to it, written twice, and a reader switching tabs met two different filter rows.
+ * `FilterBar`'s prop is a structural `FilterSurface` now, which both hooks satisfy, so the two tabs
+ * are one control over two backends. {@link COLLECTION_TRAY} is where this tab says which of its
+ * cells it offers.
  */
 export function CollectionSearchTab({
   categories,
@@ -270,7 +324,17 @@ export function CollectionSearchTab({
         )}
       </AnimatePresence>
 
-      <CollectionSearchFilters search={search} />
+      {/* The card-search tab's own row, over this tab's backend — see the note on this component
+          for why that is one component now and was two until 2026-08-25. `layoutToggle={false}`
+          for `OpenPanel`'s reason: this wall has no table to switch to, so the pair would move the
+          *search view's* stored preference and change nothing the reader can see. */}
+      <FilterBar
+        search={search}
+        sortRows={COLLECTION_SORT_ROWS}
+        tray={COLLECTION_TRAY}
+        labels={COLLECTION_LABELS}
+        layoutToggle={false}
+      />
 
       {/**
        * The question, **above the wall rather than under the tile it was asked from**.

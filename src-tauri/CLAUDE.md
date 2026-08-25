@@ -235,12 +235,18 @@ shared_cell` walks both into two databases and compares them column by column.
   Near Mint from both feeds, cheapest row wins a collision, and an unpriced finish gets
   **no row** rather than a zero.
 
-- **A price filter is built where the marketplace is known, and that is `run_search` rather than
-  `filters.rs`.** `SearchRequest::price_min`/`price_max` are applied over
-  `sorting::printing_price_expr(marketplace)` — the same expression the Price column shows and the
-  `price` sort orders by, so a card inside the band can never be one the wall prices outside it.
-  `CardFilters` is shared with the collection and the wishlist, which price a *copy* by its
-  finish; a price field on that struct would have to carry SQL to mean anything there.
+- **A price filter is built where the marketplace is known, and there are two of them because the
+  two lists price different objects.** `search::scope` bands
+  `sorting::printing_price_expr(marketplace)` and `collection::scope` bands
+  `sorting::price_expr(marketplace, ENTRY_FINISH)` — each the same expression its own list shows
+  and sorts by, so a row inside the band can never be one the wall prices outside it. **That is
+  exactly why the fields are not on `CardFilters`**, which is shared with the wishlist as well: a
+  price field on that struct would have to carry SQL to mean anything, and the printing's
+  `usd → usd_foil → usd_etched` chain prices a plain copy at its foil's rate whenever that is the
+  only listing — right for a search over printings, wrong for a binder row that says which one the
+  reader holds. So `SearchRequest` and `CollectionQuery` each declare their own pair, and the
+  collection's is pushed in `scope` rather than in `list_entries` so the page, the full count and
+  `summarise` cannot describe different rows.
   **An unpriced printing fails a bound end**, because `NULL >= ?` is NULL — a shop that does not
   quote a printing has not offered it for nothing. Two half-open bounds rather than a `BETWEEN`,
   so a reader who moved one end sends one predicate, and an inverted pair narrows to nothing
