@@ -144,9 +144,54 @@ function lastEnabledIndex(options: readonly DropdownOption[]): number {
 }
 
 /**
- * The single-select shell every native `<select>` in the app is being replaced with — a
- * disclosure button, the listbox it opens, an optional search box (Task 4), without
- * multi-select (Task 5) built on top of it.
+ * Where a `<MultiDropdown>` **opening** lands: the first `selected` value that is in `drawn`,
+ * or row 0 — several may be picked, and the first is where a reader's eye starts. Falls back to
+ * 0 (never rerouted away from a disabled row the way {@link openingIndex} is) because a selected
+ * row is never disabled by this app's own rule (`optionDisabled`'s first clause, in
+ * `SetCombobox.tsx`) — there is nothing today for a reroute to protect against.
+ *
+ * Reads `drawn`, not the full `options` list, unlike `<Dropdown>`'s `openingIndex` — see the
+ * call site in `MultiDropdown` for why that is the right list for a *controlled* search (the set
+ * picker's shape) and does not disturb `<Dropdown>`'s own opening rule at all.
+ */
+function multiOpeningIndex(drawn: readonly DropdownOption[], selected: readonly string[]): number {
+  for (const v of selected) {
+    const i = drawn.findIndex((o) => o.value === v);
+    if (i >= 0) return i;
+  }
+  return 0;
+}
+
+/**
+ * Props private to {@link DropdownShell} — exactly the handful of places `<Dropdown>` and
+ * `<MultiDropdown>` differ, so the shell itself needs no other `multi` branch anywhere.
+ */
+type ShellProps = SharedProps & {
+  /** Whether this opening is a multi-select. Drives `aria-multiselectable`, the Space decision
+   *  in `onListKeyDown` below, and whether activating a row closes the panel. */
+  multi: boolean;
+  /** The trigger's own content — `<Dropdown>` computes a picked label or its placeholder,
+   *  `<MultiDropdown>` passes `triggerLabel` straight through. The shell draws it verbatim and
+   *  never inspects it. */
+  triggerContent: ReactNode;
+  /** Whether one option's value counts as picked — `aria-selected` and the row's tick. */
+  isPicked: (value: string) => boolean;
+  /** The row a fresh opening lands on, given the list about to be drawn. `<Dropdown>` ignores
+   *  the argument and answers from `options` and its own `value` — `openingIndex`, unchanged
+   *  from before this file had a shell. `<MultiDropdown>` reads it — see
+   *  {@link multiOpeningIndex}. */
+  computeOpeningIndex: (drawn: readonly DropdownOption[]) => number;
+  /** Enter, or a pointer press, on an enabled row. `<Dropdown>` passes `onChange`;
+   *  `<MultiDropdown>` passes `onToggle`. Whether the panel then closes is the shell's own
+   *  call, from `multi` alone — see `activate` below. */
+  onActivate: (value: string) => void;
+};
+
+/**
+ * The disclosure button, the listbox it opens and an optional search box (Task 4) — every
+ * native `<select>` in the app is being replaced with this, in one of two shapes:
+ * `<Dropdown>` below commits a single value and closes; `<MultiDropdown>` toggles a value and
+ * stays open. Neither is exported; each is reached only through its own thin wrapper.
  *
  * **Whichever element is focused while the panel is open is what carries
  * `aria-activedescendant`**, because that attribute belongs on the *focused* element. Without
@@ -157,14 +202,7 @@ function lastEnabledIndex(options: readonly DropdownOption[]): number {
  * Enter, and skipped by the arrow keys, because a row is walked by `aria-activedescendant`
  * rather than by the tab order.
  */
-export function Dropdown(
-  props: SharedProps & {
-    value: string;
-    onChange: (value: string) => void;
-    /** Trigger text when `value` matches no option. Defaults to an em dash. */
-    placeholder?: string;
-  },
-) {
+function DropdownShell(props: ShellProps) {
   const {
     options,
     size = "md",
@@ -185,9 +223,11 @@ export function Dropdown(
     emptyLine = "No matches.",
     footer,
     onReachEnd,
-    value,
-    onChange,
-    placeholder,
+    multi,
+    triggerContent,
+    isPicked,
+    computeOpeningIndex,
+    onActivate,
   } = props;
 
   const [open, setOpen] = useState(false);
@@ -299,9 +339,12 @@ export function Dropdown(
     setOpen(true);
   };
 
-  const commit = (v: string) => {
-    onChange(v);
-    dismiss();
+  // Enter, or a pointer press, on an enabled row. `<Dropdown>`'s `onActivate` is `onChange` and
+  // this closes behind it, exactly as `commit` always did; `<MultiDropdown>`'s is `onToggle` and
+  // `multi` is what keeps the panel open — see "stays open across several picks".
+  const activate = (v: string) => {
+    onActivate(v);
+    if (!multi) dismiss();
   };
 
   // A new query is a new list; neither the old cursor position nor how far the reader had
@@ -371,10 +414,30 @@ export function Dropdown(
       case "Enter": {
         e.preventDefault();
         const opt = drawn[index];
-        if (opt && !opt.disabled) commit(opt.value);
+        if (opt && !opt.disabled) activate(opt.value);
         break;
       }
       default: {
+        // **Space decision (Task 5), made deliberately and stated here because this is its
+        // site: on a non-searchable `<MultiDropdown>`, Space toggles the active row instead of
+        // joining type-ahead below.** A native multi-select toggles on Space, and this app's own
+        // Enter already does the same job for a multi-select — toggle, not close — so Space
+        // reaching a *different* outcome than Enter on the same row would be the surprise, not
+        // this. Left untreated, `" ".length === 1` would fall straight into the type-ahead
+        // branch below and be swallowed: no option label starts with a space, so the keystroke
+        // would silently match nothing and the row a reader is looking at would not move.
+        // **Never for `searchable`**: the search box already owns every character it receives
+        // (the guard just below exempts it the same way), and a query has to be able to hold a
+        // literal space — several set names do, and a search box that ate Space as a toggle
+        // could never type them. `<Dropdown>` falls through unchanged, because `multi` is false
+        // there: Space stays an ordinary type-ahead character exactly like any other, which is
+        // what "buffers consecutive keystrokes into one type-ahead word" already relies on.
+        if (multi && !searchable && e.key === " ") {
+          e.preventDefault();
+          const opt = drawn[index];
+          if (opt && !opt.disabled) activate(opt.value);
+          break;
+        }
         // Type-ahead continues while the panel is open, building the same word the closed
         // trigger's keystrokes would have. Never for `searchable`: that box already owns
         // every character it receives, through its own `onChange`.
@@ -386,9 +449,6 @@ export function Dropdown(
       }
     }
   };
-
-  const picked = options.find((o) => o.value === value);
-  const content = picked ? picked.label : (placeholder ?? DEFAULT_PLACEHOLDER);
 
   return (
     <div
@@ -413,14 +473,14 @@ export function Dropdown(
         aria-labelledby={labelledBy}
         onClick={() => {
           if (open) setOpen(false);
-          else openAt(openingIndex(options, value));
+          else openAt(computeOpeningIndex(drawn));
         }}
         onKeyDown={(e) => {
           // The panel holds the caret while open, so this only ever runs on the closed
           // trigger — a keydown fired at a focused descendant never bubbles to a sibling.
           if (e.key === "ArrowDown") {
             e.preventDefault();
-            openAt(openingIndex(options, value));
+            openAt(computeOpeningIndex(drawn));
             return;
           }
           if (e.key.length !== 1 || e.ctrlKey || e.metaKey || e.altKey) return;
@@ -433,7 +493,7 @@ export function Dropdown(
             return;
           }
           const match = typeAhead(e.key);
-          openAt(match !== -1 ? match : openingIndex(options, value));
+          openAt(match !== -1 ? match : computeOpeningIndex(drawn));
         }}
         className={cn(
           size === "sm"
@@ -447,7 +507,7 @@ export function Dropdown(
           className,
         )}
       >
-        {content}
+        {triggerContent}
         <ChevronDown className="size-3.5" aria-hidden="true" />
       </button>
 
@@ -504,6 +564,9 @@ export function Dropdown(
                 tabIndex={-1}
                 aria-label={labelledBy ? undefined : label}
                 aria-labelledby={labelledBy}
+                // `<Dropdown>` never sets this — a single-select listbox is not multiselectable,
+                // and the attribute's absence says so rather than a written-out "false".
+                aria-multiselectable={multi ? "true" : undefined}
                 // The search box carries this instead when there is one — see the doc comment
                 // above this component.
                 aria-activedescendant={
@@ -526,10 +589,10 @@ export function Dropdown(
                     key={opt.value}
                     id={optionId(uid, i)}
                     option={opt}
-                    picked={opt.value === value}
+                    picked={isPicked(opt.value)}
                     active={i === index}
                     size={size}
-                    onCommit={() => commit(opt.value)}
+                    onCommit={() => activate(opt.value)}
                   />
                 ))}
               </ul>
@@ -539,6 +602,70 @@ export function Dropdown(
         )}
       </AnimatePresence>
     </div>
+  );
+}
+
+/**
+ * The single-select — every native `<select>` in the app, one value in and `onChange` out.
+ * Everything else lives in {@link DropdownShell}; this is the thin translation from "one value"
+ * to the shell's `isPicked`/`triggerContent`/`computeOpeningIndex`/`onActivate`.
+ */
+export function Dropdown(
+  props: SharedProps & {
+    value: string;
+    onChange: (value: string) => void;
+    /** Trigger text when `value` matches no option. Defaults to an em dash. */
+    placeholder?: string;
+  },
+) {
+  const { value, onChange, placeholder, options, ...shared } = props;
+  const picked = options.find((o) => o.value === value);
+  const content = picked ? picked.label : (placeholder ?? DEFAULT_PLACEHOLDER);
+  return (
+    <DropdownShell
+      {...shared}
+      options={options}
+      multi={false}
+      triggerContent={content}
+      isPicked={(v) => v === value}
+      // Ignores the `drawn` argument on purpose — this is `openingIndex(options, value)`,
+      // unchanged from before this file had a shell, and reading the full `options` rather than
+      // whatever is currently drawn is what lets a reopen land on the picked row even while a
+      // leftover, not-yet-reset search query would otherwise have filtered it out.
+      computeOpeningIndex={() => openingIndex(options, value)}
+      onActivate={onChange}
+    />
+  );
+}
+
+/**
+ * The multi-select every `<select multiple>` this app never had is being built as —
+ * `SetCombobox` (Task 8) is its first real caller, ~1 050 sets deep. `selected` is read
+ * fresh on every render rather than snapshotted, so several picks in a row (this control's
+ * whole reason to exist) each see the latest list.
+ *
+ * The Space decision is made and explained at its actual site — the default case inside
+ * {@link DropdownShell}'s `onListKeyDown` — because that is the one place it has any effect.
+ */
+export function MultiDropdown(
+  props: SharedProps & {
+    selected: readonly string[];
+    onToggle: (value: string) => void;
+    /** What the trigger says — "Any set", "2 sets". A count, never a value. */
+    triggerLabel: string;
+  },
+) {
+  const { selected, onToggle, triggerLabel, options, ...shared } = props;
+  return (
+    <DropdownShell
+      {...shared}
+      options={options}
+      multi
+      triggerContent={triggerLabel}
+      isPicked={(v) => selected.includes(v)}
+      computeOpeningIndex={(drawn) => multiOpeningIndex(drawn, selected)}
+      onActivate={onToggle}
+    />
   );
 }
 

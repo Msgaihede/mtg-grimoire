@@ -2,7 +2,7 @@ import { useState } from "react";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { Dropdown } from "./Dropdown";
+import { Dropdown, MultiDropdown } from "./Dropdown";
 import type { DropdownOption } from "./types";
 
 const FORMATS: DropdownOption[] = [
@@ -319,6 +319,21 @@ describe("Dropdown search", () => {
     await user.click(screen.getByRole("button", { name: "Format" }));
     expect(screen.getByText("Showing 4 of 40.")).toBeInTheDocument();
   });
+
+  it("resets the uncontrolled query on a fresh opening", async () => {
+    // Carried over from Task 4: openAt clears localQuery in the same batch as the active-index
+    // reset, but nothing pinned it until now. A reader who typed a filter, closed without
+    // picking, and reopened must not be shown a pre-filtered panel.
+    const user = userEvent.setup();
+    render(
+      <Dropdown label="Format" value="modern" onChange={vi.fn()} options={FORMATS} searchable />,
+    );
+    await user.click(screen.getByRole("button", { name: "Format" }));
+    await user.type(screen.getByRole("combobox"), "an");
+    await user.keyboard("{Escape}");
+    await user.click(screen.getByRole("button", { name: "Format" }));
+    expect(screen.getByRole("combobox")).toHaveValue("");
+  });
 });
 
 describe("Dropdown type-ahead", () => {
@@ -374,5 +389,103 @@ describe("Dropdown type-ahead", () => {
     expect(box).toHaveValue("s");
     // Filtered by "s", substring, case-insensitive: only Standard has one.
     expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["Standard"]);
+  });
+});
+
+describe("MultiDropdown", () => {
+  function MultiHarness() {
+    const [picked, setPicked] = useState<string[]>(["modern"]);
+    return (
+      <MultiDropdown
+        label="Format"
+        triggerLabel={picked.length === 0 ? "Any format" : `${picked.length} formats`}
+        selected={picked}
+        onToggle={(v) =>
+          setPicked((p) => (p.includes(v) ? p.filter((x) => x !== v) : [...p, v]))
+        }
+        options={FORMATS}
+      />
+    );
+  }
+
+  it("says a count on the trigger, not a value", async () => {
+    const user = userEvent.setup();
+    render(<MultiHarness />);
+    const trigger = screen.getByRole("button", { name: "Format" });
+    expect(trigger).toHaveTextContent("1 formats");
+    await user.click(trigger);
+    await user.click(screen.getByRole("option", { name: "Commander" }));
+    expect(trigger).toHaveTextContent("2 formats");
+  });
+
+  it("stays open across several picks", async () => {
+    const user = userEvent.setup();
+    render(<MultiHarness />);
+    await user.click(screen.getByRole("button", { name: "Format" }));
+    await user.click(screen.getByRole("option", { name: "Commander" }));
+    // The whole purpose of a multi-select is picking several in a row.
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+    await user.click(screen.getByRole("option", { name: "Standard" }));
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+  });
+
+  it("marks the listbox multiselectable and every picked row selected", async () => {
+    const user = userEvent.setup();
+    render(<MultiHarness />);
+    await user.click(screen.getByRole("button", { name: "Format" }));
+    expect(screen.getByRole("listbox")).toHaveAttribute("aria-multiselectable", "true");
+    expect(screen.getByRole("option", { name: "Modern" })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+  });
+
+  it("toggles the active row on Enter without closing", async () => {
+    const user = userEvent.setup();
+    render(<MultiHarness />);
+    await user.click(screen.getByRole("button", { name: "Format" }));
+    await user.keyboard("{Enter}");
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Format" })).toHaveTextContent("Any format");
+  });
+
+  // The Space decision (see the reasoning at its site, `onListKeyDown`'s default case in
+  // Dropdown.tsx): Space toggles the active row on a non-searchable multi-select — the same
+  // outcome as Enter, on the same row, and for the same reason a native multi-select does it.
+  it("toggles the active row on Space without closing", async () => {
+    const user = userEvent.setup();
+    render(<MultiHarness />);
+    await user.click(screen.getByRole("button", { name: "Format" }));
+    await user.keyboard(" ");
+    expect(screen.getByRole("listbox")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Format" })).toHaveTextContent("Any format");
+  });
+
+  function SearchableMultiHarness() {
+    const [picked, setPicked] = useState<string[]>([]);
+    return (
+      <MultiDropdown
+        label="Format"
+        triggerLabel={picked.length === 0 ? "Any format" : `${picked.length} formats`}
+        selected={picked}
+        onToggle={(v) =>
+          setPicked((p) => (p.includes(v) ? p.filter((x) => x !== v) : [...p, v]))
+        }
+        options={FORMATS}
+        searchable
+      />
+    );
+  }
+
+  // The other half of the Space decision: a searchable multi-select's search box has to be able
+  // to hold a literal space — several set names do — so the toggle above must not reach it.
+  it("types a literal space into a searchable multi-select's search box rather than toggling", async () => {
+    const user = userEvent.setup();
+    render(<SearchableMultiHarness />);
+    await user.click(screen.getByRole("button", { name: "Format" }));
+    await user.type(screen.getByRole("combobox"), "a b");
+    expect(screen.getByRole("combobox")).toHaveValue("a b");
+    // Nothing toggled: the trigger still says nothing is picked.
+    expect(screen.getByRole("button", { name: "Format" })).toHaveTextContent("Any format");
   });
 });
