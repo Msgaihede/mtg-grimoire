@@ -206,3 +206,110 @@ describe("Dropdown", () => {
     expect(onReachEnd).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("Dropdown search", () => {
+  it("has no search box unless asked for one", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    await user.click(screen.getByRole("button", { name: "Format" }));
+    expect(screen.queryByRole("combobox")).not.toBeInTheDocument();
+  });
+
+  it("filters by label substring, case-insensitively, when uncontrolled", async () => {
+    const user = userEvent.setup();
+    render(
+      <Dropdown label="Format" value="modern" onChange={vi.fn()} options={FORMATS} searchable />,
+    );
+    await user.click(screen.getByRole("button", { name: "Format" }));
+    await user.type(screen.getByRole("combobox"), "an");
+    // Commander and Standard; Modern and Pauper are gone.
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
+      "Commander",
+      "Standard",
+    ]);
+  });
+
+  it("filters nothing when the caller controls the query", async () => {
+    const user = userEvent.setup();
+    const onQueryChange = vi.fn();
+    render(
+      <Dropdown
+        label="Format"
+        value="modern"
+        onChange={vi.fn()}
+        options={FORMATS}
+        searchable
+        query="zzz"
+        onQueryChange={onQueryChange}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Format" }));
+    // A controlled caller has already filtered; the shell must not filter a second time or the
+    // set picker's rank ordering would be silently re-cut by a substring test.
+    expect(screen.getAllByRole("option")).toHaveLength(4);
+    await user.type(screen.getByRole("combobox"), "x");
+    expect(onQueryChange).toHaveBeenCalledWith("zzzx");
+  });
+
+  it("says so when nothing matches", async () => {
+    const user = userEvent.setup();
+    render(
+      <Dropdown
+        label="Format"
+        value="modern"
+        onChange={vi.fn()}
+        options={FORMATS}
+        searchable
+        emptyLine="No formats match that."
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Format" }));
+    await user.type(screen.getByRole("combobox"), "zzz");
+    expect(screen.getByText("No formats match that.")).toBeInTheDocument();
+    expect(screen.queryAllByRole("option")).toHaveLength(0);
+  });
+
+  it("keeps the caret in the search box while the pointer picks", async () => {
+    const user = userEvent.setup();
+    render(
+      <Dropdown label="Format" value="" onChange={vi.fn()} options={FORMATS} searchable />,
+    );
+    await user.click(screen.getByRole("button", { name: "Format" }));
+    const box = screen.getByRole("combobox");
+    expect(box).toHaveFocus();
+    await user.click(screen.getByRole("option", { name: "Pauper" })); // disabled: no close
+    expect(box).toHaveFocus();
+  });
+
+  it("calls onReachEnd when ArrowDown is pressed on the last row", async () => {
+    const user = userEvent.setup();
+    const onReachEnd = vi.fn();
+    render(
+      <Dropdown
+        label="Format"
+        value="standard"
+        onChange={vi.fn()}
+        options={FORMATS}
+        onReachEnd={onReachEnd}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Format" }));
+    await user.keyboard("{ArrowDown}");
+    expect(onReachEnd).toHaveBeenCalled();
+  });
+
+  it("draws a footer below the list", async () => {
+    const user = userEvent.setup();
+    render(
+      <Dropdown
+        label="Format"
+        value="modern"
+        onChange={vi.fn()}
+        options={FORMATS}
+        footer={<p>Showing 4 of 40.</p>}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Format" }));
+    expect(screen.getByText("Showing 4 of 40.")).toBeInTheDocument();
+  });
+});

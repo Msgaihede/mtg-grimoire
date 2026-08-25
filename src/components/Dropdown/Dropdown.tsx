@@ -76,6 +76,9 @@ export type SharedProps = {
 /** What the trigger draws when `value` matches nothing in `options`. */
 const DEFAULT_PLACEHOLDER = "—";
 
+/** How long a run of closed-trigger keystrokes stays one type-ahead word. */
+const TYPE_AHEAD_MS = 600;
+
 /** Module scope so a scroll effect can depend on it without re-running every render. */
 const optionId = (id: string, index: number) => `${id}-option-${index}`;
 
@@ -132,14 +135,17 @@ function lastEnabledIndex(options: readonly DropdownOption[]): number {
 
 /**
  * The single-select shell every native `<select>` in the app is being replaced with — a
- * disclosure button and the listbox it opens, without the search box (Task 4) or multi-select
- * (Task 5) built on top of it.
+ * disclosure button, the listbox it opens, an optional search box (Task 4), without
+ * multi-select (Task 5) built on top of it.
  *
- * **The `<ul role="listbox">` is what takes the caret on open**, because there is no search box
- * here to take it instead, and it is therefore what carries `aria-activedescendant` — that
- * attribute belongs on the *focused* element. Rows are never focused and never `disabled`: an
- * out-of-reach row is `aria-disabled`, refused by both the pointer and Enter, and skipped by the
- * arrow keys, because a row is walked by `aria-activedescendant` rather than by the tab order.
+ * **Whichever element is focused while the panel is open is what carries
+ * `aria-activedescendant`**, because that attribute belongs on the *focused* element. Without
+ * `searchable` there is nothing else to take the caret, so it is the `<ul role="listbox">`
+ * itself. With `searchable` the `<input role="combobox">` takes it instead, and the listbox
+ * carries neither the caret nor the attribute — see the render below. Rows are never focused
+ * and never `disabled`: an out-of-reach row is `aria-disabled`, refused by both the pointer and
+ * Enter, and skipped by the arrow keys, because a row is walked by `aria-activedescendant`
+ * rather than by the tab order.
  */
 export function Dropdown(
   props: SharedProps & {
@@ -161,6 +167,12 @@ export function Dropdown(
     labelledBy,
     className,
     panelClassName,
+    searchable = false,
+    searchPlaceholder,
+    query,
+    onQueryChange,
+    emptyLine = "No matches.",
+    footer,
     onReachEnd,
     value,
     onChange,
@@ -169,12 +181,26 @@ export function Dropdown(
 
   const [open, setOpen] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
+  // Uncontrolled search state — read only when the caller has not supplied `query`. See
+  // `controlled` below for the reason a controlled caller's typing never lands here.
+  const [localQuery, setLocalQuery] = useState("");
 
   const rootRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
   const frameRef = useRef<HTMLDivElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
   const listRef = useRef<HTMLUListElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  /**
+   * The closed trigger's type-ahead buffer — several keystrokes typed within
+   * {@link TYPE_AHEAD_MS} of each other are one word, not several independent single-character
+   * jumps. A ref rather than state: nothing about it is ever drawn, so a re-render would only
+   * cost a paint nobody sees.
+   */
+  const typeAheadRef = useRef<{ buffer: string; timeout: number | null }>({
+    buffer: "",
+    timeout: null,
+  });
 
   const uid = useId();
   const listboxId = `${uid}-listbox`;
@@ -199,15 +225,35 @@ export function Dropdown(
   // dropdown does not also close on the same press.
   useDismissOnEscape({ layer: "inner", onDismiss: dismiss, enabled: open });
 
+  // Controlled vs uncontrolled search. A caller that supplies `query` has already filtered with
+  // its own idea of a match — the set picker's is name-contains, code-prefix and a three-level
+  // rank — and a second substring test here would silently re-cut a list that was deliberately
+  // ordered. Uncontrolled, the shell does the one thing every plain select needs: a
+  // case-insensitive substring match on the label.
+  const controlled = query !== undefined;
+  const q = query ?? localQuery;
+  const drawn =
+    searchable && !controlled
+      ? options.filter((o) => o.label.toLowerCase().includes(q.trim().toLowerCase()))
+      : options;
+
+  // A stored index can outrun a shrunk list — searching narrows `drawn` while the panel stays
+  // open — and a stale index would point `aria-activedescendant` at a row that is no longer
+  // drawn, and make ArrowDown fire `onReachEnd` forever instead of moving. Read this, never
+  // `activeIndex` itself, everywhere below.
+  const index = Math.min(activeIndex, Math.max(0, drawn.length - 1));
+
   useEffect(() => {
-    if (open) listRef.current?.focus();
-  }, [open]);
+    // The search box takes the caret when there is one — see the doc comment above this
+    // component — and the listbox takes it otherwise.
+    if (open) (searchable ? inputRef : listRef).current?.focus();
+  }, [open, searchable]);
 
   useEffect(() => {
     if (!open) return;
     // jsdom leaves this layout API undefined.
-    document.getElementById(optionId(uid, activeIndex))?.scrollIntoView?.({ block: "nearest" });
-  }, [activeIndex, open, uid]);
+    document.getElementById(optionId(uid, index))?.scrollIntoView?.({ block: "nearest" });
+  }, [index, open, uid]);
 
   useEffect(() => {
     if (!open) return;
@@ -219,6 +265,16 @@ export function Dropdown(
     return () => window.removeEventListener("mousedown", onMouseDown);
   }, [open]);
 
+  // Only clears a timer this component itself started, so an unmount mid-buffer never fires
+  // into state nobody reads any more. The ref is copied into the closure up front — by the
+  // time cleanup runs, `typeAheadRef.current` could already be a later render's object.
+  useEffect(() => {
+    const ta = typeAheadRef.current;
+    return () => {
+      if (ta.timeout !== null) window.clearTimeout(ta.timeout);
+    };
+  }, []);
+
   const openAt = (i: number) => {
     setActiveIndex(i);
     setOpen(true);
@@ -229,11 +285,57 @@ export function Dropdown(
     dismiss();
   };
 
-  // A stored index can outrun a shrunk list — Task 4 filters `options` while the panel stays
-  // open — and a stale index would point `aria-activedescendant` at a row that is no longer
-  // drawn, and make ArrowDown fire `onReachEnd` forever instead of moving. Read this, never
-  // `activeIndex` itself, everywhere below.
-  const index = Math.min(activeIndex, Math.max(0, options.length - 1));
+  // A new query is a new list; neither the old cursor position nor how far the reader had
+  // paged into the old one means anything in it. One handler for both branches: a controlled
+  // caller is told what was typed, an uncontrolled one is trusted to remember it.
+  const updateQuery = (next: string) => {
+    setActiveIndex(0);
+    if (controlled) onQueryChange?.(next);
+    else setLocalQuery(next);
+  };
+
+  const onListKeyDown = (e: React.KeyboardEvent) => {
+    // The panel keeps rendering through its exit fade (`PopupPanel`'s own `useIsPresent`), so
+    // the element outlives `open` — without this guard Enter could still commit a row on a
+    // dropdown that has already closed.
+    if (!open || drawn.length === 0) return;
+    switch (e.key) {
+      case "ArrowDown": {
+        e.preventDefault();
+        const next = nextEnabledIndex(drawn, index, 1);
+        // Nothing moved: the keyboard walked off the end of the list.
+        if (next === index) onReachEnd?.();
+        else setActiveIndex(next);
+        break;
+      }
+      case "ArrowUp": {
+        e.preventDefault();
+        setActiveIndex(nextEnabledIndex(drawn, index, -1));
+        break;
+      }
+      case "Home": {
+        e.preventDefault();
+        setActiveIndex(firstEnabledIndex(drawn));
+        break;
+      }
+      case "End": {
+        e.preventDefault();
+        const last = lastEnabledIndex(drawn);
+        // Already there: the same "asking for more" gesture ArrowDown makes.
+        if (index === last) onReachEnd?.();
+        else setActiveIndex(last);
+        break;
+      }
+      case "Enter": {
+        e.preventDefault();
+        const opt = drawn[index];
+        if (opt && !opt.disabled) commit(opt.value);
+        break;
+      }
+      default:
+        break;
+    }
+  };
 
   const picked = options.find((o) => o.value === value);
   const content = picked ? picked.label : (placeholder ?? DEFAULT_PLACEHOLDER);
@@ -264,16 +366,34 @@ export function Dropdown(
           else openAt(openingIndex(options, value));
         }}
         onKeyDown={(e) => {
-          // The listbox holds the caret while open, so this only ever runs on the closed
+          // The panel holds the caret while open, so this only ever runs on the closed
           // trigger — a keydown fired at a focused descendant never bubbles to a sibling.
           if (e.key === "ArrowDown") {
             e.preventDefault();
             openAt(openingIndex(options, value));
-          } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
-            e.preventDefault();
-            const match = typeAheadIndex(options, e.key);
-            openAt(match !== -1 ? match : openingIndex(options, value));
+            return;
           }
+          if (e.key.length !== 1 || e.ctrlKey || e.metaKey || e.altKey) return;
+          e.preventDefault();
+          if (searchable) {
+            // Same gesture, same place: a character that would have jumped a row instead
+            // opens the panel and seeds the search box the reader is about to land in.
+            updateQuery(e.key);
+            setOpen(true);
+            return;
+          }
+          // Several keystrokes typed within TYPE_AHEAD_MS of each other are one word, not
+          // several independent single-character jumps — "st" reaches Standard, not whatever
+          // the lone "s" would have.
+          const ta = typeAheadRef.current;
+          if (ta.timeout !== null) window.clearTimeout(ta.timeout);
+          ta.buffer += e.key;
+          ta.timeout = window.setTimeout(() => {
+            ta.buffer = "";
+            ta.timeout = null;
+          }, TYPE_AHEAD_MS);
+          const match = typeAheadIndex(options, ta.buffer);
+          openAt(match !== -1 ? match : openingIndex(options, value));
         }}
         className={cn(
           size === "sm"
@@ -319,6 +439,23 @@ export function Dropdown(
                 panelClassName,
               )}
             >
+              {searchable && (
+                <input
+                  ref={inputRef}
+                  type="text"
+                  role="combobox"
+                  aria-expanded="true"
+                  aria-controls={listboxId}
+                  aria-activedescendant={
+                    drawn.length > 0 && index >= 0 ? optionId(uid, index) : undefined
+                  }
+                  value={q}
+                  onChange={(e) => updateQuery(e.target.value)}
+                  onKeyDown={onListKeyDown}
+                  placeholder={searchPlaceholder ?? "Search"}
+                  className="mb-2 h-8 w-full rounded-md border border-border bg-bg px-2 text-sm placeholder:text-dim focus:border-accent focus:outline-none"
+                />
+              )}
               <ul
                 ref={listRef}
                 id={listboxId}
@@ -326,54 +463,24 @@ export function Dropdown(
                 tabIndex={-1}
                 aria-label={labelledBy ? undefined : label}
                 aria-labelledby={labelledBy}
+                // The search box carries this instead when there is one — see the doc comment
+                // above this component.
                 aria-activedescendant={
-                  options.length > 0 && index >= 0 ? optionId(uid, index) : undefined
+                  !searchable && drawn.length > 0 && index >= 0
+                    ? optionId(uid, index)
+                    : undefined
                 }
-                onKeyDown={(e) => {
-                  // The panel keeps rendering through its exit fade (`PopupPanel`'s own
-                  // `useIsPresent`), so the element outlives `open` — without this guard Enter
-                  // could still commit a row on a dropdown that has already closed.
-                  if (!open || options.length === 0) return;
-                  switch (e.key) {
-                    case "ArrowDown": {
-                      e.preventDefault();
-                      const next = nextEnabledIndex(options, index, 1);
-                      // Nothing moved: the keyboard walked off the end of the list.
-                      if (next === index) onReachEnd?.();
-                      else setActiveIndex(next);
-                      break;
-                    }
-                    case "ArrowUp": {
-                      e.preventDefault();
-                      setActiveIndex(nextEnabledIndex(options, index, -1));
-                      break;
-                    }
-                    case "Home": {
-                      e.preventDefault();
-                      setActiveIndex(firstEnabledIndex(options));
-                      break;
-                    }
-                    case "End": {
-                      e.preventDefault();
-                      const last = lastEnabledIndex(options);
-                      // Already there: the same "asking for more" gesture ArrowDown makes.
-                      if (index === last) onReachEnd?.();
-                      else setActiveIndex(last);
-                      break;
-                    }
-                    case "Enter": {
-                      e.preventDefault();
-                      const opt = options[index];
-                      if (opt && !opt.disabled) commit(opt.value);
-                      break;
-                    }
-                    default:
-                      break;
-                  }
-                }}
+                onKeyDown={searchable ? undefined : onListKeyDown}
                 className="max-h-64 overflow-auto"
               >
-                {options.map((opt, i) => (
+                {drawn.length === 0 && (
+                  // Not an option, and a bare `<li>` in a listbox is a `listitem` where only
+                  // options are allowed. `presentation` makes it the sentence it looks like.
+                  <li role="presentation" className="px-2 py-3 text-center text-xs text-dim">
+                    {emptyLine}
+                  </li>
+                )}
+                {drawn.map((opt, i) => (
                   <Row
                     key={opt.value}
                     id={optionId(uid, i)}
@@ -385,6 +492,7 @@ export function Dropdown(
                   />
                 ))}
               </ul>
+              {footer}
             </PopupPanel>
           </div>
         )}
