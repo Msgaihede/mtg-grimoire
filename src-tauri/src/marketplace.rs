@@ -106,11 +106,32 @@ pub async fn set_marketplace(
     id: String,
 ) -> Result<(), String> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        crate::sync::with_write(&state, |conn| store(conn, &id))
-    })
-    .await
-    .map_err(|e| format!("the marketplace could not be saved: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || set_marketplace_now(&state, &id))
+        .await
+        .map_err(|e| format!("the marketplace could not be saved: {e}"))?
+}
+
+/// [`set_marketplace`]'s body, with the `AppState` handed in.
+///
+/// Split out so the mark below can be tested: a `#[tauri::command]` taking `tauri::State`
+/// cannot be entered from a test, and one line that only matters to another subsystem is
+/// exactly the kind that gets dropped and never noticed.
+///
+/// **Every price the plain-text mirror has written just changed meaning**, so the mirror is told
+/// explicitly. It cannot learn this any other way: the setting is an `app_meta` row, and that
+/// table maps to no surface on purpose — a sync writes it, and the update hook has to stay quiet
+/// through 116 700 rows. A live pass found every mirrored CSV still carrying the previous
+/// marketplace's prices until `Rebuild now` was pressed, which moved one row from 8.25 to 5.99.
+///
+/// Only on success, and only where [`store`] accepted the id: a refusal changed nothing on disk
+/// and must not cost a full render. This is the shape
+/// [`crate::mirror::settings::set_root_now`] already has.
+pub fn set_marketplace_now(state: &AppState, id: &str) -> Result<(), String> {
+    let saved = crate::sync::with_write(state, |conn| store(conn, id));
+    if saved.is_ok() {
+        state.mirror.mark_all();
+    }
+    saved
 }
 
 #[cfg(test)]

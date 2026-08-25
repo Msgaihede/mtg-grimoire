@@ -318,7 +318,7 @@ pub fn rebuild_now(state: &AppState) -> Result<crate::mirror::run::PassReport, S
         // A **fresh** digest map, deliberately: this is the press a reader makes when they
         // suspect the folder is wrong, and reusing the thread's would let a file they edited
         // by hand read as unchanged — the one state this button exists to get out of.
-        let mut cache = std::collections::HashMap::new();
+        let mut cache = crate::mirror::run::DigestCache::default();
         crate::mirror::run::run_pass(conn, &root, crate::mirror::run::Dirty::ALL, &mut cache)
     };
     // After any lock has gone, and before the answer: the panel polls `mirror_status` the

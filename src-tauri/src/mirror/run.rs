@@ -25,7 +25,7 @@
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::hash::{Hash, Hasher};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
 
@@ -117,6 +117,64 @@ pub struct PassReport {
     pub failed: usize,
 }
 
+/// The digest of every file the mirror has written, **and the root they were written under**.
+///
+/// The root is half the key, and it is a field rather than a note to the caller because that is
+/// the difference between an invariant and a habit. The map is keyed by a *plan-relative* path
+/// — `Decks/Burn/deck.txt` — which is the same key under every root, so a digest taken at one
+/// folder will answer confidently about a completely different folder's copy. [`put`]'s
+/// `is_file` check does not save it: presence is not content, and a file that is present at the
+/// old root holding the *older* plan reads exactly like one that is up to date.
+///
+/// That was two bugs, found in that order. The first was patched by having the caller clear the
+/// map whenever it noticed the setting had moved, which worked until a live pass found the
+/// second: a root moved away and back left the returning folder's manifest untouched and
+/// orphaned 21 files for good. Keeping the root *in* the cache makes both impossible rather
+/// than remembered — [`run_pass`] aims the cache at its root before it writes anything, and a
+/// hit can only ever describe the file the pass is actually about.
+#[derive(Debug, Default)]
+pub struct DigestCache {
+    /// The root the digests below were taken under. Empty before the first pass, which is not
+    /// a path any root can have — [`crate::mirror::settings::root`] only ever answers absolute.
+    root: PathBuf,
+    files: HashMap<String, u64>,
+}
+
+impl DigestCache {
+    /// Point the cache at the root this pass is about, forgetting everything taken under a
+    /// different one.
+    ///
+    /// A different root is not a *stale* cache, it is an unrelated one: nothing in it describes
+    /// a file under this folder, so there is nothing to salvage. What is dropped costs one read
+    /// per file the next pass finds already correct, which is the price the very first pass of
+    /// a session pays anyway.
+    fn aim_at(&mut self, root: &Path) {
+        if self.root != root {
+            self.files.clear();
+            root.clone_into(&mut self.root);
+        }
+    }
+
+    /// Every path this cache has a digest for. Test-only: production code asks [`put`].
+    #[cfg(test)]
+    pub fn paths(&self) -> impl Iterator<Item = &str> {
+        self.files.keys().map(String::as_str)
+    }
+
+    /// How many files it remembers. Test-only, for the same reason.
+    #[cfg(test)]
+    pub fn len(&self) -> usize {
+        self.files.len()
+    }
+
+    /// Does it remember nothing? Clippy asks for this beside [`len`](Self::len), and it is a
+    /// fair ask: "the cache was emptied" is what half the tests around a root change assert.
+    #[cfg(test)]
+    pub fn is_empty(&self) -> bool {
+        self.files.is_empty()
+    }
+}
+
 /// Which surfaces this pass is responsible for.
 ///
 /// **It narrows what is *rendered*, never what is *pruned*.** A pass over one surface still
@@ -168,7 +226,7 @@ pub fn run_pass(
     conn: &Connection,
     root: &Path,
     dirty: Dirty,
-    cache: &mut HashMap<String, u64>,
+    cache: &mut DigestCache,
 ) -> Result<PassReport, String> {
     // First, and before the four reads: if the stick is unplugged there is no point asking the
     // database for 350 files' worth of rows to discover it.
@@ -178,6 +236,29 @@ pub fn run_pass(
             root.display()
         )
     })?;
+
+    // **A missing manifest under a root that exists means the mirror was reset.**
+    //
+    // It is the one file every pass writes and no plan can ever leave out, so its absence is
+    // not ambiguous: either this is the first pass over this folder, or somebody deleted the
+    // folder — or part of it — while the app was running. `create_dir_all` above has just
+    // quietly put an empty directory back, so **no failure arm fires and nothing else notices**;
+    // a live pass measured 93 of 100 files returning and `Wishlist/` never coming back, because
+    // the dirty mask only ever named the surface the reader's next edit happened to touch.
+    // `README.txt` promises them that deleting this folder is safe, and this is what makes that
+    // true. Escalating also covers the reader who deletes one deck's directory rather than all
+    // of it, which no mask could ever have described.
+    let dirty = if root.join(MANIFEST_NAME).is_file() {
+        dirty
+    } else {
+        Dirty::ALL
+    };
+
+    // Before anything is written: a cache carried over from a different root describes another
+    // folder's files entirely, and `put`'s `is_file` check cannot tell that apart from a file
+    // that is up to date. See [`DigestCache`].
+    cache.aim_at(root);
+    let cache = &mut cache.files;
 
     let decks = crate::deck::list_decks(conn)?;
     let deck_folders = crate::deck_meta::list_folders(conn)?;
@@ -663,7 +744,7 @@ mod tests {
 
     /// A pass with a digest map of its own — the shape a caller that keeps no state has.
     fn pass(conn: &Connection, root: &Path, dirty: Dirty) -> PassReport {
-        run_pass(conn, root, dirty, &mut HashMap::new()).unwrap()
+        run_pass(conn, root, dirty, &mut DigestCache::default()).unwrap()
     }
 
     fn mtime(path: &Path) -> SystemTime {
@@ -718,7 +799,7 @@ mod tests {
     #[test]
     fn a_second_pass_over_unchanged_data_opens_nothing_for_writing() {
         let (conn, dir, _) = seeded_db_and_temp_root();
-        let mut cache = HashMap::new();
+        let mut cache = DigestCache::default();
         run_pass(&conn, dir.path(), Dirty::ALL, &mut cache).unwrap();
         let before = mtime(&deck_file(&dir, "Azula"));
         let manifest_before = mtime(&dir.path().join(MANIFEST_NAME));
@@ -754,7 +835,7 @@ mod tests {
     #[test]
     fn a_renamed_deck_leaves_nothing_behind() {
         let (conn, dir, id) = seeded_db_and_temp_root();
-        let mut cache = HashMap::new();
+        let mut cache = DigestCache::default();
         run_pass(&conn, dir.path(), Dirty::ALL, &mut cache).unwrap();
         assert!(dir.path().join("Decks/Azula/Theory").is_dir());
         rename_deck(&conn, id, "Katara");
@@ -782,7 +863,7 @@ mod tests {
     #[test]
     fn a_theory_list_switched_off_takes_its_directory_with_it() {
         let (conn, dir, id) = seeded_db_and_temp_root();
-        let mut cache = HashMap::new();
+        let mut cache = DigestCache::default();
         run_pass(&conn, dir.path(), Dirty::ALL, &mut cache).unwrap();
         assert!(dir.path().join("Decks/Azula/Theory/Azula.csv").is_file());
         conn.execute("UPDATE decks SET theory_enabled = 0 WHERE id = ?1", [id])
@@ -918,7 +999,7 @@ mod tests {
     #[test]
     fn a_deck_renamed_away_and_back_is_written_again() {
         let (conn, dir, id) = seeded_db_and_temp_root();
-        let mut cache = HashMap::new();
+        let mut cache = DigestCache::default();
         run_pass(&conn, dir.path(), Dirty::ALL, &mut cache).unwrap();
         for name in ["Katara", "Azula"] {
             rename_deck(&conn, id, name);
@@ -952,7 +1033,7 @@ mod tests {
     #[test]
     fn a_pass_over_one_surface_does_not_prune_the_others() {
         let (conn, dir, _) = seeded_db_and_temp_root();
-        let mut cache = HashMap::new();
+        let mut cache = DigestCache::default();
         run_pass(&conn, dir.path(), Dirty::ALL, &mut cache).unwrap();
         let decks = Dirty {
             decks: true,
@@ -975,6 +1056,15 @@ mod tests {
     #[test]
     fn a_pass_renders_only_the_surfaces_it_was_told_are_dirty() {
         let (conn, dir, _) = seeded_db_and_temp_root();
+        // **This folder has to look already-mirrored, and that is the point of the two lines.**
+        // A root with no manifest owes a *full* pass however narrow the mask is — see the
+        // escalation in `run_pass` — so a cold folder can never demonstrate the narrowing. An
+        // empty manifest is the honest neutral state here: `prune`'s authority is exactly what
+        // it names, so naming nothing authorises nothing, and the only thing it says is "the
+        // mirror has been here and nobody has deleted the folder".
+        std::fs::create_dir_all(dir.path()).unwrap();
+        std::fs::write(dir.path().join(MANIFEST_NAME), "").unwrap();
+
         let decks = Dirty {
             decks: true,
             collection: false,
@@ -986,6 +1076,120 @@ mod tests {
         assert!(!dir.path().join("Wishlist/Wishlist.csv").exists());
     }
 
+    /// The escalation itself, at the level it is enforced. A folder with no manifest is
+    /// indistinguishable from one a reader has just deleted, and both mean the same thing:
+    /// nothing on disk can be relied on, so render everything whatever the mask says.
+    #[test]
+    fn a_root_with_no_manifest_is_rendered_whole_however_narrow_the_mask() {
+        let (conn, dir, _) = seeded_db_and_temp_root();
+        let decks = Dirty {
+            decks: true,
+            collection: false,
+            wishlist: false,
+        };
+        pass(&conn, dir.path(), decks);
+        assert!(
+            dir.path().join("Collection/Collection.csv").is_file(),
+            "a folder the mirror has never written owes a full pass, not the mask's subset"
+        );
+        assert!(dir.path().join("Wishlist/Wishlist.csv").is_file());
+    }
+
+    /// **Which file is the sentinel, and it is the manifest rather than any other.** Deleting
+    /// the whole folder takes both it and `README.txt`, so the test above cannot tell the two
+    /// choices apart — a mutation keying the escalation on the README survived it. This one
+    /// deletes the manifest alone.
+    ///
+    /// The manifest is the right sentinel because it is the *pruner's authority*: without it a
+    /// pass can no longer tell its own leftovers from the reader's own files, which the README
+    /// says out loud. Re-establishing it is worth one full render, and no other file in the
+    /// folder carries that meaning.
+    #[test]
+    fn deleting_the_manifest_alone_is_enough_to_owe_a_full_pass() {
+        let (conn, dir, _) = seeded_db_and_temp_root();
+        pass(&conn, dir.path(), Dirty::ALL);
+        std::fs::remove_file(dir.path().join(MANIFEST_NAME)).unwrap();
+        std::fs::remove_dir_all(dir.path().join("Wishlist")).unwrap();
+        assert!(
+            dir.path().join(README_NAME).is_file(),
+            "the README stays, so only the manifest can be what is noticed"
+        );
+
+        // A deck edit, which is all the mask would ever have said.
+        pass(
+            &conn,
+            dir.path(),
+            Dirty {
+                decks: true,
+                collection: false,
+                wishlist: false,
+            },
+        );
+
+        assert!(
+            dir.path().join("Wishlist/Wishlist.csv").is_file(),
+            "a lost manifest owes a full pass, whatever the mask said"
+        );
+        assert!(dir.path().join(MANIFEST_NAME).is_file());
+    }
+
+    /// [`DigestCache::aim_at`] itself, which is the invariant in one place.
+    #[test]
+    fn aiming_the_cache_at_another_root_forgets_everything_it_knew() {
+        let mut cache = DigestCache::default();
+        cache.aim_at(Path::new("D:/one"));
+        cache.files.insert("Decks/Burn/Burn.txt".to_owned(), 42);
+
+        cache.aim_at(Path::new("D:/one"));
+        assert_eq!(cache.len(), 1, "the same root keeps its digests");
+
+        cache.aim_at(Path::new("D:/two"));
+        assert!(cache.is_empty(), "a different root shares none of them");
+    }
+
+    /// And the same guard where a pass reaches it. **The interesting root is one the mirror has
+    /// written before**, not an empty one: at an empty root `put`'s `is_file` check misses and
+    /// every file is rewritten anyway, so a two-root test that never comes back cannot fail —
+    /// it was written that way first and two mutations survived it.
+    ///
+    /// Coming back is what exposes the cache: every file is *present* at the first root and some
+    /// hold the older plan, which is exactly what a digest taken at the second root cannot tell
+    /// apart from a file that is up to date.
+    #[test]
+    fn a_cache_carried_back_to_a_root_cannot_vouch_for_its_stale_copies() {
+        let (conn, first, _) = seeded_db_and_temp_root();
+        let second = tempfile::tempdir().unwrap();
+        let mut cache = DigestCache::default();
+
+        run_pass(&conn, first.path(), Dirty::ALL, &mut cache).unwrap();
+        let stale = std::fs::read_to_string(first.path().join(MANIFEST_NAME)).unwrap();
+
+        // The plan grows while the mirror is pointed somewhere else.
+        crate::deck::create_deck(
+            &conn,
+            &crate::deck::DeckInput {
+                name: "Zuko".to_owned(),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        run_pass(&conn, second.path(), Dirty::ALL, &mut cache).unwrap();
+        let planned = std::fs::read_to_string(second.path().join(MANIFEST_NAME)).unwrap();
+        assert_ne!(planned, stale, "the two roots have to disagree");
+
+        run_pass(&conn, first.path(), Dirty::ALL, &mut cache).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(first.path().join(MANIFEST_NAME)).unwrap(),
+            planned,
+            "the returning root's manifest has to say what this pass planned"
+        );
+        assert!(
+            deck_file(&first, "Zuko").is_file(),
+            "and the deck it never had is written into it"
+        );
+    }
+
     /// R6: a regular file as the root's parent, which is `paths.rs`'s own idiom for "this
     /// path cannot be made". A hard-coded `Z:/` would be a real drive on somebody's machine.
     #[test]
@@ -995,7 +1199,7 @@ mod tests {
         let blocker = dir.path().join("not-a-directory");
         std::fs::write(&blocker, b"x").unwrap();
         let root = blocker.join("mirror");
-        assert!(run_pass(&conn, &root, Dirty::ALL, &mut HashMap::new()).is_err());
+        assert!(run_pass(&conn, &root, Dirty::ALL, &mut DigestCache::default()).is_err());
     }
 
     /// R9: no path is capped. A name longer than a filesystem component costs that deck its
@@ -1072,7 +1276,7 @@ mod tests {
     #[test]
     fn the_readme_and_the_manifest_survive_every_prune() {
         let (conn, dir, id) = seeded_db_and_temp_root();
-        let mut cache = HashMap::new();
+        let mut cache = DigestCache::default();
         run_pass(&conn, dir.path(), Dirty::ALL, &mut cache).unwrap();
         crate::deck::delete_deck(&conn, id, None).unwrap();
         run_pass(&conn, dir.path(), Dirty::ALL, &mut cache).unwrap();

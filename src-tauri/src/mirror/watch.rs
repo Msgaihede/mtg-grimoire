@@ -25,11 +25,11 @@
 //!
 //! See `docs/superpowers/specs/2026-08-25-text-backed-cards-design.md` §5.
 
-use crate::mirror::run::{Dirty, PassReport};
+use crate::mirror::run::{DigestCache, Dirty, PassReport};
 use crate::mirror::settings;
 use crate::sync::AppState;
 use rusqlite::Connection;
-use std::collections::HashMap;
+
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -336,7 +336,7 @@ fn watch(state: &AppState) {
         }
     };
 
-    let mut cache: HashMap<String, u64> = HashMap::new();
+    let mut cache = DigestCache::default();
     let mut on = settings::enabled(&conn);
     // The startup pass, before the loop and before anything can have been edited: it is the
     // whole of what makes a mirror correct after a crash, a kill, or a write that landed while
@@ -434,7 +434,7 @@ fn pass(
     state: &AppState,
     conn: &Connection,
     dirty: Dirty,
-    cache: &mut HashMap<String, u64>,
+    cache: &mut DigestCache,
     failures: u32,
 ) -> u32 {
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -947,7 +947,7 @@ mod tests {
         std::fs::write(&blocker, b"not a folder").unwrap();
         aim_at(&state, &blocker.join("mirror"));
 
-        let mut cache: HashMap<String, u64> = HashMap::new();
+        let mut cache = DigestCache::default();
         let failures = pass(&state, &conn, Dirty::ALL, &mut cache, 0);
 
         assert_eq!(failures, 1, "a failed pass is counted, for the backoff");
@@ -978,7 +978,7 @@ mod tests {
         let root = dir.path().join("mirror");
         aim_at(&state, &root);
 
-        let mut cache: HashMap<String, u64> = HashMap::new();
+        let mut cache = DigestCache::default();
         pass(&state, &conn, Dirty::ALL, &mut cache, 0);
         let first = cache.len();
         assert!(first > 0, "an empty collection still writes its own files");
@@ -1010,7 +1010,7 @@ mod tests {
         let old_root = dir.path().join("old");
         aim_at(&state, &old_root);
 
-        let mut cache: HashMap<String, u64> = HashMap::new();
+        let mut cache = DigestCache::default();
         pass(&state, &conn, Dirty::ALL, &mut cache, 0);
         let planned = cache.len();
         assert!(planned > 0);
@@ -1059,12 +1059,12 @@ mod tests {
         let root = dir.path().join("mirror");
         aim_at(&state, &root);
 
-        let mut cache: HashMap<String, u64> = HashMap::new();
+        let mut cache = DigestCache::default();
         pass(&state, &conn, Dirty::ALL, &mut cache, 0);
         let first = cache.len();
         assert!(first > 0);
 
-        let victim = root.join(cache.keys().next().unwrap());
+        let victim = root.join(cache.paths().next().unwrap());
         std::fs::write(&victim, b"a reader typed this").unwrap();
         pass(&state, &conn, Dirty::ALL, &mut cache, 0);
 
@@ -1169,7 +1169,7 @@ mod tests {
         let state = state_at(dir.path());
         let conn = own_conn(dir.path());
         aim_at(&state, &dir.path().join("mirror"));
-        let mut cache: HashMap<String, u64> = HashMap::new();
+        let mut cache = DigestCache::default();
         assert_eq!(pass(&state, &conn, Dirty::ALL, &mut cache, 9), 0);
     }
 
@@ -1228,5 +1228,139 @@ mod tests {
             Some(Dirty::ALL),
             "a corrected card name reaches the files this way and no other"
         );
+    }
+
+    /// **Bug 1 from the live pass.** Measured against the real corpus: delete the mirror folder
+    /// mid-session and 93 of 100 files come back — `Wishlist/` never does. `abs.is_file()`
+    /// forces a rewrite of every file whose *surface* is being rendered, and the next edit
+    /// dirties one surface, so a wishlist nobody has touched stays missing for the rest of the
+    /// session while `README.txt` promises the reader that deleting the folder is safe.
+    ///
+    /// The signal is the manifest: the one file the mirror always writes and never plans away,
+    /// so its absence under a root that exists means the mirror was reset and the next pass
+    /// owes a full one. It covers the reader who deletes only part of the folder as well.
+    #[test]
+    fn deleting_the_folder_repairs_the_surfaces_the_next_edit_did_not_touch() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state_at(dir.path());
+        let conn = own_conn(dir.path());
+        let root = dir.path().join("mirror");
+        aim_at(&state, &root);
+
+        let mut cache = DigestCache::default();
+        pass(&state, &conn, Dirty::ALL, &mut cache, 0);
+        let wishlist: Vec<String> = cache
+            .paths()
+            .filter(|p| p.starts_with("Wishlist/"))
+            .map(str::to_owned)
+            .collect();
+        assert!(!wishlist.is_empty(), "the plan has to reach the wishlist");
+
+        // What the reader does, and what the README says is safe.
+        std::fs::remove_dir_all(&root).unwrap();
+
+        // The next edit is a deck edit. Only the decks are dirty; nobody has touched a wish.
+        pass(&state, &conn, DECKS_ONLY, &mut cache, 0);
+
+        for rel in &wishlist {
+            assert!(
+                root.join(rel).is_file(),
+                "{rel} is gone, and no edit to a deck will ever bring it back"
+            );
+        }
+        assert!(
+            root.join(crate::mirror::run::MANIFEST_NAME).is_file(),
+            "and the manifest, or the next pass cannot tell this happened at all"
+        );
+    }
+
+    /// **Bug 3 from the live pass**, and a regression the class fix introduced: moving the root
+    /// away and back left the returning folder's manifest untouched — `written 21` where 22 was
+    /// expected — so the next prune read a manifest describing a plan that no longer existed
+    /// and 21 files were orphaned for good.
+    ///
+    /// `abs.is_file()` proves a file is *present*; it cannot prove that **this root's** copy
+    /// holds the content the digest describes. Here the manifest is present at the first root
+    /// holding the older plan, while the digest remembered from the second root says the newer
+    /// one — so the pass skipped it and the two disagreed permanently.
+    ///
+    /// The assertion whose absence let this through is the last one: the manifest at the root
+    /// the pass is actually about has to say what that pass planned.
+    #[test]
+    fn coming_back_to_a_root_rewrites_the_manifest_it_left_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state_at(dir.path());
+        let conn = own_conn(dir.path());
+        let first = dir.path().join("first");
+        let second = dir.path().join("second");
+
+        aim_at(&state, &first);
+        let mut cache = DigestCache::default();
+        pass(&state, &conn, Dirty::ALL, &mut cache, 0);
+        let left_behind = std::fs::read_to_string(first.join(crate::mirror::run::MANIFEST_NAME))
+            .expect("the first pass writes a manifest");
+
+        // The plan changes while the mirror is pointed somewhere else — a deck made while the
+        // stick was out. Anything that adds files.
+        {
+            let write = crate::sync::lock_db(&state);
+            crate::deck::create_deck(
+                &write,
+                &crate::deck::DeckInput {
+                    name: "Burn".into(),
+                    format_key: "commander".into(),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        }
+        aim_at(&state, &second);
+        pass(&state, &conn, Dirty::ALL, &mut cache, 0);
+        let planned_now = std::fs::read_to_string(second.join(crate::mirror::run::MANIFEST_NAME))
+            .expect("the second root gets one of its own");
+        assert_ne!(
+            planned_now, left_behind,
+            "the two roots have to disagree or this test proves nothing"
+        );
+
+        // And back. The manifest is present at `first`, and holds the *older* plan.
+        aim_at(&state, &first);
+        pass(&state, &conn, Dirty::ALL, &mut cache, 0);
+
+        assert_eq!(
+            std::fs::read_to_string(first.join(crate::mirror::run::MANIFEST_NAME)).unwrap(),
+            planned_now,
+            "a digest taken under the second root cannot vouch for the first root's copy"
+        );
+    }
+
+    /// **Bug 2 from the live pass.** Switching marketplace changed nothing on disk until
+    /// `Rebuild now` was pressed, which then moved a row from 8.25 to 5.99 — every mirrored CSV
+    /// had been carrying the previous marketplace's prices.
+    ///
+    /// `app_meta` maps to no surface and must not: a sync writes that table and the hook has to
+    /// stay quiet. But this is a deliberate user action that changes what every price column
+    /// says, so it marks explicitly — the shape `set_root_now` already has.
+    #[test]
+    fn switching_marketplace_marks_every_surface() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state_at(dir.path());
+        assert_eq!(state.mirror.take(), None, "nothing is dirty yet");
+        crate::marketplace::set_marketplace_now(&state, "cardkingdom").unwrap();
+        assert_eq!(
+            state.mirror.take(),
+            Some(Dirty::ALL),
+            "every Price column in the mirror just changed meaning"
+        );
+    }
+
+    /// The other half: an id this build does not know is refused, so nothing changed on disk
+    /// and nothing may be re-rendered.
+    #[test]
+    fn a_refused_marketplace_marks_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state_at(dir.path());
+        crate::marketplace::set_marketplace_now(&state, "cardmarket-but-typo").unwrap_err();
+        assert_eq!(state.mirror.take(), None);
     }
 }
