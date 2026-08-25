@@ -20,6 +20,9 @@ const NONE = {
   sets: [],
   manaValues: [],
   manaX: false,
+  rarities: [],
+  priceMin: undefined,
+  priceMax: undefined,
   finishes: [],
   conditions: [],
   needsReview: undefined,
@@ -42,6 +45,23 @@ describe("activeFilterCount", () => {
     // once the flagged ones are dealt with. Compared against `undefined`, never tested for
     // truthiness, which is the whole difference between a tri-state and a checkbox.
     expect(activeFilterCount({ ...NONE, needsReview: false })).toBe(1);
+    expect(activeFilterCount({ ...NONE, rarities: ["rare", "mythic"] })).toBe(1);
+  });
+
+  /**
+   * The band is one kind however many of its two ends are set — `$5 – $20` is one control and
+   * one thing to clear, so a reader who set both ends must not read `Reset all 2` over it.
+   */
+  it("counts a price band once, whichever ends of it are set", () => {
+    expect(activeFilterCount({ ...NONE, priceMin: 5 })).toBe(1);
+    expect(activeFilterCount({ ...NONE, priceMax: 20 })).toBe(1);
+    expect(activeFilterCount({ ...NONE, priceMin: 5, priceMax: 20 })).toBe(1);
+  });
+
+  /** A floor of zero is a bound the reader typed, and `0` is falsy — so this is the case a
+   *  truthiness test would drop, leaving Reset all dark over a list that really is banded. */
+  it("counts a floor of zero", () => {
+    expect(activeFilterCount({ ...NONE, priceMin: 0 })).toBe(1);
   });
 
   /** Whitespace is not a search. */
@@ -51,10 +71,12 @@ describe("activeFilterCount", () => {
 
   /**
    * The collection's row is longer than the search's by three: what the copy is (finish),
-   * what state it is in (condition), and whether it is one of the rows a sync flagged.
-   * Reset all has to reach every one of them, so the count has to see every one of them.
+   * what state it is in (condition), and whether it is one of the rows a sync flagged. Ten
+   * kinds over twelve fields — the price band is one kind with two ends, and the X chip rides
+   * with the mana values. Reset all has to reach every one of them, so the count has to see
+   * every one of them.
    */
-  it("sees all eight kinds the collection offers", () => {
+  it("sees all ten kinds the collection offers", () => {
     expect(
       activeFilterCount({
         text: "bolt",
@@ -63,11 +85,14 @@ describe("activeFilterCount", () => {
         sets: ["lea"],
         manaValues: [1],
         manaX: true,
+        rarities: ["rare"],
+        priceMin: 5,
+        priceMax: 20,
         finishes: ["foil"],
         conditions: ["NM"],
         needsReview: true,
       }),
-    ).toBe(8);
+    ).toBe(10);
   });
 
   /** X is the last chip of the mana-value group and is OR'd with the numerals, so it is that

@@ -73,6 +73,11 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     // row is a database nobody has zoomed, so every wall opens at `DEFAULT_ZOOM` — which is what
     // every test in this file is standing in.
     cardZoom: vi.fn().mockResolvedValue({}),
+    // The launch read `useListViewPersistence` makes, beside the zoom's. `{}` is what a
+    // database nobody has switched answers, and it leaves every list on `store.ts`' own
+    // default — which is the state every case in this file is written against.
+    listView: vi.fn().mockResolvedValue({}),
+    setListView: vi.fn().mockResolvedValue(undefined),
     setCardZoom: vi.fn().mockResolvedValue(undefined),
     // The shell reads the rail's width once as it launches and writes it back on every press.
     // Answered `false` in the `beforeEach` below, which is a database nobody has collapsed the

@@ -1031,8 +1031,9 @@ price | type`). An **inactive category stays its own group in all three grouping
     [collection-folders.md](../../../docs/reference/collection-folders.md).
   - **The Collection tab draws `FilterBar`, and since 2026-08-25 that is the *same component* the
     `All cards` tab draws.** It had a filter row of its own for two days — built out of
-    `@/components/FilterChips`, which is the sanctioned reuse and is still how `CollectionFilterBar`
-    is built — and what was wrong with it is that it was the same arrangement of the same controls
+    `@/components/FilterChips`, which is the sanctioned reuse and is still how
+    `PrintingsFilterBar` is built — and what was wrong with it is that it was the same
+    arrangement of the same controls
     written twice, so a reader switching tabs met two different rows. `FilterBar`'s prop is a
     structural `FilterSurface` now, which `useCardSearch` and `useCollectionSearch` both satisfy;
     the hook split is untouched, so a reader who never leaves their binder still runs no
@@ -1041,7 +1042,13 @@ price | type`). An **inactive category stays its own group in all three grouping
       `decks`, `rarity`, `price` — and the two absences are facts about a collection. **No
       `owned`**: every row here is a copy the reader has, so a filter whose two states select the
       same list is a control that reads as broken. **No `printings`**: that switch folds a card's
-      printings together and these *are* the reader's printings.
+      printings together and these *are* the reader's printings. **And no `Any card` row in the
+      format picker since 2026-08-26** — `FilterSurface.anyCard`, which this tab does not set.
+      That row is not a format: it is what puts back the printings *no* format allows, and it only
+      means anything where `playableOnly` narrows the corpus to begin with. This tab has never sent
+      that flag, so picking the row put the `any-card` sentinel on the wire, `collection_list` read
+      it as a legalities key nothing matches, and the column went **empty**. It shipped that way
+      with the tray and nothing went red for it.
     - **`decks` is the cell no other surface has**, and it is what this tab is for: `Not in a deck`,
       pressed by default. **Counted by nothing and cleared by nothing** — a badge that counted it
       would open every deck reading `Reset all 1` for a state nobody touched, and Reset all leaves

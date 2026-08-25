@@ -292,7 +292,27 @@ const sweepCallsAt = (marketplace: string) =>
  * so `/sort/i` on `getByLabelText` would still risk matching the whole header row rather than
  * only the control this file means.
  */
-const sortSelect = () => screen.getByRole("combobox", { name: "Sort" });
+// **`Sort results` and not the bare `Sort` this page drew before it shared `FilterBar`.**
+// That row is mounted on four surfaces and one of them — the deck editor — already has a
+// `Sort` of its own, so the shared control names what it orders. `FilterBar`'s own label
+// carries the argument.
+const sortSelect = () => screen.getByRole("combobox", { name: "Sort results" });
+/**
+ * Open the filter tray, so a cell behind the Filters disclosure can be pressed.
+ *
+ * Everything but the box, the colours, the order and the layout pair lives behind that button
+ * since this page started drawing `FilterBar` — so a suite that reached straight for a chip is
+ * now reaching into a tray that is not mounted. Matched on a prefix: the button's name carries
+ * the live count (`Show filters — 2 active`), which moves as a case presses things.
+ */
+async function openTray(user: {
+  // Structural, so the bare `userEvent` module and a `userEvent.setup()` instance both satisfy it
+  // — this file uses each in different cases, and the two are not the same type.
+  click: (element: Element) => Promise<unknown>;
+}): Promise<void> {
+  await user.click(screen.getByRole("button", { name: /^Show filters/ }));
+}
+
 
 /**
  * The page, under the providers `App` mounts above it.
@@ -404,6 +424,7 @@ describe("CollectionPage", () => {
     wrap(<CollectionPage />);
     await screen.findByText(/nothing here yet/i);
 
+    await openTray(userEvent);
     await userEvent.click(screen.getByRole("button", { name: "Foil" }));
 
     expect(
@@ -424,6 +445,7 @@ describe("CollectionPage", () => {
     await waitFor(() => expect(prewarmCollection).toHaveBeenCalledTimes(1));
 
     // A filter click re-renders and re-fetches; the warm must not go again with it.
+    await openTray(userEvent);
     await userEvent.click(screen.getByRole("button", { name: "Foil" }));
     await waitFor(() => expect(collectionList.mock.calls.length).toBeGreaterThan(1));
     expect(prewarmCollection).toHaveBeenCalledTimes(1);
@@ -782,6 +804,7 @@ describe("CollectionPage", () => {
     const banner = screen.getByRole("status", { name: /needs review/i });
     await waitFor(() => expect(banner).toHaveTextContent("3"));
 
+    await openTray(userEvent);
     await userEvent.click(screen.getByRole("button", { name: "Needs review" }));
     await waitFor(() => expect(lastQuery().needsReview).toBe(true));
     expect(banner).toBeEmptyDOMElement();
@@ -869,6 +892,7 @@ describe("CollectionPage", () => {
     wrap(<CollectionPage />);
     await screen.findByText("Lightning Bolt");
 
+    await openTray(userEvent);
     await userEvent.click(screen.getByRole("button", { name: "Etched" }));
     await userEvent.click(screen.getByRole("button", { name: /^LP/ }));
     await userEvent.selectOptions(sortSelect(), "price");
@@ -898,6 +922,13 @@ describe("CollectionPage", () => {
     const user = userEvent.setup();
     wrap(<CollectionPage />);
     await screen.findByText("Lightning Bolt");
+
+    // **It opens on the order it is actually in, and `Custom…` is not there to open on.** A
+    // controlled `<select>` whose value matches no option silently reports the **first** one —
+    // alphabetically `Highest price` here — so this is the assertion that tells "the sort is name
+    // order" from "the control fell back to row zero", and the two look identical on screen.
+    expect(sortSelect()).toHaveValue("name");
+    expect(screen.queryByRole("option", { name: "Custom…" })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Copies" }));
     await waitFor(() => expect(lastQuery().sort).toEqual([{ key: "quantity", dir: "desc" }]));
@@ -1069,7 +1100,7 @@ describe("CollectionPage", () => {
     wrap(<CollectionPage />);
     await screen.findByText("Card 1");
 
-    await user.click(await screen.findByRole("button", { name: "Export" }));
+    await user.click(await screen.findByRole("button", { name: "Export collection" }));
     await waitFor(() =>
       expect(collectionList).toHaveBeenCalledWith(expect.objectContaining({ limit: 500 })),
     );
@@ -1091,7 +1122,7 @@ describe("CollectionPage", () => {
     wrap(<CollectionPage />);
     await screen.findByText("Lightning Bolt");
 
-    await user.click(screen.getByRole("button", { name: "Import" }));
+    await user.click(screen.getByRole("button", { name: "Import cards" }));
     const dialog = await screen.findByRole("dialog", { name: "Import a decklist" });
     await user.click(within(dialog).getByLabelText("Decklist"));
     await user.paste("1 Sol Ring");
@@ -1161,10 +1192,11 @@ describe("CollectionPage", () => {
 
     // A filter switched on, so there is something real for "everything" to have dropped — the
     // marketplace assertion below is not just "the field was never set to begin with".
+    await openTray(user);
     await user.click(screen.getByRole("button", { name: "Foil" }));
     await waitFor(() => expect(lastQuery().finishes).toEqual(["foil"]));
 
-    await user.click(await screen.findByRole("button", { name: "Export" }));
+    await user.click(await screen.findByRole("button", { name: "Export collection" }));
     await waitFor(() =>
       expect(collectionList).toHaveBeenCalledWith(expect.objectContaining({ limit: 500 })),
     );
@@ -1203,7 +1235,7 @@ describe("CollectionPage", () => {
     await screen.findByText("Lightning Bolt");
     await waitFor(() => expect(lastQuery().marketplace).toBe("tcgplayer"));
 
-    await user.click(await screen.findByRole("button", { name: "Export" }));
+    await user.click(await screen.findByRole("button", { name: "Export collection" }));
     await user.click(
       screen.getByRole("checkbox", { name: "Export everything, ignoring the filters" }),
     );
@@ -2065,7 +2097,7 @@ describe("the collection's folders", () => {
     await user.click(await screen.findByRole("button", { name: /^Trade binder folder/ }));
     await waitFor(() => expect(lastQuery().folderId).toBe(3));
 
-    await user.click(screen.getAllByRole("button", { name: "Export" })[0]);
+    await user.click(screen.getAllByRole("button", { name: "Export collection" })[0]);
 
     const dialog = await screen.findByRole("dialog", { name: /export/i });
     expect(within(dialog).getByText(/in Trade binder/)).toBeInTheDocument();

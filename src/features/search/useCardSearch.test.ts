@@ -376,7 +376,8 @@ describe("the X mana chip", () => {
  * `SearchPage` passes nothing, and the first case here is that one: with no option the hook must
  * behave exactly as it did before this parameter existed. (`FilterBar.stories.tsx` is the other
  * caller that passes nothing; `DeckSearchPanel` is the one that passes a default.
- * `CollectionFilterBar` mounts none of this — it imports `FORMATS` and draws its own select.)
+ * The collection and the wishlist mount `FilterBar` too, and answer `FORMATS` for `formats` —
+ * neither seeds a default, so neither reaches the branch this case is about.)
  */
 describe("the default format filter", () => {
   beforeEach(() => {

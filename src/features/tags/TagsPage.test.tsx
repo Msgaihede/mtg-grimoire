@@ -67,6 +67,10 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     // reason: a `.catch` cannot catch the synchronous TypeError of calling `undefined`. An
     // empty row is a database nobody has zoomed, so every wall opens at its default.
     cardZoom: vi.fn().mockResolvedValue({}),
+    // `useListViewPersistence`' launch read, beside the zoom's — this file mounts the whole
+    // `App` for its sidebar drags. `{}` leaves every list on its own default.
+    listView: vi.fn().mockResolvedValue({}),
+    setListView: vi.fn().mockResolvedValue(undefined),
     setCardZoom: vi.fn().mockResolvedValue(undefined),
     // And the rail's own width, read once on the way up. `false` is a database nobody has
     // collapsed the sidebar in, which is the shell every test here means to render.
