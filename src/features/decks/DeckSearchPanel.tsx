@@ -580,10 +580,20 @@ export function DeckSearchPanel({
         "flex size-7 shrink-0 items-center justify-center rounded-md text-dim",
         "transition-colors duration-150 motion-reduce:transition-none",
         roomy ? "hover:text-text" : "cursor-not-allowed opacity-60",
-        // Collapsed the rail's own border is on this button, exactly as it was: at 36px a
-        // hairline beside a bordered control would be two lines saying one thing, and the button
-        // is the only thing in the rail that can carry it.
-        shown || "w-9 border border-border",
+        // **Flat in both states, and that is the change of 2026-08-26.** Collapsed, this button
+        // carried `border border-border` — the rail's own hairline, drawn on the only thing in
+        // 36px that could hold one — which made the one control the reader sees at that width a
+        // boxed button where every other icon button in the app is a bare glyph on the page. The
+        // hairline is the *panel's* chrome rather than this button's, so it went back to the
+        // `<section>` (below), where it is the same left edge the drawn panel carries and the
+        // "two lines saying one thing" it was avoiding still cannot happen — there is one line
+        // and it is not on the button.
+        //
+        // `w-full` rather than the `w-9` that came with the border: the rail's content box is a
+        // pixel narrower than the rail now that the section is bordered, and the chevron is
+        // centred by the button filling that box. A bare `size-7` would sit 28px wide at the
+        // start of a 35px column, 3px off the rail's own centre.
+        shown || "w-full",
         FOCUS,
       )}
     >
@@ -641,14 +651,18 @@ export function DeckSearchPanel({
       // One hairline down the left edge, and it is the only chrome the panel adds: the
       // category columns beside it are bordered boxes and these controls sit on the page, so without it
       // the "Add to" select reads as part of the deck's own header row. Everything right of
-      // the line is not your deck. The rail carries its own border instead — at 36px a hairline
-      // beside a bordered button would be two lines saying one thing.
+      // the line is not your deck. **Railed too, since 2026-08-26** — that sentence is as true of
+      // 36px of rail as of the drawn panel, and it used to be said by a border on the disclosure
+      // instead, which drew the button as a box rather than the column as a column. The rail and
+      // the panel are one edge now, so a collapse changes what is in this column and not what it
+      // is. The `w-9` is unchanged and stays 36px: `box-sizing` is `border-box`, so the hairline
+      // comes out of the rail rather than out of the desk beside it.
       // `relative` for the resize handle, which is drawn *over* the hairline rather than in the
       // column: a grab strip that took a place in this flex column would be a strip the length
       // of one row rather than the length of the edge.
       className={cn(
-        "flex min-h-0 shrink-0 flex-col gap-2",
-        shown ? "relative border-l border-border pl-3" : "w-9",
+        "flex min-h-0 shrink-0 flex-col gap-2 border-l border-border",
+        shown ? "relative pl-3" : "w-9",
       )}
       style={shown ? { width: drawnWidth } : undefined}
     >
@@ -713,11 +727,16 @@ export function DeckSearchPanel({
             against at the 193px floor.
 
             Down the rail when the panel is shut, so 36px of chrome still says what it is rather
-            than leaving a bare icon to be guessed at. */}
+            than leaving a bare icon to be guessed at — and `select-none` in that state alone,
+            which is `TitleBar`'s rule for the wordmark reached from the other side. There the
+            words sit in a drag region and a highlight fights the reader; here they *are* the
+            rail, so a pointer moved down the shut column with the button held drags a selection
+            across the whole of what the panel has left on screen. Drawn, this is an ordinary
+            heading over a search box and there is nothing to protect it from. */}
         <span
           className={cn(
             "min-w-0 truncate text-sm font-medium text-text",
-            shown ? "flex-1 text-center" : "text-center",
+            shown ? "flex-1 text-center" : "select-none text-center",
           )}
           style={shown ? undefined : { writingMode: "vertical-rl" }}
         >
