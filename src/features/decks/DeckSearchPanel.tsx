@@ -732,11 +732,27 @@ export function DeckSearchPanel({
             words sit in a drag region and a highlight fights the reader; here they *are* the
             rail, so a pointer moved down the shut column with the button held drags a selection
             across the whole of what the panel has left on screen. Drawn, this is an ordinary
-            heading over a search box and there is nothing to protect it from. */}
+            heading over a search box and there is nothing to protect it from.
+
+            **`self-center` down the rail, and `text-center` is not what centres it there** —
+            reported 2026-08-26, once the chevron's border stopped framing the misalignment. In
+            `vertical-rl` the *inline* axis is the one running down the page and the **block**
+            axis runs right to left, so `text-align` moves the words up and down (against a box
+            whose height is their own content, i.e. not at all), and the line box is laid at
+            block-start — which is the span's **right** edge. Stretched by the row's
+            `items-stretch` to the rail's full width, that put the title's centre ~7px right of
+            the chevron's in a 36px column.
+
+            So the span stops stretching and is centred as an item instead: `align-self: center`
+            shrink-wraps it to one line box's thickness and puts that box on the rail's own
+            centre line, which is where `justify-center` has already put the chevron. `text-center`
+            is left off that arm rather than kept as decoration — a class that cannot act in the
+            writing mode it is written for is the thing somebody later "fixes" the real bug by
+            adjusting. */}
         <span
           className={cn(
             "min-w-0 truncate text-sm font-medium text-text",
-            shown ? "flex-1 text-center" : "select-none text-center",
+            shown ? "flex-1 text-center" : "select-none self-center",
           )}
           style={shown ? undefined : { writingMode: "vertical-rl" }}
         >
