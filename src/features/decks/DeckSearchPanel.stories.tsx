@@ -4,7 +4,6 @@ import { TOOLTIP_OPEN_MS } from "@/components/tooltip/TooltipProvider";
 import type { FormatFilterOption } from "@/features/search/useCardSearch";
 import { AUTO_CATEGORY } from "./autoCategory";
 import { DeckSearchPanel } from "./DeckSearchPanel";
-import { useAddMode } from "./NormalSearchAdd";
 import { useDeck } from "./useDeck";
 
 /**
@@ -50,18 +49,16 @@ function Panel({
   maxWidth?: number;
 }) {
   const deck = useDeck(deckId);
-  /**
-   * The own/need answer, mounted **here** for `add`'s reason: it is the editor's, because it
-   * governs the toolbar's quick-add field as well as the panel's Add button, and this wrapper is
-   * standing in for the editor. The panel draws the control and remembers nothing, which is why
-   * pressing it in a story sticks — the memory is the query cache's, keyed by this deck.
+  /*
+   * **`useAddMode` was mounted here for `add`'s reason and is gone with the own/need pair**
+   * (2026-08-25). The answer was the editor's, because it governed the toolbar's quick-add field
+   * as well as the panel's Add button, so this wrapper held it while standing in for the editor.
+   * Every add from this panel means "I need this" now; putting a copy the reader owns into a deck
+   * is the Collection tab's `collection_to_deck`.
    */
-  const { mode, setMode } = useAddMode(deckId);
   return (
     <DeckSearchPanel
       add={deck.addCard}
-      mode={mode}
-      onMode={setMode}
       categories={deck.categories}
       deckId={deckId}
       targetCategoryId={deck.deck?.defaultCategoryId ?? AUTO_CATEGORY}
@@ -86,6 +83,15 @@ function Panel({
 async function showAllCards(panel: HTMLElement) {
   await userEvent.click(within(panel).getByRole("button", { name: "All cards" }));
 }
+
+/**
+ * The panel's disclosure — **a pattern, because its name says what pressing it does** and
+ * therefore changes with the state: `Collapse card search` open, `Expand card search` collapsed.
+ * It was the literal `Search cards` until 2026-08-25, when the words became a heading beside the
+ * button and the control became a bare chevron. The `$` anchor keeps it off the drag handle's
+ * `Resize card search`.
+ */
+const PANEL_TOGGLE = /card search$/;
 
 const meta = {
   title: "Decks/SearchPanel",
@@ -198,7 +204,7 @@ export const Docked: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const panel = canvas.getByRole("region", { name: "Add cards" });
-    const toggle = within(panel).getByRole("button", { name: "Search cards" });
+    const toggle = within(panel).getByRole("button", { name: PANEL_TOGGLE });
     // Open at rest, so the strip is simply there (issue #183). {@link Collapsed} is where the
     // other state is the subject rather than the setup, and {@link Tabs} is where the tab the
     // panel opens on is the subject rather than a press to get past.
@@ -283,29 +289,29 @@ export const Tabs: Story = {
 };
 
 /**
- * The strip at the narrowest this panel goes — **the width it has to survive, and the one nobody
+ * The panel at the narrowest it goes — **the width it has to survive, and the one nobody
  * designs at**.
  *
  * `MIN_PANEL_WIDTH_PX` is 206, measured from one 150px card and the chrome around it, and a reader
- * drags the column there. Its content box is **193px**; the disclosure is **99** and the strip
- * **141**, so the two cannot share a line and the row's `flex-wrap` drops the strip below. That
- * class is the whole of what keeps this safe: a flex item cannot shrink below its own min-content,
- * so unwrapped this would be an *overhang* rather than a squeeze — and `DeckEditor`'s page section
- * is `overflow-y-auto`, which computes `overflow-x` to `auto`, so the overhang would be a
- * horizontal scrollbar across the whole deck builder. `ManaValueChips` shipped exactly that once.
+ * drags the column there. Its content box is **193px**, and the one thing this width forbids is an
+ * *overhang*: a flex item cannot shrink below its own min-content, and `DeckEditor`'s page section
+ * is `overflow-y-auto`, which computes `overflow-x` to `auto` — so a control that will not fit
+ * puts a horizontal scrollbar across the whole deck builder. `ManaValueChips` shipped exactly that
+ * once.
  *
- * It is also why the tabs are two short words. Driven headless over the built stylesheet on
- * 2026-08-23: at "Collection Search" / "Normal Search" the strip measures **216px** against that
- * 193px box and the row reads `scrollWidth` 216 / `clientWidth` 193 — the overhang, in the label
- * text. At these labels it reads 193/193 on two lines.
+ * **Three controls shared the header row and now two things do, neither of which can overhang.**
+ * Driven headless over the built stylesheet on 2026-08-23, when the row held a 99px disclosure,
+ * the 141px tab strip and the 175px own/need pair, each on a line of its own inside 193 — 100px
+ * tall, against 62 with the strip alone. The strip became a full-width bar of its own on
+ * 2026-08-24 and the pair was deleted on 2026-08-25, so what is left on the row is a 28px chevron
+ * and a heading that truncates. **The tabs are still two short words**, and that measurement is
+ * the reason: at "Collection Search" / "Normal Search" the strip read `scrollWidth` **216** against
+ * a `clientWidth` of 193 — the overhang, in the label text — and two `flex-1` halves of 193 give
+ * each label 96px to fit in.
  *
- * **And there is a third control on that row now**, on the card-search tab: the own/need pair,
- * measured the same way and **175px** at "Cards I own" / "Cards I need". It fits the 193px box with
- * 18px to spare, so it takes a third line and the row still reads 193/193 — 100px tall here against
- * 62 with the strip alone, 68 at the panel's 384px opening width, and one 30px line by ~1000px.
- * Shorter labels would buy nothing at *this* width (`Own`/`Need` is 95, and the strip above already
- * forces the wrap), which is why the reader's own words stayed. The play presses the tab and reads
- * the row again, because that is the state with the most in it.
+ * The play reads both states, because the card-search tab is the one with a filter row under it.
+ * **Heights have not been re-driven since the row lost two controls**; the widths above are
+ * per-control and did not move.
  *
  * `maxWidth` is the editor's cap and is what pins the panel here; in the app it is
  * `min(half the window, what the desk can spare over DECK_FLOOR)`.
@@ -316,31 +322,28 @@ export const Narrow: Story = {
     const canvas = within(canvasElement);
     const panel = canvas.getByRole("region", { name: "Add cards" });
     const strip = within(panel).getByRole("group", { name: "Search in" });
-    const toggle = within(panel).getByRole("button", { name: "Search cards" });
+    const toggle = within(panel).getByRole("button", { name: PANEL_TOGGLE });
 
-    // Both controls are drawn and both are reachable — the wrap is a layout answer, never a
-    // control being dropped.
+    // Both controls are drawn and both are reachable — the layout is an answer about width, never
+    // a control being dropped.
     await expect(strip).toBeVisible();
     await expect(toggle).toBeVisible();
     await expect(within(strip).getByRole("button", { name: "Collection" })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
-    // The row wraps rather than overflowing. Storybook runs in a real browser, so unlike the
-    // suite this can be read off the box rather than off the class.
-    const row = strip.parentElement!;
+    // Nothing overhangs. Storybook runs in a real browser, so unlike the suite this can be read
+    // off the box rather than off the class — the header row, the tab bar and the panel itself.
+    const row = toggle.parentElement!;
     await expect(row.scrollWidth).toBe(row.clientWidth);
+    await expect(strip.scrollWidth).toBe(strip.clientWidth);
     await expect(panel.scrollWidth).toBe(panel.clientWidth);
 
-    // And again with the row at its fullest: the card-search tab draws the own/need pair beside
-    // the two controls above, which is three lines inside 193px and the state this width is most
-    // likely to break in.
+    // And again on the tab that draws a filter row under all of it, which is the state this width
+    // is most likely to break in.
     await showAllCards(panel);
-    const modes = await within(panel).findByRole("group", { name: "Adding" });
-    await expect(modes).toBeVisible();
-    await expect(row).toContainElement(modes);
-    await expect(row.scrollWidth).toBe(row.clientWidth);
     await expect(panel.scrollWidth).toBe(panel.clientWidth);
+    await expect(strip.scrollWidth).toBe(strip.clientWidth);
   },
 };
 
@@ -420,7 +423,7 @@ export const Collapsed: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const panel = canvas.getByRole("region", { name: "Add cards" });
-    const toggle = within(panel).getByRole("button", { name: "Search cards" });
+    const toggle = within(panel).getByRole("button", { name: PANEL_TOGGLE });
     // At rest, before anything is pressed — open, and one tab press from the wall.
     await expect(toggle).toHaveAttribute("aria-expanded", "true");
     await showAllCards(panel);
@@ -438,7 +441,7 @@ export const Collapsed: Story = {
 
     await expect(toggle).toHaveAttribute("aria-expanded", "false");
     // The same button, not a new one in the same place — across both presses.
-    await expect(within(panel).getByRole("button", { name: "Search cards" })).toBe(toggle);
+    await expect(within(panel).getByRole("button", { name: PANEL_TOGGLE })).toBe(toggle);
     // Everything below the rail is gone with it: the tab strip, the filters, the count and the
     // wall.
     await expect(within(panel).queryByRole("group", { name: "Search in" })).toBeNull();
@@ -483,7 +486,7 @@ export const NoRoom: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const panel = canvas.getByRole("region", { name: "Add cards" });
-    const toggle = within(panel).getByRole("button", { name: "Search cards" });
+    const toggle = within(panel).getByRole("button", { name: PANEL_TOGGLE });
     await expect(toggle).toHaveAttribute("aria-expanded", "false");
     await expect(toggle).toHaveAttribute("aria-disabled", "true");
     // Reachable, which is the whole point of not using `disabled`.

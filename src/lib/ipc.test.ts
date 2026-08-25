@@ -252,6 +252,39 @@ describe("ipc argument names match the Rust command signatures", () => {
   });
 
   /**
+   * **The collection's price band, in the two spellings `serde(rename_all = "camelCase")` turns
+   * `price_min`/`price_max` into.**
+   *
+   * Pinned for `allocation`'s reason and with one of its own. The field is new (2026-08-25) and
+   * the deck builder's Collection Search tab is its only sender, so nothing else would notice a
+   * name that does not deserialize — and a `CollectionQuery` is `#[serde(default)]`, so an
+   * unrecognised key is **dropped silently** rather than refused. The symptom would be a slider
+   * the reader can move over a wall that never narrows.
+   *
+   * Each bound alone as well as the pair, because sending one end is the ordinary case: half a
+   * band is one predicate, and a caller that folded a missing end into a `0` or an `Infinity`
+   * would be asking a question the reader did not.
+   */
+  it("carries the collection list's price band, each bound on its own", async () => {
+    invoke.mockResolvedValue({ items: [], total: 0 });
+
+    await ipc.collectionList({ priceMin: 2.5, priceMax: 40, limit: 60, offset: 0 });
+    expect(invoke).toHaveBeenCalledWith("collection_list", {
+      query: { priceMin: 2.5, priceMax: 40, limit: 60, offset: 0 },
+    });
+
+    await ipc.collectionList({ priceMin: 2.5, limit: 60, offset: 0 });
+    expect(invoke).toHaveBeenCalledWith("collection_list", {
+      query: { priceMin: 2.5, limit: 60, offset: 0 },
+    });
+
+    await ipc.collectionList({ priceMax: 40, limit: 60, offset: 0 });
+    expect(invoke).toHaveBeenCalledWith("collection_list", {
+      query: { priceMax: 40, limit: 60, offset: 0 },
+    });
+  });
+
+  /**
    * **The folder a bulk import files into, and the default that keeps every other caller
    * unchanged.**
    *

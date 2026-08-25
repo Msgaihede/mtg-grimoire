@@ -579,14 +579,20 @@ which means a mounted query merely *marked* stale never refetches — the collec
 folder summary and the deck are each invalidated, not just their roots. PR 2 of this series
 shipped a ghost row by getting exactly that wrong.
 
-**The `All cards` tab grew an own/need toggle at the same time** (`NormalSearchAdd.ts`), and its
-default is `need` — today's behaviour exactly, a `deck_cards` row and nothing else, which reads
-as missing. `own` prefers to move a **free** copy the reader already has into the deck's group and
-records a new one there only when there is none. Its preference order is the deleted allocator's,
-kept deliberately: exact printing, then another printing of the same oracle card, real copies
-before proxies, then entry id — which is why a reader who used to let the allocator choose sees
-the same copy chosen now. **Copies in another deck's group are never candidates on that path**:
-it is silent, and taking another deck's card only ever happens through the confirm above.
+**The `All cards` tab grew an own/need toggle at the same time and it was deleted on 2026-08-25**
+(`NormalSearchAdd.ts`, gone with it). Its default was `need` — a `deck_cards` row and nothing else,
+which reads as missing — and `own` moved a **free** copy the reader already had into the deck's
+group, or recorded a new one there when there was none, choosing by the deleted allocator's own
+preference order: exact printing, then another printing of the same oracle card, real copies before
+proxies, then entry id.
+
+**What retired it is the tab above rather than a change of mind about the write.** `own` was
+`collection_to_deck` reached silently: it chose a copy out of rows the reader was not looking at,
+and where it found none it filed a *new* collection row for a card they had only searched for. The
+Collection tab reaches the same command with the copy on screen and the donor deck named in the
+question — so the feature is the tab, and a second, quieter entrance to it was a liability rather
+than a shortcut. Every add from the deck editor now writes a list row and claims nothing about the
+reader's cardboard.
 
 **The import's "Add cards to collection" box is the third surface and it does _not_ file into the
 group** — see [import-export.md](import-export.md#the-deck-arms-add-cards-to-collection-box), where
@@ -1023,8 +1029,9 @@ What it owes an answer to, at least:
   headless over `dist/`'s stylesheet; a row leaving the unallocated list on the press it was
   added by; and the cross-deck confirmation — its wording, and that the *other* deck's list has
   really lost the card afterwards.
-- **The own/need toggle**, both paths, and that `own` picks the same copy the deleted allocator
-  would have.
+- ~~**The own/need toggle**, both paths~~ — deleted on 2026-08-25 before this list was ever
+  driven. Every add from the editor is a list row now; the Collection tab is the only way a copy
+  moves into a deck's group from the search column.
 - **The import box ticked**, and where the copies land — see the note below the checkbox, which
   says the root and not the deck's group.
 
@@ -1112,6 +1119,5 @@ React never sees** — go through
 | `src/features/decks/DeckSearchPanel.tsx` | The two tabs, `DEFAULT_DECK_SEARCH_TAB` (`collection`) and `DECK_SEARCH_TAB_KEY` |
 | `src/features/decks/CollectionSearchTab.tsx` | The list, `landingCategory`, and the confirmation that names the other deck |
 | `src/features/decks/useCollectionSearch.ts` | `collection_list` with `allocation`, `CopySource`'s three answers, and the invalidation a move fires |
-| `src/features/decks/NormalSearchAdd.ts` | The card-search tab's own/need toggle — `ADD_MODES`, `DEFAULT_ADD_MODE` (`need`), `addModeKey` |
 | `src/features/decks/useDeck.ts` | `setQuantity`, which routes a **live** decrease through `deckToCollection`, and `invalidateCollection`, which fires only when the outcome says copies moved |
 | `src/features/decks/DeckEditor.tsx` | `setQuantityAt` — the app's one removal path, and where the `CutFrom` row is looked up |

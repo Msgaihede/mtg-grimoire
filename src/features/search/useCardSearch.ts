@@ -269,6 +269,35 @@ export function activeFilterCount(f: FilterState): number {
 }
 
 /**
+ * The rows a format picker offers, which is {@link FORMATS} plus — when it is not already one of
+ * them — the surface's own default.
+ *
+ * It has to be able to carry a key `FORMATS` does not list because the deck picker offers every
+ * enabled `format_specs` row against this list's seven: a Brawl or an Oathbreaker deck would
+ * otherwise open on a filter whose value no option holds, and **a `<select>` given a value none
+ * of its `<option>`s carry does not show it — it silently reports the first one**, so the panel
+ * would say `Any format` over a filtered wall of cards.
+ *
+ * A plain function rather than a hook, because two hooks need it: `useCardSearch` and
+ * `useCollectionSearch` both seed a format off the deck being edited and both draw the same
+ * picker. Each memoises the call on the two strings; the rule is written once.
+ */
+export function formatsWithDefault(
+  defaultValue: string,
+  defaultLabel: string | undefined,
+): readonly FormatFilterOption[] {
+  // The **value** decides, because the value is what `format` was seeded from: a row fenced out
+  // for want of a label would leave the filter set to a key the picker cannot draw, which is
+  // precisely the case this exists to prevent. A row is still a value *and* a word, so a default
+  // carrying no word falls back to its key rather than putting a blank line in the picker.
+  // Nothing reaches that fallback today — the one caller that sets a default reads
+  // `spec.displayName` — and the two lines must not be able to disagree.
+  if (!defaultValue) return FORMATS;
+  if (FORMATS.some((f) => f.value === defaultValue)) return FORMATS;
+  return [...FORMATS, { value: defaultValue, label: defaultLabel || defaultValue }];
+}
+
+/**
  * The picked colours as the backend spells them — `"WU"`, `"C"`, or nothing.
  *
  * Always WUBRG order, so `U` then `W` and `W` then `U` produce the same string and
@@ -849,14 +878,7 @@ export function useCardSearch(options: CardSearchOptions = {}) {
 
   const defaultFormatLabel = options.defaultFormat?.label;
   /**
-   * The rows the format picker offers, which is {@link FORMATS} plus — when it is not already
-   * one of them — the default itself.
-   *
-   * It has to be able to carry a key `FORMATS` does not list because the deck picker offers
-   * every enabled `format_specs` row against this list's seven: a Brawl or an Oathbreaker deck
-   * would otherwise open on a filter whose value no option holds, and a `<select>` given a
-   * value none of its `<option>`s carry does not show it — it silently reports the first one,
-   * so the panel would say `Any format` over a filtered wall of cards.
+   * The rows the format picker offers — see {@link formatsWithDefault}, which is the rule.
    *
    * **Depends on the two string fields and never on the object.** Every caller builds
    * `defaultFormat` inline, so the object is a fresh identity each render and a dependency on
@@ -864,20 +886,10 @@ export function useCardSearch(options: CardSearchOptions = {}) {
    * keystroke in the search box. The option is rebuilt from the two strings for the same
    * reason, rather than closed over.
    */
-  const formats = useMemo<readonly FormatFilterOption[]>(() => {
-    // The **value** decides, because the value is what `format` above was seeded from: a row
-    // fenced out for want of a label would leave the filter set to a key the picker cannot
-    // draw, which is precisely the case this memo exists to prevent. A row is still a value
-    // *and* a word, so a default carrying no word falls back to its key rather than putting a
-    // blank line in the picker. Nothing reaches that fallback today — the one caller that sets
-    // a default reads `spec.displayName` — and the two lines must not be able to disagree.
-    if (!defaultFormatValue) return FORMATS;
-    if (FORMATS.some((f) => f.value === defaultFormatValue)) return FORMATS;
-    return [
-      ...FORMATS,
-      { value: defaultFormatValue, label: defaultFormatLabel || defaultFormatValue },
-    ];
-  }, [defaultFormatValue, defaultFormatLabel]);
+  const formats = useMemo<readonly FormatFilterOption[]>(
+    () => formatsWithDefault(defaultFormatValue, defaultFormatLabel),
+    [defaultFormatValue, defaultFormatLabel],
+  );
 
   // **"Not the default", which is very nearly but not quite "the reader set it".** The name
   // says the intent and the comparison is what the state can answer: a format equal to the
@@ -1112,7 +1124,26 @@ export function useCardSearch(options: CardSearchOptions = {}) {
      * It cannot come back `""` from a *non-empty* spec, which is why there is no `Custom…`
      * row to draw: see {@link SEARCH_SORT_OPTIONS}.
      */
-    sortSelection: sort.length === 0 ? "" : sort[0].key,
+    // Annotated rather than inferred: in a mutable object literal a bare `""` widens to `string`,
+    // which is wide enough to stop satisfying `FilterSurface<SearchSortKey | "">` — and the
+    // symptom is an error on the *call site*, three files away, about a select this file owns.
+    sortSelection: (sort.length === 0 ? "" : sort[0].key) as SearchSortKey | "",
+    /**
+     * Which way the list runs, or `undefined` at `Best match` — which is a ranking rather than a
+     * direction, and is where the bar's arrow greys.
+     *
+     * The **first** term's direction, because the first term is the one the select owns:
+     * {@link flipSortDir} rewrites it in place and leaves a Shift-built secondary key exactly
+     * where the table's headers put it. Read through the same `sort.length === 0` test
+     * `sortSelection` above uses, so the select and the arrow can never disagree about whether
+     * there is a sort at all.
+     *
+     * **Answered here rather than derived in `FilterBar`** (2026-08-25). It was `sortSelection
+     * === "" ? undefined : …` up there, which is a rule about *this* view's empty spec written
+     * into a component two views now draw: the collection's empty spec is name order, which has
+     * a direction, so the shared derivation would have greyed an arrow that works.
+     */
+    sortDir: sort.length === 0 ? undefined : (sort[0].dir ?? "asc"),
     /**
      * The direction button beside the select: rewrites the first term's direction in place,
      * leaving any Shift-built secondary keys where they are.
