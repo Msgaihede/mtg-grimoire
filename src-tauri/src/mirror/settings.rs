@@ -241,11 +241,26 @@ pub async fn mirror_set_root(
     root: String,
 ) -> Result<(), String> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        crate::sync::with_write(&state, |conn| set_root(conn, Path::new(&root)))
-    })
-    .await
-    .map_err(|e| format!("the mirror folder could not be saved: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || set_root_now(&state, Path::new(&root)))
+        .await
+        .map_err(|e| format!("the mirror folder could not be saved: {e}"))?
+}
+
+/// [`mirror_set_root`]'s body, with the `AppState` handed in.
+///
+/// Split out for [`rebuild_now`]'s reason — a `#[tauri::command]` taking `tauri::State` cannot
+/// be entered from a test, and the line worth testing here is the one after the save.
+///
+/// **Spec §7: "moving the root writes a fresh mirror at the new location."** Nothing else
+/// would do it: `mirror_root` lives in `app_meta`, which maps to no surface on purpose, so the
+/// update hook stays silent and the newly chosen folder would sit empty until some unrelated
+/// edit happened to dirty a surface. Marked only on success — a refused path has moved nothing.
+pub fn set_root_now(state: &AppState, path: &Path) -> Result<(), String> {
+    let saved = crate::sync::with_write(state, |conn| set_root(conn, path));
+    if saved.is_ok() {
+        state.mirror.mark_all();
+    }
+    saved
 }
 
 /// Rewrite every file the mirror owns, now, and answer what the pass did.
@@ -279,17 +294,34 @@ pub async fn mirror_rebuild(
 
 /// [`mirror_rebuild`]'s body, with the `AppState` handed in.
 ///
-/// Split out so the stamp above can be tested: a `#[tauri::command]` taking
-/// `tauri::State` cannot be called without a running app, and "the rebuild records itself"
-/// is exactly the sort of one-line wiring that is silently dropped and never noticed.
+/// Split out so the stamp below can be tested: a `#[tauri::command]` taking `tauri::State`
+/// cannot be called without a running app, and "the rebuild records itself" is exactly the
+/// sort of one-line wiring that is silently dropped and never noticed.
+///
+/// **A read-only connection of its own, never `AppState.db_read`** — the rule
+/// [`crate::index::lifecycle::build_now`] states and [`crate::mirror::watch::watch`] follows.
+/// This is the same full pass the thread runs: all four listings and up to ~350 files. Held on
+/// the shared read connection it would queue every search and every `mirror_status` poll behind
+/// it — and this one is worse than the thread's, because the reader who pressed the button is
+/// sitting in front of the window watching it. If the connection cannot be opened the pass
+/// falls back to the shared one rather than refusing: a slow rebuild is better than a button
+/// that does nothing, and the reader asked for this explicitly.
 pub fn rebuild_now(state: &AppState) -> Result<crate::mirror::run::PassReport, String> {
+    let own = crate::db::open_read_only(&state.data_dir.join("mtg.db")).ok();
     let outcome = {
-        let conn = crate::sync::lock_db_read(state);
-        let root = root(&conn, &state.data_dir);
+        let shared = own.is_none().then(|| crate::sync::lock_db_read(state));
+        let conn = own
+            .as_ref()
+            .or(shared.as_deref())
+            .expect("one or the other");
+        let root = root(conn, &state.data_dir);
+        // A **fresh** digest map, deliberately: this is the press a reader makes when they
+        // suspect the folder is wrong, and reusing the thread's would let a file they edited
+        // by hand read as unchanged — the one state this button exists to get out of.
         let mut cache = std::collections::HashMap::new();
-        crate::mirror::run::run_pass(&conn, &root, crate::mirror::run::Dirty::ALL, &mut cache)
+        crate::mirror::run::run_pass(conn, &root, crate::mirror::run::Dirty::ALL, &mut cache)
     };
-    // After the read lock has gone, and before the answer: the panel polls `mirror_status` the
+    // After any lock has gone, and before the answer: the panel polls `mirror_status` the
     // moment this resolves, so a stamp written any later is a stamp it can miss.
     crate::mirror::watch::record(state, &outcome);
     outcome

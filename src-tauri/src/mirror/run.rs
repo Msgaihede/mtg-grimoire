@@ -269,6 +269,21 @@ fn digest(bytes: &[u8]) -> u64 {
 /// Three outcomes and each is one line of the report. The **cache miss reads the file** — that
 /// is the whole of spec §5's "the digests start from the files on disk", and the reason a
 /// relaunch with no edits opens nothing for writing.
+///
+/// **A remembered digest never vouches for a file on its own.** The cache says what this
+/// process last *wrote*, which is not the same claim as what is on disk now, and every way the
+/// two come apart looks identical from in here: the reader deletes the mirror folder while the
+/// app is running and `create_dir_all` quietly puts an empty one back (`README.txt` promises
+/// them that is safe); a stick is unplugged and comes back empty; the root setting moves and
+/// the same plan-relative key now names a file under a folder nothing has ever written to.
+/// Each of those was a separate special case somewhere up the stack, and each of them is this
+/// one `&& abs.is_file()` instead — a cache hit is confirmed with a `stat` before it is
+/// trusted. ~350 stats a pass against the ~350 writes it still avoids, and the map goes back
+/// to being a pure optimisation rather than a second, quieter source of truth about the disk.
+///
+/// It is deliberately **presence** and not contents. Re-reading every file to compare would
+/// throw away the whole point of the cache; a reader who hand-edits a mirrored file is
+/// answered by `Rebuild now`, which runs with a fresh map for exactly that reason.
 fn put(
     root: &Path,
     rel: &str,
@@ -277,11 +292,11 @@ fn put(
     report: &mut PassReport,
 ) {
     let want = digest(bytes);
-    if cache.get(rel) == Some(&want) {
+    let abs = root.join(rel);
+    if cache.get(rel) == Some(&want) && abs.is_file() {
         report.unchanged += 1;
         return;
     }
-    let abs = root.join(rel);
     if std::fs::read(&abs).is_ok_and(|on_disk| digest(&on_disk) == want) {
         cache.insert(rel.to_owned(), want);
         report.unchanged += 1;

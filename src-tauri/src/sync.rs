@@ -554,18 +554,7 @@ pub async fn run_sync(
     // `Err` would drop exactly the lockouts nobody else records. An upsert of one integer is
     // not worth being clever about.
     persist_penalty(&state);
-    // A finished ingest is one of the four things that run a full mirror pass (spec §5). The
-    // update hook cannot carry this: `cards` maps to no surface on purpose, because a sync
-    // rewrites 116 700 rows and a per-row mark would make every refresh a hundred thousand
-    // hook fires and a rebuild. **Gated on `updated`**, not on `Ok`: a throttled run that
-    // downloaded nothing changed no card name and no printing, so marking there would spend a
-    // full render on every launch of the day for a corpus that is byte for byte the one the
-    // last pass already mirrored. Hash comparison would write nothing — the render is the cost.
-    if let Ok(outcome) = &result {
-        if outcome.updated {
-            state.mirror.mark_all();
-        }
-    }
+    note_mirror_after_sync(&state, &result);
     if let Err(e) = &result {
         {
             let conn = lock_db(&state);
@@ -574,6 +563,29 @@ pub async fn run_sync(
         let _ = app.emit("sync:progress", Progress::error(e.clone()));
     }
     result
+}
+
+/// Tell the plain-text mirror that a sync finished, if it changed anything.
+///
+/// One of the four things that run a full mirror pass (spec §5). The update hook cannot carry
+/// this: `cards` maps to no surface on purpose, because a sync rewrites 116 700 rows and a
+/// per-row mark would be a hundred thousand hook fires and a rebuild every refresh.
+///
+/// **Gated on `updated`, not on `Ok`.** A throttled run that downloaded nothing changed no card
+/// name and no printing, so marking there would spend a full render on every launch of the day
+/// over a corpus byte for byte the one the last pass already mirrored. Hash comparison means it
+/// would *write* nothing — the render is the cost, and it is avoidable.
+///
+/// A function rather than four lines inline in [`run_sync`] because [`run_sync`] takes a
+/// `tauri::AppHandle` and this crate has no mock-app harness, so nothing in the suite can enter
+/// it. This much is reachable, and the condition is the half worth testing; what stays untested
+/// is the single call above it.
+pub(crate) fn note_mirror_after_sync(state: &AppState, result: &Result<SyncOutcome, String>) {
+    if let Ok(outcome) = result {
+        if outcome.updated {
+            state.mirror.mark_all();
+        }
+    }
 }
 
 /// Note a failed call to Scryfall in the error log.

@@ -30,7 +30,6 @@ use crate::mirror::settings;
 use crate::sync::AppState;
 use rusqlite::Connection;
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -78,15 +77,12 @@ const WISHLIST_ONLY: Dirty = Dirty {
 /// for `deck_audit`, `deck_undo`, `error_log`, `image_cache`, the art- and oracle-tag tables,
 /// `app_meta` and `sync_meta`: none of them is read by [`crate::mirror::read`].
 ///
-/// `deck_allocations` is the one exclusion worth naming, because it *looks* like it belongs:
-/// it records which collection copies a deck holds. The mirror reads the collection with
-/// [`crate::collection::Allocation::All`] and writes no owned/missing column on any surface,
-/// so an allocation moving changes no byte on disk. The write that put the card in the deck
-/// touched `deck_cards` in the same breath, and that is what marks.
-///
 /// **Written as a match on a fixed list rather than a prefix test**, so that a table added
 /// later is `None` until somebody decides otherwise — the safe direction for a table like
-/// `deck_audit`, which starts with `deck_` and must never trigger anything.
+/// `deck_audit`, which starts with `deck_` and must never trigger anything. What keeps that
+/// from being a silent decision is `every_table_in_the_schema_has_been_decided_about`, which
+/// asserts the whole of `sqlite_master` against a written-down list: a migration that adds a
+/// table goes red here until somebody says which side of this match it belongs on.
 pub fn surface_of(table: &str) -> Option<Dirty> {
     match table {
         "deck_cards" | "deck_categories" | "deck_tags" | "deck_folders" => Some(DECKS_ONLY),
@@ -292,38 +288,86 @@ pub fn spawn(state: Arc<AppState>) {
     }
 }
 
-/// The loop.
-fn watch(state: &AppState) {
-    let mut cache: HashMap<String, u64> = HashMap::new();
-    // The root the digests in `cache` describe. A changed root invalidates every one of them:
-    // the map is keyed by a plan-relative path, so a digest remembered for
-    // `Decks/Burn/deck.txt` under the old folder would let `put` skip writing the same file
-    // under the new one, and the reader would watch a freshly chosen folder fill up with gaps.
-    // See the `Err` arm of [`pass`] for the same trap in its other form.
-    let mut cached_root: Option<PathBuf> = None;
+/// The longest this thread will wait between retries after a run of failed passes.
+///
+/// A minute, and the ceiling is the interesting half. Without a backoff an unreachable root is
+/// retried every tick the mask stays dirty — roughly 1 600 times an hour, each one climbing the
+/// `count` on a single folded `error_log` row and each one a `create_dir_all` at a path that is
+/// not there. With one, the same hour is about sixty. It stops at a minute rather than climbing
+/// further because the reader who plugs the stick back in is often watching the panel while
+/// they do it, and `Rebuild now` is the immediate way out in any case.
+const MAX_BACKOFF: Duration = Duration::from_secs(60);
 
-    let mut on = enabled(state);
+/// How long to wait after `failures` consecutive failed passes: 2 s, 4 s, 8 s … to
+/// [`MAX_BACKOFF`]. Zero failures is no wait at all.
+fn backoff_for(failures: u32) -> Duration {
+    if failures == 0 {
+        return Duration::ZERO;
+    }
+    // Shift capped well inside `u32`, so the multiply cannot be the thing that overflows.
+    let steps = 1u32 << failures.saturating_sub(1).min(16);
+    DEBOUNCE.saturating_mul(steps).min(MAX_BACKOFF)
+}
+
+/// The loop.
+///
+/// **Its own read-only connection, never `AppState.db_read`** — the rule
+/// [`crate::index::lifecycle::build_now`] states two lines from where this is spawned. A pass
+/// reads all four listings and writes up to ~350 files, and holding the shared read connection
+/// across that would queue every search and every `mirror_status` poll behind it. Spec §5 says
+/// the mirror "never blocks a search"; a second reader under WAL is how that is true rather
+/// than aspirational.
+fn watch(state: &AppState) {
+    // Spelled here, in `lib.rs`'s `init_state`, and in `index::lifecycle::build_now` — three
+    // readers, three connections, one file.
+    let conn = match crate::db::open_read_only(&state.data_dir.join("mtg.db")) {
+        Ok(conn) => conn,
+        Err(e) => {
+            // The end of the mirror for this session, and it is reported three ways rather
+            // than swallowed: `init_state` opened this same file read-only moments ago, so a
+            // failure here is not a transient the next tick would clear. Retrying it forever
+            // would be a thread spinning on a question already answered.
+            let message =
+                format!("the backup mirror could not open a database connection of its own: {e}");
+            eprintln!("{message}");
+            record(state, &Err(message.clone()));
+            note_failure(state, &message);
+            return;
+        }
+    };
+
+    let mut cache: HashMap<String, u64> = HashMap::new();
+    let mut on = settings::enabled(&conn);
     // The startup pass, before the loop and before anything can have been edited: it is the
     // whole of what makes a mirror correct after a crash, a kill, or a write that landed while
     // the last session was closing. `Dirty::ALL`, because the mask cannot describe what
     // happened while the process was not running.
+    //
+    // **The mask is taken first, and the order is the point.** `install_hook` runs before this
+    // thread starts, so anything written between the two is already marked — and a full render
+    // covers it, so leaving it marked would buy nothing and cost a second full render two and a
+    // quarter seconds later. Taken *before* rather than after because a write that lands while
+    // the pass is running must stay marked: it may not be in the rows this pass read.
+    let mut failures = 0u32;
     if on {
-        pass(state, Dirty::ALL, &mut cache, &mut cached_root);
+        state.mirror.take();
+        failures = pass(state, &conn, Dirty::ALL, &mut cache, failures);
     }
 
     let mut settings_checked = Instant::now();
     let mut seen_marks = state.mirror.marks();
     let mut quiet_since = Instant::now();
+    let mut last_failure = Instant::now();
 
     loop {
         std::thread::sleep(TICK);
 
-        // The settings, at most once per debounce rather than once per tick: this takes
-        // `db_read`'s mutex, and a search may be holding it. Four reads a second of one
-        // `app_meta` row, forever, is the sort of cost that is invisible until it is not.
+        // The settings, at most once per debounce rather than once per tick. One `app_meta`
+        // row is cheap, but four reads a second forever is the sort of cost that is invisible
+        // until it is not.
         if settings_checked.elapsed() >= DEBOUNCE {
             settings_checked = Instant::now();
-            let now_on = enabled(state);
+            let now_on = settings::enabled(&conn);
             // Off to on: a full pass, because everything written while it was off is
             // unrecorded and the mask cannot describe it. This is what "takes effect without a
             // restart" has to mean — a mirror that waited for the reader's next edit before
@@ -348,52 +392,82 @@ fn watch(state: &AppState) {
         if !state.mirror.is_dirty() || quiet_since.elapsed() < DEBOUNCE {
             continue;
         }
+        // The backoff, and it is checked here rather than folded into the debounce so that a
+        // run of failures slows the *retries* without slowing anything else: the mask keeps
+        // accumulating, the settings keep being read, and the first pass after the root comes
+        // back is still a full one.
+        if last_failure.elapsed() < backoff_for(failures) {
+            continue;
+        }
         let Some(dirty) = state.mirror.take() else {
             continue;
         };
-        pass(state, dirty, &mut cache, &mut cached_root);
+        failures = pass(state, &conn, dirty, &mut cache, failures);
+        if failures > 0 {
+            last_failure = Instant::now();
+        }
     }
 }
 
-/// Is the mirror switched on? Infallible, like [`settings::enabled`] itself.
-fn enabled(state: &AppState) -> bool {
-    settings::enabled(&crate::sync::lock_db_read(state))
-}
-
-/// Run one pass and record what it did.
+/// Run one pass and record what it did. Answers the new consecutive-failure count.
 ///
-/// **`db_read` only.** A pass reads the whole collection, every deck and the whole wishlist;
-/// on the write connection that would be seconds of a lock a button press is waiting for, and
-/// the reader would meet it as [`crate::db::BUSY`]. The one write this whole module makes is
-/// the single `error_log` row below, and that does not wait for the connection either.
+/// **Never `AppState.db`, and never `AppState.db_read` either** — see [`watch`]. `conn` is this
+/// thread's own read-only handle, so a pass that takes seconds blocks no search, no facet
+/// request and no `mirror_status` poll.
+///
+/// **The digest cache is not swept here, and it used to be.** Two special cases stood in this
+/// function — clear on failure, clear when the root moved — because a remembered digest let
+/// `run::put` skip a file that was no longer on disk. A third way to reach the same state (the
+/// reader deleting the mirror folder while the app runs, which `README.txt` tells them is safe)
+/// showed the shape was wrong: `put` now confirms a cache hit with a `stat` before trusting it,
+/// which answers all three at once. What is left here is the one thing that is genuinely about
+/// the *mask* rather than the disk.
+///
+/// **A panic is caught rather than allowed to end the thread.** The mutexes recover from
+/// poisoning crate-wide, so a panic in here was survivable in the sense that nothing else
+/// broke — and invisible in every sense that matters: no `error_log` row, no sentence in the
+/// panel, and a Backup panel reporting the last good pass forever while the folder quietly
+/// stopped being updated. Caught, it is an ordinary failure with an ordinary backoff.
+/// `AssertUnwindSafe` is honest here rather than a silencer: the one thing a panic can leave
+/// half-written is `cache`, and a stale or missing entry there costs a `stat` and a rewrite.
 fn pass(
     state: &AppState,
+    conn: &Connection,
     dirty: Dirty,
     cache: &mut HashMap<String, u64>,
-    cached_root: &mut Option<PathBuf>,
-) {
-    let outcome = {
-        let conn = crate::sync::lock_db_read(state);
-        let root = settings::root(&conn, &state.data_dir);
-        if cached_root.as_deref() != Some(root.as_path()) {
-            cache.clear();
-            *cached_root = Some(root.clone());
-        }
-        crate::mirror::run::run_pass(&conn, &root, dirty, cache)
-    };
+    failures: u32,
+) -> u32 {
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let root = settings::root(conn, &state.data_dir);
+        crate::mirror::run::run_pass(conn, &root, dirty, cache)
+    }))
+    .unwrap_or_else(|payload| Err(panic_sentence(&payload)));
+
     record(state, &outcome);
-    if let Err(e) = &outcome {
-        // **Everything the failed pass believed about the disk goes with it.** `run_pass`
-        // fails when the root cannot be created — an unplugged stick, a share that went away,
-        // a permission taken back — and a root that comes back may come back *empty*. The
-        // digest map is in memory and would still say every file matches, so a warm cache
-        // would make the recovery pass write nothing at all. Spec §7's "a root that comes back
-        // gets a full rebuild" is these three lines.
-        cache.clear();
-        *cached_root = None;
-        state.mirror.mark_all();
-        note_failure(state, e);
+    match &outcome {
+        Ok(_) => 0,
+        Err(e) => {
+            // The mask was taken before this ran, so the surfaces this pass was responsible for
+            // are no longer recorded anywhere else. `mark_all` rather than re-marking `dirty`:
+            // spec §7's "a root that comes back gets a full rebuild rather than a partial one",
+            // because the mask cannot describe what was missed while it was gone.
+            state.mirror.mark_all();
+            note_failure(state, e);
+            failures.saturating_add(1)
+        }
     }
+}
+
+/// The sentence a caught panic becomes. `Box<dyn Any>` carries the payload of `panic!`, which
+/// is a `&str` for a literal and a `String` for a format — and neither for a panic raised any
+/// other way, which is what the third arm is for.
+fn panic_sentence(payload: &Box<dyn std::any::Any + Send>) -> String {
+    let what = payload
+        .downcast_ref::<&str>()
+        .map(|s| (*s).to_owned())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_else(|| "no message".to_owned());
+    format!("the backup mirror hit a bug and skipped this pass: {what}")
 }
 
 /// One `error_log` row for a failed pass — never one per file, which is what
@@ -513,19 +587,20 @@ mod tests {
     fn every_table_in_the_schema_has_been_decided_about() {
         let conn = migrated_memory_db();
         let mut stmt = conn
-            .prepare("SELECT name FROM sqlite_master WHERE type = 'table'")
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
             .unwrap();
         let tables: Vec<String> = stmt
             .query_map([], |r| r.get::<_, String>(0))
             .unwrap()
             .map(Result::unwrap)
             .collect();
-        let mut mapped: Vec<&str> = tables
+
+        let (mapped, ignored): (Vec<&str>, Vec<&str>) = tables
             .iter()
-            .filter(|t| surface_of(t).is_some())
             .map(String::as_str)
-            .collect();
-        mapped.sort_unstable();
+            .partition(|t| surface_of(t).is_some());
+
+        // The nine that reach the mirror.
         assert_eq!(
             mapped,
             [
@@ -538,9 +613,51 @@ mod tests {
                 "decks",
                 "wishlist_entries",
                 "wishlist_folders",
+            ]
+        );
+
+        // **And every other table the schema creates, by name.** The count alone was the first
+        // draft of this and it could not fail: `tables.len()` appeared only in an assertion
+        // *message*, so a migration adding a table passed green and the doc on `surface_of`
+        // claiming otherwise was simply wrong. Spelled out, a new table is a red test with an
+        // obvious remedy — add it here, having decided which side of the match it is on.
+        //
+        // The `cards_fts*` five are FTS5's own shadow tables. They are in `sqlite_master` like
+        // any other, the ingest writes them, and they map to nothing for the reason `cards`
+        // does.
+        assert_eq!(
+            ignored,
+            [
+                "app_meta",
+                "art_tag_illustrations",
+                "art_tag_meta",
+                "art_tag_parents",
+                "art_taggings",
+                "art_tags",
+                "card_migrations",
+                "cards",
+                "cards_fts",
+                "cards_fts_config",
+                "cards_fts_data",
+                "cards_fts_docsize",
+                "cards_fts_idx",
+                "deck_audit",
+                "deck_undo",
+                "error_log",
+                "format_specs",
+                "image_cache",
+                "marketplace_feed_meta",
+                "marketplace_prices",
+                "muted_tags",
+                "oracle_tag_cards",
+                "oracle_tag_meta",
+                "oracle_tag_parents",
+                "oracle_taggings",
+                "oracle_tags",
+                "sets",
+                "sync_meta",
             ],
-            "of the {} tables the schema creates, exactly these nine reach the mirror",
-            tables.len()
+            "a table added to the schema has to be decided about here"
         );
     }
 
@@ -803,35 +920,37 @@ mod tests {
         );
     }
 
-    /// The recovery contract of spec §7, and the trap it exists for: `run::put` short-circuits
-    /// on the in-memory digest *before* it looks at the disk, so a root that goes away and
-    /// comes back empty would be answered "unchanged" by a warm cache and never rewritten.
+    /// A read-only connection of the mirror thread's own, which is what [`watch`] opens: a
+    /// pass reads four listings and writes ~350 files, and doing that on `AppState.db_read`
+    /// queues every search behind it. The tests below take one the same way.
+    fn own_conn(dir: &Path) -> Connection {
+        crate::db::open_read_only(&dir.join("mtg.db")).unwrap()
+    }
+
+    /// Point the mirror at `root` without going through `set_root`'s validation.
+    fn aim_at(state: &AppState, root: &Path) {
+        let conn = crate::sync::lock_db(state);
+        crate::update::set_app_meta(&conn, settings::K_ROOT, root.to_str().unwrap()).unwrap();
+    }
+
+    /// Spec §7's recovery contract. The mask was **taken** before the pass ran, so a failure
+    /// that did not re-mark would lose the surfaces that pass was responsible for outright —
+    /// and it re-marks *everything*, because the mask cannot describe what was missed while
+    /// the root was gone.
     #[test]
-    fn a_failed_pass_forgets_every_digest_and_marks_everything() {
+    fn a_failed_pass_marks_everything_for_the_next_one() {
         let dir = tempfile::tempdir().unwrap();
         let state = state_at(dir.path());
+        let conn = own_conn(dir.path());
         // A file where a folder should be, so `create_dir_all` on a child of it cannot work.
         let blocker = dir.path().join("blocked");
         std::fs::write(&blocker, b"not a folder").unwrap();
-        {
-            // Written past `set_root`, which refuses a parent that is not a directory: the
-            // subject here is `run_pass` failing, not the setting's own validation.
-            let conn = crate::sync::lock_db(&state);
-            crate::update::set_app_meta(
-                &conn,
-                settings::K_ROOT,
-                blocker.join("mirror").to_str().unwrap(),
-            )
-            .unwrap();
-        }
+        aim_at(&state, &blocker.join("mirror"));
+
         let mut cache: HashMap<String, u64> = HashMap::new();
-        cache.insert("Decks/Burn/deck.txt".into(), 12_345);
-        let mut cached_root = Some(blocker.join("mirror"));
+        let failures = pass(&state, &conn, Dirty::ALL, &mut cache, 0);
 
-        pass(&state, Dirty::ALL, &mut cache, &mut cached_root);
-
-        assert!(cache.is_empty(), "a failed pass must forget every digest");
-        assert_eq!(cached_root, None);
+        assert_eq!(failures, 1, "a failed pass is counted, for the backoff");
         assert_eq!(
             state.mirror.take(),
             Some(Dirty::ALL),
@@ -842,86 +961,272 @@ mod tests {
             .is_some());
     }
 
-    /// Changing the root has to invalidate the digests too, for `put`'s reason above: the map
-    /// is keyed by a plan-relative path, which is the same key under both folders.
+    /// The class of bug the `is_file` guard in `run::put` closes, in the shape that a reader
+    /// can actually produce: `README.txt` tells them deleting the folder is safe, they delete
+    /// it, and `create_dir_all` puts an empty one back — so **no failure arm fires at all**.
+    /// A cache trusted on its own word would answer "unchanged" for all ~350 files and leave
+    /// that folder empty for the rest of the session.
+    ///
+    /// This is what let two special cases be deleted from [`pass`]: clearing the cache on
+    /// failure and clearing it when the root moved were each one route into this state, and
+    /// neither of them covered this one.
     #[test]
-    fn moving_the_root_forgets_the_digests_taken_under_the_old_one() {
+    fn deleting_the_mirror_folder_mid_session_gets_it_rebuilt() {
         let dir = tempfile::tempdir().unwrap();
         let state = state_at(dir.path());
-        let new_root = dir.path().join("new");
-        {
-            let conn = crate::sync::lock_db(&state);
-            settings::set_root(&conn, &new_root).unwrap();
-        }
+        let conn = own_conn(dir.path());
+        let root = dir.path().join("mirror");
+        aim_at(&state, &root);
+
         let mut cache: HashMap<String, u64> = HashMap::new();
-        cache.insert("Collection/collection.txt".into(), 999);
-        let mut cached_root = Some(dir.path().join("old"));
+        pass(&state, &conn, Dirty::ALL, &mut cache, 0);
+        let first = cache.len();
+        assert!(first > 0, "an empty collection still writes its own files");
 
-        pass(&state, Dirty::ALL, &mut cache, &mut cached_root);
+        // What the reader does, and what the README says is safe.
+        std::fs::remove_dir_all(&root).unwrap();
 
-        assert_eq!(cached_root, Some(new_root.clone()));
-        assert!(
-            !cache.contains_key("Collection/collection.txt"),
-            "a digest taken under the old root cannot vouch for a file under the new one"
+        let failures = pass(&state, &conn, Dirty::ALL, &mut cache, 0);
+
+        assert_eq!(failures, 0, "recreating the folder is not a failure");
+        let last = crate::sync::lock_plain(&state.mirror_status);
+        assert_eq!(
+            last.last_report.as_ref().unwrap().written,
+            first,
+            "every file the reader deleted is written again"
         );
+        assert_eq!(last.last_report.as_ref().unwrap().unchanged, 0);
+    }
+
+    /// The same class from the other route, and the one the deleted `cached_root` special case
+    /// used to answer: the digest map is keyed by a plan-relative path, which is the *same* key
+    /// under both folders. Spec §7's "moving the root writes a fresh mirror at the new
+    /// location" is this test plus `set_root_now`'s `mark_all`.
+    #[test]
+    fn moving_the_root_writes_a_whole_mirror_at_the_new_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state_at(dir.path());
+        let conn = own_conn(dir.path());
+        let old_root = dir.path().join("old");
+        aim_at(&state, &old_root);
+
+        let mut cache: HashMap<String, u64> = HashMap::new();
+        pass(&state, &conn, Dirty::ALL, &mut cache, 0);
+        let planned = cache.len();
+        assert!(planned > 0);
+
+        let new_root = dir.path().join("new");
+        settings::set_root_now(&state, &new_root).unwrap();
+        pass(&state, &conn, Dirty::ALL, &mut cache, 0);
+
         assert!(
             new_root.is_dir(),
             "the pass creates the folder it was given"
         );
-        assert!(crate::sync::lock_plain(&state.mirror_status)
-            .last_error
-            .is_none());
-    }
-
-    /// A second pass over the same root keeps the digests, which is what makes the steady
-    /// state render-and-hash rather than 350 writes every two seconds. The counterpart to the
-    /// two tests above: they clear the cache, and this one proves clearing is not the default.
-    ///
-    /// **The files are deleted between the two passes, and that is the whole experiment.**
-    /// `run::put` has two ways to answer "unchanged" — the remembered digest, and a read of
-    /// the file — so a test that simply ran twice would pass with the cache emptied every time
-    /// and prove nothing. It was written that way first, and a mutation that cleared the cache
-    /// on every pass survived it. With the files gone, only the cache can still say
-    /// "unchanged"; a cleared one has to write all of them again.
-    ///
-    /// It is also the hazard the failure path exists for, seen from the other side: a cache
-    /// that outlives the files it describes is a mirror that never rewrites them.
-    #[test]
-    fn a_second_pass_at_the_same_root_keeps_its_digests() {
-        let dir = tempfile::tempdir().unwrap();
-        let state = state_at(dir.path());
-        let root = dir.path().join("mirror");
-        {
-            let conn = crate::sync::lock_db(&state);
-            settings::set_root(&conn, &root).unwrap();
-        }
-        let mut cache: HashMap<String, u64> = HashMap::new();
-        let mut cached_root = None;
-        pass(&state, Dirty::ALL, &mut cache, &mut cached_root);
-        let first = cache.len();
-        assert!(first > 0, "an empty collection still writes its own files");
         assert_eq!(
             crate::sync::lock_plain(&state.mirror_status)
                 .last_report
                 .as_ref()
                 .unwrap()
                 .written,
-            first,
-            "the first pass writes every file it planned"
+            planned,
+            "a digest taken under the old root cannot vouch for a file under the new one"
         );
+        assert!(
+            old_root.is_dir(),
+            "and the previous folder is left exactly where it was — spec §7"
+        );
+    }
 
-        for rel in cache.keys() {
-            std::fs::remove_file(root.join(rel)).unwrap();
-        }
-        pass(&state, Dirty::ALL, &mut cache, &mut cached_root);
+    /// The hash-skip, which is what makes the steady state render-and-hash rather than ~350
+    /// writes every two seconds. The counterpart to the three tests above: they all end in a
+    /// rewrite, and this one proves rewriting is not simply what always happens.
+    ///
+    /// **One file's contents are corrupted between the passes, and that is the experiment.**
+    /// `run::put` has two ways to answer "unchanged" — the remembered digest, and a read of
+    /// the file — so a test that just ran twice passes with the cache emptied every time and
+    /// proves nothing. It was written that way first and a mutation clearing the cache on
+    /// every pass survived it. The file is left *present* so the `is_file` guard is satisfied
+    /// and only the digest can answer; a cold cache reads it, finds a mismatch and rewrites.
+    ///
+    /// It also pins the documented semantics: the cache trusts **presence**, not contents, and
+    /// a hand-edited mirror file is `Rebuild now`'s job.
+    #[test]
+    fn a_second_pass_skips_a_file_whose_digest_it_remembers() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state_at(dir.path());
+        let conn = own_conn(dir.path());
+        let root = dir.path().join("mirror");
+        aim_at(&state, &root);
+
+        let mut cache: HashMap<String, u64> = HashMap::new();
+        pass(&state, &conn, Dirty::ALL, &mut cache, 0);
+        let first = cache.len();
+        assert!(first > 0);
+
+        let victim = root.join(cache.keys().next().unwrap());
+        std::fs::write(&victim, b"a reader typed this").unwrap();
+        pass(&state, &conn, Dirty::ALL, &mut cache, 0);
 
         assert_eq!(cache.len(), first, "the digests survive a pass");
         let last = crate::sync::lock_plain(&state.mirror_status);
         assert_eq!(
             last.last_report.as_ref().unwrap().written,
             0,
-            "a remembered digest is answered without opening the file at all"
+            "a remembered digest is answered without reading the file"
         );
         assert_eq!(last.last_report.as_ref().unwrap().unchanged, first);
+        drop(last);
+        assert_eq!(
+            std::fs::read(&victim).unwrap(),
+            b"a reader typed this",
+            "presence is what the cache checks, never contents"
+        );
+    }
+
+    /// I3. A panic in the render used to end the thread with nothing to show for it: the
+    /// mutexes recover crate-wide, so nothing else broke — and nothing was recorded either,
+    /// leaving the panel reporting the last good pass while the folder quietly stopped
+    /// updating. Driven through the one thing in the pass that can be made to panic from
+    /// out here: a `data_dir` whose path is not valid UTF-16 cannot be the subject, so the
+    /// panic is raised inside the closure's own work instead.
+    #[test]
+    fn a_panic_inside_the_pass_is_recorded_and_not_fatal() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state_at(dir.path());
+        let outcome: Result<PassReport, String> =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> PassReport {
+                panic!("a plan with no name")
+            }))
+            .map_err(|payload| panic_sentence(&payload));
+
+        let sentence = outcome.unwrap_err();
+        assert!(
+            sentence.contains("a plan with no name"),
+            "the payload has to survive into the sentence: {sentence}"
+        );
+        assert!(sentence.contains("skipped this pass"), "{sentence}");
+        record(&state, &Err(sentence));
+        assert!(crate::sync::lock_plain(&state.mirror_status)
+            .last_error
+            .is_some());
+    }
+
+    /// A `String` payload as well as the `&str` one above, because a downcast handling only
+    /// one of the two turns a whole class of panic into "no message".
+    ///
+    /// **The obvious version of this test cannot fail, and it was the first draft.**
+    /// `panic!("root {} is gone", 7)` looks like a formatted panic and is not: every argument
+    /// is a literal, so the message is const-evaluated and the payload arrives as a
+    /// `&'static str`. Removing the `String` arm from `panic_sentence` left that test green —
+    /// a surviving mutation, and the reason these two subjects are what they are. Both were
+    /// checked by printing the two downcasts rather than reasoned about:
+    ///
+    /// * a format argument with a runtime value, which is `Some(String)`;
+    /// * `Result::unwrap()` on an `Err`, which is the realistic way a bug in the render path
+    ///   would reach [`pass`]'s guard, and is also `Some(String)`.
+    #[test]
+    fn a_string_payload_keeps_its_message_too() {
+        let root = std::env::temp_dir().join("E-cards").display().to_string();
+        let formatted = std::panic::catch_unwind(|| panic!("root {root} is gone")).unwrap_err();
+        assert!(
+            formatted.downcast_ref::<String>().is_some(),
+            "the subject has to be a String payload or this test proves nothing"
+        );
+        assert!(panic_sentence(&formatted).contains("is gone"));
+
+        let unwrapped = std::panic::catch_unwind(|| "nope".parse::<u8>().unwrap()).unwrap_err();
+        assert!(unwrapped.downcast_ref::<String>().is_some());
+        assert!(panic_sentence(&unwrapped).contains("InvalidDigit"));
+    }
+
+    /// The backoff, which is the difference between climbing one `error_log` row's count ~1 600
+    /// times an hour and ~60. Doubling, and capped — the cap is the half that matters, because
+    /// the reader plugging the stick back in is often watching the panel while they do it.
+    #[test]
+    fn the_retry_backoff_doubles_and_stops_at_a_minute() {
+        assert_eq!(
+            backoff_for(0),
+            Duration::ZERO,
+            "a healthy pass waits not at all"
+        );
+        assert_eq!(backoff_for(1), DEBOUNCE);
+        assert_eq!(backoff_for(2), DEBOUNCE * 2);
+        assert_eq!(backoff_for(3), DEBOUNCE * 4);
+        assert_eq!(backoff_for(10), MAX_BACKOFF);
+        assert_eq!(
+            backoff_for(u32::MAX),
+            MAX_BACKOFF,
+            "and it must not overflow on the way there"
+        );
+    }
+
+    /// A pass that works resets the count, so one bad afternoon does not leave the mirror
+    /// waiting a minute between passes for the rest of the session.
+    #[test]
+    fn a_pass_that_works_clears_the_backoff() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state_at(dir.path());
+        let conn = own_conn(dir.path());
+        aim_at(&state, &dir.path().join("mirror"));
+        let mut cache: HashMap<String, u64> = HashMap::new();
+        assert_eq!(pass(&state, &conn, Dirty::ALL, &mut cache, 9), 0);
+    }
+
+    /// I1, and spec §7's "moving the root writes a fresh mirror at the new location". Nothing
+    /// else can mark it: `mirror_root` is an `app_meta` row, and `app_meta` maps to no surface.
+    #[test]
+    fn choosing_a_new_folder_marks_every_surface() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state_at(dir.path());
+        assert_eq!(state.mirror.take(), None, "nothing is dirty yet");
+        settings::set_root_now(&state, &dir.path().join("mirror")).unwrap();
+        assert_eq!(
+            state.mirror.take(),
+            Some(Dirty::ALL),
+            "the new folder has to be written, and only a mark can cause that"
+        );
+    }
+
+    /// The other half of it: a refused path has moved nothing, so it must not cause a pass.
+    #[test]
+    fn a_refused_folder_marks_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state_at(dir.path());
+        settings::set_root_now(&state, Path::new("export")).unwrap_err();
+        assert_eq!(state.mirror.take(), None);
+    }
+
+    /// The sync gate, through the one part of `run_sync`'s tail that a test can reach — that
+    /// function takes a `tauri::AppHandle` and this crate has no mock-app harness, so the
+    /// *call* to this stays untested and is reported as such. The condition is what is worth
+    /// pinning: a throttled run that downloaded nothing must not spend a full render, and a
+    /// run that did must.
+    #[test]
+    fn only_a_sync_that_updated_something_marks_the_mirror() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = state_at(dir.path());
+        let outcome = |updated| crate::sync::SyncOutcome {
+            updated,
+            card_count: 116_700,
+            updated_at: None,
+        };
+
+        crate::sync::note_mirror_after_sync(&state, &Ok(outcome(false)));
+        assert_eq!(
+            state.mirror.take(),
+            None,
+            "a throttled run changed no card name and must cost no render"
+        );
+
+        crate::sync::note_mirror_after_sync(&state, &Err("no network".into()));
+        assert_eq!(state.mirror.take(), None, "and neither must a failure");
+
+        crate::sync::note_mirror_after_sync(&state, &Ok(outcome(true)));
+        assert_eq!(
+            state.mirror.take(),
+            Some(Dirty::ALL),
+            "a corrected card name reaches the files this way and no other"
+        );
     }
 }
