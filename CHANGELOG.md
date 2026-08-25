@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.16.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.15.0...v0.16.0) (2026-08-25)
+
+
+### Features
+
+* **mirror:** change detection, the debounced thread, and the wiring ([ca6622b](https://github.com/Msgaihede/mtg-grimoire/commit/ca6622b1ff91ef93d2b33bb9fd83c9bef170a208))
+* **mirror:** the field registry, the layout, the reads, and the Settings panel ([106b807](https://github.com/Msgaihede/mtg-grimoire/commit/106b807622c9e4c03f2b388cccffd97d7584e5cf))
+* **transfer:** the golden fence, the Rust card, and the mirror's naming rules ([caa681a](https://github.com/Msgaihede/mtg-grimoire/commit/caa681ab6d43cf66cb4d026dae0614eac34955cb))
+* **transfer:** the Rust writer, the fold, and the mirror pass ([9ecf0e5](https://github.com/Msgaihede/mtg-grimoire/commit/9ecf0e559c1e3c5ee8488fd7b9e86a1629c0e5ae))
+
+
+### Bug Fixes
+
+* **mirror:** assert the file survived, not how many files there are ([6ffdb69](https://github.com/Msgaihede/mtg-grimoire/commit/6ffdb690976fa363bd1f11ba5d74a3e4e0b973da))
+* **mirror:** guard the write path, and fence the field tables ([46a28d0](https://github.com/Msgaihede/mtg-grimoire/commit/46a28d0cba3a3b6cb7321f4d4f3190f0a33a1a96))
+* **mirror:** the pass no longer blocks a search, and the cache no longer lies ([8f9b2fe](https://github.com/Msgaihede/mtg-grimoire/commit/8f9b2fe1d7502ec69b3f8f67d1420a51333c9f9b))
+* **mirror:** three bugs the live pass found ([35230a0](https://github.com/Msgaihede/mtg-grimoire/commit/35230a0cbdf4403f48eac02182862ff3c428b9a3))
+
 ## [0.15.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.14.0...v0.15.0) (2026-08-24)
 
 
