@@ -563,12 +563,35 @@ export function usePopupPlacement({
 }
 ```
 
-- [ ] **Step 3: Confirm nothing regressed**
+- [ ] **Step 3: Run lint on the new file specifically**
+
+Run: `npx eslint src/components/Dropdown/usePopupPlacement.ts src/components/PopupListbox.tsx --max-warnings 0`
+Expected: clean.
+
+**This step exists because of a known trap, and it is worth reading before you write the file.** This
+repo's lint objects to `setState` inside an effect, and it only fires at `npm run verify` — which
+nothing in this task runs. The `setPlacement` here is a **measurement**, not derived state: a panel's
+size does not exist until the panel is mounted, so there is nothing to compute during render and the
+rule's usual cure (derive it instead) has nothing to derive from.
+
+If the rule fires anyway, do **not** reach for a suppression first. In order:
+
+1. Guard the write — `setPlacement((prev) => (same(prev, next) ? prev : next))` — so the effect
+   cannot re-enter. Often enough on its own.
+2. Hold the numbers in a ref and expose them through `useSyncExternalStore`, which is what the rule
+   is steering toward.
+3. Only if neither works: a scoped `eslint-disable-next-line` **with the reason written out on the
+   line above it**, naming what cannot be derived and why. A bare suppression is a defect in this
+   repo; a suppression with its argument is a decision.
+
+Report which of the three you used.
+
+- [ ] **Step 4: Confirm nothing regressed**
 
 Run: `npx vitest run src/components/AnchoredPopup.test.tsx src/features/decks/QuickAdd.test.tsx`
 Expected: PASS. Both render `PopupPanel`; the new optional prop must not disturb them.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add src/components/Dropdown/usePopupPlacement.ts src/components/PopupListbox.tsx
@@ -600,6 +623,9 @@ The single-select component, without the search box (Task 4) and without multi-s
   `lucide-react`; `AnimatePresence` from `motion/react`.
 - Produces:
 
+**`SharedProps` is declared once, here, in full.** Task 4 implements the search half and Task 8
+implements `onOpen`; nothing re-declares the type.
+
 ```ts
 type SharedProps = {
   options: readonly DropdownOption[];
@@ -608,12 +634,48 @@ type SharedProps = {
   fill?: boolean;                   // stretch to the container, chevron to the far edge
   active?: boolean;                 // gold border and text — "this is not where the control opens"
   disabled?: boolean;
-  id?: string;                      // the trigger's id, for a visible <label htmlFor>
+  id?: string;                      // the trigger's id, so a visible <label htmlFor> still presses it
   label?: string;                   // aria-label, when there is no visible label
-  labelledBy?: string;              // id of a visible <label>
+  labelledBy?: string;              // id of the visible <label> — see the naming rule below
   className?: string;               // on the trigger
   panelClassName?: string;          // on the panel
+  // Implemented in Task 4:
+  searchable?: boolean;
+  searchPlaceholder?: string;       // default "Search"
+  query?: string;                   // controlled: the caller filters
+  onQueryChange?: (query: string) => void;
+  emptyLine?: string;               // default "No matches."
+  footer?: ReactNode;
+  onReachEnd?: () => void;
+  // Implemented in Task 8:
+  onOpen?: () => void;
 };
+```
+
+**The naming rule, and it is not the one a `<select>` used.** A native `<select>` is *labelable*:
+`<label htmlFor="deck-view">View</label>` names it, and a screen reader says "View, combobox,
+Table". A `<button>` is labelable too — the label still presses it — **but a native `<label>` is
+not in a button's accessible-name computation**, so the same markup would announce "Table, button"
+and never say which field it is. The name has to come from `aria-labelledby`.
+
+So a call site with a visible label passes **both**:
+
+```tsx
+<label id="deck-view-label" htmlFor="deck-view" className="text-[0.6875rem] text-dim">
+  View
+</label>
+<Dropdown id="deck-view" labelledBy="deck-view-label" … />
+```
+
+`id` keeps the pointer behaviour (clicking the label opens the dropdown); `labelledBy` is what makes
+the name "View" while the *content* stays the value. That split is `SetCombobox`'s, stated on its
+own `labelId`: the button's content is the value, so its name has to come from somewhere else or
+assistive tech announces the value twice and the field never.
+
+**This changes how tests find these controls.** `getByLabelText("View")` becomes
+`getByRole("button", { name: "View" })`, which is exactly what `pickOption(user, "View", "Table")`
+does — so the 72 rewrites need no extra thought, but a test that reached for a control any other way
+does.
 
 function Dropdown(props: SharedProps & {
   value: string;
@@ -853,7 +915,10 @@ const optionId = (id: string, index: number) => `${id}-option-${index}`;
   dismisses through `useDismissOnEscape({ layer: "inner", enabled: open })` and returns focus to
   the trigger. On the **closed trigger**: ArrowDown opens, and any single printable character
   opens and jumps (Task 4 shares the matcher).
-- Opening sets the active index to the picked row, or 0.
+- **Opening sets the active index to the picked row, or 0.** On `<MultiDropdown>` (Task 5) "the
+  picked row" is the **first** `selected` value that is in the drawn list — several may be picked,
+  and the first is where a reader's eye starts. Falls back to 0 when none of them is drawn, which is
+  the set picker's normal state once a query has narrowed the list past the ticked sets.
 - Dismissal: a `window` `mousedown` outside the root closes without moving focus (the reader is
   already somewhere else); `onBlur` on the root closes when focus leaves it.
 - `onReachEnd` is called when ArrowDown is pressed on the last row or End is pressed twice — it is
@@ -897,11 +962,10 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 - Test: `src/components/Dropdown/Dropdown.test.tsx`
 
 **Interfaces:**
-- Consumes: Task 3's shell.
-- Produces: `SharedProps` gains
-  `searchable?: boolean`, `searchPlaceholder?: string`, `query?: string`,
-  `onQueryChange?: (query: string) => void`, `emptyLine?: string`, `footer?: ReactNode`,
-  `onReachEnd?: () => void`.
+- Consumes: Task 3's shell and the `SharedProps` it declared in full.
+- Produces: no new type. This task **implements** the fields Task 3 declared under
+  "Implemented in Task 4" — `searchable`, `searchPlaceholder`, `query`, `onQueryChange`,
+  `emptyLine`, `footer`, `onReachEnd`.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1172,7 +1236,9 @@ Expected: PASS, 22 tests.
 
 - [ ] **Step 5: Write the stories**
 
-Create `src/components/Dropdown/Dropdown.stories.tsx`. Follow the house conventions:
+Create `src/components/Dropdown/Dropdown.stories.tsx`, titled `Primitives/Dropdown` — the
+namespaces in this repo are `Primitives` / `Chrome` / `Cards` / a feature area, and there is no
+`Components` one. Follow the house conventions:
 `import type { Meta, StoryObj } from "@storybook/react-vite"` and
 `import { expect, fn, userEvent, within } from "storybook/test"`. A controlled component needs a
 stateful wrapper (see `FilterChips.stories.tsx`, which explains why: rendered against a fixed value
@@ -1345,7 +1411,9 @@ function Probe() {
 }
 
 const meta = {
-  title: "Components/Dropdown/PlacementProbe",
+  // Titles in this repo are one of Primitives / Chrome / Cards / a feature area - never
+  // "Components". Grep an existing stories file before inventing a namespace.
+  title: "Primitives/Dropdown/PlacementProbe",
   component: Probe,
 } satisfies Meta<typeof Probe>;
 export default meta;
@@ -1451,6 +1519,7 @@ and stories describe behaviour nobody wants to lose.
 - Modify: `src/features/search/SetCombobox.tsx`
 - Test: `src/features/search/SetCombobox.test.tsx` (expected to change as little as possible)
 - Modify: `src/features/search/SetCombobox.stories.tsx`
+- Modify: `src/components/Dropdown/Dropdown.tsx` — implement `onOpen`, which Task 3 declared
 
 **Interfaces:**
 - Consumes: `<MultiDropdown>` (Task 5).
@@ -1529,8 +1598,10 @@ return (
 );
 ```
 
-`onOpen?: () => void` is a new `SharedProps` field — add it to the shell in this task, called on
-every opening. It is what `startOpening` needs and there is no other way for a caller to hook one.
+`onOpen` was declared on `SharedProps` in Task 3 and is **implemented here**, called on every
+opening. It is what `startOpening` needs and there is no other way for a caller to hook one: the
+shell owns `open`, and an effect on it would take the `pinned` snapshot one commit after the first
+render of the list it is meant to order.
 
 `footer` is the two existing blocks, unchanged:
 
@@ -1613,8 +1684,11 @@ own task.
      `<Dropdown size="md" … />`; a `h-8` one becomes `size="sm"`.
    - `value` / `onChange={(e) => f(e.target.value)}` becomes `value` / `onChange={f}` — the shell
      hands over the string, not an event.
-   - A `<label htmlFor={id}>` beside it keeps working: pass the same `id`. A select with only an
-     `aria-label` passes `label`.
+   - **A visible `<label>` needs two things now, not one.** Give the label an `id` and pass
+     `labelledBy` as well as `id` — see the naming rule in Task 3. A native `<label>` is not in a
+     `<button>`'''s accessible-name computation, so `htmlFor` alone leaves the control announcing
+     its *value* and never its name. A select that had only an `aria-label` passes `label` and
+     needs nothing else.
    - A select drawn gold when a filter is on passes `active={…}` rather than a className.
    - **Move every existing comment with the code it explains.** These files carry the reasoning for
      decisions that were expensive to reach; a comment left behind on a deleted line is the finding
@@ -1809,6 +1883,12 @@ Other notes:
 - `CollectionSearchFilters`' format picker is `searchable`; the sort is not.
 - `CollectionSearchFilters` deliberately has **no set combobox** — do not add one. Its comment at
   `:41` says why: this column is too narrow for a popup over thirty-plus options.
+- **One call in your bucket drives a control you do not own.** `DeckEditor.stories.tsx:1099` opens
+  Deck settings and picks `Add cards to` — that is `DeckSettingsForm`'s default-category picker, and
+  it belongs to Task 14. Rewrite the call mechanically
+  (`pickOption(user, "Add cards to", "Main deck")`) and **do not try to run that play**: it is red
+  until Task 14 lands, and story plays are Task 15's round in any case because `stories.test.tsx`
+  collects the whole tree. Say in your report that you left it unverified.
 - 16 `selectOptions` calls in `DeckEditor.test.tsx` is the largest single rewrite in the plan.
   Convert them one at a time and run the file after each three or four; the file is long enough that
   a batch of sixteen failures is unreadable.
@@ -1835,8 +1915,10 @@ Notes:
 
 - **`FormatSelect`'s public props must not change.** `CreateDeckDialog`, `DeckSettingsForm` and
   `src/features/transfer/import/destinations/NewDeckPreview.tsx` all render it, and
-  `NewDeckPreview` is **not in this bucket** — if its props move, that file breaks and nobody in
-  this fan-out owns it.
+  **`NewDeckPreview` is owned by no task in this fan-out and must not be edited by anyone** — it
+  sits in Task 11's directory and is deliberately absent from Task 11's file list, because it
+  contains no `<select>` of its own. If `FormatSelect`'s props move, that file breaks and no bucket
+  will notice.
 - **Keep the `formatKey` guard at `:74`.** It injects a synthetic option so a value the picker has
   no row for still matches one, and it exists because a native select would otherwise report row 0
   while the dialog read something else. The shell draws a placeholder now, so the guard is belt and
