@@ -148,9 +148,11 @@ import type {
   InstallKind,
   MarketplaceFeedStatus,
   MeldRelation,
+  MirrorStatus,
   MoveOutcome,
   MutedTag,
   OracleTagStatus,
+  PassReport,
   Printing,
   PrintingTags,
   ReleaseInfo,
@@ -746,6 +748,21 @@ export interface FakeUpdate {
  * text still in it**, which is the whole of what that refusal has to show: an export the app
  * could not save is one the reader can still copy.
  *
+ * **`mirrorRootUnwritable`** is `exportWriteError` one feature over and one step further along:
+ * the plain-text mirror's root has gone — a stick unplugged, a sync folder uninstalled, a
+ * permission revoked — so the **background pass has already failed** and `mirror_rebuild`
+ * refuses too. It is the one fault here that does both halves, and it needs both because a
+ * mirror failure is something a reader *finds* rather than something they press for: the panel
+ * has to be able to draw the sentence with nothing having been clicked, and pressing Rebuild
+ * now must not clear it by succeeding, which is a state the app cannot be in. So `installWorld`
+ * records the failed pass on the world and the rebuild handler branches — the row half and the
+ * handler half of the same fault.
+ *
+ * **Nothing else about the world changes, which is the point of the fault.** No database write
+ * ever waits on a mirror write, so a story in this state still edits decks, still adds cards,
+ * and still shows every number it showed before. What is lost is a folder of text files, and
+ * what says so is one sentence in one panel.
+ *
  * **`syncing`** is a card update in flight, and it exists for exactly one command:
  * `cache_clear` refuses outright while one is running, because `data/tmp/` is where the corpus
  * download puts 77 MB that the ingest then reads back. It is **not** `busy` — that fault is the
@@ -770,7 +787,8 @@ export type Fault =
   | "artTagsMissing"
   | "artTagsFetchError"
   | "imageUrisMissing"
-  | "exportWriteError";
+  | "exportWriteError"
+  | "mirrorRootUnwritable";
 
 /**
  * What the picture cache costs, as the Settings page's one button sees it.
@@ -782,6 +800,39 @@ export interface FakeImageCache {
   files: number;
   bytes: number;
   rows: number;
+}
+
+/**
+ * The plain-text mirror, as the Settings panel sees it: two stored settings and three facts
+ * about this session.
+ *
+ * **This fake has no filesystem and does not pretend to.** `mirror_rebuild` counts the files a
+ * pass *would* write off the rows this store already holds — seven formats per deck, per
+ * collection folder, per wishlist folder — and stamps the time; it never touches a disk, and
+ * nothing here can show a reader a file. That is the same concession {@link FakeImageCache}
+ * makes for `data/images/`, and it buys the same thing: the button is pressable, the panel's
+ * two sentences are drawn from a real number, and a story can press it twice and watch the
+ * answer change from "written" to "unchanged", which is the hash-skip the whole design rests on.
+ *
+ * The split between the two stored fields and the three session ones is the crate's, verbatim:
+ * `enabled` and `root` are `app_meta` rows that survive a restart, while a pass's time, its
+ * report and its failure describe a folder that may not — so `mirror_status` answers `null` for
+ * all three until something has run.
+ */
+export interface FakeMirror {
+  /** `app_meta.mirror_enabled` — **on** until somebody says otherwise, because a backup a
+   *  reader has to remember to switch on is not there on the day it is needed. */
+  enabled: boolean;
+  /** `app_meta.mirror_root`, or `null` for the row never having been written — which is what a
+   *  fresh install is in, and what {@link readHandlers.mirror_status} answers `data/export` for.
+   *  Stored as written, exactly as {@link FakeDb.marketplace} is, so a story can stand in a row
+   *  this build would discard. */
+  root: string | null;
+  /** Unix **seconds**, or `null` for no pass having finished. `null` is the state the panel has
+   *  a sentence of its own for — see `BackupPanel`'s `lastPassLine`. */
+  lastRunAt: number | null;
+  lastReport: PassReport | null;
+  lastError: string | null;
 }
 
 export interface FakeDb {
@@ -974,6 +1025,16 @@ export interface FakeDb {
    * shape a fixture is in.
    */
   mutedTags: FakeMutedTag[];
+  /**
+   * The plain-text mirror's settings and this session's last pass.
+   *
+   * **One object rather than five fields on this interface**, unlike the six `app_meta` rows
+   * above it, and the grouping is the honest one: those six are unrelated preferences that
+   * happen to share a table, while these five are one feature answered by one command in one
+   * round trip. `mirror_status` is the only thing that reads them and the panel is the only
+   * thing that draws them.
+   */
+  mirror: FakeMirror;
   fault: Fault | null;
 }
 
@@ -1147,6 +1208,36 @@ function isStorableZoom(zoom: number): boolean {
  * no `detail`, and one old enough to read "days ago". Stamps are relative to *now* so the
  * relative times stay true whenever a story runs.
  */
+/**
+ * What the `mirrorRootUnwritable` fault records on the world: a pass that ran and could not
+ * write, five minutes ago, on a stick that has since gone.
+ *
+ * **The root moves too, and it has to.** A folder called `D:\Storybook\data\export` that cannot
+ * be written is a puzzle; `E:\Backups\MTG` is a story a reader recognises in one glance, and it
+ * is the case the whole fault is about — a mirror pointed somewhere removable, which is exactly
+ * where a reader who takes backups seriously points it.
+ *
+ * `failed` carries the whole file count and `written` is zero, which is what a vanished root
+ * produces: nothing partial, because the first `create_dir_all` is what fails.
+ *
+ * Written as an assignment onto the world rather than as a branch in the handlers — the shape
+ * `errorLogSeed` uses one table over — so a story in this state can press Rebuild now and watch
+ * it refuse rather than watching a handler quietly answer something else.
+ */
+export function mirrorFailedPass(db: FakeDb, now: number = Math.floor(Date.now() / 1000)): void {
+  const root = "E:\\Backups\\MTG";
+  db.mirror.root = root;
+  db.mirror.lastRunAt = now - 300;
+  db.mirror.lastReport = {
+    written: 0,
+    unchanged: 0,
+    skipped: 0,
+    pruned: 0,
+    failed: mirrorFileCount(db),
+  };
+  db.mirror.lastError = mirrorRootGone(root);
+}
+
 export function errorLogSeed(now: number = Math.floor(Date.now() / 1000)): ErrorEntry[] {
   return [
     {
@@ -1271,6 +1362,13 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // Never seeded, always earned — {@link FakeDb.deckUndo}'s rule: a mute exists only where a
     // story pressed the control, so a Settings list showing one is about that press.
     mutedTags: [],
+    // On, at the folder nobody has chosen, with **no pass having run** — and that last part is
+    // a fact about this fake rather than about the app. The real mirror runs a full pass at
+    // startup, so a reader opening Settings has always missed one; here there is no thread and
+    // no disk, so the honest opening state is the one the panel has a sentence for, and Rebuild
+    // now is what a story presses to leave it. `mirrorRootUnwritable` is the one world that
+    // opens with a pass already behind it, because that fault *is* a pass having failed.
+    mirror: { enabled: true, root: null, lastRunAt: null, lastReport: null, lastError: null },
     fault: null,
     ...init,
   };
@@ -5300,6 +5398,30 @@ export function readHandlers(db: FakeDb) {
     deck_search_open: (): boolean => db.deckSearchOpen,
 
     /**
+     * `mirror::settings::mirror_status` — everything the Backup panel draws, in one round trip.
+     *
+     * **Infallible, and that is the contract rather than an accident.** Every one of the five
+     * fields collapses a missing or unreadable row into a default: the panel reads this to
+     * decide whether to draw a switch as on, and there is nothing useful for it to do with an
+     * error that is not "show the defaults". So there is no `mirrorStatusError` fault and no
+     * branch here that throws — the one thing that *can* go wrong with the mirror is a pass
+     * that could not write, and that is a field on the answer rather than a rejection of it.
+     *
+     * `lastRunAt` is a **string** because the crate sends one: a JSON number is an `f64` on the
+     * other side, and seconds-since-epoch is not a value to round-trip through one.
+     *
+     * A read, so it answers through every second of a sync — it takes `db_read` in the crate,
+     * where the two writes beside it take the write connection.
+     */
+    mirror_status: (): MirrorStatus => ({
+      enabled: db.mirror.enabled,
+      root: mirrorRoot(db),
+      lastRunAt: db.mirror.lastRunAt === null ? null : String(db.mirror.lastRunAt),
+      lastReport: db.mirror.lastReport,
+      lastError: db.mirror.lastError,
+    }),
+
+    /**
      * `marketplace_feed::status` — one row per **feed-backed** marketplace, whether or not it
      * has ever been fetched.
      *
@@ -5717,6 +5839,38 @@ const THEORY_UNREADABLE = "the theory list could not be read: database is locked
  * than an invented one.
  */
 const exportDenied = (path: string) => `could not write ${path}: Access is denied. (os error 5)`;
+/**
+ * `mirror::settings::DEFAULT_ROOT_NAME` under this invented machine's data folder.
+ *
+ * Beside the database rather than in Documents, which is the crate's own argument: a portable
+ * install already carries that folder around, so the cards travel with the app by default
+ * instead of being left behind on a machine the reader has stopped using.
+ */
+const MIRROR_DEFAULT_ROOT = `${SYNC_DATA_DIR}\\export`;
+/**
+ * `mirror::settings::set_root`'s first refusal, verbatim.
+ *
+ * The one of that function's three checks this fake can make. The other two — a parent that does
+ * not exist, and a path that is already a file — are questions about a disk, and there is no
+ * disk here; inventing an answer to them would be inventing the folder tree the whole feature is
+ * about. This one is a property of the *string*, which is exactly why the crate checks it first:
+ * a relative root resolves against wherever the app was started from, which for a portable
+ * install is a different folder on Tuesday than on Monday.
+ */
+const mirrorRootNotAbsolute = (path: string) =>
+  `"${path}" is not an absolute path. The mirror needs a full path — a drive letter or a ` +
+  `share — because a relative one is resolved against wherever the app was started from, ` +
+  `which is not the same folder twice.`;
+/**
+ * What a pass says when the root has gone — the `mirrorRootUnwritable` fault's one sentence.
+ *
+ * **It names the folder and says what happens next, and it apologises for nothing.** A mirror
+ * failure costs the reader a folder of text files and costs the database nothing, so the honest
+ * shape is news plus a fact about the future rather than an alarm: the next pass tries again on
+ * its own, and a root that comes back gets a full rebuild.
+ */
+const mirrorRootGone = (root: string) =>
+  `The folder "${root}" is not there. The mirror will try again as soon as it comes back.`;
 /** `deck::DEFAULT_FORMAT` — `decks.format_key`'s own DDL default, so a blank key means here
  *  exactly what it means in SQL. */
 const DEFAULT_FORMAT = "casual";
@@ -5877,6 +6031,47 @@ function refuse(message: string): Error {
 
 function refuseIfBusy(db: FakeDb): void {
   if (db.fault === "busy") throw refuse(BUSY);
+}
+
+/**
+ * `mirror::settings::root` — the stored folder, or the default beside the database.
+ *
+ * The stored value is **filtered rather than trusted**, which is the crate's rule and not a
+ * tidy-up: `set_root` is the only writer that validates, and a row this build did not write —
+ * a hand edit, a database copied off a machine whose drive letters differ — must not be able to
+ * point a pruning pass at a relative path. A value that fails the filter reads exactly as no
+ * value at all.
+ */
+function mirrorRoot(db: FakeDb): string {
+  const stored = db.mirror.root;
+  return stored !== null && isAbsolutePath(stored) ? stored : MIRROR_DEFAULT_ROOT;
+}
+
+/** `Path::is_absolute` on Windows: a drive letter with a separator, or a UNC share. */
+function isAbsolutePath(path: string): boolean {
+  return /^[a-zA-Z]:[\\/]/.test(path) || path.startsWith("\\\\");
+}
+
+/**
+ * How many files a full pass would write, counted off the rows this store holds.
+ *
+ * **Derived, never a constant**, for the reason every other number in this file is derived: a
+ * seed with fifty decks has to report a bigger pass than one with none, or the panel's summary
+ * is a caption on a fixture rather than a fact about the world beside it. Seven formats per
+ * thing, which is `EXPORT_FORMAT_EXTENSION`'s six `.txt` and one `.csv`, times:
+ *
+ * * each deck, plus a second set for each deck that keeps a theory list;
+ * * the collection as a whole, plus each collection folder — including the automatic per-deck
+ *   groups and `Recently removed`, which are mirrored like any other folder;
+ * * the wishlist as a whole, plus each wishlist folder;
+ *
+ * and one more for `README.txt`, which is part of the deliverable rather than decoration.
+ */
+function mirrorFileCount(db: FakeDb): number {
+  const FORMATS = 7;
+  const decks = db.decks.length + db.decks.filter((d) => d.theoryEnabled).length;
+  const lists = 1 + db.collectionFolders.length + 1 + db.wishlistFolders.length;
+  return FORMATS * (decks + lists) + 1;
 }
 
 /** `collection::valid_quantity`. **Zero is allowed here** — what zero *means* is each
@@ -10447,6 +10642,92 @@ export function writeHandlers(db: FakeDb) {
      */
     export_write_file: (args: { path: string; contents: string }): void => {
       if (db.fault === "exportWriteError") throw refuse(exportDenied(args.path));
+    },
+
+    /**
+     * `mirror::settings::mirror_set_enabled` — switch the plain-text mirror on or off.
+     *
+     * The **fourth** of this table's one-line boolean writes, on exactly the split
+     * `set_nav_collapsed` argues: the write takes `sync::with_write` and is refusable, while
+     * the read (`mirror_status`, on `db_read`) answers through every second of a sync. There is
+     * no validation to add for the reason that paragraph gives — a `boolean` off the IPC
+     * boundary has no junk state — so `busy` is the whole of what it can refuse.
+     *
+     * **Switching it off destroys nothing**, here and in the crate: the files already written
+     * stay where they are, and the setting only stops the thread writing more. That is why the
+     * panel does not confirm.
+     */
+    mirror_set_enabled: (args: { enabled: boolean }): void => {
+      refuseIfBusy(db);
+      db.mirror.enabled = args.enabled;
+    },
+
+    /**
+     * `mirror::settings::mirror_set_root` — point the mirror at a folder.
+     *
+     * One of the crate's three refusals is reachable from here and the other two are not; see
+     * {@link mirrorRootNotAbsolute} for which and why. **The one that is reachable is the one
+     * worth having**, because `mirror_status` discards a bad root *silently*: without this
+     * check a relative path would look like it saved and then read back as `data/export`
+     * forever, with the reader watching a folder nothing is ever written to.
+     *
+     * **The old folder is left alone**, exactly as the crate leaves it: those files are the
+     * reader's cards in plain text, and changing a setting is not consent to delete them. There
+     * is nothing to clean up here anyway — but a fake that *did* clear something would teach a
+     * reader a model the app does not have, which is this file's whole rule.
+     *
+     * The new root is stored **verbatim**, {@link FakeDb.marketplace}'s shape: what the reader
+     * chose, not what this build would narrow it to.
+     */
+    mirror_set_root: (args: { root: string }): void => {
+      refuseIfBusy(db);
+      if (!isAbsolutePath(args.root)) throw refuse(mirrorRootNotAbsolute(args.root));
+      db.mirror.root = args.root;
+    },
+
+    /**
+     * `mirror::settings::mirror_rebuild` — rewrite every file the mirror owns, now.
+     *
+     * **Not refusable by `busy`, and it is on the `unlocked` list in `db.test.ts` for it**: the
+     * crate runs this on the blocking pool against `db_read`, like every other read-shaped
+     * command, because a pass reads the whole collection and must never touch the write
+     * connection. A story that seeded `busy` to watch a rebuild fail would be watching a
+     * refusal the app cannot produce. What it *can* be refused by is the root having gone,
+     * which is the `mirrorRootUnwritable` fault.
+     *
+     * **Two answers, and pressing twice is how you see the second.** The first pass writes
+     * every file {@link mirrorFileCount} counts; every later one reports the same number
+     * unchanged, which is the hash-comparison the whole design rests on — a mirror that is
+     * already correct costs reads and no writes. There is no disk here for the digests to be
+     * compared against, so this is the model rather than a simulation of it, and it is the one
+     * thing about the mirror a story can actually watch happen.
+     *
+     * `pruned` and `skipped` are always `0` and that is not a shortcut: pruning deletes files
+     * this app would no longer write, and `skipped` counts a `README.txt` the reader already had
+     * in the folder they chose. Neither can happen in a fake with no filesystem — there is
+     * nothing left behind to remove and nothing of theirs to decline to overwrite.
+     *
+     * **It stamps `lastRunAt`**, which the shipped `mirror_rebuild` does not yet do — the
+     * command answers its report without recording the pass, so the panel's "Last written…"
+     * line does not move on a manual rebuild in the real window. Recorded here rather than
+     * copied, because a fake that reproduced the gap would make the button unpressable in every
+     * story: there would be nothing on screen to show it had run.
+     */
+    mirror_rebuild: (): PassReport => {
+      if (db.fault === "mirrorRootUnwritable") throw refuse(mirrorRootGone(mirrorRoot(db)));
+      const total = mirrorFileCount(db);
+      const first = db.mirror.lastReport === null;
+      const report: PassReport = {
+        written: first ? total : 0,
+        unchanged: first ? 0 : total,
+        skipped: 0,
+        pruned: 0,
+        failed: 0,
+      };
+      db.mirror.lastRunAt = Math.floor(Date.now() / 1000);
+      db.mirror.lastReport = report;
+      db.mirror.lastError = null;
+      return report;
     },
   } satisfies Record<string, CommandHandler>;
 }

@@ -13,6 +13,7 @@ import {
   allHandlers,
   artTagIllustrations,
   makeDb,
+  mirrorFailedPass,
   neverCheckedUpdate,
   oracleTagCards,
   oracleTagEdges,
@@ -1466,6 +1467,161 @@ describe("writing an export", () => {
     expect(() => w.export_write_file({ path: "E:\\removal.txt", contents: "1 Shock\n" })).toThrow(
       /could not write E:\\removal\.txt/,
     );
+  });
+});
+
+/**
+ * The plain-text mirror's four commands — two stored settings, one derived report, and the one
+ * fault that is a pass having already failed.
+ *
+ * There is no filesystem here, so what is asserted is the *model*: what the panel is told, what
+ * the second press of Rebuild answers, and which of the crate's three root refusals a fake with
+ * no disk can honestly make.
+ */
+describe("the plain-text mirror", () => {
+  it("is on, beside the database, with no pass behind it", () => {
+    const status = readHandlers(makeDb()).mirror_status();
+
+    expect(status).toEqual({
+      enabled: true,
+      root: "D:\\Storybook\\data\\export",
+      // All three null together: a pass's time, its report and its failure describe a folder
+      // that may not survive a restart, so none of them is a stored setting.
+      lastRunAt: null,
+      lastReport: null,
+      lastError: null,
+    });
+  });
+
+  /** `settings::root`'s filter, which exists because a row this build did not write must not
+   *  be able to point a pruning pass at a relative path. */
+  it("reads a relative stored root as the default rather than following it", () => {
+    for (const junk of ["export", "", "./export", "..\\export"]) {
+      const db = makeDb();
+      db.mirror.root = junk;
+      expect(readHandlers(db).mirror_status().root).toBe("D:\\Storybook\\data\\export");
+    }
+  });
+
+  it("stores an absolute root verbatim and answers it back", () => {
+    const db = makeDb();
+    writeHandlers(db).mirror_set_root({ root: "E:\\Backups\\MTG" });
+    expect(readHandlers(db).mirror_status().root).toBe("E:\\Backups\\MTG");
+    // A UNC share is absolute too, and is what a reader mirroring to a NAS picks.
+    writeHandlers(db).mirror_set_root({ root: "\\\\nas\\cards" });
+    expect(readHandlers(db).mirror_status().root).toBe("\\\\nas\\cards");
+  });
+
+  /** A refused write must leave the previous choice alone: the read discards junk silently, so
+   *  a write that half-landed would look like a save and read back as the default. */
+  it("refuses a relative root in words and keeps the one it had", () => {
+    const db = makeDb();
+    writeHandlers(db).mirror_set_root({ root: "E:\\Backups\\MTG" });
+
+    expect(() => writeHandlers(db).mirror_set_root({ root: "export" })).toThrow(
+      /not an absolute path/,
+    );
+
+    expect(readHandlers(db).mirror_status().root).toBe("E:\\Backups\\MTG");
+  });
+
+  it("switches off and on again", () => {
+    const db = makeDb();
+    writeHandlers(db).mirror_set_enabled({ enabled: false });
+    expect(readHandlers(db).mirror_status().enabled).toBe(false);
+    writeHandlers(db).mirror_set_enabled({ enabled: true });
+    expect(readHandlers(db).mirror_status().enabled).toBe(true);
+  });
+
+  /**
+   * **The second press is the interesting one.** A mirror that is already correct writes
+   * nothing and reports every file unchanged, which is the hash-comparison the whole design
+   * rests on — and a fake whose Rebuild answered the same numbers twice would show a reader a
+   * button that cannot tell them anything.
+   */
+  it("writes everything once and reports it unchanged after that", () => {
+    const db = makeDb();
+    const first = writeHandlers(db).mirror_rebuild();
+
+    expect(first.written).toBeGreaterThan(0);
+    expect(first).toMatchObject({ unchanged: 0, skipped: 0, pruned: 0, failed: 0 });
+
+    const second = writeHandlers(db).mirror_rebuild();
+    expect(second).toEqual({
+      written: 0,
+      unchanged: first.written,
+      skipped: 0,
+      pruned: 0,
+      failed: 0,
+    });
+  });
+
+  /** Seven formats a thing, counted off the rows — never a constant, or the summary would be a
+   *  caption on a fixture rather than a fact about the world beside it. */
+  it("counts a pass off the rows it would write", () => {
+    const empty = writeHandlers(makeDb()).mirror_rebuild().written;
+    const withDeck = writeHandlers(
+      makeDb({ decks: [deck({ id: 1, theoryEnabled: false })] }),
+    ).mirror_rebuild().written;
+    const withTheory = writeHandlers(
+      makeDb({ decks: [deck({ id: 1, theoryEnabled: true })] }),
+    ).mirror_rebuild().written;
+
+    expect(withDeck - empty).toBe(7);
+    // A theory list is a second set of seven, one directory down.
+    expect(withTheory - withDeck).toBe(7);
+  });
+
+  /** It stamps the pass, which is what moves the panel's "Last written…" line. */
+  it("records when it ran", () => {
+    const db = makeDb();
+    expect(readHandlers(db).mirror_status().lastRunAt).toBeNull();
+
+    writeHandlers(db).mirror_rebuild();
+
+    const at = readHandlers(db).mirror_status().lastRunAt;
+    // A string, because the crate sends one: a JSON number is an `f64` on the other side.
+    expect(typeof at).toBe("string");
+    expect(Number(at)).toBeGreaterThan(1_700_000_000);
+  });
+
+  /** Unlocked, and deliberately: a pass holds the *read* connection, so a sync underneath it
+   *  cannot refuse it. Asserted here as well as in the busy sweep because the sweep proves the
+   *  name is on the exemption list and this proves the exemption is true. */
+  it("rebuilds through a running sync", () => {
+    expect(() => writeHandlers(makeDb({ fault: "busy" })).mirror_rebuild()).not.toThrow();
+  });
+
+  describe("the mirrorRootUnwritable fault", () => {
+    const gone = () => {
+      const db = makeDb({ fault: "mirrorRootUnwritable" });
+      mirrorFailedPass(db);
+      return db;
+    };
+
+    it("reports a pass that ran and could not write, with nothing pressed", () => {
+      const status = readHandlers(gone()).mirror_status();
+
+      expect(status.root).toBe("E:\\Backups\\MTG");
+      expect(status.lastRunAt).not.toBeNull();
+      expect(status.lastError).toMatch(/is not there/);
+      // Nothing partial: the first `create_dir_all` is what fails, so every file is a failure
+      // and none of them was written.
+      expect(status.lastReport).toMatchObject({ written: 0, unchanged: 0 });
+      expect(status.lastReport?.failed).toBeGreaterThan(0);
+    });
+
+    it("refuses a manual rebuild, naming the folder", () => {
+      expect(() => writeHandlers(gone()).mirror_rebuild()).toThrow(/E:\\Backups\\MTG/);
+    });
+
+    /** The half that makes it a fault rather than a seed: pressing the button must not clear
+     *  the error by succeeding into a folder that is not there. */
+    it("leaves the failed pass on the world after a refused rebuild", () => {
+      const db = gone();
+      expect(() => writeHandlers(db).mirror_rebuild()).toThrow();
+      expect(readHandlers(db).mirror_status().lastError).toMatch(/is not there/);
+    });
   });
 });
 
@@ -5119,6 +5275,14 @@ describe("the busy fault", () => {
       // to be holding and no `BUSY` it could ever answer. It writes a file at a path the OS
       // save dialog produced and nothing else.
       "export_write_file",
+      // The eighth, unlocked for the first reason on this list rather than a ninth one:
+      // `mirror::settings::mirror_rebuild` runs on the blocking pool against `db_read`, like
+      // every other read-shaped command, because a pass reads the whole collection and writes a
+      // few hundred small files — far too much to do while holding the write connection, and
+      // forbidden from touching it at all. It is in `writeHandlers` because it *writes*, just
+      // not to the database. Its two neighbours (`mirror_set_enabled`, `mirror_set_root`) take
+      // `sync::with_write` and are in the loop below with everything else.
+      "mirror_rebuild",
     ];
     const args: Record<string, unknown> = {
       id: 1,
@@ -5172,6 +5336,13 @@ describe("the busy fault", () => {
       // "not there any more" instead of BUSY.
       entryId: 1,
       deckCardId: 1,
+      // The mirror's pair. `enabled` is the **fourth** one-line boolean write here and is never
+      // read on this path — `refuseIfBusy` comes first, as it does for every write in the loop
+      // — while `root` *is* validated, and is absolute here on purpose: a relative one would
+      // fail this loop by answering "not an absolute path" instead of BUSY, which is exactly
+      // the ordering mistake the loop is looking for.
+      enabled: true,
+      root: "D:\\Backups\\MTG",
     };
     // The five above excluded, this is every command that really takes the write lock —
     // re-counted 2026-08-12 **after a merge in which three branches had each added one**,
@@ -5308,8 +5479,17 @@ describe("the busy fault", () => {
     // that reasoned "a feature lands, so add one" would have written 67 and been wrong. The
     // figure is a fact about the *handlers*, and a release can be entirely about who presses
     // them.
+    //
+    // The plain-text mirror then added **three** handlers and moved it by **two**, 66 → 68,
+    // which is the split this comment keeps having to make: `mirror_set_enabled` and
+    // `mirror_set_root` take `sync::with_write` and are refusable like everything in the loop,
+    // while `mirror_rebuild` joined `unlocked` — it holds the *read* connection for the length
+    // of a pass and has no BUSY to answer. `mirror_status`, the panel's one read, is in
+    // `readHandlers` and not in this table at all. Measured after the change rather than
+    // reasoned about, and this is the second entry here where a branch's handler count and its
+    // delta to this number are different figures.
     const names = Object.keys(w).filter((n) => !unlocked.includes(n));
-    expect(names).toHaveLength(66);
+    expect(names).toHaveLength(68);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,

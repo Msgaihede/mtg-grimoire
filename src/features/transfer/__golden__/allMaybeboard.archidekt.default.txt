@@ -1,0 +1,3 @@
+Cuts
+1x Sol Ring (ltc) 284 [Cuts{noDeck}]
+2x Mana Vault (2xm) 271 [Cuts{noDeck}] *F* ^Cut candidate,#4aab08^

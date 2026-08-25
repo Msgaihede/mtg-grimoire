@@ -1,0 +1,28 @@
+Commander
+1x Bruna, Light of Alabaster (avr) 5 [Commander]
+
+Companion
+1x Lurrus of the Dream-Den (iko) 226 [Companion] *F*
+
+Removal
+2x Lightning Bolt (lea) 161 [Removal]
+1x Lightning Bolt (lea) 161 [Removal] *F*
+1x Wrath of God (10e) 56 [Removal] ^Cut candidate,#4aab08^
+
+Sideboard
+1x Lightning Bolt (lea) 161 [Sideboard]
+
+Cut pile
+1x Sol Ring (ltc) 284 [Cut pile{noDeck}]
+
+Artifacts
+1x Sol Ring (ltc) 284 [Artifacts]
+1x Chalice of the Void (mrd) 44 [Artifacts] ^Keeper^
+4x Æther Vial (dst) 91 [Artifacts]
+1x Jeweled Lotus (cmr) 319★ [Artifacts] *E*
+
+Lands
+4x Branchloft Pathway // Boulderloft Pathway (znr) 258 [Lands]
+
+Maybe pile
+1x Mana Crypt (2xm) 270 [Maybe pile]

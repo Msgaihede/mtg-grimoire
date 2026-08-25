@@ -463,3 +463,80 @@ measured on: [import-export.md](../../../docs/reference/import-export.md).
 - **The picker's own half is unverifiable**, exactly as the importer's `open` is:
   `dialog:allow-save` opens a native window CDP cannot reach and no test or browser can drive.
   Path → written file is covered; click → path is not.
+
+## The golden fence, and the second writer in Rust
+
+**There are two implementations of the export writer and that is deliberate.**
+`src-tauri/src/transfer/` — `card.rs`, `fields.rs`, `fold.rs`, `csv.rs`, `write.rs` — is a Rust
+port of `fields.ts` and `export/{format,fold,csv}.ts`, written for the plain-text mirror, which is
+maintained by a background thread and cannot ask the page to render a file. Moving the writer to
+Rust outright was considered and rejected: it turns this dialog's live field preview into a round
+trip per checkbox, strands the writer-to-parser round-trip test vitest owns, and forces the
+Storybook fake to grow a third writer. **The price of keeping both is drift**, and the golden
+corpus is what turns drift into a red build. Full record:
+[text-mirror.md](../../../docs/reference/text-mirror.md).
+
+- **`__golden__/corpus.json` is the one corpus and both suites read it.** Cards on all three
+  surfaces with every field populated, plus the edge cases these suites already know are sharp: a
+  `//` split name, a CSV cell holding a comma and a quote, a switched-off pile, a labelled card
+  with and without a colour, a list a format empties for itself, and an empty list. Rust
+  deserialises it into `transfer::Card` with `rename_all = "camelCase"` and
+  `deny_unknown_fields`, so the *data* cannot drift either.
+- **`__golden__/*.txt` is every scenario × seven formats × two field sets** — everything
+  available, and the format's own defaults — named `<scenario>.<format>.<all|default>.txt`.
+  `golden.test.ts` asserts byte equality against them and so does `write.rs`'s cargo suite; both
+  **count what they compared and assert the total**, so a deleted golden is a red build rather
+  than a quietly smaller matrix.
+- **`npm run golden` regenerates them from the TypeScript writer, which is the behaviour of
+  record** because it is what shipped. `scripts/golden.mjs` deliberately massages nothing: if a
+  golden file looks wrong, the writer is what to argue with. It needs Node 22.18 or later, and
+  `npm run verify` does not run it.
+- **`__golden__/fields.json` is the registry golden, and it exists because the `.txt` files
+  cannot fence this half.** `writeLine` renders exactly seven ids, so **six of the seven formats
+  can absorb a change to `FORMAT_FIELDS` with zero golden bytes moving**: adding `lang` to
+  `plain`'s `optional` on one side alone moves no file, while changing the *fold key* — which
+  needs two corpus rows differing solely in that field to show up, and none exist. One printing
+  held in two languages would then export as two lines from the mirror and one from the dialog,
+  with all 70 files green. Only CSV was ever fenced here, because its header row **is**
+  `availableFields` spelled out. So `npm run golden` also writes `fields.json` — `SURFACE_FIELDS`
+  plus what `availableFields` and `defaultFields` answer for all 21 (format, surface) pairs — and
+  `golden.test.ts` and `fields.rs`'s cargo suite each assert it. Measured by mutation on
+  2026-08-25: the drift above reddens exactly one test on each side and no golden file.
+- **Regenerating obliges a matching change in `src-tauri/src/transfer/`, or `cargo test` goes
+  red** — which is the point of the fence rather than a nuisance. **Adding a field is three edits
+  and a regeneration**: `fields.ts`, `fields.rs`, `corpus.json` if the field needs a value, then
+  `npm run golden`. Skipping the Rust half is a red cargo suite, and `npm run verify` runs both
+  suites, so there is no way to land half of it. **What makes that true of a registry edit is
+  `fields.json` and not the rendered bytes** — see the row above.
+- **`deny_unknown_fields` is one-directional, and two other things close the other half.** It
+  catches a field TypeScript *adds*; serde reads a missing `Option<T>` as `None`, so a field
+  TypeScript *deletes* loads silently. The goldens catch a deletion on the Rust side, and on this
+  side `golden.test.ts` derives its field list from `Object.keys(transferCard())` in
+  `fixtures.ts` — an object literal against an explicit `TransferCard` return type with no
+  optional members — so adding **or** removing a field breaks at `tsc` and the list moves with it.
+- **A golden pins only what the fixture varies, and this is the most transferable thing the
+  mirror's build produced.** Three real rules in `format.ts` were held by no golden at all, each
+  found by mutating the Rust port and watching every golden stay green: **`SECTION_ORDER` was a
+  sort nothing held to being one** — dropping the ordering argument left the whole set green,
+  because every corpus scenario already listed its piles in section order; **Archidekt's
+  `DISCRIMINATOR` is exercised by no fixture**, since both its field sets include `Category` and
+  no two corpus rows share a pile name across the active flag; and **`arena_filters_before_it_folds`
+  cannot fail on the order it names**, confirmed by swapping filter and fold, because Arena's
+  discriminator is `sectionOf`, which already encodes `categoryActive`. **Targeted unit tests
+  beside the fence are what cover a rule whose inputs the corpus never varies** — a
+  byte-comparison suite is a strong fence against drift and a weak one against a rule nothing
+  exercises. Adding a scenario to the corpus is the other half of the answer, and it is not free:
+  a corpus row is a fixture **three test files** read (`golden.test.ts`, `transfer/card.rs`,
+  `transfer/write.rs`) plus `scripts/golden.mjs`. It said *five* until 2026-08-25, thirty-eight
+  lines under the same file's "both suites" — a prose-only edit routes to neither CI job.
+- **The parser did not follow, and there is no Rust parser.** The mirror never reads a file back,
+  so one would exist only to be tested. The round trip survives transitively and gets *stronger*:
+  vitest parses the golden files through `parse.ts` and recovers the cards, and the cargo suite
+  has already proved Rust reproduces those bytes exactly — so the app's parser demonstrably reads
+  what the mirror writes, a claim a writer-then-parse test closed inside one implementation
+  cannot make.
+- **`export/arena.ts`'s row filter did not follow either.** The mirror leaves it off, so
+  `*.arena.txt` in the backup lists every card and is therefore a complete record and **not** a
+  valid Arena import. That is said in the mirror's own `README.txt` rather than left to be
+  discovered, and it is one of the two omissions [import-export.md](../../../docs/reference/import-export.md)
+  now records.

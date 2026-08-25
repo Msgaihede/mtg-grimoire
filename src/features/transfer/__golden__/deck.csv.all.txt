@@ -1,0 +1,14 @@
+Quantity,Name,Set,Collector number,Category,Finish,Tag,Tag colour,Language,Set name,Rarity,Type line,Price
+1,"Bruna, Light of Alabaster",AVR,5,Commander,,,,en,Avacyn Restored,mythic,Legendary Creature — Angel,4.31
+1,Lurrus of the Dream-Den,IKO,226,Companion,foil,,,en,Ikoria: Lair of Behemoths,rare,Legendary Creature — Cat Nightmare,2.5
+2,Lightning Bolt,LEA,161,Removal,,,,en,Limited Edition Alpha,common,Instant,380
+1,Lightning Bolt,LEA,161,Removal,foil,,,en,Limited Edition Alpha,common,Instant,380
+1,Lightning Bolt,LEA,161,Sideboard,,,,en,Limited Edition Alpha,common,Instant,380
+1,Sol Ring,LTC,284,Cut pile,,,,en,Tales of Middle-earth Commander,uncommon,Artifact,1.75
+1,Sol Ring,LTC,284,Artifacts,,,,en,Tales of Middle-earth Commander,uncommon,Artifact,1.75
+4,Branchloft Pathway // Boulderloft Pathway,ZNR,258,Lands,,,,en,Zendikar Rising,rare,Land // Land,6.5
+1,Wrath of God,10E,56,Removal,,Cut candidate,#4aab08,en,Tenth Edition,rare,Sorcery,12.99
+1,Chalice of the Void,MRD,44,Artifacts,,Keeper,,en,Mirrodin,rare,Artifact,54.5
+4,Æther Vial,DST,91,Artifacts,,,,ja,Darksteel,uncommon,Artifact,28.4
+1,Jeweled Lotus,CMR,319★,Artifacts,etched,,,en,Commander Legends,mythic,Artifact,89.99
+1,Mana Crypt,2XM,270,Maybe pile,,,,en,Double Masters,mythic,Artifact,175

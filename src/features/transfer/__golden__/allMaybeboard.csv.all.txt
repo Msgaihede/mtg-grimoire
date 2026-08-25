@@ -1,0 +1,3 @@
+Quantity,Name,Set,Collector number,Category,Finish,Tag,Tag colour,Language,Set name,Rarity,Type line,Price
+1,Sol Ring,LTC,284,Cuts,,,,en,Tales of Middle-earth Commander,uncommon,Artifact,1.75
+2,Mana Vault,2XM,271,Cuts,foil,Cut candidate,#4aab08,en,Double Masters,mythic,Artifact,45

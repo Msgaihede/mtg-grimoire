@@ -161,7 +161,8 @@ the only reader on any of the three.
 their overlap:
 
 - **A *format* says what channels it has** — `FORMAT_FIELDS[format].optional`. Arena's line has no
-  printing-hint-free position for a `Condition` column at all; CSV alone offers all 25.
+  printing-hint-free position for a `Condition` column at all; **CSV alone offers the whole of
+  `TRANSFER_FIELD_IDS`**, which is literally how it is written (`optional: TRANSFER_FIELD_IDS`).
 - **A *surface* says what facts it holds** — `SURFACE_FIELDS[surface]`. A deck has no purchase
   history; a wishlist has no piles.
 
@@ -171,19 +172,27 @@ intersection narrowed to what a format turns on by default. Neither function is 
 other surface: switching format re-derives the checked set from that format's own defaults rather
 than carrying the old selection forward, because a set chosen for CSV means nothing to Arena.
 
-**25 fields total, counted from `TRANSFER_FIELD_IDS`.** `quantity` and `name` are `ALWAYS` — never
-drawn as a checkbox, because a line with no count and no name is not a card — leaving 23 that can
-ever be optional anywhere.
+**`quantity` and `name` are `ALWAYS`** — never drawn as a checkbox, because a line with no count
+and no name is not a card. **Every other id in `TRANSFER_FIELD_IDS` can be optional somewhere.**
 
-| Surface | Fields it carries (excluding `quantity`/`name`) | Count |
-| --- | --- | --- |
-| `deck` | setCode, collectorNumber, category, finish, lang, setName, rarity, typeLine, unitPrice | **9** |
-| `collection` | setCode, collectorNumber, finish, condition, lang, tradelistQuantity, purchasePrice, purchaseCurrency, acquiredAt, acquisitionSource, serialNumber, grading, altered, signed, proxy, misprint, tags, notes, setName, rarity, typeLine, unitPrice | **22** |
-| `wishlist` | setCode, collectorNumber, finish, lang, notes, rarity, typeLine, unitPrice | **8** |
+**There is no total written here any more, and the reason is on the record.** This page said
+"25 fields total" from the day it shipped and went on saying it after `tag` and `tagColor` landed
+on 2026-08-24 — the array holds **27** ids as of 2026-08-25, counted by running the module. A
+count is a fact about a *tree*, `TRANSFER_FIELD_IDS.length` is the only honest way to ask, and
+`fields.test.ts` already asserts one header per id, so the number is a build's answer rather than
+a sentence's.
 
-(**Counted** from `SURFACE_FIELDS` directly, not carried over from the plan's own estimate: the
-collection carries every fact a physical card can have except a pile, which is why its CSV is
-the tallest thing the export dialog draws.) `category` is the one field neither the collection nor
+| Surface | Fields it carries, excluding `quantity`/`name` |
+| --- | --- |
+| `deck` | setCode, collectorNumber, category, finish, **tag**, **tagColor**, lang, setName, rarity, typeLine, unitPrice |
+| `collection` | setCode, collectorNumber, finish, condition, lang, tradelistQuantity, purchasePrice, purchaseCurrency, acquiredAt, acquisitionSource, serialNumber, grading, altered, signed, proxy, misprint, tags, notes, setName, rarity, typeLine, unitPrice |
+| `wishlist` | setCode, collectorNumber, finish, lang, notes, rarity, typeLine, unitPrice |
+
+(Transcribed from `SURFACE_FIELDS` on 2026-08-25 by running it, and the deck row is the one that
+had rotted — it was missing `tag` and `tagColor` and carried a stale count beside them. Re-read it
+in the same commit that changes that constant. The collection carries every fact a physical card
+can have except a pile, which is why its CSV is the tallest thing the export dialog draws.)
+`category` is the one field neither the collection nor
 the wishlist ever offers — a collection row is filed nowhere at all, so there is no pile to name and
 no checkbox for one. **A wish has been filed somewhere since schema v23 and still does not offer
 it**, which is a decision rather than an oversight: a wishlist folder is not a deck category, no
@@ -203,11 +212,13 @@ space-insensitively, so a header never drifts out of sync with a column:
 | `collectorNumber` | Collector number | `proxy` | Proxy |
 | `category` | Category | `misprint` | Misprint |
 | `finish` | Finish | `tags` | Tags |
-| `condition` | Condition | `notes` | Notes |
-| `lang` | Language | `setName` | Set name |
-| `tradelistQuantity` | Tradelist quantity | `rarity` | Rarity |
-| `purchasePrice` | Purchase price | `typeLine` | Type line |
-| `purchaseCurrency` | Purchase currency | `unitPrice` | Price |
+| `tag` | Tag | `notes` | Notes |
+| `tagColor` | Tag colour | `setName` | Set name |
+| `condition` | Condition | `rarity` | Rarity |
+| `lang` | Language | `typeLine` | Type line |
+| `tradelistQuantity` | Tradelist quantity | `unitPrice` | Price |
+| `purchasePrice` | Purchase price | | |
+| `purchaseCurrency` | Purchase currency | | |
 | `acquiredAt` | Acquired | | |
 | `acquisitionSource` | Acquired from | | |
 | `serialNumber` | Serial number | | |
@@ -522,11 +533,61 @@ the new-deck arm, where the deck is created a command earlier; and the outcome l
 collection half is refused while the deck half committed, which is the one state the two writes can
 end in that neither command can report on its own.
 
+## The second writer, in Rust — 2026-08-25
+
+**`src-tauri/src/transfer/` is a Rust port of this writer, and it is the one place in the app
+where a piece of domain logic deliberately exists twice.** It was written for the plain-text
+mirror, which is maintained by a background thread and cannot ask the page to render a file.
+Moving the writer to Rust outright — having this dialog fetch its text over IPC — was considered
+and rejected: it turns the live field preview into a round trip per checkbox, strands the
+writer-to-parser round-trip test vitest owns, and forces the Storybook fake to grow a third
+writer. What the two implementations cover:
+
+| TypeScript | Rust |
+| --- | --- |
+| `fields.ts` — the registry, `FORMAT_FIELDS`, `SURFACE_FIELDS` | `transfer/fields.rs` |
+| `export/format.ts`, `export/fold.ts`, `csv.ts` | `transfer/write.rs`, `fold.rs`, `csv.rs` |
+| `TransferCard.ts` and its three row adapters | `transfer::Card`, built by `mirror/read.rs` |
+| `import/parse.ts` | **nothing — the parser stays TypeScript-only** |
+| `export/arena.ts` — the row filter | **nothing — the mirror leaves it off** |
+
+**`src/features/transfer/__golden__/` is what makes that legal.** One committed corpus and one
+committed golden set per scenario × format × field set; `npm run golden` regenerates them from
+*this* writer, which is the behaviour of record, and both suites assert byte equality against the
+same files. A change to either writer without the other is a red build. `src/features/transfer/CLAUDE.md`
+carries the working rules; [text-mirror.md](text-mirror.md) carries the whole record, including
+the three real rules in `format.ts` that **no golden file held** — a golden pins only what the
+fixture varies, and the corpus never varied `SECTION_ORDER`'s input, Archidekt's discriminator, or
+Arena's filter-versus-fold order.
+
+**The port reproduced every golden on the first run of the finished writer**, and it held against
+the real corpus: driven live 2026-08-25 (debug build), all seven of a real deck's mirrored files
+were byte-identical to what this dialog produces with every field ticked — `Azula.csv` included,
+at 11,527 bytes against 11,471 characters, so the 56 bytes of multi-byte UTF-8 in the type lines
+matched too.
+
+### The two things a mirrored file still cannot say
+
+Both are properties of the *format*, not settings the mirror could have switched on, and the
+mirror's own `README.txt` names both rather than leaving them to be discovered:
+
+- **MTGO and Arena have no maybeboard.** Both write only the piles the reader has switched on, so
+  a switched-off pile is absent from `*.mtgo.txt` and `*.arena.txt` and present in the other five
+  — and in the CSV, which is where every card always is. In the export dialog this is the
+  `omittedCount` line; a file on disk has nowhere to put one.
+- **The Arena row filter stays off in the mirror.** `*.arena.txt` lists every card, which makes it
+  a complete record and **not** a file Arena would accept for a paper collection. The mirror is a
+  backup first; a reader who wants an importable Arena list uses this dialog, where the filter is
+  a checkbox — and it is off by default there too, for the reason
+  [the Arena filter section](#the-arena-filter--what-in-mtg-arena-is-measured-as) gives.
+
 ## Where the code is
 
 `src/features/transfer/` (`TransferCard.ts`, `fields.ts`, `csv.ts`, `formats.ts`, `export/` —
 including `export/arena.ts`, the Arena filter's rule — and `import/`) is the whole of the
-TypeScript side; `src-tauri/src/import.rs` (renamed from
+TypeScript side, with `__golden__/` and `scripts/golden.mjs` the fence between it and
+`src-tauri/src/transfer/`, the Rust writer the plain-text mirror renders through
+([text-mirror.md](text-mirror.md)); `src-tauri/src/import.rs` (renamed from
 `deck_import.rs`), `export.rs`, `collection.rs`'s `collection_import_commit` and `wishlist.rs`'s
 `wishlist_import_commit` are the Rust side. `src/components/Dialog.tsx` is the shared modal shell
 both `ExportDialog` and `ImportDialog` are built on. `src/features/decks/CLAUDE.md` still owns

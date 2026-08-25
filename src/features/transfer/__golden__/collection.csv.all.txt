@@ -1,0 +1,9 @@
+Quantity,Name,Set,Collector number,Finish,Condition,Language,Tradelist quantity,Purchase price,Purchase currency,Acquired,Acquired from,Serial number,Grading,Altered,Signed,Proxy,Misprint,Tags,Notes,Set name,Rarity,Type line,Price
+1,"""Ach! Hans, Run!""",UNH,78,,NM,en,0,12.5,USD,2024-03-11,Card Kingdom,,,no,no,no,no,funny,"Sleeved, double-sleeved",Unhinged,rare,Enchantment,9.99
+4,Sol Ring,C21,263,,LP,en,2,1.75,USD,2023-08-02,Trade with Anna,,,no,yes,no,no,commander staple,"Bent corner
+Still playable",Commander 2021,uncommon,Artifact,1.2
+2,Lightning Bolt,LEA,161,,NM,en,,,,,,,,no,no,no,no,,,Limited Edition Alpha,common,Instant,380
+1,Lightning Bolt,LEA,161,,LP,en,,,,,,,,no,no,no,no,,,Limited Edition Alpha,common,Instant,380
+1,Black Lotus,LEA,232,,HP,en,0,25000,USD,2019-01-05,Estate sale,007/500,PSA 4,yes,yes,no,no,grail,,Limited Edition Alpha,rare,Artifact,25000
+1,Shivan Dragon,LEB,175,foil,MP,de,1,45,EUR,2022-11-30,eBay,,,no,no,yes,yes,display,"Says ""mint"" but isn't",Limited Edition Beta,rare,Creature — Dragon,310.5
+3,Counterspell,MH2,267,,,ja,,,,,,,,,,,,,,Modern Horizons 2,common,Instant,0.35

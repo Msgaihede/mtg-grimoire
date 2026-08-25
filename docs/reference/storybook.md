@@ -50,13 +50,14 @@ it says `tags: ["autodocs"]`.
   v25 deleted it). A fake that stored DTOs would make all three agree, and teach a reader a model
   the app does not have.
 - **Seeds and faults are state, not response stubs**: `parameters: { fake: { seed, fault } }`,
-  seeds `empty`/`starter`/`needsReview`/`large`, **seventeen** faults — `busy`/`syncing`/
+  seeds `empty`/`starter`/`needsReview`/`large`, **eighteen** faults — `busy`/`syncing`/
   `syncError`/`imageFailures`/`gone`/`indexCold`/`deckMeta`/`updateAvailable`/`updateError`/
   `errorLog`/`feedFetchError`/`oracleTagsMissing`/`oracleTagsFetchError`/`artTagsMissing`/
   `artTagsFetchError`/`imageUrisMissing`/
-  `exportWriteError`. (Re-counted 2026-08-20: this line said _twelve_ while `imageUrisMissing`
+  `exportWriteError`/`mirrorRootUnwritable`. (Re-counted 2026-08-20: this line said _twelve_ while `imageUrisMissing`
   and `exportWriteError` had both been in the union for a feature each, which is the third time
-  this number has rotted; the art taxonomy's pair took it to seventeen the same day.) Saying
+  this number has rotted; the art taxonomy's pair took it to seventeen the same day, and the
+  plain-text mirror's unwritable root to eighteen on 2026-08-25.) Saying
   nothing gets `starter` with no
   fault. A fault is set on the world, so a story about `BUSY` shows what the _app_ does with a
   refusal rather than what one mocked call returns. **`indexCold` is one of the four that are not
@@ -86,6 +87,15 @@ it says `tags: ["autodocs"]`.
   the state that has prices _and_ a failure, which is the one the panel's wording is hardest to
   get right in. The backend refuses a feed that parses to zero rows for the same reason, so an
   error page cannot wipe a working table.
+  **`mirrorRootUnwritable` is the only fault that is both a row change and a handler branch**,
+  added 2026-08-25 with the plain-text mirror. A root that has gone — a stick unplugged, a sync
+  folder uninstalled, a permission revoked — is a pass that has **already** failed, so
+  `installWorld` records it on the world (`mirrorFailedPass`) and the Backup panel draws the
+  sentence with nothing having been pressed; and `mirror_rebuild` still refuses, because a
+  button that cleared the error by succeeding into a folder that is not there would be showing a
+  state the app cannot be in. Nothing else about the world changes, which is the fault's whole
+  point: no database write ever waits on a mirror write, so the story still edits decks and
+  still shows every number it showed before. What is lost is a folder of text files.
   **`artTagsMissing` and `artTagsFetchError` are the Oracle pair below, one dataset over**, and
   they are two more faults rather than a reuse of those two because the taxonomies are two files
   on two schedules: either can be absent, or failing, while the other is fine, and the Tags page

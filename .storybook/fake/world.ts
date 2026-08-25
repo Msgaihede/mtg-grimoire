@@ -34,7 +34,7 @@
  *    {@link installWorld}.
  */
 import { QueryClient } from "@tanstack/react-query";
-import { allHandlers, errorLogSeed } from "./db";
+import { allHandlers, errorLogSeed, mirrorFailedPass } from "./db";
 import type { FakeDb, Fault } from "./db";
 import { installCorpus } from "./images";
 import {
@@ -213,6 +213,12 @@ export function installWorld(
     db.artTagParents = [];
     db.artTagMeta = null;
   }
+  // The third fault that writes to the world rather than only branching in a handler, and the
+  // only one that does **both**: a mirror root that has gone is a pass that has *already*
+  // failed, so the Backup panel must be able to draw the sentence with nothing having been
+  // pressed — and `mirror_rebuild` must still refuse, or pressing the button would clear an
+  // error by succeeding into a folder that is not there.
+  if (db.fault === "mirrorRootUnwritable") mirrorFailedPass(db);
 
   const scope = createScope(allHandlers(db));
   activateScope(scope);

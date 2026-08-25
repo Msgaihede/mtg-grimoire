@@ -41,6 +41,17 @@ taxonomy up to seven days behind Scryfall is the design working, not a stale dow
 - **Rust owns data plumbing** (SQLite/FTS5, Scryfall sync, image cache). **TS owns domain
   logic** (deck validation, import/export parsing). Rust supplies _facts_; TS draws
   _conclusions_. Keep that boundary.
+- **Export _writing_ is the one thing that lives on both sides, by design, and the golden fence
+  is what makes it legal.** The plain-text mirror is maintained by a Rust thread and cannot ask
+  the page to render a file, so `src-tauri/src/transfer/` is a second implementation of
+  `src/features/transfer/export/`. The alternative — move the writer to Rust and have the export
+  dialog fetch its text over IPC — turns the dialog's live field preview into a round trip per
+  checkbox and strands the writer-to-parser round-trip test vitest owns. So both stay, and
+  **`src/features/transfer/__golden__/` is the fence that turns drift into a red build** rather
+  than into a file that quietly disagrees with the dialog: one committed corpus, one committed
+  golden set, both suites asserting byte equality against it. **Parsing did not follow** — there
+  is no Rust parser, because the mirror never reads a file back. Full record:
+  [text-mirror.md](docs/reference/text-mirror.md).
 - Spec: `docs/superpowers/specs/2026-08-04-mtg-collection-tracker-design.md`
 - Research (live-verified facts, incl. Scryfall breaking changes): `docs/superpowers/research/`
 - Plans: `docs/superpowers/plans/` — execute in order, check off steps as you go.
@@ -99,6 +110,7 @@ number to compare against.
 | [in-app-updates.md](docs/reference/in-app-updates.md) | Why the portable swap is hand-written |
 | [decks-storage.md](docs/reference/decks-storage.md) | Deck tables, the card commands, how owned/missing is answered, the audit log, the decklist import |
 | [import-export.md](docs/reference/import-export.md) | The seven formats, the field registry, the fold rule, the four import destinations |
+| [text-mirror.md](docs/reference/text-mirror.md) | The plain-text mirror — the layout, the dirty map, why the pruner reads a manifest instead of guessing, the measured cost of a pass, and the bugs still open |
 | [wishlist-folders.md](docs/reference/wishlist-folders.md) | The two folder tables, the four-term grain, the merge rule, the root-add duplicate and the `elsewhere` mark |
 | [collection-folders.md](docs/reference/collection-folders.md) | The collection's cabinet — the eleventh grain term, the deck groups and `Recently removed` that made it the ledger of where every card sits, the v25 conversion, and what a zero quantity now costs |
 | [decks-live-findings.md](docs/reference/decks-live-findings.md) | What driving the shipped window found — **including the bugs still open** |

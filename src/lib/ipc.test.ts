@@ -1127,6 +1127,50 @@ describe("ipc argument names match the Rust command signatures", () => {
       contents: "1 Lightning Bolt\n",
     });
   });
+
+  /**
+   * The plain-text mirror's four. Two of them carry an argument, and both names are the crate's
+   * parameter names — `mirror_set_enabled(enabled)` and `mirror_set_root(root)` — so a wrapper
+   * that spelled either differently would fail at runtime with a deserialization error and no
+   * type error anywhere.
+   */
+  it("asks for the mirror's state with no arguments", async () => {
+    invoke.mockResolvedValue({
+      enabled: true,
+      root: "D:\\app\\data\\export",
+      lastRunAt: null,
+      lastReport: null,
+      lastError: null,
+    });
+
+    const status = await ipc.mirrorStatus();
+
+    expect(invoke).toHaveBeenCalledWith("mirror_status");
+    // `lastRunAt` is a **string** on the wire and `null` for no pass having finished — the two
+    // facts this whole panel's "not run yet" arm rests on.
+    expect(status.lastRunAt).toBeNull();
+  });
+
+  it("sends the mirror switch under `enabled`", async () => {
+    invoke.mockResolvedValue(undefined);
+    await ipc.mirrorSetEnabled(false);
+    expect(invoke).toHaveBeenCalledWith("mirror_set_enabled", { enabled: false });
+  });
+
+  it("sends the mirror folder under `root`", async () => {
+    invoke.mockResolvedValue(undefined);
+    await ipc.mirrorSetRoot("E:\\Backups\\MTG");
+    expect(invoke).toHaveBeenCalledWith("mirror_set_root", { root: "E:\\Backups\\MTG" });
+  });
+
+  it("asks for a rebuild with no arguments and gets the pass back", async () => {
+    invoke.mockResolvedValue({ written: 142, unchanged: 208, pruned: 0, failed: 0 });
+
+    const report = await ipc.mirrorRebuild();
+
+    expect(invoke).toHaveBeenCalledWith("mirror_rebuild");
+    expect(report).toEqual({ written: 142, unchanged: 208, pruned: 0, failed: 0 });
+  });
 });
 
 it("unwraps the sync:progress payload and returns the unlisten handle", async () => {

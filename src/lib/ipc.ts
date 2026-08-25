@@ -27,6 +27,8 @@
  *                                                  dataset by `tags/oracle.rs`/`tags/art.rs`
  * `TagHit`/`TagRef`                              — `src-tauri/src/tags/query.rs`
  * `MutedTag`                                     — `src-tauri/src/tags/muted.rs`
+ * `MirrorStatus`                                 — `src-tauri/src/mirror/settings.rs`
+ * `PassReport`                                   — `src-tauri/src/mirror/run.rs`
  * `TagTerms`                                     — `src-tauri/src/filters.rs`
  *
  * **Five settings carry no struct at all.** Each is one `app_meta` row: two answered as a bare
@@ -3457,6 +3459,68 @@ export interface CacheCleared {
   failed: number;
 }
 
+/**
+ * What one pass of the plain-text mirror did — `src-tauri/src/mirror/run.rs`.
+ *
+ * Five counts and no list of names, because the numbers are what a panel says and the names
+ * are what the folder says. **`failed` is not an error**, exactly as {@link CacheCleared}'s is
+ * not: a file the mirror could not write is one file, the pass carried on past it, and the
+ * honest answer is the count that landed beside the count that would not.
+ *
+ * `unchanged` is the number this whole design rests on. The pass hashes every file it would
+ * write against what it last wrote and opens nothing for a match, so a mirror that is already
+ * correct costs a read per file and no writes at all — which is why the summary says both
+ * numbers rather than only the one that moved.
+ */
+export interface PassReport {
+  written: number;
+  unchanged: number;
+  /**
+   * Files the mirror left alone **because they are not its own** — in practice a `README.txt`
+   * that was already in the folder the reader chose.
+   *
+   * A different fact from every other count here, which is why it is a count of its own:
+   * `unchanged` says the bytes on disk are already the bytes we would write, and `failed` says
+   * we tried and could not. Neither is true of a file we declined to touch. The backup root is
+   * user-choosable — a synced folder, a Dropbox, a stick with a decade of somebody's notes on
+   * it — and the manifest is the only authority on which files in it are ours.
+   */
+  skipped: number;
+  /** Files this app would itself have written that it no longer would — a renamed deck's old
+   *  folder. Never a file the reader put there; see the spec's pruning rule. */
+  pruned: number;
+  failed: number;
+}
+
+/**
+ * Everything the Settings panel draws about the mirror — `src-tauri/src/mirror/settings.rs`.
+ *
+ * Two of the five fields are stored settings and three are facts about *this process run*: a
+ * pass records what it did in memory, because the numbers describe a folder that may not
+ * survive a restart and a count read back after one would be a claim about a disk nobody has
+ * looked at since.
+ */
+export interface MirrorStatus {
+  enabled: boolean;
+  /** An absolute path. Never blank — a missing or unusable setting reads as `data/export`. */
+  root: string;
+  /**
+   * Unix **seconds as a string**, or `null` when no pass has finished this session.
+   *
+   * A string for {@link SyncStatus.lastCheckAt}'s reason: a JSON number is an `f64` on this
+   * side, and seconds-since-epoch is not a value to round-trip through one.
+   *
+   * **`null` is an answer and the panel has a sentence for it.** A fresh app has run no pass,
+   * and a panel that drew {@link MirrorStatus.lastReport}'s zeroes instead would claim a pass
+   * happened and wrote nothing — which is the one thing that cannot be told from a mirror that
+   * is already up to date.
+   */
+  lastRunAt: string | null;
+  lastReport: PassReport | null;
+  /** The sentence to show when the last pass could not write, or `null` when it went fine. */
+  lastError: string | null;
+}
+
 export const ipc = {
   searchCards: (req: SearchRequest) => invoke<SearchResponse>("search_cards", { req }),
   /**
@@ -4733,6 +4797,40 @@ export const ipc = {
    */
   exportWriteFile: (path: string, contents: string) =>
     invoke<void>("export_write_file", { path, contents }),
+  /**
+   * The plain-text mirror's whole state, in one round trip — the Backup panel's only read.
+   *
+   * **Infallible by signature at the far end**, which is the contract rather than an accident:
+   * a missing setting row, a hand-edited one and a row a newer build wrote all read as the
+   * default, so there is nothing for this call to reject with. It still returns a promise that
+   * can reject, because the IPC boundary itself can.
+   */
+  mirrorStatus: () => invoke<MirrorStatus>("mirror_status"),
+  /** Switch the mirror on or off. Takes effect without a restart — the pass thread consults the
+   *  setting on every tick rather than reading it once at startup. Answers `BUSY` if a sync
+   *  holds the write connection, like every other write here. */
+  mirrorSetEnabled: (enabled: boolean) => invoke<void>("mirror_set_enabled", { enabled }),
+  /**
+   * Point the mirror at a folder, as an **absolute** path.
+   *
+   * Three refusals, each a sentence rather than a code: a relative path (it resolves against
+   * wherever the app was started from, which for a portable install is not the same folder
+   * twice), a path whose parent does not exist, and a path that is already a file. The folder
+   * itself need not exist — the first pass creates it.
+   *
+   * **The old folder is left alone**, deliberately: those files are the reader's cards in plain
+   * text, and changing a setting is not consent to delete them.
+   */
+  mirrorSetRoot: (root: string) => invoke<void>("mirror_set_root", { root }),
+  /**
+   * Rewrite every file the mirror owns, now, and answer what the pass did.
+   *
+   * Runs whether or not the mirror is enabled — an explicit press is an explicit press — and
+   * against a **fresh** digest cache, because this is the button a reader reaches for when they
+   * suspect the folder is wrong: reusing the thread's cache would let a file somebody deleted
+   * by hand read as unchanged, which is the one state this command exists to get out of.
+   */
+  mirrorRebuild: () => invoke<PassReport>("mirror_rebuild"),
 };
 
 /**

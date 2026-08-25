@@ -2959,6 +2959,10 @@ mod tests {
             client: crate::scryfall::Client::new("http://127.0.0.1:1".into()),
             images: crate::images::Cache::new(dir.join("images")),
             index: std::sync::RwLock::default(),
+            // The mirror is never started in these tests; a clean mask and an empty record are
+            // what an `AppState` looks like before the first pass.
+            mirror: std::sync::Arc::new(crate::mirror::watch::Mask::default()),
+            mirror_status: std::sync::Mutex::new(crate::mirror::watch::LastPass::default()),
         });
 
         // Stands in for the ingest, which holds this exact lock for the length of a sync.

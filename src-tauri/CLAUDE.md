@@ -527,6 +527,59 @@ shared_cell` walks both into two databases and compares them column by column.
   reversible printings included, because `card_row` falls back to `card_faces[0]`. Every
   `oracleId === null` branch in the app is a fence around the type, not a card you can find.
 
+## Hard rules — the plain-text mirror
+
+`mirror/` writes the decks, the collection and the wishlist to plain text files on disk, in all
+seven formats, so the day the app will not start the cards are still the reader's. Full record,
+with the measurements: [text-mirror.md](../docs/reference/text-mirror.md).
+
+- **There is one `update_hook`, on the one write connection, and it is the whole of how the
+  mirror learns anything.** `watch::install_hook` is installed on `AppState.db` from `setup`, and
+  every user-facing write in this crate goes through `sync::with_write` on that connection — so
+  no command has to remember to tell the mirror anything, and no command added next year can
+  forget to. `db_read` is `SQLITE_OPEN_READ_ONLY` and can never fire it; SQLite allows exactly
+  one update hook per handle, so a second `install_hook` **replaces** rather than adds. The
+  callback runs on the writer's thread with the write connection's mutex held: one `fetch_or` on
+  an atomic and return. Nothing there may allocate, take a lock, or call back into the database —
+  SQLite forbids the last one outright.
+- **A new user table must be added to `watch::surface_of`'s map, or its writes never reach the
+  mirror.** The map's default arm is `_ => None`, which is the correct direction to fail (a
+  surface that never catches up, which `Rebuild now` or deleting the root fixes — not a
+  wrongly-pruned file and not a per-row storm), but it means **a table nobody decided about is
+  silently invisible to the backup**. What stops that from being silent is
+  `watch::tests::every_table_in_the_schema_has_been_decided_about`, which asserts the whole of
+  `sqlite_master` against a written-down list: **a migration that adds a table goes red there
+  until somebody says which side of the match it belongs on.** Add the table to both.
+- **Most tables map to nothing, and that row is load-bearing rather than lazy.** A sync rewrites
+  the whole `cards` table and a feed refresh rewrites `marketplace_prices` wholesale; mapping
+  either to a surface would fire the hook a hundred thousand times per refresh and make every
+  sync a mirror rebuild. What those two change enters through **one full pass after the refresh
+  completes** — `sync::run_sync` and `marketplace_feed::refresh` each call `Mask::mark_all`.
+- **`app_meta` maps to nothing on purpose, so a setting that changes what a file would say marks
+  by hand.** `mirror::settings::set_root_now` and `marketplace::set_marketplace_now` each call
+  `mark_all()` **on success only** — a refused value changed nothing and must not cost a full
+  render. A third setting of that shape owes the same line; a live pass found the marketplace one
+  missing, with every mirrored CSV quoting the previous marketplace's prices.
+- **The mirror thread and `Rebuild now` each open a read-only connection of their own** — never
+  `AppState.db_read`, the rule `index::lifecycle::build_now` already states. A pass reads four
+  listings and writes up to ~350 files; on the shared read connection that queues every search
+  and every `mirror_status` poll behind it.
+- **The one write the mirror makes is its `error_log` row**, through
+  `db::lock_for(&state.db, Duration::ZERO)` — a single `try_lock`, `images::flush_records`'
+  precedent. A dropped row costs the log one entry; the sentence still reaches the panel through
+  `mirror_status`, which is in memory. Nothing in a mirror pass may ever make a button answer
+  `db::BUSY`.
+- **The manifest authorises what a pass may *overwrite* as well as what it may delete.** The root
+  is user-choosable and `set_root` accepts any absolute path whose parent exists, so `README.txt` —
+  the one fixed name the mirror writes at the top of it — may already be the reader's. `put_readme`
+  writes it only when a previous manifest named it or the bytes on disk are already ours, counts
+  the refusal in `PassReport::skipped`, and **leaves a skipped README out of the manifest it then
+  writes** (listing it would make the next pass claim it). A second fixed name anywhere in the
+  mirror owes the same treatment.
+- **Every filesystem test in `mirror/` runs against a `tempfile` root, and none may touch
+  `data/`.** The default root is `data_dir/export`, so a test that forgets to set `mirror_root`
+  inside its tempdir writes into the developer's own mirror.
+
 ## Hard rules — decks (storage side)
 
 Full detail, with the measurements and the traps behind each rule, is in
@@ -945,3 +998,4 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
 | [decks-storage.md](../docs/reference/decks-storage.md) | The deck tables, the card commands, how owned/missing is answered, the audit log, the decklist import |
 | [wishlist-folders.md](../docs/reference/wishlist-folders.md) | The wishlist's cabinet (v23) — the four-term grain, the merge rule, the root-add duplicate |
 | [collection-folders.md](../docs/reference/collection-folders.md) | The collection's cabinet (v24–v25) — the eleventh grain term, the deck groups and `Recently removed`, the conversion that made them, what a zero quantity now costs |
+| [text-mirror.md](../docs/reference/text-mirror.md) | `mirror/` — the layout, the dirty map, why the pruner reads a manifest instead of guessing, what a pass costs measured, and the bugs still open |

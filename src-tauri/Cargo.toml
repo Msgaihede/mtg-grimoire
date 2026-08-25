@@ -21,11 +21,14 @@ tauri-build = { version = "2", features = [] }
 [dependencies]
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
-# The system file picker, and the *only* thing it is here for: choosing a custom deck cover.
-# The webview cannot name a file on disk on its own, and `deck_set_cover_image` takes a path
-# the backend reads rather than bytes — so this plugin is what stands between a button and a
-# command that already exists. `capabilities/default.json` grants `dialog:allow-open` and
-# nothing else; the other four dialog verbs (save, message, ask, confirm) are not permitted.
+# The system file picker. The webview cannot name a file on disk on its own, and the commands
+# behind it — `deck_set_cover_image`, `import_read_file`, `export_write_file`, and the mirror's
+# "Change folder…" — take a path the backend reads or writes rather than bytes, so this plugin
+# is what stands between a button and a command that already exists.
+# `capabilities/default.json` grants `dialog:allow-open` **and `dialog:allow-save`** — the
+# second since the export dialog shipped, which this comment went on denying for a whole plan.
+# The other three verbs (message, ask, confirm) are not permitted; the app's own questions are
+# drawn in the page. Never `dialog:default`.
 tauri-plugin-dialog = "2"
 # The one write it is here for: putting a decklist export on the clipboard. Grants
 # `clipboard-manager:allow-write-text` and nothing else — not `:default`, which also grants
@@ -59,7 +62,14 @@ tauri-plugin-snap-layout = "1"
 # release profile would leave `capabilities/default.json`'s `mcp-bridge:` entries unresolvable
 # and fail the build that needs them least.
 tauri-plugin-mcp-bridge = "0.12"
-rusqlite = { version = "0.40", features = ["bundled"] }
+# `hooks` is what the plain-text mirror watches through: an `update_hook` on the one write
+# connection sees every insert, update and delete with the table's name, so no command has to
+# remember to tell the mirror anything and none added later can forget to. Verified in the
+# vendored manifest on 2026-08-25: `hooks = []` pulls in **no additional crates**, and the
+# `Cargo.lock` diff for this change is therefore **empty** — a lockfile records resolved versions
+# and dependency edges, never feature selections, so an empty diff is the evidence rather than a
+# missing one.
+rusqlite = { version = "0.40", features = ["bundled", "hooks"] }
 # What makes two tag names the same name. `deck_tags` is one global list since schema v21 and
 # its uniqueness grain is a **key** rather than the word itself: NFC, then Unicode lowercase,
 # then NFC again - so "Cafe" spelled with a precomposed e-acute, with a combining accent, and
