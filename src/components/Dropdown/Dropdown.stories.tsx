@@ -28,12 +28,14 @@ function StatefulDropdown({ value: seed, onChange, ...rest }: ComponentProps<typ
 }
 
 /** `<MultiDropdown>`'s own stateful wrapper — `triggerLabel` is computed here from the state the
- *  wrapper owns, never threaded through as an arg, so it can never drift from what is picked. */
+ *  wrapper owns, never threaded through as an arg, so it can never drift from what is picked.
+ *  `Omit` rather than destructuring it out and discarding it: a caller passing one in would be
+ *  dead on arrival either way, and the type says so instead of a call site finding out live. */
 function StatefulMultiDropdown({
   selected: seed,
   onToggle,
   ...rest
-}: ComponentProps<typeof MultiDropdown>) {
+}: Omit<ComponentProps<typeof MultiDropdown>, "triggerLabel">) {
   const [selected, setSelected] = useState<readonly string[]>(seed);
   const label =
     selected.length === 0
@@ -183,7 +185,6 @@ export const Multi: Story = {
       selected={["modern"]}
       onToggle={noop}
       options={FORMAT_OPTIONS}
-      triggerLabel="1 format"
     />
   ),
   play: async ({ canvasElement }) => {

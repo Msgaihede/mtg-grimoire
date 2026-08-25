@@ -144,22 +144,25 @@ function lastEnabledIndex(options: readonly DropdownOption[]): number {
 }
 
 /**
- * Where a `<MultiDropdown>` **opening** lands: the first `selected` value that is in `drawn`,
- * or row 0 — several may be picked, and the first is where a reader's eye starts. Falls back to
- * 0 (never rerouted away from a disabled row the way {@link openingIndex} is) because a selected
- * row is never disabled by this app's own rule (`optionDisabled`'s first clause, in
- * `SetCombobox.tsx`) — there is nothing today for a reroute to protect against.
+ * Where a `<MultiDropdown>` **opening** lands, given the list it is opening on.
  *
- * Reads `drawn`, not the full `options` list, unlike `<Dropdown>`'s `openingIndex` — see the
- * call site in `MultiDropdown` for why that is the right list for a *controlled* search (the set
- * picker's shape) and does not disturb `<Dropdown>`'s own opening rule at all.
+ * **Two branches, and only the first is safe from a reroute for free.** When a `selected` value
+ * is found in that list, its row is never disabled — a selected option is never greyed by this
+ * app's own rule (`optionDisabled` in `src/features/search/facets.ts:50`, delegating to
+ * `countDisabled`'s "a selected option is never greyed" clause at `:28`) — so the found branch
+ * needs no reroute the way {@link openingIndex} needs one. **The fallback does not inherit that
+ * guarantee**: row 0 is an arbitrary row when nothing selected survived into the list — the set
+ * picker's normal state once a query has narrowed the list past every ticked row — and it can be
+ * disabled. Landing there would silently do nothing on the very first Enter or Space, for
+ * exactly the reason {@link openingIndex}'s own doc gives, so the fallback reroutes to the first
+ * enabled row the same way `openingIndex` reroutes its own.
  */
 function multiOpeningIndex(drawn: readonly DropdownOption[], selected: readonly string[]): number {
   for (const v of selected) {
     const i = drawn.findIndex((o) => o.value === v);
     if (i >= 0) return i;
   }
-  return 0;
+  return drawn[0]?.disabled ? firstEnabledIndex(drawn) : 0;
 }
 
 /**
@@ -176,11 +179,11 @@ type ShellProps = SharedProps & {
   triggerContent: ReactNode;
   /** Whether one option's value counts as picked — `aria-selected` and the row's tick. */
   isPicked: (value: string) => boolean;
-  /** The row a fresh opening lands on, given the list about to be drawn. `<Dropdown>` ignores
-   *  the argument and answers from `options` and its own `value` — `openingIndex`, unchanged
-   *  from before this file had a shell. `<MultiDropdown>` reads it — see
-   *  {@link multiOpeningIndex}. */
-  computeOpeningIndex: (drawn: readonly DropdownOption[]) => number;
+  /** The row a fresh opening lands on, given the list that will actually be on screen once the
+   *  panel finishes opening — `openingList` below, never `drawn` directly (see its own comment
+   *  for why that distinction is load-bearing). Both `<Dropdown>`'s `openingIndex` and
+   *  `<MultiDropdown>`'s {@link multiOpeningIndex} read the argument honestly. */
+  computeOpeningIndex: (openingList: readonly DropdownOption[]) => number;
   /** Enter, or a pointer press, on an enabled row. `<Dropdown>` passes `onChange`;
    *  `<MultiDropdown>` passes `onToggle`. Whether the panel then closes is the shell's own
    *  call, from `multi` alone — see `activate` below. */
@@ -287,6 +290,20 @@ function DropdownShell(props: ShellProps) {
     searchable && !controlled
       ? options.filter((o) => o.label.toLowerCase().includes(q.trim().toLowerCase()))
       : options;
+
+  // The list an **opening** index has to be computed against — not always `drawn`, because
+  // `openAt` below clears the uncontrolled query in the *same batch* as the index it is handed.
+  // An index computed against the current, possibly query-narrowed `drawn` would describe a row
+  // in a list that is about to be replaced: open on row 1 of a two-row narrowed list, and the
+  // very same commit resets the query, so the next paint shows row 1 of the *full* list — a
+  // different row entirely, silently. `openAt` only resets the query `if (!controlled)`, so
+  // that is exactly the condition here: uncontrolled opens onto the full `options` (what the
+  // reset leaves drawn), controlled opens onto `drawn` (which nothing here is about to change —
+  // a controlled caller filters before handing `options` down, so `drawn === options` for it
+  // regardless, but this is written as the actual rule rather than as that coincidence, because
+  // it is `openAt`'s reset condition that decides it, not an algebraic identity today's code
+  // happens to hold).
+  const openingList = controlled ? drawn : options;
 
   // A stored index can outrun a shrunk list — searching narrows `drawn` while the panel stays
   // open — and a stale index would point `aria-activedescendant` at a row that is no longer
@@ -423,9 +440,17 @@ function DropdownShell(props: ShellProps) {
         // joining type-ahead below.** A native multi-select toggles on Space, and this app's own
         // Enter already does the same job for a multi-select — toggle, not close — so Space
         // reaching a *different* outcome than Enter on the same row would be the surprise, not
-        // this. Left untreated, `" ".length === 1` would fall straight into the type-ahead
-        // branch below and be swallowed: no option label starts with a space, so the keystroke
-        // would silently match nothing and the row a reader is looking at would not move.
+        // this.
+        // **The honest cost, stated rather than hidden**: the old behaviour was not always a
+        // dead key. A lone Space as the *first* character of a fresh buffer does match nothing —
+        // `typeAheadIndex` is a `startsWith`, and no label starts with a space — but mid-buffer
+        // it is live: typing "limited " continues a real `startsWith("limited ")` match against
+        // any multi-word label such as "Limited Edition Alpha". Toggling on Space gives that up
+        // for every non-searchable `<MultiDropdown>` — multi-word labels can no longer be
+        // type-ahead-narrowed past their first word — in exchange for Space reliably toggling
+        // the row a reader is looking at, on every press rather than only the ones that happen
+        // to land after a word boundary with no match. That trade was accepted on its merits,
+        // not because the alternative was inert.
         // **Never for `searchable`**: the search box already owns every character it receives
         // (the guard just below exempts it the same way), and a query has to be able to hold a
         // literal space — several set names do, and a search box that ate Space as a toggle
@@ -473,14 +498,14 @@ function DropdownShell(props: ShellProps) {
         aria-labelledby={labelledBy}
         onClick={() => {
           if (open) setOpen(false);
-          else openAt(computeOpeningIndex(drawn));
+          else openAt(computeOpeningIndex(openingList));
         }}
         onKeyDown={(e) => {
           // The panel holds the caret while open, so this only ever runs on the closed
           // trigger — a keydown fired at a focused descendant never bubbles to a sibling.
           if (e.key === "ArrowDown") {
             e.preventDefault();
-            openAt(computeOpeningIndex(drawn));
+            openAt(computeOpeningIndex(openingList));
             return;
           }
           if (e.key.length !== 1 || e.ctrlKey || e.metaKey || e.altKey) return;
@@ -493,7 +518,7 @@ function DropdownShell(props: ShellProps) {
             return;
           }
           const match = typeAhead(e.key);
-          openAt(match !== -1 ? match : computeOpeningIndex(drawn));
+          openAt(match !== -1 ? match : computeOpeningIndex(openingList));
         }}
         className={cn(
           size === "sm"
@@ -628,11 +653,10 @@ export function Dropdown(
       multi={false}
       triggerContent={content}
       isPicked={(v) => v === value}
-      // Ignores the `drawn` argument on purpose — this is `openingIndex(options, value)`,
-      // unchanged from before this file had a shell, and reading the full `options` rather than
-      // whatever is currently drawn is what lets a reopen land on the picked row even while a
-      // leftover, not-yet-reset search query would otherwise have filtered it out.
-      computeOpeningIndex={() => openingIndex(options, value)}
+      // Reads its argument honestly — `openingList` (see the shell's own comment) is always
+      // `options` for a single-select regardless of search state, so this is exactly
+      // `openingIndex(options, value)`, unchanged from before this file had a shell.
+      computeOpeningIndex={(openingList) => openingIndex(openingList, value)}
       onActivate={onChange}
     />
   );
@@ -663,7 +687,7 @@ export function MultiDropdown(
       multi
       triggerContent={triggerLabel}
       isPicked={(v) => selected.includes(v)}
-      computeOpeningIndex={(drawn) => multiOpeningIndex(drawn, selected)}
+      computeOpeningIndex={(openingList) => multiOpeningIndex(openingList, selected)}
       onActivate={onToggle}
     />
   );
@@ -679,7 +703,8 @@ function Row({
 }: {
   id: string;
   option: DropdownOption;
-  /** Whether this is the value the dropdown currently holds — `aria-selected`. */
+  /** Whether this option counts as picked — the one value `<Dropdown>` holds, or one of several
+   *  `<MultiDropdown>` does — `aria-selected` and the tick. */
   picked: boolean;
   /** Whether the keyboard's cursor is on this row — the highlight, not a selection. */
   active: boolean;

@@ -488,4 +488,75 @@ describe("MultiDropdown", () => {
     // Nothing toggled: the trigger still says nothing is picked.
     expect(screen.getByRole("button", { name: "Format" })).toHaveTextContent("Any format");
   });
+
+  function ReopenHarness() {
+    const [picked, setPicked] = useState<string[]>(["standard"]);
+    return (
+      <MultiDropdown
+        label="Format"
+        triggerLabel={picked.length === 0 ? "Any format" : `${picked.length} formats`}
+        selected={picked}
+        onToggle={(v) =>
+          setPicked((p) => (p.includes(v) ? p.filter((x) => x !== v) : [...p, v]))
+        }
+        options={FORMATS}
+        searchable
+      />
+    );
+  }
+
+  // Regression: `computeOpeningIndex` used to be handed `drawn` — the *current*,
+  // query-narrowed list — but `openAt` clears an uncontrolled query in the very same batch as
+  // the index it is given, so the index was computed against a list about to be replaced.
+  // Repro: selected = ["standard"]; FORMATS is [Commander, Modern, Pauper, Standard], so
+  // Standard is row 3 of the full list. Typing "an" narrows the drawn list to
+  // [Commander, Standard], where Standard sits at row 1 — a different list, a different index
+  // for the same option. Reopening must still land on Standard (row 3 of the reset full list),
+  // not row 1 of it (Modern).
+  it("reopens on the picked row, not the stale row a leftover search query would have named", async () => {
+    const user = userEvent.setup();
+    render(<ReopenHarness />);
+    await user.click(screen.getByRole("button", { name: "Format" }));
+    await user.type(screen.getByRole("combobox"), "an");
+    await user.keyboard("{Escape}");
+    await user.click(screen.getByRole("button", { name: "Format" }));
+    expect(screen.getByRole("combobox")).toHaveAttribute(
+      "aria-activedescendant",
+      expect.stringContaining("option-3"), // Standard, in the reset full FORMATS list
+    );
+  });
+
+  const FORMATS_ROW0_DISABLED: DropdownOption[] = [
+    { value: "vintage", label: "Vintage", disabled: true },
+    { value: "legacy", label: "Legacy" },
+    { value: "modern", label: "Modern" },
+  ];
+
+  // Regression: `multiOpeningIndex`'s no-selection fallback used to return row 0 unconditionally
+  // — safe only because a *found* selected row is never disabled, a guarantee the fallback does
+  // not inherit. Nothing selected surviving into the list is the set picker's normal state once
+  // a query has narrowed past every ticked row, and row 0 can be disabled — landing there is the
+  // silent first-press failure `openingIndex`'s own doc warns about, now for Enter and Space
+  // both.
+  it("reroutes the no-selection fallback away from a disabled row 0", async () => {
+    const user = userEvent.setup();
+    const onToggle = vi.fn();
+    render(
+      <MultiDropdown
+        label="Format"
+        triggerLabel="Any format"
+        selected={[]}
+        onToggle={onToggle}
+        options={FORMATS_ROW0_DISABLED}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Format" }));
+    // Opens on Legacy (row 1, the first enabled), not Vintage (row 0, disabled).
+    expect(screen.getByRole("listbox")).toHaveAttribute(
+      "aria-activedescendant",
+      expect.stringContaining("option-1"),
+    );
+    await user.keyboard("{Enter}");
+    expect(onToggle).toHaveBeenCalledWith("legacy");
+  });
 });
