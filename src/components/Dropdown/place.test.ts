@@ -65,4 +65,25 @@ describe("placeDropdown", () => {
     const tall = { ...at, panel: { width: 200, height: 790 } };
     expect(placeDropdown(tall).top).toBeGreaterThanOrEqual(VIEWPORT_GUTTER);
   });
+
+  it("clamps to the top gutter when the flipped-up panel is taller than the room above", () => {
+    // Bottom-anchored trigger, so flipY is genuinely true: roomAbove 700 beats roomBelow 64.
+    // The panel is then taller than the room it flipped into — `above` computes to -24 — and the
+    // clamp is the only thing between that and a panel drawn off the top of the window.
+    const at = {
+      ...base,
+      trigger: { left: 100, top: 700, right: 220, bottom: 736 },
+      panel: { width: 200, height: 720 },
+    };
+    const out = placeDropdown(at);
+    expect(out.flipY).toBe(true);
+    expect(out.top).toBe(VIEWPORT_GUTTER);
+  });
+
+  it("clamps a panel wider than the window to the left gutter", () => {
+    // Neither edge fits, so neither flip helps: the panel has no correct edge and takes the one a
+    // reader's eye starts at. Without the upper bound this would sit at the trigger's own left.
+    const at = { ...base, panel: { width: 1400, height: 300 } };
+    expect(placeDropdown(at).left).toBe(VIEWPORT_GUTTER);
+  });
 });
