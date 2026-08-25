@@ -1720,6 +1720,15 @@ The bucket follows the component, not the directory.
 
 Notes for this bucket:
 
+- **Both ids are templated off `labels.idStem`, and the label ids must be too.** PR #235 made this
+  row drawable on more than one surface (`SEARCH_LABELS.idStem` is `"card-search"`; the deck panel
+  passes its own), so a hardcoded `id` would collide the moment both are on screen. Follow the
+  existing pattern: `` id={`${labels.idStem}-sort`} `` and
+  `` labelledBy={`${labels.idStem}-sort-label`} ``, with the matching id on the `<label>`.
+- **The sort's label is `sr-only` and the format's comes from `TrayField`.** Two different label
+  mechanisms on one row — read each before you touch it, and give the `TrayField` label an id
+  rather than inventing a second label beside it.
+
 - **The sort select is never gold** — pass no `active`. The comment at `:524` says why and must
   travel with it: a list is always in *some* order, so a sort cannot be inactive, and a gold sort
   picker would claim a filter is on about the one control on the row that is not a filter.
