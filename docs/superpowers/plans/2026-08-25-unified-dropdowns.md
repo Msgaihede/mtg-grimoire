@@ -2,13 +2,13 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace all 23 native `<select>` elements and rebuild `SetCombobox` on one `Dropdown`
+**Goal:** Replace every native `<select>` element and rebuild `SetCombobox` on one `Dropdown`
 component, so every option list in the app is drawn by the app, looks the same, and can be given a
 search box with one prop.
 
 **Architecture:** A private `<DropdownShell>` owns the trigger, the panel, the search box, the rows,
 the keyboard walk, dismissal and placement. Two components are exported over it — `<Dropdown>`
-(single-select, replacing the 23) and `<MultiDropdown>` (multi-select, which `SetCombobox` becomes a
+(single-select, replacing them all) and `<MultiDropdown>` (multi-select, which `SetCombobox` becomes a
 caller of). The panel is positioned by pure arithmetic in `placeDropdown()` and drawn `absolute`
 inside a zero-size `fixed` frame, which is what makes it escape a scroller *and* survive a
 transformed ancestor.
@@ -87,7 +87,7 @@ interfaces; neither changes a decision.
 | --- | --- |
 | `src/components/PopupListbox.tsx` | `PopupPanel` gains an optional `style` prop |
 | `src/features/search/SetCombobox.tsx` | rebuilt on `<MultiDropdown>` |
-| 13 feature files | 23 `<select>` → `<Dropdown>` |
+| 12 feature files | every native `<select>` → `<Dropdown>` |
 | `src/features/card/AllPrintingsDialog.tsx` | `ARROW_OWNERS` / `ownsArrowKeys` |
 | 25 test and story files | 72 `selectOptions` calls |
 | `docs/reference/frontend-design.md`, `src/CLAUDE.md` | the new rules and the live readings |
@@ -1297,7 +1297,7 @@ import type { UserEvent } from "@testing-library/user-event";
  * Drive a `Dropdown` from a test, the way `test-drag.ts` drives a drag.
  *
  * **Why a helper and not 72 hand-written pairs of clicks.** These replaced 72
- * `userEvent.selectOptions` calls across 25 files when the app's 23 native `<select>`s became one
+ * `userEvent.selectOptions` calls across 25 files when the app's native `<select>`s became one
  * component. Written out at each site, the component's internals would be pinned in 72 places and
  * the next change to them would be a 25-file sweep; here it is one edit.
  *
@@ -1705,9 +1705,16 @@ own task.
 ### Task 9: Search
 
 **Files:**
-- Modify: `src/features/search/FilterBar.tsx` — 2 controls at `:520` (sort) and `:789` (format)
+- Modify: `src/features/search/FilterBar.tsx` — 2 controls: **Sort results** and **Format**
 - Test: `src/features/search/FilterBar.test.tsx` (3 calls), `src/features/search/SearchPage.test.tsx`
-  (4), `src/features/search/SearchPage.stories.tsx` (2)
+  (4), `src/features/search/SearchPage.stories.tsx` (2),
+  `src/features/decks/DeckSearchPanel.test.tsx` (3),
+  `src/features/decks/DeckSearchPanel.stories.tsx` (2)
+
+**`DeckSearchPanel` is in this bucket even though it lives under `features/decks`.** PR #235 made
+the deck's docked collection search *be* the card search — `DeckSearchPanel.tsx:1224` renders
+`<FilterBar>` directly, and all five of its `selectOptions` calls target **your** format control.
+The bucket follows the component, not the directory.
 
 **Interfaces:** consumes `<Dropdown>`; produces nothing other tasks read.
 
@@ -1728,8 +1735,8 @@ Notes for this bucket:
 ### Task 10: Collection
 
 **Files:**
-- Modify: `src/features/collection/CollectionFilterBar.tsx` — `:119` (format), `:193` (sort)
-- Modify: `src/features/collection/AddToCollection.tsx` — `:248` (condition)
+- Modify: `src/features/collection/CollectionFilterBar.tsx` — 2 controls: **Format** and **Sort**
+- Modify: `src/features/collection/AddToCollection.tsx` — 1 control: **Condition**
 - Test: `src/features/collection/CollectionFilterBar.test.tsx` (2),
   `src/features/collection/CollectionPage.test.tsx` (1),
   `src/features/collection/AddToCollection.test.tsx` (1),
@@ -1738,7 +1745,7 @@ Notes for this bucket:
 Notes:
 
 - **`AddToCollection`'s conditions must not be sorted.** `CONDITIONS` is a grade scale and its own
-  comment at `:243` says it: *the kind whose order is the information*. Leave `sortOptions` out, and
+  comment beside it says it: *the kind whose order is the information*. Leave `sortOptions` out, and
   carry that comment over verbatim. No `searchable` — six grades.
 - **`CollectionFilterBar`'s sort keeps its pinned `Custom…` row**, drawn only while
   `sortSelection === ""`, as `{ value: "", label: "Custom…", disabled: true }` placed first. Its
@@ -1750,10 +1757,11 @@ Notes:
 ### Task 11: Wishlist and import
 
 **Files:**
-- Modify: `src/features/wishlist/WishlistFilterBar.tsx` — `:138` (sort)
-- Modify: `src/features/transfer/import/destinations/CollectionPreview.tsx` — `:95` (condition),
-  `:111` (finish)
-- Modify: `src/features/transfer/import/destinations/WishlistPreview.tsx` — `:75` (finish)
+- Modify: `src/features/wishlist/WishlistFilterBar.tsx` — 1 control: **Sort**
+- Modify: `src/features/transfer/import/destinations/CollectionPreview.tsx` — 2 controls:
+  **Condition when the file doesn't say** and **Finish when the file doesn't say**
+- Modify: `src/features/transfer/import/destinations/WishlistPreview.tsx` — 1 control: **Finish when
+  the file doesn't say**
 - Test: `src/features/wishlist/WishlistPage.test.tsx` (1),
   `src/features/transfer/import/ImportDialog.test.tsx` (1),
   `src/features/transfer/import/ImportDialog.stories.tsx` (1)
@@ -1776,10 +1784,10 @@ Notes:
 ### Task 12: Card
 
 **Files:**
-- Modify: `src/features/card/CardDetailPane.tsx` — `:1641` (group printings by); delete the private
-  `CONTROL` at `:89`
-- Modify: `src/features/card/PrintingsFilterBar.tsx` — `:406` (sort printings by)
-- Modify: `src/features/card/AllPrintingsDialog.tsx` — `ARROW_OWNERS` / `ownsArrowKeys` at `:263`
+- Modify: `src/features/card/CardDetailPane.tsx` — 1 control: **Group printings by**; delete the
+  private `CONTROL` recipe near the top of the file
+- Modify: `src/features/card/PrintingsFilterBar.tsx` — 1 control: **Sort printings by**
+- Modify: `src/features/card/AllPrintingsDialog.tsx` — `ARROW_OWNERS` and `ownsArrowKeys`
 - Test: `src/features/card/CardDetailPane.test.tsx` (2),
   `src/features/card/CardDetailPane.stories.tsx` (2),
   `src/features/card/AllPrintingsDialog.test.tsx`
@@ -1812,7 +1820,7 @@ const ARROW_OWNERS =
 ```
 
 **The fence already exists — rewrite it, do not add a second one.**
-`AllPrintingsDialog.test.tsx:762` is `it("yields the arrow keys to a focused select in the filter
+`AllPrintingsDialog.test.tsx` carries `it("yields the arrow keys to a focused select in the filter
 row")`, and it will go red the moment the sort control stops being a `<select>`: it reaches for it
 with `getByRole("combobox", { name: "Sort printings by" })`, which finds nothing once the trigger is
 a `button`. **That red is the point.** Rewrite it as:
@@ -1864,13 +1872,15 @@ Other notes:
 ### Task 13: Deck editor
 
 **Files:**
-- Modify: `src/features/decks/DeckEditor.tsx` — `:3655` (view), `:3673` (group by), `:3719` (sort
-  by); delete the private `CONTROL` at `:156`
-- Modify: `src/features/decks/CollectionSearchFilters.tsx` — `:134` (format), `:168` (sort)
+- Modify: `src/features/decks/DeckEditor.tsx` — 3 controls: **View**, **Group by**, **Sort**; delete
+  the private `CONTROL` recipe near the top of the file
 - Test: `src/features/decks/DeckEditor.test.tsx` (16),
-  `src/features/decks/DeckEditor.stories.tsx` (5),
-  `src/features/decks/DeckSearchPanel.test.tsx` (3),
-  `src/features/decks/DeckSearchPanel.stories.tsx` (2)
+  `src/features/decks/DeckEditor.stories.tsx` (5)
+
+**Two things left this bucket after the plan was written, and both are because `main` moved.**
+`CollectionSearchFilters.tsx` **no longer exists** — PR #235 replaced the deck's own filter row with
+the card search's `FilterBar`, so its two controls are Task 9's now. `DeckSearchPanel`'s tests and
+stories went with them, for the same reason. Do not go looking for either.
 
 **This is the bucket with the geometry risk.** The three toolbar pickers are `h-9 text-xs` today and
 become `md` — `h-9 text-sm`. `QuickZones.tsx:161` records a toolbar `<select>` hanging **66px** past
@@ -1881,10 +1891,7 @@ row moves to `sm` in a follow-up commit and the reason gets written at the call 
 
 Other notes:
 
-- `CollectionSearchFilters`' format picker is `searchable`; the sort is not.
-- `CollectionSearchFilters` deliberately has **no set combobox** — do not add one. Its comment at
-  `:41` says why: this column is too narrow for a popup over thirty-plus options.
-- **One call in your bucket drives a control you do not own.** `DeckEditor.stories.tsx:1099` opens
+- **One call in your bucket drives a control you do not own.** `DeckEditor.stories.tsx`'s `Add cards to` call opens
   Deck settings and picks `Add cards to` — that is `DeckSettingsForm`'s default-category picker, and
   it belongs to Task 14. Rewrite the call mechanically
   (`pickOption(user, "Add cards to", "Main deck")`) and **do not try to run that play**: it is red
@@ -1897,11 +1904,11 @@ Other notes:
 ### Task 14: Deck forms
 
 **Files:**
-- Modify: `src/features/decks/DeckSettingsForm.tsx` — `:294` (game), `:316` (format), `:439` (default
-  category), `:546` (folder)
-- Modify: `src/features/decks/FormatSelect.tsx` — `:105` (format), `:156` (game); delete its private
+- Modify: `src/features/decks/DeckSettingsForm.tsx` — 4 controls: **Game**, **Format**, **Add cards
+  to** (the default category) and **Folder**
+- Modify: `src/features/decks/FormatSelect.tsx` — 2 controls: **Format** and **Game**; delete its private
   `<select>` recipe
-- Modify: `src/features/decks/CategoriesDialog.tsx` — `:633` (where a deleted category's cards go)
+- Modify: `src/features/decks/CategoriesDialog.tsx` — 1 control: where a deleted category's cards go
 - Test: `src/features/decks/DeckSettingsForm.test.tsx` (6),
   `src/features/decks/DeckSettingsForm.stories.tsx` (2),
   `src/features/decks/DeckSettingsDialog.test.tsx` (6),
@@ -1920,13 +1927,13 @@ Notes:
   sits in Task 11's directory and is deliberately absent from Task 11's file list, because it
   contains no `<select>` of its own. If `FormatSelect`'s props move, that file breaks and no bucket
   will notice.
-- **Keep the `formatKey` guard at `:74`.** It injects a synthetic option so a value the picker has
+- **Keep the `formatKey` guard.** It injects a synthetic option so a value the picker has
   no row for still matches one, and it exists because a native select would otherwise report row 0
   while the dialog read something else. The shell draws a placeholder now, so the guard is belt and
   braces — leave it, and add a line to its comment saying which of the two is load-bearing.
 - **`AUTO_CATEGORY` and the folder ids are numbers.** They are already `String(n)` at the
   `<option value>` boundary and parsed back in `onChange`; keep exactly that, and keep the comment
-  at `:401` that explains it.
+  that explains it.
 - **The folder picker's `""` is "Top level"** — a real row, not a placeholder.
 - `searchable` on the format picker, the default-category picker and the folder picker. Not on the
   game picker (2 rows) and not on `CategoriesDialog`'s (a handful).
@@ -1986,7 +1993,7 @@ schema failures and you will spend an hour on SQLite.
 git add -A
 git commit -m "refactor: every option list is a Dropdown
 
-23 native selects across 13 files, and the 72 selectOptions calls that
+Every native select in the app, and the selectOptions calls that
 drove them.
 
 Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
