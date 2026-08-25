@@ -18,6 +18,7 @@ import { describe, expect, it } from "vitest";
 import { formatExport, omittedCount } from "./export/format";
 import { availableFields, defaultFields, type TransferSurface } from "./fields";
 import { EXPORT_FORMATS } from "./formats";
+import { transferCard } from "./fixtures";
 import { parseDecklist } from "./import/parse";
 import type { TransferCard } from "./TransferCard";
 import corpusText from "./__golden__/corpus.json?raw";
@@ -51,6 +52,67 @@ const CASES = Object.entries(corpus.scenarios).flatMap(([scenario, { surface, ca
     })),
   ),
 );
+
+/**
+ * Every field a `TransferCard` has, **read off a value rather than written out here.**
+ *
+ * `fixtures.ts`' `transferCard()` returns an object literal against an explicit `TransferCard`
+ * return type, and the interface has no optional members — `null` is how it spells absence, as
+ * its own header says. So the compiler moves that literal in both directions: a field added to
+ * `TransferCard` makes the literal incomplete, and a field removed from it makes the literal
+ * carry an excess property. Either way `fixtures.ts` stops compiling until somebody fixes it,
+ * and the moment they do, `Object.keys` here changes and the case below goes red until
+ * `corpus.json` is fixed too.
+ *
+ * That chain is the point. Task 2's Rust struct reads `corpus.json` with `deny_unknown_fields`,
+ * which only fires on a key Rust has never heard of — it cannot see a field TypeScript grew and
+ * the corpus never learned, because that field is simply absent from the JSON. This case is the
+ * half of the fence that faces the other way.
+ */
+const FIELDS = Object.keys(transferCard()).sort();
+
+describe("the corpus itself", () => {
+  it("names every TransferCard field on every card, and no others", () => {
+    const cards = Object.values(corpus.scenarios).flatMap((s) => s.cards);
+    expect(cards.length).toBeGreaterThan(0);
+    const odd = cards
+      .map((card) => ({
+        card: card.name,
+        missing: FIELDS.filter((f) => !(f in card)),
+        extra: Object.keys(card).filter((k) => !FIELDS.includes(k)),
+      }))
+      .filter((row) => row.missing.length > 0 || row.extra.length > 0);
+    expect(odd).toEqual([]);
+  });
+
+  /**
+   * A named category is one row of `deck_categories`, and `idx_deck_categories_grain` is
+   * `UNIQUE (deck_id, name)` — so `kind` and `is_active` are facts about *the category*, not
+   * about each card filed under it. Two cards naming one category and disagreeing about either
+   * is a state the database cannot hold, and a golden file pinning what the writer does with
+   * one would be a fence around a case that can never arrive.
+   *
+   * This exists because the corpus had exactly that: two `Sol Ring` rows both in `Artifacts`,
+   * one active and one not, folding in twelve deck goldens. Caught in review rather than by a
+   * test, which is what this case changes.
+   */
+  it("never lets one category name disagree with itself about kind or active", () => {
+    const conflicts: string[] = [];
+    for (const [scenario, { cards }] of Object.entries(corpus.scenarios)) {
+      const grainOf = new Map<string, string>();
+      for (const card of cards) {
+        if (card.categoryName === null) continue;
+        const grain = JSON.stringify([card.categoryKind, card.categoryActive]);
+        const seen = grainOf.get(card.categoryName);
+        if (seen === undefined) grainOf.set(card.categoryName, grain);
+        else if (seen !== grain) {
+          conflicts.push(`${scenario}/${card.categoryName}: ${seen} vs ${grain}`);
+        }
+      }
+    }
+    expect(conflicts).toEqual([]);
+  });
+});
 
 describe("the golden corpus", () => {
   it("has a file for every scenario, format and field set, and no others", () => {

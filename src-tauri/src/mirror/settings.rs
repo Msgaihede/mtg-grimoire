@@ -335,23 +335,32 @@ mod tests {
         assert!(err.contains("absolute"), "got: {err}");
     }
 
+    /// A path that genuinely is not there, built as a child of a directory that genuinely is:
+    /// `tmp/nope/export`'s parent `tmp/nope` was never created. A hardcoded `Z:/...` was the
+    /// first draft and is wrong twice over — `Z:` is a real drive on some machines, and the
+    /// answer must not depend on which machine ran the suite.
     #[test]
     fn a_root_whose_parent_does_not_exist_is_refused() {
         let conn = migrated_memory_db();
-        assert!(set_root(&conn, Path::new("Z:/nope/nope/export")).is_err());
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("nope").join("export");
+        assert!(set_root(&conn, &missing).is_err());
     }
 
     /// The half that is easy to leave untested: a validator that refused *everything* would
-    /// pass all four tests above. The parent here is the temp folder, which exists; the
-    /// folder itself does not and is not created — the first pass does that.
+    /// pass all four tests above. The parent is the temp directory, which exists for as long
+    /// as `tmp` is alive; the folder itself does not exist and is not created — the first
+    /// pass does that.
+    ///
+    /// `tempfile::tempdir` rather than a fixed name under `%TEMP%`: the suite runs in
+    /// parallel, and a leftover directory from an earlier run would make the assertion below
+    /// vacuous rather than failing loudly.
     #[test]
     fn an_absolute_root_whose_parent_exists_round_trips() {
         let conn = migrated_memory_db();
-        let dir = std::env::temp_dir().join("mtg-grimoire-mirror-settings-test");
-        assert!(
-            !dir.exists(),
-            "the test must not depend on a folder existing"
-        );
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("mirror");
+        assert!(!dir.exists(), "a fresh temp dir starts empty");
 
         set_root(&conn, &dir).unwrap();
         assert_eq!(root(&conn, Path::new("D:/app/data")), dir);
@@ -367,11 +376,12 @@ mod tests {
     #[test]
     fn a_refused_root_leaves_the_stored_one_intact() {
         let conn = migrated_memory_db();
-        let dir = std::env::temp_dir().join("mtg-grimoire-mirror-settings-test");
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("mirror");
         set_root(&conn, &dir).unwrap();
 
         assert!(set_root(&conn, Path::new("export")).is_err());
-        assert!(set_root(&conn, Path::new("Z:/nope/nope/export")).is_err());
+        assert!(set_root(&conn, &tmp.path().join("nope").join("export")).is_err());
 
         assert_eq!(root(&conn, Path::new("D:/app/data")), dir);
     }

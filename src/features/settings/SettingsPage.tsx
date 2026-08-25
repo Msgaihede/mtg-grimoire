@@ -1,3 +1,4 @@
+import { BackupPanel } from "@/features/settings/BackupPanel";
 import { CachePanel } from "@/features/settings/CachePanel";
 import { DangerZonePanel } from "@/features/settings/DangerZonePanel";
 import { ErrorLogPanel } from "@/features/settings/ErrorLogPanel";
@@ -67,14 +68,23 @@ export function SettingsPage({ update }: { update: Update }) {
 
       <ErrorLogPanel log={log} />
 
+      {/* Still in the group that throws nothing away, and beside the cache because the two are
+          this page's only panels about the folder on disk — one says what is kept there and the
+          other what can be swept out of it. Above it rather than below for the ordering rule:
+          the mirror deletes nothing a reader owns, and Clear cache does. */}
+      <BackupPanel />
+
       <CachePanel cache={cache} />
 
       <section aria-labelledby="later-heading" className="space-y-2">
         <h2 id="later-heading" className="font-heading text-lg leading-none text-dim">
           Not here yet
         </h2>
+        {/* Export left this list when the mirror landed — the panel above writes every deck,
+            the collection and the wishlist in all seven formats, continuously, which is more
+            than this line ever promised. Import is still the dialog's alone. */}
         <p className="text-sm text-dim">
-          Data folder, sync behaviour, import and export. Coming in a later plan.
+          Data folder, sync behaviour and import. Coming in a later plan.
         </p>
       </section>
 

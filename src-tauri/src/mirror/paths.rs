@@ -10,6 +10,7 @@
 //! Nothing here touches the filesystem. These are pure functions over names, which is what
 //! lets the whole layout be decided — and tested — before a single byte is written.
 
+use crate::transfer::Format;
 use std::collections::HashSet;
 
 /// The nine characters Windows refuses in a path component. `/` is here as well as `\`
@@ -32,9 +33,23 @@ const DEVICE_NAMES: [&str; 22] = [
 /// folder that is not there on every pass and rebuild it on every pass.
 const TRAILING: [char; 2] = ['.', ' '];
 
-/// The two extensions this app writes. Six of the seven export formats are `.txt` and the
-/// seventh is `.csv`; see `EXPORT_FORMAT_EXTENSION` on the TypeScript side.
-const OUR_EXTENSIONS: [&str; 2] = [".txt", ".csv"];
+/// The file this mirror writes for one entity in one format.
+///
+/// `Azula` in [`Format::Archidekt`] is `Azula.archidekt.txt`. **The entity's name is the
+/// stem, never the format's** — a file dragged out of its folder still says what it is,
+/// which `archidekt.txt` would not. Five of the seven carry their [`Format::key`] as a second
+/// segment; [`Format::Plain`] and [`Format::Csv`] are bare, because plain text is what a
+/// decklist is by default and `.csv` already distinguishes itself.
+///
+/// This is the **only** spelling of that rule, and [`is_ours`] is built from it rather than
+/// from a second list of five words: what the pruner claims is by construction what the
+/// writer writes, so the two cannot drift.
+pub fn file_name(entity: &str, format: Format) -> String {
+    match format {
+        Format::Plain | Format::Csv => format!("{entity}.{}", format.extension()),
+        _ => format!("{entity}.{}.{}", format.key(), format.extension()),
+    }
+}
 
 /// Turn a reader's name into a single path component Windows will actually create.
 ///
@@ -71,8 +86,15 @@ pub fn sanitise(name: &str) -> String {
     // The `_` therefore goes on the stem rather than on the end of the whole name, which is
     // the same thing for the dotless names a deck usually has and the correct thing when a
     // reader has put a dot in one. `.` is ASCII, so the byte index is a char boundary.
+    //
+    // The stem is trimmed again before it is compared. Win32 ignores a stem's trailing
+    // spaces and dots when it resolves a device, so `CON .txt` opens the console exactly as
+    // `CON.txt` does — and the whole-name trim above cannot see that space, because the name
+    // does not end in it. Trimming only for the comparison would leave `CON _.txt`; the
+    // trimmed stem is used for the output too, because the space it drops is one Win32 was
+    // never going to honour.
     let stem_len = trimmed.find('.').unwrap_or(trimmed.len());
-    let stem = &trimmed[..stem_len];
+    let stem = trimmed[..stem_len].trim_end_matches(TRAILING);
     if DEVICE_NAMES.iter().any(|d| stem.eq_ignore_ascii_case(d)) {
         return format!("{stem}_{}", &trimmed[stem_len..]);
     }
@@ -122,19 +144,33 @@ pub fn disambiguate(named: &[(i64, String)]) -> Vec<String> {
 
 /// The prune predicate: may a pass delete a file with this name?
 ///
-/// True for anything ending `.txt` or `.csv`, case-insensitively. **This is the entire fence
-/// between a prune and a reader's own files, and it is deliberately crude**: the mirror root
-/// is user-choosable and may be a synced folder, a Dropbox, or a USB stick with a decade of
-/// somebody's notes on it. Every file this app writes ends in one of these two, so the fence
-/// only has to be *at least* this wide; making it narrower — matching known stems — would
-/// mean a deck renamed while the app was closed left a file nothing could ever clean up.
+/// True only for one of the seven names [`file_name`] would have produced for `dir_name`.
 ///
-/// The cost, stated plainly: a reader who keeps `shopping list.txt` in the mirror root loses
-/// it. `README.txt` says the whole root is generated and safe to delete, which is the honest
-/// version of that warning.
-pub fn is_ours(file_name: &str) -> bool {
-    let lower = file_name.to_ascii_lowercase();
-    OUR_EXTENSIONS.iter().any(|ext| lower.ends_with(ext))
+/// **This is the entire fence between a prune and a reader's own files**, and the mirror root
+/// is user-choosable: it may be a synced folder, a Dropbox, or a stick with a decade of
+/// somebody's notes on it. So the fence is *narrow* rather than crude. `budget.csv` dropped
+/// into `Collection/` survives, because `Collection/` is only ever going to hold
+/// `Collection.csv`; `Azula.archidekt.txt` survives in `Katara/`, because it is not a file
+/// this app would have put there. Every file the mirror writes is named after the entity
+/// whose directory it sits in, which is what makes the containing directory enough to decide.
+///
+/// **Callers pass files only. Never ask this about a directory.** A deck the reader named
+/// `Azula.csv` is a *directory* called `Azula.csv`, and inside a parent directory called
+/// `Azula` this predicate would say yes and a caller that trusted it would delete the deck.
+/// A directory is removed by the pass's "now empty and unplanned" rule and by nothing else.
+///
+/// The comparison ignores ASCII case because Windows does: a file this app created as
+/// `Azula.txt` can be enumerated as `AZULA.TXT` after a reader renames its casing, and it is
+/// still the same file. Refusing to claim it would leave an orphan nothing could ever clean.
+///
+/// The cost of the narrow fence, stated plainly: a stale file whose entity was renamed while
+/// the app was closed is no longer claimed by name and lingers until the reader deletes the
+/// root. `README.txt` says the whole root is generated and safe to delete, which is the
+/// remedy the spec chose over deleting a reader's own files.
+pub fn is_ours(file_name: &str, dir_name: &str) -> bool {
+    Format::ALL
+        .iter()
+        .any(|&f| file_name.eq_ignore_ascii_case(&self::file_name(dir_name, f)))
 }
 
 #[cfg(test)]
@@ -216,12 +252,64 @@ mod tests {
     }
 
     #[test]
-    fn pruning_claims_only_the_two_extensions_this_app_writes() {
-        assert!(is_ours("Azula.archidekt.txt"));
-        assert!(is_ours("Collection.csv"));
-        assert!(!is_ours("my notes.md"));
-        assert!(!is_ours("Azula.png"));
-        assert!(!is_ours("README"));
+    fn pruning_claims_the_seven_files_this_app_writes_for_that_directory() {
+        assert!(is_ours("Azula.archidekt.txt", "Azula"));
+        assert!(is_ours("Collection.csv", "Collection"));
+        assert!(!is_ours("my notes.md", "Collection"));
+        assert!(!is_ours("Azula.png", "Azula"));
+        assert!(!is_ours("README", "Azula"));
+    }
+
+    #[test]
+    fn a_readers_own_file_survives_a_prune_because_the_stem_is_not_the_directorys() {
+        // The defect this predicate was rewritten for: the mirror root is user-choosable, so
+        // `budget.csv` can be a decade of somebody's spreadsheet and the pass must not touch
+        // it. `Collection/` only ever holds files stemmed `Collection`.
+        assert!(!is_ours("budget.csv", "Collection"));
+        assert!(!is_ours("my notes.txt", "Collection"));
+        assert!(!is_ours("shopping list.txt", "Wishlist"));
+        assert!(is_ours("Collection.csv", "Collection"), "ours still is");
+    }
+
+    #[test]
+    fn a_mirror_file_is_not_ours_in_somebody_elses_directory() {
+        // A deck's file dragged one folder over, or left behind by a rename. It is not a file
+        // this app would have written *here*, so the pass leaves it for the reader.
+        assert!(is_ours("Azula.archidekt.txt", "Azula"));
+        assert!(!is_ours("Azula.archidekt.txt", "Katara"));
+        assert!(!is_ours("Azula.txt", "Katara"));
+    }
+
+    #[test]
+    fn every_one_of_the_seven_files_the_writer_plans_is_claimed_and_nothing_else_is() {
+        for format in Format::ALL {
+            let written = file_name("Azula", format);
+            assert!(
+                is_ours(&written, "Azula"),
+                "the pruner must claim what the writer wrote: {written}"
+            );
+            assert!(
+                !is_ours(&written, "Azula (2)"),
+                "but only in the directory it belongs to: {written}"
+            );
+        }
+        // The five that need their key, and the two that do not.
+        assert_eq!(file_name("Azula", Format::Plain), "Azula.txt");
+        assert_eq!(file_name("Azula", Format::Csv), "Azula.csv");
+        assert_eq!(file_name("Azula", Format::Mtgo), "Azula.mtgo.txt");
+        assert_eq!(file_name("Azula", Format::Arena), "Azula.arena.txt");
+        assert_eq!(file_name("Azula", Format::Moxfield), "Azula.moxfield.txt");
+        assert_eq!(file_name("Azula", Format::Archidekt), "Azula.archidekt.txt");
+        assert_eq!(file_name("Azula", Format::Tcgplayer), "Azula.tcgplayer.txt");
+    }
+
+    #[test]
+    fn a_near_miss_on_the_format_segment_is_not_ours() {
+        assert!(!is_ours("Azula.mtga.txt", "Azula"), "not a format key");
+        assert!(!is_ours("Azula.plain.txt", "Azula"), "plain carries no key");
+        assert!(!is_ours("Azula.csv.txt", "Azula"));
+        assert!(!is_ours("Azula.archidekt.csv", "Azula"));
+        assert!(!is_ours("Azula.archidekt.txt.bak", "Azula"));
     }
 
     #[test]
@@ -231,6 +319,11 @@ mod tests {
         // `CON`, and the deck would be un-mirrorable.
         assert_eq!(sanitise("CON.txt"), "CON_.txt");
         assert_eq!(sanitise("nul.dek"), "nul_.dek");
+        // Win32 ignores a stem's trailing spaces and dots when it resolves a device, so this
+        // one opens the console too. The trim has to run on the stem, not just on the name.
+        assert_eq!(sanitise("CON .txt"), "CON_.txt");
+        assert_eq!(sanitise("com1 . dek"), "com1_. dek");
+        assert_eq!(sanitise("PRN  "), "PRN_");
         assert_eq!(
             sanitise("Aggro.dek"),
             "Aggro.dek",
@@ -265,9 +358,13 @@ mod tests {
     }
 
     #[test]
-    fn pruning_ignores_the_case_of_the_extension() {
-        assert!(is_ours("Collection.CSV"));
-        assert!(is_ours("Azula.TXT"));
+    fn pruning_ignores_ascii_case_because_windows_does() {
+        // A reader who renames `Azula.txt` to `AZULA.TXT` has renamed nothing on NTFS. If the
+        // pruner stopped claiming it, it could never be cleaned up.
+        assert!(is_ours("Collection.CSV", "Collection"));
+        assert!(is_ours("AZULA.TXT", "Azula"));
+        assert!(is_ours("azula.ARCHIDEKT.txt", "AZULA"));
+        assert!(!is_ours("BUDGET.CSV", "Collection"), "still not ours");
     }
 
     #[test]

@@ -12,8 +12,10 @@ Removal
 Sideboard
 1x Lightning Bolt (lea) 161 [Sideboard]
 
+Cut pile
+1x Sol Ring (ltc) 284 [Cut pile{noDeck}]
+
 Artifacts
-1x Sol Ring (ltc) 284 [Artifacts{noDeck}]
 1x Sol Ring (ltc) 284 [Artifacts]
 1x Chalice of the Void (mrd) 44 [Artifacts] ^Keeper^
 4x Æther Vial (dst) 91 [Artifacts]

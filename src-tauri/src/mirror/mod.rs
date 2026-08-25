@@ -11,5 +11,7 @@
 //! that actually changed; and it **must survive being killed**, so a full pass runs at
 //! startup rather than waiting for the next edit.
 
+pub mod layout;
 pub mod paths;
+pub mod read;
 pub mod settings;

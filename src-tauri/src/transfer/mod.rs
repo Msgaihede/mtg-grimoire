@@ -16,6 +16,8 @@
 //! Condition column of blanks.
 
 pub mod card;
+pub mod csv;
+pub mod fields;
 
 pub use card::{load_corpus, Card, CorpusFile, Scenario, Scenarios};
 

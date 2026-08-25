@@ -31,6 +31,7 @@ pub mod search;
 pub mod sorting;
 pub mod sync;
 pub mod tags;
+pub mod transfer;
 pub mod update;
 pub mod window;
 pub mod wishlist;
