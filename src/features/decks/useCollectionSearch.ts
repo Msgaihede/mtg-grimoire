@@ -5,15 +5,13 @@ import {
   useMutation,
   useQueryClient,
 } from "@tanstack/react-query";
-import {
-  activeFilterCount,
-  COLLECTION_FIRST_DIR,
-  nextOffset,
-} from "@/features/collection/useCollection";
+import { COLLECTION_FIRST_DIR, nextOffset } from "@/features/collection/useCollection";
 import { useCollectionFolderList } from "@/features/collection/useCollectionFolders";
 import {
+  activeFilterCount,
   colorParam,
   DEBOUNCE_MS,
+  formatsWithDefault,
   toggleColor,
   toggleIn,
   type ColorKey,
@@ -173,6 +171,11 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
     setAppliedDefaultFormat(defaultFormatValue);
     setFormat(defaultFormatValue);
   }
+  const defaultFormatLabel = defaultFormat?.label;
+  const formatOptions = useMemo<readonly FormatFilterOption[]>(
+    () => formatsWithDefault(defaultFormatValue, defaultFormatLabel),
+    [defaultFormatValue, defaultFormatLabel],
+  );
   const [allocation, setAllocation] = useState<Allocation>(DEFAULT_ALLOCATION);
   /**
    * The three filters this column grew on 2026-08-24, when the tab became a wall of art rather
@@ -186,6 +189,21 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
   const [colors, setColors] = useState<readonly ColorKey[]>([]);
   const [manaValues, setManaValues] = useState<readonly number[]>([]);
   const [manaX, setManaX] = useState(false);
+  /**
+   * The three filters this column grew on 2026-08-25, when the tab stopped drawing a row of its
+   * own and started drawing `FilterBar` — the same control the card search beside it has.
+   *
+   * **Sets and rarities were already on the wire**, exactly as the three above were:
+   * `CollectionQuery extends CardFilters` and `push_card_filters` emits both for all three lists,
+   * so those two are state-only work. **The price band is not** — `CollectionQuery.priceMin` and
+   * `priceMax` are new, and they are the entry's own per-finish price rather than the printing's
+   * fallback chain, which is what makes a banded row a row the Price column agrees with. See
+   * `collection::scope`.
+   */
+  const [sets, setSets] = useState<readonly string[]>([]);
+  const [rarities, setRarities] = useState<readonly string[]>([]);
+  const [priceMin, setPriceMin] = useState<number | undefined>(undefined);
+  const [priceMax, setPriceMax] = useState<number | undefined>(undefined);
   /**
    * The order the wall is drawn in — **`[]` is the backend's own name order** rather than a fourth
    * option, which is why `sortSelection` reports `"name"` for it.
@@ -206,6 +224,10 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
   // reader picked the same two colours in the other order.
   const colorsParam = colorParam(colors);
   const manaParam = manaValues.length > 0 ? [...manaValues].sort((a, b) => a - b) : undefined;
+  // Sorted for the key's sake, like the mana values above: a picker's press order is not a fact
+  // about the filter, and an unsorted array would be a second cache entry for one answer.
+  const setsParam = sets.length > 0 ? [...sets].sort() : undefined;
+  const raritiesParam = rarities.length > 0 ? [...rarities].sort() : undefined;
 
   const filters: Omit<CollectionQuery, "limit" | "offset"> = {
     // Blank strings are dropped rather than sent: the backend reads them as unset anyway, and
@@ -213,8 +235,16 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
     text: debouncedText || undefined,
     format: format || undefined,
     colors: colorsParam,
+    sets: setsParam,
+    rarities: raritiesParam,
     manaValues: manaParam,
     manaX: manaX || undefined,
+    // Each end on its own, and **`undefined` rather than a substituted `0`/`Infinity`**: half a
+    // band is one predicate, and a floor of zero would silently drop every copy the marketplace
+    // cannot price — which is a filter the reader did not ask for. `collection::scope` pushes
+    // exactly the ends that arrive.
+    priceMin,
+    priceMax,
     // **Sent on every request, `"all"` included.** It is a two-state control the reader can see,
     // so the payload says which state it is in rather than leaning on the backend's default for
     // one of them — `useCollection`'s "a value the backend would infer anyway is not put on the
@@ -246,8 +276,15 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
     // holding an array compares by structure, so `["W","U"]` and `["U","W"]` would be two entries
     // for one answer. `colorParam` and the sort above have already put both in order.
     colorsParam ?? "",
+    setsParam?.join(",") ?? "",
+    raritiesParam?.join(",") ?? "",
     manaParam?.join(",") ?? "",
     manaX ? "x" : "",
+    // `String(undefined)` is `"undefined"`, which is a segment as good as any other and cannot
+    // collide with a number — where an empty string could be read as a bound of zero by anyone
+    // debugging the key.
+    String(priceMin),
+    String(priceMax),
     sort.map((t) => `${t.key}:${t.dir}`).join(","),
     allocation,
     marketplace.id,
@@ -310,19 +347,76 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
     setText,
     format,
     setFormat,
+    /** The rows the format picker offers — {@link formatsWithDefault}, memoised on the two
+     *  strings for the reason `useCardSearch` states: every caller builds `defaultFormat` inline,
+     *  so a dependency on the object would rebuild the list on every keystroke. */
+    formats: formatOptions,
     colors,
     /** `toggleColor` rather than a plain `toggleIn`, so **C excludes the five and the five exclude
      *  C** — colourless is not a sixth colour and the search's own rule is the one to keep. */
     toggleColor: (key: ColorKey) => setColors((picked) => toggleColor(picked, key)),
+    sets,
+    toggleSet: (code: string) => setSets((picked) => toggleIn(picked, code)),
+    rarities,
+    toggleRarity: (rarity: string) => setRarities((picked) => toggleIn(picked, rarity)),
+    priceMin,
+    priceMax,
+    /** Both ends at once, because {@link PriceRange} moves them together — a slider drag can
+     *  change either, and two setters would be two renders and two query keys for one gesture. */
+    setPriceRange: (min: number | undefined, max: number | undefined) => {
+      setPriceMin(min);
+      setPriceMax(max);
+    },
     manaValues,
     toggleManaValue: (value: number) => setManaValues((picked) => toggleIn(picked, value)),
     manaX,
     toggleManaX: () => setManaX((on) => !on),
+    /**
+     * **No facets, and that is a fact about this list rather than a gap.** `facets.ts` reads
+     * `undefined` as "we do not know", which leaves every chip live and nothing greyed — the
+     * honest state here, because `collection_list` has no facet command behind it the way
+     * `search_cards` does. Counting would be a second query per keystroke over the reader's whole
+     * binder, for a row of numbers beside a list already on screen.
+     */
+    facets: undefined,
+    /** Which marketplace the price band and every figure on a tile are quoted from. `FilterBar`
+     *  captions the band with its currency, so this is what keeps `Price (USD)` from standing
+     *  over a filter in euros. */
+    marketplace,
     sort,
     setSortKey: (key: CollectionSortKey) => setSort([{ key, dir: COLLECTION_FIRST_DIR[key] }]),
+    /**
+     * Turn the first term over — the same control the card search's arrow drives, and the first
+     * term because that is the one the select owns.
+     *
+     * **An empty spec is written out rather than left alone, which is where this parts company
+     * with the search's twin.** There the empty spec is `Best match`, which has no direction, so
+     * that arrow is `disabled` and a no-op is unreachable. Here the empty spec *is* name order —
+     * `sortSelection` below reports `name` for it and never `""` — so the button is drawn live
+     * and pointing up, and a no-op would be a control that visibly does nothing. Flipping it
+     * materialises the order the list was already in, with its direction reversed.
+     */
+    flipSortDir: () =>
+      setSort((spec) =>
+        spec.length === 0
+          ? [{ key: "name", dir: COLLECTION_FIRST_DIR.name === "asc" ? "desc" : "asc" }]
+          : spec.map((term, at) =>
+              at === 0 ? { key: term.key, dir: term.dir === "asc" ? "desc" : "asc" } : term,
+            ),
+      ),
     /** Which row the sort select shows. `[]` is the backend's name order, which is what the
      *  `name` option asks for — so the control never sits on a value it has no option for. */
     sortSelection: (sort.length === 0 ? "name" : sort[0].key) as CollectionSortKey,
+    /**
+     * Which way the list runs — **never `undefined`, which is where this parts company with the
+     * card search's twin.**
+     *
+     * An empty spec is this list's name order rather than a ranking, so it has a direction and
+     * that direction is `COLLECTION_FIRST_DIR.name`. The search's empty spec is `Best match`,
+     * which has none, and its arrow greys there; greying this one would grey a button that
+     * works, on a list whose order is on screen in front of the reader.
+     */
+    sortDir: sort.length === 0 ? COLLECTION_FIRST_DIR.name : sort[0].dir,
     /**
      * How many filters are narrowing the wall — the number in `Reset all`.
      *
@@ -331,25 +425,37 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
      * a state the reader has not touched — and `resetAll` leaves it pressed for the same reason:
      * "the copies no deck is holding" is what this tab *is*, not a filter laid over it.
      *
-     * The four `CollectionFilterState` fields this column has no control for are passed at their
-     * empty values rather than being counted from a narrower shape, so the count cannot drift
-     * from the collection page's definition of what a filter is.
+     * **The search's `activeFilterCount` and no longer the collection page's** (2026-08-25). This
+     * tab draws `FilterBar`'s tray now, so its kinds *are* the search's kinds — set, format,
+     * colour, mana value, rarity, price — and counting them against the definition the tray's own
+     * cells come from is what keeps the badge and the cells from drifting apart. The collection
+     * page's count is over a longer row (finishes, conditions, needs-review) this column has never
+     * offered a control for, and passing three empty arrays to it was a shape that only worked as
+     * long as nothing here grew.
+     *
+     * `owned` is `undefined` for the reason the tray has no Owned cell: every row here is a copy
+     * the reader has, so it is not a question this list can ask.
      */
     activeCount: activeFilterCount({
       text,
       format,
       colors,
-      sets: [],
+      sets,
       manaValues,
       manaX,
-      finishes: [],
-      conditions: [],
-      needsReview: undefined,
+      owned: undefined,
+      rarities,
+      priceMin,
+      priceMax,
     }),
     resetAll: () => {
       setText("");
       setFormat("");
       setColors([]);
+      setSets([]);
+      setRarities([]);
+      setPriceMin(undefined);
+      setPriceMax(undefined);
       setManaValues([]);
       setManaX(false);
       setSort([]);

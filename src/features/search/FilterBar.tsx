@@ -18,7 +18,7 @@ import {
 } from "@/components/FilterChips";
 import { PriceRange } from "@/components/PriceRange";
 import { useTooltip } from "@/components/tooltip/useTooltip";
-import type { SearchSortKey } from "@/lib/ipc";
+import type { FacetResponse, SearchSortKey } from "@/lib/ipc";
 import { MANA_KEYS, MANA_LABEL } from "@/lib/mana";
 import { TRANSITION } from "@/lib/motion";
 import { sortOptions } from "@/lib/options";
@@ -29,8 +29,13 @@ import { clearFieldOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { colorDisabled, countDisabled, facetTitle, optionDisabled } from "./facets";
 import { SetCombobox } from "./SetCombobox";
-import { TagQueryRow } from "./TagQueryRow";
-import { ANY_CARD, SEARCH_SORT_OPTIONS, type CardSearch } from "./useCardSearch";
+import { TagQueryRow, type TagQuerySurface } from "./TagQueryRow";
+import {
+  ANY_CARD,
+  SEARCH_SORT_OPTIONS,
+  type ColorKey,
+  type FormatFilterOption,
+} from "./useCardSearch";
 
 /**
  * The orders the picker offers, in the one order an option list in this app is drawn in:
@@ -42,11 +47,154 @@ import { ANY_CARD, SEARCH_SORT_OPTIONS, type CardSearch } from "./useCardSearch"
  * `SEARCH_SORT_OPTIONS` is declared in the order the orders were reasoned about, which is the
  * author's notes rather than anything a reader can see.
  *
- * `Best match` is deliberately not in this list. It is pinned above it in the markup, because it
- * is not a column to order by: it is the search's own ranking, and on a browse — with nothing to
- * be relevant to — the name order that stands in for it.
+ * **`Best match` is pinned first and outside the sort**, because it is not a column to order by:
+ * it is the search's own ranking, and on a browse — with nothing to be relevant to — the name
+ * order that stands in for it. A reader reaching for the way back reaches for it blind, so it
+ * stays at the top whatever the alphabet does to the rows below.
+ *
+ * **`Best match`, and never `Default order` again** (issue #213). That name said what the row
+ * *was* in the state machine — the empty sort spec — instead of what it does, so a reader
+ * browsing the alphabetical opening wall read it as the name of alphabetical order and reported
+ * the label as wrong. It is not: with text in the box this row is FTS5's `bm25` with the name
+ * column weighted ten times the type line and oracle text, and a search for `human` opens on
+ * `Human Frailty` rather than on `A Girl and Her Dogs`. `Name` is the row that really is
+ * alphabetical, and it sits two below this one — which is the whole of the fix: name each row for
+ * the order it produces, and let the reader pick between them.
+ *
+ * The one state the name overshoots is the empty box, where there is no query to be relevant to
+ * and the search falls back to name order (`search.rs`'s `ORDER_NAME`). Kept anyway: a row whose
+ * label changed as the reader typed would be a control moving under them, and `Name` is right
+ * there for anyone who wants alphabetical said out loud.
  */
-const SORT_ROWS = sortOptions(SEARCH_SORT_OPTIONS, (s) => s.label);
+export const SEARCH_SORT_ROWS: readonly { value: SearchSortKey | ""; label: string }[] = [
+  { value: "", label: "Best match" },
+  ...sortOptions(SEARCH_SORT_OPTIONS, (s) => s.label),
+];
+
+/**
+ * Which captioned cells the tray draws, in the order it draws them.
+ *
+ * **Named rather than derived from what the surface can answer**, so a filter a surface has the
+ * state for but does not mean to offer is an absent name here rather than a cell that appears
+ * because a field happened to be wired. Each surface's list is written down where that surface is
+ * mounted, which is the same rule the row itself has always followed: this file owns the layout,
+ * the caller owns *which* filters it offers.
+ */
+export type TrayCell = "set" | "format" | "owned" | "decks" | "rarity" | "price" | "printings";
+
+/** What the card search offers, which is every cell there is. The default, so the two surfaces
+ *  that draw the whole tray say nothing. */
+export const SEARCH_TRAY: readonly TrayCell[] = [
+  "set",
+  "format",
+  "owned",
+  "rarity",
+  "price",
+  "printings",
+];
+
+/**
+ * What this row's own controls are **called**, and the `id` stem their labels bind through.
+ *
+ * **Two surfaces asking two different questions, so the box cannot carry one name.** The card
+ * search's is over every printing Scryfall has published and the deck editor's Collection tab is
+ * over the reader's own binder — "Search cards" standing over the second would be the control
+ * lying about which list it narrows, and a `getByLabelText` could not tell the two apart on the
+ * one screen that draws both.
+ *
+ * **The stem is what keeps two mounted rows from sharing an `id`.** A `<label for>` binds to the
+ * *first* element with that id in the document, so two bars with one stem would put both labels on
+ * one box and leave the other unnamed. Only one of these two is ever mounted at a time today — the
+ * panel's tabs are two components and the search page is a different route — so this is a fence
+ * rather than a fix, which is the right time to build one.
+ *
+ * The **sort** picker is deliberately not in here. `Sort results` has to be unambiguous *wherever*
+ * this row is mounted, which is why it is not the bare `Sort` the deck's own toolbar draws — and
+ * it says what it orders rather than what it is over, so it is right on both surfaces.
+ */
+export interface FilterLabels {
+  /** Stem for every `id` this row hands out — `<stem>-text`, `-sort`, `-format`. */
+  idStem: string;
+  /** The search box's accessible name, and — with an ellipsis — its placeholder. */
+  search: string;
+}
+
+/** The card search's, and the default. */
+export const SEARCH_LABELS: FilterLabels = { idStem: "card-search", search: "Search cards" };
+
+/**
+ * Everything this row reads off the thing it is filtering — **a structural interface rather than
+ * one hook's `ReturnType`**, which is what lets the deck editor's Collection tab draw the same
+ * control over `collection_list`.
+ *
+ * It was `CardSearch` until 2026-08-25, and the argument for widening it is the one the app kept
+ * losing: the two tabs of the deck editor's docked panel are two searches over two backends, and
+ * a reader switching between them was meeting two different filter rows. The second was built out
+ * of `@/components/FilterChips` the sanctioned way — which is still the right module boundary,
+ * and is still how `CollectionFilterBar` is built — but *this* row and that one were the same
+ * arrangement of the same controls written twice, and the two drifted the first time either
+ * moved.
+ *
+ * **The optional half is the part each surface answers for itself**, and a cell is drawn only
+ * when its own setter is here: a `tray` naming `owned` over a surface that cannot answer it draws
+ * nothing rather than a control that does nothing. Everything above the line is required, because
+ * everything above the line is on the bar at every width and on every surface.
+ */
+export interface FilterSurface<SortKey extends string = string> extends TagQuerySurface {
+  text: string;
+  setText: (text: string) => void;
+  format: string;
+  setFormat: (format: string) => void;
+  /** The rows the format picker offers — the *surface's* own list and never the shared
+   *  `FORMATS`, because it can carry a key that array does not: see `formatsWithDefault`, and
+   *  the `<select>` trap it exists to prevent. */
+  formats: readonly FormatFilterOption[];
+  colors: readonly ColorKey[];
+  toggleColor: (key: ColorKey) => void;
+  sets: readonly string[];
+  toggleSet: (code: string) => void;
+  rarities: readonly string[];
+  toggleRarity: (rarity: string) => void;
+  manaValues: readonly number[];
+  toggleManaValue: (value: number) => void;
+  manaX: boolean;
+  toggleManaX: () => void;
+  priceMin: number | undefined;
+  priceMax: number | undefined;
+  setPriceRange: (min: number | undefined, max: number | undefined) => void;
+  /** How many printings each option would leave, or `undefined` when that is not known — which
+   *  is what a cold index, a failed query, the first render **and a surface with no facet command
+   *  at all** all arrive as. `facets.ts` reads it as "we don't know" and leaves the row live. */
+  facets: FacetResponse | undefined;
+  /** Where the money is quoted from. The price cell's caption is this currency, which is what
+   *  keeps `Price (USD)` from standing over a band in euros. */
+  marketplace: { currency: "usd" | "eur" };
+  activeCount: number;
+  resetAll: () => void;
+  sortSelection: SortKey;
+  setSortKey: (key: SortKey) => void;
+  /**
+   * Which way the list runs, or nothing when it runs in an order that has no direction.
+   *
+   * **The surface's own answer rather than `sort[0].dir` read from here**, because the two
+   * surfaces disagree about what an empty sort spec *is*: the search's is `Best match`, which is
+   * a ranking and has no direction, and the collection's is name order, which has one. Derived
+   * here, one of them would be drawn with a dead arrow.
+   */
+  sortDir: SortDir | undefined;
+  flipSortDir: () => void;
+
+  /** The Owned/Missing pair. Absent on a surface where every row is a copy the reader has. */
+  owned?: boolean | undefined;
+  setOwned?: (next: boolean | undefined) => void;
+  /** The one-row-per-card switch. Absent where the rows *are* the reader's printings and folding
+   *  them would hide which piece of cardboard is being moved. */
+  allPrintings?: boolean;
+  toggleAllPrintings?: () => void;
+  /** `Not in a deck`. Absent on a surface with no deck to be in. */
+  allocation?: "all" | "unallocated";
+  setAllocation?: (next: "all" | "unallocated") => void;
+}
 
 /**
  * The rarities the tray offers, in the order a card is printed at them.
@@ -113,7 +261,10 @@ function sentence(word: string): string {
  * Each chip clears its whole kind, which is what makes it the inverse of the count: pressing one
  * takes exactly one off the badge.
  */
-function activeChips(search: CardSearch, currency: "usd" | "eur"): { label: string; remove: () => void }[] {
+function activeChips<SortKey extends string>(
+  search: FilterSurface<SortKey>,
+  currency: "usd" | "eur",
+): { label: string; remove: () => void }[] {
   const chips: { label: string; remove: () => void }[] = [];
 
   if (search.colors.length > 0) {
@@ -176,12 +327,16 @@ function activeChips(search: CardSearch, currency: "usd" | "eur"): { label: stri
     });
   }
 
-  if (search.owned !== undefined) {
+  // The setter and not the value, because `owned`'s own third state *is* `undefined`: a surface
+  // that cannot ask this question is told apart from one that is not currently asking it by which
+  // of the two fields is here at all.
+  const { setOwned } = search;
+  if (setOwned && search.owned !== undefined) {
     // The word the chip in the tray carries, so the statement and the control that made it use
     // one vocabulary.
     chips.push({
       label: search.owned ? "Owned" : "Missing",
-      remove: () => search.setOwned(undefined),
+      remove: () => setOwned(undefined),
     });
   }
 
@@ -234,12 +389,33 @@ function activeChips(search: CardSearch, currency: "usd" | "eur"): { label: stri
  * counted by the Reset all badge or cleared by pressing it, and the sort in particular is one
  * piece of state shared with the table's headers rather than something this row owns.
  */
-export function FilterBar({
+export function FilterBar<SortKey extends string>({
   search,
+  sortRows = SEARCH_SORT_ROWS as readonly { value: SortKey; label: string }[],
+  tray = SEARCH_TRAY,
+  labels = SEARCH_LABELS,
   layoutToggle = true,
   layoutFor = "search",
 }: {
-  search: CardSearch;
+  search: FilterSurface<SortKey>;
+  /** What this surface calls its search box, and the `id` stem its labels bind through — see
+   *  {@link FilterLabels}. Defaults to {@link SEARCH_LABELS}. */
+  labels?: FilterLabels;
+  /**
+   * The rows the order picker offers, **pinned row included** — see {@link SEARCH_SORT_ROWS},
+   * which is the default and carries the reasoning for the one that is pinned.
+   *
+   * A prop rather than a constant because the two surfaces order by different things: the card
+   * search ranks by relevance and offers a `Best match` row that is the *empty* spec, and a
+   * collection has no ranking to fall back to and every row of its picker is a real column. One
+   * array covering both would have to hold a row one of them cannot act on.
+   */
+  sortRows?: readonly { value: SortKey; label: string }[];
+  /**
+   * Which captioned cells the tray draws — see {@link TrayCell}. Defaults to
+   * {@link SEARCH_TRAY}, so the two surfaces that offer every filter say nothing.
+   */
+  tray?: readonly TrayCell[];
   /**
    * Whether the grid-or-table pair rides the row.
    *
@@ -345,18 +521,11 @@ export function FilterBar({
       ),
     [facets?.formats, search.format, search.formats],
   );
-  /**
-   * Which way the list runs, or nothing when it runs in the view's own order.
-   *
-   * The **first** term's direction, because the first term is the one the select owns:
-   * `flipSortDir` rewrites it in place and leaves a Shift-built secondary key exactly where the
-   * table's headers put it. Read through `sortSelection` rather than straight off `sort[0]`, so
-   * that one derived value decides all three things the button does — which way the arrow
-   * points, what its name says, and whether it can be pressed — and the two halves of the pair
-   * can never disagree about whether there is a sort at all.
-   */
-  const sortDir: SortDir | undefined =
-    search.sortSelection === "" ? undefined : (search.sort[0]?.dir ?? "asc");
+  // Which way the list runs, or nothing when it runs in an order that has no direction. **The
+  // surface's own answer** — it was derived here from `sortSelection === ""` until 2026-08-25,
+  // which is a rule about the card search's empty spec and not about a sort. See
+  // {@link FilterSurface.sortDir}.
+  const sortDir = search.sortDir;
   const tip = useTooltip();
   const currency = search.marketplace.currency;
   const chips = activeChips(search, currency);
@@ -381,11 +550,13 @@ export function FilterBar({
         gave a 1500px bar its air are what tip the second line into a third.
       */}
       <div className="flex flex-wrap items-center gap-x-2 gap-y-2 @min-[640px]/fb:gap-x-2.5 @min-[900px]/fb:gap-x-3">
-        <label htmlFor="card-search-text" className="sr-only">
-          Search cards
+        {/* The name is the surface's — see {@link FilterLabels}, and the two questions it keeps
+            apart. */}
+        <label htmlFor={`${labels.idStem}-text`} className="sr-only">
+          {labels.search}
         </label>
         <input
-          id="card-search-text"
+          id={`${labels.idStem}-text`}
           type="search"
           value={search.text}
           onChange={(e) => search.setText(e.target.value)}
@@ -396,7 +567,9 @@ export function FilterBar({
           // search page's. jsdom implements no native clear at all, so the handler is also the
           // only half of the behaviour a test can see. The rule is {@link clearFieldOnEscape}'s.
           onKeyDown={(e) => clearFieldOnEscape(e, search.text, () => search.setText(""))}
-          placeholder="Search cards…"
+          // The accessible name with an ellipsis, so the two say the same thing — a placeholder
+          // that differed from the label would be two names for one box.
+          placeholder={`${labels.search}…`}
           // `FILTER_FIELD` and not `FILTER_CONTROL`: the row's chips dip 3% under the press and
           // a box the reader types into must not, or the native ✕ slides out from under the
           // pointer clearing it. Issue #179 — the reason is on the constant.
@@ -514,13 +687,13 @@ export function FilterBar({
               and this one has to be unambiguous *wherever* it is. `PrintingsFilterBar.tsx:380` made
               the same call and wrote down the same trap — a bare verb names an action and not the
               thing it acts on, which is why it draws `Sort printings by` and not `Sort by`. */}
-          <label htmlFor="card-search-sort" className="sr-only">
+          <label htmlFor={`${labels.idStem}-sort`} className="sr-only">
             Sort results
           </label>
           <select
-            id="card-search-sort"
+            id={`${labels.idStem}-sort`}
             value={search.sortSelection}
-            onChange={(e) => search.setSortKey(e.target.value as SearchSortKey | "")}
+            onChange={(e) => search.setSortKey(e.target.value as SortKey)}
             // **Never gold**, unlike the format select in the tray. Accent there means "this is
             // not where the control opens", which is a state a filter can be in and out of. A
             // list is always in *some* order, so a sort cannot be inactive — and a gold sort
@@ -532,34 +705,19 @@ export function FilterBar({
               "min-w-0 flex-1 border-border bg-surface px-2 text-dim @min-[640px]/fb:flex-none",
             )}
           >
-            {/* Pinned first and outside the sorted list, for the reason `Any format` is: it is
-                not a column to order by, and a reader reaching for the way back reaches for it
-                blind.
+            {/* **Every row comes from the prop, pinned one included** — see
+                {@link SEARCH_SORT_ROWS}, which is the default and carries the argument for the
+                row that is pinned. It was written into this markup until 2026-08-25, which made
+                `Best match` a fact about the *control* rather than about the search behind it;
+                the collection has no ranking to fall back to and every row of its picker is a
+                real column, so a hard-coded first row would be a destination one of the two
+                surfaces cannot go to.
 
-                **`Best match`, and never `Default order` again** (issue #213). That name said
-                what the row *was* in the state machine — the empty sort spec — instead of what it
-                does, so a reader browsing the alphabetical opening wall read it as the name of
-                alphabetical order and reported the label as wrong. It is not: with text in the
-                box this row is FTS5's `bm25` with the name column weighted ten times the type
-                line and oracle text, and a search for `human` opens on `Human Frailty` rather
-                than on `A Girl and Her Dogs`. `Name` is the row that really is alphabetical, and
-                it sits two below this one — which is the whole of the fix: name each row for the
-                order it produces, and let the reader pick between them.
-
-                The one state the name overshoots is the empty box, where there is no query to be
-                relevant to and the search falls back to name order (`search.rs`'s `ORDER_NAME`).
-                Kept anyway: a row whose label changed as the reader typed would be a control
-                moving under them, and `Name` is right there for anyone who wants alphabetical
-                said out loud.
-
-                Pickable, and **not** `disabled` like the collection's `Custom…` — the two rows
+                No row is ever `disabled` here, unlike the collection page's `Custom…` — the two
                 look alike and are opposites. That one is a state the control can only be *put*
-                into, from a header this select has no option for. This one is a real destination:
-                it is how a reader who sorted by accident gets the ranking back, and on the grid
-                it is the only way, because the third press that clears a sort is a press on a
-                header the grid does not draw. */}
-            <option value="">Best match</option>
-            {SORT_ROWS.map((s) => (
+                into, from a header this select has no option for. Every row of this one is a
+                real destination. */}
+            {sortRows.map((s) => (
               <option key={s.value} value={s.value}>
                 {s.label}
               </option>
@@ -700,7 +858,15 @@ export function FilterBar({
         />
       </div>
 
-      {trayOpen && <FilterTray id={trayId} search={search} formatOptions={formatOptions} />}
+      {trayOpen && (
+        <FilterTray
+          id={trayId}
+          search={search}
+          cells={tray}
+          labels={labels}
+          formatOptions={formatOptions}
+        />
+      )}
 
       {/*
         **The search, in words — and the row is drawn whether or not there is anything in it.**
@@ -758,20 +924,35 @@ export function FilterBar({
  * deliberately, looking straight at it, which is the one case where arriving instantly reads as
  * responsive rather than as a jump.
  */
-function FilterTray({
+function FilterTray<SortKey extends string>({
   id,
   search,
+  cells,
+  labels,
   formatOptions,
 }: {
   id: string;
-  search: CardSearch;
+  search: FilterSurface<SortKey>;
+  labels: FilterLabels;
+  /** Which cells to draw, in the order to draw them — {@link TrayCell}. */
+  cells: readonly TrayCell[];
   formatOptions: { value: string; label: string; disabled: boolean }[];
 }) {
   const facets = search.facets;
-  return (
-    <div id={id} className="rounded-lg border border-border bg-surface px-4 py-3.5">
-      <div className="grid grid-cols-1 gap-x-6 gap-y-3.5 @min-[640px]/fb:grid-cols-2 @min-[900px]/fb:grid-cols-3">
-        <TrayField label="Set">
+  /**
+   * Every cell this tray knows how to draw, keyed by its name — **built, then picked from**,
+   * rather than a chain of conditionals in the grid.
+   *
+   * Two things fall out of it that matter. The **caller's** order is the drawn order, because
+   * `cells.map` walks the prop rather than the record; and a cell whose surface cannot answer it
+   * is `null` here, so a `tray` naming `owned` over a collection draws nothing rather than a pair
+   * of buttons that do not work. Both of those are checks the type system cannot make — a cell
+   * list is a string array and the fields it needs are optional — so they are made here, once,
+   * where the failure is a missing box rather than a dead control.
+   */
+  const drawn: Record<TrayCell, ReactNode> = {
+    set: (
+      <TrayField key="set" label="Set">
           {/* `align="start"`: the picker sits at the left edge of a tray that is itself as wide
               as the bar, so a 288px listbox pinned to the trigger's right edge would open back
               across the field rather than out from it. The row-shaped callers pass neither and
@@ -783,11 +964,13 @@ function FilterTray({
             align="start"
             fill
           />
-        </TrayField>
+      </TrayField>
+    ),
 
-        <TrayField label="Format" htmlFor="card-search-format">
+    format: (
+      <TrayField key="format" label="Format" htmlFor={`${labels.idStem}-format`}>
           <select
-            id="card-search-format"
+            id={`${labels.idStem}-format`}
             value={search.format}
             onChange={(e) => search.setFormat(e.target.value)}
             className={cn(
@@ -830,9 +1013,10 @@ function FilterTray({
               </option>
             ))}
           </select>
-        </TrayField>
+      </TrayField>
+    ),
 
-        {/* The only filter here that is not a statement about the card: everything else describes
+    /* The only filter here that is not a statement about the card: everything else describes
             cardboard, and this describes the reader's relationship to it.
 
             **Two buttons rather than the one cycling chip the bar used to carry, and the tray is
@@ -845,30 +1029,65 @@ function FilterTray({
 
             **Never greyed**, whatever the counts say. The tooltip counts what each button's word
             names, which is one rule reading correctly in both directions — unpressed, it is what
-            pressing would give; pressed, it is what the reader is already looking at. */}
-        <TrayField label="Owned">
-          <div className="flex gap-1.5">
-            <ToggleChip
-              label="Owned"
-              pressed={search.owned === true}
-              title={facetTitle("Owned", facets?.owned.owned)}
-              onClick={() => search.setOwned(true)}
-              className="flex-1"
-            />
-            <ToggleChip
-              label="Missing"
-              pressed={search.owned === false}
-              title={facetTitle("Missing", facets?.owned.missing)}
-              onClick={() => search.setOwned(false)}
-              className="flex-1"
-            />
-          </div>
-        </TrayField>
+            pressing would give; pressed, it is what the reader is already looking at. */
+    owned: search.setOwned ? (
+      <TrayField key="owned" label="Owned">
+        <div className="flex gap-1.5">
+          <ToggleChip
+            label="Owned"
+            pressed={search.owned === true}
+            title={facetTitle("Owned", facets?.owned.owned)}
+            onClick={() => search.setOwned?.(true)}
+            className="flex-1"
+          />
+          <ToggleChip
+            label="Missing"
+            pressed={search.owned === false}
+            title={facetTitle("Missing", facets?.owned.missing)}
+            onClick={() => search.setOwned?.(false)}
+            className="flex-1"
+          />
+        </div>
+      </TrayField>
+    ) : null,
 
-        {/* Two by two below 640 and one line above it. Four gems and four words is 340px at its
+    /* **The cell the deck editor's Collection tab exists for**, and the one control in this tray
+       no other surface has.
+
+       Pressed — the default — the list is the copies no deck is holding: the root, a binder the
+       reader made, and `Recently removed`, which are the three places a card is still on the
+       desk. Unpressed shows the spoken-for copies too, and pressing Add on one of those is what
+       that tab's confirmation is for.
+
+       **One chip rather than the Owned pair beside it**, because this is one axis with two ends
+       rather than two different questions, and `aria-pressed` is how this app says that. The
+       `hint` folds into the accessible name, so the visible words are contained in it (WCAG
+       2.5.3).
+
+       **Counted by nothing and cleared by nothing.** It is pressed by default, so a badge that
+       counted it would open every deck reading `Reset all 1` for a state the reader has not
+       touched — and Reset all leaves it pressed for the same reason: "the copies no deck is
+       holding" is what that tab *is*, not a filter laid over it. `useCollectionSearch`'s
+       `activeCount` is where that decision is written down. */
+    decks: search.setAllocation ? (
+      <TrayField key="decks" label="Decks">
+        <ToggleChip
+          label="Not in a deck"
+          hint="only the copies no deck is holding"
+          pressed={search.allocation === "unallocated"}
+          onClick={() =>
+            search.setAllocation?.(search.allocation === "unallocated" ? "all" : "unallocated")
+          }
+          className="w-full"
+        />
+      </TrayField>
+    ) : null,
+
+    /* Two by two below 640 and one line above it. Four gems and four words is 340px at its
             widest, which fits a third of the tray on the search page and does not fit one column
-            of a 206px panel — and a chip that cannot shrink hangs out of the panel. */}
-        <TrayField label="Rarity">
+            of a 206px panel — and a chip that cannot shrink hangs out of the panel. */
+    rarity: (
+      <TrayField key="rarity" label="Rarity">
           <div className="grid grid-cols-2 gap-1.5 @min-[640px]/fb:flex">
             {RARITIES.map((rarity) => (
               <RarityChip
@@ -887,41 +1106,60 @@ function FilterTray({
                 onClick={() => search.toggleRarity(rarity)}
               />
             ))}
-          </div>
-        </TrayField>
+        </div>
+      </TrayField>
+    ),
 
-        {/* The marketplace's own money in the caption, never a bare `$`. The number a reader types
+    /* The marketplace's own money in the caption, never a bare `$`. The number a reader types
             here is compared against the same expression the Price column shows, so a band in
             euros over Cardmarket prices and a band in dollars over TCGplayer's are two different
-            filters and the label is the only thing that says which one is on screen. */}
-        <TrayField label={`Price (${search.marketplace.currency.toUpperCase()})`}>
-          <PriceRange
-            min={search.priceMin}
-            max={search.priceMax}
-            currency={search.marketplace.currency}
-            onChange={search.setPriceRange}
-          />
-        </TrayField>
+            filters and the label is the only thing that says which one is on screen.
 
-        {/* A view mode rather than a filter — it says which *rows* the wall draws, one per card or
+       **Which expression that is, is the surface's own business.** The card search bands the
+       *printing's* fallback chain and the collection bands the copy's own finish, because each
+       is what the Price beside it shows — `collection::scope` carries the contrast. This cell
+       only has to name the currency both of them are in. */
+    price: (
+      <TrayField
+        key="price"
+        label={`Price (${search.marketplace.currency.toUpperCase()})`}
+      >
+        <PriceRange
+          min={search.priceMin}
+          max={search.priceMax}
+          currency={search.marketplace.currency}
+          onChange={search.setPriceRange}
+        />
+      </TrayField>
+    ),
+
+    /* A view mode rather than a filter — it says which *rows* the wall draws, one per card or
             one per printing — so it is untouched by Reset all and absent from the badge. In the
             tray rather than on the bar because it is the rarest press on this whole surface: the
             search answers "which cards exist", and this is the way through to "which printings",
-            which is otherwise the card pane's question. */}
-        <TrayField label="Printings">
-          {/* **One label, never flipped to `One per card` when it is off.** This is a plain
-              two-state toggle and `aria-pressed` already carries the state, so a label that
-              changed with it would say the same thing twice — and say it as a double negative,
-              since an unpressed `One per card` means "not one per card". The Owned pair beside it
-              flips nothing either: it answers the same problem with two buttons, because *its*
-              two states are two different questions rather than one question's on and off. */}
-          <ToggleChip
-            label="All printings"
-            pressed={search.allPrintings}
-            onClick={search.toggleAllPrintings}
-            className="w-full"
-          />
-        </TrayField>
+            which is otherwise the card pane's question. */
+    printings: search.toggleAllPrintings ? (
+      <TrayField key="printings" label="Printings">
+        {/* **One label, never flipped to `One per card` when it is off.** This is a plain
+            two-state toggle and `aria-pressed` already carries the state, so a label that
+            changed with it would say the same thing twice — and say it as a double negative,
+            since an unpressed `One per card` means "not one per card". The Owned pair beside it
+            flips nothing either: it answers the same problem with two buttons, because *its*
+            two states are two different questions rather than one question's on and off. */}
+        <ToggleChip
+          label="All printings"
+          pressed={search.allPrintings ?? false}
+          onClick={() => search.toggleAllPrintings?.()}
+          className="w-full"
+        />
+      </TrayField>
+    ) : null,
+  };
+
+  return (
+    <div id={id} className="rounded-lg border border-border bg-surface px-4 py-3.5">
+      <div className="grid grid-cols-1 gap-x-6 gap-y-3.5 @min-[640px]/fb:grid-cols-2 @min-[900px]/fb:grid-cols-3">
+        {cells.map((cell) => drawn[cell])}
       </div>
     </div>
   );

@@ -1029,49 +1029,60 @@ price | type`). An **inactive category stays its own group in all three grouping
     group is offered only under a confirmation that names that deck, because the press takes the
     card off that deck's list too. Full rules:
     [collection-folders.md](../../../docs/reference/collection-folders.md).
-- **And the `All cards` tab grew an own/need toggle, whose default is `need` and is _not_ the tab
-  strip's reasoning read across.** `NormalSearchAdd.ts` holds `ADD_MODES`, `DEFAULT_ADD_MODE` and
-  `addModeKey`. `need` is what Add has always done — a `deck_cards` row and nothing else, which
-  reads as missing and is what the deck→wishlist sweep is built on. `own` prefers to move a free
-  copy the reader already has into the deck's group and records a new one there only when there is
-  none. Two rules are worth knowing before changing it:
-  - **The default under-claims on purpose.** The two candidates are not symmetric in what they cost
-    when wrong: `need` writes a list row, while an `own` default would quietly file collection rows
-    for cards the reader never said they had. And this control is on the tab you reach for when
-    your binder did **not** answer, so the card in front of you is likelier to be one you lack.
-  - **It is keyed by deck where the tab strip is app-wide**, which is the one place the two part
-    company: how you search is a habit, what a particular deck is being built out of is a fact
-    about that deck. A cube assembled from the binder and a Standard deck being shopped for want
-    different answers.
-  - **Copies in another deck's group are never candidates on this path.** It is silent, and taking
-    another deck's card is only ever done through the Collection tab's confirm.
-  - **An `own` add names its pile rather than resolving it, and the pile it invents is the app's**
-    (fixed 2026-08-23, the same day it was found). It shipped marking such a pile `'user'`:
-    `collection_to_deck` took a category **id**, so `useDeck`'s `categoryIdForName` resolved the
-    name in TypeScript and created through `deck_category_create` — the reader's own "New
-    category" write — and a "Ramp" invented by an owned add drew an empty heading for ever where
-    the same pile invented by a `need` add left the desk with its last card. **It could not be
-    closed from TypeScript**, which is why the fix is in Rust: the only two commands that resolve
-    a name through `category_for_name` (and so write `'auto'`) each write a card as well, and this
-    is the write that must place the copies — so the workaround was two writes, two history rows
-    and a card briefly in the wrong pile. `collection_to_deck` takes a `collection_alloc::Pile`
-    now, **an id or a name and never both**, resolved through `category_for_name` inside the
-    move's own transaction; `ipc.ts` mirrors it as the `DeckPile` union, and `categoryIdForName`
-    is gone. A call carrying both is refused in words (`BOTH_PILES`) rather than silently
-    preferring one — `deck_add_card` lets the id win because a drag genuinely carries both, and
-    nothing sends both here.
-  - **The control is drawn on the panel's own header row beside the tab strip, and only while the
-    `All cards` tab is showing** — `AddModeStrip`, the strip's shape down to `aria-pressed` and
-    `FOCUS_INSET`. A row of the Collection tab is a copy the reader already has, so there is
-    nothing there for the question to mean. **The answer is the editor's and the control is the
-    panel's**, threaded as a `mode`/`onMode` pair: `useAddMode` is read in `DeckEditor` because the
-    toolbar's quick-add field files by it too. What follows is worth stating — a reader who never
-    opens the search column never sees the question, and their quick adds are on `DEFAULT_ADD_MODE`,
-    which is the mode that claims nothing about their cardboard. **It shipped on the toolbar for one
-    day** (2026-08-23) because `DeckSearchPanel.tsx` was another agent's file while it was built.
-    Third control on that row, so the 206px floor was measured again: the pair is **175px** against
-    a 193px content box, it wraps to a line of its own, and the row is 100px there against 62 with
-    the strip alone.
+  - **The Collection tab draws `FilterBar`, and since 2026-08-25 that is the *same component* the
+    `All cards` tab draws.** It had a filter row of its own for two days — built out of
+    `@/components/FilterChips`, which is the sanctioned reuse and is still how `CollectionFilterBar`
+    is built — and what was wrong with it is that it was the same arrangement of the same controls
+    written twice, so a reader switching tabs met two different rows. `FilterBar`'s prop is a
+    structural `FilterSurface` now, which `useCardSearch` and `useCollectionSearch` both satisfy;
+    the hook split is untouched, so a reader who never leaves their binder still runs no
+    `search_cards`. Four things carry it:
+    - **`COLLECTION_TRAY` is where this tab says which cells it offers** — `set`, `format`,
+      `decks`, `rarity`, `price` — and the two absences are facts about a collection. **No
+      `owned`**: every row here is a copy the reader has, so a filter whose two states select the
+      same list is a control that reads as broken. **No `printings`**: that switch folds a card's
+      printings together and these *are* the reader's printings.
+    - **`decks` is the cell no other surface has**, and it is what this tab is for: `Not in a deck`,
+      pressed by default. **Counted by nothing and cleared by nothing** — a badge that counted it
+      would open every deck reading `Reset all 1` for a state nobody touched, and Reset all leaves
+      it pressed because "the copies no deck is holding" is what this tab *is* rather than a filter
+      laid over it.
+    - **`sets` and `rarities` were already on the wire and simply never sent** —
+      `CollectionQuery extends CardFilters`, and `push_card_filters` emits both for all three lists.
+      **The price band is new** (`collection::scope`) and is the copy's own per-finish price rather
+      than the printing's fallback chain, so a banded row is a row the Price column agrees with.
+    - **The box keeps its own name**, `Search your collection`, through `FilterBar`'s `labels` prop.
+      One name on both tabs would be the control lying about which list it narrows, and a
+      `getByLabelText` that cannot tell the two apart on the one screen that draws both.
+- **The own/need toggle stood on the `All cards` tab from 2026-08-23 to 2026-08-25 and is
+  deleted, plumbing and all.** It decided what an Add *wrote*: `need` — the default — a
+  `deck_cards` row and nothing else, which reads as missing and is what the deck→wishlist sweep is
+  built on; `own` a hunt through the binder for a free copy, moved into the deck's group. Every add
+  from this editor means the first of those now.
+  **The Collection tab is why this is a deletion rather than a relocation.** `own` was silent: it
+  chose a copy out of rows the reader was not looking at, and where it found none it filed a *new*
+  collection row for a card they had only searched for. The tab searches the copies they actually
+  hold, shows which one a press would take, and names the deck a spoken-for copy would come out of
+  before taking it. What went with the control: `NormalSearchAdd.ts` whole (`ADD_MODES`,
+  `DEFAULT_ADD_MODE`, `useAddMode`, `chooseFreeCopy`, `freeCopiesQuery`, `NO_DECK_ROW`),
+  `useDeck.addCard`'s `owned` arm and its wider invalidation, and `DeckEditor`'s `panelAdd` wrapper.
+  **Nothing in Rust changed** — `collection_to_deck` was never this path's alone.
+- **The docked panel's title row is a chevron and a heading** (2026-08-25). It was one control —
+  a magnifier, the words `Search cards`, and the whole thing the disclosure — which put the panel's
+  name hard against its left edge and made the heading a thing a reader could press by accident.
+  The chevron is an icon button at the left edge with an `aria-label` of its own
+  (`Collapse card search` / `Expand card search`, so **a test matches it on a pattern**), and the
+  title is centred over the row at `text-sm`. **The chevron points where the panel is going** —
+  right when open, left when railed — drawn as one `ChevronLeft` rotated 180°, never two icons
+  swapped, which is `SortableHeader`'s rule and its reason: a different element in the same slot
+  teleports. Collapsed, the rail is the chevron above the vertical title. `aria-expanded` is still
+  what carries the state, and the button is still the same element across a collapse — the caret
+  hand-back effect depends on that.
+- **The tab strip is full width**, each tab `flex-1 min-w-0`, so the lit rule is half the panel.
+  Safe at the 206px floor for a stronger reason than the `flex-wrap` row it replaced: two items
+  each asking for half a line cannot wrap past each other, and the wider word (`Collection`, ~68px)
+  fits the 96 that half of a 193px content box gives it. `min-w-0` is what keeps that true if the
+  labels grow.
 - **The docked panel's format filter opens on the open deck's format, and it is a _default_ rather
   than a constraint.** `DeckEditor` derives `DeckSearchPanel`'s `defaultFormat` from the loaded row
   and that row's `FormatSpec`, and `useCardSearch` seeds its `format` state from it, so the first

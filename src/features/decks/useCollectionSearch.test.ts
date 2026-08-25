@@ -200,6 +200,121 @@ describe("useCollectionSearch", () => {
   });
 
   /**
+   * **The three filters this column grew when it took `FilterBar`'s tray** (2026-08-25), asserted
+   * on the payload for `allocation`'s reason: two of them were already on the wire and simply
+   * never sent, so a hook holding the right state and dropping the field would read as correct
+   * everywhere but in the answers.
+   *
+   * `sets` and `rarities` are `CardFilters`' own — `CollectionQuery extends CardFilters` and
+   * `push_card_filters` emits both for all three lists — so those two are state-only work. The
+   * band is new in `collection::scope` and is the copy's **own** per-finish price rather than the
+   * printing's fallback chain, which is what makes a banded row a row the Price column agrees
+   * with.
+   *
+   * Each is set through the same press `FilterBar` makes, and each is read back off the last
+   * request rather than off state.
+   */
+  it("sends the set, rarity and price filters the tray offers", async () => {
+    const { result } = mount();
+    await waitFor(() => expect(collectionList).toHaveBeenCalled());
+
+    act(() => result.current.toggleSet("lea"));
+    act(() => result.current.toggleRarity("rare"));
+    act(() => result.current.setPriceRange(2.5, 40));
+
+    await waitFor(() => expect(lastQuery().priceMax).toBe(40));
+    expect(lastQuery().sets).toEqual(["lea"]);
+    expect(lastQuery().rarities).toEqual(["rare"]);
+    expect(lastQuery().priceMin).toBe(2.5);
+  });
+
+  /**
+   * **One end of the band on its own is one bound**, and the other is genuinely absent rather
+   * than folded into a `0` — which would silently drop every copy the marketplace cannot price,
+   * a filter the reader did not ask for. `collection::scope` pushes exactly the ends that arrive.
+   */
+  it("sends half a price band as half a price band", async () => {
+    const { result } = mount();
+    await waitFor(() => expect(collectionList).toHaveBeenCalled());
+
+    act(() => result.current.setPriceRange(undefined, 40));
+
+    await waitFor(() => expect(lastQuery().priceMax).toBe(40));
+    expect(lastQuery().priceMin).toBeUndefined();
+  });
+
+  /**
+   * **Every one of them is in the key**, which is the half a payload assertion cannot see: the
+   * list is `keepPreviousData` against local SQLite, so a key missing a term serves the *previous*
+   * filter's page under the new control, instantly, with nothing on screen to notice.
+   *
+   * Counted as requests rather than compared as strings — the key is an implementation detail and
+   * "it refetched" is the property.
+   */
+  it("re-reads for each of them rather than serving the last page", async () => {
+    const { result } = mount();
+    await waitFor(() => expect(collectionList).toHaveBeenCalled());
+
+    for (const press of [
+      () => result.current.toggleSet("lea"),
+      () => result.current.toggleRarity("rare"),
+      () => result.current.setPriceRange(1, undefined),
+    ]) {
+      const asked = collectionList.mock.calls.length;
+      act(press);
+      await waitFor(() => expect(collectionList.mock.calls.length).toBeGreaterThan(asked));
+    }
+  });
+
+  /**
+   * **`Reset all` clears the three new filters and leaves `Not in a deck` pressed**, which is the
+   * one judgement call in this hook's `activeCount`: the chip is on by default, so counting it
+   * would open every deck reading `Reset all 1` for a state nobody touched, and clearing it would
+   * take away what this tab *is* rather than a filter laid over it.
+   */
+  it("clears the tray's filters on reset and keeps the allocation", async () => {
+    const { result } = mount();
+    await waitFor(() => expect(collectionList).toHaveBeenCalled());
+
+    act(() => result.current.toggleSet("lea"));
+    act(() => result.current.toggleRarity("rare"));
+    act(() => result.current.setPriceRange(2.5, 40));
+    await waitFor(() => expect(result.current.activeCount).toBe(4)); // + the deck's format
+
+    act(() => result.current.resetAll());
+
+    await waitFor(() => expect(result.current.activeCount).toBe(0));
+    expect(result.current.sets).toEqual([]);
+    expect(result.current.rarities).toEqual([]);
+    expect(result.current.priceMin).toBeUndefined();
+    expect(result.current.priceMax).toBeUndefined();
+    expect(result.current.allocation).toBe("unallocated");
+  });
+
+  /**
+   * The direction arrow beside the sort picker, and **the one place this hook deliberately
+   * differs from `useCardSearch`**.
+   *
+   * An empty sort spec is this list's *name order* — `sortSelection` reports `name` for it and
+   * never `""` — so it has a direction and the button is drawn live. The card search's empty spec
+   * is `Best match`, a ranking, so its arrow greys. A press here therefore has to **write the
+   * order out** rather than no-op on an empty array, or the reader would be looking at a control
+   * that visibly does nothing.
+   */
+  it("flips the name order it opens in, rather than doing nothing", async () => {
+    const { result } = mount();
+    await waitFor(() => expect(collectionList).toHaveBeenCalled());
+    expect(result.current.sortSelection).toBe("name");
+    expect(result.current.sortDir).toBe("asc");
+
+    act(() => result.current.flipSortDir());
+
+    await waitFor(() => expect(result.current.sortDir).toBe("desc"));
+    expect(result.current.sortSelection).toBe("name");
+    expect(lastQuery().sort).toEqual([{ key: "name", dir: "desc" }]);
+  });
+
+  /**
    * The write, addressed the way `collection_alloc::collection_to_deck` declares it: the
    * **collection row**, the deck, the category and how many copies.
    */

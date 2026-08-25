@@ -209,6 +209,21 @@ function tab({
 /** What the last `collection_list` was asked with. */
 const lastQuery = () => collectionList.mock.calls[collectionList.mock.calls.length - 1][0];
 
+/**
+ * Open this tab's filter tray, and hand back its disclosure.
+ *
+ * **Set, Format, Decks, Rarity and Price are behind it since 2026-08-25**, when this tab stopped
+ * drawing a filter row of its own and started drawing `FilterBar`'s — so a case about any of them
+ * presses this first. The four controls that never fold away (the search box, the colours, the
+ * mana values and the sort) need none of it. `FilterBar.test.tsx`'s own `openTray`, spelled again
+ * here rather than exported across, because what is shared is the component and the assertion is
+ * about *this* surface's cells.
+ */
+async function openTray(): Promise<HTMLElement> {
+  await userEvent.click(await screen.findByRole("button", { name: /^Show filters/ }));
+  return screen.getByRole("button", { name: /^Hide filters/ });
+}
+
 describe("CollectionSearchTab", () => {
   /**
    * **One tile per printing, whatever the copies behind it are** — the fold this wall replaced a
@@ -287,6 +302,11 @@ describe("CollectionSearchTab", () => {
     tab();
     await waitFor(() => expect(collectionList).toHaveBeenCalled());
     expect(lastQuery().allocation).toBe("unallocated");
+    // **Behind the Filters disclosure since 2026-08-25**, when this tab stopped drawing a filter
+    // row of its own and started drawing `FilterBar`'s — the chip is a `Decks` tray cell now. The
+    // *state* it opens in is unchanged and is the assertion above, which reads the payload rather
+    // than the control: a filter that is on and out of sight is still on.
+    await openTray();
     const toggle = screen.getByRole("button", { name: /^Not in a deck/ });
     expect(toggle).toHaveAttribute("aria-pressed", "true");
 

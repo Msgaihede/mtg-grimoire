@@ -87,6 +87,23 @@ export default meta;
 type Story = StoryObj<typeof meta>;
 
 /**
+ * Open the filter tray, and hand back the **`Not in a deck`** chip inside it.
+ *
+ * Set, Format, Decks, Rarity and Price went behind a disclosure on 2026-08-25, when this tab
+ * stopped drawing a filter row of its own and started drawing `FilterBar`'s — so every play about
+ * one of them presses this first. The four controls that never fold away (the search box, the
+ * colours, the mana values and the sort) need none of it.
+ *
+ * It hands back the chip rather than the disclosure because that is what three of the four callers
+ * want next, and because a helper that returned the thing it pressed would leave each of them
+ * repeating the query it exists to spell once.
+ */
+async function openTray(canvas: ReturnType<typeof within>): Promise<HTMLElement> {
+  await userEvent.click(await canvas.findByRole("button", { name: /^Show filters/ }));
+  return canvas.findByRole("button", { name: /^Not in a deck/ });
+}
+
+/**
  * How the tab opens: the reader's own copies, **narrowed to the ones no deck is holding**.
  *
  * That default is the product decision this tab is (spec §7.2). "Unallocated" is the root, a
@@ -98,15 +115,21 @@ export const Default: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
-    const toggle = await canvas.findByRole("button", { name: /^Not in a deck/ });
+    const toggle = await openTray(canvas);
     await expect(toggle).toHaveAttribute("aria-pressed", "true");
     // Tiles, found by the one control each carries: a wall says the copy in an accessible **name**
     // rather than in a line of text, so this is the query a wall answers.
     const adds = await canvas.findAllByRole("button", { name: /^Add / });
     await expect(adds.length).toBeGreaterThan(0);
-    // And the filter row is the card search's, which is what the change was for.
+    // And the row above them is the card search's own — which is the whole of the 2026-08-25
+    // change, so it is worth naming a cell the card search draws and one it does not.
     await expect(canvas.getByRole("group", { name: "Color identity" })).toBeInTheDocument();
     await expect(canvas.getByRole("group", { name: "Mana value" })).toBeInTheDocument();
+    await expect(canvas.getByLabelText("Format")).toBeInTheDocument();
+    // No Owned pair and no All printings: every row here is a copy the reader has, and these
+    // *are* their printings. `COLLECTION_TRAY` is where both absences are argued.
+    await expect(canvas.queryByRole("button", { name: /^Owned/ })).toBeNull();
+    await expect(canvas.queryByRole("button", { name: /^All printings/ })).toBeNull();
   },
 };
 
@@ -121,7 +144,7 @@ export const EveryCopy: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
-    await userEvent.click(await canvas.findByRole("button", { name: /^Not in a deck/ }));
+    await userEvent.click(await openTray(canvas));
 
     await expect(await canvas.findByRole("button", { name: /^Not in a deck/ })).toHaveAttribute(
       "aria-pressed",
@@ -163,7 +186,7 @@ export const CrossDeckConfirm: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
-    await userEvent.click(await canvas.findByRole("button", { name: /^Not in a deck/ }));
+    await userEvent.click(await openTray(canvas));
     // Narrowed for {@link EveryCopy}'s reason — the wall virtualises and this row is not near the
     // top of the whole binder.
     await userEvent.type(await canvas.findByRole("searchbox"), "Sol Ring");
@@ -215,6 +238,8 @@ export const DeckFormat: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
+    // The select is a tray cell, so the disclosure comes first — see {@link openTray}.
+    await openTray(canvas);
     await expect(await canvas.findByLabelText("Format")).toHaveValue("modern");
   },
 };

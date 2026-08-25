@@ -73,7 +73,6 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 }));
 
 import { DECK_SEARCH_TAB_KEY, DeckSearchPanel, type DeckSearchTab } from "./DeckSearchPanel";
-import { DEFAULT_ADD_MODE, type AddMode } from "./NormalSearchAdd";
 import { DECK_SEARCH_OPEN_KEY } from "./useDeckSearchOpen";
 import { useDeck } from "./useDeck";
 import { useAppStore } from "@/lib/store";
@@ -275,10 +274,6 @@ interface Props {
   targetCategoryId: number;
   roomy: boolean;
   defaultFormat?: FormatFilterOption | null;
-  /** What a press on the card search's Add button means. The editor holds the answer (it governs
-   *  the toolbar's quick-add field too) and this panel draws the control. */
-  mode: AddMode;
-  onMode: (mode: AddMode) => void;
   /** The editor's cap on the drag. Absent is `Infinity`, which is what a story and the first
    *  paint both get — see the prop's own doc. */
   maxWidth?: number;
@@ -294,10 +289,6 @@ function panel({
   deckId = 4,
   targetCategoryId = MAIN.id,
   roomy = true,
-  /** The mode the editor is holding. `need` is `DEFAULT_ADD_MODE`, which is what every deck
-   *  starts on. */
-  mode = DEFAULT_ADD_MODE as AddMode,
-  onMode = vi.fn(),
   // `null` rather than an omission, because `null` is what the editor actually sends for a deck
   // it has no format to seed the search with — the annotation is what keeps the other cases
   // assignable.
@@ -336,8 +327,6 @@ function panel({
     roomy,
     defaultFormat,
     maxWidth,
-    mode,
-    onMode,
   };
   const ui = (p: Props) => (
     <QueryClientProvider client={client}>
@@ -374,8 +363,6 @@ function panel({
     update,
     remount,
     retarget: (categoryId: number) => update({ targetCategoryId: categoryId }),
-    /** The editor's end of the own/need control — this panel holds no memory of its own. */
-    onMode,
   };
 }
 
@@ -392,7 +379,7 @@ function panel({
  */
 async function openPanel(options: Parameters<typeof panel>[0] = {}) {
   const view = panel(options);
-  await screen.findByRole("button", { name: "Search cards" });
+  await screen.findByRole("button", { name: PANEL_TOGGLE });
   // **And one more press than it used to be** (2026-08-23). The card search is a *tab* now and
   // the panel opens on the other one, so a test that reached straight for the wall would be
   // asking about a body that is not mounted — the same failure this helper was named for when
@@ -414,6 +401,22 @@ async function openPanel(options: Parameters<typeof panel>[0] = {}) {
  * reached the component and not this file should fail in one obvious place rather than in thirty
  * `getByRole` calls that each read as "the wall never arrived".
  */
+/**
+ * The panel's disclosure — **matched on a pattern, because its name says what pressing it does
+ * and therefore changes with the state**: `Collapse card search` open, `Expand card search`
+ * collapsed.
+ *
+ * It was the literal `Search cards` until 2026-08-25, when the words became a heading beside the
+ * button and the control became a bare chevron with an `aria-label` of its own. A test asking
+ * about *which state it is in* asserts `aria-expanded`, which is the attribute that carries it —
+ * matching the name for that would be reading the label as the state.
+ *
+ * The `$` anchor keeps it off `Resize card search`, the drag handle's name — which is a
+ * `separator` rather than a `button`, so nothing here could reach it anyway, and the anchor is
+ * what keeps that true if either name moves.
+ */
+const PANEL_TOGGLE = /card search$/;
+
 const ALL_CARDS = "All cards";
 /** Its sibling — the tab the panel opens on. */
 const COLLECTION = "Collection";
@@ -464,7 +467,7 @@ describe("DeckSearchPanel", () => {
   it("starts open, so a reader who searches while they build has a wall", async () => {
     panel();
 
-    const rail = await screen.findByRole("button", { name: "Search cards" });
+    const rail = await screen.findByRole("button", { name: PANEL_TOGGLE });
     expect(rail).toHaveAttribute("aria-expanded", "true");
     expect(rail).not.toHaveAttribute("aria-disabled");
     // The strip rather than the searchbox, since 2026-08-23: what "open" draws is a *body*, and
@@ -488,7 +491,7 @@ describe("DeckSearchPanel", () => {
     const first = panel();
     await screen.findByRole("group", { name: "Search in" });
 
-    await userEvent.click(screen.getByRole("button", { name: "Search cards" }));
+    await userEvent.click(screen.getByRole("button", { name: PANEL_TOGGLE }));
 
     expect(setDeckSearchOpen).toHaveBeenCalledWith(false);
     // The strip is the tell that the body has gone, whichever tab was on: a searchbox would have
@@ -500,12 +503,12 @@ describe("DeckSearchPanel", () => {
     // reason `panel`'s own `storedOpen` gives: this is the state the *stored* answer puts the
     // panel in, and it is the first paint that has to be right.
     panel({ storedOpen: false });
-    expect(screen.getByRole("button", { name: "Search cards" })).toHaveAttribute(
+    expect(screen.getByRole("button", { name: PANEL_TOGGLE })).toHaveAttribute(
       "aria-expanded",
       "false",
     );
 
-    await userEvent.click(screen.getByRole("button", { name: "Search cards" }));
+    await userEvent.click(screen.getByRole("button", { name: PANEL_TOGGLE }));
     expect(setDeckSearchOpen).toHaveBeenLastCalledWith(true);
   });
 
@@ -526,7 +529,7 @@ describe("DeckSearchPanel", () => {
   it("asks the backend for nothing while it is shut", async () => {
     panel({ storedOpen: false, storedTab: "all" });
 
-    const rail = await screen.findByRole("button", { name: "Search cards" });
+    const rail = await screen.findByRole("button", { name: PANEL_TOGGLE });
     expect(rail).toHaveAttribute("aria-expanded", "false");
     expect(searchCards).not.toHaveBeenCalled();
     // The filter row's set list goes with it: the whole body is unmounted, not just the wall.
@@ -793,10 +796,10 @@ describe("DeckSearchPanel", () => {
     await openPanel();
     await screen.findByRole("button", { name: "Lightning Bolt" });
 
-    await userEvent.click(screen.getByRole("button", { name: "Search cards" }));
+    await userEvent.click(screen.getByRole("button", { name: PANEL_TOGGLE }));
 
     expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
-    const rail = screen.getByRole("button", { name: "Search cards" });
+    const rail = screen.getByRole("button", { name: PANEL_TOGGLE });
     expect(rail).toHaveAttribute("aria-expanded", "false");
 
     await userEvent.click(rail);
@@ -819,7 +822,7 @@ describe("DeckSearchPanel", () => {
     const view = await openPanel();
     view.update({ roomy: false });
 
-    const rail = screen.getByRole("button", { name: "Search cards" });
+    const rail = screen.getByRole("button", { name: PANEL_TOGGLE });
     expect(rail).toHaveAttribute("aria-expanded", "false");
     expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
 
@@ -870,7 +873,7 @@ describe("DeckSearchPanel", () => {
     (document.activeElement as HTMLElement | null)?.blur();
     act(() => useAppStore.setState({ selectedCardId: null }));
 
-    expect(screen.getByRole("button", { name: "Search cards" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: PANEL_TOGGLE })).toHaveFocus();
 
     // And it is still there one commit later, when the width the closing pane gave back
     // reopens the panel around it. The disclosure is one node across both states for exactly
@@ -878,7 +881,7 @@ describe("DeckSearchPanel", () => {
     view.update({ roomy: true });
 
     expect(screen.getByRole("searchbox", { name: "Search cards" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Search cards" })).toHaveFocus();
+    expect(screen.getByRole("button", { name: PANEL_TOGGLE })).toHaveFocus();
   });
 
   /** And it does not steal one: an opener still on screen has already been handed the caret
@@ -911,7 +914,7 @@ describe("DeckSearchPanel", () => {
     view.update({ roomy: true });
     expect(screen.getByRole("searchbox", { name: "Search cards" })).toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: "Search cards" }));
+    await userEvent.click(screen.getByRole("button", { name: PANEL_TOGGLE }));
     view.update({ roomy: false });
     view.update({ roomy: true });
 
@@ -973,8 +976,8 @@ describe("DeckSearchPanel", () => {
 
     // And a press is still a press: shutting the panel is the reader saying they are done, so
     // the next open is a clean search seeded from the deck's format again.
-    await userEvent.click(screen.getByRole("button", { name: "Search cards" }));
-    await userEvent.click(screen.getByRole("button", { name: "Search cards" }));
+    await userEvent.click(screen.getByRole("button", { name: PANEL_TOGGLE }));
+    await userEvent.click(screen.getByRole("button", { name: PANEL_TOGGLE }));
 
     expect(screen.getByRole("searchbox", { name: "Search cards" })).toHaveValue("");
     await openFilterTray();
@@ -1233,11 +1236,11 @@ describe("DeckSearchPanel tabs", () => {
     await openPanel();
     await screen.findByRole("button", { name: "Lightning Bolt" });
 
-    await userEvent.click(screen.getByRole("button", { name: "Search cards" }));
+    await userEvent.click(screen.getByRole("button", { name: PANEL_TOGGLE }));
 
     expect(screen.queryByRole("group", { name: "Search in" })).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: "Search cards" }));
+    await userEvent.click(screen.getByRole("button", { name: PANEL_TOGGLE }));
 
     expect(tab(ALL_CARDS)).toHaveAttribute("aria-pressed", "true");
     expect(await screen.findByRole("button", { name: "Lightning Bolt" })).toBeInTheDocument();
@@ -1248,7 +1251,7 @@ describe("DeckSearchPanel tabs", () => {
   it("draws no strip when the editor has no room for the panel", async () => {
     panel({ roomy: false });
 
-    await screen.findByRole("button", { name: "Search cards" });
+    await screen.findByRole("button", { name: PANEL_TOGGLE });
     expect(screen.queryByRole("group", { name: "Search in" })).not.toBeInTheDocument();
   });
 
@@ -1266,7 +1269,7 @@ describe("DeckSearchPanel tabs", () => {
     await openPanel();
 
     const strip = screen.getByRole("group", { name: "Search in" });
-    const disclosure = screen.getByRole("button", { name: "Search cards" });
+    const disclosure = screen.getByRole("button", { name: PANEL_TOGGLE });
     const header = disclosure.parentElement!;
 
     expect(header).not.toContainElement(strip);
@@ -1279,137 +1282,53 @@ describe("DeckSearchPanel tabs", () => {
   });
 
   /**
-   * **It still cannot hang out of a panel dragged to its floor** ({@link MIN_PANEL_WIDTH_PX}),
-   * which is 206px — a ~193px content box.
+   * **Half the panel each, and it still cannot hang out of one dragged to its floor**
+   * ({@link MIN_PANEL_WIDTH_PX}), which is 206px — a ~193px content box.
    *
-   * The pill it replaced measured **141px** and had to be two short words, because a segmented
-   * pair cannot wrap inside the one rounded box it is drawn as. This is two plain flex items on a
-   * `flex-wrap` row, whose min-content is one word — so the constraint is met structurally rather
-   * than by keeping the labels short. Unwrapped, a row like this is not a squeeze but an
-   * *overhang*: a flex item cannot shrink below its own min-content, and `DeckEditor`'s page
-   * section is `overflow-y-auto`, which computes `overflow-x` to `auto` — a horizontal scrollbar
-   * across the whole deck builder, which the app's 1024px floor forbids. That is `src/CLAUDE.md`'s
-   * rule, and it shipped once already through `ManaValueChips`.
+   * The pill this replaced measured **141px** and had to be two short words, because a segmented
+   * pair cannot wrap inside the one rounded box it is drawn as. Two `flex-1` items are safe for a
+   * stronger reason than the `flex-wrap` row that stood here until 2026-08-25: each is already
+   * asking for half a line, so neither can wrap past the other, and the wider word (`Collection`,
+   * ~68px) fits the 96 that half of a 193px content box gives it. `min-w-0` is what keeps that
+   * true if the labels ever grow — without it a flex item's floor is its own min-content, and an
+   * overhang here is a horizontal scrollbar across the whole deck builder, which the app's 1024px
+   * floor forbids (`src/CLAUDE.md`; `ManaValueChips` shipped it once already).
    *
-   * **jsdom lays nothing out, so the class is the assertion.**
+   * **jsdom lays nothing out, so the classes are the assertion.**
    */
-  it("wraps the strip, so it cannot hang out of a narrow panel", async () => {
+  it("gives each tab half the panel, so neither can hang out of a narrow one", async () => {
     await openPanel();
 
-    expect(screen.getByRole("group", { name: "Search in" })).toHaveClass("flex-wrap");
+    const strip = screen.getByRole("group", { name: "Search in" });
+    // Not `flex-wrap` — two halves of a bar are one bar, and a wrapped tab strip is two.
+    expect(strip).not.toHaveClass("flex-wrap");
+    for (const label of [COLLECTION, ALL_CARDS]) {
+      const button = within(strip).getByRole("button", { name: label });
+      expect(button).toHaveClass("flex-1");
+      expect(button).toHaveClass("min-w-0");
+    }
+  });
+
+  /**
+   * **The own/need pair is gone from this row, and nothing replaced it** (2026-08-25).
+   *
+   * It was `AddModeStrip` — `Cards I own` / `Cards I need`, drawn beside the disclosure on the
+   * card-search tab — and it decided what an Add wrote: a `deck_cards` row that reads as missing,
+   * or a move of a copy the reader already had. Every add means the first of those now, and the
+   * Collection tab is where the second is done, because it can name the deck a spoken-for copy
+   * would come out of and ask before taking it.
+   *
+   * Asserted on the tab that used to draw it, which is the only place it could come back.
+   */
+  it("no longer asks what kind of add the card search makes", async () => {
+    await openPanel();
+
+    expect(screen.queryByRole("group", { name: "Adding" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cards I own" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Cards I need" })).not.toBeInTheDocument();
   });
 });
 
-/**
- * ## The own/need toggle
- *
- * A press on the card search's Add button is one of two things — a card the reader **has**, or one
- * they are putting on the list in order to buy it — and the app cannot guess which. The control
- * says which, and it lives **here**, on the tab whose button it decides: it shipped on the deck's
- * toolbar for a day because this file belonged to another agent while it was built.
- *
- * The *answer* is still the editor's, because it governs the toolbar's quick-add field too, so
- * this panel takes a `mode`/`onMode` pair and remembers nothing. `DeckEditor.test.tsx` is where
- * the memory and the two writes it picks between are driven; this file is about the control.
- */
-describe("DeckSearchPanel add mode", () => {
-  /**
-   * **On the card search, and only there.** A row of the collection tab is a copy the reader
-   * already has — that is what a collection row *is* — so the question is answered before it is
-   * asked, and a mode control drawn beside that list would be a switch with one meaning.
-   */
-  it("asks which kind of add the card search makes, on the tab that makes it", async () => {
-    panel();
-    await screen.findByRole("group", { name: "Search in" });
-
-    expect(screen.queryByRole("group", { name: "Adding" })).not.toBeInTheDocument();
-
-    await userEvent.click(tab(ALL_CARDS));
-
-    const modes = await screen.findByRole("group", { name: "Adding" });
-    expect(within(modes).getByRole("button", { name: "Cards I need" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-    expect(within(modes).getByRole("button", { name: "Cards I own" })).toHaveAttribute(
-      "aria-pressed",
-      "false",
-    );
-  });
-
-  /** And it goes away again with the tab, rather than lingering over a list it says nothing
-   *  about. */
-  it("takes the control away when the reader goes back to their binder", async () => {
-    await openPanel();
-    await screen.findByRole("group", { name: "Adding" });
-
-    await userEvent.click(tab(COLLECTION));
-
-    expect(screen.queryByRole("group", { name: "Adding" })).not.toBeInTheDocument();
-  });
-
-  /**
-   * **The press is handed up and the marking comes back down**, which is the whole of this
-   * panel's part in it.
-   *
-   * Two assertions rather than one, because a control that reported the press and drew its own
-   * answer would pass the first: the mark has to follow the *prop*, or the panel and the
-   * quick-add field across the desk would disagree about which mode the deck is in.
-   */
-  it("hands the press to the editor rather than remembering it", async () => {
-    const view = await openPanel();
-    await screen.findByRole("group", { name: "Adding" });
-
-    await userEvent.click(screen.getByRole("button", { name: "Cards I own" }));
-
-    expect(view.onMode).toHaveBeenCalledWith("own");
-    // Nothing moved on screen, because nothing here holds the answer.
-    expect(screen.getByRole("button", { name: "Cards I own" })).toHaveAttribute(
-      "aria-pressed",
-      "false",
-    );
-
-    view.update({ mode: "own" });
-
-    expect(screen.getByRole("button", { name: "Cards I own" })).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-    expect(screen.getByRole("button", { name: "Cards I need" })).toHaveAttribute(
-      "aria-pressed",
-      "false",
-    );
-  });
-
-  /**
-   * **Two controls on the header row, and the wrap is what keeps them inside a dragged-down
-   * panel** ({@link MIN_PANEL_WIDTH_PX}).
-   *
-   * Driven headless over the built stylesheet on 2026-08-23, when there were three: at 206px the
-   * content box is **193**, the disclosure is **99**, the tab strip was **141** and this pair is
-   * **175** — so each took a line of its own and the row read `scrollWidth` **193** against a
-   * `clientWidth` of **193**, at 100px tall. **The strip left this row on 2026-08-24**, so those
-   * three lines are two: the pair still takes its own at the floor, and shares line one with the
-   * 99px disclosure by the panel's 384px opening width. Shorter labels buy nothing at the floor —
-   * `Own`/`Need` measures 95 and the disclosure alone already forces the wrap there — so the
-   * reader's own words stay. **The 2026-08-24 heights have not been re-driven**; the widths above
-   * are per-control and did not move.
-   *
-   * **jsdom lays nothing out, so the class is the assertion** and the numbers are the record of
-   * where they came from.
-   */
-  it("puts the control on the panel's own wrapped header row", async () => {
-    await openPanel();
-
-    const modes = await screen.findByRole("group", { name: "Adding" });
-    const row = modes.parentElement!;
-    expect(row).toHaveClass("flex-wrap");
-    expect(row).toContainElement(screen.getByRole("button", { name: "Search cards" }));
-    // **The tab strip is no longer on this row** — its own test above owns where it went, and
-    // this is the half that would catch it being folded back in beside the pair.
-    expect(row).not.toContainElement(screen.getByRole("group", { name: "Search in" }));
-  });
-});
 
 /**
  * The panel's own width, which the reader owns from its left edge.
@@ -1515,7 +1434,7 @@ describe("DeckSearchPanel resizing", () => {
     drag(900, 700);
     expect(column()).toHaveStyle({ width: "584px" });
 
-    const toggle = screen.getByRole("button", { name: "Search cards" });
+    const toggle = screen.getByRole("button", { name: PANEL_TOGGLE });
     await userEvent.click(toggle);
     expect(screen.queryByRole("separator", { name: "Resize card search" })).not.toBeInTheDocument();
 
