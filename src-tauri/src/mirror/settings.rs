@@ -262,19 +262,37 @@ pub async fn mirror_set_root(
 /// Runs whether or not the mirror is [`enabled`] — an explicit press is an explicit press,
 /// and a reader who wants one folder of text files without a background thread watching them
 /// is asking for something this command can give.
+///
+/// **It records its own pass**, through the same [`crate::mirror::watch::record`] the thread
+/// uses. Without that the panel draws "Rebuilt — 350 files written" directly above
+/// "Last written 2 hours ago", because it ranks a recorded failure against a rebuild **by
+/// clock** and the rebuild had left no clock reading of its own.
 #[tauri::command]
 pub async fn mirror_rebuild(
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<crate::mirror::run::PassReport, String> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let conn = crate::sync::lock_db_read(&state);
+    tauri::async_runtime::spawn_blocking(move || rebuild_now(&state))
+        .await
+        .map_err(|e| format!("the mirror could not be rebuilt: {e}"))?
+}
+
+/// [`mirror_rebuild`]'s body, with the `AppState` handed in.
+///
+/// Split out so the stamp above can be tested: a `#[tauri::command]` taking
+/// `tauri::State` cannot be called without a running app, and "the rebuild records itself"
+/// is exactly the sort of one-line wiring that is silently dropped and never noticed.
+pub fn rebuild_now(state: &AppState) -> Result<crate::mirror::run::PassReport, String> {
+    let outcome = {
+        let conn = crate::sync::lock_db_read(state);
         let root = root(&conn, &state.data_dir);
         let mut cache = std::collections::HashMap::new();
         crate::mirror::run::run_pass(&conn, &root, crate::mirror::run::Dirty::ALL, &mut cache)
-    })
-    .await
-    .map_err(|e| format!("the mirror could not be rebuilt: {e}"))?
+    };
+    // After the read lock has gone, and before the answer: the panel polls `mirror_status` the
+    // moment this resolves, so a stamp written any later is a stamp it can miss.
+    crate::mirror::watch::record(state, &outcome);
+    outcome
 }
 
 #[cfg(test)]

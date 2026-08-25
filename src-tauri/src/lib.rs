@@ -21,6 +21,7 @@ pub mod legalities;
 pub mod maintenance;
 pub mod marketplace;
 pub mod marketplace_feed;
+pub mod mirror;
 pub mod nav;
 pub mod paths;
 pub mod reconcile;
@@ -431,7 +432,13 @@ pub fn run() {
             update_check,
             update_download,
             update_apply,
-            update_open_release_page
+            update_open_release_page,
+            // The plain-text mirror. Four commands and no more: the Backup panel's read, the
+            // two settings, and the button that rewrites the folder now.
+            mirror::settings::mirror_status,
+            mirror::settings::mirror_set_enabled,
+            mirror::settings::mirror_set_root,
+            mirror::settings::mirror_rebuild
         ])
         .setup(|app| {
             // First, and before anything that can fail: the window is created **hidden**
@@ -456,6 +463,23 @@ pub fn run() {
             // stays live. Nothing about it is fatal; the handle is dropped and the thread
             // runs detached.
             index::lifecycle::spawn_build(&state);
+
+            // The plain-text mirror, in two halves that must stay in this order.
+            //
+            // First the hook, on `state.db` and **nowhere else**: that is the one connection
+            // every user-facing write in this crate goes through (`sync::with_write`), and
+            // `db_read` is opened read-only so it could never fire one. It is installed before
+            // the thread starts so that nothing written between here and the first pass can
+            // slip past unmarked — though the first pass is `Dirty::ALL` and would cover it
+            // anyway, which is what makes this ordering cheap insurance rather than a rule.
+            mirror::watch::install_hook(&db::lock_blocking(&state.db), state.mirror.clone());
+
+            // Then the thread. Detached and never fatal, exactly like the facet warm-up above:
+            // it runs one full pass now — the whole of what makes the folder correct after a
+            // crash — and then wakes two seconds after the reader stops editing. It reads
+            // through `db_read` and never takes the write connection, so no press it overlaps
+            // can be answered `db::BUSY` by it.
+            mirror::watch::spawn(state.clone());
 
             // Here rather than before the builder, and the difference is one rare bug: this
             // deletes a staged build, and the second instance of a double-click would
@@ -669,6 +693,12 @@ fn init_state(app: &tauri::App) -> Result<AppState, String> {
         // Cold, and built by `setup` the moment this state is in an `Arc` — see there for
         // why the build cannot be started from in here.
         index: std::sync::RwLock::default(),
+        // Clean, and hooked up by `setup` for the index's reason: the hook holds a clone of
+        // this `Arc`, and there is no `Arc` until this value has been put in one. Nothing has
+        // been written yet either, so a clean mask is the truth — the startup pass is
+        // `Dirty::ALL` regardless.
+        mirror: Arc::new(mirror::watch::Mask::default()),
+        mirror_status: Mutex::new(mirror::watch::LastPass::default()),
     })
 }
 

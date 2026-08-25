@@ -101,6 +101,19 @@ pub struct AppState {
     /// write replaces it. The `Arc` inside is so a reader clones the handle and lets the lock
     /// go at once — a facet pass must never hold a lock a sync's rebuild is waiting on.
     pub index: std::sync::RwLock<crate::index::lifecycle::IndexSlot>,
+    /// What the plain-text mirror still owes the disk, as three bits.
+    ///
+    /// An `Arc` and not a plain field because the update hook on `db` holds a clone of it for
+    /// the life of the process — see [`crate::mirror::watch::install_hook`]. Written from
+    /// inside SQLite's own callback and read by the mirror thread; no lock is involved either
+    /// way, which is the point.
+    pub mirror: Arc<crate::mirror::watch::Mask>,
+    /// What the mirror's last pass did, for the Settings panel to read back.
+    ///
+    /// In memory rather than in the database, deliberately: the numbers describe a folder
+    /// that may not survive a restart, and a count read back after one would be a claim about
+    /// a disk nobody has looked at since. See [`crate::mirror::watch::LastPass`].
+    pub mirror_status: Mutex<crate::mirror::watch::LastPass>,
 }
 
 /// Result of a sync run. `updated_at` is `Some` only when `updated` is true, so a
@@ -541,6 +554,18 @@ pub async fn run_sync(
     // `Err` would drop exactly the lockouts nobody else records. An upsert of one integer is
     // not worth being clever about.
     persist_penalty(&state);
+    // A finished ingest is one of the four things that run a full mirror pass (spec §5). The
+    // update hook cannot carry this: `cards` maps to no surface on purpose, because a sync
+    // rewrites 116 700 rows and a per-row mark would make every refresh a hundred thousand
+    // hook fires and a rebuild. **Gated on `updated`**, not on `Ok`: a throttled run that
+    // downloaded nothing changed no card name and no printing, so marking there would spend a
+    // full render on every launch of the day for a corpus that is byte for byte the one the
+    // last pass already mirrored. Hash comparison would write nothing — the render is the cost.
+    if let Ok(outcome) = &result {
+        if outcome.updated {
+            state.mirror.mark_all();
+        }
+    }
     if let Err(e) = &result {
         {
             let conn = lock_db(&state);
@@ -1197,6 +1222,10 @@ mod tests {
                 // an image, so this directory does not have to exist.
                 images: crate::images::Cache::new(PathBuf::from("D:\\app\\data\\images")),
                 index: std::sync::RwLock::default(),
+                // The mirror is never started in these tests; a clean mask and an empty record are
+                // what an `AppState` looks like before the first pass.
+                mirror: std::sync::Arc::new(crate::mirror::watch::Mask::default()),
+                mirror_status: std::sync::Mutex::new(crate::mirror::watch::LastPass::default()),
             },
             dir,
         )

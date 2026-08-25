@@ -950,6 +950,12 @@ pub async fn refresh(
 
     match joined {
         Ok(Ok(_)) => {
+            // The second of the four things that run a full mirror pass (spec §5).
+            // `marketplace_prices` maps to no surface on purpose — this refresh rewrites the
+            // whole table, and a per-row mark would be ~100 000 hook fires — so the completed
+            // refresh is what tells the mirror the `Price` column in every mirrored CSV has
+            // moved. One line, at the one place this path succeeds.
+            state.mirror.mark_all();
             progress("done", 0, 0);
             Ok(status_of(state, provider))
         }
@@ -1839,6 +1845,10 @@ mod tests {
                 client: crate::scryfall::Client::new("http://127.0.0.1:1".into()),
                 images: crate::images::Cache::new(dir.join("images")),
                 index: std::sync::RwLock::default(),
+                // The mirror is never started in these tests; a clean mask and an empty record are
+                // what an `AppState` looks like before the first pass.
+                mirror: std::sync::Arc::new(crate::mirror::watch::Mask::default()),
+                mirror_status: std::sync::Mutex::new(crate::mirror::watch::LastPass::default()),
             }),
             dir,
         )

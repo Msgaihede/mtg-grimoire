@@ -16,3 +16,4 @@ pub mod paths;
 pub mod read;
 pub mod run;
 pub mod settings;
+pub mod watch;
