@@ -12,6 +12,14 @@ const FORMATS: DropdownOption[] = [
   { value: "standard", label: "Standard" },
 ];
 
+// Overlapping first letters, distinct second ones — "s" alone is ambiguous between the first
+// two, and only "st" picks out Standard, which is the whole point of buffering.
+const TYPE_AHEAD_OPTIONS: DropdownOption[] = [
+  { value: "sol", label: "Sol" },
+  { value: "standard", label: "Standard" },
+  { value: "timer", label: "Timer" },
+];
+
 function Harness({ initial = "modern" }: { initial?: string }) {
   const [value, setValue] = useState(initial);
   return <Dropdown label="Format" value={value} onChange={setValue} options={FORMATS} />;
@@ -281,21 +289,20 @@ describe("Dropdown search", () => {
     expect(box).toHaveFocus();
   });
 
-  it("calls onReachEnd when ArrowDown is pressed on the last row", async () => {
+  it("arrows and commits within the query-narrowed list, not the full one", async () => {
     const user = userEvent.setup();
-    const onReachEnd = vi.fn();
+    const onChange = vi.fn();
     render(
-      <Dropdown
-        label="Format"
-        value="standard"
-        onChange={vi.fn()}
-        options={FORMATS}
-        onReachEnd={onReachEnd}
-      />,
+      <Dropdown label="Format" value="modern" onChange={onChange} options={FORMATS} searchable />,
     );
     await user.click(screen.getByRole("button", { name: "Format" }));
-    await user.keyboard("{ArrowDown}");
-    expect(onReachEnd).toHaveBeenCalled();
+    await user.type(screen.getByRole("combobox"), "an");
+    // Narrowed to Commander, Standard (see the substring test above) — a fresh query also reset
+    // the cursor to row 0, Commander.
+    await user.keyboard("{ArrowDown}"); // Commander -> Standard, the narrowed list's row 1
+    await user.keyboard("{Enter}");
+    // The full list's row 1 is Modern; only reading the *narrowed* list lands on Standard.
+    expect(onChange).toHaveBeenCalledWith("standard");
   });
 
   it("draws a footer below the list", async () => {
@@ -311,5 +318,61 @@ describe("Dropdown search", () => {
     );
     await user.click(screen.getByRole("button", { name: "Format" }));
     expect(screen.getByText("Showing 4 of 40.")).toBeInTheDocument();
+  });
+});
+
+describe("Dropdown type-ahead", () => {
+  it("buffers consecutive keystrokes into one type-ahead word", async () => {
+    const user = userEvent.setup();
+    render(<Dropdown label="Format" value="" onChange={vi.fn()} options={TYPE_AHEAD_OPTIONS} />);
+    await user.click(screen.getByRole("button", { name: "Format" }));
+    await user.keyboard("{Escape}");
+    // "s" alone opens on Sol (row 0) — the first keystroke both opens the panel and starts the
+    // buffer, moving focus off the button before the second keystroke arrives. Only a buffer
+    // that survives that handoff reaches Standard (row 1) on "st".
+    await user.keyboard("st");
+    expect(screen.getByRole("listbox")).toHaveAttribute(
+      "aria-activedescendant",
+      expect.stringContaining("option-1"),
+    );
+  });
+
+  it(
+    "resets the type-ahead buffer once it has sat idle past the timeout",
+    async () => {
+      const user = userEvent.setup();
+      render(<Dropdown label="Format" value="" onChange={vi.fn()} options={TYPE_AHEAD_OPTIONS} />);
+      await user.click(screen.getByRole("button", { name: "Format" }));
+      await user.keyboard("{Escape}");
+      await user.keyboard("s");
+      // Real time, not fake: userEvent awaits real timers internally, and this repo has already
+      // been bitten by the two not mixing (a naive vi.useFakeTimers() hangs the whole file, not
+      // just this test). A genuine wait comfortably past the 600ms buffer is simpler and safe
+      // for the one test that needs it.
+      await new Promise((resolve) => setTimeout(resolve, 700));
+      await user.keyboard("t");
+      // A fresh "t", not a continued "st" — Timer (row 2), not Standard (row 1).
+      expect(screen.getByRole("listbox")).toHaveAttribute(
+        "aria-activedescendant",
+        expect.stringContaining("option-2"),
+      );
+    },
+    10000,
+  );
+
+  it("opens a searchable dropdown into its search box on a printable key", async () => {
+    const user = userEvent.setup();
+    render(
+      <Dropdown label="Format" value="modern" onChange={vi.fn()} options={FORMATS} searchable />,
+    );
+    await user.click(screen.getByRole("button", { name: "Format" }));
+    await user.keyboard("{Escape}");
+    await user.keyboard("s");
+    // Same gesture, same place: the character lands in the search box rather than jumping a row.
+    const box = screen.getByRole("combobox");
+    expect(box).toHaveFocus();
+    expect(box).toHaveValue("s");
+    // Filtered by "s", substring, case-insensitive: only Standard has one.
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["Standard"]);
   });
 });

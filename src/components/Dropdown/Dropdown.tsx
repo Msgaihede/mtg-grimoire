@@ -54,6 +54,14 @@ export type SharedProps = {
   searchable?: boolean;
   /** @default "Search" */
   searchPlaceholder?: string;
+  /**
+   * `aria-label` on the search box — its only accessible name, since the box carries no visible
+   * `<label>` of its own. Deliberately not derived from `label`: `label` is usually singular
+   * ("Set"), the set picker Task 8 folds in needs exactly `"Search sets"`, and a `"Search " +
+   * label` concat would silently reword every other consumer to something nobody chose.
+   * @default "Search"
+   */
+  searchLabel?: string;
   /** Controlled: the caller filters. */
   query?: string;
   onQueryChange?: (query: string) => void;
@@ -102,8 +110,10 @@ function openingIndex(options: readonly DropdownOption[], value: string): number
 }
 
 /**
- * The first **enabled** row whose label begins with the typed character, case-insensitively —
- * the closed trigger's type-ahead. Shared with the search box's own matcher (Task 4).
+ * The first **enabled** row whose label begins with the typed characters, case-insensitively —
+ * the buffered type-ahead's matcher, used both closed (the trigger) and open (a non-`searchable`
+ * listbox). **Not** what a `searchable` box's own query matches by — that is a substring test
+ * against `label`, computed inline where `drawn` is built.
  */
 function typeAheadIndex(options: readonly DropdownOption[], char: string): number {
   const needle = char.toLowerCase();
@@ -169,6 +179,7 @@ export function Dropdown(
     panelClassName,
     searchable = false,
     searchPlaceholder,
+    searchLabel = "Search",
     query,
     onQueryChange,
     emptyLine = "No matches.",
@@ -275,8 +286,16 @@ export function Dropdown(
     };
   }, []);
 
+  // A fresh opening starts with a blank search, so a reader who typed a filter, closed without
+  // picking, and reopened is not shown a pre-filtered panel. Reset here rather than on close —
+  // in the same batch as the active-index reset, matching `SetCombobox`'s `startOpening()` —
+  // because the panel is still fading out on close and clearing the box there would be a visible
+  // flicker in something the reader is watching leave. Never for a **controlled** caller: it owns
+  // `query` and this must not reach it, so the guard skips `onQueryChange` entirely rather than
+  // calling it with `""`.
   const openAt = (i: number) => {
     setActiveIndex(i);
+    if (!controlled) setLocalQuery("");
     setOpen(true);
   };
 
@@ -292,6 +311,29 @@ export function Dropdown(
     setActiveIndex(0);
     if (controlled) onQueryChange?.(next);
     else setLocalQuery(next);
+  };
+
+  /**
+   * Advances the type-ahead buffer by one character and returns the first enabled row it now
+   * matches, or `-1`. Several keystrokes typed within {@link TYPE_AHEAD_MS} of each other are
+   * one word, not several independent single-character jumps — "st" reaches Standard, not
+   * whatever the lone "s" would have.
+   *
+   * Shared by the closed trigger's `onKeyDown` and the open, non-`searchable` listbox's
+   * `onListKeyDown` below — the same buffer has to survive the handoff between them, since the
+   * very keystroke that opens the panel is also the one that starts the word. A `searchable`
+   * dropdown never calls this: the search box owns filtering there, and a character key lands in
+   * it through the browser's own text-input handling rather than through here.
+   */
+  const typeAhead = (char: string): number => {
+    const ta = typeAheadRef.current;
+    if (ta.timeout !== null) window.clearTimeout(ta.timeout);
+    ta.buffer += char;
+    ta.timeout = window.setTimeout(() => {
+      ta.buffer = "";
+      ta.timeout = null;
+    }, TYPE_AHEAD_MS);
+    return typeAheadIndex(options, ta.buffer);
   };
 
   const onListKeyDown = (e: React.KeyboardEvent) => {
@@ -332,8 +374,16 @@ export function Dropdown(
         if (opt && !opt.disabled) commit(opt.value);
         break;
       }
-      default:
+      default: {
+        // Type-ahead continues while the panel is open, building the same word the closed
+        // trigger's keystrokes would have. Never for `searchable`: that box already owns
+        // every character it receives, through its own `onChange`.
+        if (searchable || e.key.length !== 1 || e.ctrlKey || e.metaKey || e.altKey) break;
+        e.preventDefault();
+        const match = typeAhead(e.key);
+        if (match !== -1) setActiveIndex(match);
         break;
+      }
     }
   };
 
@@ -382,17 +432,7 @@ export function Dropdown(
             setOpen(true);
             return;
           }
-          // Several keystrokes typed within TYPE_AHEAD_MS of each other are one word, not
-          // several independent single-character jumps — "st" reaches Standard, not whatever
-          // the lone "s" would have.
-          const ta = typeAheadRef.current;
-          if (ta.timeout !== null) window.clearTimeout(ta.timeout);
-          ta.buffer += e.key;
-          ta.timeout = window.setTimeout(() => {
-            ta.buffer = "";
-            ta.timeout = null;
-          }, TYPE_AHEAD_MS);
-          const match = typeAheadIndex(options, ta.buffer);
+          const match = typeAhead(e.key);
           openAt(match !== -1 ? match : openingIndex(options, value));
         }}
         className={cn(
@@ -444,6 +484,7 @@ export function Dropdown(
                   ref={inputRef}
                   type="text"
                   role="combobox"
+                  aria-label={searchLabel}
                   aria-expanded="true"
                   aria-controls={listboxId}
                   aria-activedescendant={
