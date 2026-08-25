@@ -252,6 +252,17 @@ Two writers, one behaviour, and a build that goes red the moment they disagree.
 `corpus.json` if the field needs a value, then `npm run golden`. Skipping the Rust half is a red
 `cargo test`, which is the whole point of the fence.
 
+**Corrected 2026-08-25, by mutation rather than by reading.** The rendered `.txt` goldens fence
+that claim for **CSV only**. `write_line` renders exactly seven ids, so in the six line formats
+every other id is invisible: adding `FieldId::Lang` to `Format::Plain`'s `optional` on one side
+alone moves **zero golden bytes** while changing the *fold key*, and one printing held in two
+languages would then export as two lines from the mirror and one from the dialog with all 70
+files green. What actually fences it is a second golden one level up —
+`__golden__/fields.json`, holding `SURFACE_FIELDS` and what `availableFields`/`defaultFields`
+answer for all 21 (format, surface) pairs, written by `npm run golden` and asserted by
+`golden.test.ts` and `transfer/fields.rs`. The drift above now reddens exactly one test on each
+side and no golden file.
+
 ## 7. Settings, and what failure looks like
 
 A `BackupPanel` beside the existing Cache, Marketplace, Hidden tags, Update and Danger Zone panels,

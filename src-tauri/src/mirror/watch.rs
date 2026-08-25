@@ -886,6 +886,7 @@ mod tests {
         let report = PassReport {
             written: 7,
             unchanged: 343,
+            skipped: 0,
             pruned: 0,
             failed: 0,
         };
@@ -1087,29 +1088,80 @@ mod tests {
     /// I3. A panic in the render used to end the thread with nothing to show for it: the
     /// mutexes recover crate-wide, so nothing else broke — and nothing was recorded either,
     /// leaving the panel reporting the last good pass while the folder quietly stopped
-    /// updating. Driven through the one thing in the pass that can be made to panic from
-    /// out here: a `data_dir` whose path is not valid UTF-16 cannot be the subject, so the
-    /// panic is raised inside the closure's own work instead.
+    /// updating.
+    ///
+    /// **Driven through [`pass`] itself, which the first version of this test was not.** It
+    /// re-implemented `catch_unwind` + [`panic_sentence`] + [`record`] in its own body and
+    /// never called the function it is named after, so deleting [`pass`]'s own `catch_unwind`
+    /// left it green — the guard was the one thing here that was untested.
+    ///
+    /// **The subject is an `i64` overflow in the fold, which is a real bug's shape rather than
+    /// a `panic!` planted for the occasion.** Two collection rows of one printing, told apart
+    /// only by a serial number, each holding `i64::MAX` copies: every format but CSV renders
+    /// without a serial-number channel, so `fold_for_fields` merges them and `seen.quantity +=
+    /// card.quantity` overflows. That is `render` → `format_export` → `fold`, entirely inside
+    /// the caught closure.
+    ///
+    /// `#[cfg(debug_assertions)]` because that is what makes the overflow a panic: a release
+    /// build wraps instead, and the pass would then succeed and this test would be red for a
+    /// reason that is not the guard. `npm run verify` and CI both run `cargo test` in debug.
+    #[cfg(debug_assertions)]
     #[test]
     fn a_panic_inside_the_pass_is_recorded_and_not_fatal() {
         let dir = tempfile::tempdir().unwrap();
         let state = state_at(dir.path());
-        let outcome: Result<PassReport, String> =
-            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| -> PassReport {
-                panic!("a plan with no name")
-            }))
-            .map_err(|payload| panic_sentence(&payload));
+        seed_a_render_that_overflows(&state);
+        let conn = own_conn(dir.path());
+        let root = dir.path().join("mirror");
+        aim_at(&state, &root);
 
-        let sentence = outcome.unwrap_err();
+        let failures = pass(&state, &conn, Dirty::ALL, &mut DigestCache::default(), 0);
+
+        assert_eq!(failures, 1, "a caught panic is an ordinary failure");
+        let last = crate::sync::lock_plain(&state.mirror_status);
+        let sentence = last.last_error.clone().expect("the panic must be recorded");
+        assert!(sentence.contains("skipped this pass"), "{sentence}");
         assert!(
-            sentence.contains("a plan with no name"),
+            sentence.contains("overflow"),
             "the payload has to survive into the sentence: {sentence}"
         );
-        assert!(sentence.contains("skipped this pass"), "{sentence}");
-        record(&state, &Err(sentence));
-        assert!(crate::sync::lock_plain(&state.mirror_status)
-            .last_error
-            .is_some());
+        drop(last);
+        assert!(
+            state.mirror.is_dirty(),
+            "and the surfaces it was responsible for are marked again"
+        );
+    }
+
+    /// Two collection rows of one printing that a fold with no serial-number channel merges,
+    /// each holding as many copies as an `i64` can — so the merge overflows.
+    ///
+    /// **Seeding `cards` is allowed here only because the database is a file in a tempdir that
+    /// dies with the test**, so no later measurement of the real corpus can be made a fiction
+    /// by it. The two entries go in through `collection::add_entry`, the app's own write.
+    #[cfg(debug_assertions)]
+    fn seed_a_render_that_overflows(state: &AppState) {
+        let conn = crate::sync::lock_db(state);
+        conn.execute(
+            "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
+                rarity,type_line,finishes,prices,raw)
+             VALUES ('bolt-lea','o1','Lightning Bolt','lea','161','en','normal','common',
+                'Instant','[\"nonfoil\",\"foil\"]','{\"usd\":\"1.00\"}','{}')",
+            [],
+        )
+        .unwrap();
+        for i in 0..2 {
+            crate::collection::add_entry(
+                &conn,
+                &crate::collection::EntryInput {
+                    card_id: "bolt-lea".to_owned(),
+                    finish: "nonfoil".to_owned(),
+                    quantity: i64::MAX,
+                    serial_number: Some(format!("{i}/2")),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        }
     }
 
     /// A `String` payload as well as the `&str` one above, because a downcast handling only

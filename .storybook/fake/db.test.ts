@@ -1544,10 +1544,16 @@ describe("the plain-text mirror", () => {
     const first = writeHandlers(db).mirror_rebuild();
 
     expect(first.written).toBeGreaterThan(0);
-    expect(first).toMatchObject({ unchanged: 0, pruned: 0, failed: 0 });
+    expect(first).toMatchObject({ unchanged: 0, skipped: 0, pruned: 0, failed: 0 });
 
     const second = writeHandlers(db).mirror_rebuild();
-    expect(second).toEqual({ written: 0, unchanged: first.written, pruned: 0, failed: 0 });
+    expect(second).toEqual({
+      written: 0,
+      unchanged: first.written,
+      skipped: 0,
+      pruned: 0,
+      failed: 0,
+    });
   });
 
   /** Seven formats a thing, counted off the rows — never a constant, or the summary would be a

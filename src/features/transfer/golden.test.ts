@@ -16,12 +16,19 @@
  */
 import { describe, expect, it } from "vitest";
 import { formatExport, omittedCount } from "./export/format";
-import { availableFields, defaultFields, type TransferSurface } from "./fields";
+import {
+  availableFields,
+  defaultFields,
+  SURFACE_FIELDS,
+  type TransferFieldId,
+  type TransferSurface,
+} from "./fields";
 import { EXPORT_FORMATS } from "./formats";
 import { transferCard } from "./fixtures";
 import { parseDecklist } from "./import/parse";
 import type { TransferCard } from "./TransferCard";
 import corpusText from "./__golden__/corpus.json?raw";
+import fieldsText from "./__golden__/fields.json?raw";
 
 /** Where the glob's keys start. They are project-absolute, so the file name is the tail. */
 const DIR = "/src/features/transfer/__golden__";
@@ -111,6 +118,46 @@ describe("the corpus itself", () => {
       }
     }
     expect(conflicts).toEqual([]);
+  });
+});
+
+const fieldsGolden = JSON.parse(fieldsText) as {
+  surfaces: Record<TransferSurface, TransferFieldId[]>;
+  available: Record<string, TransferFieldId[]>;
+  default: Record<string, TransferFieldId[]>;
+};
+
+/**
+ * **The registry fence, one level above the rendered bytes — and the hole it closes cannot be
+ * closed by any `.txt` file.**
+ *
+ * `writeLine` renders exactly seven ids, so every other id is invisible in the six line
+ * formats. Adding `lang` to `plain`'s `optional` on one side alone moves **zero golden bytes**
+ * while changing the *fold key*, which would need two corpus rows differing solely in that
+ * field to show up — and none exist. One printing held in two languages would then export as
+ * two lines from the mirror and one line from this dialog, with all 70 files and both suites
+ * green. Spec §6's "skipping the Rust half is a red `cargo test`" was true of CSV alone, whose
+ * header row *is* `availableFields` spelled out.
+ *
+ * So `fields.json` commits the tables themselves in the shape that already works: written by
+ * `npm run golden` from this side, asserted here and by `fields.rs`'s cargo suite. It is a
+ * fence against *drift*, and only against drift — a table edited on both sides and regenerated
+ * is a deliberate change, which is what regenerating a golden always means.
+ */
+describe("the registry golden", () => {
+  it("is what this build's field tables answer", () => {
+    expect(fieldsGolden.surfaces).toEqual(SURFACE_FIELDS);
+    const available: Record<string, TransferFieldId[]> = {};
+    const byDefault: Record<string, TransferFieldId[]> = {};
+    for (const format of EXPORT_FORMATS) {
+      for (const surface of Object.keys(SURFACE_FIELDS) as TransferSurface[]) {
+        available[`${format}.${surface}`] = availableFields(format, surface);
+        byDefault[`${format}.${surface}`] = defaultFields(format, surface);
+      }
+    }
+    expect(fieldsGolden.available).toEqual(available);
+    expect(fieldsGolden.default).toEqual(byDefault);
+    expect(Object.keys(available)).toHaveLength(EXPORT_FORMATS.length * 3);
   });
 });
 

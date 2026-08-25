@@ -14,6 +14,11 @@
 //!   [`prune`]'s authority — see the ruling written out there. A file the reader put in the
 //!   root, which may be a Dropbox with a decade of somebody's notes in it, was never in a
 //!   manifest we wrote and so can never be claimed by one.
+//! - **A pass writes only files the mirror itself put there.** The prune path has always been
+//!   fenced against destroying a reader's file; [`put_readme`] is the same fence one function
+//!   over, on the only fixed name the mirror writes into a folder the reader chose. A
+//!   `README.txt` no manifest of ours has ever named is theirs, and it is counted in
+//!   [`PassReport::skipped`] rather than overwritten.
 //! - **One file that fails is one file.** A render that errors or a write that is refused
 //!   increments [`PassReport::failed`] and the pass carries on. An unwritable file is not a
 //!   reason to abandon the other 349.
@@ -108,11 +113,18 @@ the next pass builds it again from the database.
 /// wanted and the directories that were left empty by them — because a reader watching a
 /// rename settle wants one number for "what went away", and a directory going away is as much
 /// of that as a file is.
+///
+/// `skipped` counts **files the mirror left alone because they are not its own**, which is a
+/// different fact from every other number here: `unchanged` says the bytes on disk are already
+/// the bytes we would write, and `failed` says we tried and could not. Neither is true of a
+/// `README.txt` the reader already had — see [`put_readme`] — and folding it into either would
+/// tell them the folder is finished when a file in it is deliberately not.
 #[derive(Debug, Default, Clone, PartialEq, serde::Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PassReport {
     pub written: usize,
     pub unchanged: usize,
+    pub skipped: usize,
     pub pruned: usize,
     pub failed: usize,
 }
@@ -237,18 +249,28 @@ pub fn run_pass(
         )
     })?;
 
+    // The previous manifest, read **once** and used three times: it decides whether this pass
+    // is owed a full render, whether `README.txt` in this folder is ours to overwrite, and what
+    // [`prune`] is authorised to delete. Reading it once is what keeps those three answers from
+    // being about three different moments.
+    let previous = read_manifest(root);
+
     // **A missing manifest under a root that exists means the mirror was reset.**
     //
     // It is the one file every pass writes and no plan can ever leave out, so its absence is
     // not ambiguous: either this is the first pass over this folder, or somebody deleted the
-    // folder — or part of it — while the app was running. `create_dir_all` above has just
-    // quietly put an empty directory back, so **no failure arm fires and nothing else notices**;
-    // a live pass measured 93 of 100 files returning and `Wishlist/` never coming back, because
-    // the dirty mask only ever named the surface the reader's next edit happened to touch.
-    // `README.txt` promises them that deleting this folder is safe, and this is what makes that
-    // true. Escalating also covers the reader who deletes one deck's directory rather than all
-    // of it, which no mask could ever have described.
-    let dirty = if root.join(MANIFEST_NAME).is_file() {
+    // whole folder while the app was running. `create_dir_all` above has just quietly put an
+    // empty directory back, so **no failure arm fires and nothing else notices**; a live pass
+    // measured 93 of 100 files returning and `Wishlist/` never coming back, because the dirty
+    // mask only ever named the surface the reader's next edit happened to touch. `README.txt`
+    // promises them that deleting this folder is safe, and this is what makes that true.
+    //
+    // **A reader who deletes one deck's directory rather than all of it is NOT covered by
+    // this**, and the sentence that said it was is the reason this one is long: the manifest
+    // sits at the root, so `Decks/Azula/` going away leaves the sentinel intact and no
+    // escalation fires. That subtree comes back on the next pass that happens to have `decks`
+    // dirty, or at the next startup, which takes a full mask of its own.
+    let dirty = if previous.is_some() {
         dirty
     } else {
         Dirty::ALL
@@ -289,15 +311,16 @@ pub fn run_pass(
         }
     }
 
-    // Unconditionally, on every pass, and free after the first: it is hash-compared like every
-    // other file, so rewriting it costs a hash of a constant.
-    put(root, README_NAME, README.as_bytes(), cache, &mut report);
+    // On every pass, and free after the first: it is hash-compared like every other file, so
+    // rewriting it costs a hash of a constant. The answer is whether the folder's `README.txt`
+    // is one of **ours**, which is what the manifest below may claim.
+    let readme_is_ours = put_readme(root, previous.as_deref(), cache, &mut report);
 
-    prune(root, &plan, cache, &mut report);
+    prune(root, &plan, previous, cache, &mut report);
     put(
         root,
         MANIFEST_NAME,
-        manifest_text(&plan).as_bytes(),
+        manifest_text(&plan, readme_is_ours).as_bytes(),
         cache,
         &mut report,
     );
@@ -407,6 +430,52 @@ fn write_file(abs: &Path, bytes: &[u8]) -> std::io::Result<()> {
     std::fs::write(abs, bytes)
 }
 
+/// Write [`README_NAME`] — unless the folder already holds one this mirror never wrote.
+/// Answers whether the file at that path is now the mirror's, which is what the manifest says.
+///
+/// **The write path deserves the fence the prune path has.** [`set_root`] accepts any absolute
+/// path whose parent exists, a drive root and a Dropbox with a decade of somebody's notes in it
+/// included, and [`README_NAME`] is the one fixed name the mirror puts at the top of it. Five
+/// rulings reasoned about what a pass may *delete* from a folder the reader chose; none looked
+/// at what the first pass writes **into** it, and the answer was "whatever is already called
+/// `README.txt`". That is the same harm the manifest exists to prevent, arriving by the other
+/// door.
+///
+/// **The manifest is the authority, exactly as it is for [`prune`]**, and for the same reason:
+/// it is a record of what this app actually wrote rather than a guess about what it might have.
+/// A `README.txt` no previous manifest names is the reader's, is left alone, and is counted in
+/// [`PassReport::skipped`].
+///
+/// **Byte-identical content is adopted rather than refused**, which is the one thing that keeps
+/// the guard from being permanent. `README.txt` tells the reader that deleting `.mirror-manifest`
+/// is safe; without this arm, doing so would freeze the README they already had from us at
+/// whatever this build wrote, for good. A file that already *is* what we would write has nothing
+/// in it to lose, so writing it changes nothing and claiming it changes everything.
+///
+/// A directory sitting at the path is not ours either — `exists()` and not `is_file()` — and it
+/// is skipped rather than counted as a failure, because a reader who put something there is not
+/// a fault to report.
+fn put_readme(
+    root: &Path,
+    previous: Option<&[String]>,
+    cache: &mut HashMap<String, u64>,
+    report: &mut PassReport,
+) -> bool {
+    let listed = previous.is_some_and(|lines| lines.iter().any(|line| line == README_NAME));
+    let abs = root.join(README_NAME);
+    if !listed && abs.exists() && !holds_our_readme(&abs) {
+        report.skipped += 1;
+        return false;
+    }
+    put(root, README_NAME, README.as_bytes(), cache, report);
+    true
+}
+
+/// Is what is at this path already, byte for byte, the README this build writes?
+fn holds_our_readme(abs: &Path) -> bool {
+    std::fs::read(abs).is_ok_and(|on_disk| on_disk == README.as_bytes())
+}
+
 // ---------------------------------------------------------------------------------------
 // The manifest, and the prune it authorises
 // ---------------------------------------------------------------------------------------
@@ -416,12 +485,18 @@ fn write_file(abs: &Path, bytes: &[u8]) -> std::io::Result<()> {
 /// [`README_NAME`] is in the list like any other file, so it stops being a special case
 /// anywhere: nothing ever plans it away, so nothing can ever prune it. [`MANIFEST_NAME`] is
 /// **not** in the list, which is what makes it unprunable by construction.
-fn manifest_text(plan: &Plan) -> String {
+///
+/// **`readme_is_ours` is the one thing here that is not read off the plan, and it has to be.**
+/// A manifest is a record of what this app *wrote*; naming a `README.txt` [`put_readme`] just
+/// refused to touch would make the next pass read it back as ours and overwrite the reader's
+/// file on the second pass rather than the first — the guard undone by the file that authorises
+/// it.
+fn manifest_text(plan: &Plan, readme_is_ours: bool) -> String {
     let mut lines: Vec<&str> = plan
         .files
         .iter()
         .map(|f| f.path.as_str())
-        .chain(std::iter::once(README_NAME))
+        .chain(readme_is_ours.then_some(README_NAME))
         .collect();
     lines.sort_unstable();
     lines.dedup();
@@ -480,7 +555,17 @@ fn safe_entry(rel: &str) -> bool {
 /// **Against the full plan, never the dirty subset.** A pass that renders only the decks still
 /// writes a manifest naming every file in the mirror, or the next pass would read one that had
 /// forgotten the collection and delete it.
-fn prune(root: &Path, plan: &Plan, cache: &mut HashMap<String, u64>, report: &mut PassReport) {
+///
+/// [`README_NAME`] is in `wanted` **unconditionally**, including when [`put_readme`] refused to
+/// write it: `wanted` is what may not be deleted, and a README that is the reader's own is the
+/// last file in the folder this pass is allowed to take away.
+fn prune(
+    root: &Path,
+    plan: &Plan,
+    previous: Option<Vec<String>>,
+    cache: &mut HashMap<String, u64>,
+    report: &mut PassReport,
+) {
     let wanted: HashSet<&str> = plan
         .files
         .iter()
@@ -489,7 +574,7 @@ fn prune(root: &Path, plan: &Plan, cache: &mut HashMap<String, u64>, report: &mu
         .collect();
     let mut emptied: BTreeSet<String> = BTreeSet::new();
 
-    match read_manifest(root) {
+    match previous {
         Some(previous) => {
             for rel in previous {
                 if wanted.contains(rel.as_str()) || !safe_entry(&rel) {
@@ -517,6 +602,14 @@ fn prune(root: &Path, plan: &Plan, cache: &mut HashMap<String, u64>, report: &mu
 /// theory switch is off still owns its `Theory` directory with the deck's own stem, so seven
 /// files from before the switch are claimable. Everything else waits for the next pass, and one
 /// pass's worth of orphans is the right price for never guessing.
+///
+/// **`wanted` is consulted without regard to ASCII case, because [`is_ours`] claims without
+/// regard to it.** Each half was right on its own and the pair was not: `is_ours` ignores case
+/// deliberately, because Windows does and a file this app created as `Azula.txt` can be
+/// enumerated as `AZULA.TXT` after a reader or a sync client re-cases it. `wanted` is a set of
+/// the plan's exact spellings, so the same file was claimed by the first test and missed by the
+/// second — and dropped, in the same pass that had just written it, because [`put`] runs before
+/// [`prune`]. It healed on the next pass and cost the reader a deck's file until then.
 fn recover(
     root: &Path,
     plan: &Plan,
@@ -525,6 +618,9 @@ fn recover(
     report: &mut PassReport,
     emptied: &mut BTreeSet<String>,
 ) {
+    // One lowercased copy of the plan's paths, built once, so the membership test below asks
+    // the same question `is_ours` just answered. See this function's doc.
+    let wanted_ci: HashSet<String> = wanted.iter().map(|w| w.to_ascii_lowercase()).collect();
     for dir in &plan.dirs {
         let Some(stem) = dir.stem.as_deref() else {
             continue;
@@ -545,7 +641,7 @@ fn recover(
                 continue;
             }
             let rel = join_rel(&dir.path, &name);
-            if wanted.contains(rel.as_str()) {
+            if wanted_ci.contains(&rel.to_ascii_lowercase()) {
                 continue;
             }
             drop_file(root, &rel, cache, report, emptied);
@@ -970,24 +1066,30 @@ mod tests {
 
     /// A manifest is a file on the reader's disk and therefore input. A line that escapes the
     /// root is ignored rather than obeyed.
+    ///
+    /// **The file `../taxes.csv` names is inside the tempdir, not beside it.** The root here is
+    /// a *child* of the temp directory rather than the temp directory itself, so the escape the
+    /// manifest attempts still lands somewhere `dir` will delete when it drops. Written the
+    /// obvious way it reached `%TEMP%/taxes.csv` — a fixed name outside any tempdir, shared by
+    /// every worktree running `cargo test`, and cleaned up only when the assertions passed.
     #[test]
     fn a_manifest_line_that_escapes_the_root_is_ignored() {
         let (conn, dir, _) = seeded_db_and_temp_root();
-        pass(&conn, dir.path(), Dirty::ALL);
-        let outside = dir.path().parent().unwrap().join("taxes.csv");
+        let root = dir.path().join("mirror");
+        pass(&conn, &root, Dirty::ALL);
+        let outside = dir.path().join("taxes.csv");
         std::fs::write(&outside, b"not yours").unwrap();
         std::fs::write(
-            dir.path().join(MANIFEST_NAME),
+            root.join(MANIFEST_NAME),
             "../taxes.csv\n..\\taxes.csv\n/etc/passwd\nC:/Windows/notepad.exe\n",
         )
         .unwrap();
-        let report = pass(&conn, dir.path(), Dirty::ALL);
+        let report = pass(&conn, &root, Dirty::ALL);
         assert!(
             outside.is_file(),
             "a manifest may not name a path outside the root"
         );
         assert_eq!(report.pruned, 0, "{report:?}");
-        let _ = std::fs::remove_file(&outside);
         for line in ["../x", "..\\x", "/x", "C:/x", "a//b", "a/./b", "a/../b", ""] {
             assert!(!safe_entry(line), "{line:?} must be refused");
         }
@@ -1271,6 +1373,122 @@ mod tests {
         ] {
             assert!(text.contains(phrase), "README.txt must say {phrase:?}");
         }
+    }
+
+    /// **The write path's own fence, and the harm it closes is data loss by writing.**
+    /// `set_root` accepts any absolute path whose parent exists — a project folder, a Downloads
+    /// subfolder, `C:\` — and `README.txt` is the one fixed name the mirror puts at the top of
+    /// it. Before this guard the first pass overwrote whatever was there, silently.
+    ///
+    /// The second pass is the half that is easy to get wrong and impossible to see in the
+    /// first: a manifest that named the skipped `README.txt` would make the *next* pass read it
+    /// back as ours, so the reader's file would survive one pass and be overwritten by the one
+    /// two seconds later.
+    #[test]
+    fn a_readme_the_mirror_did_not_write_is_left_alone_by_every_pass() {
+        let (conn, dir, _) = seeded_db_and_temp_root();
+        let theirs = "Notes on the folder I keep my cards in.\n";
+        std::fs::write(dir.path().join(README_NAME), theirs).unwrap();
+
+        let first = pass(&conn, dir.path(), Dirty::ALL);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(README_NAME)).unwrap(),
+            theirs,
+            "the reader's own README was overwritten"
+        );
+        assert_eq!(first.skipped, 1, "{first:?}");
+        assert_eq!(
+            first.failed, 0,
+            "a file of theirs is not a fault: {first:?}"
+        );
+        assert!(
+            deck_file(&dir, "Azula").is_file(),
+            "and the rest of the mirror is still written"
+        );
+        let manifest = std::fs::read_to_string(dir.path().join(MANIFEST_NAME)).unwrap();
+        assert!(
+            !manifest.lines().any(|line| line == README_NAME),
+            "a manifest may only name files we actually wrote"
+        );
+
+        let second = pass(&conn, dir.path(), Dirty::ALL);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(README_NAME)).unwrap(),
+            theirs,
+            "the second pass read the manifest back and took it anyway"
+        );
+        assert_eq!(second.skipped, 1, "{second:?}");
+    }
+
+    /// The half that keeps the guard above from being a refusal to write anything: a
+    /// `README.txt` this app wrote is still rewritten after a reader edits it, which is what
+    /// the file itself promises them.
+    #[test]
+    fn a_readme_the_mirror_wrote_is_rewritten_after_a_reader_edits_it() {
+        let (conn, dir, _) = seeded_db_and_temp_root();
+        pass(&conn, dir.path(), Dirty::ALL);
+        std::fs::write(dir.path().join(README_NAME), b"I typed over it").unwrap();
+
+        let report = pass(&conn, dir.path(), Dirty::ALL);
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join(README_NAME)).unwrap(),
+            README,
+            "a file the manifest names is ours to rewrite"
+        );
+        assert_eq!(report.skipped, 0, "{report:?}");
+    }
+
+    /// The one arm that keeps the guard from being permanent. `README.txt` tells the reader
+    /// deleting `.mirror-manifest` is safe; a guard with no content check would then freeze the
+    /// README *we* wrote at whatever that build said, for good, because no later manifest would
+    /// ever name it again.
+    #[test]
+    fn a_readme_identical_to_ours_is_adopted_when_the_manifest_is_gone() {
+        let (conn, dir, _) = seeded_db_and_temp_root();
+        pass(&conn, dir.path(), Dirty::ALL);
+        std::fs::remove_file(dir.path().join(MANIFEST_NAME)).unwrap();
+
+        let report = pass(&conn, dir.path(), Dirty::ALL);
+        assert_eq!(report.skipped, 0, "our own README was disowned: {report:?}");
+        let manifest = std::fs::read_to_string(dir.path().join(MANIFEST_NAME)).unwrap();
+        assert!(manifest.lines().any(|line| line == README_NAME));
+    }
+
+    /// **M2: `is_ours` ignores ASCII case and `wanted` did not, so `recover` could delete a
+    /// file it wanted.** Reachable only with no manifest, and only after a reader or a sync
+    /// client has re-cased one of our files — and it costs that file in the same pass that
+    /// wrote it, because `put` runs before `prune`.
+    ///
+    /// **This test is sharp on a case-insensitive filesystem and vacuous on a case-sensitive
+    /// one, deliberately.** On Windows `put` writes through the existing `AZULA.TXT` and
+    /// `recover` then deletes the only copy; on Linux `put` creates a second file under the
+    /// planned spelling and `AZULA.TXT` really is an orphan. Every measured claim in this repo
+    /// was taken on Windows, which is also the platform `is_ours` ignores case for.
+    #[test]
+    fn recover_keeps_a_file_it_wants_whose_casing_has_drifted() {
+        let (conn, dir, _) = seeded_db_and_temp_root();
+        pass(&conn, dir.path(), Dirty::ALL);
+
+        // Re-cased by hand rather than by `rename`, which is not a case-only rename everywhere.
+        let planned = deck_file(&dir, "Azula");
+        let body = std::fs::read(&planned).unwrap();
+        std::fs::remove_file(&planned).unwrap();
+        std::fs::write(dir.path().join("Decks/Azula/AZULA.TXT"), &body).unwrap();
+        std::fs::remove_file(dir.path().join(MANIFEST_NAME)).unwrap();
+
+        pass(&conn, dir.path(), Dirty::ALL);
+
+        let survivors: Vec<String> = std::fs::read_dir(dir.path().join("Decks/Azula"))
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.eq_ignore_ascii_case("Azula.txt"))
+            .collect();
+        assert_eq!(
+            survivors.len(),
+            1,
+            "the deck's plain file was deleted by the pass that wrote it"
+        );
     }
 
     #[test]

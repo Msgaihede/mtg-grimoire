@@ -3462,7 +3462,7 @@ export interface CacheCleared {
 /**
  * What one pass of the plain-text mirror did — `src-tauri/src/mirror/run.rs`.
  *
- * Four counts and no list of names, because the numbers are what a panel says and the names
+ * Five counts and no list of names, because the numbers are what a panel says and the names
  * are what the folder says. **`failed` is not an error**, exactly as {@link CacheCleared}'s is
  * not: a file the mirror could not write is one file, the pass carried on past it, and the
  * honest answer is the count that landed beside the count that would not.
@@ -3475,6 +3475,17 @@ export interface CacheCleared {
 export interface PassReport {
   written: number;
   unchanged: number;
+  /**
+   * Files the mirror left alone **because they are not its own** — in practice a `README.txt`
+   * that was already in the folder the reader chose.
+   *
+   * A different fact from every other count here, which is why it is a count of its own:
+   * `unchanged` says the bytes on disk are already the bytes we would write, and `failed` says
+   * we tried and could not. Neither is true of a file we declined to touch. The backup root is
+   * user-choosable — a synced folder, a Dropbox, a stick with a decade of somebody's notes on
+   * it — and the manifest is the only authority on which files in it are ours.
+   */
+  skipped: number;
   /** Files this app would itself have written that it no longer would — a renamed deck's old
    *  folder. Never a file the reader put there; see the spec's pruning rule. */
   pruned: number;

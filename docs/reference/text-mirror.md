@@ -178,7 +178,7 @@ Hash comparison means the over-approximation writes nothing.
 success, because both are `app_meta` rows the update hook must stay quiet about and both change what
 every file would say. The marketplace one is there because a live pass found every mirrored CSV
 still carrying the previous marketplace's prices; pressing `Rebuild now` moved one row from 8.25 to
-5.99, which is what proved it. Marked **only on success** — a refused path or a rejected id changed
+5.99, which is what proved it (**debug build, 2026-08-25**, the corpus in the cost table below). Marked **only on success** — a refused path or a rejected id changed
 nothing and must not cost a full render.
 
 ### The debounce is two atomics, and the second one is why it works
@@ -188,7 +188,8 @@ nothing and must not cost a full render.
 no bit — a reader dragging thirty cards into one deck would have the pass fire in the middle of it.
 The counter is bumped by **every** mark, changed or not, and the thread restarts its `DEBOUNCE`
 whenever the number moves. `TICK` is 250 ms and `DEBOUNCE` is 2,000 ms; the live pass measured the
-first changed file at **+2,793 ms** after a card was added, which is those two constants working.
+first changed file at **+2,793 ms** after a card was added (**debug build, 2026-08-25**; the same
+figure is in the stamped cost table below), which is those two constants working.
 
 `take()` is a single `swap(0)` — read and clear in one atomic — because a write landing between a
 separate peek and clear would be seen by neither the pass that is starting nor the one after it, and
@@ -302,6 +303,44 @@ segment. This threat model is one the manifest itself introduced, and it only ev
 **`sweep_empty` uses `remove_dir`, never `remove_dir_all`**: if anything is left in a directory the
 pass emptied, it is not ours. And only directories that held something taken away are even looked at.
 
+**R15 — the manifest is also the authority on what may be *overwritten*, and that fence was
+missing until 2026-08-25.** Five rulings hardened the path that deletes; nothing had looked at what
+the first pass writes **into** a folder the reader chose. `settings::set_root` accepts any absolute
+path whose parent exists — a drive root included — and `README.txt` is the one fixed name the mirror
+puts at the top of it, so pointing **Change folder…** at a populated folder overwrote whatever
+`README.txt` was already there, silently. That is the same harm the prune fence exists to prevent,
+arriving by the other door.
+
+`run::put_readme` is the fence, and the manifest decides: a `README.txt` no previous manifest names
+is the reader's, is left where it is, and is counted in `PassReport::skipped` — a fifth number,
+because `unchanged` means "the bytes on disk are already ours" and `failed` means "we tried and could
+not", and neither is true of a file we declined to touch. The panel says **"1 left alone (yours)"**
+rather than a bare count for the same reason.
+
+Two arms make it work rather than merely refuse:
+
+- **A `README.txt` byte-identical to ours is adopted**, not skipped. Without that, a reader who
+  deletes `.mirror-manifest` — which the README tells them is safe — would freeze the README *we*
+  wrote at whatever that build said, for good, because no later manifest would ever name it again.
+- **A skipped README is left out of the manifest this pass writes.** Listing it would make the
+  *next* pass read it back as ours, so the reader's file would survive one pass and be overwritten
+  by the one two seconds later — the guard undone by the file that authorises it. It stays in
+  `prune`'s `wanted` set unconditionally, so it can never be deleted either.
+
+`mirror_set_root` was **deliberately not** made to refuse a populated folder. The only file it could
+refuse over is exactly the one now protected, refusing turns a folder the mirror can use perfectly
+well into one the reader cannot choose at all, and it could not cover the default root or a README
+dropped in later — a second, weaker fence in front of the real one. The panel's sentence says the
+rule instead: "a file the backup did not write is never overwritten either."
+
+**`recover`'s membership test ignores ASCII case, because `is_ours` does.** Each half was right
+alone and the pair was not: `is_ours` compares with `eq_ignore_ascii_case` deliberately, because
+Windows does and a file this app created as `Azula.txt` can be enumerated as `AZULA.TXT` after a
+reader or a sync client re-cases it — while `wanted` was a set of the plan's exact spellings. The
+re-cased file was claimed by the first test, missed by the second, and **dropped in the same pass
+that had just written it**, because `put` runs before `prune`. Fixed 2026-08-25 by lowercasing both
+sides of that one lookup.
+
 ### What a reader loses if they delete `.mirror-manifest`
 
 **Stale files in directories the current plan no longer names are orphaned permanently, not for one
@@ -344,7 +383,8 @@ retried every tick the mask stays dirty — roughly 1,600 times an hour, each on
 a path that is not there. It stops at a minute rather than climbing further because the reader who
 plugs the stick back in is often watching the panel while they do it, and `Rebuild now` is the
 immediate way out. **A root that comes back gets a full rebuild rather than a partial one**: measured
-live, the folder held 100 files again within 5 s.
+live (**debug build, 2026-08-25**, the same 100-file corpus as the cost table), the folder held
+100 files again within 5 s.
 
 **A panic in the pass is caught rather than allowed to end the thread.** Uncaught it was survivable in
 the sense that nothing else broke and invisible in every sense that matters — no `error_log` row, no
@@ -425,12 +465,32 @@ Two writers, one behaviour, and a build that goes red the moment they disagree.
   `parse.ts` and asserts it recovers the cards. Since the cargo suite has already proved Rust
   reproduces those bytes exactly, the app's parser demonstrably reads what the mirror writes — a
   claim today's writer-then-parse test, closed inside one implementation, cannot make.
+- **A second golden, one level up: `__golden__/fields.json`.** The rendered files fence the
+  *writer*; for six of the seven formats they cannot fence the **registry**. `write_line` renders
+  exactly seven ids, so every other id is invisible outside CSV — adding `FieldId::Lang` to
+  `Format::Plain`'s `optional` on one side alone moves **zero golden bytes** while changing the
+  fold key, and one printing held in two languages would export as two lines from the mirror and
+  one from the dialog with all 70 files green. CSV was fenced all along because its header row
+  **is** `available_fields` spelled out. `fields.json` holds `SURFACE_FIELDS` and what
+  `availableFields`/`defaultFields` answer for all 21 (format, surface) pairs, written by
+  `npm run golden` from the TypeScript side and asserted by `golden.test.ts` and
+  `transfer/fields.rs`. **Measured by mutation on 2026-08-25**: that drift reddens exactly one test
+  on each side and no golden file. `FieldId::key` and `Surface::key` exist for it, and are
+  self-fencing — a wrong wire word is red in the same test.
 
 **The port reproduced all of it on the first run of the finished writer** — no golden regenerated,
-none unreproducible. And it held against the real corpus: driven live 2026-08-25, all **seven** of a
-real deck's mirrored files were byte-identical to what the export dialog produces with every field
-ticked, `Azula.csv` included at 11,527 bytes against 11,471 characters — 56 bytes of multi-byte
-UTF-8 in the type lines. The fence holds through the encoding, not only through the ASCII.
+none unreproducible. And it held against the real corpus: driven live 2026-08-25 (debug build), all
+**seven** of a real deck's mirrored files were byte-identical to what the export dialog produces
+with every field ticked **and "Only cards MTG Arena has" left unticked**, `Azula.csv` included at
+11,527 bytes against 11,471 characters — 56 bytes of multi-byte UTF-8 in the type lines. The fence
+holds through the encoding, not only through the ASCII.
+
+**That caveat is the design rather than a gap in the check, and it is one file of the seven.**
+Spec §3.1 says the mirror leaves Arena's row filter off, so `*.arena.txt` in the backup lists every
+card — a complete record and not a valid Arena import, which `README.txt` says out loud.
+`export/arena.ts`'s filter has no Rust counterpart by design and `card.rs`'s `legalities` is
+carried but read by nothing on this side. Ticking that box in the dialog produces a shorter file
+than the mirror's, correctly.
 
 ### **A golden pins only what the fixture varies**, and this is the most transferable lesson in the plan
 
@@ -448,6 +508,12 @@ Three holes were found *in the fence itself*, and no golden file could have caug
    which already encodes `categoryActive`, so a switched-off and a switched-on row can never fold
    whichever order runs first. Closed by two tests using the one shape the discriminator is blind
    to: a row with `category_active` but no `category_kind`.
+
+4. **Six of the seven formats could absorb a `FORMAT_FIELDS` change with no golden byte moving**,
+   which contradicted spec §6's stated guarantee — found by adding `FieldId::Lang` to
+   `Format::Plain` in Rust alone and watching all 70 files stay green. That one is **not** answered
+   by a targeted test: it is answered by committing the registry itself as a golden, which is the
+   same fence shape applied one level up. See `fields.json` above.
 
 **So: targeted unit tests beside the fence are what cover a rule whose inputs the corpus never
 varies.** A byte-comparison suite is a strong fence against *drift* and a weak one against *a rule

@@ -42,6 +42,17 @@ impl Surface {
     /// Every surface. A sweep over this is how a suite covers all three without a list of
     /// three written down at each call site and forgotten when a fourth arrives.
     pub const ALL: [Self; 3] = [Self::Deck, Self::Collection, Self::Wishlist];
+
+    /// The surface's wire word — the one `#[serde(rename_all = "lowercase")]` reads above, and
+    /// what `__golden__/fields.json` keys its rows by. Written out rather than derived from the
+    /// `Deserialize` impl because a key is data and a derive is a mechanism.
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Deck => "deck",
+            Self::Collection => "collection",
+            Self::Wishlist => "wishlist",
+        }
+    }
 }
 
 /// A format a transfer can be written to.

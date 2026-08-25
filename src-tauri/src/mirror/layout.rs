@@ -913,19 +913,55 @@ mod tests {
         );
     }
 
+    /// **Which directories the plan owns, and which of them claim files — written out.**
+    ///
+    /// The version this replaced derived `expected` from the plan's own output by sorting and
+    /// deduplicating it, so nothing could ever redden it: `Plan.dirs` is built from a
+    /// `BTreeSet`, which makes sorted-and-unique true by construction. It read as coverage for
+    /// an invariant [`Plan`]'s doc leans on and was ceremony.
+    ///
+    /// What is worth pinning is the *contents*. A `stem` is what [`crate::mirror::run`]'s
+    /// recovery path is allowed to claim files by, so a container that grew one — `Decks`, or a
+    /// reader's own deck folder — is how a pass comes to delete a file of theirs, and a list
+    /// that lost one is an orphan nothing can ever tidy. The literal below is the whole answer
+    /// for the adversarial shape: two deck folders whose names collide with a deck and with
+    /// each other's, an archived deck, a theory list, and three collection folders named after
+    /// files the mirror writes.
     #[test]
-    fn owned_directories_are_sorted_and_unique() {
-        let rows = adversarial_shape();
-        let dirs = rows.dirs();
-        let paths: Vec<&str> = dirs.iter().map(|d| d.path.as_str()).collect();
-        let mut expected = paths.clone();
-        expected.sort_unstable();
-        expected.dedup();
-        assert_eq!(
-            paths, expected,
-            "a parent has to precede its children, and appear once"
-        );
+    fn the_owned_directories_and_the_stems_that_claim_files_are_exactly_these() {
+        let dirs = adversarial_shape().dirs();
+        let got: Vec<(&str, Option<&str>)> = dirs
+            .iter()
+            .map(|d| (d.path.as_str(), d.stem.as_deref()))
+            .collect();
+        assert_eq!(got, EXPECTED_OWNED_DIRS);
     }
+
+    /// Every directory [`plan_files`] owns for [`adversarial_shape`], in the order it answers
+    /// them, with the stem each one claims files by. `None` is a container: it holds
+    /// directories and claims nothing, which is what keeps a reader's `Standard.csv` in their
+    /// own `Standard` folder out of the recovery path's reach.
+    const EXPECTED_OWNED_DIRS: [(&str, Option<&str>); 19] = [
+        ("", None),
+        ("Collection", Some("Collection")),
+        ("Collection/Binder", Some("Binder")),
+        ("Collection/Binder/Binder.txt (2)", Some("Binder.txt (2)")),
+        ("Collection/Collection.csv (2)", Some("Collection.csv (2)")),
+        ("Decks", None),
+        ("Decks/Archived", None),
+        ("Decks/Archived (2)", None),
+        ("Decks/Archived (3)", Some("Archived (3)")),
+        ("Decks/Archived (3)/Theory", Some("Archived (3)")),
+        ("Decks/Archived/Archived (2)", None),
+        ("Decks/Archived/Archived (2)/Azula", Some("Azula")),
+        ("Decks/Archived/Archived (2)/Azula/Theory", Some("Azula")),
+        ("Decks/Archived/Azula", None),
+        ("Decks/Azula", None),
+        ("Decks/Azula/Azula", Some("Azula")),
+        ("Decks/Azula/Azula/Theory", Some("Azula")),
+        ("Wishlist", Some("Wishlist")),
+        ("Wishlist/Wishlist.txt (2)", Some("Wishlist.txt (2)")),
+    ];
 
     #[test]
     fn a_deck_gets_seven_files_and_the_plain_one_carries_no_format_segment() {

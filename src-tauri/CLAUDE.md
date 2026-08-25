@@ -569,6 +569,13 @@ with the measurements: [text-mirror.md](../docs/reference/text-mirror.md).
   precedent. A dropped row costs the log one entry; the sentence still reaches the panel through
   `mirror_status`, which is in memory. Nothing in a mirror pass may ever make a button answer
   `db::BUSY`.
+- **The manifest authorises what a pass may *overwrite* as well as what it may delete.** The root
+  is user-choosable and `set_root` accepts any absolute path whose parent exists, so `README.txt` —
+  the one fixed name the mirror writes at the top of it — may already be the reader's. `put_readme`
+  writes it only when a previous manifest named it or the bytes on disk are already ours, counts
+  the refusal in `PassReport::skipped`, and **leaves a skipped README out of the manifest it then
+  writes** (listing it would make the next pass claim it). A second fixed name anywhere in the
+  mirror owes the same treatment.
 - **Every filesystem test in `mirror/` runs against a `tempfile` root, and none may touch
   `data/`.** The default root is `data_dir/export`, so a test that forgets to set `mirror_root`
   inside its tempdir writes into the developer's own mirror.

@@ -36,7 +36,7 @@ const RAN: MirrorStatus = {
   enabled: true,
   root: ROOT,
   lastRunAt: String(NOW - 7_200),
-  lastReport: { written: 142, unchanged: 208, pruned: 0, failed: 0 },
+  lastReport: { written: 142, unchanged: 208, skipped: 0, pruned: 0, failed: 0 },
   lastError: null,
 };
 
@@ -56,7 +56,7 @@ const UNWRITABLE: MirrorStatus = {
   enabled: true,
   root: "E:\\Backups\\MTG",
   lastRunAt: String(NOW - 300),
-  lastReport: { written: 0, unchanged: 0, pruned: 0, failed: 350 },
+  lastReport: { written: 0, unchanged: 0, skipped: 0, pruned: 0, failed: 350 },
   lastError: 'The folder "E:\\Backups\\MTG" is not there.',
 };
 
@@ -112,6 +112,7 @@ beforeEach(() => {
   mirrorRebuild.mockReset().mockResolvedValue({
     written: 350,
     unchanged: 0,
+    skipped: 0,
     pruned: 2,
     failed: 0,
   });
@@ -233,6 +234,31 @@ describe("BackupPanel", () => {
    * sit in one file — and it means none of them proves the panel ever *asks*. This one starts
    * with an empty cache, so the only way anything reaches the screen is `ipc.mirrorStatus`.
    */
+  /**
+   * **The one panel here describing a *background* thread is the one that has to poll.** Its
+   * five neighbours read state only this window changes, so invalidating after each write is the
+   * whole story; a mirror pass runs on a thread nothing in the page can hear from, and a panel
+   * opened during the ~3 s startup pass said "Not run yet" until the query happened to remount.
+   *
+   * Fake timers rather than a six-second wait, and `shouldAdvanceTime` so that the promises the
+   * refetch produces still settle. No `userEvent` in here: that library takes its own delay from
+   * the timer implementation and hangs the whole file under a fake one.
+   */
+  it("keeps asking, so a pass nobody pressed for reaches the panel on its own", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      mirrorStatus.mockResolvedValue(NO_PASS_YET);
+      render(<BackupPanel />, { wrapper: LiveWorld });
+      expect(await screen.findByText(/Not run yet/)).toBeInTheDocument();
+
+      mirrorStatus.mockResolvedValue(RAN);
+      await vi.advanceTimersByTimeAsync(6_000);
+      expect(await screen.findByText(/142 files written/)).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("reads the mirror's state from the backend", async () => {
     mirrorStatus.mockResolvedValue({ ...RAN, root: "E:\\Backups\\MTG" });
     render(<BackupPanel />, { wrapper: LiveWorld });
@@ -378,22 +404,30 @@ describe("BackupPanel", () => {
 
 describe("passSummary", () => {
   it("names both halves of an ordinary pass", () => {
-    expect(passSummary({ written: 142, unchanged: 208, pruned: 0, failed: 0 })).toBe(
+    expect(passSummary({ written: 142, unchanged: 208, skipped: 0, pruned: 0, failed: 0 })).toBe(
       "142 files written, 208 unchanged",
     );
   });
 
   /** Zero is not said. A line ending "0 removed, 0 could not be written" every day trains a
    *  reader to stop reading the line on the day it matters. */
-  it("says pruned and failed only when there are any", () => {
-    expect(passSummary({ written: 1, unchanged: 0, pruned: 3, failed: 2 })).toBe(
+  it("says skipped, pruned and failed only when there are any", () => {
+    expect(passSummary({ written: 1, unchanged: 0, skipped: 0, pruned: 3, failed: 2 })).toBe(
       "1 file written, 0 unchanged, 3 removed, 2 could not be written",
+    );
+  });
+
+  /** The reader's own `README.txt`, which the pass will not overwrite. It is said in words
+   *  because a bare number could not distinguish it from a file that failed. */
+  it("names a file it left alone as theirs", () => {
+    expect(passSummary({ written: 349, unchanged: 0, skipped: 1, pruned: 0, failed: 0 })).toBe(
+      "349 files written, 0 unchanged, 1 left alone (yours)",
     );
   });
 
   /** A pass over fifty decks and a folder tree reaches four figures routinely. */
   it("separates thousands", () => {
-    expect(passSummary({ written: 2_450, unchanged: 0, pruned: 0, failed: 0 })).toBe(
+    expect(passSummary({ written: 2_450, unchanged: 0, skipped: 0, pruned: 0, failed: 0 })).toBe(
       "2,450 files written, 0 unchanged",
     );
   });

@@ -1228,7 +1228,13 @@ export function mirrorFailedPass(db: FakeDb, now: number = Math.floor(Date.now()
   const root = "E:\\Backups\\MTG";
   db.mirror.root = root;
   db.mirror.lastRunAt = now - 300;
-  db.mirror.lastReport = { written: 0, unchanged: 0, pruned: 0, failed: mirrorFileCount(db) };
+  db.mirror.lastReport = {
+    written: 0,
+    unchanged: 0,
+    skipped: 0,
+    pruned: 0,
+    failed: mirrorFileCount(db),
+  };
   db.mirror.lastError = mirrorRootGone(root);
 }
 
@@ -10696,8 +10702,10 @@ export function writeHandlers(db: FakeDb) {
      * compared against, so this is the model rather than a simulation of it, and it is the one
      * thing about the mirror a story can actually watch happen.
      *
-     * `pruned` is always `0` and that is not a shortcut: pruning deletes files this app would
-     * no longer write, and nothing in a fake with no filesystem can have been left behind.
+     * `pruned` and `skipped` are always `0` and that is not a shortcut: pruning deletes files
+     * this app would no longer write, and `skipped` counts a `README.txt` the reader already had
+     * in the folder they chose. Neither can happen in a fake with no filesystem — there is
+     * nothing left behind to remove and nothing of theirs to decline to overwrite.
      *
      * **It stamps `lastRunAt`**, which the shipped `mirror_rebuild` does not yet do — the
      * command answers its report without recording the pass, so the panel's "Last written…"
@@ -10712,6 +10720,7 @@ export function writeHandlers(db: FakeDb) {
       const report: PassReport = {
         written: first ? total : 0,
         unchanged: first ? 0 : total,
+        skipped: 0,
         pruned: 0,
         failed: 0,
       };

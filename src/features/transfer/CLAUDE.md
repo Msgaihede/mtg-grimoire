@@ -491,11 +491,23 @@ corpus is what turns drift into a red build. Full record:
   record** because it is what shipped. `scripts/golden.mjs` deliberately massages nothing: if a
   golden file looks wrong, the writer is what to argue with. It needs Node 22.18 or later, and
   `npm run verify` does not run it.
+- **`__golden__/fields.json` is the registry golden, and it exists because the `.txt` files
+  cannot fence this half.** `writeLine` renders exactly seven ids, so **six of the seven formats
+  can absorb a change to `FORMAT_FIELDS` with zero golden bytes moving**: adding `lang` to
+  `plain`'s `optional` on one side alone moves no file, while changing the *fold key* — which
+  needs two corpus rows differing solely in that field to show up, and none exist. One printing
+  held in two languages would then export as two lines from the mirror and one from the dialog,
+  with all 70 files green. Only CSV was ever fenced here, because its header row **is**
+  `availableFields` spelled out. So `npm run golden` also writes `fields.json` — `SURFACE_FIELDS`
+  plus what `availableFields` and `defaultFields` answer for all 21 (format, surface) pairs — and
+  `golden.test.ts` and `fields.rs`'s cargo suite each assert it. Measured by mutation on
+  2026-08-25: the drift above reddens exactly one test on each side and no golden file.
 - **Regenerating obliges a matching change in `src-tauri/src/transfer/`, or `cargo test` goes
   red** — which is the point of the fence rather than a nuisance. **Adding a field is three edits
   and a regeneration**: `fields.ts`, `fields.rs`, `corpus.json` if the field needs a value, then
   `npm run golden`. Skipping the Rust half is a red cargo suite, and `npm run verify` runs both
-  suites, so there is no way to land half of it.
+  suites, so there is no way to land half of it. **What makes that true of a registry edit is
+  `fields.json` and not the rendered bytes** — see the row above.
 - **`deny_unknown_fields` is one-directional, and two other things close the other half.** It
   catches a field TypeScript *adds*; serde reads a missing `Option<T>` as `None`, so a field
   TypeScript *deletes* loads silently. The goldens catch a deletion on the Rust side, and on this
@@ -514,7 +526,9 @@ corpus is what turns drift into a red build. Full record:
   beside the fence are what cover a rule whose inputs the corpus never varies** — a
   byte-comparison suite is a strong fence against drift and a weak one against a rule nothing
   exercises. Adding a scenario to the corpus is the other half of the answer, and it is not free:
-  a corpus row is a fixture five suites read.
+  a corpus row is a fixture **three test files** read (`golden.test.ts`, `transfer/card.rs`,
+  `transfer/write.rs`) plus `scripts/golden.mjs`. It said *five* until 2026-08-25, thirty-eight
+  lines under the same file's "both suites" — a prose-only edit routes to neither CI job.
 - **The parser did not follow, and there is no Rust parser.** The mirror never reads a file back,
   so one would exist only to be tested. The round trip survives transitively and gets *stronger*:
   vitest parses the golden files through `parse.ts` and recovers the cards, and the cargo suite

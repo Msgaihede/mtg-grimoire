@@ -30,12 +30,18 @@ const files = (n: number): string => `${count(n)} ${n === 1 ? "file" : "files"}`
  * not are the same sentence with `written` alone; `unchanged` is what tells them apart at a
  * glance.
  *
- * `pruned` and `failed` are said only when they are not zero, which is the rule
+ * `skipped`, `pruned` and `failed` are said only when they are not zero, which is the rule
  * {@link CacheCleared}'s panel already follows: a line ending "0 removed, 0 could not be
  * written" every day trains a reader to stop reading the line on the day it matters.
+ *
+ * **"left alone" is the reader's own file, and it needs the words rather than a number.** It is
+ * a `README.txt` that was in the folder before the mirror was pointed at it: the pass will not
+ * overwrite a file no manifest of ours has ever named, so the one thing the folder is missing
+ * is the one thing this line has to be able to explain.
  */
 export function passSummary(report: PassReport): string {
   const parts = [`${files(report.written)} written`, `${count(report.unchanged)} unchanged`];
+  if (report.skipped > 0) parts.push(`${count(report.skipped)} left alone (yours)`);
   if (report.pruned > 0) parts.push(`${count(report.pruned)} removed`);
   if (report.failed > 0) parts.push(`${count(report.failed)} could not be written`);
   return parts.join(", ");
@@ -132,7 +138,23 @@ export function BackupPanel(): JSX.Element {
    *  so that it carries a *time* — see {@link Rebuilt} and {@link errorOutranks}. */
   const [rebuilt, setRebuilt] = useState<Rebuilt | null>(null);
 
-  const read = useQuery({ queryKey: MIRROR_KEY, queryFn: () => ipc.mirrorStatus() });
+  /**
+   * **The one panel here describing a *background* thread is the one that has to poll.** Its
+   * five neighbours read state only this window changes, so an invalidation after each write is
+   * the whole story; the mirror's pass runs on a thread nothing in the page can hear from. A
+   * panel opened during the ~3 s startup pass said "Not run yet — press Rebuild now to write
+   * one." and kept saying it until the query happened to remount.
+   *
+   * 5 s rather than anything faster: `DEBOUNCE` is 2 s and a measured pass is ~0.3 s, so the
+   * longest a finished pass stays unreported is about one debounce plus one interval — and the
+   * poll is one `app_meta` read and a clone of an in-memory record, taken only while this panel
+   * is on screen.
+   */
+  const read = useQuery({
+    queryKey: MIRROR_KEY,
+    queryFn: () => ipc.mirrorStatus(),
+    refetchInterval: 5_000,
+  });
   const status = read.data ?? null;
 
   const invalidate = () => void client.invalidateQueries({ queryKey: MIRROR_KEY });
@@ -258,7 +280,8 @@ export function BackupPanel(): JSX.Element {
           </div>
           <p className="text-xs text-dim">
             Moving it writes a fresh copy at the new folder and leaves the old one exactly where
-            it is. Deleting a folder of your cards is not a setting&rsquo;s decision to make.
+            it is. Deleting a folder of your cards is not a setting&rsquo;s decision to make, and
+            a file the backup did not write is never overwritten either.
           </p>
 
           <div className="flex flex-wrap items-center justify-between gap-3">

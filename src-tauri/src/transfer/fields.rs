@@ -104,6 +104,46 @@ pub const FIELD_IDS: [FieldId; 27] = [
 /// What no format may omit. A line with no count and no name is not a card.
 pub const ALWAYS: [FieldId; 2] = [FieldId::Quantity, FieldId::Name];
 
+/// The field's wire word — the string `TRANSFER_FIELD_IDS` spells it with.
+///
+/// **A spelling, not a label, and not the CSV header either** — [`Format::key`] one file over,
+/// for the same reason. It is what `__golden__/fields.json` names a field by, so the registry
+/// fence can compare the two implementations' field lists id for id rather than only through
+/// the bytes a CSV header row happens to expose. A wrong entry here is a red
+/// `every_format_and_surface_offers_the_fields_typescript_says` rather than a silent
+/// mismatch: the golden is written from TypeScript's own ids.
+pub fn key(id: FieldId) -> &'static str {
+    match id {
+        FieldId::Quantity => "quantity",
+        FieldId::Name => "name",
+        FieldId::SetCode => "setCode",
+        FieldId::CollectorNumber => "collectorNumber",
+        FieldId::Category => "category",
+        FieldId::Finish => "finish",
+        FieldId::Tag => "tag",
+        FieldId::TagColor => "tagColor",
+        FieldId::Condition => "condition",
+        FieldId::Lang => "lang",
+        FieldId::TradelistQuantity => "tradelistQuantity",
+        FieldId::PurchasePrice => "purchasePrice",
+        FieldId::PurchaseCurrency => "purchaseCurrency",
+        FieldId::AcquiredAt => "acquiredAt",
+        FieldId::AcquisitionSource => "acquisitionSource",
+        FieldId::SerialNumber => "serialNumber",
+        FieldId::Grading => "grading",
+        FieldId::Altered => "altered",
+        FieldId::Signed => "signed",
+        FieldId::Proxy => "proxy",
+        FieldId::Misprint => "misprint",
+        FieldId::Tags => "tags",
+        FieldId::Notes => "notes",
+        FieldId::SetName => "setName",
+        FieldId::Rarity => "rarity",
+        FieldId::TypeLine => "typeLine",
+        FieldId::UnitPrice => "unitPrice",
+    }
+}
+
 /// The CSV column name — and what a CSV *reader* matches an incoming header against.
 ///
 /// **Data rather than a label**: the words here are written into files and read back out of
@@ -161,9 +201,24 @@ fn num_i(v: Option<i64>) -> String {
 /// The same rule for a price.
 ///
 /// Rust's `f64` Display is the shortest representation that round-trips, which is what JavaScript's
-/// `String(n)` gives too — so `2.5` is `2.5` and `2.0` is `2` on both sides. They part company
-/// only above `1e21`, where JS switches to exponent notation and Rust does not; no price in this
-/// app reaches it.
+/// `String(n)` gives too — so `2.5` is `2.5` and `2.0` is `2` on both sides.
+///
+/// **They part company in five places, not one** (measured both ways on 2026-08-25, debug build:
+/// `node -e` against `rustc -O`):
+///
+/// | value | JavaScript | Rust |
+/// | --- | --- | --- |
+/// | `-0.0` | `0` | `-0` |
+/// | `1e-7` (and anything below `1e-6`) | `1e-7` | `0.0000001` |
+/// | `5e-7` | `5e-7` | `0.0000005` |
+/// | `1e21` and above | `1e+21` | `1000000000000000000000` |
+/// | infinity | `Infinity` / `-Infinity` | `inf` / `-inf` |
+///
+/// `NaN` agrees. **None of the five is reachable for a price** through any write the app offers —
+/// `collection_entries.purchase_price` is an unconstrained `REAL`, so a hand-edited `0.0000005`
+/// would write `5e-7` from the export dialog and `0.0000005` from the mirror, and that is the
+/// whole of the exposure. The sentence here used to name only `1e21`, which is how a note that
+/// no build checks comes to be four cases short.
 fn num_f(v: Option<f64>) -> String {
     match v {
         Some(n) => n.to_string(),
@@ -549,5 +604,76 @@ mod tests {
         assert_eq!(read(FieldId::PurchasePrice, &card), "1.25");
         assert_eq!(read(FieldId::UnitPrice, &card), "2");
         assert_eq!(read(FieldId::Misprint, &sample()), "");
+    }
+
+    /// `__golden__/fields.json`, which is TypeScript's answer to the two questions this file
+    /// exists to answer.
+    #[derive(serde::Deserialize)]
+    struct FieldsGolden {
+        surfaces: std::collections::BTreeMap<String, Vec<String>>,
+        available: std::collections::BTreeMap<String, Vec<String>>,
+        default: std::collections::BTreeMap<String, Vec<String>>,
+    }
+
+    fn fields_golden() -> FieldsGolden {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../src/features/transfer/__golden__/fields.json");
+        let text = std::fs::read_to_string(&path).unwrap_or_else(|e| {
+            panic!(
+                "the registry golden is not readable at {}: {e}. It is TypeScript's file — \
+                 run `npm run golden`",
+                path.display()
+            )
+        });
+        serde_json::from_str(&text).unwrap_or_else(|e| panic!("{}: {e}", path.display()))
+    }
+
+    fn keys(ids: &[FieldId]) -> Vec<String> {
+        ids.iter().map(|id| key(*id).to_owned()).collect()
+    }
+
+    /// **The registry fence, one level above the rendered bytes.**
+    ///
+    /// The 70 golden `.txt` files fence the *writer*, and for six of the seven formats they
+    /// cannot fence this file: `write_line` renders exactly seven ids, so adding `Lang` to
+    /// `Format::Plain`'s `optional` here and nowhere else moves **zero golden bytes** while
+    /// changing the fold key — and one printing held in two languages would then export as two
+    /// lines from the mirror and one from the export dialog, with every test in both suites
+    /// green. Spec §6's promise that skipping the Rust half is a red `cargo test` was true of
+    /// CSV alone, whose header row *is* the field list spelled out.
+    ///
+    /// So the tables themselves are committed, in the shape that already works: written from
+    /// TypeScript by `npm run golden`, asserted here and in `golden.test.ts`. All 21 pairs on
+    /// both axes, plus `SURFACE_FIELDS` — which is not recoverable from the intersections,
+    /// because a field no format offers drops out of every one of them.
+    #[test]
+    fn every_format_and_surface_offers_the_fields_typescript_says() {
+        let golden = fields_golden();
+        assert_eq!(golden.available.len(), 21, "7 formats × 3 surfaces");
+        assert_eq!(golden.default.len(), 21);
+
+        for surface in Surface::ALL {
+            assert_eq!(
+                golden.surfaces.get(surface.key()),
+                Some(&keys(surface_fields(surface))),
+                "SURFACE_FIELDS disagrees for {}",
+                surface.key()
+            );
+        }
+        for format in Format::ALL {
+            for surface in Surface::ALL {
+                let at = format!("{}.{}", format.key(), surface.key());
+                assert_eq!(
+                    golden.available.get(&at),
+                    Some(&keys(&available_fields(format, surface))),
+                    "available_fields disagrees at {at}"
+                );
+                assert_eq!(
+                    golden.default.get(&at),
+                    Some(&keys(&default_fields(format, surface))),
+                    "default_fields disagrees at {at}"
+                );
+            }
+        }
     }
 }

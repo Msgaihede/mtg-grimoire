@@ -31,8 +31,10 @@ use rusqlite::Connection;
 /// collection instead of thirty, and nothing here is drawing rows, so the page size costs only
 /// memory.
 ///
-/// If either clamp is ever lowered this constant has to follow it down.
-/// `a_collection_larger_than_one_page_is_read_whole` is what says so.
+/// If either clamp is ever lowered this constant has to follow it down, and **there is one test
+/// per clamp because there are two constants**:
+/// `a_collection_larger_than_one_page_is_read_whole` and
+/// `a_wishlist_larger_than_one_page_is_read_whole`.
 pub const PAGE: u32 = 500;
 
 /// Every card the source holds, ready to be written to a file.
@@ -506,6 +508,38 @@ mod tests {
             cards[0].finish, None,
             "two spellings of one finish would write two lines"
         );
+    }
+
+    /// `n` wishes, told apart by the printing they name — [`crate::schema::WISHLIST_GRAIN`]'s
+    /// second term, and the only one of its four a fixture can vary `n` times cheaply. A serial
+    /// number is not in this grain, so the collection's trick does not port.
+    fn db_with_n_wishes(n: u32) -> Connection {
+        let conn = seeded();
+        for i in 0..n {
+            let id = format!("bolt-{i}");
+            conn.execute(
+                "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
+                    rarity,type_line,finishes,prices,raw)
+                 VALUES (?1,'o1','Lightning Bolt','lea',?2,'en','normal','common','Instant',
+                    '[\"nonfoil\",\"foil\"]','{\"usd\":\"1.00\"}','{}')",
+                rusqlite::params![id, i.to_string()],
+            )
+            .unwrap();
+            crate::wishlist::add_wish(&conn, &wish(&id, None)).unwrap();
+        }
+        conn
+    }
+
+    /// **[`PAGE`] is correct only because both list readers clamp at the same number, and
+    /// neither clamp is public.** Lowering `collection::MAX_LIMIT` is caught by the test below;
+    /// lowering `wishlist::MAX_LIMIT` alone was caught by nothing at all, and would have
+    /// mirrored every wishlist as its first 500 rows with no error raised anywhere. The two
+    /// halves need two tests because they are two constants.
+    #[test]
+    fn a_wishlist_larger_than_one_page_is_read_whole() {
+        let conn = db_with_n_wishes(PAGE + 7);
+        let cards = cards_for(&conn, &Source::WholeWishlist, shop()).unwrap();
+        assert_eq!(cards.len() as u32, PAGE + 7);
     }
 
     #[test]

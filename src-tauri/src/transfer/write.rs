@@ -40,17 +40,26 @@ const MAYBEBOARD: &str = "Maybeboard";
 /// **The fallback arm has no counterpart in TypeScript and exists because the types differ.**
 /// Over there `KIND_SECTION` is a `Record<CategoryKind, string>` over a closed union, so the
 /// compiler makes it total; here `Card::category_kind` is an `Option<String>` read from JSON,
-/// which no match can exhaust. TypeScript's runtime answer for a kind outside the union is
-/// `undefined`, which reaches `sectioned` as the empty string and files the card under a blank
-/// heading — a file, but not one anybody wants. `Deck` is chosen instead on the same grounds
-/// `maybe` is: a card the app cannot classify still counts toward the deck.
+/// which no match can exhaust.
+///
+/// **It answers `""`, which is what TypeScript answers, and the temptation to improve on that
+/// is the reason this paragraph is long.** `KIND_SECTION[kind]` is `undefined` for a kind
+/// outside the union, `sectionOf`'s guard tests `=== null` rather than `== null`, so the
+/// `undefined` is returned and reaches `sectioned` as the empty string. A blank heading is not
+/// a file anybody wants — but answering `Deck` here instead was three divergences rather than
+/// one: the heading, the **sort position** (`sectioned` puts a key its order does not name
+/// first, where `Deck` sorts third) and the **fold key**, which decides whether such a row
+/// merges with a real main-deck row at all. Unreachable from the database, where
+/// `deck_categories.kind` is CHECK-constrained to the five words; reachable through
+/// `corpus.json`, where `Card::category_kind` is an unvalidated `Option<String>`. A port
+/// reproduces what the original does, including where the original is unfortunate.
 fn kind_section(kind: &str) -> &'static str {
     match kind {
         "commander" => "Commander",
         "companion" => "Companion",
         "side" => "Sideboard",
         "main" | "maybe" => "Deck",
-        _ => "Deck",
+        _ => "",
     }
 }
 
@@ -790,6 +799,37 @@ mod tests {
         assert_eq!(
             format_export(&cards, Format::Arena, &fields),
             "Deck\n2 Lightning Bolt\n\nSideboard\n1 Lightning Bolt\n"
+        );
+    }
+
+    /// **M12: a `category_kind` outside the five words answers `""`, which is what TypeScript
+    /// answers, and it is three facts rather than one.** `KIND_SECTION[kind]` is `undefined`
+    /// over there and `sectionOf`'s guard tests `=== null`, so the blank reaches `sectioned` —
+    /// where a key the order does not name sorts **first**, and folds against a key of its own.
+    /// This arm answered `Deck` and so disagreed on the heading, on the sort position (third)
+    /// and on whether such a row merges with a real main-deck row.
+    ///
+    /// Unreachable from the database — `deck_categories.kind` is CHECK-constrained to the five
+    /// — and reachable through `corpus.json`, where `Card::category_kind` is an unvalidated
+    /// `Option<String>`. No golden file can hold it for that reason, which is why this is a
+    /// targeted test rather than a scenario.
+    #[test]
+    fn a_kind_outside_the_five_words_writes_a_blank_heading_sorted_first() {
+        let odd = Card {
+            name: "Chittering Rats".into(),
+            category_name: Some("Tokens".into()),
+            category_kind: Some("tokens".into()),
+            category_active: Some(true),
+            ..base()
+        };
+        let text = format_export(
+            &[active_bolt(2), odd],
+            Format::Moxfield,
+            &[FieldId::Quantity, FieldId::Name],
+        );
+        assert_eq!(
+            text, "\n1 Chittering Rats\n\nDeck\n2 Lightning Bolt\n",
+            "a kind the app cannot classify files under a blank heading, first"
         );
     }
 
