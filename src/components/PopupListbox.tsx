@@ -1,4 +1,4 @@
-import { type CSSProperties, type ReactNode } from "react";
+import { type CSSProperties, type ReactNode, type Ref } from "react";
 import { motion, useIsPresent } from "motion/react";
 import { popup } from "@/lib/motion";
 import { cn } from "@/lib/utils";
@@ -22,10 +22,18 @@ import { cn } from "@/lib/utils";
  * list and `QuickAdd`'s suggestions are both drawn in one of these.
  */
 export function PopupPanel({
+  ref,
   className,
   style,
   children,
 }: {
+  /**
+   * The panel's own DOM node, for `usePopupPlacement` to measure — `offsetWidth`/`offsetHeight`
+   * are the panel's real layout size, and this is the only box in the shell with a border and
+   * padding to measure. React 19's ref-as-a-prop: no `forwardRef` wrapper needed, and `motion.div`
+   * forwards it to the underlying element itself.
+   */
+  ref?: Ref<HTMLDivElement>;
   className?: string;
   /**
    * Inline position, for a panel placed from measured numbers rather than from a Tailwind offset.
@@ -40,6 +48,7 @@ export function PopupPanel({
   const present = useIsPresent();
   return (
     <motion.div
+      ref={ref}
       {...popup}
       style={style}
       // Not in the accessibility tree on the way out either: a second, stale copy of the panel's
