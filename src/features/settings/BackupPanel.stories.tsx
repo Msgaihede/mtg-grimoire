@@ -115,9 +115,15 @@ export const SwitchedOff: Story = {
  * correct from one that could not be written at all.
  *
  * **The outcome line and the status line are two different sentences.** The alert says what
- * *this press* did; the line above it says what the mirror last recorded. In the shipped window
- * they can disagree — `mirror_rebuild` answers its report without stamping the pass — so they
- * are deliberately kept as two claims rather than folded into one.
+ * *this press* did; the line above it says what the mirror last recorded.
+ *
+ * **The alert is not sticky, and the ranking is by clock.** A TanStack mutation stays
+ * `isSuccess` for the life of the component, so a rebuild's note ranked above the backend's own
+ * state would hide every later failure until the reader navigated away — the panel reporting
+ * "Rebuilt — 350 files written" while the mirror had quietly stopped working. `errorOutranks`
+ * compares `MirrorStatus.lastRunAt` against the moment this rebuild finished: a pass that
+ * failed *after* it wins, and a failure it has already answered does not. See
+ * {@link RootUnwritable} for the other end of that.
  */
 export const Rebuilt: Story = {
   play: async ({ canvasElement }) => {
@@ -150,6 +156,10 @@ export const Rebuilt: Story = {
  * Pressing Rebuild now in this state **refuses**, which is the half that makes this a fault
  * rather than a fixture: a button that cleared the error by succeeding into a folder that is
  * not there would be showing a state the app cannot be in.
+ *
+ * What a *successful* rebuild would do here is the precedence {@link Rebuilt} describes: a pass
+ * that finished after the recorded failure has answered it, and the panel says so rather than
+ * telling a reader who has just plugged the stick back in that their repair did not take.
  */
 export const RootUnwritable: Story = {
   parameters: { fake: { fault: "mirrorRootUnwritable" } },

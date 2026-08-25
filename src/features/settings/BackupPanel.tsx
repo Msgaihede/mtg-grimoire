@@ -42,6 +42,24 @@ export function passSummary(report: PassReport): string {
 }
 
 /**
+ * When the backend's recorded pass ran, in unix seconds — or `null` when there has not been one.
+ *
+ * **The only clock this panel gets**, which is why it is a function of its own rather than two
+ * lines inside {@link lastPassLine}: it is also what ranks a background failure against a
+ * rebuild this window watched finish (see {@link errorOutranks}), and a second reading of the
+ * same field would let the sentence and the precedence disagree about which pass is newer.
+ *
+ * Three values collapse into `null` and it matters that they do: no pass has finished, the
+ * stamp will not parse, and the stamp is not a time. **`Number("")` is `0`, not `NaN`** — and
+ * so is `Number("  ")` — so a blank row would otherwise sail past a finiteness check and print
+ * `Last written 20,600 days ago`. Nothing this app has ever written happened in 1970.
+ */
+function passRanAt(status: MirrorStatus): number | null {
+  const at = status.lastRunAt === null ? Number.NaN : Number(status.lastRunAt.trim());
+  return Number.isFinite(at) && at > 0 ? at : null;
+}
+
+/**
  * When the mirror last wrote, and how it went.
  *
  * **`null` gets a sentence of its own rather than the report's zeroes.** `lastRunAt` is `null`
@@ -51,9 +69,7 @@ export function passSummary(report: PassReport): string {
  *
  * A stamp that will not parse takes the same arm, and that is the settings module's own rule
  * arriving here: a value this build cannot read is a fact about storage rather than a number to
- * print. **`Number("")` is `0`, not `NaN`** — and so is `Number("  ")` — so a blank row would
- * otherwise sail past a finiteness check and print `Last written 20,600 days ago`. The floor is
- * therefore `> 0` as well as finite: nothing this app has ever written happened in 1970.
+ * print. {@link passRanAt} is where the three ways to `null` are collapsed.
  *
  * @param nowMs the clock in **milliseconds**, which is what {@link ago} takes. A **default
  * parameter** rather than a `Date.now()` in the panel body, which is `ErrorLogPanel`'s
@@ -62,8 +78,8 @@ export function passSummary(report: PassReport): string {
  * passes, and a settings panel on a timer would be motion without information.
  */
 export function lastPassLine(status: MirrorStatus, nowMs: number = Date.now()): string {
-  const at = status.lastRunAt === null ? Number.NaN : Number(status.lastRunAt.trim());
-  if (!Number.isFinite(at) || at <= 0) return "Not run yet — press Rebuild now to write one.";
+  const at = passRanAt(status);
+  if (at === null) return "Not run yet — press Rebuild now to write one.";
   const when = ago(at, nowMs);
   return status.lastReport === null
     ? `Last written ${when}.`
@@ -72,6 +88,18 @@ export function lastPassLine(status: MirrorStatus, nowMs: number = Date.now()): 
 
 /** The panel's one line of news, and how loudly it says it. */
 type Note = { tone: "problem" | "plain"; text: string } | null;
+
+/**
+ * A pass this window watched finish, with the moment it did.
+ *
+ * **The time is the whole reason this is a record rather than `rebuild.data`.** A TanStack
+ * mutation is `isSuccess` for the life of the component, so its result carries no sense of
+ * having been superseded — and the panel has to be able to tell a rebuild that answered the
+ * mirror's last failure from one that happened *before* the failure now being reported.
+ * Unix seconds, because {@link MirrorStatus.lastRunAt} is the only clock the backend offers
+ * and the two have to be comparable.
+ */
+type Rebuilt = { report: PassReport; at: number };
 
 /**
  * The plain-text mirror: whether it runs, where it writes, and how the last pass went.
@@ -100,6 +128,9 @@ export function BackupPanel(): JSX.Element {
   /** The picker itself could not be opened — a different failure from a setting the backend
    *  refused, and cleared by the next press so it cannot outlive the news it is about. */
   const [pickerFailure, setPickerFailure] = useState<string | null>(null);
+  /** The last rebuild this window watched finish. Held here rather than read off the mutation
+   *  so that it carries a *time* — see {@link Rebuilt} and {@link errorOutranks}. */
+  const [rebuilt, setRebuilt] = useState<Rebuilt | null>(null);
 
   const read = useQuery({ queryKey: MIRROR_KEY, queryFn: () => ipc.mirrorStatus() });
   const status = read.data ?? null;
@@ -115,7 +146,14 @@ export function BackupPanel(): JSX.Element {
   });
   const rebuild = useMutation({
     mutationFn: () => ipc.mirrorRebuild(),
-    onSuccess: invalidate,
+    onSuccess: (report) => {
+      // Stamped here, at the moment the pass answered, and not from `submittedAt`: a pass over
+      // a large collection takes a measurable fraction of a second, and what has to be ranked
+      // against the backend's `lastRunAt` is when the folder was last correct — not when
+      // somebody pressed a button.
+      setRebuilt({ report, at: Math.floor(Date.now() / 1000) });
+      invalidate();
+    },
   });
   const busy = setEnabled.isPending || setRoot.isPending || rebuild.isPending;
 
@@ -153,7 +191,7 @@ export function BackupPanel(): JSX.Element {
   // rather than ranked against them — which is what keeps it from outliving the news it is
   // about.
   const refusal = pickerFailure ?? writeFailure([setEnabled, setRoot, rebuild]);
-  const note = noteFor(refusal, rebuild.isSuccess ? rebuild.data : null, status, read);
+  const note = noteFor(refusal, rebuilt, status, read);
 
   return (
     <SettingsSection id="backup" title="Backup">
@@ -229,6 +267,9 @@ export function BackupPanel(): JSX.Element {
               type="button"
               onClick={() => {
                 setPickerFailure(null);
+                // The previous pass's note goes with the press that supersedes it, so a second
+                // rebuild that fails cannot be read under the first one's success.
+                setRebuilt(null);
                 rebuild.mutate();
               }}
               disabled={busy}
@@ -251,33 +292,69 @@ export function BackupPanel(): JSX.Element {
 }
 
 /**
+ * Whether the failure the backend is reporting is newer than the rebuild this window watched.
+ *
+ * **The whole of the precedence decision, in one predicate**, and it is a decision rather than
+ * an ordering that fell out of the code. `MirrorStatus.lastError` describes the pass at
+ * `lastRunAt`; a {@link Rebuilt} describes a pass that finished at its own `at`. So "which is
+ * newer" is knowable from what the backend already returns, and the two cases are genuinely
+ * different news:
+ *
+ * * **The error is the newer pass** — a background pass has failed *since* the rebuild, so the
+ *   mirror is broken now. That outranks a success from before it, and saying otherwise would
+ *   make this panel silent about the one thing it exists to report.
+ * * **The rebuild is newer** — the reader has fixed whatever it was (plugged the stick back in,
+ *   moved the folder) and pressed the button, and it worked. The recorded error is about a pass
+ *   that has since been superseded, so reporting it would be telling them their repair did not
+ *   take.
+ *
+ * A tie goes to the **error**, and an error whose pass carries no readable time is treated as
+ * current: when the clock cannot settle it, the conservative answer is the one that says
+ * something is wrong.
+ *
+ * This is what a naive `rebuild.isSuccess` ranking could not express. A TanStack mutation stays
+ * `isSuccess` for the life of the component, so one successful press would have hidden **every**
+ * later failure until the reader navigated away — the panel showing a stale "Rebuilt — 350 files
+ * written" while the mirror was quietly failing.
+ */
+function errorOutranks(status: MirrorStatus, rebuilt: Rebuilt | null): boolean {
+  if (rebuilt === null) return true;
+  const at = passRanAt(status);
+  return at === null || at >= rebuilt.at;
+}
+
+/**
  * The one thing the panel has to say, picked from four candidates.
  *
- * In order of how new the news is: a refusal the reader just earned, the rebuild they just
- * pressed, the background pass that could not write, and the read that would not answer. Only
- * one line is drawn, so this is a precedence rather than a list — and it is the same
- * most-recent-news rule `@/lib/writes` applies within a set of writes, extended over the two
- * things on this panel that are not writes.
+ * In order of how new the news is: a refusal the reader just earned, the mirror's current
+ * recorded failure, the rebuild they pressed, and the read that would not answer. Only one line
+ * is drawn, so this is a precedence rather than a list — and it is the same most-recent-news
+ * rule `@/lib/writes` applies within a set of writes, extended over the three things on this
+ * panel that are not writes.
+ *
+ * **The middle two are ranked by clock rather than by position**, which is {@link errorOutranks}
+ * and is the fix for a real defect: with the rebuild ranked above the error unconditionally, one
+ * successful press silenced the panel for the rest of the session.
  *
  * **A rebuild that could not write every file is a problem rather than an outcome**, which is
- * why the tone is read off `failed` instead of off success: `mirror_rebuild` answers `Ok` for a
- * pass that ran, and a pass that ran and dropped 350 files is not good news drawn in grey.
+ * why that tone is read off `failed` instead of off success: `mirror_rebuild` answers `Ok` for
+ * a pass that ran, and a pass that ran and dropped 350 files is not good news drawn in grey.
  */
 function noteFor(
   refusal: string | null,
-  rebuilt: PassReport | null | undefined,
+  rebuilt: Rebuilt | null,
   status: MirrorStatus | null,
   read: { isError: boolean; error: unknown },
 ): Note {
   if (refusal !== null) return { tone: "problem", text: refusal };
+  if (status?.lastError && errorOutranks(status, rebuilt)) {
+    return { tone: "problem", text: `The last backup could not be written. ${status.lastError}` };
+  }
   if (rebuilt) {
     return {
-      tone: rebuilt.failed > 0 ? "problem" : "plain",
-      text: `Rebuilt — ${passSummary(rebuilt)}.`,
+      tone: rebuilt.report.failed > 0 ? "problem" : "plain",
+      text: `Rebuilt — ${passSummary(rebuilt.report)}.`,
     };
-  }
-  if (status?.lastError) {
-    return { tone: "problem", text: `The last backup could not be written. ${status.lastError}` };
   }
   if (status === null && read.isError) return { tone: "problem", text: ipcError(read.error) };
   return null;

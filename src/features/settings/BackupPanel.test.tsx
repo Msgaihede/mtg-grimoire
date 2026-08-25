@@ -133,10 +133,84 @@ describe("BackupPanel", () => {
     expect(await screen.findByText(/not run yet/i)).toBeInTheDocument();
   });
 
+  /**
+   * **The backend's own sentence, under the panel's framing, in the panel's error channel.**
+   *
+   * This asserted `/could not/i` against the whole region until 2026-08-25, and that could not
+   * fail: `passSummary` emits "350 could not be written" for any ordinary pass that dropped
+   * files, so the match was satisfied by the status line and the whole `lastError` arm could be
+   * deleted with the test still green. The guard below is the other half — a report with
+   * failures and *no* `lastError` must draw no alert at all.
+   */
   it("shows the sentence when the last pass could not write", async () => {
     render(<BackupPanel />, { wrapper: wrapperWithMirrorError });
 
-    expect(await screen.findByRole("region", { name: "Backup" })).toHaveTextContent(/could not/i);
+    expect(await within(panel()).findByRole("alert")).toHaveTextContent(
+      'The last backup could not be written. The folder "E:\\Backups\\MTG" is not there.',
+    );
+  });
+
+  /** The guard on the test above, and the reason it is not a substring match any more: a pass
+   *  that ran and dropped files is **not** a pass that could not run, and only the second is
+   *  news this panel raises. */
+  it("does not mistake a pass that dropped files for a pass that could not run", async () => {
+    render(<BackupPanel />, { wrapper: harness({ ...UNWRITABLE, lastError: null }) });
+
+    // The failures are still reported — in the status line, where they belong.
+    expect(await screen.findByText(/350 could not be written/)).toBeInTheDocument();
+    expect(within(panel()).queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  /**
+   * **A successful rebuild must not silence the panel.**
+   *
+   * A TanStack mutation stays `isSuccess` for the life of the component, so a note ranked above
+   * the backend's own state would be drawn from the first press until the reader navigated away
+   * — the panel showing "Rebuilt — 350 files written" while the mirror quietly stopped working.
+   * That shipped for one review round and is what `errorOutranks` exists for.
+   *
+   * Driven through {@link LiveWorld} rather than a seeded client, because the point is a
+   * *second* status arriving: the first read answers a healthy mirror, and every read after the
+   * rebuild answers a background pass that failed **later** than it.
+   */
+  it("still reports a background failure after a rebuild has succeeded", async () => {
+    const user = userEvent.setup();
+    const failedLater = { ...UNWRITABLE, lastRunAt: String(NOW + 600) };
+    mirrorStatus.mockReset().mockResolvedValueOnce(RAN).mockResolvedValue(failedLater);
+    render(<BackupPanel />, { wrapper: LiveWorld });
+
+    await user.click(await screen.findByRole("button", { name: /rebuild now/i }));
+    expect(mirrorRebuild).toHaveBeenCalledOnce();
+
+    await waitFor(() =>
+      expect(within(panel()).getByRole("alert")).toHaveTextContent(
+        'The last backup could not be written. The folder "E:\\Backups\\MTG" is not there.',
+      ),
+    );
+  });
+
+  /**
+   * The other half of that precedence, and what makes it a decision rather than "the error
+   * always wins": a reader who plugged the stick back in and pressed Rebuild has *answered* the
+   * recorded failure, and telling them it is still broken would be telling them their repair
+   * did not take.
+   */
+  it("lets a successful rebuild answer an older failure", async () => {
+    const user = userEvent.setup();
+    const failedEarlier = { ...UNWRITABLE, lastRunAt: String(NOW - 7_200) };
+    mirrorStatus.mockReset().mockResolvedValue(failedEarlier);
+    render(<BackupPanel />, { wrapper: LiveWorld });
+
+    // The failure is on screen before the press — this is not a panel that never draws one.
+    expect(await within(panel()).findByRole("alert")).toHaveTextContent(/is not there/);
+
+    await user.click(screen.getByRole("button", { name: /rebuild now/i }));
+
+    await waitFor(() =>
+      expect(within(panel()).getByRole("alert")).toHaveTextContent(
+        "Rebuilt — 350 files written, 0 unchanged, 2 removed.",
+      ),
+    );
   });
 
   it("switching it off calls through and does not ask again on its own", async () => {

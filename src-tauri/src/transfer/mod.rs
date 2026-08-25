@@ -18,6 +18,8 @@
 pub mod card;
 pub mod csv;
 pub mod fields;
+pub mod fold;
+pub mod write;
 
 pub use card::{load_corpus, Card, CorpusFile, Scenario, Scenarios};
 
