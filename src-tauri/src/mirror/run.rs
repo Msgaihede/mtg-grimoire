@@ -1460,10 +1460,18 @@ mod tests {
     /// wrote it, because `put` runs before `prune`.
     ///
     /// **This test is sharp on a case-insensitive filesystem and vacuous on a case-sensitive
-    /// one, deliberately.** On Windows `put` writes through the existing `AZULA.TXT` and
-    /// `recover` then deletes the only copy; on Linux `put` creates a second file under the
-    /// planned spelling and `AZULA.TXT` really is an orphan. Every measured claim in this repo
-    /// was taken on Windows, which is also the platform `is_ours` ignores case for.
+    /// one, deliberately.** On Windows `put` writes *through* the existing `AZULA.TXT` — one
+    /// file under two spellings — so a case-sensitive `wanted` deletes the only copy. On Linux
+    /// they are two files: `put` creates the planned one, `AZULA.TXT` really is an orphan, and
+    /// sparing it is the case-insensitive lookup erring toward leaving a file rather than
+    /// removing one. Every measured claim in this repo was taken on Windows, which is also the
+    /// platform `is_ours` ignores case for.
+    ///
+    /// **So the assertion is "the planned file survived", not "exactly one file survived".**
+    /// The count is 1 on Windows and 2 on Linux and both are correct; asserting the count made
+    /// this red on the Linux half of the CI matrix (run 32811287174) while the code under test
+    /// was doing the right thing on both. `is_file` on the planned path is the invariant that
+    /// actually holds everywhere: `recover` may never delete a file it wants.
     #[test]
     fn recover_keeps_a_file_it_wants_whose_casing_has_drifted() {
         let (conn, dir, _) = seeded_db_and_temp_root();
@@ -1478,16 +1486,14 @@ mod tests {
 
         pass(&conn, dir.path(), Dirty::ALL);
 
-        let survivors: Vec<String> = std::fs::read_dir(dir.path().join("Decks/Azula"))
-            .unwrap()
-            .flatten()
-            .map(|e| e.file_name().to_string_lossy().into_owned())
-            .filter(|name| name.eq_ignore_ascii_case("Azula.txt"))
-            .collect();
-        assert_eq!(
-            survivors.len(),
-            1,
+        assert!(
+            planned.is_file(),
             "the deck's plain file was deleted by the pass that wrote it"
+        );
+        assert_eq!(
+            std::fs::read(&planned).unwrap(),
+            body,
+            "the surviving file is not the one the pass wrote"
         );
     }
 
