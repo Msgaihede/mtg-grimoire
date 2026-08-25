@@ -652,6 +652,15 @@ type SharedProps = {
 };
 ```
 
+```ts
+function Dropdown(props: SharedProps & {
+  value: string;
+  onChange: (value: string) => void;
+  /** Trigger text when `value` matches no option. Defaults to an em dash. */
+  placeholder?: string;
+}): JSX.Element;
+```
+
 **The naming rule, and it is not the one a `<select>` used.** A native `<select>` is *labelable*:
 `<label htmlFor="deck-view">View</label>` names it, and a screen reader says "View, combobox,
 Table". A `<button>` is labelable too — the label still presses it — **but a native `<label>` is
@@ -676,14 +685,6 @@ assistive tech announces the value twice and the field never.
 `getByRole("button", { name: "View" })`, which is exactly what `pickOption(user, "View", "Table")`
 does — so the 72 rewrites need no extra thought, but a test that reached for a control any other way
 does.
-
-function Dropdown(props: SharedProps & {
-  value: string;
-  onChange: (value: string) => void;
-  /** Trigger text when `value` matches no option. Defaults to an em dash. */
-  placeholder?: string;
-}): JSX.Element;
-```
 
 - [ ] **Step 1: Write the failing tests**
 
