@@ -808,6 +808,50 @@ describe("DeckSearchPanel", () => {
   });
 
   /**
+   * **The rail is a column with a hairline down its edge, not a bordered button standing in an
+   * empty strip** (2026-08-26). The border used to be on the disclosure, and it was there for a
+   * real reason — at 36px a hairline beside a bordered control is two lines saying one thing —
+   * so the edit that puts it back reads as a restoration rather than as a regression. What it
+   * costs is that the one control a reader sees at that width is drawn as a box where every
+   * other icon button in the app is a bare glyph, and the panel's own left edge is missing from
+   * exactly the state that most needs to say *everything right of this line is not your deck*.
+   *
+   * A class sweep, because **jsdom lays nothing out and loads no stylesheet**: there is no
+   * computed border here and no selection to make, so a browser is the only witness to either
+   * fact and this is the fence that keeps them from being quietly undone. `classList.contains`
+   * rather than `className.includes` — a substring test passes on `border-l` when asked about
+   * `border`, which would make the button's assertion vacuous in the one direction it exists to
+   * catch.
+   */
+  it("keeps its hairline on the column and its disclosure flat, drawn or railed", async () => {
+    await openPanel();
+
+    const drawn = screen.getByRole("region", { name: "Add cards" });
+    expect(drawn.classList.contains("border-l")).toBe(true);
+    expect(
+      screen.getByRole("button", { name: PANEL_TOGGLE }).classList.contains("border"),
+    ).toBe(false);
+
+    await userEvent.click(screen.getByRole("button", { name: PANEL_TOGGLE }));
+
+    const railed = screen.getByRole("region", { name: "Add cards" });
+    expect(railed.classList.contains("border-l")).toBe(true);
+    expect(
+      screen.getByRole("button", { name: PANEL_TOGGLE }).classList.contains("border"),
+    ).toBe(false);
+
+    // The sideways title is the whole of what the rail draws besides the chevron, so a pointer
+    // dragged down the shut column would otherwise highlight the panel's own name. Found by the
+    // writing mode rather than by the words: `Search cards` is also the search box's accessible
+    // name, and the two are on screen together whenever the body is drawn.
+    const sideways = screen
+      .getAllByText("Search cards")
+      .filter((el) => el.style.writingMode === "vertical-rl");
+    expect(sideways).toHaveLength(1);
+    expect(sideways[0].classList.contains("select-none")).toBe(true);
+  });
+
+  /**
    * The editor measures the row the two of them share and says whether there is room. With
    * none, the rail is what is drawn whatever the reader last chose — and the disclosure is
    * disabled, because a press could not open anything and a control that records an intention
