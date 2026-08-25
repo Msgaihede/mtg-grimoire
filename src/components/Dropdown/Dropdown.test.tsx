@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { Dropdown } from "./Dropdown";
@@ -89,12 +89,28 @@ describe("Dropdown", () => {
   it("refuses a disabled row to the pointer as well as to Enter", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
-    render(<Dropdown label="Format" value="modern" onChange={onChange} options={FORMATS} />);
+    const { rerender } = render(
+      <Dropdown label="Format" value="modern" onChange={onChange} options={FORMATS} />,
+    );
     await user.click(screen.getByRole("button", { name: "Format" }));
     await user.click(screen.getByRole("option", { name: "Pauper" }));
     expect(onChange).not.toHaveBeenCalled();
     // A list that refuses the click and takes the keystroke is a list with two rules.
     expect(screen.getByRole("listbox")).toBeInTheDocument();
+
+    // Enter's own guard needs a row that is actually active *and* disabled to exercise it —
+    // opening never lands there and the arrow keys skip it, so nothing above reaches it. A
+    // live options change does: Task 4's facet counts can disable the very row the keyboard
+    // is already sitting on (Modern, picked and therefore active since it opened). The click
+    // above never moved the cursor off it.
+    const facetsChanged = FORMATS.map((o) =>
+      o.value === "modern" ? { ...o, disabled: true } : o,
+    );
+    rerender(
+      <Dropdown label="Format" value="modern" onChange={onChange} options={facetsChanged} />,
+    );
+    await user.keyboard("{Enter}");
+    expect(onChange).not.toHaveBeenCalled();
   });
 
   it("hands the caret back to the trigger on Escape", async () => {
@@ -136,11 +152,57 @@ describe("Dropdown", () => {
         label="Set"
         value="lea"
         onChange={vi.fn()}
-        options={[{ value: "lea", label: "Limited Edition Alpha", hint: "LEA" }]}
+        options={[
+          {
+            value: "lea",
+            label: "Limited Edition Alpha",
+            hint: "LEA",
+            icon: <span data-testid="glyph" />,
+          },
+        ]}
       />,
     );
     await user.click(screen.getByRole("button", { name: "Set" }));
+    const option = screen.getByRole("option", { name: /Limited Edition Alpha/ });
     // The name is the row's own content — label and hint both, and no aria-label replacing them.
-    expect(screen.getByRole("option", { name: /Limited Edition Alpha/ })).toHaveTextContent("LEA");
+    expect(option).toHaveTextContent("LEA");
+    expect(within(option).getByTestId("glyph")).toBeInTheDocument();
+  });
+
+  it("calls onReachEnd when ArrowDown cannot move past the last enabled row", async () => {
+    const user = userEvent.setup();
+    const onReachEnd = vi.fn();
+    render(
+      <Dropdown
+        label="Format"
+        value="standard"
+        onChange={vi.fn()}
+        options={FORMATS}
+        onReachEnd={onReachEnd}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Format" }));
+    // Opens already on Standard — the last enabled row — so this ArrowDown has nowhere to go.
+    await user.keyboard("{ArrowDown}");
+    expect(onReachEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it("calls onReachEnd when End is pressed a second time at the last row", async () => {
+    const user = userEvent.setup();
+    const onReachEnd = vi.fn();
+    render(
+      <Dropdown
+        label="Format"
+        value="commander"
+        onChange={vi.fn()}
+        options={FORMATS}
+        onReachEnd={onReachEnd}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Format" }));
+    await user.keyboard("{End}"); // Standard — the last enabled row
+    expect(onReachEnd).not.toHaveBeenCalled();
+    await user.keyboard("{End}"); // already there
+    expect(onReachEnd).toHaveBeenCalledTimes(1);
   });
 });

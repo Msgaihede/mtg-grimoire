@@ -79,10 +79,23 @@ const DEFAULT_PLACEHOLDER = "—";
 /** Module scope so a scroll effect can depend on it without re-running every render. */
 const optionId = (id: string, index: number) => `${id}-option-${index}`;
 
-/** The row a fresh opening starts on: the picked one, or the first row. */
+/** The row a fresh opening starts on, disregarding whether it can be pressed: the picked one,
+ *  or the first row. {@link openingIndex} is what a caller actually opens on. */
 function startIndex(options: readonly DropdownOption[], value: string): number {
   const idx = options.findIndex((o) => o.value === value);
   return idx >= 0 ? idx : 0;
+}
+
+/**
+ * Where a fresh **opening** lands — never a disabled row, or Enter on the very first press
+ * would silently do nothing. Rerouted to the first enabled row when {@link startIndex} landed on
+ * one that cannot be pressed, whether because the picked value itself is disabled or because
+ * nothing matched and the fallback (row 0) happens to be. `-1` when nothing in the list can be
+ * pressed at all — see {@link firstEnabledIndex}.
+ */
+function openingIndex(options: readonly DropdownOption[], value: string): number {
+  const i = startIndex(options, value);
+  return options[i]?.disabled ? firstEnabledIndex(options) : i;
 }
 
 /**
@@ -104,16 +117,17 @@ function nextEnabledIndex(options: readonly DropdownOption[], from: number, dir:
   return from;
 }
 
+/** `-1`, not `0`, when nothing is enabled — row 0 is not a row Enter may land on. */
 function firstEnabledIndex(options: readonly DropdownOption[]): number {
-  const idx = options.findIndex((o) => !o.disabled);
-  return idx === -1 ? 0 : idx;
+  return options.findIndex((o) => !o.disabled);
 }
 
+/** `-1`, not `0`, when nothing is enabled — see {@link firstEnabledIndex}. */
 function lastEnabledIndex(options: readonly DropdownOption[]): number {
   for (let i = options.length - 1; i >= 0; i--) {
     if (!options[i].disabled) return i;
   }
-  return 0;
+  return -1;
 }
 
 /**
@@ -163,6 +177,7 @@ export function Dropdown(
   const listRef = useRef<HTMLUListElement>(null);
 
   const uid = useId();
+  const listboxId = `${uid}-listbox`;
 
   const { placement, minWidth } = usePopupPlacement({
     triggerRef: buttonRef,
@@ -190,6 +205,12 @@ export function Dropdown(
 
   useEffect(() => {
     if (!open) return;
+    // jsdom leaves this layout API undefined.
+    document.getElementById(optionId(uid, activeIndex))?.scrollIntoView?.({ block: "nearest" });
+  }, [activeIndex, open, uid]);
+
+  useEffect(() => {
+    if (!open) return;
     const onMouseDown = (e: MouseEvent) => {
       // Closed without moving focus: the reader clicked elsewhere and is already there.
       if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
@@ -198,8 +219,8 @@ export function Dropdown(
     return () => window.removeEventListener("mousedown", onMouseDown);
   }, [open]);
 
-  const openAt = (index: number) => {
-    setActiveIndex(index);
+  const openAt = (i: number) => {
+    setActiveIndex(i);
     setOpen(true);
   };
 
@@ -207,6 +228,12 @@ export function Dropdown(
     onChange(v);
     dismiss();
   };
+
+  // A stored index can outrun a shrunk list — Task 4 filters `options` while the panel stays
+  // open — and a stale index would point `aria-activedescendant` at a row that is no longer
+  // drawn, and make ArrowDown fire `onReachEnd` forever instead of moving. Read this, never
+  // `activeIndex` itself, everywhere below.
+  const index = Math.min(activeIndex, Math.max(0, options.length - 1));
 
   const picked = options.find((o) => o.value === value);
   const content = picked ? picked.label : (placeholder ?? DEFAULT_PLACEHOLDER);
@@ -229,22 +256,23 @@ export function Dropdown(
         disabled={disabled}
         aria-haspopup="listbox"
         aria-expanded={open}
+        aria-controls={open ? listboxId : undefined}
         aria-label={labelledBy ? undefined : label}
         aria-labelledby={labelledBy}
         onClick={() => {
           if (open) setOpen(false);
-          else openAt(startIndex(options, value));
+          else openAt(openingIndex(options, value));
         }}
         onKeyDown={(e) => {
           // The listbox holds the caret while open, so this only ever runs on the closed
           // trigger — a keydown fired at a focused descendant never bubbles to a sibling.
           if (e.key === "ArrowDown") {
             e.preventDefault();
-            openAt(startIndex(options, value));
+            openAt(openingIndex(options, value));
           } else if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
             e.preventDefault();
             const match = typeAheadIndex(options, e.key);
-            openAt(match !== -1 ? match : startIndex(options, value));
+            openAt(match !== -1 ? match : openingIndex(options, value));
           }
         }}
         className={cn(
@@ -255,7 +283,7 @@ export function Dropdown(
           "disabled:active:scale-100",
           FOCUS,
           active ? "border-accent text-accent" : "border-border text-dim hover:text-text",
-          fill ? "flex w-full justify-between" : "inline-flex items-center gap-1.5",
+          fill ? "flex w-full items-center justify-between" : "inline-flex items-center gap-1.5",
           className,
         )}
       >
@@ -265,10 +293,12 @@ export function Dropdown(
 
       <AnimatePresence>
         {open && (
-          <div ref={frameRef} className={cn("fixed left-0 top-0 size-0", LAYER.popup)}>
+          // The key belongs on AnimatePresence's own direct child — this frame div — and not
+          // on PopupPanel, a grandchild it happens to work for today only because there is
+          // ever at most one of these mounted.
+          <div key="panel" ref={frameRef} className={cn("fixed left-0 top-0 size-0", LAYER.popup)}>
             <PopupPanel
               ref={panelRef}
-              key="panel"
               style={{ left: placement?.left ?? 0, top: placement?.top ?? 0, minWidth }}
               className={cn(
                 "absolute rounded-md border border-border bg-surface p-2 shadow-lg",
@@ -291,23 +321,31 @@ export function Dropdown(
             >
               <ul
                 ref={listRef}
+                id={listboxId}
                 role="listbox"
                 tabIndex={-1}
-                aria-activedescendant={options.length > 0 ? optionId(uid, activeIndex) : undefined}
+                aria-label={labelledBy ? undefined : label}
+                aria-labelledby={labelledBy}
+                aria-activedescendant={
+                  options.length > 0 && index >= 0 ? optionId(uid, index) : undefined
+                }
                 onKeyDown={(e) => {
-                  if (options.length === 0) return;
+                  // The panel keeps rendering through its exit fade (`PopupPanel`'s own
+                  // `useIsPresent`), so the element outlives `open` — without this guard Enter
+                  // could still commit a row on a dropdown that has already closed.
+                  if (!open || options.length === 0) return;
                   switch (e.key) {
                     case "ArrowDown": {
                       e.preventDefault();
-                      const next = nextEnabledIndex(options, activeIndex, 1);
+                      const next = nextEnabledIndex(options, index, 1);
                       // Nothing moved: the keyboard walked off the end of the list.
-                      if (next === activeIndex) onReachEnd?.();
+                      if (next === index) onReachEnd?.();
                       else setActiveIndex(next);
                       break;
                     }
                     case "ArrowUp": {
                       e.preventDefault();
-                      setActiveIndex(nextEnabledIndex(options, activeIndex, -1));
+                      setActiveIndex(nextEnabledIndex(options, index, -1));
                       break;
                     }
                     case "Home": {
@@ -319,13 +357,13 @@ export function Dropdown(
                       e.preventDefault();
                       const last = lastEnabledIndex(options);
                       // Already there: the same "asking for more" gesture ArrowDown makes.
-                      if (activeIndex === last) onReachEnd?.();
+                      if (index === last) onReachEnd?.();
                       else setActiveIndex(last);
                       break;
                     }
                     case "Enter": {
                       e.preventDefault();
-                      const opt = options[activeIndex];
+                      const opt = options[index];
                       if (opt && !opt.disabled) commit(opt.value);
                       break;
                     }
@@ -341,7 +379,7 @@ export function Dropdown(
                     id={optionId(uid, i)}
                     option={opt}
                     picked={opt.value === value}
-                    active={i === activeIndex}
+                    active={i === index}
                     size={size}
                     onCommit={() => commit(opt.value)}
                   />
