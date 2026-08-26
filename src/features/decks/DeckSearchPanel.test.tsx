@@ -10,6 +10,8 @@ import {
 } from "@/components/tooltip/TooltipProvider";
 import type { FormatFilterOption } from "@/features/search/useCardSearch";
 import type { CardSummary, CollectionRow, DeckCategory, SearchResponse } from "@/lib/ipc";
+import { MARKETPLACES } from "@/lib/marketplace";
+import { pricesAsOf } from "@/lib/prices";
 import { startDrag } from "@/test-drag";
 import { pickOption } from "@/test-dropdown";
 import { readDragData } from "./dnd";
@@ -759,6 +761,48 @@ describe("DeckSearchPanel", () => {
   });
 
   /**
+   * **The chin's money slot on the docked wall — the spread, from the search's own helper.**
+   *
+   * This tab *is* the card search in a 384px column: same hook, same rows, same collapse. So it
+   * quotes what the search page quotes, through `priceRange`, and a card costing one thing on the
+   * search page and another in the deck editor would be the reader learning that a price means
+   * something about which wall they found it on.
+   *
+   * The ends are widened deliberately: `priceRange` collapses equal ends to one figure, so
+   * `formatPrice(card.priceLow, …)` — the obvious wrong helper — passes on every single-printing
+   * row and fails only on a span. There is no table over here to cross-check against (the panel
+   * is 384px wide and has none), which makes this the only assertion holding the column to it.
+   */
+  it("quotes the spread across the printings a tile stands for", async () => {
+    searchCards.mockResolvedValue(page([{ ...BOLT, priceLow: 0.45, priceHigh: 88 }]));
+    await openPanel();
+
+    await screen.findByRole("button", { name: "Lightning Bolt" });
+
+    expect(screen.getByText("$0.45–$88.00")).toBeInTheDocument();
+  });
+
+  /**
+   * **Spec §5: a price is never shown without saying how old it is** — said once under the wall,
+   * now that its chins quote money.
+   *
+   * **This column is the narrowest surface in the app**, so it is where the sentence costs height
+   * — two wrapped lines (33.59px) at the 206px floor, one at the 384px opening width, measured
+   * headless over the built stylesheet and written up at the call site. jsdom lays nothing out and
+   * can see none of that, so this asserts only that the sentence is there, once; the width
+   * question is a live one.
+   *
+   * Through `pricesAsOf` rather than the sentence typed out here, so this pins the function rather
+   * than a copy of the wording.
+   */
+  it("says how old the wall's prices are, once, under it", async () => {
+    await openPanel();
+    await screen.findByRole("button", { name: "Lightning Bolt" });
+
+    expect(screen.getAllByText(pricesAsOf(MARKETPLACES.tcgplayer))).toHaveLength(1);
+  });
+
+  /**
    * The crown, on the one wall a Commander deck is actually built out of.
    *
    * `gameChanger` is a fact about the *card*, so this panel says it exactly as the search view
@@ -783,13 +827,28 @@ describe("DeckSearchPanel", () => {
     expect(crownedTile).toContainElement(marks[0]);
   });
 
-  /** The tiles stay selectable, so the card pane keeps working from inside the editor. */
-  it("opens the card in the pane from a tile", async () => {
+  /**
+   * The tiles stay selectable, so the card pane keeps working from inside the editor.
+   *
+   * **`paneFromDeckSearch` is asserted beside the id, and it is the load-bearing half.** This wall
+   * goes through `openCardFromDeckSearch` rather than `setSelectedCardId` — the one write in the
+   * app that says a card was opened from *this* column, which is what puts the pane's overlay over
+   * the deck instead of over the search that produced it (issue #183). The id alone would pass for
+   * either action. It became worth pinning on 2026-08-26, when `CardGrid`'s `onSelect` widened to
+   * `(id, card)` and this call site had to become an arrow — an indirection is a place a handler
+   * can be swapped for the wrong one with the obvious assertion still green.
+   */
+  it("opens the card in the pane from a tile, as a card found in this column", async () => {
     await openPanel();
 
     await userEvent.click(await screen.findByRole("button", { name: "Lightning Bolt" }));
 
     expect(useAppStore.getState().selectedCardId).toBe("1");
+    expect(useAppStore.getState().paneFromDeckSearch).toBe(true);
+    // And no finish: a search tile is a printing and names none, so the pane opens on whatever
+    // the card itself is. The arrow drops `onSelect`'s second argument for exactly this — passed
+    // bare, the tile's row would land in this field.
+    expect(useAppStore.getState().paneFinish).toBeNull();
   });
 
   /** The editor has to be usable at 1024px with the card pane docked beside it, and 384px of

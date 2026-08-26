@@ -408,6 +408,10 @@ function Results({ search }: { search: CardSearch }) {
   // not otherwise. `tip`'s own identity never changes (`useTooltip` memoises it on the context
   // alone), so it costs the memo nothing to depend on it too.
   const columns = useMemo(() => columnsFor(marketplace, tip), [marketplace, tip]);
+  // The currency both layouts quote in, named once. It is the marketplace's and never a bare
+  // `Intl.NumberFormat`: the table's Price column reads it out of `columnsFor` above and the
+  // wall's chin reads it here, so the two cannot end up drawing one search in two currencies.
+  const currency = marketplace.currency;
   // Read here rather than taken as a prop: the layout is the result area's own business,
   // and the page above it only needs to know which pager is live.
   const view = useAppStore((s) => s.searchView);
@@ -607,6 +611,17 @@ function Results({ search }: { search: CardSearch }) {
             // The crown, in the same chip as that mark. Held still at module scope like every
             // other callback this wall is handed.
             gameChanger={tileGameChanger}
+            // What the chin says one copy costs — **the spread**, because a collapsed row stands
+            // for every printing that got past the filters and one figure would be a claim about
+            // one of them. `priceRange` is the helper the table's Price column is built from, so
+            // the two drawings of one search cannot quote different money; equal ends collapse to
+            // a single price, which is what keeps `$2.15–$2.15` off the 17 588 cards in the corpus
+            // that have exactly one printing.
+            //
+            // Spec §5 — a price is never shown without saying how old it is — is answered once
+            // under this wall rather than on forty tooltips, which is why this slot is a bare
+            // figure.
+            money={(card) => priceRange(card.priceLow, card.priceHigh, currency)}
             // The whole tile is the target: the art, its two corner marks and the caption.
             cardMenu={cardMenu}
             cardMenuKey={cardMenuKey}
@@ -684,6 +699,24 @@ function Results({ search }: { search: CardSearch }) {
             }}
           />
         ))}
+
+      {/* **Spec §5: a price is never shown without saying how old it is** — and, with five
+          marketplaces in the picker, whose it is. `pricesAsOf` answers both, and names which of
+          the two clocks this marketplace runs on: the card-data sync for the blob-backed pair,
+          the last price-feed refresh for the two this app downloads itself.
+
+          **Said once, under the wall, rather than on every tile.** The wall's chins each carry a
+          bare figure, and forty tooltips saying the same sentence would be the same statement
+          made forty times — the argument the deck's `PriceStrip` and the card pane both already
+          make, and the reason the chin's money slot is a plain string.
+
+          **Grid only.** The table states it in the Price column's own header (`columnsFor`
+          above), so drawing it here as well would say it twice in one view. Drawn rather than
+          hung on a `title`, which is what the card pane and `TheoryDiffDialog` decided for the
+          same reason: a hover is not a reader. */}
+      {!empty && view === "grid" && (
+        <p className="shrink-0 text-[0.7rem] text-dim">{pricesAsOf(marketplace)}</p>
+      )}
     </div>
   );
 }

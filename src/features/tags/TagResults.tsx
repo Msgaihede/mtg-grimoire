@@ -24,6 +24,8 @@ import { parseFinishes } from "@/lib/finish";
 import { WALL_CARD_VARIANT } from "@/lib/images";
 import { ipc, ipcError, type CardSummary } from "@/lib/ipc";
 import { statusLine } from "@/lib/motion";
+import { pricesAsOf } from "@/lib/prices";
+import { priceRange } from "@/lib/priceRange";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
@@ -57,6 +59,10 @@ export function TagResults({ search }: { search: CardSearch }) {
   // not otherwise. `tip`'s own identity never changes (`useTooltip` memoises it on the context
   // alone), so it costs the memo nothing to depend on it too.
   const columns = useMemo(() => columnsFor(marketplace, tip), [marketplace, tip]);
+  // The currency both layouts quote in, named once — the marketplace's, and never a bare
+  // `Intl.NumberFormat`. The table reads it through `columnsFor` above and the wall's chin reads
+  // it here, so the two cannot draw one tag search in two currencies.
+  const currency = marketplace.currency;
   // The Tags page's own layout preference, not the search's — see `store.ts`, where the field
   // says why a reader who put this wall in a table said nothing about their card search.
   const view = useAppStore((s) => s.tagsView);
@@ -269,6 +275,19 @@ export function TagResults({ search }: { search: CardSearch }) {
             treatment={tileTreatment}
             // The crown, in the same chip as that mark.
             gameChanger={tileGameChanger}
+            // What the chin says one copy costs — the **spread**, through the same `priceRange`
+            // the table beside it uses, so a wall and its table cannot quote different money
+            // about one search.
+            //
+            // **Nearly always one figure here, and that is the collapse being off** rather than
+            // the helper being the wrong one: uncollapsed, a row is one printing and both ends
+            // carry its own price, which `priceRange` folds into a single price. It is still the
+            // spread that is asked for, because the reader may press All printings back on — at
+            // which point this wall is the search's wall and has to say what that one says.
+            //
+            // Spec §5's as-of sentence is said once under this wall, not on forty tooltips, which
+            // is why this slot is a bare figure.
+            money={(card) => priceRange(card.priceLow, card.priceHigh, currency)}
             cardMenu={cardMenu}
             cardMenuKey={cardMenuKey}
             // The tile's one control, built from the row it is about: the popup offers the
@@ -335,6 +354,18 @@ export function TagResults({ search }: { search: CardSearch }) {
             }}
           />
         ))}
+
+      {/* **Spec §5: a price is never shown without saying how old it is** — the wall's chins
+          started quoting money on 2026-08-26, so the rule reaches this page where it did not
+          before. `pricesAsOf` names the marketplace as well as the date, which matters with five
+          in the picker.
+
+          Said **once** here rather than as a tooltip on every one of forty tiles, and **grid
+          only**: the table says it in the Price column's header through the same `columnsFor`
+          the search page uses, so drawing it here too would state it twice in one view. */}
+      {!empty && view === "grid" && (
+        <p className="shrink-0 text-[0.7rem] text-dim">{pricesAsOf(marketplace)}</p>
+      )}
     </div>
   );
 }

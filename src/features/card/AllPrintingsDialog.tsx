@@ -94,7 +94,7 @@ import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError, type Printing } from "@/lib/ipc";
 import { languageHint } from "@/lib/languages";
 import { PRESS } from "@/lib/motion";
-import { formatPrice } from "@/lib/prices";
+import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { useAppStore, type CardWalkStop, type PrintingsRequest } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
@@ -615,7 +615,6 @@ function Body({
   // read in this app, so switching refetches rather than re-labelling numbers from another feed.
   const { marketplace } = useMarketplace();
   const viewCard = useAppStore((s) => s.setSelectedCardId);
-  const tip = useTooltip();
   const queryClient = useQueryClient();
   /**
    * The wishlist row a press repoints, or `null` on every surface that names none — which is
@@ -816,29 +815,6 @@ function Body({
   );
 
   /**
-   * The cheapest of a printing's finishes, at the marketplace the whole wall is quoted from.
-   *
-   * "Cheapest across finishes" rather than the nonfoil price, for `cheapestPrice`'s reason: an
-   * etched-only or foil-only promo is priced in that column and nowhere else, and ranking those
-   * with the unpriced ones would put the expensive ones at the bottom.
-   *
-   * **A `null` price draws an em dash, never `$0.00`.** `formatPrice` never invents a zero, and a
-   * marketplace that has not answered for this printing costs a dash rather than a number — no
-   * other feed's figure is substituted, because no two feeds have the same holes.
-   */
-  const tilePrice = useCallback(
-    (row: PrintingRow) => (
-      <span
-        className="shrink-0 font-mono tabular-nums"
-        {...tip(`Cheapest finish at ${marketplace.label}`)}
-      >
-        {formatPrice(cheapestPrice(row.finishPrices), marketplace.currency)}
-      </span>
-    ),
-    [marketplace.label, marketplace.currency, tip],
-  );
-
-  /**
    * What the wall is showing, in three wordings.
    *
    * * **unfiltered and uncapped** — `862 printings`
@@ -969,10 +945,48 @@ function Body({
             topLeft={tileLanguage}
             finish={tileFinish}
             treatment={tileTreatment}
-            action={tilePrice}
+            // What one copy of this printing costs, **in the chin** — the bar under the art that
+            // already carries the rarity, the set and the finish.
+            //
+            // It was `action={tilePrice}` until 2026-08-26: a hover-revealed strip over the foot
+            // of the picture. That was the wrong home for it twice over. A price that only exists
+            // while a pointer rests on the tile is unreadable to a reader scanning a wall of 862
+            // printings for the cheap one — and this is the one screen in the app built for
+            // exactly that comparison. And the strip lies *inside* the tile's `relative` box,
+            // whereas the chin is a sibling of the art button, so the figure is announced rather
+            // than hidden behind a hover a keyboard cannot perform. Both are gone in favour of
+            // one fact drawn once, in the place every other wall now draws it.
+            //
+            // The **cheapest finish**, not the nonfoil price: `cheapestPrice` is what this
+            // dialog's own `price` group-by ranks on, so the order the reader picked and the
+            // number under each tile come from one definition — and a foil-only or etched-only
+            // promo is priced in that column and nowhere else, so quoting nonfoil would leave the
+            // rows most worth comparing reading as unpriced.
+            //
+            // `formatPrice` draws an em dash for a printing this marketplace has not answered
+            // for; it never invents `$0.00`, and no other feed's figure is substituted, because
+            // no two feeds have the same holes. Spec §5's as-of sentence is said once for this
+            // wall rather than on a thousand tooltips, which is why this is a bare figure.
+            money={(row) => formatPrice(cheapestPrice(row.finishPrices), marketplace.currency)}
             cardMenu={cardMenu}
             cardMenuKey={cardMenuKey}
           />
+
+          {/* **Spec §5: a price is never shown without saying how old it is** — and this wall is
+              nothing but prices, so it is the last surface that should have been missing it.
+
+              It restores the other half of what `tilePrice`'s tooltip used to say, and says it
+              better. That tooltip read `Cheapest finish at <marketplace>`: it named *whose*
+              prices these are, which matters with five in the picker, but never said *when* —
+              and it said it once per tile, revealed on a hover a keyboard cannot perform.
+              `pricesAsOf` answers both halves in one sentence, drawn once, under the wall it is
+              about; it also names which of the two clocks this marketplace runs on, the card-data
+              sync or the price-feed refresh, which a fixed phrasing could not.
+
+              Under the wall rather than beside the count line above it, so it reads as a footnote
+              to the figures it is about — the arrangement the deck's `PriceStrip` and the card
+              pane both already use. */}
+          <p className="shrink-0 pt-1 text-[0.7rem] text-dim">{pricesAsOf(marketplace)}</p>
         </div>
       )}
     </div>

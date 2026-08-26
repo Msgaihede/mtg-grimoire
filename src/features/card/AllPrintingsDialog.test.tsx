@@ -5,7 +5,8 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 import { openDropdown } from "@/test-dropdown";
 import type { DeckFinish, DeckVariant, Printing, PrintingsResponse } from "@/lib/ipc";
-import type { MarketplaceId } from "@/lib/marketplace";
+import { MARKETPLACES, type MarketplaceId } from "@/lib/marketplace";
+import { pricesAsOf } from "@/lib/prices";
 // Type-only, so it is erased before the `vi.mock` below runs — the store's *value* import stays
 // under the mock, with the component's, where the hoisting order needs it.
 import type { PaneDeckContext, PrintingsRequest } from "@/lib/store";
@@ -289,6 +290,23 @@ function rightClick(element: HTMLElement): void {
   element.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
 }
 
+/**
+ * The **chin** of the wall's one tile — the bar under the art, not the tile as a whole.
+ *
+ * The distinction is the whole point of the price assertions below. `CardGrid` draws a tile as a
+ * `relative` box (the art button, its two corner marks and the hover-revealed action strip) with
+ * the chin as that box's *sibling*, so a query over the tile finds a figure in either — which is
+ * exactly what a price left wired to `action` as well as to `money` would look like. Scoped here,
+ * a chin assertion fails while the money is anywhere else on the tile.
+ *
+ * One tile, because jsdom's wall is one column and every price fixture here holds one printing.
+ */
+async function tileChin(): Promise<HTMLElement> {
+  const art = await screen.findByRole("button", { name: /LEA/ });
+  const tile = art.parentElement?.parentElement as HTMLElement;
+  return tile.lastElementChild as HTMLElement;
+}
+
 describe("AllPrintingsDialog", () => {
   it("draws nothing until a card is asked for", () => {
     renderDialog();
@@ -367,6 +385,80 @@ describe("AllPrintingsDialog", () => {
 
     expect(document.getElementById(TOOLTIP_PANEL_ID)).toHaveTextContent("Printed in Phyrexian");
     vi.useRealTimers();
+  });
+
+  /**
+   * **The chin's money slot: the cheapest finish this printing is sold in.**
+   *
+   * A printings row is one piece of cardboard sold in one to three finishes, so the figure under
+   * it is `cheapestPrice` — which is what this dialog's own `price` sort already ranks on, so the
+   * order the reader picked and the number under each tile come from one definition.
+   *
+   * The fixture is foil-only because that is the case a nonfoil-column chin gets wrong: 12 849
+   * foil-only and 892 etched-only printings would read as unpriced on the one screen in the app
+   * built for comparing prices. `formatPrice` draws the em dash for a printing no marketplace
+   * quotes, and never invents `$0.00`.
+   *
+   * It lives **in the chin** rather than in a hover-revealed strip over the art, which is where
+   * this dialog drew it until 2026-08-26 (`action={tilePrice}`). One fact, drawn once, in the
+   * place every other wall in the app now draws it — and reachable without a pointer, since the
+   * chin is a sibling of the tile's button rather than swallowed by its accessible name.
+   */
+  it("quotes the cheapest finish a printing is sold in, in the chin", async () => {
+    cardPrintings.mockResolvedValue(
+      page([
+        {
+          ...p("a", "lea"),
+          finishes: '["foil"]',
+          finishPrices: { nonfoil: null, foil: 31.18, etched: null },
+        },
+      ]),
+    );
+    renderDialog();
+    open({ cardId: "card-1", oracleId: "o1", name: "Sol Ring", deck: null });
+
+    expect(within(await tileChin()).getByText("$31.18")).toBeInTheDocument();
+    // **Once.** A price in the chin *and* in a hover strip over the art is one fact drawn twice,
+    // and this is the assertion that catches leaving both wired.
+    expect(screen.getAllByText("$31.18")).toHaveLength(1);
+  });
+
+  /**
+   * **Spec §5: a price is never shown without saying how old it is**, on the one wall in the app
+   * that is nothing but prices — and the one that had never said it.
+   *
+   * It also restores what `tilePrice`'s tooltip used to carry and the chin's bare figure cannot:
+   * *whose* prices these are, which matters with five marketplaces in the picker. That tooltip
+   * said the marketplace and never the date, once per tile, behind a hover; this says both, once,
+   * in text.
+   *
+   * Through `pricesAsOf` rather than the sentence typed out here — spelling it would pin a copy
+   * of the wording rather than the function.
+   */
+  it("says whose prices these are and how old they are, under the wall", async () => {
+    cardPrintings.mockResolvedValue(page([p("a", "lea")]));
+    renderDialog();
+    open({ cardId: "card-1", oracleId: "o1", name: "Sol Ring", deck: null });
+
+    await screen.findByRole("button", { name: /LEA/ });
+
+    expect(screen.getByText(pricesAsOf(MARKETPLACES.tcgplayer))).toBeInTheDocument();
+    // The half the chin's bare figure cannot say, asserted in its own right: `getMarketplace`
+    // answers `null` here — a fresh install — so this is the default resolving to TCGplayer
+    // rather than a label anything on this wall hard-codes.
+    expect(screen.getByText(/TCGplayer/)).toBeInTheDocument();
+  });
+
+  /** A printing no marketplace quotes costs a dash, not a `$0.00` nobody asked for — and not
+   *  another feed's figure, since no two feeds have the same holes. */
+  it("draws an em dash in the chin for a printing this marketplace does not price", async () => {
+    cardPrintings.mockResolvedValue(
+      page([{ ...p("a", "lea"), finishPrices: { nonfoil: null, foil: null, etched: null } }]),
+    );
+    renderDialog();
+    open({ cardId: "card-1", oracleId: "o1", name: "Sol Ring", deck: null });
+
+    expect(within(await tileChin()).getByText("—")).toBeInTheDocument();
   });
 
   /**

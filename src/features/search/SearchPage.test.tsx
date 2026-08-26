@@ -1181,6 +1181,64 @@ describe("the result layout toggle", () => {
   });
 
   /**
+   * **The chin's money slot, and it quotes the spread.**
+   *
+   * A collapsed row stands for every printing that got past the filters, so one figure would be a
+   * claim about one of them. `priceRange` is the same helper the table's Price column is built
+   * from, which is the whole point: a wall and the table beside it are two drawings of one search
+   * and must not quote different money.
+   *
+   * The fixture widens the ends deliberately. `priceRange` collapses equal ends to a single
+   * price — 17 588 of the corpus's 37 553 cards have exactly one printing, and `$400.50–$400.50`
+   * would be noise on every one of them — so the obvious wrong helper, `formatPrice(card.priceLow,
+   * …)`, is indistinguishable from a correct chin on an equal-ended row and fails only here.
+   */
+  it("quotes the spread across the printings a tile stands for", async () => {
+    searchCards.mockResolvedValue(page([{ ...BOLT, priceLow: 0.45, priceHigh: 88 }]));
+    wrap(<SearchPage />);
+
+    await screen.findByAltText("Lightning Bolt");
+
+    expect(screen.getByText("$0.45–$88.00")).toBeInTheDocument();
+  });
+
+  /** The other half of the same rule: one printing is one figure, not a range repeating itself. */
+  it("quotes one figure for a tile standing for a single printing", async () => {
+    wrap(<SearchPage />);
+
+    await screen.findByAltText("Lightning Bolt");
+
+    expect(screen.getByText("$400.50")).toBeInTheDocument();
+  });
+
+  /**
+   * **Spec §5: a price is never shown without saying how old it is.** The wall started quoting
+   * money in the chin above, so the rule reaches the grid where it previously reached only the
+   * table's Price column header.
+   *
+   * Once, under the wall — not on forty tooltips. And **through `pricesAsOf` rather than the
+   * sentence typed out here**: spelling it in the test would pin a copy of the wording rather
+   * than the function, so a reworded sentence would go red in a place that has nothing to say
+   * about it while a wall drawing a *stale* sentence stayed green.
+   *
+   * The table is asserted to draw exactly one of it too, which is what proves the grid's line is
+   * not a second copy in the view that already says it in its column header.
+   */
+  it("says how old the wall's prices are, once, under the grid", async () => {
+    wrap(<SearchPage />);
+
+    await screen.findByAltText("Lightning Bolt");
+
+    expect(screen.getAllByText(pricesAsOf(MARKETPLACES.tcgplayer))).toHaveLength(1);
+
+    await userEvent.click(screen.getByRole("button", { name: "Table view" }));
+
+    // The table says it in the Price column's header instead — as a tooltip and an accessible
+    // name, not as text — so the grid's line goes with the grid.
+    expect(screen.queryByText(pricesAsOf(MARKETPLACES.tcgplayer))).toBeNull();
+  });
+
+  /**
    * A tile is a printing you can carry somewhere — spec §1's first source.
    *
    * The wall is generic, so the payload is built *here*, from the search row: what a tile

@@ -19,6 +19,8 @@ import { useCardSearch, type FormatFilterOption } from "@/features/search/useCar
 import { FOCUS } from "@/lib/focus";
 import { ipcError, type CardSummary, type DeckCategory } from "@/lib/ipc";
 import { statusLine, TRANSITION } from "@/lib/motion";
+import { pricesAsOf } from "@/lib/prices";
+import { priceRange } from "@/lib/priceRange";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { AUTO_CATEGORY, autoCategoryFor } from "./autoCategory";
@@ -1154,7 +1156,12 @@ function OpenPanel({
   // deck's format over a filter the reader had cleared.
   const tip = useTooltip();
   const search = useCardSearch({ defaultFormat });
-  const { query, rows, searchKey } = search;
+  const { query, rows, searchKey, marketplace } = search;
+  // The currency this column's chins quote in. Taken off the search's own marketplace rather
+  // than read again here, so the rows and the money on them come from one answer — that
+  // marketplace is in the query key, so a switch refetches instead of re-labelling figures from
+  // another feed.
+  const currency = marketplace.currency;
 
   // Read here rather than handed down: the root's own `selectedCardId` is for the caret effect,
   // and this is the wall's selection. One field, two subscriptions, no round trip either side.
@@ -1328,11 +1335,34 @@ function OpenPanel({
           selectionScope="deck-panel"
           baseTileWidth={TILE_BASE}
           selectedId={selectedCardId}
-          onSelect={selectCard}
+          // **A one-argument arrow, and the parameter is dropped rather than adapted.**
+          // `CardGrid`'s `onSelect` widened to `(id, card)` on 2026-08-26, for the walls whose
+          // tiles are not simply printings and which need to read something off the row. This
+          // column's are — one tile per printing, no keys, no finishes — so there is nothing on
+          // the row it wants.
+          //
+          // It can no longer be passed bare, which is the whole of why this is not still
+          // `onSelect={selectCard}`: `openCardFromDeckSearch`'s **second** parameter is an
+          // optional `Finish`, so a bare reference lines the tile's `CardSummary` up against that
+          // and fails to compile. The arrow says the same thing the bare reference always meant —
+          // a search tile names no finish, so the card opens at the store's own `null` default,
+          // exactly as it did before the widening.
+          onSelect={(id) => selectCard(id)}
           tileRef={tileRef}
           // The crown in a tile's top-right chip: the same fact the search view's wall marks,
           // marked the same way here — see `tileGameChanger`.
           gameChanger={tileGameChanger}
+          // What the chin says one copy costs — the **spread**, through `priceRange`, which is
+          // the search page's own helper over the same rows. This tab *is* the card search in a
+          // 384px column: same hook, same collapse, so a card that costs one thing on the search
+          // page and another in here would be the reader learning that a price means something
+          // about which wall they found it on. A collapsed row stands for every printing that got
+          // past the filters, so a single figure would be a claim about one of them; equal ends
+          // collapse to one price rather than repeating themselves.
+          //
+          // Spec §5's as-of sentence is said once for this wall, not on every tile, which is why
+          // this slot is a bare figure.
+          money={(card) => priceRange(card.priceLow, card.priceHigh, currency)}
           // The whole tile is the target — the art, its corner chip and the caption under it.
           // The wall's own `cardMenu` slot, so this panel knows nothing about menus beyond
           // where a right-click lands.
@@ -1398,6 +1428,35 @@ function OpenPanel({
             }
           }}
         />
+      )}
+
+      {/* **Spec §5: a price is never shown without saying how old it is** — said once under the
+          wall, in the same words and the same voice as the other three catalogue walls, so the
+          four read as one thing.
+
+          **This is the narrowest surface in the app, so it is the one where the sentence costs
+          height — and it costs less than it looks like it will.** Measured headless over the built
+          stylesheet with the real webfont, at the 193px content box `MIN_PANEL_WIDTH_PX` (206)
+          leaves: **two lines, 33.59px**, and the same two lines for all five marketplaces —
+          including the longest, `"Card Kingdom prices as of the last price-feed refresh."` At the
+          panel's 384px opening width it is **one line, 16.8px**. So the worst case is one extra
+          line of 11.2px type at a width the reader has to drag to.
+
+          Drawn unconditionally either way: the rule has no narrow-surface exemption, and a price
+          with no date is worse than a wall one line shorter. `shrink-0` so the wall gives up the
+          height rather than this being squeezed to nothing.
+
+          **Serve dist over http to re-measure this, never `file://`** — dist's CSS references its
+          fonts with absolute `/assets/…` URLs, which from a file page resolve to the drive root
+          and fall back to the generic sans-serif without saying so. The tell is measuring one
+          string twice, once in the app's stack and once forced to `sans-serif`: identical widths
+          mean the real face never loaded (265.2px against the true 272.78px here).
+
+          Unconditional on the layout, unlike the search page's and the Tags page's, because this
+          panel has no table: `leaves the grid-or-table choice to the search view` is its own
+          test, so the wall is the only thing that can be on screen here. */}
+      {!empty && (
+        <p className="shrink-0 text-[0.7rem] text-dim">{pricesAsOf(marketplace)}</p>
       )}
       {/* No `prefetchImages` effect, deliberately — the search view's warms a page of 50
           because a 1 200px wall shows forty tiles at once, and the reader is a scroll away from
