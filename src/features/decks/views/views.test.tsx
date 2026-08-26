@@ -2383,7 +2383,10 @@ describe("GridView tiles", () => {
     expect(wall().style.gap).toBe("20px");
     expect(foot().style.height).toBe("56px");
     expect(foot().style.fontSize).toBe("");
-    expect(foot().className).toContain("text-[calc(0.625rem*var(--mark-scale,1))]");
+    // `classList.contains`, never `className.toContain` — see this describe's seam case for the
+    // substring trap that spelling walks into, and there is no reason to keep two spellings of
+    // one idea in one file.
+    expect(foot().classList.contains("text-[calc(0.625rem*var(--mark-scale,1))]")).toBe(true);
     expect(controls().style.bottom).toBe("56px");
     cleanup();
 
@@ -2399,6 +2402,14 @@ describe("GridView tiles", () => {
     expect(tile().style.width).toBe("75px");
     expect(wall().style.gap).toBe("10px");
     expect(foot().style.height).toBe("14px");
+    // The type is asserted at **both** ends rather than at the top one only. The class is the
+    // same string at every stop — it is `--mark-scale` that moves, and jsdom resolves no
+    // `calc()` — so this end adds no information about the *size*. What it adds is the thing
+    // this case is named for: the foot's type is carried the same way going down as going up,
+    // and the 20px/9px floor that used to hold here is gone from both halves rather than from
+    // the half somebody looked at.
+    expect(foot().style.fontSize).toBe("");
+    expect(foot().classList.contains("text-[calc(0.625rem*var(--mark-scale,1))]")).toBe(true);
     expect(controls().style.bottom).toBe("14px");
   });
 
@@ -2462,6 +2473,30 @@ describe("GridView tiles", () => {
     );
 
     expect(screen.getByText(/C21 · 179/)).toBeInTheDocument();
+  });
+
+  /**
+   * **The chin supplies its own bottom edge here, and that is the whole job of the `seam` prop.**
+   *
+   * This tile's face is `CardArt`, which has no border at all — a rule break on it is a `ring-2`
+   * rather than an edge — so the chin draws all three of its own. The stacked card is the exact
+   * opposite, and the mirror of this assertion already lives there (`CardStack.test.tsx`, "carries
+   * the rule break's edge through the data line as well", which pins `border-x` and no bottom
+   * edge): under a bordered card the chin must **not** draw one, or the card's own border and the
+   * chin's stack into a 2px foot under a 1px everything-else.
+   *
+   * **`classList.contains`, never `className.toContain`.** `"border-border"` contains the
+   * substring `border-b`, so the obvious spelling passes on *both* seams and asserts nothing at
+   * all — which is a shape this repo has been bitten by before.
+   *
+   * This pins a class string rather than a painted pixel, because jsdom has no Tailwind, so it
+   * retires nothing the live pass does about the seam itself. What it retires is the **silence**:
+   * `seam` had no test on this surface at all, and flipping it to the stack's answer left the
+   * whole file green.
+   */
+  it("gives the chin its own bottom edge, which the bare art frame has not got", () => {
+    draw(DEFAULT_ZOOM);
+    expect(foot().classList.contains("border-b")).toBe(true);
   });
 
   /**

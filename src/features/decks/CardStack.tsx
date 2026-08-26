@@ -1163,6 +1163,14 @@ function StackedCard({
         // with the face inset at `rounded-[7px]`, so the chin draws sides only and rides onto the
         // card's own border rather than supplying a bottom edge of its own.
         seam="card"
+        // **The shortage, and it is drawn only where it says something**: a fully covered card
+        // prints nothing at all, because sixty ticks are sixty things to read past on the way to
+        // the three that matter. That is the whole reason this is a conditional rather than a
+        // figure that is always there in one of two colours, and it is the deck's own fact — the
+        // one slot no other surface's chin fills.
+        //
+        // `aria-hidden` even out here, outside the button: the button beside it already says the
+        // shortage in words, and a screen reader should not hear "1 slash 2" as well.
         extra={
           short ? (
             <span
