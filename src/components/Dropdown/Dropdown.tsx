@@ -77,7 +77,21 @@ export type SharedProps = {
    * rather than two.
    */
   onReachEnd?: () => void;
-  // Implemented in Task 8:
+  /**
+   * The panel is opening — called in the **same batch** as the state change that opens it, on
+   * every one of the three ways in (a click, ArrowDown on the closed trigger, and a character
+   * key on a `searchable` one).
+   *
+   * For the per-*opening* state a caller keeps outside this component. `SetCombobox`'s is the
+   * page depth it resets and the snapshot of picked sets it floats to the top; an effect on the
+   * shell's own `open` would take that snapshot one commit after the first render of the list it
+   * is meant to order, which is the whole reason this hook exists rather than nothing.
+   *
+   * **Not a place to change what `options` will be.** The opening row is computed from the list
+   * drawn on the render *before* this runs — see `openingList` below — so a caller that
+   * synchronously re-cut its own list here would open the panel on a row of a list it is about
+   * to discard. Reset a page depth, take a snapshot; do not clear a controlled `query`.
+   */
   onOpen?: () => void;
 };
 
@@ -226,6 +240,7 @@ function DropdownShell(props: ShellProps) {
     emptyLine = "No matches.",
     footer,
     onReachEnd,
+    onOpen,
     multi,
     triggerContent,
     isPicked,
@@ -350,10 +365,16 @@ function DropdownShell(props: ShellProps) {
   // flicker in something the reader is watching leave. Never for a **controlled** caller: it owns
   // `query` and this must not reach it, so the guard skips `onQueryChange` entirely rather than
   // calling it with `""`.
+  //
+  // `onOpen` goes off here rather than from an effect on `open`, which is the whole of what it
+  // is for: a caller's per-opening state then lands in the same batch as the open itself. Its
+  // one other entry point is the `searchable` character-key branch below, which cannot use this
+  // function — see the comment there.
   const openAt = (i: number) => {
     setActiveIndex(i);
     if (!controlled) setLocalQuery("");
     setOpen(true);
+    onOpen?.();
   };
 
   // Enter, or a pointer press, on an enabled row. `<Dropdown>`'s `onActivate` is `onChange` and
@@ -405,9 +426,18 @@ function DropdownShell(props: ShellProps) {
       case "ArrowDown": {
         e.preventDefault();
         const next = nextEnabledIndex(drawn, index, 1);
-        // Nothing moved: the keyboard walked off the end of the list.
-        if (next === index) onReachEnd?.();
-        else setActiveIndex(next);
+        if (next === index) {
+          // Nothing moved: the keyboard walked off the end of the list — which, for a caller
+          // that pages, is the end of a *page* rather than of the list. Ask for the rest, and
+          // step onto the first row that arrives: the arrow key the reader is already holding
+          // meant "more of this list", not "reveal some and stay where I am".
+          onReachEnd?.();
+          // Only from the very last row, and inert whenever nothing is revealed — `index` is
+          // then `drawn.length - 1`, so the clamp above walks `index + 1` straight back to it on
+          // the next render. From a last *enabled* row with disabled ones after it there is
+          // nothing to step onto, which is why this asks about the list's end and not the walk's.
+          if (index === drawn.length - 1) setActiveIndex(index + 1);
+        } else setActiveIndex(next);
         break;
       }
       case "ArrowUp": {
@@ -514,7 +544,11 @@ function DropdownShell(props: ShellProps) {
             // Same gesture, same place: a character that would have jumped a row instead
             // opens the panel and seeds the search box the reader is about to land in.
             updateQuery(e.key);
+            // Opened by hand rather than through `openAt`, whose uncontrolled query reset would
+            // wipe the very character this branch exists to keep — and `updateQuery` has already
+            // put the cursor on row 0. It is still an opening, so it is still announced.
             setOpen(true);
+            onOpen?.();
             return;
           }
           const match = typeAhead(e.key);

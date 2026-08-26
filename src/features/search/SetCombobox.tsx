@@ -1,16 +1,10 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Check, ChevronDown } from "lucide-react";
-import { AnimatePresence } from "motion/react";
-import { FILTER_UNAVAILABLE } from "@/components/FilterChips";
-import { PopupPanel } from "@/components/PopupListbox";
-import { useTooltip } from "@/components/tooltip/useTooltip";
+import { MultiDropdown } from "@/components/Dropdown/Dropdown";
 import { FOCUS } from "@/lib/focus";
 import { ipc, type SetSummary } from "@/lib/ipc";
 import { setGlyphClass } from "@/lib/keyrune";
-import { LAYER } from "@/lib/layers";
 import { sortOptions } from "@/lib/options";
-import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { facetTitle, optionDisabled } from "./facets";
 
@@ -54,9 +48,6 @@ const MORE_STEP = 50;
  */
 const MAX_SETS = 64;
 
-/** Module scope so the scroll effect can depend on it without re-running every render. */
-const optionId = (id: string, index: number) => `${id}-option-${index}`;
-
 /** Exact code, then code prefix, then a name match. Lower sorts first. */
 const rank = (code: string, needle: string): number =>
   code === needle ? 0 : code.startsWith(needle) ? 1 : 2;
@@ -64,13 +55,17 @@ const rank = (code: string, needle: string): number =>
 /**
  * A searchable, multi-select set picker.
  *
- * Hand-rolled rather than pulled from a component library, and deliberately *not* a
- * portalled popover: the shipped CSP is `style-src 'self'`, and every Radix overlay
- * primitive pulls in `react-remove-scroll`, which injects a runtime `<style>` element the
- * moment it opens. That passes `tauri dev` and breaks in a packaged build. This is a
- * plain absolutely-positioned listbox in the same stacking context as the button, so
- * nothing is injected and nothing is locked. The ARIA wiring below is the whole of what
- * the dependency would have provided.
+ * **Everything that is not about sets belongs to `<MultiDropdown>`** — the disclosure button,
+ * the panel and where it lands, the search box, the rows, the keyboard walk,
+ * `aria-activedescendant`, and all three dismissals (Escape with the caret handed back, an
+ * outside `mousedown`, focus leaving). That shell is hand-rolled rather than pulled from a
+ * component library for the reason this control used to state itself: the shipped CSP is
+ * `style-src 'self'`, and every overlay primitive in reach injects a runtime `<style>` element
+ * the moment it opens — which passes `tauri dev` and breaks in a packaged build. Nothing here
+ * is portalled and nothing is injected; `PopupPanel`'s own doc carries the rest of that record.
+ *
+ * What is left is the part that is about *sets*: which ones to offer, in what order, how many
+ * at a time, which of them this search has anything in, and how many one search may name.
  */
 export function SetCombobox({
   selected,
@@ -110,17 +105,22 @@ export function SetCombobox({
    */
   options?: readonly SetSummary[];
   /**
-   * Which edge of the 288px listbox is pinned to the trigger — `AddToCollectionButton`'s prop,
-   * with the same two values for the same reason, and this app's standing rule about an anchored
-   * popup: it is pinned to, and grows from, the corner nearest its trigger's own edge.
+   * Which edge of the panel is pinned to the trigger — `AddToCollectionButton`'s prop, with the
+   * same two values for the same reason, and this app's standing rule about an anchored popup:
+   * it is pinned to, and grows from, the corner nearest its trigger's own edge.
    *
-   * `"end"` is the default because both search-shaped callers put this control at the **right end**
-   * of a wrapping filter row, where it was measured opening 174px past a 1280px window from the
-   * static position — and nothing clips these popups, so the overflow scrolled the whole app
-   * sideways the moment `scrollIntoView` ran. `AllPrintingsDialog` puts it second in its row and
-   * passes `"start"`: there is nothing to the left of the trigger to open back across, and a
-   * listbox that opened leftwards from a control at the head of a row reads as belonging to
-   * whatever it landed on.
+   * **A first guess rather than the last word**, since the panel became `<MultiDropdown>`'s:
+   * `placeDropdown` measures the trigger against the window and overrules the guess when the
+   * asked-for edge would put the panel past the far gutter. It is still a guess worth passing,
+   * because the caller knows its own layout better than one measurement does.
+   *
+   * `"end"` is the default because both search-shaped callers put this control at the **right
+   * end** of a wrapping filter row, where the panel was measured opening 174px past a 1280px
+   * window from the static position — and nothing clips these popups, so the overflow scrolled
+   * the whole app sideways the moment `scrollIntoView` ran. `AllPrintingsDialog` puts it second
+   * in its row and passes `"start"`: there is nothing to the left of the trigger to open back
+   * across, and a panel that opened leftwards from a control at the head of a row reads as
+   * belonging to whatever it landed on.
    */
   align?: "start" | "end";
   /**
@@ -133,15 +133,12 @@ export function SetCombobox({
    */
   fill?: boolean;
 }) {
-  const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  /** Which option the keyboard is on. Focus stays in the box; this moves instead. */
-  const [active, setActive] = useState(0);
   /**
    * How many rows are drawn. Reset to {@link MAX_OPTIONS} on a new query and on each open —
-   * beside the `setActive(0)` that resets the cursor for the same reason, rather than from an
-   * effect that would have to work out which change it was reacting to. A new query is a new
-   * list, and how deep the reader had paged into the old one means nothing in it.
+   * on an open beside the `pinned` snapshot that is retaken for the same reason, rather than
+   * from an effect that would have to work out which change it was reacting to. A new query is
+   * a new list, and how deep the reader had paged into the old one means nothing in it.
    */
   const [shown, setShown] = useState(MAX_OPTIONS);
   /**
@@ -163,12 +160,6 @@ export function SetCombobox({
    * has nothing in would otherwise sink it out of the page mid-gesture, leaving no way back.
    */
   const [pinned, setPinned] = useState<ReadonlySet<string>>(() => new Set(selected));
-  const rootRef = useRef<HTMLDivElement>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-  const buttonRef = useRef<HTMLButtonElement>(null);
-  const id = useId();
-  const listboxId = `${id}-listbox`;
-  const labelId = `${id}-label`;
 
   // One call per session: the set list changes at most once a sync, and the picker has to
   // open instantly.
@@ -189,49 +180,26 @@ export function SetCombobox({
   });
 
   /**
-   * Everything that belongs to one *opening* rather than to the mount: the cursor, how far the
-   * reader has paged, and which sets are floated to the top.
+   * Everything that belongs to one *opening* rather than to the mount: how far the reader has
+   * paged, and which sets are floated to the top. The cursor is the third such thing and is the
+   * shell's own — `<MultiDropdown>` puts it on the first selected row it can find.
    *
-   * Deliberately not an effect on `open`. The two callers are the only two ways in, and doing
-   * it there keeps the state changes in the same batch as `setOpen` — an effect would take a
-   * snapshot one commit after the first render of the list it is meant to order. Note what is
-   * *not* here: the query, which survives an opening on purpose so reopening the picker shows
-   * the reader the list they left. (`setShown` is reset by the query's own `onChange` for the
-   * separate reason that a new query is a new list; `pinned` is not, because the sets already
-   * ticked are the same sets whatever has been typed.)
+   * Handed over as `onOpen`, and deliberately not an effect on the shell's `open`: the shell
+   * calls this in the same batch as the state change that opens the panel, where an effect
+   * would take the snapshot one commit after the first render of the list it is meant to order.
+   *
+   * Note what is *not* here: the query, which survives an opening on purpose so reopening the
+   * picker shows the reader the list they left. That is also the one thing an `onOpen` may not
+   * touch — the shell computes its opening row from the list drawn on the render *before* this
+   * runs, so clearing the query here would open the panel on a row of a list it is about to
+   * discard. (`setShown` is reset by `onQueryChange` for the separate reason that a new query is
+   * a new list; `pinned` is not, because the sets already ticked are the same sets whatever has
+   * been typed.)
    */
   const startOpening = useCallback(() => {
-    setActive(0);
     setShown(MAX_OPTIONS);
     setPinned(new Set(selected));
   }, [selected]);
-
-  useEffect(() => {
-    if (open) inputRef.current?.focus();
-  }, [open]);
-
-  // Escape is a keyboard word, and the element it dismissed is about to unmount with the
-  // focus still on it — which drops the caret onto `<body>`, so the next Tab restarts from
-  // the top of the app rather than continuing along the filter row. Called before React
-  // flushes the close, while the input is still mounted. The outside-click below
-  // deliberately does not do this: the reader is already somewhere else.
-  const dismiss = useCallback(() => {
-    setOpen(false);
-    buttonRef.current?.focus();
-  }, []);
-
-  // The innermost open layer: capture phase, and the press is consumed so the card detail
-  // pane underneath does not close on the same one. See `useDismissOnEscape`.
-  useDismissOnEscape({ layer: "inner", onDismiss: dismiss, enabled: open });
-
-  useEffect(() => {
-    if (!open) return;
-    const onClick = (e: MouseEvent) => {
-      if (!rootRef.current?.contains(e.target as Node)) setOpen(false);
-    };
-    window.addEventListener("mousedown", onClick);
-    return () => window.removeEventListener("mousedown", onClick);
-  }, [open]);
 
   const matches = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -251,6 +219,7 @@ export function SetCombobox({
     // Three grouping levels, then the alphabet — `sortOptions` settles them in order and
     // `list_sets`'s own newest-first order survives none of it. That order is still the
     // right thing for the backend to answer; what the picker draws is a display decision.
+    // The shell deliberately never sorts, so the order built here is the order drawn.
     //
     // **1 — picked first.** The list is paged, and a set the reader has already ticked must
     // never sit past the end of the page, where they can neither see it nor un-tick it.
@@ -310,16 +279,6 @@ export function SetCombobox({
   // Counted from what is on screen rather than from `shown`, which can outrun the list when
   // the query narrows under a reader who has already paged down.
   const revealMore = () => setShown(page.length + MORE_STEP);
-  // Clamped rather than reset from an effect: the list shortens under the cursor whenever
-  // the query narrows or the set list finishes loading, and a stored index that outruns it
-  // would point `aria-activedescendant` at an element that is not there any more.
-  const activeIndex = Math.min(active, Math.max(0, page.length - 1));
-
-  useEffect(() => {
-    if (!open) return;
-    // `scrollIntoView` is one of the layout APIs jsdom leaves undefined.
-    document.getElementById(optionId(id, activeIndex))?.scrollIntoView?.({ block: "nearest" });
-  }, [activeIndex, open, id]);
 
   const label =
     selected.length === 0 ? "Any set" : `${selected.length} set${selected.length === 1 ? "" : "s"}`;
@@ -360,273 +319,100 @@ export function SetCombobox({
   const canToggle = (code: string) =>
     (!full || selected.includes(code)) && !optionDisabled(counts, code, selected.includes(code));
 
-  const onListKeyDown = (e: React.KeyboardEvent) => {
-    if (page.length === 0) return;
-    if (e.key === "ArrowDown") {
-      e.preventDefault();
-      // The bottom of a *page* is not the bottom of the list, so pressing past the last row
-      // reveals the next page and lands on its first entry. The old clamp survives only for
-      // the case where there genuinely is no more.
-      //
-      // Not because the footer's button is out of reach — it is inside the root, and the
-      // `onBlur` below only closes when focus leaves the root, so Tab does get there. It is
-      // that Tab is *also* how a reader leaves this control entirely, and the arrow key they
-      // are already holding is the one that meant "more of this list".
-      if (activeIndex >= page.length - 1) {
-        if (moreCount > 0) {
-          revealMore();
-          setActive(page.length);
-        }
-      } else {
-        setActive(activeIndex + 1);
-      }
-    } else if (e.key === "ArrowUp") {
-      e.preventDefault();
-      setActive(Math.max(activeIndex - 1, 0));
-    } else if (e.key === "Home") {
-      e.preventDefault();
-      setActive(0);
-    } else if (e.key === "End") {
-      e.preventDefault();
-      // End means "the end of what I can see"; pressing it again from there asks for the
-      // rest, the same bargain `ArrowDown` strikes at the bottom row. It does not leap to
-      // match 1 047 of 1 047 — one press, one page, and the reader can watch it arrive.
-      if (activeIndex === page.length - 1 && moreCount > 0) {
-        revealMore();
-        setActive(page.length + moreCount - 1);
-      } else {
-        setActive(page.length - 1);
-      }
-    } else if (e.key === "Enter") {
-      e.preventDefault();
-      const code = page[activeIndex].code;
-      if (canToggle(code)) onToggle(code);
-    }
-  };
-
-  return (
-    <div
-      ref={rootRef}
-      className={cn("relative", fill && "min-w-0")}
-      // Tab out of the panel and the panel should not still be there: 288px of listbox
-      // hanging over the results, with the caret three controls further along. `onBlur`
-      // is React's `focusout`, so it catches the input losing focus to anything at all;
-      // a `relatedTarget` inside the root — the trigger, on Escape — is not leaving.
-      onBlur={(e) => {
-        if (open && !rootRef.current?.contains(e.relatedTarget)) setOpen(false);
-      }}
-    >
-      {/* The button's *content* is the value ("2 sets"); its name has to come from
-          somewhere else, or assistive tech announces the value twice and the field never. */}
-      <span id={labelId} className="sr-only">
-        Set
-      </span>
-      {/* A disclosure button, not the combobox: the combobox is the text field it reveals,
-          which is where the caret goes and what `aria-activedescendant` is read from. */}
-      <button
-        ref={buttonRef}
-        type="button"
-        aria-labelledby={labelId}
-        aria-expanded={open}
-        aria-haspopup="listbox"
-        onClick={() => {
-          setOpen((v) => !v);
-          startOpening();
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "ArrowDown" && !open) {
-            e.preventDefault();
-            setOpen(true);
-            startOpening();
-          }
-        }}
-        className={cn(
-          "inline-flex h-9 items-center gap-1.5 rounded-md border px-2.5 text-sm",
-          "transition-colors duration-150 motion-reduce:transition-none",
-          FOCUS,
-          // `flex` rather than `inline-flex`, so the button is a block that takes its container's
-          // width; `justify-between` is what then holds the chevron against the far edge instead
-          // of letting it sit against the label.
-          fill && "flex w-full justify-between",
-          selected.length > 0
-            ? "border-accent text-accent"
-            : "border-border text-dim hover:text-text",
-        )}
-      >
-        {label}
-        <ChevronDown className="size-3.5" aria-hidden="true" />
-      </button>
-
-      <AnimatePresence>
-        {open && (
-          <PopupPanel
-            key="sets"
+  const footer = (
+    <>
+      {full && (
+        <p className="pt-2 text-center text-[0.7rem] text-dim">
+          {MAX_SETS} sets is the most one search can name — remove one to add another.
+        </p>
+      )}
+      {moreCount > 0 && (
+        <div className="pt-2 text-center text-[0.7rem] text-dim">
+          {/* The advice stays first and unchanged: at 1 047 sets, paging to the end is
+              reachable but it is not the intended path, and the button below is the
+              escape for the search that cannot be narrowed rather than the fast way. */}
+          <p>
+            Showing {page.length} of {matches.length} — keep typing to narrow it down.
+          </p>
+          <button
+            type="button"
+            // Same reason as the rows above: a press here must not pull the caret out of the
+            // search box, or the arrow keys stop working the moment the reader reaches for more
+            // with the mouse. The shell's root only closes when focus leaves the root, and this
+            // button is inside it — so Tabbing onto it is safe either way, and this is about the
+            // mouse.
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={revealMore}
             className={cn(
-              "absolute mt-1 w-72 rounded-md border border-border bg-surface p-2 shadow-lg",
-              // Over the results table's sticky header, which is a layer down. They used to
-              // share one, and a shared layer is resolved by document order — where the
-              // header, coming after this filter row, painted a grey band across the picker.
-              LAYER.popup,
-              // **Pinned to one edge of the trigger, never left to the static position.** At the
-              // `"end"` default this control sits at the end of a wrapping filter row, so with
-              // `left: auto` — the static position, i.e. the trigger's left edge — 288px of
-              // listbox opened 174px past the window at 1280 (measured). Nothing clips it, so the
-              // *page* scrolled sideways to reveal it: the whole app slid left, sidebar and all,
-              // the moment the picker's own `scrollIntoView` ran. `AddToCollection`'s `align` is
-              // the same decision for the same reason, and `align="start"` is the mirror of it
-              // for a trigger at the head of a row rather than at its end.
-              align === "start" ? "left-0" : "right-0",
-              // And the corner it is pinned by is the corner it grows from, which is the one
-              // thing `popup` leaves to whoever anchors it: a listbox that grew from its own
-              // middle would read as unrelated to the button that opened it. Both spellings
-              // written out whole — Tailwind scans source text, so an interpolated class emits
-              // no rule at all.
-              align === "start" ? "origin-top-left" : "origin-top-right",
+              FOCUS,
+              // A quiet footer control, not a primary action: it wears the footer's own
+              // size and colour and is told apart from the sentence by the underline.
+              "mt-1 rounded-md px-1.5 py-0.5 underline underline-offset-2",
+              "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
             )}
           >
-            <input
-              ref={inputRef}
-              type="text"
-              role="combobox"
-              aria-label="Search sets"
-              aria-expanded="true"
-              aria-controls={listboxId}
-              aria-activedescendant={page.length > 0 ? optionId(id, activeIndex) : undefined}
-              value={query}
-              onChange={(e) => {
-                setQuery(e.target.value);
-                // A new query is a new list, and neither the old cursor position nor how far
-                // the reader had paged into the old one means anything in it.
-                setActive(0);
-                setShown(MAX_OPTIONS);
-              }}
-              onKeyDown={onListKeyDown}
-              placeholder="Name or code"
-              className="mb-2 h-8 w-full rounded-md border border-border bg-bg px-2 text-sm placeholder:text-dim focus:border-accent focus:outline-none"
-            />
-            <ul
-              id={listboxId}
-              role="listbox"
-              aria-multiselectable="true"
-              className="max-h-64 overflow-auto"
-            >
-              {page.length === 0 && (
-                // Not an option, and a bare `<li>` in a listbox is a `listitem` where only
-                // options are allowed. `presentation` makes it the sentence it looks like.
-                <li role="presentation" className="px-2 py-3 text-center text-xs text-dim">
-                  {emptyLine}
-                </li>
-              )}
-              {page.map((s, i) => (
-                <Option
-                  key={s.code}
-                  id={optionId(id, i)}
-                  set={s}
-                  picked={selected.includes(s.code)}
-                  active={i === activeIndex}
-                  disabled={!canToggle(s.code)}
-                  title={facetTitle(s.name, counts?.[s.code])}
-                  onToggle={onToggle}
-                />
-              ))}
-            </ul>
-            {full && (
-              <p className="pt-2 text-center text-[0.7rem] text-dim">
-                {MAX_SETS} sets is the most one search can name — remove one to add another.
-              </p>
-            )}
-            {moreCount > 0 && (
-              <div className="pt-2 text-center text-[0.7rem] text-dim">
-                {/* The advice stays first and unchanged: at 1 047 sets, paging to the end is
-                    reachable but it is not the intended path, and the button below is the
-                    escape for the search that cannot be narrowed rather than the fast way. */}
-                <p>
-                  Showing {page.length} of {matches.length} — keep typing to narrow it down.
-                </p>
-                <button
-                  type="button"
-                  // Same reason as the rows above: a press here must not pull the caret out
-                  // of the search box, or the arrow keys stop working the moment the reader
-                  // reaches for more with the mouse. The root's `onBlur` only closes when
-                  // focus leaves the root, and this button is inside it — so Tabbing onto it
-                  // is safe either way, and this is about the mouse.
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={revealMore}
-                  className={cn(
-                    FOCUS,
-                    // A quiet footer control, not a primary action: it wears the footer's own
-                    // size and colour and is told apart from the sentence by the underline.
-                    "mt-1 rounded-md px-1.5 py-0.5 underline underline-offset-2",
-                    "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
-                  )}
-                >
-                  Show {moreCount} more
-                </button>
-              </div>
-            )}
-          </PopupPanel>
-        )}
-      </AnimatePresence>
-    </div>
-  );
-}
-
-function Option({
-  id,
-  set,
-  picked,
-  active,
-  disabled,
-  title,
-  onToggle,
-}: {
-  id: string;
-  set: SetSummary;
-  picked: boolean;
-  active: boolean;
-  disabled: boolean;
-  /**
-   * The tooltip, and only the tooltip. Unlike the chips, this row's accessible name comes
-   * from its own content — the set's name, its code and its tick — and an `aria-label`
-   * carrying the count would replace all three with a sentence that has no code in it.
-   */
-  title?: string;
-  onToggle: (code: string) => void;
-}) {
-  const glyph = setGlyphClass(set.code);
-  const tip = useTooltip();
-  return (
-    <li
-      id={id}
-      role="option"
-      aria-selected={picked}
-      aria-disabled={disabled || undefined}
-      {...tip(title)}
-      // Keeps the caret — and therefore the arrow keys — in the search box while the
-      // reader picks several sets with the mouse.
-      onMouseDown={(e) => e.preventDefault()}
-      onClick={() => !disabled && onToggle(set.code)}
-      className={cn(
-        "flex items-center gap-2 rounded-md px-2 py-1.5 text-sm",
-        "transition-colors duration-150 motion-reduce:transition-none",
-        // The filter row's one treatment for unavailable, shared with the chips rather than
-        // spelled twice: the cap and a facet zero look the same because they mean the same.
-        disabled ? FILTER_UNAVAILABLE : "cursor-pointer",
-        picked ? "text-accent" : "text-text",
-        active && "bg-bg",
+            Show {moreCount} more
+          </button>
+        </div>
       )}
-    >
-      {/* keyrune covers 441 of ~1 050 sets, and its own `.ss` rule draws a generic set
-          symbol for the rest — so every row has a glyph, and the code rides along as text
-          for the ones where that glyph is not the set's own. */}
-      <i className={cn(glyph, "w-4 shrink-0 text-center")} aria-hidden="true" />
-      <span className="min-w-0 flex-1 truncate">{set.name}</span>
-      <span className="shrink-0 font-mono text-xs text-dim">{set.code.toUpperCase()}</span>
-      {/* Gold text alone reads as "hovered" in a list the reader is moving through. The
-          slot is held open on every row so picking one does not shuffle the column. */}
-      <span className="w-3.5 shrink-0">
-        {picked && <Check className="size-3.5" aria-hidden="true" />}
-      </span>
-    </li>
+    </>
+  );
+
+  const dropdownOptions = page.map((s) => ({
+    value: s.code,
+    label: s.name,
+    hint: s.code.toUpperCase(),
+    // keyrune covers 441 of ~1 050 sets and its own `.ss` rule draws a generic symbol for the
+    // rest, so every row has a glyph and the code rides along as text for the ones where that
+    // glyph is not the set's own.
+    icon: <i className={cn(setGlyphClass(s.code), "w-4 shrink-0 text-center")} aria-hidden="true" />,
+    // One predicate for both the mouse and the Enter key: a list that refuses the click and
+    // takes the keystroke is a list with two rules. The cap and a facet zero look the same
+    // because they mean the same.
+    disabled: !canToggle(s.code),
+    // The tooltip, and only the tooltip. Unlike the chips, this row's accessible name comes
+    // from its own content — the set's name, its code and its tick — and an `aria-label`
+    // carrying the count would replace all three with a sentence that has no code in it.
+    title: facetTitle(s.name, counts?.[s.code]),
+  }));
+
+  return (
+    <MultiDropdown
+      // The trigger's *content* is the value ("2 sets"); its name has to come from somewhere
+      // else, or assistive tech announces the value twice and never says which field it is.
+      label="Set"
+      triggerLabel={label}
+      selected={selected}
+      onToggle={onToggle}
+      options={dropdownOptions}
+      align={align}
+      fill={fill}
+      active={selected.length > 0}
+      searchable
+      searchPlaceholder="Name or code"
+      // Not the shell's `"Search"` default and not a `"Search " + label` concat either: this box
+      // searches sets, and the plural is the word a reader hears.
+      searchLabel="Search sets"
+      // Controlled, because the match is this control's own — name-contains, code-prefix and a
+      // three-level rank — and the shell's substring test would silently re-cut a list that was
+      // deliberately ordered.
+      query={query}
+      onQueryChange={(next) => {
+        setQuery(next);
+        // A new query is a new list, and neither the old cursor position nor how far the reader
+        // had paged into the old one means anything in it. (The shell resets the cursor itself.)
+        setShown(MAX_OPTIONS);
+      }}
+      emptyLine={emptyLine}
+      // The bottom of a *page* is not the bottom of the list, so the arrow key that walked off
+      // the end asks for the next one — the same bargain the footer's button strikes for the
+      // mouse. Not because that button is out of reach (it is inside the shell's root, so Tab
+      // does get there); it is that Tab is *also* how a reader leaves this control entirely, and
+      // the arrow key they are already holding is the one that meant "more of this list".
+      onReachEnd={revealMore}
+      onOpen={startOpening}
+      panelClassName="w-72"
+      footer={footer}
+    />
   );
 }
