@@ -23,6 +23,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
+import { Dropdown } from "@/components/Dropdown/Dropdown";
+import type { DropdownOption } from "@/components/Dropdown/types";
 import {
   FILTER_CONTROL,
   FILTER_FOCUS,
@@ -127,7 +129,14 @@ const GROUP_BY_PICKER = sortOptions(GROUP_BY_OPTIONS, (o) => o.label);
 const SORT_BY_PICKER = sortOptions(SORT_OPTIONS, (o) => o.label);
 
 /**
- * A header/toolbar control that is not a chip: a select, a field, a plain press.
+ * A header/toolbar press that is not a chip — since 2026-08-26 exactly the undo/redo pair and
+ * the header's Categories/Tags/History/Deck settings row.
+ *
+ * **The toolbar's three pickers — View, Group by, Sort — drew from this same string until
+ * then.** They moved onto `components/Dropdown`, whose trigger is a `<button>` rather than a
+ * `<select>` and draws its own `md` geometry rather than borrowing this one; a native select and
+ * a popup-driven button were never going to share one class list forever. What is left is what
+ * this doc's own numbers were always about — a plain press, never a picker.
  *
  * **36px, and the number is `FILTER_CONTROL`'s rather than one of this file's own.** It was 32
  * for the same stated reason it is 36 now — "so the two rows read as rows rather than as a pile
@@ -148,11 +157,9 @@ const SORT_BY_PICKER = sortOptions(SORT_OPTIONS, (o) => o.label);
  * regression `NAME_FLOOR` (see {@link DeckNameField}) exists to keep out. Height is the axis
  * that had room.
  *
- * The press is {@link PRESS}, the app's one recipe. The format select is `disabled` when the
- * specs have not answered and must not appear to depress, which is why the out-of-reach
- * clause is here and not on the shared string.
+ * The press is {@link PRESS}, the app's one recipe.
  */
-const CONTROL =
+const PLAIN_PRESS =
   "h-9 rounded-md border border-border bg-surface px-2.5 text-xs text-dim " +
   `${PRESS} ` +
   "disabled:active:scale-100";
@@ -452,14 +459,16 @@ const VIEWS: readonly { id: DeckView; label: string }[] = [
 ];
 
 /**
- * The view switch as the toolbar draws it — and it is a `<select>`, like the two pickers beside
- * it (changed 2026-08-15).
+ * The view switch as the toolbar draws it — a `Dropdown`, like the two pickers beside it.
+ * It was a four-button segmented group until 2026-08-15, then a `<select>` like its two
+ * neighbours, then (2026-08-26) all three moved onto `components/Dropdown` — see
+ * {@link VIEW_OPTIONS}, which is this array reshaped for that component's `options`.
  *
  * **Three controls answering three questions about one list, in one grammar.** `View` says how a
  * card is drawn, `Group by` says what the headings are and `Sort` says the order inside one;
  * drawing the first as a four-button segmented group and the other two as selects made the
  * odd one out the one a reader reaches for most, and spent a quarter of the toolbar's width on
- * three answers nobody had asked for. A `<select>` costs one press to open and shows the picked
+ * three answers nobody had asked for. A dropdown costs one press to open and shows the picked
  * view when it is shut, which is what the pressed button was doing at four times the width.
  *
  * **Alphabetically, through `sortOptions`, because there is no order here that carries
@@ -469,6 +478,18 @@ const VIEWS: readonly { id: DeckView; label: string }[] = [
  * neither. Sorted at module level for {@link GROUP_BY_PICKER}'s reason.
  */
 const VIEW_PICKER = sortOptions(VIEWS, (v) => v.label);
+
+/**
+ * {@link VIEW_PICKER}, reshaped for `<Dropdown>`'s `options` prop — `id` renamed to `value`,
+ * the field every `DropdownOption` is keyed on, and nothing else moved. Two names for the same
+ * list rather than one: `VIEWS`' own `id` field is `DeckView`-typed and read straight into
+ * `setView`, and renaming it there would ripple into every other reader of `DeckView` far past
+ * this toolbar.
+ */
+const VIEW_OPTIONS: readonly DropdownOption[] = VIEW_PICKER.map(({ id, label }) => ({
+  value: id,
+  label,
+}));
 
 /**
  * The dismissible layers this editor *owns*, and it deliberately holds at most one.
@@ -3387,7 +3408,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                         aria-pressed={variant === id}
                         className={cn(
                           // 36px like every other press in this ribbon — the back button and
-                          // {@link CONTROL}. At 28px this segmented pair was the shortest thing
+                          // {@link PLAIN_PRESS}. At 28px this segmented pair was the shortest thing
                           // in the row by eight pixels and read as a secondary control, which is
                           // the opposite of what it is: it says which of the deck's two lists is
                           // on screen.
@@ -3460,7 +3481,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                     aria-label={label}
                     {...(bare ? tip(label, { describes: false }) : {})}
                     className={cn(
-                      CONTROL,
+                      PLAIN_PRESS,
                       FILTER_FOCUS,
                       "inline-flex shrink-0 items-center justify-center whitespace-nowrap",
                       bare ? "w-9 px-0" : "gap-1.5",
@@ -3567,7 +3588,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               header's actions block measured 825px against the ~729 a 1280px window can spare
               (2026-08-14, a debug build, **five** buttons — `Export deck` is a sixth and nothing
               has been re-measured since), so it already wraps — and a wrapped header costs 44px
-              of deck height at the app's own default size (see {@link CONTROL}). Two more text
+              of deck height at the app's own default size (see {@link PLAIN_PRESS}). Two more text
               buttons there would make that worse at every width; two 36px icons here cost 76px
               on the row that is already about editing the deck's contents.
 
@@ -3608,7 +3629,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                 aria-label={label}
                 {...tip(label, { describes: false })}
                 className={cn(
-                  CONTROL,
+                  PLAIN_PRESS,
                   FILTER_FOCUS,
                   "grid w-9 place-items-center px-0",
                   on === null || undo.busy ? "cursor-default opacity-40" : "hover:text-text",
@@ -3631,41 +3652,39 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           {/* The first of the row's three pickers, and the one that says how a card is drawn.
               It is the same control as the two beside it on purpose — see {@link VIEW_PICKER}. */}
           <div className={cn("flex shrink-0 items-center gap-1.5", tightHeader && "order-1")}>
-            <label htmlFor="deck-view" className="text-[0.6875rem] text-dim">
+            <label
+              id="deck-view-label"
+              htmlFor="deck-view"
+              className="text-[0.6875rem] text-dim"
+            >
               View
             </label>
-            <select
+            <Dropdown
               id="deck-view"
+              labelledBy="deck-view-label"
               value={view}
-              onChange={(e) => setView(e.target.value as DeckView)}
-              className={cn(CONTROL, FILTER_FOCUS, "text-text")}
-            >
-              {VIEW_PICKER.map(({ id, label }) => (
-                <option key={id} value={id}>
-                  {label}
-                </option>
-              ))}
-            </select>
+              onChange={(value) => setView(value as DeckView)}
+              options={VIEW_OPTIONS}
+            />
           </div>
 
           <div className={cn("flex shrink-0 items-center gap-1.5", tightHeader && "order-1")}>
-            <label htmlFor="deck-group-by" className="text-[0.6875rem] text-dim">
+            <label
+              id="deck-group-by-label"
+              htmlFor="deck-group-by"
+              className="text-[0.6875rem] text-dim"
+            >
               Group by
             </label>
-            <select
+            <Dropdown
               id="deck-group-by"
+              labelledBy="deck-group-by-label"
               value={groupBy}
-              onChange={(e) => pickGroupBy(e.target.value as GroupBy)}
-              className={cn(CONTROL, FILTER_FOCUS, "text-text")}
-            >
-              {GROUP_BY_PICKER.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
+              onChange={(value) => pickGroupBy(value as GroupBy)}
+              options={GROUP_BY_PICKER}
+            />
 
-            {/* A modifier of the select it stands beside, so it lives inside that cluster's
+            {/* A modifier of the picker it stands beside, so it lives inside that cluster's
                 `gap-1.5` rather than out in the toolbar's `gap-x-4` — and it is drawn **only**
                 under Mana value, because there is nothing for it to say about a deck grouped by
                 category or by type. A control that persists across a grouping it has no effect
@@ -3679,7 +3698,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                 The whole sentence is the chip's `title`, which `ToggleChip` also makes its
                 accessible name: "Split X" alone is a control naming a thing rather than an
                 action, and the name has to stand up read out of context — a screen reader gets
-                no select beside it. It begins with the visible label all the same (WCAG 2.5.3),
+                no picker beside it. It begins with the visible label all the same (WCAG 2.5.3),
                 so the chip is still addressable by what is written on it. */}
             {groupBy === "manaValue" && (
               // `ToggleChip` (`components/FilterChips.tsx`) owns turning its `title` prop into
@@ -3695,21 +3714,20 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           </div>
 
           <div className={cn("flex shrink-0 items-center gap-1.5", tightHeader && "order-1")}>
-            <label htmlFor="deck-sort-by" className="text-[0.6875rem] text-dim">
+            <label
+              id="deck-sort-by-label"
+              htmlFor="deck-sort-by"
+              className="text-[0.6875rem] text-dim"
+            >
               Sort
             </label>
-            <select
+            <Dropdown
               id="deck-sort-by"
+              labelledBy="deck-sort-by-label"
               value={sortBy}
-              onChange={(e) => pickSortBy(e.target.value as SortBy)}
-              className={cn(CONTROL, FILTER_FOCUS, "text-text")}
-            >
-              {SORT_BY_PICKER.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
+              onChange={(value) => pickSortBy(value as SortBy)}
+              options={SORT_BY_PICKER}
+            />
           </div>
 
           {/* The break, and it is `aria-hidden` because it is a line ending rather than a

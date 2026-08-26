@@ -28,6 +28,8 @@
  */
 import { useId, useMemo, type ReactNode } from "react";
 import { X } from "lucide-react";
+import { Dropdown } from "@/components/Dropdown/Dropdown";
+import type { DropdownOption } from "@/components/Dropdown/types";
 import { FILTER_CONTROL, FILTER_FIELD, ToggleChip } from "@/components/FilterChips";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { SetCombobox } from "@/features/search/SetCombobox";
@@ -213,6 +215,16 @@ function toggleIn<T>(list: readonly T[], value: T): T[] {
   return list.includes(value) ? list.filter((v) => v !== value) : [...list, value];
 }
 
+/**
+ * `PRINTING_GROUP_BY_OPTIONS`, in the shape `<Dropdown>` draws — the four orderings with their
+ * own value and label and nothing else, since none of them wants a hint or an icon here. Module
+ * scope because the four modes never change: rebuilding this array on every render of an open
+ * modal would cost four objects for nothing.
+ */
+const SORT_DROPDOWN_OPTIONS: readonly DropdownOption[] = PRINTING_GROUP_BY_OPTIONS.map(
+  (option) => ({ value: option.value, label: option.label }),
+);
+
 export function PrintingsFilterBar({
   filter,
   setOptions,
@@ -238,6 +250,7 @@ export function PrintingsFilterBar({
   onSortChange: (next: PrintingGroupBy) => void;
 }) {
   const sortId = useId();
+  const sortLabelId = `${sortId}-label`;
   const active = isFilterActive(filter);
   /**
    * This card's sets in the shape the search's picker takes, and the counts it draws them with.
@@ -394,34 +407,33 @@ export function PrintingsFilterBar({
           ordering is shared with the pane and so is the reader's choice of it; only the word
           differs, because only what it does differs.
 
-          The words are drawn **and** spelled into `aria-label`, identically. A `<select>`'s
-          accessible name is what this control is addressed by from outside the component, and the
-          caption above it is what a pointer presses to focus it; keeping them one string is what
-          makes the name *contain* the visible label (WCAG 2.5.3) rather than widen past it —
-          which is the trap in the shorter `Sort by` this row could have drawn instead. */}
+          **The visible caption supplies the accessible name directly, through `labelledBy`,
+          rather than a second `aria-label` spelling the same words.** A `<select>` needed the
+          words written twice — once as the caption's text, once as its own `aria-label` —
+          because nothing tied the two together; `Dropdown`'s `labelledBy` ties the trigger's
+          name to the caption itself, so the two cannot drift the way a hand-copied string could,
+          and the name still *contains* the visible label (WCAG 2.5.3) rather than widening past
+          it — which is the trap in the shorter `Sort by` this row could have drawn instead. */}
       <div className="flex flex-col gap-1">
-        <label htmlFor={sortId} className={CAPTION}>
+        <label id={sortLabelId} htmlFor={sortId} className={CAPTION}>
           Sort printings by
         </label>
-        <select
+        <Dropdown
           id={sortId}
-          aria-label="Sort printings by"
+          labelledBy={sortLabelId}
+          size="sm"
           value={sort}
-          onChange={(event) => {
-            // The same predicate that narrows the stored row narrows the event, so there is no
-            // cast here and no second idea of what a mode is. A `<select>` cannot emit anything
-            // else, which is exactly why this costs nothing to be right about.
-            const chosen = event.target.value;
-            if (isPrintingGroupBy(chosen)) onSortChange(chosen);
+          options={SORT_DROPDOWN_OPTIONS}
+          onChange={(value) => {
+            // `SORT_DROPDOWN_OPTIONS` is built from nothing but `PRINTING_GROUP_BY_OPTIONS`'s
+            // own four values, so `value` here can only ever be one of them — the same
+            // guarantee a native `<select>`'s event gave for free. Kept as a real check rather
+            // than a cast because `Dropdown`'s `onChange` is typed as a bare `string` and cannot
+            // see that provenance on its own.
+            if (isPrintingGroupBy(value)) onSortChange(value);
           }}
-          className={cn(FILTER_CONTROL, FOCUS, "border-border bg-surface px-2 text-text")}
-        >
-          {PRINTING_GROUP_BY_OPTIONS.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
+          className="text-text"
+        />
       </div>
 
       {/* **It clears the four filters and never the sort.** Clearing what you are looking at must

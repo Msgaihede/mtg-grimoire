@@ -11,6 +11,7 @@ import type {
   GlobalTag,
 } from "@/lib/ipc";
 import { startDrag } from "@/test-drag";
+import { pickOption } from "@/test-dropdown";
 
 const deckCategoryList = vi.hoisted(() => vi.fn());
 const deckCategoryCreate = vi.hoisted(() => vi.fn());
@@ -644,6 +645,14 @@ describe("categories", () => {
     await user.click(within(row("Ramp")).getByRole("button", { name: "Delete" }));
     const dialog = await screen.findByRole("group", { name: "Delete Ramp" });
 
+    // The closed trigger, read rather than assumed — a mutation that swapped the dropdown's
+    // option `value` for the category's `name` left every other assertion in this test passing
+    // while this row silently read "—": the default `choice` is still the picked category's
+    // *id*, so a `value` keyed on `name` instead matches no option, and the trigger draws its
+    // em-dash placeholder on a destructive confirmation with nobody the wiser.
+    expect(
+      within(dialog).getByRole("button", { name: "Its 12 cards" }),
+    ).toHaveTextContent("move to “Commander”");
     expect(within(dialog).getByText(/move to “Commander”\. Nothing is lost/)).toBeInTheDocument();
     // One list in this deck, so no sentence about a second one: the words appear only where
     // there are copies the reader cannot see.
@@ -688,15 +697,14 @@ describe("categories", () => {
 
     await user.click(within(row("Ramp")).getByRole("button", { name: "Delete" }));
     const dialog = await screen.findByRole("group", { name: "Delete Ramp" });
-    const picker = within(dialog).getByLabelText("Its 7 cards");
 
     // Anchored on the sentence's own opening: `move to “Commander”` alone also matches the
-    // `<option>` in the picker, which is a different control saying a different thing.
+    // picker's own row saying the same thing, which is a different control.
     expect(within(dialog).getByText(/^The 7 cards in it move to “Commander”/)).toHaveTextContent(
       "both the live and theory lists",
     );
 
-    await user.selectOptions(picker, "delete");
+    await pickOption(user, "Its 7 cards", "go with it");
     expect(within(dialog).getByText(/^The 7 cards in it go with it/)).toHaveTextContent(
       "both the live and theory lists, not just the one on screen",
     );
@@ -748,7 +756,7 @@ describe("categories", () => {
 
     await user.click(within(row("Ramp")).getByRole("button", { name: "Delete" }));
     const dialog = await screen.findByRole("group", { name: "Delete Ramp" });
-    await user.selectOptions(within(dialog).getByLabelText("Its 12 cards"), "delete");
+    await pickOption(user, "Its 12 cards", "go with it");
 
     // The destructive arm says where the cards actually end up: the `deck_cards` rows go, and
     // the copies the reader owns are filed into `Recently removed` rather than destroyed.
@@ -771,7 +779,7 @@ describe("categories", () => {
 
     await user.click(within(row("Draw")).getByRole("button", { name: "Delete" }));
     const dialog = await screen.findByRole("group", { name: "Delete Draw" });
-    expect(within(dialog).queryByRole("combobox")).not.toBeInTheDocument();
+    expect(within(dialog).queryByText(/^Its \d+ cards$/)).not.toBeInTheDocument();
     expect(within(dialog).getByText("It is empty, so nothing goes with it.")).toBeInTheDocument();
 
     await user.click(within(dialog).getByRole("button", { name: "Delete “Draw”" }));

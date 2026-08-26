@@ -39,11 +39,14 @@ export type SharedProps = {
   /**
    * id of the visible `<label>`.
    *
-   * A `<label htmlFor>` never reaches a button's accessible name the way it reaches a
-   * `<select>`'s — the button's own content is the picked value, so without this the name and
-   * the content say the same thing and a screen reader never hears which field it is. Pass
-   * both `id` and `labelledBy` where there is a visible label: `id` keeps the pointer
-   * behaviour, `labelledBy` is what supplies the name.
+   * **Not what makes the label reach the button — `<button>` is labelable and a `<label htmlFor>`
+   * already names it, the same as it would a `<select>`.** `labelledBy` is explicit belt-and-braces:
+   * it *states* the accessible name outright rather than leaving it to a label association that a
+   * later refactor (the label moved, the `for`/`id` pair drifting apart) could quietly break —
+   * and the button's own content is the picked value, so a trigger left unnamed by either route
+   * would say the value and nothing about which field it is. Pass both `id` and `labelledBy`
+   * where there is a visible label: `id` keeps the pointer behaviour, `labelledBy` is what pins
+   * the name.
    */
   labelledBy?: string;
   /** On the trigger. */

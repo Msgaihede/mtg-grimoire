@@ -1,17 +1,17 @@
 /**
  * The wishlist as a destination — `CollectionPreview.tsx`'s twin, with the finish control alone.
  *
- * **No condition select.** A wish is a card the reader does not have yet; recording a grade for
- * cardboard nobody owns is a question this list has never asked. The finish select is the same
+ * **No condition control.** A wish is a card the reader does not have yet; recording a grade for
+ * cardboard nobody owns is a question this list has never asked. The finish picker is the same
  * store field the collection's own draws — `importDefaults.finish` — because "the shiny one" is
  * an answer about the reader's taste that both lists share; `importDefaults.condition` exists for
  * the collection alone and this preview never reads it.
  */
 import { useMemo, useState, type JSX } from "react";
-import { FOCUS } from "@/lib/focus";
+import { Dropdown } from "@/components/Dropdown/Dropdown";
+import type { DropdownOption } from "@/components/Dropdown/types";
 import { ipc, ipcError, type DeckFinish, type TransferImportMode } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
-import { cn } from "@/lib/utils";
 import type { DestinationPreviewProps, ImportDestination, ImportModeOption } from "../destination";
 import { CommitBar, useImportCommit } from "../shared/CommitBar";
 import { ModeRadios } from "../shared/ModeRadios";
@@ -55,6 +55,14 @@ export function WishlistPreview({
     });
   };
 
+  // Exempt from `sortOptions`: a printing's finishes run plain before the premium treatments
+  // (`src/CLAUDE.md`'s exemption rule) — alphabetising would put Etched first.
+  const finishOptions: readonly DropdownOption[] = [
+    { value: "", label: "No preference" },
+    { value: "foil", label: "Foil" },
+    { value: "etched", label: "Etched" },
+  ];
+
   return (
     <form
       onSubmit={(e) => {
@@ -70,23 +78,29 @@ export function WishlistPreview({
         </p>
 
         <div className="flex flex-wrap items-center gap-4 text-sm">
-          <label className="flex items-center gap-2">
-            Finish when the file doesn&apos;t say
-            <select
+          <div className="flex items-center gap-2">
+            {/* An id'd `<label>` plus `labelledBy`, not a wrapping one left to itself —
+                `CollectionPreview.tsx`'s own two carry the same pair, for the same reason: a
+                `<label>` does reach a `<button>`'s accessible name the same way it reaches a
+                `<select>`'s, `<button>` being labelable too, so `labelledBy` is not what makes
+                the connection. It states the name from this text outright rather than leaving it
+                to an association a later refactor could break, and `htmlFor` keeps a click on the
+                words opening the dropdown. */}
+            <label id="wishlist-import-finish-label" htmlFor="wishlist-import-finish">
+              Finish when the file doesn&apos;t say
+            </label>
+            <Dropdown
+              id="wishlist-import-finish"
+              labelledBy="wishlist-import-finish-label"
+              size="sm"
               value={defaults.finish ?? ""}
-              onChange={(e) =>
-                setDefaults({
-                  ...defaults,
-                  finish: e.target.value === "" ? null : (e.target.value as DeckFinish),
-                })
+              onChange={(v) =>
+                setDefaults({ ...defaults, finish: v === "" ? null : (v as DeckFinish) })
               }
-              className={cn("h-8 rounded-md border border-border bg-surface px-2", FOCUS)}
-            >
-              <option value="">No preference</option>
-              <option value="foil">Foil</option>
-              <option value="etched">Etched</option>
-            </select>
-          </label>
+              options={finishOptions}
+              className="bg-surface"
+            />
+          </div>
         </div>
 
         <ModeRadios

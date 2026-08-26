@@ -231,16 +231,18 @@ export const Unplayable: Story = {
     // Set, Format, Owned, Rarity, Price and Printings live in the filter row's tray since the
     // row was redesigned — only the box, the colours, the mana values and the sort are on the
     // bar at every width.
-    const format = canvas.getByLabelText("Format") as HTMLSelectElement;
-    await expect(format).toHaveValue("");
+    const format = canvas.getByRole("button", { name: "Format" });
+    // The trigger's own text is the whole of what the reader sees — no separate `value` to
+    // check apart from it, the way a native `<select>` needed both.
+    await expect(format).toHaveTextContent("Any format");
 
-    await userEvent.selectOptions(format, "any-card");
+    await userEvent.click(format);
+    await userEvent.click(await canvas.findByRole("option", { name: "Any card" }));
 
     await canvas.findByText("41 cards");
-    await expect(format).toHaveValue("any-card");
-    // The widest row is where the select was moved to, so the word on the closed control is the
+    // The widest row is where the picker was moved to, so the word on the closed trigger is the
     // one thing saying this wall has art cards in it.
-    await expect(format.selectedOptions[0]).toHaveTextContent("Any card");
+    await expect(format).toHaveTextContent("Any card");
 
     // **Named rather than counted, and reached by a search rather than by scrolling.** The
     // table is virtualised and jsdom lays nothing out, so which rows are in the DOM is an
@@ -259,7 +261,8 @@ export const Unplayable: Story = {
     // printing of Prismatic Ending, so dropping back to `Any format` leaves this search with
     // nothing — and the page says so as a statement about the filters rather than about the
     // database, because the search box is on (`summaryOf`'s `unfiltered` arm).
-    await userEvent.selectOptions(format, "");
+    await userEvent.click(format);
+    await userEvent.click(await canvas.findByRole("option", { name: "Any format" }));
     await waitFor(async () => {
       await expect(canvas.getByText("No cards match these filters.")).toBeInTheDocument();
     });
@@ -331,8 +334,13 @@ export const Empty: Story = {
     // Set, Format, Owned, Rarity, Price and Printings live in the filter row's tray since the
     // row was redesigned — only the box, the colours, the mana values and the sort are on the
     // bar at every width.
-    const format = canvas.getByLabelText("Format") as HTMLSelectElement;
-    await expect([...format.options].filter((o) => o.disabled)).toHaveLength(0);
+    const format = canvas.getByRole("button", { name: "Format" });
+    await userEvent.click(format);
+    // `aria-disabled`, not the native attribute — a dropdown row is a `<li>` and never carries
+    // the latter either way.
+    await expect(
+      canvas.getAllByRole("option").filter((o) => o.hasAttribute("aria-disabled")),
+    ).toHaveLength(0);
   },
 };
 

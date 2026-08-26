@@ -5,6 +5,7 @@ import { registerCommands } from "../../../.storybook/fake/core";
 import { FOCUS } from "@/lib/focus";
 import type { DeckRow } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
+import { openDropdown } from "@/test-dropdown";
 import { CreateDeckDialog } from "./CreateDeckDialog";
 import { useDecks } from "./useDecks";
 import { useNewDeckFormat } from "./useNewDeckFormat";
@@ -160,21 +161,23 @@ type Story = StoryObj<typeof meta>;
  * a reader looking for Modern under M.
  *
  * The play fills five of them and writes a real deck through the fake's `deck_create` — one
- * call, carrying the lot. The folder is asserted against the **select's own value** rather than
- * against a literal, because the id belongs to the seed and the claim is that whatever was
- * chosen is what was sent.
+ * call, carrying the lot. The folder id is the seed's own (`FILED_DECK_FOLDER` in
+ * `.storybook/fake/seeds.ts`) rather than read off a live control: a dropdown's trigger carries
+ * no `value` the way a `<select>`'s did, so the claim moved from "whatever the control holds" to
+ * "the id the fixture names that path".
  */
 export const Default: Story = {
   play: async ({ args, canvasElement }) => {
     const canvas = within(canvasElement);
 
     await userEvent.type(await canvas.findByLabelText("Name"), "Sunday burn");
-    await userEvent.selectOptions(canvas.getByLabelText("Format"), "modern");
+    await openDropdown(userEvent.setup(), "Format");
+    await userEvent.click(await canvas.findByRole("option", { name: "Modern" }));
     await userEvent.type(canvas.getByLabelText("Description"), "Twenty damage, quickly.");
     await userEvent.click(canvas.getByRole("switch", { name: /Theory deck/ }));
 
-    const folder = canvas.getByLabelText("Folder");
-    await userEvent.selectOptions(folder, "Constructed › Commander");
+    await openDropdown(userEvent.setup(), "Folder");
+    await userEvent.click(await canvas.findByRole("option", { name: "Constructed › Commander" }));
 
     await userEvent.click(canvas.getByRole("button", { name: "Create deck" }));
 
@@ -184,7 +187,7 @@ export const Default: Story = {
           name: "Sunday burn",
           formatKey: "modern",
           description: "Twenty damage, quickly.",
-          folderId: Number((folder as HTMLSelectElement).value),
+          folderId: 2,
           // Set at create, and it seeds nothing: a deck being born has no live cards to copy
           // into the plan, unlike the patch's off → on transition.
           theoryEnabled: true,
@@ -273,22 +276,24 @@ export const Refused: Story = {
 /**
  * The one launch where `format_specs` has not answered yet.
  *
- * The select still has to *say* something, and what it says is what it would create: Casual,
+ * The trigger still has to *say* something, and what it says is what it would create: Casual,
  * which is `decks.format_key`'s own DDL default. **The words come from this host, not from the
  * form** — `DeckSettingsValue` carries a format *key* and no display name, so a form handed an
  * empty list can do no better than label the option with the key, and the control would read
  * `casual`. So the empty list is never passed: a one-row fallback goes down instead, and the
- * select stays live because a list of one is still a list.
+ * dropdown stays live because a list of one is still a list.
  */
 export const NoFormats: Story = {
   args: { noFormats: true },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
-    const format = await canvas.findByLabelText("Format");
-    await expect(format).toHaveValue("casual");
-    await expect(within(format).getAllByRole("option")).toHaveLength(1);
-    await expect(within(format).getByRole("option")).toHaveTextContent("Casual");
+    const format = await canvas.findByRole("button", { name: "Format" });
+    await expect(format).toHaveTextContent("Casual");
     await expect(format).toBeEnabled();
+
+    await openDropdown(userEvent.setup(), "Format");
+    await expect(canvas.getAllByRole("option")).toHaveLength(1);
+    await expect(canvas.getByRole("option")).toHaveTextContent("Casual");
   },
 };

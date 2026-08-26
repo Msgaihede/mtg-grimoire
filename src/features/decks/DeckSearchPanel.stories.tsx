@@ -350,7 +350,7 @@ export const Narrow: Story = {
 /**
  * Opened on the format of the deck being edited.
  *
- * Deck 1 is **Modern Goodstuff**, so the filter row's Format select starts on Modern and the
+ * Deck 1 is **Modern Goodstuff**, so the filter row's Format picker starts on Modern and the
  * wall beside the deck is cards that deck may legally hold rather than the whole corpus. A deck
  * is built out of what is legal in it, which is where a search run from inside it should start;
  * {@link Docked} above is the same panel with no deck format behind it, and is what every other
@@ -374,27 +374,27 @@ export const DeckFormat: Story = {
     // the card search itself arrives. `findBy`, not `getBy`: it still has a round trip to make.
     await showAllCards(panel);
     // …and then the filter row's own tray, which is where Format has lived since the row was
-    // redesigned. Three presses to a select is a lot to write down, and each is a real thing a
+    // redesigned. Three presses to a dropdown is a lot to write down, and each is a real thing a
     // reader does: open the column, choose the card search, open the filters.
     await userEvent.click(await within(panel).findByRole("button", { name: /^Show filters/ }));
-    const format = (await within(panel).findByLabelText("Format")) as HTMLSelectElement;
+    const format = await within(panel).findByRole("button", { name: "Format" });
 
-    // The value is what the request carries; the option's own text is the whole of what the
-    // reader can see. A select holding a key none of its options carries reports the first one
-    // instead — `Any card`, the widest row there is since the `Unplayable` chip was merged into
-    // this list — so `value` reads back `"any-card"` and the line below catches it, while only
-    // the line after that says which word the reader is actually looking at.
-    await expect(format).toHaveValue("modern");
-    await expect(format.selectedOptions[0]).toHaveTextContent("Modern");
+    // The trigger's own text is the whole of what the reader can see — a `<Dropdown>` given a
+    // value none of its options carries falls back to its own placeholder dash rather than to a
+    // picked row's label (`DEFAULT_PLACEHOLDER`, `Dropdown.tsx`), which is what a stale seed
+    // would read as here.
+    await expect(format).toHaveTextContent("Modern");
 
     // Moved to a format this deck is not in, which is the thing that has to keep working.
-    await userEvent.selectOptions(format, "legacy");
-    await expect(format).toHaveValue("legacy");
+    await userEvent.click(format);
+    await userEvent.click(await within(panel).findByRole("option", { name: "Legacy" }));
+    await expect(format).toHaveTextContent("Legacy");
 
     // And all the way back out. `Any format` is pinned above the sorted list and is never
     // greyed, so the way to the whole corpus is one press from wherever the reader has got to —
     // which is what makes the deck's format a starting point rather than a pen.
-    await userEvent.selectOptions(format, "");
+    await userEvent.click(format);
+    await userEvent.click(await within(panel).findByRole("option", { name: "Any format" }));
     await expect(await within(panel).findByText("37 cards")).toBeInTheDocument();
   },
 };

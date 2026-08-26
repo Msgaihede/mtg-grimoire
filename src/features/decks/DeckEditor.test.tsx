@@ -1,5 +1,6 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { UserEvent } from "@testing-library/user-event";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
@@ -24,6 +25,7 @@ import {
 } from "@/components/tooltip/TooltipProvider";
 import { fromDeckCard } from "@/features/transfer/TransferCard";
 import { dragOnto, startDrag } from "@/test-drag";
+import { openDropdown, pickOption } from "@/test-dropdown";
 import {
   CARD_BODY_ATTR,
   DECK_CARD_VARIANT,
@@ -513,17 +515,24 @@ async function openFilterTray() {
 }
 
 /**
- * The deck settings dialog's `Add cards to` select, opened.
+ * The deck settings dialog's `Add cards to` picker, opened.
  *
  * **This is where "every pile of this deck, drawn or not" is now asked**, and it is one of the
  * two surfaces built from `deck.categories` rather than from the drawn groups — the card's
  * right-click `Move to` being the other. The docked search panel's own `Add to` select carried
  * that claim until 2026-08-15, when the choice became a deck setting; the claim did not move,
  * only the control that shows it.
+ *
+ * **A `Dropdown` since Task 14 of the unified-dropdowns migration, not the native `<select>`
+ * this helper used to `findByLabelText` and hand back.** Its panel is a listbox that mounts only
+ * while open, so there is no element to return any more — a caller reads the rows off `screen`
+ * (`getAllByRole("option")`/`getByRole("option", { name })`) once this has opened it, and reads
+ * the picked value off the trigger's own text (`getByRole("button", { name: "Add cards to" })`)
+ * rather than off a `.value`.
  */
-async function openAddTo() {
+async function openAddTo(user: UserEvent) {
   await userEvent.click(screen.getByRole("button", { name: "Deck settings" }));
-  return (await screen.findByLabelText("Add cards to")) as HTMLSelectElement;
+  await openDropdown(user, "Add cards to");
 }
 
 /** A group, by the heading it draws. Every view labels its section with the group's name and
@@ -574,9 +583,20 @@ const COPIES = "Copies of Lightning Bolt in Main deck";
 /** The X toggle's whole accessible name, which `ToggleChip` also spends as its tooltip. Written
  *  out once because three tests address the control, and a regex over its two-word label alone
  *  would keep passing on the day the sentence went missing — which is the half of the name that
- *  has to stand up read out of context, with no Group by select beside it. */
+ *  has to stand up read out of context, with no Group by picker beside it. */
 const SPLIT_X =
   "Split X — give cards with X in their cost a group of their own, instead of counting X as zero";
+
+/** `VIEWS`' own `id → label` map, read back here because it is not exported: the two
+ *  `it.each(["stacks", "table", "text", "grid"])` sweeps below pass the id as both the test's
+ *  own `%s` name and `pickOption`'s second argument, and that argument is the row's visible
+ *  text — never the value a `<select>` used to take. */
+const VIEW_LABEL: Record<string, string> = {
+  stacks: "Stacks",
+  table: "Table",
+  text: "Text",
+  grid: "Grid",
+};
 
 /**
  * jsdom lays nothing out, so the docked panel's virtualised wall measures a scroll container of
@@ -893,6 +913,7 @@ describe("DeckEditor", () => {
    *   `min-h-0` are one group and a floor under a scrollport is a floor under a scrollbar.
    */
   it("gives the deck's walls no height and the virtualised table one", async () => {
+    const user = userEvent.setup();
     await open();
 
     const deskOf = () => {
@@ -907,15 +928,15 @@ describe("DeckEditor", () => {
     expect(stacks.view.className).not.toContain("overflow");
     expect(stacks.row.className).not.toContain("min-h-");
 
-    for (const id of ["text", "grid"]) {
-      await userEvent.selectOptions(screen.getByLabelText("View"), id);
+    for (const label of ["Text", "Grid"]) {
+      await pickOption(user, "View", label);
       const wall = deskOf();
-      expect(wall.view.className, id).toContain("min-h-96");
-      expect(wall.view.className, id).not.toContain("overflow");
-      expect(wall.row.className, id).not.toContain("min-h-");
+      expect(wall.view.className, label).toContain("min-h-96");
+      expect(wall.view.className, label).not.toContain("overflow");
+      expect(wall.row.className, label).not.toContain("min-h-");
     }
 
-    await userEvent.selectOptions(screen.getByLabelText("View"), "table");
+    await pickOption(user, "View", "Table");
     const table = deskOf();
     // The squeezable box, back where it was — and `min-h-96` merged away rather than fighting it.
     expect(table.view.className).toContain("min-h-0");
@@ -1130,6 +1151,7 @@ describe("DeckEditor", () => {
    * therefore its heading.
    */
   it("draws no heading for an empty auto pile, whatever the pile is called", async () => {
+    const user = userEvent.setup();
     const auto = category(6, "Ramp", "main", { origin: "auto" });
     const mine = category(7, "Draw", "main");
     deckGet.mockResolvedValue(detail({}, [bolt()], [...CATEGORIES, auto, mine]));
@@ -1140,9 +1162,9 @@ describe("DeckEditor", () => {
     expect(within(group("Draw")).getByText("0 cards")).toBeInTheDocument();
     // Every pile of the deck is still filable-into, drawn or not — the claim is that the list is
     // built from `deck.categories` and not from the drawn groups.
-    const addTo = within(await openAddTo());
-    expect(addTo.getByRole("option", { name: "Ramp" })).toBeInTheDocument();
-    expect(addTo.getByRole("option", { name: "Draw" })).toBeInTheDocument();
+    await openAddTo(user);
+    expect(screen.getByRole("option", { name: "Ramp" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Draw" })).toBeInTheDocument();
   });
 
   /** The other half of the same sentence: with a card in it the auto pile is a pile like any
@@ -1191,6 +1213,7 @@ describe("DeckEditor", () => {
    * the box brings the heading straight back.
    */
   it("keeps the reader's own empty piles under a filter and drops the app's", async () => {
+    const user = userEvent.setup();
     const brew = category(6, "Sunday brew", "main");
     const ramp = category(7, "Ramp", "main", { origin: "auto" });
     deckGet.mockResolvedValue(
@@ -1222,11 +1245,14 @@ describe("DeckEditor", () => {
     // 2026-08-14, and the docked panel's "Add to" carried it until 2026-08-15, when the choice
     // became a deck setting; `Add cards to` in the settings dialog is what carries it now, built
     // from the same `deck.categories` the filter never touches.
-    const addTo = within(await openAddTo());
-    expect(addTo.getByRole("option", { name: "Sunday brew" })).toBeInTheDocument();
+    await openAddTo(user);
+    expect(screen.getByRole("option", { name: "Sunday brew" })).toBeInTheDocument();
     // The auto pile too: its heading is gone from the desk and it is still a place to file a
     // card, which is the half that makes losing the heading survivable.
-    expect(addTo.getByRole("option", { name: "Ramp" })).toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Ramp" })).toBeInTheDocument();
+    // The panel closes on its own Escape rung before the dialog's — one press, one layer — so
+    // the dialog's own close button is still there to press next.
+    await user.keyboard("{Escape}");
     await userEvent.click(screen.getByRole("button", { name: "Close deck settings" }));
 
     await userEvent.clear(box);
@@ -1370,14 +1396,15 @@ describe("DeckEditor", () => {
   /** Three ways to read the same list, and the deck decides which one answers the question in
    *  front of you. The headings are `grouping.ts`'s, in all four views. */
   it("regroups the deck from the toolbar", async () => {
+    const user = userEvent.setup();
     await open();
     expect(screen.getByRole("list", { name: "Main deck" })).toBeInTheDocument();
 
-    await userEvent.selectOptions(screen.getByLabelText("Group by"), "type");
+    await pickOption(user, "Group by", "Type");
     expect(screen.getByRole("list", { name: "Instant" })).toBeInTheDocument();
     expect(screen.queryByRole("list", { name: "Main deck" })).not.toBeInTheDocument();
 
-    await userEvent.selectOptions(screen.getByLabelText("Group by"), "manaValue");
+    await pickOption(user, "Group by", "Mana value");
     expect(screen.getByRole("list", { name: "Mana value 1" })).toBeInTheDocument();
     expect(screen.queryByRole("list", { name: "Instant" })).not.toBeInTheDocument();
   });
@@ -1396,21 +1423,22 @@ describe("DeckEditor", () => {
    * select's clothes: `Stacks` is written first because it is the default, and it is drawn third.
    */
   it("offers all three toolbar pickers alphabetically", async () => {
+    const user = userEvent.setup();
     await open();
 
-    const labels = (select: HTMLElement) =>
-      within(select)
-        .getAllByRole("option")
-        .map((o) => o.textContent);
+    // One dropdown is open at a time — opening the next closes the last, the same way a native
+    // `<select>` never left two panels up at once — so the listbox in scope is always the one
+    // just opened.
+    const optionLabels = () => screen.getAllByRole("option").map((o) => o.textContent);
 
-    expect(labels(screen.getByLabelText("View"))).toEqual(["Grid", "Stacks", "Table", "Text"]);
-    expect(labels(screen.getByLabelText("Group by"))).toEqual(["Categories", "Mana value", "Type"]);
-    expect(labels(screen.getByLabelText("Sort"))).toEqual([
-      "Alphabetical",
-      "Mana cost",
-      "Price",
-      "Type",
-    ]);
+    await openDropdown(user, "View");
+    expect(optionLabels()).toEqual(["Grid", "Stacks", "Table", "Text"]);
+
+    await openDropdown(user, "Group by");
+    expect(optionLabels()).toEqual(["Categories", "Mana value", "Type"]);
+
+    await openDropdown(user, "Sort");
+    expect(optionLabels()).toEqual(["Alphabetical", "Mana cost", "Price", "Type"]);
   });
 
   /**
@@ -1422,13 +1450,14 @@ describe("DeckEditor", () => {
    * claim is mostly about the two absences, which nothing else in this file can settle.
    */
   it("offers the X split only while the deck is grouped by mana value", async () => {
+    const user = userEvent.setup();
     await open();
     expect(screen.queryByRole("button", { name: SPLIT_X })).not.toBeInTheDocument();
 
-    await userEvent.selectOptions(screen.getByLabelText("Group by"), "manaValue");
+    await pickOption(user, "Group by", "Mana value");
     expect(screen.getByRole("button", { name: SPLIT_X })).toBeInTheDocument();
 
-    await userEvent.selectOptions(screen.getByLabelText("Group by"), "type");
+    await pickOption(user, "Group by", "Type");
     expect(screen.queryByRole("button", { name: SPLIT_X })).not.toBeInTheDocument();
   });
 
@@ -1441,8 +1470,9 @@ describe("DeckEditor", () => {
    * avoid. So the assertion is on the *write*: nothing about this control is local.
    */
   it("writes the X split onto the deck rather than holding it in the editor", async () => {
+    const user = userEvent.setup();
     await open();
-    await userEvent.selectOptions(screen.getByLabelText("Group by"), "manaValue");
+    await pickOption(user, "Group by", "Mana value");
 
     await userEvent.click(screen.getByRole("button", { name: SPLIT_X }));
 
@@ -1455,8 +1485,9 @@ describe("DeckEditor", () => {
   it("draws the X split pressed for a deck that carries it", async () => {
     deckGet.mockResolvedValue(detail({ separateXGroup: true }, [bolt()]));
 
+    const user = userEvent.setup();
     await open();
-    await userEvent.selectOptions(screen.getByLabelText("Group by"), "manaValue");
+    await pickOption(user, "Group by", "Mana value");
 
     const chip = screen.getByRole("button", { name: SPLIT_X });
     expect(chip).toHaveAttribute("aria-pressed", "true");
@@ -1471,6 +1502,7 @@ describe("DeckEditor", () => {
   /** The order *inside* a heading, which the grouping does not decide. Alphabetical by default,
    *  because a decklist is read by name. */
   it("sorts inside each group from the toolbar", async () => {
+    const user = userEvent.setup();
     await open();
     // The **stack**, not the whole section: the heading above it carries a button of its own —
     // the grip a pile is dragged past its neighbours by — and a section-wide sweep would read
@@ -1482,7 +1514,7 @@ describe("DeckEditor", () => {
 
     expect(names()[0]).toMatch(/^Bear/);
 
-    await userEvent.selectOptions(screen.getByLabelText("Sort"), "price");
+    await pickOption(user, "Sort", "Price");
 
     // Dearest first, which is what a money column means everywhere else in this app.
     expect(names()[0]).toMatch(/^Lightning Bolt/);
@@ -1491,28 +1523,29 @@ describe("DeckEditor", () => {
   /** One deck, four ways of looking at it. The switch says which, and every one of them draws
    *  the same headings from the same `CardGroup[]`. */
   it("draws the deck in whichever of the four views is chosen", async () => {
+    const user = userEvent.setup();
     await open();
-    const pick = (id: string) => userEvent.selectOptions(screen.getByLabelText("View"), id);
 
-    // The switch is a `<select>`, so the picked view is also what the control *reads* — which a
-    // segmented group said with a colour and this says in words.
-    expect(screen.getByLabelText("View")).toHaveValue("stacks");
+    // The trigger's own content is the picked view — a Dropdown's `<button>` has no `.value`,
+    // so what a segmented group said with a colour and a `<select>` said with `.value` this
+    // says in its own visible text.
+    expect(screen.getByRole("button", { name: "View" })).toHaveTextContent("Stacks");
 
-    await pick("table");
+    await pickOption(user, "View", "Table");
     expect(screen.getByRole("table", { name: "This deck" })).toBeInTheDocument();
 
-    await pick("text");
+    await pickOption(user, "View", "Text");
     expect(screen.queryByRole("table")).not.toBeInTheDocument();
     expect(
       within(group("Main deck")).getByRole("button", { name: /^Lightning Bolt/ }),
     ).toBeVisible();
 
-    await pick("grid");
+    await pickOption(user, "View", "Grid");
     expect(
       within(group("Main deck")).getByRole("button", { name: /^Lightning Bolt/ }),
     ).toBeVisible();
 
-    await pick("stacks");
+    await pickOption(user, "View", "Stacks");
     expect(screen.getByRole("list", { name: "Main deck" })).toBeInTheDocument();
   });
 
@@ -2245,10 +2278,11 @@ describe("DeckEditor", () => {
    *  behind the one option that is not a category and is the default. Read from **deck
    *  settings**, which is where the question is asked since 2026-08-15. */
   it("offers auto first, then every category, as add targets", async () => {
+    const user = userEvent.setup();
     await open();
 
-    const select = await openAddTo();
-    expect([...select.options].map((o) => o.textContent)).toEqual([
+    await openAddTo(user);
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
       "Auto (by what it does)",
       "Main deck",
       "Sideboard",
@@ -2262,8 +2296,10 @@ describe("DeckEditor", () => {
     ]);
     // The default, and the whole of the fix that came with the sentinel: it used to be
     // `categories[0]`, which on a deck with no user category of its own is the seeded
-    // **Commander** pile.
-    expect(select.value).toBe("0");
+    // **Commander** pile. The trigger's own text is the read now — a `Dropdown` has no `.value`.
+    expect(screen.getByRole("button", { name: "Add cards to" })).toHaveTextContent(
+      "Auto (by what it does)",
+    );
   });
 
   /**
@@ -2329,7 +2365,7 @@ describe("DeckEditor", () => {
     await openFilterTray();
     await seeded("Modern");
 
-    expect(screen.getByLabelText("Format")).toHaveValue("modern");
+    expect(screen.getByRole("button", { name: "Format" })).toHaveTextContent("Modern");
     expect(screen.getByText("Format", { selector: "dt" }).closest("div")).toHaveTextContent(
       "Modern",
     );
@@ -2352,7 +2388,7 @@ describe("DeckEditor", () => {
     await openFilterTray();
     await seeded("Casual");
 
-    expect(screen.getByLabelText("Format")).toHaveValue("");
+    expect(screen.getByRole("button", { name: "Format" })).toHaveTextContent("Any format");
     expect(screen.getByText("Format", { selector: "dt" }).closest("div")).toHaveTextContent(
       "Casual",
     );
@@ -2381,7 +2417,7 @@ describe("DeckEditor", () => {
     await openFilterTray();
     await screen.findByText("Historic");
 
-    expect(screen.getByLabelText("Format")).toHaveValue("");
+    expect(screen.getByRole("button", { name: "Format" })).toHaveTextContent("Any format");
     expect(screen.queryByRole("button", { name: /issues? ·|No issues ·/ })).not.toBeInTheDocument();
   });
 
@@ -2391,11 +2427,12 @@ describe("DeckEditor", () => {
    * it and is not one of `FORMATS`' seven, which is the ordinary case for a deck: the deck picker
    * offers every enabled row and this filter offers seven keys.
    *
-   * So the select can only read `Gladiator` because the hook folded the default into its own
-   * option list. Without that the value would match no option, React would select the first row
-   * that is not disabled, and the panel would say `Any format` over a wall already narrowed to
-   * Gladiator. Both assertions are made for that reason: `value` reads back `""` under the bug
-   * and the option's text is the whole of what the reader sees.
+   * So the trigger can only read `Gladiator` because the hook folded the default into its own
+   * option list. Without that the value would match no option, and `Dropdown` draws its own
+   * em-dash placeholder for an unmatched value rather than falling back to the first row while
+   * still reporting the old one — so the panel would read as showing nothing over a wall already
+   * narrowed to Gladiator. The assertion is made for that reason: the trigger's own text is the
+   * whole of what the reader sees.
    */
   it("draws a deck format the filter row's own list has never carried", async () => {
     deckGet.mockResolvedValue(
@@ -2403,13 +2440,11 @@ describe("DeckEditor", () => {
     );
     await open();
     // The filter row lives in `OpenPanel`, which mounts on the disclosure press (2026-08-14),
-    // and the Format select is one press further in — inside the row's own filter tray.
+    // and the Format control is one press further in — inside the row's own filter tray.
     await openFilterTray();
     await seeded("Gladiator");
 
-    const filter = screen.getByLabelText("Format") as HTMLSelectElement;
-    expect(filter).toHaveValue("gladiator");
-    expect(filter.selectedOptions[0]).toHaveTextContent("Gladiator");
+    expect(screen.getByRole("button", { name: "Format" })).toHaveTextContent("Gladiator");
   });
 
   /**
@@ -3371,8 +3406,8 @@ describe("DeckEditor", () => {
     );
     await open();
 
-    expect(screen.getByLabelText("Group by")).toHaveValue("manaValue");
-    expect(screen.getByLabelText("Sort")).toHaveValue("price");
+    expect(screen.getByRole("button", { name: "Group by" })).toHaveTextContent("Mana value");
+    expect(screen.getByRole("button", { name: "Sort" })).toHaveTextContent("Price");
     // And it is the list that was regrouped, not just the select.
     expect(await screen.findByRole("list", { name: "Mana value 1" })).toBeInTheDocument();
   });
@@ -3388,8 +3423,8 @@ describe("DeckEditor", () => {
     deckGet.mockResolvedValue(detail({ lastGroupBy: "colour", lastSortBy: "rarity" }, [bolt()]));
     await open();
 
-    expect(screen.getByLabelText("Group by")).toHaveValue("category");
-    expect(screen.getByLabelText("Sort")).toHaveValue("alphabetical");
+    expect(screen.getByRole("button", { name: "Group by" })).toHaveTextContent("Categories");
+    expect(screen.getByRole("button", { name: "Sort" })).toHaveTextContent("Alphabetical");
     expect(screen.getByRole("list", { name: "Main deck" })).toBeInTheDocument();
   });
 
@@ -3398,18 +3433,19 @@ describe("DeckEditor", () => {
    * so a press on Sort cannot write back a grouping read out of a stale render.
    */
   it("remembers each control the reader presses, one field at a time", async () => {
+    const user = userEvent.setup();
     withPlan({ lastVariant: "live" });
     await open();
 
     await userEvent.click(await screen.findByRole("button", { name: "Theory" }));
     await waitFor(() => expect(deckSetViewState).toHaveBeenCalledWith(4, { variant: "theory" }));
 
-    await userEvent.selectOptions(screen.getByLabelText("Group by"), "manaValue");
+    await pickOption(user, "Group by", "Mana value");
     await waitFor(() =>
       expect(deckSetViewState).toHaveBeenLastCalledWith(4, { groupBy: "manaValue" }),
     );
 
-    await userEvent.selectOptions(screen.getByLabelText("Sort"), "price");
+    await pickOption(user, "Sort", "Price");
     await waitFor(() => expect(deckSetViewState).toHaveBeenLastCalledWith(4, { sortBy: "price" }));
 
     expect(deckSetViewState).toHaveBeenCalledTimes(3);
@@ -4525,8 +4561,9 @@ describe("DeckEditor — a card's menu", () => {
   it.each(["stacks", "table", "text", "grid"])(
     "gives the caret back to the card when the menu closes in %s",
     async (view) => {
+      const user = userEvent.setup();
       await open();
-      await userEvent.selectOptions(screen.getByLabelText("View"), view);
+      await pickOption(user, "View", VIEW_LABEL[view]);
 
       const marked = await waitFor(() => {
         const el = document.querySelector<HTMLElement>(
@@ -4758,8 +4795,9 @@ describe("DeckEditor — a category's menu", () => {
   }
 
   it.each(["stacks", "table", "text", "grid"])("offers a pile its menu in %s", async (view) => {
+    const user = userEvent.setup();
     await open();
-    await userEvent.selectOptions(screen.getByLabelText("View"), view);
+    await pickOption(user, "View", VIEW_LABEL[view]);
 
     await rightClickGroup(MAIN);
 
@@ -5109,8 +5147,9 @@ describe("DeckEditor — a category's menu", () => {
    * band that was always tall would be as wrong as one that never grew.
    */
   it("makes the table's band taller while its pile is being renamed", async () => {
+    const user = userEvent.setup();
     await open();
-    await userEvent.selectOptions(screen.getByLabelText("View"), "table");
+    await pickOption(user, "View", "Table");
 
     const band = () => screen.getByText("Main deck").closest("[role=row]") as HTMLElement;
     expect(band().style.height).toBe("44px");
@@ -5136,8 +5175,9 @@ describe("DeckEditor — a category's menu", () => {
    * would pin nothing. Whether a menu *opened* is the question.
    */
   it("offers no menu on a derived heading", async () => {
+    const user = userEvent.setup();
     await open();
-    await userEvent.selectOptions(screen.getByLabelText("Group by"), "manaValue");
+    await pickOption(user, "Group by", "Mana value");
 
     const heading = await screen.findByText("Mana value 1");
     fireEvent.contextMenu(heading);

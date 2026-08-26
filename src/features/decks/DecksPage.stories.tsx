@@ -441,12 +441,14 @@ export const NewDeck: Story = {
     await expect(name).toHaveFocus();
     // `waitFor`, because this value now depends on **two** reads having landed —
     // `format_specs_list` for the picker and `deck_last_format` for the memory — and
-    // `toHaveValue` does not retry. The old `casual` claim was true either way, so it could be
-    // asserted flat; this one is only true once both have answered, and under a loaded suite
-    // that is not guaranteed to be the microtask after the click. The same claim in
+    // `toHaveTextContent` does not retry on its own. The old `casual` claim was true either way,
+    // so it could be asserted flat; this one is only true once both have answered, and under a
+    // loaded suite that is not guaranteed to be the microtask after the click. The same claim in
     // `DecksPage.test.tsx` is wrapped for the same reason.
     await waitFor(async () => {
-      await expect(within(form).getByLabelText("Format")).toHaveValue("commander");
+      await expect(within(form).getByRole("button", { name: "Format" })).toHaveTextContent(
+        "Commander",
+      );
     });
 
     await userEvent.type(name, "Sunday Cube");

@@ -458,7 +458,9 @@ export const Default: Story = {
     // Unfiltered and uncapped, so the count line is the plain wording — no "of", nothing to
     // explain, which is the case a reader must be able to trust at a glance.
     await expect(await modal.findByText("8 printings")).toBeInTheDocument();
-    await expect(modal.getByRole("combobox", { name: "Sort printings by" })).toHaveValue("artist");
+    await expect(modal.getByRole("button", { name: "Sort printings by" })).toHaveTextContent(
+      "Artist",
+    );
 
     // The set picker at rest: a disclosure button whose *content* is its value, which is why its
     // accessible name is the `sr-only` "Set" beside it and not the word on it. Shut, it says
@@ -629,9 +631,10 @@ export const SetPicker: Story = {
 
     await userEvent.click(modal.getByRole("button", { name: "Set" }));
 
-    // **Scoped to the picker's own listbox**, because the `Sort printings by` `<select>` beside it
-    // holds four native `<option>`s and a native option's implicit role is `option` too — an
-    // unscoped count answers 10 here and would read as a picker offering the corpus.
+    // **Scoped to the picker's own listbox.** `Sort printings by` beside it is a `Dropdown` too,
+    // and its own rows would answer to an unscoped `option` query the moment its panel is open —
+    // scoping is what keeps this count the Set picker's alone rather than whichever listbox the
+    // suite happens to have left open.
     const listbox = within(await modal.findByRole("listbox"));
     // Alpha holds three of the eight printings; the other five sets hold one each. The count is on
     // the tooltip because the row's own name is the set's name and code.

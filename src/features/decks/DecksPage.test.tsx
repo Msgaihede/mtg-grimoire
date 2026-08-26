@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 import type { DeckFolder, DeckRow, FormatSpec, ImportMatch, SyncStatus } from "@/lib/ipc";
 import { cardImageUrl, imageOrigin } from "@/lib/images";
+import { openDropdown } from "@/test-dropdown";
 import { spec } from "./validation/fixtures";
 
 const deckList = vi.hoisted(() => vi.fn());
@@ -598,16 +599,20 @@ describe("DecksPage", () => {
     wrap(<DecksPage />);
     await userEvent.click(await screen.findByRole("button", { name: "New deck" }));
 
-    const format = await screen.findByLabelText("Format");
-    const options = within(format)
-      .getAllByRole("option")
-      .map((o) => o.textContent);
-
-    expect(options).toEqual(["Casual", "Commander", "Modern", "Standard"]);
+    await screen.findByLabelText("Name");
+    await openDropdown(userEvent.setup(), "Format");
+    await waitFor(() =>
+      expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
+        "Casual",
+        "Commander",
+        "Modern",
+        "Standard",
+      ]),
+    );
     // Commander, not Casual: nothing has been created on this install, so there is no remembered
     // format and `newDeckFormat` answers with what a first deck starts on. The value's own rule
     // is the test below.
-    await waitFor(() => expect(format).toHaveValue("commander"));
+    expect(screen.getByRole("button", { name: "Format" })).toHaveTextContent("Commander");
   });
 
   /**
@@ -627,8 +632,10 @@ describe("DecksPage", () => {
     await screen.findByRole("list", { name: "Your decks" });
     await userEvent.click(screen.getByRole("button", { name: "New deck" }));
 
-    const format = await screen.findByLabelText("Format");
-    await waitFor(() => expect(format).toHaveValue("modern"));
+    await screen.findByLabelText("Name");
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Format" })).toHaveTextContent("Modern"),
+    );
   });
 
   /** The other door into a new deck, and it starts in the same place: a pasted list makes a deck
@@ -647,8 +654,10 @@ describe("DecksPage", () => {
     await userEvent.paste("1 Sol Ring");
     await userEvent.click(screen.getByRole("button", { name: "Preview" }));
 
-    const format = await screen.findByLabelText("Format");
-    await waitFor(() => expect(format).toHaveValue("modern"));
+    await screen.findByRole("button", { name: "Format" });
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Format" })).toHaveTextContent("Modern"),
+    );
   });
 
   /** Creating a deck is creating it *and* going to it — nobody makes a deck to look at a tile. */
@@ -657,7 +666,8 @@ describe("DecksPage", () => {
     await userEvent.click(await screen.findByRole("button", { name: "New deck" }));
 
     await userEvent.type(await screen.findByLabelText("Name"), "Sunday burn");
-    await userEvent.selectOptions(screen.getByLabelText("Format"), "modern");
+    await openDropdown(userEvent.setup(), "Format");
+    await userEvent.click(await screen.findByRole("option", { name: "Modern" }));
     await userEvent.click(screen.getByRole("button", { name: "Create deck" }));
 
     // The whole deck in one call, and the two answers the reader left alone are the switch's
@@ -1690,7 +1700,7 @@ describe("the folder row's menu", () => {
 
     await userEvent.type(await screen.findByLabelText("Name"), "Aristocrats");
     // The dialog opens on the folder rather than making the reader find it in the form.
-    expect(screen.getByLabelText("Folder")).toHaveValue("1");
+    expect(screen.getByRole("button", { name: "Folder" })).toHaveTextContent("Commander");
     await userEvent.click(screen.getByRole("button", { name: "Create deck" }));
 
     await waitFor(() =>
@@ -1799,7 +1809,7 @@ describe("the folder row's menu", () => {
     await userEvent.click(await screen.findByRole("button", { name: "New deck" }));
     await userEvent.type(await screen.findByLabelText("Name"), "Aristocrats");
 
-    expect(screen.getByLabelText("Folder")).toHaveValue("");
+    expect(screen.getByRole("button", { name: "Folder" })).toHaveTextContent("Top level");
   });
 
   /**

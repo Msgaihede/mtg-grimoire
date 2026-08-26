@@ -1,5 +1,6 @@
+import { Dropdown } from "@/components/Dropdown/Dropdown";
+import type { DropdownOption } from "@/components/Dropdown/types";
 import {
-  FILTER_CONTROL,
   FILTER_FIELD,
   FILTER_FOCUS,
   LayoutToggle,
@@ -53,6 +54,48 @@ export function CollectionFilterBar({
 }) {
   const view = useAppStore((s) => s.collectionView);
   const setCollectionView = useAppStore((s) => s.setCollectionView);
+
+  const formatOptions: readonly DropdownOption[] = [
+    // Pinned above the sorted list because it is the *absence* of this filter and not
+    // a format. It happens to sort first as well today, so nothing on screen tells the
+    // two apart — which is the reason to write it down: rename it to "No format
+    // filter" and, sorted, it would land between Modern and Pauper.
+    { value: "", label: "Any format" },
+    // Alphabetical by the words on screen, the app's one order for an option list
+    // (`lib/options.ts`): a reader hunting Modern looks under M, not in the position
+    // somebody decided the formats rank in. `FORMATS` is declared in that ranking
+    // order and shared with the search, so the sort is done here, at the point of
+    // display, rather than by reordering a constant two views read.
+    //
+    // No `groups`: unlike the search's copy this select wires no facets, so nothing
+    // here greys and there is one group to order.
+    ...sortOptions(FORMATS, (f) => f.label),
+  ];
+
+  const sortDropdownOptions: readonly DropdownOption[] = [
+    ...(collection.sortSelection === ""
+      ? [
+          // Reachable by reading only: picking it would be picking the sort you already
+          // have. Present because a select showing nothing at all looks broken, and
+          // because "Custom…" is the honest name for a sort built from headers this
+          // control has no option for.
+          //
+          // Pinned first, outside the sorted list below: it is the state of the control
+          // rather than an order to pick, and a reader who sees it needs to see it
+          // without hunting. `aria-disabled`: an `<option>` was the house rule's one
+          // exception to it, because the reason behind that rule — a disabled control
+          // leaves the tab order — is about something that was in it to begin with. A
+          // `Dropdown` row is not in the tab order either: rows are walked by
+          // `aria-activedescendant`, never focused — so it takes `aria-disabled` for the
+          // same reason, by a different mechanism.
+          { value: "", label: "Custom…", disabled: true },
+        ]
+      : []),
+    // Alphabetical by label, like every other option list (`lib/options.ts`).
+    // `COLLECTION_SORTS` is declared in the order the orders were reasoned about;
+    // the display order is decided here.
+    ...sortOptions(COLLECTION_SORTS, (s) => s.label),
+  ];
 
   return (
     <div className="flex flex-col gap-2">
@@ -113,39 +156,18 @@ export function CollectionFilterBar({
       </div>
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <label htmlFor="collection-format" className="sr-only">
+        <label id="collection-format-label" htmlFor="collection-format" className="sr-only">
           Format
         </label>
-        <select
+        <Dropdown
           id="collection-format"
+          labelledBy="collection-format-label"
           value={collection.format}
-          onChange={(e) => collection.setFormat(e.target.value)}
-          className={cn(
-            FILTER_CONTROL,
-            FILTER_FOCUS,
-            "bg-surface px-2",
-            collection.format ? "border-accent text-accent" : "border-border text-dim",
-          )}
-        >
-          {/* Pinned above the sorted list because it is the *absence* of this filter and not
-              a format. It happens to sort first as well today, so nothing on screen tells the
-              two apart — which is the reason to write it down: rename it to "No format
-              filter" and, sorted, it would land between Modern and Pauper. */}
-          <option value="">Any format</option>
-          {/* Alphabetical by the words on screen, the app's one order for an option list
-              (`lib/options.ts`): a reader hunting Modern looks under M, not in the position
-              somebody decided the formats rank in. `FORMATS` is declared in that ranking
-              order and shared with the search, so the sort is done here, at the point of
-              display, rather than by reordering a constant two views read.
-
-              No `groups`: unlike the search's copy this select wires no facets, so nothing
-              here greys and there is one group to order. */}
-          {sortOptions(FORMATS, (f) => f.label).map((f) => (
-            <option key={f.value} value={f.value}>
-              {f.label}
-            </option>
-          ))}
-        </select>
+          onChange={collection.setFormat}
+          options={formatOptions}
+          searchable
+          active={collection.format !== ""}
+        />
 
         <div role="group" aria-label="Finish" className="flex gap-1">
           {FINISHES.map((f) => (
@@ -182,7 +204,7 @@ export function CollectionFilterBar({
           onClick={collection.toggleNeedsReview}
         />
 
-        <label htmlFor="collection-sort" className="sr-only">
+        <label id="collection-sort-label" htmlFor="collection-sort" className="sr-only">
           Sort
         </label>
         {/* The same state the table's headers drive, from the other end. Picking here
@@ -190,38 +212,16 @@ export function CollectionFilterBar({
             survived the headers becoming sortable because two of its orders have no column
             to press: "Recently added", which neither table can afford a column for, and
             the unit price, which is the Value column's other question. */}
-        <select
+        <Dropdown
           id="collection-sort"
+          labelledBy="collection-sort-label"
           value={collection.sortSelection}
-          onChange={(e) => collection.setSortKey(e.target.value as CollectionSort)}
-          // Never gold: a sort is always on — there is no "unsorted" — so a state colour
-          // here would say "a filter is active" about a control that cannot be inactive.
-          className={cn(FILTER_CONTROL, FILTER_FOCUS, "border-border bg-surface px-2 text-dim")}
-        >
-          {/* Reachable by reading only: picking it would be picking the sort you already
-              have. Present because a select showing nothing at all looks broken, and
-              because "Custom…" is the honest name for a sort built from headers this
-              control has no option for.
-
-              Pinned first, outside the sorted list below: it is the state of the control
-              rather than an order to pick, and a reader who sees it needs to see it without
-              hunting. `disabled` and not `aria-disabled`: an `<option>` is the house rule's
-              one exception, because the reason behind that rule — a disabled control leaves
-              the tab order — is about something that was in it to begin with. */}
-          {collection.sortSelection === "" && (
-            <option value="" disabled>
-              Custom…
-            </option>
-          )}
-          {/* Alphabetical by label, like every other option list (`lib/options.ts`).
-              `COLLECTION_SORTS` is declared in the order the orders were reasoned about;
-              the display order is decided here. */}
-          {sortOptions(COLLECTION_SORTS, (s) => s.label).map((s) => (
-            <option key={s.value} value={s.value}>
-              {s.label}
-            </option>
-          ))}
-        </select>
+          onChange={(v) => collection.setSortKey(v as CollectionSort)}
+          options={sortDropdownOptions}
+          // Never gold (no `active`): a sort is always on — there is no "unsorted" — so a
+          // state colour here would say "a filter is active" about a control that cannot be
+          // inactive.
+        />
 
         {/* Always drawn, unlike the wishlist's twin, which hides while the list is flattened:
             there is no flattened state here to hide from, and a new folder is made **inside the

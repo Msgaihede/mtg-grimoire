@@ -22,6 +22,7 @@ import { MARKETPLACES } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
 import { MARKETPLACE_KEY } from "@/lib/useMarketplace";
 import { startDrag } from "@/test-drag";
+import { openDropdown, pickOption } from "@/test-dropdown";
 
 const collectionList = vi.hoisted(() => vi.fn());
 const collectionSummary = vi.hoisted(() => vi.fn());
@@ -290,9 +291,10 @@ const sweepCallsAt = (marketplace: string) =>
  * `SORT_HINT` — since the tooltip sweep, a hover tooltip rather than a `title` — but a header's
  * own **accessible name** can still contain "Sort" (`headerLabel`, e.g. "Value. Prices as of…"),
  * so `/sort/i` on `getByLabelText` would still risk matching the whole header row rather than
- * only the control this file means.
+ * only the control this file means. A dropdown's trigger is a `button`, not a `combobox` — the
+ * combobox role belongs to a `searchable` dropdown's search box, and this one has none.
  */
-const sortSelect = () => screen.getByRole("combobox", { name: "Sort" });
+const sortSelect = () => screen.getByRole("button", { name: "Sort" });
 
 /**
  * The page, under the providers `App` mounts above it.
@@ -866,12 +868,13 @@ describe("CollectionPage", () => {
   });
 
   it("sends the collection's own filters and its sort", async () => {
+    const user = userEvent.setup();
     wrap(<CollectionPage />);
     await screen.findByText("Lightning Bolt");
 
     await userEvent.click(screen.getByRole("button", { name: "Etched" }));
     await userEvent.click(screen.getByRole("button", { name: /^LP/ }));
-    await userEvent.selectOptions(sortSelect(), "price");
+    await pickOption(user, "Sort", "Highest price");
 
     await waitFor(() => {
       const q = lastQuery();
@@ -902,7 +905,7 @@ describe("CollectionPage", () => {
     await user.click(screen.getByRole("button", { name: "Copies" }));
     await waitFor(() => expect(lastQuery().sort).toEqual([{ key: "quantity", dir: "desc" }]));
     // A header the select also offers reads back on it.
-    expect(sortSelect()).toHaveValue("quantity");
+    expect(sortSelect()).toHaveTextContent("Most copies");
 
     await user.keyboard("{Shift>}");
     await user.click(screen.getByRole("button", { name: /^Value/ }));
@@ -916,13 +919,17 @@ describe("CollectionPage", () => {
 
     // Still "Most copies": the select reads the sort's *first* term, and that is still one
     // it knows.
-    expect(sortSelect()).toHaveValue("quantity");
+    expect(sortSelect()).toHaveTextContent("Most copies");
 
     // Now start from Value alone, which the select has no option for at all.
     await user.click(screen.getByRole("button", { name: /^Value/ }));
     await waitFor(() => expect(lastQuery().sort).toEqual([{ key: "value", dir: "desc" }]));
-    expect(sortSelect()).toHaveValue("");
-    expect(screen.getByRole("option", { name: "Custom…" })).toBeDisabled();
+    expect(sortSelect()).toHaveTextContent("Custom…");
+    await openDropdown(user, "Sort");
+    expect(screen.getByRole("option", { name: "Custom…" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
   });
 
   /**
@@ -1100,7 +1107,9 @@ describe("CollectionPage", () => {
     // The collection's own preview: a condition/finish default pair the deck's importer has
     // no equivalent of, and an `add`/`set` mode radio rather than `merge`/`replace`.
     expect(await screen.findByText(/will be added to your collection/)).toBeInTheDocument();
-    expect(within(dialog).getByLabelText("Condition when the file doesn't say")).toHaveValue("NM");
+    expect(
+      within(dialog).getByRole("button", { name: "Condition when the file doesn't say" }),
+    ).toHaveTextContent("Near mint");
 
     // Scoped to the dialog: the page's own trigger is still on screen behind it and shares the
     // same accessible name.

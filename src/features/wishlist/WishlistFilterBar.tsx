@@ -1,5 +1,6 @@
+import { Dropdown } from "@/components/Dropdown/Dropdown";
+import type { DropdownOption } from "@/components/Dropdown/types";
 import {
-  FILTER_CONTROL,
   FILTER_FIELD,
   FILTER_FOCUS,
   LayoutToggle,
@@ -50,6 +51,29 @@ export function WishlistFilterBar({
   // while the filter is on, including on the complement, where by definition no row on screen
   // carries a flag and the chip is the only way back off.
   const offered = wishlist.needsReview !== undefined || wishlist.rows.some((r) => r.needsReview);
+
+  // Reachable by reading only: picking it would be picking the sort you already
+  // have. Present because a dropdown showing nothing at all looks broken, and because
+  // "Custom…" is the honest name for a sort built from a header this control has no
+  // option for.
+  //
+  // Pinned first, outside the sorted list below: it is the state of the control
+  // rather than an order to pick. `disabled: true` on the `DropdownOption`, which the
+  // component renders as `aria-disabled` — the house rule's normal case now, not the
+  // native `<option>` exception it used to be.
+  const sortDropdownOptions: readonly DropdownOption[] = [
+    ...(wishlist.sortSelection === ""
+      ? [{ value: "", label: "Custom…", disabled: true }]
+      : []),
+    // Alphabetical by label, like every other option list (`lib/options.ts`) — a
+    // reader looks up the words on screen. `WISHLIST_SORTS` is declared in the order
+    // the orders were reasoned about; the display order is decided here.
+    ...sortOptions(WISHLIST_SORTS, (s) => s.label).map((s) => ({
+      value: s.value,
+      label: s.label,
+    })),
+  ];
+
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
       <label htmlFor="wishlist-text" className="sr-only">
@@ -127,18 +151,21 @@ export function WishlistFilterBar({
           so every view that offers a reset offers the same one. */}
       <ResetAll count={wishlist.activeCount} onReset={wishlist.resetAll} />
 
-      <label htmlFor="wishlist-sort" className="sr-only">
-        Sort
-      </label>
       {/* The same state the table's headers drive, from the other end. Picking here
           *replaces* the sort with that one term; the headers refine and extend it. It
           survived the headers becoming sortable because two of its orders have no column to
           press: "Recently added", and the unit price, which is the Cost column's other
           question. */}
-      <select
+      <Dropdown
         id="wishlist-sort"
+        // No visible label — `sr-only` before this was a `<select>` — so `label` is the whole
+        // of what supplies the accessible name; there is no wrapping `<label>` here for a
+        // `<button>` to pick up even though one would reach it, `<button>` being labelable the
+        // same as a `<select>` is.
+        label="Sort"
         value={wishlist.sortSelection}
-        onChange={(e) => wishlist.setSortKey(e.target.value as WishlistSort)}
+        onChange={(v) => wishlist.setSortKey(v as WishlistSort)}
+        options={sortDropdownOptions}
         // Left-packed with the filters, where it used to be pushed to the far end of the row on
         // the grounds that this view had no layout toggle to put there. It has one now, and the
         // toggle carries its own `ml-auto` — so the row reads the way the other two do: what is
@@ -147,30 +174,8 @@ export function WishlistFilterBar({
         //
         // Never gold: a sort is always on — there is no "unsorted" — so a state colour here
         // would say "a filter is active" about a control that cannot be inactive.
-        className={cn(FILTER_CONTROL, FILTER_FOCUS, "border-border bg-surface px-2 text-dim")}
-      >
-        {/* Reachable by reading only: picking it would be picking the sort you already
-            have. Present because a select showing nothing at all looks broken, and because
-            "Custom…" is the honest name for a sort built from a header this control has no
-            option for.
-
-            Pinned first, outside the sorted list below: it is the state of the control
-            rather than an order to pick. `disabled` and not `aria-disabled` — the house
-            rule's one exception is a native `<option>`. */}
-        {wishlist.sortSelection === "" && (
-          <option value="" disabled>
-            Custom…
-          </option>
-        )}
-        {/* Alphabetical by label, like every other option list (`lib/options.ts`) — a
-            reader looks up the words on screen. `WISHLIST_SORTS` is declared in the order
-            the orders were reasoned about; the display order is decided here. */}
-        {sortOptions(WISHLIST_SORTS, (s) => s.label).map((s) => (
-          <option key={s.value} value={s.value}>
-            {s.label}
-          </option>
-        ))}
-      </select>
+        className="bg-surface"
+      />
 
       {/* The same two buttons the search and the collection carry, in the same corner and
           reading the same three words — one wall, one table, one place to switch. It writes

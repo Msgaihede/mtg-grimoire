@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, waitFor, within } from "storybook/test";
+import { pickOption } from "@/test-dropdown";
 import { CategoriesDialog } from "./CategoriesDialog";
 
 /** How long a `waitFor` will wait for `Dialog`'s first frame — the shell's panel carries its
@@ -183,7 +184,7 @@ export const DeletingACategoryAndItsCards: Story = {
     await userEvent.click(within(ramp).getByRole("button", { name: "Delete" }));
 
     const dialog = await canvas.findByRole("group", { name: "Delete Ramp" });
-    await userEvent.selectOptions(within(dialog).getByLabelText("Its 7 cards"), "delete");
+    await pickOption(userEvent.setup(), "Its 7 cards", "go with it");
     await expect(
       within(dialog).getByText(/Any copies you own go back to Recently removed/),
     ).toHaveTextContent("The 7 cards in it go with it");

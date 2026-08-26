@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, within } from "storybook/test";
+import { openDropdown } from "@/test-dropdown";
 import { CollectionFilterBar } from "./CollectionFilterBar";
 import { useCollection, type Collection } from "./useCollection";
 
@@ -135,9 +136,9 @@ export const Default: Story = {
       "placeholder",
       "Search your collection…",
     );
-    await expect(canvas.getByLabelText("Format")).toHaveValue("");
+    await expect(canvas.getByRole("button", { name: "Format" })).toHaveTextContent("Any format");
     // An empty sort spec reads as the default it is — name order — rather than as "Custom…".
-    await expect(canvas.getByLabelText("Sort")).toHaveValue("name");
+    await expect(canvas.getByRole("button", { name: "Sort" })).toHaveTextContent("Name");
     // Drawn and dead rather than absent: a Reset that arrived on the first press would take
     // its width out of the `flex-1` search box and slide the row being pressed.
     await expect(canvas.getByRole("button", { name: /^Reset all/ })).toHaveAttribute(
@@ -223,7 +224,9 @@ export const Cleared: Story = {
   },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByLabelText("Sort")).toHaveValue("price");
+    await expect(await canvas.findByRole("button", { name: "Sort" })).toHaveTextContent(
+      "Highest price",
+    );
 
     const reset = canvas.getByRole("button", { name: /^Reset all/ });
     await userEvent.click(reset);
@@ -231,7 +234,7 @@ export const Cleared: Story = {
     // Still under the cursor that pressed it, greyed rather than gone.
     await expect(reset).toHaveAttribute("aria-disabled", "true");
     await expect(canvas.getByLabelText("Search your collection")).toHaveValue("");
-    await expect(canvas.getByLabelText("Format")).toHaveValue("");
+    await expect(canvas.getByRole("button", { name: "Format" })).toHaveTextContent("Any format");
     await expect(canvas.getByRole("button", { name: "Foil" })).toHaveAttribute(
       "aria-pressed",
       "false",
@@ -245,7 +248,7 @@ export const Cleared: Story = {
       "false",
     );
     // The survivor.
-    await expect(canvas.getByLabelText("Sort")).toHaveValue("price");
+    await expect(canvas.getByRole("button", { name: "Sort" })).toHaveTextContent("Highest price");
   },
 };
 
@@ -271,20 +274,17 @@ export const CustomSort: Story = {
   args: { preset: (collection) => collection.toggleSort("value", false) },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    const sort = await canvas.findByLabelText("Sort");
-    await expect(sort).toHaveValue("");
-    // Both halves of the claim: the option exists, and it cannot be picked. Neither is legible
-    // in a screenshot of a `<select>` that simply reads "Custom…".
-    const custom = within(sort).getByRole("option", { name: "Custom…" });
-    await expect(custom).toBeDisabled();
+    const sort = await canvas.findByRole("button", { name: "Sort" });
+    await expect(sort).toHaveTextContent("Custom…");
+    await openDropdown(userEvent.setup(), "Sort");
+    // Both halves of the claim: the row exists, and it cannot be picked. Neither is legible
+    // in a screenshot of a picker that simply reads "Custom…".
+    const custom = canvas.getByRole("option", { name: "Custom…" });
+    await expect(custom).toHaveAttribute("aria-disabled", "true");
     // And the five real orders are still all there to switch to — as a sequence rather than
     // a count, because the order they are drawn in is the claim above and a length of 6 is
     // equally true of the constant passed straight through.
-    await expect(
-      within(sort)
-        .getAllByRole("option")
-        .map((o) => o.textContent),
-    ).toEqual([
+    await expect(canvas.getAllByRole("option").map((o) => o.textContent)).toEqual([
       "Custom…",
       "Highest price",
       "Most copies",

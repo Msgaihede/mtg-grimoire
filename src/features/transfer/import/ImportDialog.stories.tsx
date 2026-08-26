@@ -4,6 +4,7 @@ import { expect, fn, userEvent, waitFor, within } from "storybook/test";
 import { FOCUS } from "@/lib/focus";
 import type { DeckVariant } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
+import { pickOption } from "@/test-dropdown";
 import type { ImportDestination } from "./destination";
 import { collectionDestination } from "./destinations/CollectionPreview";
 import { deckDestination } from "./destinations/deckInto";
@@ -207,7 +208,7 @@ export const AmbiguousCommander: Story = {
     );
     await userEvent.click(canvas.getByRole("button", { name: "Preview" }));
     await userEvent.type(await canvas.findByLabelText("Name"), "Partners");
-    await userEvent.selectOptions(canvas.getByLabelText("Format"), "commander");
+    await pickOption(userEvent.setup(), "Format", "Commander");
 
     const tymna = await canvas.findByRole("button", { name: /Tymna the Weaver/ });
     await userEvent.click(tymna);
@@ -382,8 +383,14 @@ export const IntoCollection: Story = {
     await userEvent.click(canvas.getByRole("button", { name: "Preview" }));
 
     await expect(await canvas.findByText(/will be added to your collection/)).toBeInTheDocument();
-    await expect(canvas.getByLabelText(/Condition when the file doesn.t say/)).toBeInTheDocument();
-    await expect(canvas.getByLabelText(/Finish when the file doesn.t say/)).toBeInTheDocument();
+    // The trigger's accessible name is supplied by `labelledBy`, not a wrapping `<label>` — see
+    // `CollectionPreview.tsx`'s own comment — so it is found by role rather than `getByLabelText`.
+    await expect(
+      canvas.getByRole("button", { name: /Condition when the file doesn.t say/ }),
+    ).toBeInTheDocument();
+    await expect(
+      canvas.getByRole("button", { name: /Finish when the file doesn.t say/ }),
+    ).toBeInTheDocument();
     // `add`/`set`, and `add` first — never `replace`, which belongs to the deck's own preview.
     await expect(canvas.getByLabelText(/^Add these copies/)).toBeChecked();
     await expect(canvas.queryByText(/^Replace/)).toBeNull();
@@ -395,7 +402,7 @@ export const IntoCollection: Story = {
  * Into the reader's own wishlist — `WishlistPage`'s `Import` button, over
  * `wishlistDestination`. **No condition question at all**: a wish is a card the reader does not
  * own yet, so recording a grade for cardboard nobody has is a question this destination has
- * never asked. The finish select survives — "the shiny one" is an answer about taste, which a
+ * never asked. The finish picker survives — "the shiny one" is an answer about taste, which a
  * wish can carry the same as a collection entry can.
  */
 export const IntoWishlist: Story = {
@@ -408,8 +415,12 @@ export const IntoWishlist: Story = {
     await userEvent.click(canvas.getByRole("button", { name: "Preview" }));
 
     await expect(await canvas.findByText(/will be added to your wishlist/)).toBeInTheDocument();
-    await expect(canvas.getByLabelText(/Finish when the file doesn.t say/)).toBeInTheDocument();
-    await expect(canvas.queryByLabelText(/Condition/)).toBeNull();
+    // `labelledBy`, not a wrapping `<label>` — `WishlistPreview.tsx`'s own comment says why —
+    // so the name is found by role rather than `getByLabelText`.
+    await expect(
+      canvas.getByRole("button", { name: /Finish when the file doesn.t say/ }),
+    ).toBeInTheDocument();
+    await expect(canvas.queryByRole("button", { name: /Condition/ })).toBeNull();
     await expect(canvas.getByLabelText(/^Add these wishes/)).toBeChecked();
     await expect(canvas.getByRole("button", { name: "Import" })).toBeEnabled();
   },

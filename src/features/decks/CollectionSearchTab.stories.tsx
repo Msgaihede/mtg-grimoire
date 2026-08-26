@@ -238,9 +238,11 @@ export const DeckFormat: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
-    // The select is a tray cell, so the disclosure comes first — see {@link openTray}.
+    // The picker is a tray cell, so the disclosure comes first — see {@link openTray}.
     await openTray(canvas);
-    await expect(await canvas.findByLabelText("Format")).toHaveValue("modern");
+    await expect(await canvas.findByRole("button", { name: "Format" })).toHaveTextContent(
+      "Modern",
+    );
   },
 };
 

@@ -1,7 +1,8 @@
 import { render, screen, within } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
+import userEvent, { type UserEvent } from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useAppStore } from "@/lib/store";
+import { openDropdown, pickOption } from "@/test-dropdown";
 import { CollectionFilterBar } from "./CollectionFilterBar";
 import type { Collection } from "./useCollection";
 
@@ -72,22 +73,23 @@ describe("CollectionFilterBar", () => {
    * exactly why it is here.
    */
   it("wires every control to the filter it is named for", async () => {
+    const user = userEvent.setup();
     const c = collection({ activeCount: 2 });
     render(<CollectionFilterBar collection={c} onNewFolder={newFolder} />);
 
     // The box is controlled by a spy, so its value never moves off "" — one character is the
     // whole of what a keystroke can prove here.
-    await userEvent.type(screen.getByLabelText(/search your collection/i), "b");
-    await userEvent.selectOptions(screen.getByLabelText("Format"), "commander");
-    await userEvent.click(screen.getByRole("button", { name: "Red" }));
-    await userEvent.click(screen.getByRole("button", { name: "Mana value 3" }));
-    await userEvent.click(screen.getByRole("button", { name: "Cards with X in their mana cost" }));
-    await userEvent.click(screen.getByRole("button", { name: "Sets" }));
-    await userEvent.click(screen.getByRole("button", { name: "Foil" }));
-    await userEvent.click(screen.getByRole("button", { name: /^LP/ }));
-    await userEvent.click(screen.getByRole("button", { name: "Needs review" }));
-    await userEvent.selectOptions(screen.getByLabelText("Sort"), "price");
-    await userEvent.click(screen.getByRole("button", { name: /reset all/i }));
+    await user.type(screen.getByLabelText(/search your collection/i), "b");
+    await pickOption(user, "Format", "Commander");
+    await user.click(screen.getByRole("button", { name: "Red" }));
+    await user.click(screen.getByRole("button", { name: "Mana value 3" }));
+    await user.click(screen.getByRole("button", { name: "Cards with X in their mana cost" }));
+    await user.click(screen.getByRole("button", { name: "Sets" }));
+    await user.click(screen.getByRole("button", { name: "Foil" }));
+    await user.click(screen.getByRole("button", { name: /^LP/ }));
+    await user.click(screen.getByRole("button", { name: "Needs review" }));
+    await pickOption(user, "Sort", "Highest price");
+    await user.click(screen.getByRole("button", { name: /reset all/i }));
 
     expect(c.setText).toHaveBeenCalledWith("b");
     expect(c.setFormat).toHaveBeenCalledWith("commander");
@@ -109,7 +111,7 @@ describe("CollectionFilterBar", () => {
 
     // The layout is the one control on this row that is not a filter — it is the store's,
     // and it is the *collection's* half of the store, never the search's.
-    await userEvent.click(screen.getByRole("button", { name: "Card view" }));
+    await user.click(screen.getByRole("button", { name: "Card view" }));
 
     expect(useAppStore.getState().collectionView).toBe("grid");
     expect(useAppStore.getState().searchView).toBe("table");
@@ -156,11 +158,18 @@ describe("CollectionFilterBar", () => {
     expect(chip).not.toHaveAttribute("aria-disabled");
   });
 
-  /** Every `<option>`'s text, in the order the reader scrolls past them. */
-  const optionsOf = (label: string) =>
-    within(screen.getByLabelText(label))
+  /** Every row's text, in the order the reader scrolls past them — opens the dropdown to read
+   *  them, since a `Dropdown`'s rows only exist in the DOM while its panel is open, and closes
+   *  it again so a later call starts from a known-closed trigger rather than toggling one this
+   *  test left open (its internal `open` state survives a `rerender`, unlike a fresh mount). */
+  const optionsOf = async (user: UserEvent, name: string) => {
+    const trigger = await openDropdown(user, name);
+    const options = within(screen.getByRole("listbox"))
       .getAllByRole("option")
       .map((o) => o.textContent);
+    await user.click(trigger);
+    return options;
+  };
 
   /**
    * Alphabetical by the words on screen, which is the one order an option list in this app
@@ -177,10 +186,11 @@ describe("CollectionFilterBar", () => {
    * is exactly why it is pinned *and* asserted: rename it to "No format filter" and a
    * sorted-in version would land between Modern and Pauper, where nobody would look for it.
    */
-  it("offers the formats alphabetically, under a pinned Any format", () => {
+  it("offers the formats alphabetically, under a pinned Any format", async () => {
+    const user = userEvent.setup();
     render(<CollectionFilterBar collection={collection()} onNewFolder={newFolder} />);
 
-    expect(optionsOf("Format")).toEqual([
+    expect(await optionsOf(user, "Format")).toEqual([
       "Any format",
       "Commander",
       "Legacy",
@@ -202,20 +212,25 @@ describe("CollectionFilterBar", () => {
    * control, not an order to pick — and it appears only when the sort came from a header
    * this select has no option for, which is what the second render is.
    */
-  it("offers the sort orders alphabetically, under a pinned Custom…", () => {
+  it("offers the sort orders alphabetically, under a pinned Custom…", async () => {
+    const user = userEvent.setup();
     const { rerender } = render(<CollectionFilterBar collection={collection()} onNewFolder={newFolder} />);
 
     const orders = ["Highest price", "Most copies", "Name", "Recently added", "Set and number"];
-    expect(optionsOf("Sort")).toEqual(orders);
+    expect(await optionsOf(user, "Sort")).toEqual(orders);
 
     rerender(<CollectionFilterBar collection={collection({ sortSelection: "" })} onNewFolder={newFolder} />);
 
-    expect(optionsOf("Sort")).toEqual(["Custom…", ...orders]);
+    expect(await optionsOf(user, "Sort")).toEqual(["Custom…", ...orders]);
     // Still the unpickable placeholder it was before the sort moved it: a native `<option>`
-    // is the house rule's one exception to `aria-disabled`.
-    expect(
-      within(screen.getByLabelText("Sort")).getByRole("option", { name: "Custom…" }),
-    ).toBeDisabled();
+    // was the house rule's one exception to `aria-disabled`, because it was never in the tab
+    // order; a `Dropdown` row is not either, so it takes `aria-disabled` for the same reason
+    // by a different mechanism.
+    await openDropdown(user, "Sort");
+    expect(screen.getByRole("option", { name: "Custom…" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
   });
 
   /** Drawn from the first render and greyed until there is something to clear: a Reset that
