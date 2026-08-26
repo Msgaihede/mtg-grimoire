@@ -37,7 +37,7 @@
  * with nothing on screen explaining why." Readers asked for the opposite (issue #175), and the
  * argument had a hole in it: it was written when there was **one** number for the whole app, so
  * "the zoom" really was a momentary posture that a single card could set for every wall at once.
- * Split seven ways it is not that any more. A reader who sizes the deck editor so a 100-card pile
+ * Split per section it is not that any more. A reader who sizes the deck editor so a 100-card pile
  * fits the desk, or the Tags wall up so an illustration is legible, has configured *that wall* —
  * and the app forgetting it on every launch was the complaint.
  *
@@ -112,6 +112,15 @@ export const MAX_ZOOM: number = ZOOM_STEPS[ZOOM_STEPS.length - 1];
  * is not a place a reader navigates to, and it is still a section for that reason: the modal
  * throws away its filter and its scroll on every close, and the size the cards are drawn at is
  * the one thing about it a reader would resent re-setting.
+ *
+ * `deckGallery` is the decks page — the wall of deck tiles and folder cards, which is the one
+ * surface on this list whose tiles are not cards. It is a wall of **art** all the same, and the
+ * reader's question there is the one every other section answers: how many of these do I want on
+ * screen at once, against how well I want to see each one. **Named `deckGallery` rather than
+ * `decks`, and the name is doing work**: `deck` is already the section the editor's cards are
+ * drawn at, both keys are read inside `features/decks/`, and two keys one character apart are a
+ * typo that steps a wall the reader is not looking at — which reads as a gesture that does
+ * nothing rather than as a mistake.
  */
 export const ZOOM_SECTIONS = [
   "search",
@@ -120,6 +129,7 @@ export const ZOOM_SECTIONS = [
   "wishlist",
   "deckSearch",
   "deck",
+  "deckGallery",
   "printings",
 ] as const;
 
@@ -154,6 +164,10 @@ export const DEFAULT_SECTION_ZOOMS: Readonly<Record<ZoomSection, number>> = {
   wishlist: DEFAULT_ZOOM,
   deckSearch: DEFAULT_ZOOM,
   deck: DEFAULT_ZOOM,
+  // The decks page's wall of tiles and folder cards. A whole deck rather than a card, so it is
+  // the one section here whose default is a statement about a 626px art crop and a name under
+  // it rather than about a 5:7 face.
+  deckGallery: DEFAULT_ZOOM,
   // The modal's wall. Its own key rather than the search's, for {@link ZOOM_SECTIONS}' own
   // reason: the modal opens *over* a wall the reader has already sized, and a ctrl+wheel inside
   // it must not resize the page underneath.
@@ -290,6 +304,30 @@ export const CHIN_RISE = 4;
  */
 export function chinHeight(zoom: number): number {
   return scaled(CHIN_HEIGHT, zoom);
+}
+
+/**
+ * A base that **grows with the zoom and never shrinks below itself** — the rule for exactly one
+ * kind of measurement on a wall of cards: the gutter between them.
+ *
+ * It used to govern a tile's foot and the type in it as well, on the argument that the card is a
+ * picture and scales in both directions honestly while the things around it do not. That was true
+ * while they did not: a 9px caption under a halved card would have become 4px, which is not type.
+ * It is false now — the caption, the gem, the copy count and the stepper all follow
+ * {@link MARK_SCALE_VAR} — so a floored budget is a 20px strip around 5px of type, which is the
+ * same fault the other way up.
+ *
+ * The gutter keeps the floor because it is the one measurement **between** cards rather than **on**
+ * one: it is what stops a wall reading as one sheet, and halving it at 0.5× is precisely the zoom a
+ * reader chose in order to see more cards at once. Nothing is being contained, so there is nothing
+ * for it to stay in step with.
+ *
+ * Lifted out of `features/decks/views/GridView.tsx` on 2026-08-26, when the decks gallery became
+ * the second wall to need it. It is one rule about how gutters behave under a zoom, and two
+ * copies of it would be two walls that agree today.
+ */
+export function atLeast(base: number, zoom: number): number {
+  return Math.max(base, scaled(base, zoom));
 }
 
 /**

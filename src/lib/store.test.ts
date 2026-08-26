@@ -683,6 +683,117 @@ describe("hydrating the stored layouts", () => {
 });
 
 /**
+ * The two Flatten switches — "ignore the filing and show me every folder's cards at once".
+ *
+ * Two pages, not the layouts' four: the card search and the Tags page have no cabinet for a
+ * switch to ignore. And **two different defaults**, which is the thing this block exists to pin,
+ * because it is exactly what reads as an oversight later and gets "tidied" into agreement.
+ */
+describe("the two Flatten switches", () => {
+  /**
+   * The collection opens flattened and the wishlist does not, and the asymmetry is a measurement:
+   * since schema v25 every card in a deck lives in that deck's group folder, so the collection's
+   * root — "filed nowhere" — was 0 of 275 entries on the maintainer's real database, and an
+   * unflattened first launch drew `Cards 0` over a full binder. The wishlist's root is where
+   * readers actually keep wishes, so it opens on something already.
+   */
+  it("opens the collection flattened and the wishlist on its root", () => {
+    expect(useAppStore.getState().collectionFlattened).toBe(true);
+    expect(useAppStore.getState().wishlistFlattened).toBe(false);
+  });
+
+  /** One switch per cabinet: a reader who flattened their binder has said nothing about what
+   *  their shopping list should show. */
+  it("keeps the two pages apart", () => {
+    useAppStore.getState().toggleCollectionFlattened();
+
+    expect(useAppStore.getState().collectionFlattened).toBe(false);
+    expect(useAppStore.getState().wishlistFlattened).toBe(false);
+
+    useAppStore.getState().toggleWishlistFlattened();
+
+    expect(useAppStore.getState().collectionFlattened).toBe(false);
+    expect(useAppStore.getState().wishlistFlattened).toBe(true);
+  });
+
+  /** The pulse is what `useFlattenPersistence` writes off, and the section is what tells it which
+   *  row to touch — so a press has to move both, and name the page it happened on. */
+  it("counts each press and says which page it was on", () => {
+    useAppStore.getState().toggleWishlistFlattened();
+
+    expect(useAppStore.getState().flattenPulse).toBe(1);
+    expect(useAppStore.getState().flattenSection).toBe("wishlist");
+
+    useAppStore.getState().toggleCollectionFlattened();
+
+    expect(useAppStore.getState().flattenPulse).toBe(2);
+    expect(useAppStore.getState().flattenSection).toBe("collection");
+  });
+});
+
+/**
+ * The `flatten_state` row arriving at launch. The reader's memory rather than an authority, so
+ * everything it cannot say is a page left on the default this file built it with — and here that
+ * matters twice over, because the two defaults differ.
+ */
+describe("hydrating the stored Flatten switches", () => {
+  it("seeds only the pages the row names", () => {
+    useAppStore.getState().hydrateFlatten({ collection: false });
+
+    expect(useAppStore.getState().collectionFlattened).toBe(false);
+    // Unnamed, so still the default — and `false` here is the built-in one rather than an echo of
+    // the entry above it, which is the whole reason the two defaults are worth a test.
+    expect(useAppStore.getState().wishlistFlattened).toBe(false);
+
+    useAppStore.setState(useAppStore.getInitialState());
+    useAppStore.getState().hydrateFlatten({ wishlist: true });
+
+    expect(useAppStore.getState().wishlistFlattened).toBe(true);
+    expect(useAppStore.getState().collectionFlattened).toBe(true);
+  });
+
+  /**
+   * A page this build does not file cards in, and a value that is not a boolean. Both are what a
+   * newer build or a hand-edit leaves behind, and the object crossed an IPC boundary — where
+   * `boolean` is a claim rather than a fact. Each has to cost the reader that entry and nothing
+   * beside it, which is why a valid sibling rides along in the same object.
+   */
+  it("skips a section it does not know and a value that is not a boolean", () => {
+    const fields = Object.keys(useAppStore.getState());
+
+    useAppStore.getState().hydrateFlatten({
+      binders: true,
+      collection: "1",
+      wishlist: true,
+    });
+
+    expect(useAppStore.getState().collectionFlattened).toBe(true);
+    expect(useAppStore.getState().wishlistFlattened).toBe(true);
+    // And the unknown page reaches the store as *nothing at all* rather than as a field of its
+    // own: without the key guard, `FLATTEN_FIELD[section]` is `undefined` and zustand merges the
+    // write in under that name — a state nobody declared, which no assertion about the two
+    // booleans above could see.
+    expect(Object.keys(useAppStore.getState())).toEqual(fields);
+  });
+
+  /**
+   * **The race the guard exists for**, `hydrateListViews`' verbatim. The read is a round trip, so
+   * a reader who flips the switch inside it would otherwise watch last session's answer overwrite
+   * theirs a moment later — a page visibly re-filing itself under their hand.
+   */
+  it("leaves a switch the reader has already pressed alone", () => {
+    useAppStore.getState().toggleCollectionFlattened();
+
+    useAppStore.getState().hydrateFlatten({ collection: true, wishlist: true });
+
+    expect(useAppStore.getState().collectionFlattened).toBe(false);
+    // Whole-store rather than per-section, which is what the pulse can answer: inside a
+    // sub-second window the reader has by definition reached only one page.
+    expect(useAppStore.getState().wishlistFlattened).toBe(false);
+  });
+});
+
+/**
  * The export dialog's format and field choice, kept apart by surface — a deck export wants
  * Moxfield's printing line and a collection export wants a CSV with a condition column, and one
  * remembered setting would make each of them wrong half the time.

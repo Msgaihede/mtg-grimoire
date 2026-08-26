@@ -1681,6 +1681,35 @@ pub fn rename_folder(conn: &Connection, id: i64, name: &str) -> Result<DeckFolde
     read_folder(conn, id)?.ok_or_else(|| FOLDER_GONE.to_owned())
 }
 
+/// The cycle walk itself, in one place because [`move_folder`] and [`reorder_folders`] both owe
+/// it and a refusal written twice is a refusal that comes to disagree with itself. `start` is an
+/// id rather than an `Option`, because the root is nobody's descendant and a move there has
+/// nothing to climb. [`move_folder`] is where the reasoning is written down — what the walk
+/// guards, and why the hop budget is not about depth.
+fn refuse_cycle(conn: &Connection, id: i64, start: i64) -> Result<(), String> {
+    let mut cursor = Some(start);
+    let mut hops = 0usize;
+    while let Some(candidate) = cursor {
+        if candidate == id {
+            return Err(FOLDER_CYCLE.to_owned());
+        }
+        hops += 1;
+        if hops > MAX_FOLDER_DEPTH {
+            return Err(FOLDER_CYCLE.to_owned());
+        }
+        cursor = conn
+            .query_row(
+                "SELECT parent_id FROM deck_folders WHERE id = ?1",
+                params![candidate],
+                |r| r.get::<_, Option<i64>>(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+            .flatten();
+    }
+    Ok(())
+}
+
 /// Move a folder under a new parent (root, if `None`). **Refuses a cycle**: walks `parent_id`
 /// upward from the *proposed* parent, and if that walk ever meets `id` — immediately, if
 /// `parentId` names `id` itself — refuses rather than writing a loop `parent_id`'s own
@@ -1699,26 +1728,7 @@ pub fn move_folder(
     parent_id: Option<i64>,
 ) -> Result<DeckFolderRow, String> {
     if let Some(start) = parent_id {
-        let mut cursor = Some(start);
-        let mut hops = 0usize;
-        while let Some(candidate) = cursor {
-            if candidate == id {
-                return Err(FOLDER_CYCLE.to_owned());
-            }
-            hops += 1;
-            if hops > MAX_FOLDER_DEPTH {
-                return Err(FOLDER_CYCLE.to_owned());
-            }
-            cursor = conn
-                .query_row(
-                    "SELECT parent_id FROM deck_folders WHERE id = ?1",
-                    params![candidate],
-                    |r| r.get::<_, Option<i64>>(0),
-                )
-                .optional()
-                .map_err(|e| e.to_string())?
-                .flatten();
-        }
+        refuse_cycle(conn, id, start)?;
     }
     let changed = conn
         .execute(
@@ -1730,6 +1740,64 @@ pub fn move_folder(
         return Err(FOLDER_GONE.to_owned());
     }
     read_folder(conn, id)?.ok_or_else(|| FOLDER_GONE.to_owned())
+}
+
+/// File a whole row of siblings at once: every `id` in `ids` gets `parent_id` as its parent and
+/// its **position in the slice** as its `sort_order`. `ids` is that parent's complete child list
+/// in the order the reader just dropped it into; `None` is the root, as everywhere in this
+/// module.
+///
+/// **One command doing both jobs, deliberately.** A drag re-parents and positions in one
+/// gesture, and the two as separate writes are a moment when the folder is under its new parent
+/// at its old number — a state the reader can see and nobody chose. One transaction is what
+/// makes that moment unreachable.
+///
+/// **Nothing writes `sort_order` from a position anywhere else.** [`create_folder`] hands out
+/// `max + 1` and [`move_folder`] leaves the column alone, so a folder's number was whatever it
+/// was given at birth until this landed.
+///
+/// **Every id is fenced before anything is written**, [`refuse_cycle`] rather than a second copy
+/// of the walk: an id that *is* `parent_id`, or an ancestor of it, is exactly as fatal here as
+/// it is in [`move_folder`], because it is the same `ON DELETE CASCADE` onto the same table that
+/// would then walk forever.
+///
+/// **An id that is not there is [`FOLDER_GONE`]**, which is [`move_folder`]'s answer to the same
+/// mistake and not [`reorder_categories`]' silent skip: that one is scoped to a deck and drops a
+/// category belonging to another, where a folder id is the entire subject of this write and a
+/// stale one means the tree on screen is not the tree in the database.
+///
+/// **No `kind` fence, because `deck_folders` has no `kind` column.** Only
+/// [`crate::collection_folders`] can have a folder the app owns, so only its `reorder_folders`
+/// refuses one; the asymmetry is the schema's rather than an omission here.
+///
+/// **No history and no undo step**, like [`create_folder`], [`rename_folder`] and
+/// [`move_folder`]: `deck_audit` rows are filed under a `deck_id`, and reordering folders
+/// changes no deck. [`delete_folder`] is this module's one exception and says why there.
+pub fn reorder_folders(
+    conn: &Connection,
+    parent_id: Option<i64>,
+    ids: &[i64],
+) -> Result<Vec<DeckFolderRow>, String> {
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    if let Some(start) = parent_id {
+        for id in ids {
+            refuse_cycle(&tx, *id, start)?;
+        }
+    }
+    for (order, id) in ids.iter().enumerate() {
+        let changed = tx
+            .execute(
+                "UPDATE deck_folders SET parent_id = ?2, sort_order = ?3, updated_at = unixepoch()
+                  WHERE id = ?1",
+                params![id, parent_id, order as i64],
+            )
+            .map_err(|e| e.to_string())?;
+        if changed == 0 {
+            return Err(FOLDER_GONE.to_owned());
+        }
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    list_folders(conn)
 }
 
 /// Delete a folder. **Does not delete the decks in it** — `decks.folder_id` is
@@ -2070,6 +2138,24 @@ pub async fn deck_folder_move(
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         with_write(&state, |c| move_folder(c, id, parent_id))
+    })
+    .await
+    .map_err(unfinished)?
+}
+
+/// The drag's own command — see [`reorder_folders`] for why re-parenting and positioning are one
+/// write. It answers the **whole** folder list rather than the rows it moved, like
+/// [`deck_category_reorder`]: every sibling's number changed, so a caller handed only the moved
+/// rows would have to guess at the rest.
+#[tauri::command]
+pub async fn deck_folder_reorder(
+    state: tauri::State<'_, Arc<AppState>>,
+    parent_id: Option<i64>,
+    ids: Vec<i64>,
+) -> Result<Vec<DeckFolderRow>, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        with_write(&state, |c| reorder_folders(c, parent_id, &ids))
     })
     .await
     .map_err(unfinished)?
@@ -3718,5 +3804,106 @@ mod tests {
             .query_row("SELECT count(*) FROM deck_categories", [], |r| r.get(0))
             .unwrap();
         assert_eq!(n, 0);
+    }
+
+    // -- deck_folder_reorder ------------------------------------------------------------------
+
+    /// Where a folder ended up, out of the answer [`reorder_folders`] gives — which is a fresh
+    /// [`list_folders`] over the table, so this is the stored row and not a returned copy of the
+    /// request.
+    fn placed(rows: &[DeckFolderRow], id: i64) -> (Option<i64>, i64) {
+        let row = rows
+            .iter()
+            .find(|r| r.id == id)
+            .expect("list_folders answers every folder there is");
+        (row.parent_id, row.sort_order)
+    }
+
+    /// The whole of what makes this one command rather than two: a drag that re-parents *and*
+    /// positions. Both halves are asserted for every id, so writing only the order or only the
+    /// parent fails.
+    #[test]
+    fn deck_folder_reorder_writes_the_parent_and_the_position_together() {
+        let conn = conn();
+        let aggro = create_folder(&conn, None, "Aggro").unwrap();
+        let burn = create_folder(&conn, None, "Burn").unwrap();
+        let standard = create_folder(&conn, None, "Standard").unwrap();
+        let control = create_folder(&conn, Some(standard.id), "Control").unwrap();
+
+        let rows =
+            reorder_folders(&conn, Some(standard.id), &[burn.id, control.id, aggro.id]).unwrap();
+
+        assert_eq!(placed(&rows, burn.id), (Some(standard.id), 0));
+        assert_eq!(placed(&rows, control.id), (Some(standard.id), 1));
+        assert_eq!(placed(&rows, aggro.id), (Some(standard.id), 2));
+        assert_eq!(
+            placed(&rows, standard.id),
+            (None, 2),
+            "a folder nobody named is left where it was"
+        );
+        assert_eq!(rows.len(), 4, "and the answer is the whole cabinet");
+    }
+
+    /// Root is `None` and is a destination like any other — the one that cannot cycle.
+    #[test]
+    fn deck_folder_reorder_files_to_the_root() {
+        let conn = conn();
+        let standard = create_folder(&conn, None, "Standard").unwrap();
+        let burn = create_folder(&conn, Some(standard.id), "Burn").unwrap();
+
+        let rows = reorder_folders(&conn, None, &[burn.id, standard.id]).unwrap();
+
+        assert_eq!(placed(&rows, burn.id), (None, 0));
+        assert_eq!(placed(&rows, standard.id), (None, 1));
+    }
+
+    /// `parent_id` CASCADEs onto this same table, so a loop written here is [`move_folder`]'s
+    /// disaster exactly — and the fences run before the first `UPDATE`, which is what the
+    /// untouched sibling proves.
+    #[test]
+    fn deck_folder_reorder_refuses_a_cycle_and_writes_nothing() {
+        let conn = conn();
+        let standard = create_folder(&conn, None, "Standard").unwrap();
+        let aggro = create_folder(&conn, Some(standard.id), "Aggro").unwrap();
+        let burn = create_folder(&conn, Some(aggro.id), "Burn").unwrap();
+        let eternal = create_folder(&conn, None, "Eternal").unwrap();
+
+        let err = reorder_folders(&conn, Some(burn.id), &[eternal.id, standard.id]).unwrap_err();
+
+        assert_eq!(err, FOLDER_CYCLE);
+        let unchanged = read_folder(&conn, eternal.id).unwrap().unwrap();
+        assert_eq!(
+            (unchanged.parent_id, unchanged.sort_order),
+            (None, 1),
+            "the id ahead of the offender in the list must not have been written"
+        );
+        let subject = read_folder(&conn, standard.id).unwrap().unwrap();
+        assert_eq!(subject.parent_id, None);
+    }
+
+    #[test]
+    fn deck_folder_reorder_refuses_filing_a_folder_inside_itself() {
+        let conn = conn();
+        let standard = create_folder(&conn, None, "Standard").unwrap();
+        let err = reorder_folders(&conn, Some(standard.id), &[standard.id]).unwrap_err();
+        assert_eq!(err, FOLDER_CYCLE);
+    }
+
+    /// [`move_folder`]'s answer to the same mistake, and the transaction is what makes the
+    /// already-written half of the list go back.
+    #[test]
+    fn deck_folder_reorder_refuses_an_id_that_is_gone_and_writes_nothing() {
+        let conn = conn();
+        let standard = create_folder(&conn, None, "Standard").unwrap();
+        let burn = create_folder(&conn, None, "Burn").unwrap();
+
+        let err = reorder_folders(&conn, None, &[burn.id, 999_999, standard.id]).unwrap_err();
+
+        assert_eq!(err, FOLDER_GONE);
+        let unchanged = read_folder(&conn, burn.id).unwrap().unwrap();
+        assert_eq!(
+            unchanged.sort_order, 1,
+            "the row written before the stale id must have rolled back"
+        );
     }
 }

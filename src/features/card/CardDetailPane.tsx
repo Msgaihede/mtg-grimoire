@@ -22,6 +22,8 @@ import {
 } from "lucide-react";
 import { motion, useIsPresent } from "motion/react";
 import { CardImage } from "@/components/CardImage";
+import { Dropdown } from "@/components/Dropdown/Dropdown";
+import type { DropdownOption } from "@/components/Dropdown/types";
 import { ManaText } from "@/components/ManaText";
 import { RarityGem } from "@/components/RarityGem";
 import { useContextMenu } from "@/components/menu/useContextMenu";
@@ -47,7 +49,7 @@ import {
 } from "@/lib/ipc";
 import { languageHint } from "@/lib/languages";
 import type { Marketplace, MarketplaceId } from "@/lib/marketplace";
-import { dialog, PRESS } from "@/lib/motion";
+import { dialog } from "@/lib/motion";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { useAppStore, type PaneDeckContext } from "@/lib/store";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
@@ -73,23 +75,6 @@ import {
 } from "./PrintingPreview";
 import { usePrintingGroupBy } from "./usePrintingGroupBy";
 import { cardTurn, meldPartsOf, meldResultOf, type CardTurn } from "./orientation";
-
-/**
- * A header control that is not a chip — here, the one `<select>` in this pane.
- *
- * **Copied from `DeckEditor.tsx`'s `CONTROL`**, which is not exported, because the printings
- * list's `Group by` is meant to be the *same* control as the deck editor's `Group by` two
- * inches to its left: same height, same border, same press. A lookalike built from whatever
- * classes fitted would be a second grouping control in one window that behaved almost like the
- * first. If that constant is ever exported, this should become an import of it.
- *
- * The press is {@link PRESS}, the app's one recipe; the box, and the `disabled:` clause for
- * the grouping select that greys while the specs have not answered, are this pane's own.
- */
-const CONTROL =
-  "h-8 rounded-md border border-border bg-surface px-2 text-xs text-dim " +
-  `${PRESS} ` +
-  "disabled:active:scale-100";
 
 /**
  * One control in the bar under the art — the row that changes **what the picture is showing**
@@ -1562,6 +1547,16 @@ function Legalities({ card }: { card: CardDetail }) {
  * And, when the card was opened from a deck row, the fastest way to *change* which printing a
  * deck is built from: see {@link SwapOffer} and {@link PrintingRow}.
  */
+/**
+ * `PRINTING_GROUP_BY_OPTIONS`, in the shape `<Dropdown>` draws — the four grouping modes with
+ * their own value and label and nothing else, since none of them wants a hint or an icon.
+ * Module scope because the four modes never change: rebuilding this array on every render of
+ * every open pane would cost four objects for nothing.
+ */
+const GROUP_BY_DROPDOWN_OPTIONS: readonly DropdownOption[] = PRINTING_GROUP_BY_OPTIONS.map(
+  (option) => ({ value: option.value, label: option.label }),
+);
+
 function Printings({
   card,
   items,
@@ -1653,7 +1648,7 @@ function Printings({
         >
           Printings
         </h3>
-        <select
+        <Dropdown
           // **Labelled for a screen reader alone.** Every other `Group by` in the app carries a
           // visible `<label>` beside it (the deck editor's toolbar, two inches away, is the one
           // this control is copied from) — but that toolbar has a whole window's width and this
@@ -1661,23 +1656,27 @@ function Printings({
           // out of the only other thing on the line. The name says what it groups, not just
           // "Group by", because a reader listing this pane's controls hears it next to the
           // marketplace and the deck's own grouping.
-          aria-label="Group printings by"
+          //
+          // **The two no longer need a hand-kept `CONTROL` recipe to stay the same control.**
+          // Before this pane's own private `CONTROL` copied the deck editor's class string by
+          // hand, on the argument that a lookalike built from whatever classes fitted would drift
+          // into a second grouping control that behaved almost like the first. Both sites draw
+          // this same `Dropdown` now, so "the same control" is what the shell guarantees rather
+          // than what two authors happened to agree on.
+          label="Group printings by"
+          size="sm"
           value={mode}
-          onChange={(event) => {
-            // The same predicate that narrows the stored row narrows the event, so there is no
-            // cast here and no second idea of what a mode is. A `<select>` cannot emit anything
-            // else, which is exactly why this costs nothing to be right about.
-            const chosen = event.target.value;
-            if (isPrintingGroupBy(chosen)) onModeChange(chosen);
+          options={GROUP_BY_DROPDOWN_OPTIONS}
+          onChange={(value) => {
+            // `GROUP_BY_DROPDOWN_OPTIONS` is built from nothing but `PRINTING_GROUP_BY_OPTIONS`'s
+            // own four values, so `value` here can only ever be one of them — the same guarantee
+            // a native `<select>`'s event gave for free. Kept as a real check rather than a cast
+            // because `Dropdown`'s `onChange` is typed as a bare `string` and cannot see that
+            // provenance on its own.
+            if (isPrintingGroupBy(value)) onModeChange(value);
           }}
-          className={cn(CONTROL, FOCUS, "shrink-0 text-text")}
-        >
-          {PRINTING_GROUP_BY_OPTIONS.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
+          className="shrink-0 text-text"
+        />
       </div>
       {loading && <p className="text-xs text-dim">Loading printings…</p>}
       {error && (

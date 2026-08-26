@@ -184,12 +184,6 @@ export function CardArt({
           // at. A wall with **no** virtualiser has no such bound and passes `"lazy"`.
           loading={loading}
           decoding="async"
-          // An `<img>` is draggable by default, and the browser picks the *nearest*
-          // draggable ancestor as a drag's source — so the art would start a drag of itself
-          // and the tile's own drag would never begin. Off here rather than at the caller,
-          // because the caller is handed the frame and cannot reach this. Nothing is lost:
-          // an `mtgimg:` URL means nothing outside this window.
-          draggable={false}
           onError={image.onError}
           className={cn(
             "size-full object-cover",

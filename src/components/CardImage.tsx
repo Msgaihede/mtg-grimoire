@@ -25,15 +25,29 @@ import type { ImgHTMLAttributes } from "react";
  * looking at. `PrintingPreview` reached the same answer independently by keying its whole
  * `Preview` on the printing; this is that, for the frames that cannot remount themselves.
  *
+ * **The second rule it carries: the picture never starts a drag of itself.** An `<img>` is
+ * draggable by default and the browser picks the *nearest* draggable ancestor as a drag's
+ * source, so a frame inside a draggable tile steals the gesture and the tile's own drag never
+ * begins. `draggable={false}` is written before the spread, so it is a default a caller can
+ * still override and not a rule imposed on one. Nothing is lost: an `mtgimg:` URL means
+ * nothing outside this window.
+ *
+ * **Here rather than at the seven call sites, because it went missing at two of them.**
+ * `CardArt` and `CardStack` each passed it by hand with a copy of that paragraph; `DeckTile`'s
+ * cover and `CardDetailPane`'s printing rows never did — so a deck tile could be dragged by
+ * its name and not by its picture, which is what a reader reports as "drag and drop is
+ * broken". A rule every caller has to remember is a rule some caller forgets, and the failure
+ * is invisible: a dead drag looks exactly like a drag the reader aimed badly.
+ *
  * What is deliberately *not* here is anything else. No retry (that is `useImageRetry`, whose
  * `src` this takes), no frame, no fallback, no aspect ratio — the five surfaces that draw
- * card art disagree about all of those, and agree only about this.
+ * card art disagree about all of those, and agree only about these two.
  */
 export function CardImage({ src, alt, ...rest }: CardImageProps) {
   // `key` is not spread with the rest and cannot be: React 19 warns about a `key` inside a
   // spread props object and drops it, which would silently restore the bug this exists to
   // prevent. It is written out, once, here.
-  return <img key={src} src={src} alt={alt} {...rest} />;
+  return <img key={src} draggable={false} src={src} alt={alt} {...rest} />;
 }
 
 export interface CardImageProps extends Omit<ImgHTMLAttributes<HTMLImageElement>, "src" | "alt"> {

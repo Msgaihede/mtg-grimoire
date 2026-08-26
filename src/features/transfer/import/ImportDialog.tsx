@@ -34,7 +34,7 @@ export interface ImportDialogProps {
    * `Subtitle` of its own.
    *
    * **Never this file's own words, because saying it needs facts the shell must not have**:
-   * `Into Removal · Burn · Live` is a pile name, a deck name and a variant. And never *only* the
+   * `Into Removal · Burn · Actual` is a pile name, a deck name and a variant. And never *only* the
    * host's either: the header is drawn on both steps while the destination radios are only on
    * the first, so a host prop cannot follow the reader's choice. A destination that has
    * something specific to say says it through `ImportDestination.Subtitle`; this is what is left

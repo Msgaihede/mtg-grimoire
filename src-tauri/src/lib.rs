@@ -13,6 +13,7 @@ pub mod deck_undo;
 pub mod errors;
 pub mod export;
 pub mod filters;
+pub mod flatten;
 pub mod images;
 pub mod import;
 pub mod index;
@@ -331,6 +332,7 @@ pub fn run() {
             collection_folders::collection_folder_create,
             collection_folders::collection_folder_rename,
             collection_folders::collection_folder_move,
+            collection_folders::collection_folder_reorder,
             collection_folders::collection_folder_delete,
             collection_folders::collection_set_folder,
             collection_folders::collection_folder_summary,
@@ -349,6 +351,7 @@ pub fn run() {
             wishlist_folders::wishlist_folder_create,
             wishlist_folders::wishlist_folder_rename,
             wishlist_folders::wishlist_folder_move,
+            wishlist_folders::wishlist_folder_reorder,
             wishlist_folders::wishlist_folder_delete,
             wishlist_folders::wishlist_set_folder,
             wishlist_folders::wishlist_folder_summary,
@@ -392,6 +395,7 @@ pub fn run() {
             deck_meta::deck_folder_create,
             deck_meta::deck_folder_rename,
             deck_meta::deck_folder_move,
+            deck_meta::deck_folder_reorder,
             deck_meta::deck_folder_delete,
             deck_audit::deck_audit_list,
             deck_undo::deck_undo_state,
@@ -409,6 +413,8 @@ pub fn run() {
             nav::set_nav_collapsed,
             listview::list_view,
             listview::set_list_view,
+            flatten::flatten_state,
+            flatten::set_flatten_state,
             marketplace_feed::marketplace_feed_refresh,
             marketplace_feed::marketplace_feed_status,
             tags::oracle::oracle_tags_refresh,

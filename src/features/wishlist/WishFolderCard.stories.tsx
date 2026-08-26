@@ -4,6 +4,7 @@ import { expect, fn, userEvent, waitFor, within } from "storybook/test";
 import { useContextMenu } from "@/components/menu/useContextMenu";
 import type { MenuItem } from "@/components/menu/types";
 import { DROP_MARK_ROOM, DROP_OVER, DROP_RING } from "@/lib/dropMarks";
+import { folderDraggable, type FolderDrag } from "@/lib/folderDrag";
 import type { FolderNode } from "@/lib/folderTree";
 import type { WishlistFolder } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
@@ -98,6 +99,13 @@ const meta = {
     // filed in it. Stated once here rather than per story, because it is the rule rather than a
     // property of one tile; only {@link DropTarget} ever puts a wish in the air to ask it.
     canDrop: (drag: WishDrag): boolean => drag.folderId !== EXPENSIVE.id,
+    // The page's rule for the *other* drag, cut down to the one drawer this wall draws: a folder
+    // takes a sibling at any of the three landings, and refuses the folder that **is** it — which
+    // is `reorderedLevel`'s first line said in the workbench's terms. The rest of what the page
+    // checks (the cycle, the order that would not change) needs a cabinet, and a cabinet is
+    // `WishlistPage`'s story rather than this one's.
+    canDropFolder: (drag: FolderDrag): boolean => drag.folderId !== EXPENSIVE.id,
+    onDropFolder: fn(),
     act: fn(),
   },
   decorators: [
@@ -389,4 +397,67 @@ export const DropTarget: Story = {
     await waitFor(() => expect(marked(item, DROP_RING)).toBe(false), { timeout: DRAG_WAIT });
     await expect(args.onDropWish).not.toHaveBeenCalled();
   },
+};
+
+/* ------------------------------------------------------ the other drag ------- */
+
+/** A sibling drawer, in the air — `folderDraggable` rather than a whole second card, so this wall
+ *  keeps one drop target and the story stays about what happens to the card under the pointer. */
+function FolderSource({ drag }: { drag: FolderDrag }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    return folderDraggable({ element, folder: () => drag });
+  }, [drag]);
+  return (
+    <div
+      ref={ref}
+      className="inline-block w-max cursor-grab rounded-md border border-dashed border-border bg-surface px-3 py-2 text-sm"
+    >
+      {drag.name}
+    </div>
+  );
+}
+
+/** The drawer the story below carries. */
+const OTHER_FOLDER: FolderDrag = {
+  folderId: 8,
+  name: "Someday",
+  parentId: null,
+  scope: "wishlist",
+};
+
+/**
+ * **A folder card is a drag source and a drop target for _folders_ as well as for wishes**, and
+ * this is the story to drag in rather than to read: the three landings only exist under a pointer.
+ *
+ * Drop `Someday` on the **middle** of the drawer and it goes *inside* it — the same gold wash a
+ * wish gets, because only one thing is ever in the air and both mean "what you are holding lands in
+ * here". Drop it near either **end** and a 2px line appears on that side: it lands *beside* the
+ * drawer, and the line is honest because a folder has a `sortOrder` a cabinet can keep. The outer
+ * quarter of each end is the reorder zone and the middle half is the nest — a quarter is the only
+ * split at which a reorder and a nest are the same size of target, and `EDGE_ZONE` proves it.
+ *
+ * Two things are deliberately **not** marked. `inside` draws no line: it is a folder taking the
+ * drag rather than a position between two of them, and the app already has a mark for that. And a
+ * landing the page refuses draws nothing at all — no line, no wash — because a mark leading to a
+ * write that never happens is worse than no mark.
+ *
+ * The `⋯` is `data-no-drag`, so a press there opens the menu instead of picking the drawer up. That
+ * guard is not decoration: Chromium starts a drag from the nearest draggable *ancestor* of whatever
+ * was pressed.
+ *
+ * **The card carries two drop targets on two boxes**, which is a fact about the library rather than
+ * a preference — `@atlaskit/pragmatic-drag-and-drop` keeps one element drop target per element and
+ * a second registration silently replaces the first. The wish's is the `<li>`; the folder's is an
+ * inner wrapper that covers every pixel of the card, and a pointer finds both by walking up.
+ */
+export const FolderTarget: Story = {
+  render: (args) => (
+    <div className="flex w-[32rem] flex-col gap-4">
+      <Wall {...args} />
+      <FolderSource drag={OTHER_FOLDER} />
+    </div>
+  ),
 };

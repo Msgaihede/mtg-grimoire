@@ -31,19 +31,21 @@
  * `PassReport`                                   — `src-tauri/src/mirror/run.rs`
  * `TagTerms`                                     — `src-tauri/src/filters.rs`
  *
- * **Six settings carry no struct at all.** Each is one `app_meta` row: two answered as a bare
+ * **Seven settings carry no struct at all.** Each is one `app_meta` row: two answered as a bare
  * string — `getMarketplace`/`setMarketplace` (`src-tauri/src/marketplace.rs`) and
- * `printingGroupBy`/`setPrintingGroupBy` (`src-tauri/src/card.rs`) — two as a bare map,
- * `cardZoom`/`setCardZoom` (`src-tauri/src/zoom.rs`) and `listView`/`setListView`
- * (`src-tauri/src/listview.rs`), and two as a
+ * `printingGroupBy`/`setPrintingGroupBy` (`src-tauri/src/card.rs`) — three as a bare map,
+ * `cardZoom`/`setCardZoom` (`src-tauri/src/zoom.rs`), `listView`/`setListView`
+ * (`src-tauri/src/listview.rs`) and `flattenState`/`setFlattenState`
+ * (`src-tauri/src/flatten.rs`), and two as a
  * bare `boolean`: `navCollapsed`/`setNavCollapsed` (`src-tauri/src/nav.rs`) and
- * `deckSearchOpen`/`setDeckSearchOpen` (`src-tauri/src/deck.rs`). All six are
+ * `deckSearchOpen`/`setDeckSearchOpen` (`src-tauri/src/deck.rs`). All seven are
  * the shape a stored preference has to have: the read falls back on its default for a row that
  * is missing *or* holds a value this build does not recognise, and only the *write* refuses.
  *
- * Four of them are therefore typed loosely here rather than as their unions: the narrowing
+ * Five of them are therefore typed loosely here rather than as their unions: the narrowing
  * belongs to the module that owns the vocabulary (`@/lib/marketplace`,
- * `@/features/card/printings`, `@/lib/cardZoom`, `@/lib/store`), and a row a newer build wrote
+ * `@/features/card/printings`, `@/lib/cardZoom`, `@/lib/store` for both of its two rows), and a
+ * row a newer build wrote
  * must reach this side as what it is. **The two booleans are the ones with no narrowing to do**, and that is
  * the same argument arriving at nothing rather than an exception to it: a boolean has no
  * vocabulary for a later build to have widened, so there is no third state a row could come back
@@ -53,10 +55,19 @@
  * side to decide. Both store `"1"`/`"0"` and read anything else as that default, so a hand-edit
  * or a spelling a future build invents is already collapsed before it reaches the wire.
  *
- * The zoom row and the list-layout row are the two of the six whose *shape* is a map, and the
- * difference is worth a sentence: neither has a single default to fall back on, because there are
- * seven walls and four lists and each one has been touched or not. So the backend answers only
+ * The zoom row, the list-layout row and the flatten row are the three of the seven whose *shape*
+ * is a map, and the
+ * difference is worth a sentence: none has a single default to fall back on, because there are
+ * seven walls, four lists and two cabinets and each one has been touched or not. So the backend
+ * answers only
  * what it has, and a section it says nothing about keeps the default the store was built with.
+ * **The flatten row is the one where the keys are a vocabulary and the values are not** — which
+ * is the two arguments above meeting in one row rather than a third kind of setting: *which*
+ * pages file cards is `@/lib/store`'s to say, while a `bool` has no junk state for a later build
+ * to have widened. So `isFlattenSection` narrows the key, and the only thing `hydrateFlatten`
+ * asks of the value is that it really is a boolean — which is a check on the *wire*, not on a
+ * vocabulary: this file's `boolean` is a claim about what the far end sends, and a row that has
+ * been hand-edited is exactly where a claim stops being true.
  *
  * **Every price field on this page is singular, and the marketplace is how it was chosen.**
  * A query carries `marketplace`; what it answers with carries one `price` / `unitPrice` /
@@ -922,14 +933,39 @@ export interface CollectionQuery extends CardFilters {
   needsReview?: boolean;
   /**
    * Which folder the list is being read at. Absent — and `null`, which deserializes to the same
-   * `Option::None` — is **every folder**, which is what the collection has always answered.
+   * `Option::None` — asks nothing about filing; {@link rootOnly} is what narrows to the root.
    *
-   * **That is not {@link WishlistQuery.folderId}'s meaning and the difference is deliberate**:
-   * there `null` is the root list and {@link WishlistQuery.flatten} is the third state, because
-   * the wishlist page navigates *into* a folder. Nothing here needs "the root and nothing else"
-   * yet, so the field carries two states rather than inventing a sentinel for a third.
+   * Three states between the two fields, and this one wins wherever it names a folder:
+   * - `folderId: n` — that folder's **direct** members. Never what is filed in the folders
+   *   inside it, which is `collection_folders::folder_summary`'s rule. A `rootOnly` riding
+   *   along beside it is ignored rather than intersected, so a stale flag cannot empty the
+   *   drawer the reader opened.
+   * - `folderId` absent, `rootOnly: true` — `folder_id IS NULL`, the rows filed nowhere and
+   *   only those.
+   * - `folderId` absent, `rootOnly` absent or `false` — **every folder there is**, which is
+   *   what this query has always answered and what every caller written before folders existed
+   *   still asks by saying nothing: the plain-text mirror, the export sweep's "everything" arm,
+   *   the deck builder's collection panel and the importer's preview.
+   *
+   * **The same three states {@link WishlistQuery.flatten} carries, with the polarity reversed**,
+   * and the reversal is history rather than taste: there `null` is the root and `flatten` widens,
+   * because that query navigated into a folder from the start. Here the widest answer is what an
+   * absent field has always meant, so it is the *narrowing* that needed a second field — an
+   * unasked question keeps today's answer, and a caller nobody updated cannot silently lose rows.
    */
   folderId?: number | null;
+  /**
+   * `true` narrows an absent {@link folderId} to the root — the rows nobody has filed — where
+   * absent otherwise means every folder. Default `false`; ignored entirely when `folderId`
+   * names a folder.
+   *
+   * It exists for {@link WishlistQuery.flatten}'s reason read from the other end. A nullable
+   * `folderId` cannot carry three states on its own, and the value that would have to mean
+   * "the root and nothing else" is already spent: `null` and an omission are one
+   * `Option::None` on the wire. So the third state is a field rather than a sentinel — and it
+   * is the *narrow* one here because the wide one is what every existing caller already gets.
+   */
+  rootOnly?: boolean;
   /**
    * Whether copies a deck has taken off the desk are part of the answer.
    *
@@ -1732,6 +1768,22 @@ export interface MoveOutcome {
 }
 
 /**
+ * One card the plan asks for — {@link ipc.deckTheorySlots}' row, and the whole input to the deck
+ * editor's theory tick.
+ *
+ * The hand-written mirror of `deck_theory::TheorySlot`. Two fields and no third: every column
+ * that is *not* here (the name, the set, the price, the pile) is one the mark would have to be
+ * told to ignore.
+ */
+export interface TheorySlot {
+  /** `deck_theory.rs`'s own `group_key` — `` `${cardId}|${finish ?? ""}` ``.
+   *  `features/decks/theoryMatch.ts` spells the same string for a **live** row and looks it up. */
+  key: string;
+  /** How many copies the plan asks for, summed across every active pile it filed them in. */
+  quantity: number;
+}
+
+/**
  * One card the **theory** list wants more of than the live list has — a line of the plan's
  * shopping list.
  *
@@ -1753,6 +1805,22 @@ export interface MoveOutcome {
  *
  * **So neither `cardId` nor `finish` is unique on its own**: a list is keyed by the pair.
  */
+/**
+ * One card the plan asks for — {@link ipc.deckTheorySlots}' row, and the whole input to the deck
+ * editor's theory tick.
+ *
+ * The Rust mirror of `deck_theory::TheorySlot`. Two fields and no third: every column that is
+ * *not* here (the name, the set, the price, the pile) is one the mark would have to be told to
+ * ignore.
+ */
+export interface TheorySlot {
+  /** `deck_theory.rs`'s own `group_key` — `` `${cardId}|${finish ?? ""}` ``.
+   *  `features/decks/theoryMatch.ts` spells the same string for a **live** row and looks it up. */
+  key: string;
+  /** How many copies the plan asks for, summed across every active pile it filed them in. */
+  quantity: number;
+}
+
 export interface TheoryDiffRow {
   /** The printing **the theory row names**, which is the printing the reader would be buying.
    *  When the same card is filed in two theory categories this is the first row's category.
@@ -3678,6 +3746,43 @@ export const ipc = {
   collectionFolderMove: (id: number, parentId: number | null) =>
     invoke<CollectionFolder>("collection_folder_move", { id, parentId }),
   /**
+   * Place a whole level. **`ids` is the full new list of `parentId`'s children, in the order they
+   * are to sit in** — this is the first of the three folder reorders and the one the other two
+   * point at, so the contract is written out once, here.
+   *
+   * Two things follow from that sentence, and neither is legible from the name:
+   *
+   * * **It is the order, not a move.** `sort_order` is written from each id's *position*, so the
+   *   caller sends every child of that level — {@link ipc.deckCategoryReorder}'s rule, ported.
+   *   There is no way to say "put folder 7 third" without also saying what the rest of the level
+   *   is, because position is the only thing this command reads.
+   * * **`parent_id` is written from `parentId` in the same transaction.** An id in the list that
+   *   was living somewhere else is re-parented *and* placed by the one call, which is what a drag
+   *   actually is: a folder lifted out of one drawer and dropped third inside another says both
+   *   things at once. Spelling it as {@link ipc.collectionFolderMove} followed by a reorder would
+   *   be two transactions with a state between them a reader can see — the folder at the end of
+   *   its new level, or, if the second call never lands, filed somewhere they did not drop it.
+   *
+   * Writing `parent_id` is what makes {@link ipc.collectionFolderMove}'s cycle refusal this
+   * command's too, and for that comment's reason: `collection_folders.parent_id` is
+   * `ON DELETE CASCADE` **on itself**.
+   *
+   * **Every folder named is fenced to the reader's own, on both sides** — the destination and
+   * every id — so a deck's group or `Recently removed` in `ids` is refused in words. This is the
+   * one of the three cabinets with that fence, because it is the only one whose folders can
+   * belong to the app ({@link CollectionFolder.kind}); `deck_folders` and `wishlist_folders`
+   * carry no such column, so their reorders have nothing to refuse.
+   *
+   * Answers the **whole cabinet**, flat — `collection_folders::reorder_folders` ends in the same
+   * `list_folders` {@link ipc.collectionFolderList} calls, not in a read of the level it just
+   * wrote. Worth knowing rather than assuming from the argument: a re-parent moves a folder
+   * *between* levels, so an answer scoped to `parentId` could not describe the level the folder
+   * left. The three hooks still settle by invalidating the folder list rather than seeding the
+   * cache from this, which is the shape every other folder write here has.
+   */
+  collectionFolderReorder: (parentId: number | null, ids: number[]) =>
+    invoke<CollectionFolder[]>("collection_folder_reorder", { parentId, ids }),
+  /**
    * Delete a folder. **Its cards are not deleted** — they surface at the root, filed nowhere and
    * otherwise exactly as they were, and the backend re-files them by hand before the row goes so
    * two copies of one printing landing at the root merge instead of colliding on the grain.
@@ -3818,6 +3923,15 @@ export const ipc = {
    */
   wishlistFolderMove: (id: number, parentId: number | null) =>
     invoke<WishlistFolder>("wishlist_folder_move", { id, parentId }),
+  /**
+   * Place a whole level — **{@link ipc.collectionFolderReorder}'s contract verbatim, and read that
+   * one before calling this**: `ids` is the *full* new list of `parentId`'s children in order, and
+   * one transaction writes both `sort_order` (from position) and `parent_id` (from `parentId`), so
+   * a drag that re-parents *and* places is never seen half done. Sending only the folder that
+   * moved is the mistake the name invites.
+   */
+  wishlistFolderReorder: (parentId: number | null, ids: number[]) =>
+    invoke<WishlistFolder[]>("wishlist_folder_reorder", { parentId, ids }),
   /**
    * Delete a folder. **Its wishes are not deleted** — `wishlist_entries.folder_id` is
    * `ON DELETE SET NULL`, so they surface at the root, filed nowhere and otherwise exactly as
@@ -4096,6 +4210,15 @@ export const ipc = {
   deckFolderMove: (id: number, parentId: number | null) =>
     invoke<DeckFolder>("deck_folder_move", { id, parentId }),
   /**
+   * Place a whole level — **{@link ipc.collectionFolderReorder}'s contract verbatim, and read that
+   * one before calling this**: `ids` is the *full* new list of `parentId`'s children in order, and
+   * one transaction writes both `sort_order` (from position) and `parent_id` (from `parentId`), so
+   * a drag that re-parents *and* places is never seen half done. Sending only the folder that
+   * moved is the mistake the name invites.
+   */
+  deckFolderReorder: (parentId: number | null, ids: number[]) =>
+    invoke<DeckFolder[]>("deck_folder_reorder", { parentId, ids }),
+  /**
    * Delete a folder. **Its decks are not deleted** — `decks.folder_id` is `ON DELETE SET
    * NULL`, so they surface at the root, filed nowhere and otherwise exactly as they were.
    * Sub-folders *do* go with it. An id that resolves to nothing is a success.
@@ -4146,9 +4269,9 @@ export const ipc = {
   deckTheoryDiff: (deckId: number, marketplace: MarketplaceId) =>
     invoke<TheoryDiffRow[]>("deck_theory_diff", { deckId, marketplace }),
   /**
-   * Every card the plan asks for, as `deck_theory.rs`'s own `group_key` strings —
-   * `` `${cardId}|${finish ?? ""}` ``, one per theory row, in no particular order and with
-   * duplicates left in for the caller's set to fold.
+   * Every card the plan asks for, as a {@link TheorySlot} each — `deck_theory.rs`'s own
+   * `group_key` string and how many copies the plan wants, in no particular order and **one row
+   * per planned card** (the piles are summed in the SQL).
    *
    * The deck editor's theory tick, and **the one question about the pair that
    * {@link ipc.deckTheoryDiff} cannot answer**: a card the reader has fully acquired is absent
@@ -4157,12 +4280,12 @@ export const ipc = {
    *
    * **Not a `deckGet` of the other variant**, deliberately: that read prices every row and rolls
    * up allocations, and `DeckEditor.test.tsx` pins that nothing may call it for the list the
-   * reader is not looking at. This is two columns of one indexed scan and no marketplace.
+   * reader is not looking at. This is three columns of one indexed scan and no marketplace.
    *
    * Inactive categories are excluded, which is `deck_theory_diff`'s rule and the same reasoning:
    * a card parked in the theory Maybeboard is not something the reader has decided to play.
    */
-  deckTheorySlots: (deckId: number) => invoke<string[]>("deck_theory_slots", { deckId }),
+  deckTheorySlots: (deckId: number) => invoke<TheorySlot[]>("deck_theory_slots", { deckId }),
   /**
    * Copy the live list into the theory one. Answers how many **rows** were written.
    *
@@ -4619,6 +4742,41 @@ export const ipc = {
    */
   setListView: (section: string, view: string) =>
     invoke<void>("set_list_view", { section, view }),
+  /**
+   * Whether each page with a cabinet was last left ignoring its filing, as section name →
+   * flattened.
+   *
+   * The **seventh** `app_meta` setting and the third whose shape is a map — see this file's
+   * header, and {@link listView} beside it, whose contract this copies whole. **A section is
+   * absent rather than defaulted**: which pages file cards is this side's (`@/lib/store`), and
+   * the two defaults differ (`collectionFlattened` opens `true`, `wishlistFlattened` `false`), so
+   * a missing entry means the reader has never touched that switch and the backend does not
+   * invent an answer it does not own. **Infallible by signature** — a whole unreadable row
+   * answers `{}`, which is a complete, drawable app.
+   *
+   * `Record<string, boolean>` and not `Record<FlattenSection, boolean>`, for {@link listView}'s
+   * reason on the key half only: the keys are whatever some build of this app wrote, so
+   * `isFlattenSection` narrows them in `@/lib/store`. The **values** have no vocabulary to
+   * narrow, which is why the type says `boolean` — and `hydrateFlatten` still checks it, because
+   * that word is a promise about the far end rather than a fact about the row.
+   */
+  flattenState: () => invoke<Record<string, boolean>>("flatten_state"),
+  /**
+   * Remember one page's switch, leaving the other entry in the row alone.
+   *
+   * Two arguments where most of its neighbours take one, and Tauri matches by name. Rejects a
+   * blank section and nothing else: a `bool` off the IPC boundary has no junk state for a
+   * validation to catch, so unlike {@link setListView} there is no word to refuse — the
+   * asymmetry {@link setNavCollapsed} spells out, on a row whose *keys* still belong to this
+   * side.
+   *
+   * Answers `collection::BUSY` under a running sync, like every other write, and the caller
+   * deliberately does not put the switch back when it does — {@link setNavCollapsed}'s trade, for
+   * its reason: a refusal costs the reader nothing they can see this session and only the next
+   * launch's starting state for that page.
+   */
+  setFlattenState: (section: string, flattened: boolean) =>
+    invoke<void>("set_flatten_state", { section, flattened }),
   /**
    * Whether the deck editor's card search column was last left open.
    *

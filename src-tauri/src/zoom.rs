@@ -21,14 +21,15 @@
 //!
 //! **A write preserves entries this build does not understand**, which is the one thing a
 //! key/value *object* has to get right that a bare string does not. The row is read back as a raw
-//! `serde_json::Map` and only the section being written is touched, so a build that learns an
-//! eighth wall — or widens the ladder past 2× — does not have its row quietly emptied by an older
-//! build pointed at the same `mtg.db`. Validation applies to what *this* call writes, never to
-//! what it is writing beside.
+//! `serde_json::Map` and only the section being written is touched, so a build that learns a wall
+//! this one has never drawn — or widens the ladder past 2× — does not have its row quietly emptied
+//! by an older build pointed at the same `mtg.db`. Validation applies to what *this* call writes,
+//! never to what it is writing beside. (It read "an eighth wall" until 2026-08-26, when the decks
+//! gallery became one; a hypothetical spelled as a number stops being hypothetical.)
 //!
 //! One row rather than one key per section, because a wall's zoom is never read alone: the
-//! frontend seeds every section in a single pass at launch, so seven keys would be seven reads of
-//! one table to answer one question. The cost is that a write is a read-modify-write, which in a
+//! frontend seeds every section in a single pass at launch, so a key each would be a read of that
+//! table each, to answer one question. The cost is that a write is a read-modify-write, which in a
 //! single-window app already holding the write lock is one extra `SELECT`.
 //!
 //! No migration: `app_meta` is schema v6's key/value table, and this is a key in it.
@@ -95,7 +96,7 @@ fn stored_object(conn: &Connection) -> Map<String, Value> {
 /// nobody has zoomed, and it is what a fresh install returns.
 ///
 /// Entries are dropped one at a time rather than the row as a whole. A single hand-edited value
-/// costs that section its memory and leaves the other six intact, which is the difference between
+/// costs that section its memory and leaves its neighbours intact, which is the difference between
 /// a reader noticing one wall opened at 100% and a reader noticing that all of them did.
 pub fn stored(conn: &Connection) -> BTreeMap<String, f64> {
     stored_object(conn)
@@ -123,8 +124,9 @@ pub fn store(conn: &Connection, section: &str, zoom: f64) -> Result<(), String> 
         ));
     }
     let mut zooms = stored_object(conn);
-    // Read-modify-write over the *raw* map, so an entry a newer build wrote — an eighth wall, a
-    // multiplier past this build's ceiling — survives a write made beside it. See the module doc.
+    // Read-modify-write over the *raw* map, so an entry a newer build wrote — a wall this one has
+    // never drawn, a multiplier past this build's ceiling — survives a write made beside it. See
+    // the module doc.
     zooms.insert(section.to_owned(), Value::from(zoom));
     let json = serde_json::to_string(&Value::Object(zooms))
         .map_err(|e| format!("could not save the card zoom: {e}"))?;
@@ -212,8 +214,8 @@ mod tests {
         }
     }
 
-    /// A database nobody has zoomed answers with nothing at all — deliberately not with seven
-    /// entries at 1.0, which would be this crate inventing a default the frontend already owns.
+    /// A database nobody has zoomed answers with nothing at all — deliberately not with an entry
+    /// per wall at 1.0, which would be this crate inventing a default the frontend already owns.
     #[test]
     fn a_missing_row_reads_as_nothing_stored() {
         let conn = db();
@@ -221,7 +223,7 @@ mod tests {
         assert!(stored(&conn).is_empty());
     }
 
-    /// Seven walls, seven independent memories. The whole reason the value is an object rather
+    /// One memory per wall, independent of every other. The whole reason the value is an object rather
     /// than one number: zooming the deck editor's docked search column must not resize the deck
     /// laid out beside it, and that has to survive a restart too.
     #[test]
@@ -233,7 +235,11 @@ mod tests {
         let zooms = stored(&conn);
         assert_eq!(zooms.get("deckSearch"), Some(&1.5));
         assert_eq!(zooms.get("deck"), Some(&0.75));
-        assert_eq!(zooms.len(), 2, "nothing was invented for the other five");
+        assert_eq!(
+            zooms.len(),
+            2,
+            "nothing was invented for the walls nobody zoomed"
+        );
     }
 
     /// A row this build cannot make sense of is a fact about storage, not a reason to refuse to
@@ -307,25 +313,31 @@ mod tests {
     }
 
     /// **A newer build's row survives an older build's write**, which is the one thing an object
-    /// row has to get right that a bare string does not: an eighth wall and a multiplier past
-    /// this build's ceiling are both still there after this build writes beside them.
+    /// row has to get right that a bare string does not: a wall this build has never drawn and a
+    /// multiplier past its ceiling are both still there after it writes beside them.
+    ///
+    /// The fixture's key was `eighthWall` until 2026-08-26, when the decks gallery became the
+    /// eighth and the name started reading as a section somebody had forgotten to add.
     #[test]
     fn a_write_preserves_entries_this_build_cannot_use() {
         let conn = db();
-        crate::update::set_app_meta(&conn, K_CARD_ZOOM, r#"{"eighthWall": 1.5, "deck": 4}"#)
+        crate::update::set_app_meta(&conn, K_CARD_ZOOM, r#"{"aWallFromLater": 1.5, "deck": 4}"#)
             .unwrap();
 
         store(&conn, "search", 1.1).unwrap();
 
         let raw = crate::update::get_app_meta(&conn, K_CARD_ZOOM).unwrap();
         let row: Value = serde_json::from_str(&raw).unwrap();
-        assert_eq!(row["eighthWall"], 1.5, "a wall this build has never drawn");
+        assert_eq!(
+            row["aWallFromLater"], 1.5,
+            "a wall this build has never drawn"
+        );
         assert_eq!(row["deck"], 4, "a multiplier past this build's ceiling");
         assert_eq!(row["search"], 1.1);
         // And this build still reads only what it can use out of it.
         let zooms = stored(&conn);
         assert_eq!(zooms.get("search"), Some(&1.1));
-        assert_eq!(zooms.get("eighthWall"), Some(&1.5));
+        assert_eq!(zooms.get("aWallFromLater"), Some(&1.5));
         assert_eq!(zooms.get("deck"), None, "4× is past the bound");
     }
 

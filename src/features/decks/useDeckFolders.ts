@@ -64,6 +64,44 @@ export function useDeckFolders() {
   });
 
   /**
+   * **`["decks", "folders"]` alone — the one write in this hook that does not take the whole
+   * root**, and the narrowing is the point rather than an oversight.
+   *
+   * The four writes above each reach *decks* this hook never mentions: a delete `SET NULL`s
+   * `decks.folder_id`, and every one of them can be the refusal that means a node on screen is
+   * gone. A reorder reaches none. It writes `deck_folders.sort_order` and `deck_folders.parent_id`
+   * and nothing else — **no deck's `folder_id` moves**, because the folder a deck is filed in is
+   * the same folder afterwards; it is merely sitting somewhere else. So `["decks", "list"]`,
+   * `["decks", "categories", …]`, the audit, the undo cursor and the rest are all still true, and
+   * invalidating them would refetch the gallery and every open deck to redraw a row of folder
+   * cards.
+   *
+   * **The re-parent half does not widen it either.** What a re-parent changes is the *tree*, and
+   * the tree is built in TypeScript from these flat rows — so re-reading the list is exactly what
+   * makes a caller's derived shape true again. It is `["decks"]`'s prefix, so this is the same
+   * `invalidateQueries` call one rung down rather than a different mechanism.
+   *
+   * On error as well as on success, `writes`' rule: a refusal here is a busy database or an id in
+   * `ids` another surface has already deleted, and the second must not leave a tree drawing a node
+   * that is gone.
+   */
+  const settleOrder = () => void queryClient.invalidateQueries({ queryKey: ["decks", "folders"] });
+
+  /**
+   * Place a whole level: `ids` is **every** child of `parentId`, in the order they are to sit in.
+   *
+   * `sortOrder` is written from position and `parentId` from the argument, in one transaction — so
+   * one gesture both re-parents and places, and a reader never sees half of it. Sending only the
+   * folder that moved is the mistake the name invites; see `ipc.deckFolderReorder`.
+   */
+  const reorder = useMutation({
+    mutationFn: ({ parentId, ids }: { parentId: number | null; ids: number[] }) =>
+      ipc.deckFolderReorder(parentId, ids),
+    onSuccess: settleOrder,
+    onError: settleOrder,
+  });
+
+  /**
    * Delete a folder. Named `remove` for `useDecks`' reason — `delete` is a reserved word.
    *
    * **Its decks are not deleted**, and a confirmation must say so: they surface at the root,
@@ -83,6 +121,7 @@ export function useDeckFolders() {
     create,
     rename,
     move,
+    reorder,
     remove,
   };
 }

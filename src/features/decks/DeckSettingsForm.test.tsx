@@ -1,8 +1,9 @@
 import { useState } from "react";
-import { render, screen, within } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import type { DeckCategory, DeckFolder } from "@/lib/ipc";
+import { openDropdown, pickOption } from "@/test-dropdown";
 import { AUTO_CATEGORY } from "./autoCategory";
 import type { DeckCoverPickerProps } from "./DeckCoverPicker";
 import {
@@ -150,11 +151,11 @@ describe("DeckSettingsForm", () => {
     form();
 
     expect(screen.getByLabelText("Name")).toHaveValue("Burn");
-    expect(screen.getByLabelText("Format")).toHaveValue("modern");
+    expect(screen.getByRole("button", { name: "Format" })).toHaveTextContent("Modern");
     expect(screen.getByLabelText("Description")).toHaveValue("Twenty damage, quickly.");
     expect(screen.getByLabelText("Notes")).toHaveValue("Sideboard plan lives in the Maybeboard.");
     expect(screen.getByRole("switch", { name: "Theory deck Disabled" })).toBeInTheDocument();
-    expect(screen.getByLabelText("Folder")).toHaveValue("");
+    expect(screen.getByRole("button", { name: "Folder" })).toHaveTextContent("Top level");
   });
 
   /** The picker is handed its props whole; this form reads none of them and changes none. */
@@ -287,12 +288,12 @@ describe("DeckSettingsForm", () => {
     });
   });
 
-  /** A select settles in one act, so there is nothing a second callback could add — and it
+  /** A dropdown settles in one act, so there is nothing a second callback could add — and it
    *  sends the key rather than the display name. */
   it("fires only onChange for the format, by key", async () => {
     const { onChange, onCommit } = form();
 
-    await userEvent.selectOptions(screen.getByLabelText("Format"), "commander");
+    await pickOption(userEvent.setup(), "Format", "Commander");
 
     expect(onChange).toHaveBeenCalledWith({ formatKey: "commander" });
     expect(onCommit).not.toHaveBeenCalled();
@@ -310,7 +311,7 @@ describe("DeckSettingsForm", () => {
   it("fires only onChange for the game, and moves no format with it", async () => {
     const { onChange, onCommit } = form();
 
-    await userEvent.selectOptions(screen.getByLabelText("Game"), "arena");
+    await pickOption(userEvent.setup(), "Game", "Arena");
 
     expect(onChange).toHaveBeenCalledWith({ gameKey: "arena" });
     expect(onCommit).not.toHaveBeenCalled();
@@ -318,50 +319,47 @@ describe("DeckSettingsForm", () => {
 
   /** Four fixed rows, `Any` first — a ladder rather than an alphabet, and the one option list
    *  in this form that is not the host's to order. */
-  it("offers the four games, Any first", () => {
+  it("offers the four games, Any first", async () => {
     form();
 
-    const game = screen.getByLabelText("Game");
-    expect(game).toHaveValue("any");
-    expect(
-      within(game)
-        .getAllByRole("option")
-        .map((o) => o.textContent),
-    ).toEqual(["Any", "Paper", "Arena", "MTGO"]);
+    const trigger = await openDropdown(userEvent.setup(), "Game");
+    expect(trigger).toHaveTextContent("Any");
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
+      "Any",
+      "Paper",
+      "Arena",
+      "MTGO",
+    ]);
   });
 
   /** The list is drawn in the order it arrives — `pickerFormats` is the host's call, and this
    *  form re-sorting it would be a second answer to a question already settled. */
-  it("offers the formats in the order it was given", () => {
+  it("offers the formats in the order it was given", async () => {
     form();
 
-    const format = screen.getByLabelText("Format");
-    expect(
-      within(format)
-        .getAllByRole("option")
-        .map((o) => o.textContent),
-    ).toEqual(["Casual", "Commander", "Modern"]);
+    await openDropdown(userEvent.setup(), "Format");
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
+      "Casual",
+      "Commander",
+      "Modern",
+    ]);
   });
 
   /**
    * The one launch where the seeded table has not answered.
    *
-   * The select still has to *say* something, and all this form has been given is the key —
+   * The trigger still has to *say* something, and all this form has been given is the key —
    * {@link DeckSettingsValue} carries no display name. Both hosts avoid the case by handing
    * over a one-row list (the deck's own format, or Casual), so this is the floor rather than
-   * the intended state.
+   * the intended state. **Disabled, so there is no panel to open** and this asserts only what
+   * the closed trigger says.
    */
   it("still shows the current format when the list is empty", () => {
     form({ formats: [] });
 
-    const format = screen.getByLabelText("Format");
+    const format = screen.getByRole("button", { name: "Format" });
     expect(format).toBeDisabled();
-    expect(format).toHaveValue("modern");
-    expect(
-      within(format)
-        .getAllByRole("option")
-        .map((o) => o.textContent),
-    ).toEqual(["modern"]);
+    expect(format).toHaveTextContent("modern");
   });
 
   /**
@@ -396,15 +394,14 @@ describe("DeckSettingsForm", () => {
   it("fires only onChange for the folder, and reads the empty option as the top level", async () => {
     const { onChange, onCommit } = form({ value: { ...VALUE, folderId: 2 } });
 
-    const folder = screen.getByLabelText("Folder");
-    // The caption beside the label, which is the deck's own filing — the select carries the
+    // The caption beside the label, which is the deck's own filing — the trigger carries the
     // same words as an option, and only one of the two is a statement about this deck.
     expect(screen.getByText("Commander › Legends", { selector: "p" })).toBeInTheDocument();
 
-    await userEvent.selectOptions(folder, "1");
+    await pickOption(userEvent.setup(), "Folder", "Commander");
     expect(onChange).toHaveBeenLastCalledWith({ folderId: 1 });
 
-    await userEvent.selectOptions(folder, "");
+    await pickOption(userEvent.setup(), "Folder", "Top level");
     expect(onChange).toHaveBeenLastCalledWith({ folderId: null });
     expect(onCommit).not.toHaveBeenCalled();
   });
@@ -413,31 +410,31 @@ describe("DeckSettingsForm", () => {
    * `Top level` stays first, because it is not a folder at all: it is the answer meaning
    * `folder_id IS NULL`. Alphabetising it among the folders would file it under T.
    */
-  it("keeps Top level pinned above the folders", () => {
+  it("keeps Top level pinned above the folders", async () => {
     form();
 
-    const folder = screen.getByLabelText("Folder");
-    expect(
-      within(folder)
-        .getAllByRole("option")
-        .map((o) => o.textContent),
-    ).toEqual(["Top level", "Commander", "Commander › Legends"]);
+    await openDropdown(userEvent.setup(), "Folder");
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
+      "Top level",
+      "Commander",
+      "Commander › Legends",
+    ]);
   });
 
-  /** A folder list that could not be read leaves a select that can only mislead, so it says
+  /** A folder list that could not be read leaves a dropdown that can only mislead, so it says
    *  what happened and stops offering the move. */
   it("reports a folder list it could not read, and disables the move", () => {
     form({ folders: { paths: [], unread: "Database is busy.", loading: false, pending: false } });
 
     expect(screen.getByText("Could not read the folders — Database is busy.")).toBeInTheDocument();
-    expect(screen.getByLabelText("Folder")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Folder" })).toBeDisabled();
   });
 
   /** A move already in flight is not a second move to offer. */
-  it("disables the folder select while a move is pending", () => {
+  it("disables the folder dropdown while a move is pending", () => {
     form({ folders: { paths: PATHS, unread: null, loading: false, pending: true } });
 
-    expect(screen.getByLabelText("Folder")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Folder" })).toBeDisabled();
   });
 
   /** A deck filed in a folder the list does not carry — the read raced a delete elsewhere —
@@ -456,29 +453,30 @@ describe("DeckSettingsForm", () => {
    * one of the exemptions it names, because the reader arranged it themselves. Alphabetising it
    * would put `Main deck` under `Maybeboard` here and nowhere else in the app.
    */
-  it("offers Auto and then every pile of the deck, in the deck's order", () => {
+  it("offers Auto and then every pile of the deck, in the deck's order", async () => {
     form();
 
-    const select = screen.getByLabelText("Add cards to");
-    expect(select).toHaveValue(String(AUTO_CATEGORY));
-    expect(
-      within(select)
-        .getAllByRole("option")
-        .map((o) => o.textContent),
-    ).toEqual(["Auto (by what it does)", "Main deck", "Sideboard", "Maybeboard (off)"]);
+    const trigger = await openDropdown(userEvent.setup(), "Add cards to");
+    expect(trigger).toHaveTextContent("Auto (by what it does)");
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
+      "Auto (by what it does)",
+      "Main deck",
+      "Sideboard",
+      "Maybeboard (off)",
+    ]);
   });
 
-  /** A select, so it settles in one act: `onChange` and never `onCommit`, like the format, the
-   *  theory switch and the folder. **`0` is a value**, which is what the round trip back to Auto
-   *  is here to pin — a host reading it as an absence would report success and write nothing. */
+  /** A dropdown, so it settles in one act: `onChange` and never `onCommit`, like the format,
+   *  the theory switch and the folder. **`0` is a value**, which is what the round trip back to
+   *  Auto is here to pin — a host reading it as an absence would report success and write
+   *  nothing. */
   it("fires only onChange for the default category, by id, Auto included", async () => {
     const { onChange, onCommit } = form();
 
-    const select = screen.getByLabelText("Add cards to");
-    await userEvent.selectOptions(select, "12");
+    await pickOption(userEvent.setup(), "Add cards to", "Sideboard");
     expect(onChange).toHaveBeenLastCalledWith({ defaultCategoryId: 12 });
 
-    await userEvent.selectOptions(select, String(AUTO_CATEGORY));
+    await pickOption(userEvent.setup(), "Add cards to", "Auto (by what it does)");
     expect(onChange).toHaveBeenLastCalledWith({ defaultCategoryId: AUTO_CATEGORY });
     expect(onCommit).not.toHaveBeenCalled();
   });
@@ -516,9 +514,9 @@ describe("DeckSettingsForm", () => {
   it("draws no default-category row for a host with no deck yet", () => {
     form({ categories: undefined });
 
-    expect(screen.queryByLabelText("Add cards to")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Add cards to" })).toBeNull();
     // And the rest of the form is untouched by its absence.
-    expect(screen.getByLabelText("Folder")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Folder" })).toBeInTheDocument();
   });
 });
 

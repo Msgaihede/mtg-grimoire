@@ -784,8 +784,13 @@ never the raw row.
 
 **A folder with nothing filed directly in it produces no row at all** — the query is
 `WHERE folder_id IS NOT NULL … GROUP BY folder_id`, so an empty folder simply is not in the answer,
-and the root, which is not a folder, has no tile to draw either (what is at the root is what the
-unfiltered table already shows). **A page therefore cannot build its folder tree from this
+and the root, which is not a folder, has no tile to draw either. **The parenthetical that used to
+close that sentence — "what is at the root is what the unfiltered table already shows" — stopped
+being true on 2026-08-26** and is recorded here rather than quietly deleted, because it was the
+reason nobody had asked for a root tile: the table at the root now shows the copies filed
+*nowhere*, not every copy, so the root has a count of its own that no tile carries and no summary
+row answers. See
+[The root is the ungrouped cards](#the-root-is-the-ungrouped-cards-and-flatten-is-the-whole-binder). **A page therefore cannot build its folder tree from this
 command.** `collection_folder_list` is the census — flat, every kind, `ORDER BY sort_order, id` —
 and the summary is a lookup layered onto it. A card whose folder has no summary row falls back to
 a zeroed total and draws `0 cards`, which is correct rather than an error state: an empty drawer is
@@ -884,6 +889,83 @@ The cycle walk cannot stand in for either kind check, either: `optional()?.flatt
 such folder" and "that folder is at the root" into one `None`, so the climb ends on the first hop
 and an id nothing answers to would sail through.
 
+## The root is the ungrouped cards, and Flatten is the whole binder
+
+**Until 2026-08-26 this cabinet had a root that was also the whole binder**, and the two could not
+be told apart by any press. `useCollection` sent no `folderId`, `CollectionQuery::folder_id` reads
+an absent one as *every folder* (spec §8.4), and so the level a reader stood on at the top of the
+tree listed every copy they owned — including the ones filed in drawers whose cards were drawn
+directly underneath it. The folder wall said "these are drawers" and the list under it had already
+emptied them onto the floor.
+
+It now works the way [the wishlist's](wishlist-folders.md) does. **The root is the copies filed
+nowhere, and `Flatten` is the control that puts every folder on screen at once**, captioning each
+tile with the drawer its copies sit in. Since v25 every card in a deck lives in that deck's group,
+so a reader with built decks sees a much smaller root than they used to — that is the cabinet
+working, not a regression, and the header figures are taken over the same scope so they still
+describe what is on screen rather than contradicting it.
+
+### The wire was widened, not flipped, and that was the whole design
+
+The obvious change is to make `folder_id: None` mean the root, which is `WishlistQuery`'s
+convention and the better shape read cold. **It was not done, and the reason is the blast radius of
+getting it wrong.** Four callers ask this query the wide question today by saying nothing:
+
+| Caller | What an accidental narrowing would have cost |
+| --- | --- |
+| `mirror::read`'s `Source::WholeCollection` | The plain-text backup — the copy a reader falls back on when the app will not open — would hold the handful of cards nobody filed |
+| `useExportScope`'s sweep | "Export everything, ignoring the filters" would export the root |
+| The deck editor's Collection Search | The panel would stop offering any card already in a binder |
+| The importer's preview | The fold would miss every existing copy that had been filed |
+
+A flip makes *"nobody updated this caller"* the failure mode, and every one of those failures is
+silent — a shorter list looks exactly like a shorter list. So the root arrived as a **third state**
+instead:
+
+| `folder_id` | `root_only` | Answers |
+| --- | --- | --- |
+| `Some(id)` | ignored | That folder's direct members |
+| `None` | `true` | `e.folder_id IS NULL` — the root, and only the root |
+| `None` | `false` (the default) | **Every folder there is** — unchanged, so an unasked question keeps today's answer |
+
+`root_only` defaults `false`, so all four callers above kept their behaviour without being touched.
+The arbitration is an exhaustive `match` on the pair rather than a chain of `if`s, so a fourth
+state cannot be added without the compiler naming every site that has to decide about it.
+
+**`root_only` is `WishlistQuery::flatten` read from the other end.** That field widens the root to
+everything; this one narrows everything to the root. They are the same axis approached from the two
+different defaults their surfaces were born with.
+
+### The export's escape hatch needs no second field, and the reason changed
+
+`everythingFilters` returns `{ marketplace }` and nothing else, so it strips `folderId` and
+`rootOnly` together — landing on "every folder", which is exactly what *Export everything* means.
+The wishlist cannot do this: stripping its `folderId` lands on the **root**, so its sweep has to
+say `flatten: true` a second, explicit way.
+
+The conclusion here ("stripping is sufficient") is the same one that stood before the root
+narrowed, but **its reason is not**, and the difference is worth keeping: it used to hold because
+there was only one field and absent meant wide. It holds now because *both* fields strip to their
+wide default. A third folder field added later without that property would break the escape hatch
+while this sentence still looked true.
+
+### What the page draws, and what it puts away
+
+`Flatten` is one flag, `cabinet`, and it governs three things at once — the breadcrumb, the
+reader's own folder wall, and the pinned strip of deck groups and `Recently removed`. All three are
+*filing*, and a list that is ignoring the filing should not be surrounded by controls for it. The
+cards are all still there, each captioned with its drawer.
+
+Two consequences that are easy to miss and are each pinned by a test:
+
+- **The wall is drawn whenever the cabinet is, not when it holds folders.** Gated on the folder
+  count, a reader with an empty cabinet had no way to make their first folder once `+ New folder`
+  moved into the wall. It also means the wall is on screen *before* the folder list answers, so a
+  `findByRole("list", { name: "Folders" })` resolves one card early.
+- **The `Recently removed` refile sentence had to follow the wall.** `folderId` survives a press of
+  Flatten by design, so `inRemoved` stayed true under a page drawing no folder cards at all, and
+  the caption invited a drag onto targets that were not there.
+
 ## The page, and the drag payload's own key
 
 The collection page is the wishlist's page ported, and the pieces it reuses are named in
@@ -892,6 +974,71 @@ breadcrumb whose **segments are also drop targets** (without them a drag could o
 deeper, never back out), `DROP_RING` on every eligible folder the moment a row leaves its tile and
 `DROP_OVER` on the one under the pointer, and `DROP_MARK_ROOM` on the wall's scroller so a card
 flush against the content edge does not lose the outer 2 px of its ring for the whole drag.
+
+## The wall drags too, and a tile is not a row
+
+Until 2026-08-26 only the collection's **table** was a drag source. The wall registered nothing,
+and that was a recorded product call rather than an oversight — `CardGrid`'s `dragPayload` note and
+`CollectionPage`'s `tileTarget` both said why: a tile merges every entry for one printing **across
+finishes, conditions, languages and folders**, so it has no `entryId`, and `CollectionDrag`
+requires one. The same reasoning is why a tile's right-click menu had no `Move to` row while a
+table row's did.
+
+The wall is a drag source now, and the three decisions that made it one:
+
+**A tile answers under a _third_ key**, `collectionTileSource`, carrying `{ cardId, name, copies }`
+where each copy is `{ entryId, folderId }`. Widening `CollectionDrag.entryId` into a list is the
+change that looks smaller and is not: a table row really does carry one entry, so the widening
+would make every target, every test and every `canDrop` reason about a list to say a thing about a
+single row. `readCollectionDrop` is what a target that takes either asks, and `CollectionDrop` is
+its discriminated answer — the union rather than the tile alone, because a folder's answer about
+one row is a different sentence from its answer about nine copies filed in five places.
+
+**A folder takes a tile when _any_ copy behind it could move, never only when all of them could.**
+A printing held in two finishes with one already in this drawer is the ordinary case, and a folder
+that refused the whole tile for it would strand the copy that genuinely has somewhere to go.
+
+**More than one row behind the art is a question, not a guess.** One copy files on the drop, which
+is the common case and where a dialog would be a press for a choice with one answer. Two or more
+opens `PickCopies` — every copy as _finish · condition · language · folder · count_, all ticked,
+with the ones that cannot move greyed and carrying their reason in their own accessible name. A
+copy in a deck's group is refused by `set_entry_folder` (`ENTRY_IN_A_DECK`) and says so; a copy
+already in the destination says that instead. The confirm button counts **copies, not rows**,
+because a reader is filing cardboard. It is a centred modal rather than an anchored panel for the
+reason `src/CLAUDE.md` gives for a consulted surface — and because it is the only shape both doors
+can use: a drop has no opener element, and the menu's panel has already closed by the time a row's
+handler runs. **Both doors set the same state**, which is the point: this page's drag and its menu
+have already drifted once (the settle sets), and a second implementation of "which copies?" is that
+mistake one layer up.
+
+## The app's own folders in the card menu
+
+`buildCollectionTargetItems` filtered to `kind = 'user'`, so the deck groups and `Recently removed`
+never appeared as destinations. They appear now under **Add to → Collection**, and only there.
+
+**`Decks ▸ <deck>` routes to the deck's own add, never to a folder write.** `set_entry_folder`
+refuses a `deck` destination in words, and the refusal is right: filing into a group by hand would
+claim the deck holds those copies without writing the `deck_cards` row that makes it true. The
+deck's add does both halves in one transaction, so the row calls that — which makes it the write
+`Add to → Deck` already makes, reached from the cabinet the reader was looking at. It files into
+the **live** list without asking, because this row is filing rather than deck-building; a reader
+who means the plan has the deck picker one row up, which still asks.
+
+**It is drawn only under `Add to`, and only where the reader already has folders.** Not under
+`Move to`, because that row is labelled *Move* while the write adds a copy, and a destination
+picker may not mislabel its own write. Not for a reader with no folders, because
+`Add to → Collection` has always been a single press for them, and forking the commonest path in
+the app to describe a cabinet they do not have — with `Add to → Deck` sitting one row above it the
+whole time — is a cost paid by everybody. That one cost a test to learn: `CardDetailPane`'s refusal
+case clicks through to a finish on a printing with no folders, and the extra rung swallowed the add.
+
+**`Recently removed` is drawn greyed, and it cannot become a destination.** The sanctioned route in
+is `deck_to_collection`, which addresses a `deck_cards` row — and **schema v25 dropped
+`deck_allocations`**, so a collection entry carries no link to one. Since v18 a deck may hold one
+printing in two categories, so there is not even an unambiguous row to guess at: picking one would
+be the app choosing a category the reader never named, which is the same class of guess the tile
+question above exists to refuse. The row says so and names the cut in the deck editor instead,
+because a greyed row that gives no reason teaches nothing.
 
 Three things are this page's own:
 
@@ -1110,7 +1257,8 @@ React never sees** — go through
 | `src-tauri/src/reset.rs` | `clear_collection` — entries, then folders |
 | `src-tauri/src/reconcile.rs` | `fold_into_existing`, which calls `fold_entry` as `merge_entry` does, and `collision_target`, the crate's other eleven-term probe |
 | `src/lib/folderTree.ts` | `buildFolderTree` and friends, shared with the deck gallery and the wishlist, **unchanged** |
-| `src/features/collection/collectionDrag.ts` | The payload under its own key, the tile that offers it, the targets that take it |
+| `src/features/collection/collectionDrag.ts` | Both payloads under their own keys, the row and the tile that offer them, the targets that take either |
+| `src/features/collection/PickCopies.tsx` | The question a drop asks when the art stands for more than one row |
 | `src/features/collection/CollectionFolderCard.tsx` | The tile, `folderFace`, and its stories beside it |
 | `src/features/collection/PinnedFolders.tsx` | The app's own folders — pinned, flat and locked — `DECK_KIND`, `REMOVED_KIND`, and neither one a drop target |
 | `src/features/card/cardMenu.tsx` | `buildCollectionTargetItems` — `Add to → Collection`, and `Move to → folder` |

@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
+import { openDropdown } from "@/test-dropdown";
 import type { DeckFinish, DeckVariant, Printing, PrintingsResponse } from "@/lib/ipc";
 import type { MarketplaceId } from "@/lib/marketplace";
 // Type-only, so it is erased before the `vi.mock` below runs — the store's *value* import stays
@@ -405,9 +406,12 @@ describe("AllPrintingsDialog", () => {
 
     await user.click(await screen.findByRole("button", { name: "Set" }));
 
-    // **Scoped to the picker's own listbox**, because the `Sort printings by` `<select>` beside
-    // it holds four native `<option>`s and a native option's implicit role is `option` too — an
-    // unscoped count answers 6 here and reads as a picker offering the corpus.
+    // **Scoped to the picker's own listbox.** Until 2026-08-26 this had to be: the `Sort
+    // printings by` `<select>` beside it held four native `<option>`s, and a native option's
+    // implicit role is `option` too, so an unscoped count answered 6 here and read as a picker
+    // offering the corpus. `Sort printings by` is a closed `Dropdown` now and draws no `option`
+    // role at all while shut — but the scope stays, because a second open panel would raise the
+    // exact same ambiguity and costs nothing to guard against.
     const listbox = within(await screen.findByRole("listbox"));
     const alpha = listbox.getByRole("option", { name: /Alpha/ });
     // Presence rather than visibility: the popup is a `motion` surface, so its first painted
@@ -749,27 +753,27 @@ describe("AllPrintingsDialog", () => {
   });
 
   /**
-   * **A focused `<select>` owns the arrow keys**, and this is the guard that would otherwise have
-   * shipped.
+   * **An open dropdown owns the arrow keys**, and this is the guard that would otherwise have
+   * shipped — twice now, in two shapes.
    *
-   * ArrowLeft on a focused `<select>` changes its value in Chromium and in WebView2 with it, so a
-   * reader re-sorting the wall would step to another card as well — or instead, depending on which
-   * handler answered. The sort control is the one on this row that is a native select.
+   * It was a `<select>` until 2026-08-26, where ArrowLeft *changes the value* in Chromium and in
+   * WebView2 with it, so a reader re-sorting the wall would step to another card as well. A
+   * `Dropdown` has the opposite shape: a **closed** trigger does nothing with ArrowLeft, so the
+   * walk is welcome to it — and an **open** panel is where the caret is and where the arrows
+   * belong. `ARROW_OWNERS` was rewritten to match the second shape and this test moved with it.
    *
-   * `focus()` and then `user.keyboard`, never `user.type`: `type` focuses whatever element it is
-   * handed, so a test written that way passes for the wrong reason on a component that never
-   * looked at the target at all.
+   * **Opened the way a reader opens it**, not with `focus()`. Starting a keyboard flow from a
+   * programmatic focus tests a caret nobody can produce, and here it would skip the very state
+   * being tested: the panel has to be open for the exemption to be in force at all.
    */
-  it("yields the arrow keys to a focused select in the filter row", async () => {
+  it("yields the arrow keys to an open dropdown in the filter row", async () => {
     const user = userEvent.setup();
     renderDialog();
     withDeckWalk();
     open(WALK[1]);
     await screen.findByRole("dialog", { name: /Sol Ring/ });
 
-    const sort = screen.getByRole("combobox", { name: "Sort printings by" });
-    act(() => sort.focus());
-    expect(sort).toHaveFocus();
+    await openDropdown(user, "Sort printings by");
 
     await user.keyboard("{ArrowRight}");
     await user.keyboard("{ArrowLeft}");

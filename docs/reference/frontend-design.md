@@ -405,10 +405,26 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   answers it): `search`, `collection` and `wishlist`, the three list walls; `deckSearch`, the deck
   editor's docked search column, which is a fourth `CardGrid`; `deck`, the editor's desk — **one key
   for both deck views**, because Stacks and Grid are two drawings of the same pile and switching
-  between them must not resize the cards the reader just settled on; and `printings`, the modal's
-  wall, which opens *over* a wall the reader has already sized. `useCardZoomGesture(ref, section)`
-  names the section it is stepping. **The wishlist joined the list on 2026-08-20**, when it gained a
-  card view of its own; until then it was `VirtualTable` only and had no card section to zoom.
+  between them must not resize the cards the reader just settled on; `deckGallery`, the decks page's
+  wall of deck tiles and folder cards; and `printings`, the modal's wall, which opens *over* a wall
+  the reader has already sized. `useCardZoomGesture(ref, section)` names the section it is stepping.
+  **The wishlist joined the list on 2026-08-20**, when it gained a card view of its own; until then
+  it was `VirtualTable` only and had no card section to zoom.
+- **The decks gallery joined on 2026-08-26, and it is the one section whose tiles are not cards.**
+  A deck tile is a 626×457 art crop with a name, a format line, a LIVE/THEORY badge and a credit
+  under it — but the reader's question there is every other section's: how many of these at once,
+  against how well I can see each one. Three things about it are worth carrying:
+  - **`deckGallery`, not `decks`.** `deck` is already the editor's cards and both keys are read
+    inside `features/decks/`; two keys one character apart are a typo that steps a wall the reader
+    is not looking at, which reads as a gesture that does nothing rather than as a mistake.
+  - **The listener is on the tiles' scroller, not on the view.** The folder tree beside the wall is
+    navigation chrome at a fixed rail width with nothing to scale, so a ctrl+wheel over the rail is
+    the browser's business. `DecksPage.test.tsx`'s "ignores a ctrl+wheel over the folder tree" is
+    the case that pins it — every other assertion there passes just as well with the listener on
+    the whole page.
+  - **Rust needed nothing.** `zoom.rs` validates the multiplier and deliberately does not know the
+    section vocabulary (`a_section_this_build_does_not_know_is_stored_anyway`), so an eighth wall
+    is remembered across restarts by the machinery that was already there.
 - **What is drawn _on_ a card scales with it, through two inherited custom properties**
   (2026-08-17). Until then the zoom sized the tile and nothing else: the finish chip, the crown, the
   owned badge, the printings count, the rarity gem, the caption, the deck's copy count and tag dot,
@@ -474,7 +490,7 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   tiles on launch explains itself to nobody" — and the reversal is the same one the split above
   made, arriving late. That argument was written when there was **one** number for the whole app,
   where "the zoom" really was a momentary posture a single card could set for every wall at once.
-  Split seven ways it is not: a reader who sizes the deck editor so a 100-card pile fits the desk
+  Split per section it is not: a reader who sizes the deck editor so a 100-card pile fits the desk
   has configured *that wall*, and the app forgetting it every launch was the reported complaint.
   What survives of the old worry is answered by the split itself — a size is restored to the wall
   it was chosen on and nowhere else, so nothing done in the printings modal is waiting on the search
@@ -484,9 +500,9 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   (`src-tauri/src/zoom.rs`); `src/lib/useCardZoomPersistence.ts` is the whole of the frontend and
   `AppShell` is its only mount. Five decisions in it, each with a failure it is avoiding:
 
-  - **The row is an object, not seven keys.** Every wall is seeded in one pass at launch, so seven
-    keys would be seven reads of one table to answer one question. The cost is that a write is a
-    read-modify-write — one extra `SELECT` under a lock the writer already holds.
+  - **The row is an object, not one key per section.** Every wall is seeded in one pass at launch,
+    so a key each would be a read of that table each, to answer one question. The cost is that a
+    write is a read-modify-write — one extra `SELECT` under a lock the writer already holds.
   - **A write preserves entries this build cannot use**, which is the one thing an object row has
     to get right that a bare string does not: an eighth wall, or a multiplier past this build's
     ceiling, survives a write made beside it rather than being emptied by an older build pointed at
@@ -504,7 +520,7 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
     round trip keeps what they asked for, rather than watching the wall snap back under their hand.
   - **The writes hang off `zoomPulse`, not off `cardZoom`, on a 400ms trailing timer per section.**
     Watching the value gets two cases wrong in opposite directions: it writes back everything the
-    seed just applied (seven round trips to tell the database what it said a moment earlier), and it
+    seed just applied (a round trip per wall to tell the database what it said a moment earlier), and it
     *misses* a reader holding the wheel at 200%, whose gestures `stepZoom` answers with 200% forever
     — the value never moves, so the timer never restarts and the write lands mid-gesture. The
     debounce is not an optimisation: a trackpad pinch arrives as ctrl-flagged wheel events dozens a
@@ -1712,7 +1728,7 @@ clientWidth` at 1024, 1280 and 1920, and the deck view's own scroller matched it
     deck editor's docked panel at its `MIN_PANEL_WIDTH_PX` floor of **206** — a self-explaining
     label would be paid for in that column at every width.
 
-## The theory tick, and the four things a photograph settled
+## The theory mark, and the four things a photograph settled
 
 Added 2026-08-20 with `TheoryMatchMark` — the mark a deck card wears on the **Live** list when the
 deck's plan asks for it too. The rule and the data are in
@@ -1841,6 +1857,60 @@ session so the two states are one pass:
   React set — see [live-ui-verification.md](live-ui-verification.md). The `clipPath` read `none`
   after the back-out, which looks exactly like the component having stopped setting it; switching
   the variant tabs and back forced the re-render that proved otherwise.
+
+### And the seventh: the mark learned to count (issue #212)
+
+Same corner, same reader, and both halves of one report: the tick wanted **more padding**, and the
+blue banner wanted to be **as wide as the quantity area at the other end of the strip**. The second
+is what #182 had spent — `6/1` gave back 11px of mana cost and left the mark at **19px** against
+the tag's **24.61**, visibly the smaller of two things drawn as bookends. And a third ask that is
+not geometry at all: where the two lists disagree about *how many* of a card, say the difference —
+`+2`, `-8` — instead of a tick that only says the card is planned.
+
+The three are one change, because the third is what makes the second unanswerable by paddings.
+The box holds a 12px glyph on one card and two characters of 12px mono on the next, so any pair of
+paddings tuned to the tick leaves the number's box a different width again. **So the width is
+stated rather than tuned**: `min-w-[calc(1ch + 1.125rem*var(--mark-scale,1))]` — one digit's
+advance in this very face, plus `COUNT_TAG_BOX`'s own two paddings — which *is* the count tag's
+width holding a single digit, by construction rather than by a number that would rot the day the
+mono face changed. The paddings then only have to satisfy #182's `pl − pr = 5px`, and `8/3` does.
+
+**Measured 2026-08-26 over the built stylesheet** — `dist/assets/index-CCWFHD9i.css` linked from a
+`file://` page holding the **real** markup (dumped out of a throwaway vitest render of `CardStack`,
+so this is the mark *in the card* rather than its class strings pasted onto a div — the mistake
+that made #158 invisible to the 2026-08-20 pass), driven by headless Edge, at `--mark-scale` 1.
+Before and after in one pass, backing the change out through `element.style`:
+
+| | before (`6/1`, no floor) | after (`8/3`, floor, `justify-center`) |
+| --- | --- | --- |
+| the quantity tag, one digit | **24.61px** | **24.61px** — untouched |
+| the tick's box | **19px** | **24.59px** |
+| `-2`'s box | **20.20px** | **24.59px** |
+| `-12`'s box (against a `12` tag's **31.20**) | 26.80px | **30.80px** |
+| the tick's ink, either side of the visible trapezium | **1px** | **3.80px** |
+| `-2`'s ink, either side | 1px | **3.19 / 3.20px** |
+| ink off the trapezium's mid-height centre | 0 | **0** (−0.01 on the counts) |
+
+- **0.02px is the whole of what separates the two bookends now** — 24.59 against 24.61 — and the
+  gap is `1ch` being the advance of `0` while the box's own floor is computed to 24.5977. Both
+  marks are still flush to the card's right and left edges respectively, which is #158's other
+  half, unchanged.
+- **`justify-center` is worth 0.8px here and is kept anyway.** With the floor and without it, the
+  tick sat **−0.8px** off the trapezium's centre — the surplus a `min-width` adds lands entirely to
+  the right of the content under a flex container's default `flex-start`. It is small because
+  `8/3` was picked with the floor in mind; what the class buys is that #182's arithmetic stays a
+  *derivation* (the surplus grows with the zoom and moves with either padding) rather than a
+  coincidence of today's numbers.
+- **The count is drawn in place of the tick, never beside it.** A tick and a `-8` in one 25px box
+  are two clauses of one sentence at the end of a strip whose other mark is already a number. The
+  tick is the card that matches; a number is the card that does not.
+- **ASCII `+` and `-`, never `−`.** The box is `tabular-nums` mono and the typographic minus is
+  outside that fixed-advance run, so `-8` and `+2` would be different widths in the one box whose
+  job is to be the same width as the tag opposite it.
+- **What is unmeasured**: this pass is the built stylesheet and not the shipped WebView2 window,
+  and it was run at `--mark-scale` 1 only. The two ends of the zoom ladder were re-driven for #182
+  and nothing here changes how any of these terms scale — `1ch` follows the font size, which is
+  already scaled — but that is an argument rather than a reading.
 
 ## The two marks a deck card carries: picked, and just landed
 
@@ -2852,3 +2922,87 @@ gold is what tells a reader something is pressable. A mark is a picture rather t
 makes no offer, so it makes no false one. Extending the rule to the app's own logo would say the app may
 never draw its logo in its own colour, which is a conclusion about branding drawn from a rule
 about affordance.
+
+## The dropdown's panel, and the containing block that only a browser could refute
+
+**2026-08-26, `npm run build-storybook` — which is `storybook build`, a _production_ Vite bundle
+rather than a debug one — served on a throwaway port and
+driven in headless Edge 151 at 1280×800 — `documentElement.clientWidth` 1256 px and `clientHeight`
+708 px, identical to `innerWidth`/`innerHeight`, so no scrollbar separates the two in this
+document.** Every figure below is a reading from that window.
+
+**This pass exists because the suite cannot reach any of it.** jsdom implements no layout — every
+rectangle it measures is `0` — so `usePopupPlacement` is executed by the whole `Dropdown` suite
+without a single one of its numbers being *tested*. `place.test.ts` covers the arithmetic; whether
+that arithmetic is fed the right rectangles, and whether its result lands where a reader can see
+it, is a question only a browser answers. `src/components/Dropdown/PlacementProbe.stories.tsx` is
+the three containers the placement has to survive, and it carries no `play` — a play would be a
+second jsdom reading of the same zeros.
+
+- **Inside an `overflow-y-auto` scroller the panel escapes its container, which is the whole
+  point.** Scroller `top 16 bottom 176` (160 px tall); trigger `left 29 top 78 bottom 114`; panel
+  `left 29 top 118 bottom 392` — **216 px past the scroller's own bottom**, and still 316 px clear
+  of the viewport floor. A native `<select>`'s list escaped this; an absolutely-positioned panel
+  would have been cut off at 176. `panel.left − trigger.left` = **0 px**, gap below the trigger =
+  **4 px**.
+- **Inside a settled `Dialog`'s box the frame correction does real, non-zero work, and this is the
+  reading the whole approach stood on.** The probe's box carries `scale: 1` — what motion leaves on
+  a `Dialog` panel at rest, and **not** `none` — so it is a containing block for a `fixed`
+  descendant. The zero-size `fixed` frame the shell renders at `left: 0; top: 0` measured its own
+  rect at **`left 113 top 113`** instead of the viewport origin. Against a trigger at viewport
+  `left 137 top 137 bottom 173`, the panel drew at `left 137 top 177` — `panel.left −
+  trigger.left` = **0 px**, gap = **4 px**. **Uncorrected the panel would have sat at viewport
+  `left 250`, 113 px to the right of the control that opened it** — a styling bug to look at, and a
+  coordinate bug in fact.
+
+  **Those two measurements are the whole proof, and it is worth being exact about which two.** They
+  are `frameOrigin ≠ (0,0)` — the containing block exists at all — and `deltaLeft == 0` — the
+  correction cancelled it exactly. **Adding the panel's inline offsets to the frame origin proves
+  nothing**: the panel is `absolute` inside the frame, so rendered-left is *identically*
+  frame-origin + inline-left, under any offset, with correct code or broken code. That sum cannot
+  fail, so it cannot be evidence. An earlier draft of this section rested on it; this paragraph is
+  the correction.
+
+  **Three independent checks say the `113` is the transform's doing and not the margin's.** First,
+  the counterfactual: with the same `ml-24 mt-24` margin but **no** transform, `fixed left-0 top-0`
+  is viewport-relative and the frame reads `(0,0)` *regardless of the margin* — so `113` is not the
+  margin, it is the margin **made visible by** the transform. Second, `InAScroller` is a real
+  control rather than an unpositioned story: same padded preview root, its own non-zero local
+  offsets, and it still reads `(0,0)` — which rules out both a transform on the preview root and
+  the frame being accidentally `absolute` against some positioned wrapper. Third, `113 = 16 + 96 +
+  1` is the containing block's padding-box origin exactly (preview-root padding + margin + border).
+- **At the bottom of the viewport it flips, and it flips from the right corner.** Trigger
+  `top 660 bottom 696` against a 708 px viewport; panel `top 382 bottom 656` — **above** the
+  trigger, `trigger.top − panel.bottom` = **4 px**, both edges inside the viewport. The class came
+  back `origin-bottom-left` rather than `origin-top-left`, so the panel grows from the corner it is
+  pinned by — this app's standing rule for an anchored popup, confirmed in the DOM and not only in
+  the arithmetic.
+
+**Two mechanics worth keeping, because each is a way to misread this surface.** The panel measured
+`offsetWidth` **143** against a rect width of **143.234375** — sub-pixel layout rounding, *not* the
+entry tween, and the pass proved the difference by re-reading each rect 200 ms apart until two
+agreed and `getComputedStyle(panel).transform` had settled at `none`. A rect taken on the mount
+frame instead is 4% short in both axes, which is why sizes come from `offsetWidth`/`offsetHeight`
+and positions from `getBoundingClientRect()`. And the panel's `min-width` came back **126 px** in
+all three — the trigger's own `offsetWidth` — so a picker never opens narrower than the control
+that produced it.
+
+**What this pass did not measure, stated rather than implied.** Two residuals, and neither is
+dismissed on the grounds that its failure would be obvious — because neither would be.
+
+**The horizontal flip was never forced.** All three stories came back `origin-*-left` with `flipX`
+false, because a 143 px panel at `left 29`, `137` and `12` cannot run past the far gutter of a
+1256 px viewport. The `align: "end"` path and the `VIEWPORT_GUTTER` clamp are therefore still
+arithmetic-only — covered in `place.test.ts`, unproven in a browser. **This is not a hypothetical
+path**: `place.ts` names two shipping set pickers that pass `"end"`. And its failure is *silent*
+rather than visible — `VIEWPORT_GUTTER`'s own comment is the reason, since nothing in this app clips
+a popup, so an overflowing panel gets no scrollbar and instead "scrolls the whole app sideways the
+moment anything calls `scrollIntoView` on it". Deferred as a known residual, not as a safe one.
+
+**Nothing here combines a transformed containing block with an intervening scroller — and that
+union is exactly what all eight in-dialog call sites are.** `InAScroller` escapes its scroller only
+because nothing transforms in that story, and `InATransformedBox` has no scroller between the
+trigger and the box. Tracing it resolves in favour: the `fixed` frame's containing block is the
+dialog panel, the scroller is not in that chain, and `Dialog.tsx` records that the panel
+deliberately does not clip its content. But that is **two subtle facts holding it up, neither
+measured**. The first in-dialog migration should take the reading rather than inherit this one.

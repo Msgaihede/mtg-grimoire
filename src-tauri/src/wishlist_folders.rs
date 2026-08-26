@@ -183,6 +183,48 @@ pub fn rename_folder(conn: &Connection, id: i64, name: &str) -> Result<WishlistF
     read_folder(conn, id)?.ok_or_else(|| FOLDER_GONE.to_owned())
 }
 
+/// The destination fence, in one place because [`move_folder`] and [`reorder_folders`] both owe
+/// it — the sentence, not the foreign key, for the reason [`move_folder`]'s doc gives at length.
+fn require_folder(conn: &Connection, id: i64) -> Result<(), String> {
+    let exists: bool = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM wishlist_folders WHERE id = ?1)",
+            params![id],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    exists.then_some(()).ok_or_else(|| FOLDER_GONE.to_owned())
+}
+
+/// The cycle walk itself, in one place for [`require_folder`]'s reason: a refusal written twice
+/// is a refusal that comes to disagree with itself. `start` is an id rather than an `Option`,
+/// because the root is nobody's descendant and a move there has nothing to climb.
+/// [`move_folder`] is where the reasoning is written down — what the walk guards, and why the
+/// hop budget is not about depth.
+fn refuse_cycle(conn: &Connection, id: i64, start: i64) -> Result<(), String> {
+    let mut cursor = Some(start);
+    let mut hops = 0usize;
+    while let Some(candidate) = cursor {
+        if candidate == id {
+            return Err(FOLDER_CYCLE.to_owned());
+        }
+        hops += 1;
+        if hops > MAX_FOLDER_DEPTH {
+            return Err(FOLDER_CYCLE.to_owned());
+        }
+        cursor = conn
+            .query_row(
+                "SELECT parent_id FROM wishlist_folders WHERE id = ?1",
+                params![candidate],
+                |r| r.get::<_, Option<i64>>(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+            .flatten();
+    }
+    Ok(())
+}
+
 /// Move a folder under a new parent (root, if `None`). **Refuses a cycle**: walks `parent_id`
 /// upward from the *proposed* parent, and if that walk ever meets `id` — immediately, if
 /// `parentId` names `id` itself — refuses rather than writing a loop `parent_id`'s own
@@ -217,36 +259,8 @@ pub fn move_folder(
     parent_id: Option<i64>,
 ) -> Result<WishlistFolder, String> {
     if let Some(start) = parent_id {
-        let exists: bool = conn
-            .query_row(
-                "SELECT EXISTS(SELECT 1 FROM wishlist_folders WHERE id = ?1)",
-                params![start],
-                |r| r.get(0),
-            )
-            .map_err(|e| e.to_string())?;
-        if !exists {
-            return Err(FOLDER_GONE.to_owned());
-        }
-        let mut cursor = Some(start);
-        let mut hops = 0usize;
-        while let Some(candidate) = cursor {
-            if candidate == id {
-                return Err(FOLDER_CYCLE.to_owned());
-            }
-            hops += 1;
-            if hops > MAX_FOLDER_DEPTH {
-                return Err(FOLDER_CYCLE.to_owned());
-            }
-            cursor = conn
-                .query_row(
-                    "SELECT parent_id FROM wishlist_folders WHERE id = ?1",
-                    params![candidate],
-                    |r| r.get::<_, Option<i64>>(0),
-                )
-                .optional()
-                .map_err(|e| e.to_string())?
-                .flatten();
-        }
+        require_folder(conn, start)?;
+        refuse_cycle(conn, id, start)?;
     }
     let changed = conn
         .execute(
@@ -258,6 +272,66 @@ pub fn move_folder(
         return Err(FOLDER_GONE.to_owned());
     }
     read_folder(conn, id)?.ok_or_else(|| FOLDER_GONE.to_owned())
+}
+
+/// File a whole row of siblings at once: every `id` in `ids` gets `parent_id` as its parent and
+/// its **position in the slice** as its `sort_order`. `ids` is that parent's complete child list
+/// in the order the reader just dropped it into; `None` is the root, as everywhere in this
+/// module.
+///
+/// **One command doing both jobs, deliberately.** A drag re-parents and positions in one
+/// gesture, and the two as separate writes are a moment when the folder is under its new parent
+/// at its old number — a state the reader can see and nobody chose. One transaction is what
+/// makes that moment unreachable.
+///
+/// **Nothing writes `sort_order` from a position anywhere else.** [`create_folder`] hands out
+/// `max + 1` and [`move_folder`] leaves the column alone, so a folder's number was whatever it
+/// was given at birth until this landed.
+///
+/// **Both ends are fenced the way [`move_folder`] fences them, through the same two helpers**:
+/// the destination once ([`require_folder`]), then every id against it ([`refuse_cycle`]). An id
+/// that *is* `parent_id`, or an ancestor of it, is exactly as fatal here as it is there, because
+/// it is the same `ON DELETE CASCADE` onto the same table that would then walk forever.
+///
+/// **An id that is not there is [`FOLDER_GONE`]**, which is [`move_folder`]'s answer to the same
+/// mistake: a stale id means the tree on screen is not the tree in the database, and the whole
+/// row of siblings this was asked to file is therefore not the row that exists.
+///
+/// **No `kind` fence, because `wishlist_folders` has no `kind` column.** Only
+/// [`crate::collection_folders`] can have a folder the app owns, so only its `reorder_folders`
+/// refuses one; the asymmetry is the schema's rather than an omission here.
+///
+/// **Nothing here touches a wish.** `folder_id` is the fourth term of
+/// [`crate::schema::WISHLIST_GRAIN`], which is why [`delete_folder`] has to re-file by hand — but
+/// this write moves no wish between folders, only folders between folders, so no grain moves and
+/// there is nothing to merge.
+pub fn reorder_folders(
+    conn: &Connection,
+    parent_id: Option<i64>,
+    ids: &[i64],
+) -> Result<Vec<WishlistFolder>, String> {
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    if let Some(start) = parent_id {
+        require_folder(&tx, start)?;
+        for id in ids {
+            refuse_cycle(&tx, *id, start)?;
+        }
+    }
+    for (order, id) in ids.iter().enumerate() {
+        let changed = tx
+            .execute(
+                "UPDATE wishlist_folders
+                    SET parent_id = ?2, sort_order = ?3, updated_at = unixepoch()
+                  WHERE id = ?1",
+                params![id, parent_id, order as i64],
+            )
+            .map_err(|e| e.to_string())?;
+        if changed == 0 {
+            return Err(FOLDER_GONE.to_owned());
+        }
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    list_folders(conn)
 }
 
 /// Delete a folder. **Does not delete the wishes in it** — they surface at the root, filed
@@ -616,6 +690,24 @@ pub async fn wishlist_folder_move(
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         with_write(&state, |c| move_folder(c, id, parent_id))
+    })
+    .await
+    .map_err(unfinished)?
+}
+
+/// The drag's own command — see [`reorder_folders`] for why re-parenting and positioning are one
+/// write. It answers the **whole** folder list rather than the rows it moved, like
+/// [`crate::deck_meta::deck_category_reorder`]: every sibling's number changed, so a caller
+/// handed only the moved rows would have to guess at the rest.
+#[tauri::command]
+pub async fn wishlist_folder_reorder(
+    state: tauri::State<'_, Arc<AppState>>,
+    parent_id: Option<i64>,
+    ids: Vec<i64>,
+) -> Result<Vec<WishlistFolder>, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        with_write(&state, |c| reorder_folders(c, parent_id, &ids))
     })
     .await
     .map_err(unfinished)?
@@ -1266,5 +1358,118 @@ mod tests {
                 "at {id}"
             );
         }
+    }
+
+    // -- wishlist_folder_reorder --------------------------------------------------------------
+
+    /// Where a folder ended up, out of the answer [`reorder_folders`] gives — which is a fresh
+    /// [`list_folders`] over the table, so this is the stored row and not a returned copy of the
+    /// request.
+    fn placed(rows: &[WishlistFolder], id: i64) -> (Option<i64>, i64) {
+        let row = rows
+            .iter()
+            .find(|r| r.id == id)
+            .expect("list_folders answers every folder there is");
+        (row.parent_id, row.sort_order)
+    }
+
+    /// The whole of what makes this one command rather than two: a drag that re-parents *and*
+    /// positions. Both halves are asserted for every id, so writing only the order or only the
+    /// parent fails.
+    #[test]
+    fn wishlist_folder_reorder_writes_the_parent_and_the_position_together() {
+        let conn = conn();
+        let ordered = create_folder(&conn, None, "Ordered").unwrap();
+        let watching = create_folder(&conn, None, "Watching").unwrap();
+        let shopping = create_folder(&conn, None, "Shopping").unwrap();
+        let soon = create_folder(&conn, Some(shopping.id), "Soon").unwrap();
+
+        let rows = reorder_folders(
+            &conn,
+            Some(shopping.id),
+            &[watching.id, soon.id, ordered.id],
+        )
+        .unwrap();
+
+        assert_eq!(placed(&rows, watching.id), (Some(shopping.id), 0));
+        assert_eq!(placed(&rows, soon.id), (Some(shopping.id), 1));
+        assert_eq!(placed(&rows, ordered.id), (Some(shopping.id), 2));
+        assert_eq!(
+            placed(&rows, shopping.id),
+            (None, 2),
+            "a folder nobody named is left where it was"
+        );
+        assert_eq!(rows.len(), 4, "and the answer is the whole cabinet");
+    }
+
+    /// Root is `None` and is a destination like any other — the one that cannot cycle.
+    #[test]
+    fn wishlist_folder_reorder_files_to_the_root() {
+        let conn = conn();
+        let shopping = create_folder(&conn, None, "Shopping").unwrap();
+        let soon = create_folder(&conn, Some(shopping.id), "Soon").unwrap();
+
+        let rows = reorder_folders(&conn, None, &[soon.id, shopping.id]).unwrap();
+
+        assert_eq!(placed(&rows, soon.id), (None, 0));
+        assert_eq!(placed(&rows, shopping.id), (None, 1));
+    }
+
+    /// `parent_id` CASCADEs onto this same table, so a loop written here is [`move_folder`]'s
+    /// disaster exactly — and the fences run before the first `UPDATE`, which is what the
+    /// untouched sibling proves.
+    #[test]
+    fn wishlist_folder_reorder_refuses_a_cycle_and_writes_nothing() {
+        let conn = conn();
+        let shopping = create_folder(&conn, None, "Shopping").unwrap();
+        let soon = create_folder(&conn, Some(shopping.id), "Soon").unwrap();
+        let today = create_folder(&conn, Some(soon.id), "Today").unwrap();
+        let watching = create_folder(&conn, None, "Watching").unwrap();
+
+        let err = reorder_folders(&conn, Some(today.id), &[watching.id, shopping.id]).unwrap_err();
+
+        assert_eq!(err, FOLDER_CYCLE);
+        let unchanged = read_folder(&conn, watching.id).unwrap().unwrap();
+        assert_eq!(
+            (unchanged.parent_id, unchanged.sort_order),
+            (None, 1),
+            "the id ahead of the offender in the list must not have been written"
+        );
+    }
+
+    #[test]
+    fn wishlist_folder_reorder_refuses_filing_a_folder_inside_itself() {
+        let conn = conn();
+        let shopping = create_folder(&conn, None, "Shopping").unwrap();
+        let err = reorder_folders(&conn, Some(shopping.id), &[shopping.id]).unwrap_err();
+        assert_eq!(err, FOLDER_CYCLE);
+    }
+
+    /// [`move_folder`]'s answer to the same mistake, and the transaction is what makes the
+    /// already-written half of the list go back.
+    #[test]
+    fn wishlist_folder_reorder_refuses_an_id_that_is_gone_and_writes_nothing() {
+        let conn = conn();
+        let shopping = create_folder(&conn, None, "Shopping").unwrap();
+        let watching = create_folder(&conn, None, "Watching").unwrap();
+
+        let err = reorder_folders(&conn, None, &[watching.id, 999_999, shopping.id]).unwrap_err();
+
+        assert_eq!(err, FOLDER_GONE);
+        let unchanged = read_folder(&conn, watching.id).unwrap().unwrap();
+        assert_eq!(
+            unchanged.sort_order, 1,
+            "the row written before the stale id must have rolled back"
+        );
+    }
+
+    /// The destination fence [`move_folder`] makes and `deck_meta`'s deliberately does not —
+    /// [`require_folder`], the same sentence.
+    #[test]
+    fn wishlist_folder_reorder_refuses_a_destination_that_is_gone() {
+        let conn = conn();
+        let shopping = create_folder(&conn, None, "Shopping").unwrap();
+        let err = reorder_folders(&conn, Some(999_999), &[shopping.id]).unwrap_err();
+        assert_eq!(err, FOLDER_GONE);
     }
 }

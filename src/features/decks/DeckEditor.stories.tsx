@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 import { ipc } from "@/lib/ipc";
+import { openDropdown, pickOption } from "@/test-dropdown";
 import { DeckEditor } from "./DeckEditor";
 
 /**
@@ -365,35 +366,35 @@ export const CommanderDeck: Story = {
 /**
  * One deck, four ways of looking at it — and the same headings in every one.
  *
- * The switch is the toolbar's **View** select, the groups are `grouping.ts`'s, and each view
+ * The switch is the toolbar's **View** picker, the groups are `grouping.ts`'s, and each view
  * decides only how a card is drawn: a stack of card faces, a `VirtualTable` row, a 22px line, a
  * 150px tile. That is what makes this a switch rather than four screens — the Sort and Group by
  * beside it keep meaning the same thing whichever is picked, and the table's own headers
  * deliberately do not sort, because one list with two orders is a list nobody can read.
  *
- * All three of those controls are the same `<select>`, which is what this play walks: three
+ * All three of those controls are the same `Dropdown`, which is what this play walks: three
  * questions about one list, asked one way.
  */
 export const FourViews: Story = {
   args: { deckId: 3 },
   play: async ({ canvasElement }) => {
+    const user = userEvent.setup();
     const canvas = within(canvasElement);
-    const pick = (id: string) => userEvent.selectOptions(canvas.getByLabelText("View"), id);
     await canvas.findByRole("region", { name: "Main deck" });
 
-    await pick("table");
+    await pickOption(user, "View", "Table");
     await expect(await canvas.findByRole("table", { name: "This deck" })).toBeInTheDocument();
 
-    await pick("text");
+    await pickOption(user, "View", "Text");
     await waitFor(async () => await expect(canvas.queryByRole("table")).toBeNull());
     await expect(canvas.getByRole("region", { name: "Main deck" })).toBeVisible();
 
-    await pick("grid");
+    await pickOption(user, "View", "Grid");
     await expect(canvas.getByRole("region", { name: "Main deck" })).toBeVisible();
 
-    await pick("stacks");
+    await pickOption(user, "View", "Stacks");
     await expect(canvas.getByRole("list", { name: "Main deck" })).toBeInTheDocument();
-    await expect(canvas.getByLabelText("View")).toHaveValue("stacks");
+    await expect(canvas.getByRole("button", { name: "View" })).toHaveTextContent("Stacks");
   },
 };
 
@@ -413,7 +414,7 @@ export const FourViews: Story = {
  * **A third control appears and disappears with the first.** `Split X` gives the `{X}` spells a
  * heading of their own, so it is drawn only under Mana value — there is nothing for it to say
  * about a deck grouped by category or by type, and a control that persists across a grouping it
- * has no effect on is one whose scope the reader has to remember. Unlike the two selects beside
+ * has no effect on is one whose scope the reader has to remember. Unlike the two pickers beside
  * it, its state is **the deck's** (`decks.separate_x_group`, schema v13) rather than this
  * session's: how you are looking at a deck right now is thrown away with the editor, and whether
  * a particular deck is worth reading with its X spells apart is an answer about that deck. What
@@ -422,17 +423,18 @@ export const FourViews: Story = {
 export const GroupAndSort: Story = {
   args: { deckId: 1 },
   play: async ({ canvasElement }) => {
+    const user = userEvent.setup();
     const canvas = within(canvasElement);
     await canvas.findByRole("region", { name: "Main deck" });
     const splitX = () => canvas.queryByRole("button", { name: /^Split X/ });
     await expect(splitX()).toBeNull();
 
-    await userEvent.selectOptions(canvas.getByLabelText("Group by"), "manaValue");
+    await pickOption(user, "Group by", "Mana value");
     await expect(await canvas.findByRole("region", { name: "Mana value 1" })).toBeVisible();
     // The switched-off pile is still drawn, as itself, after the buckets.
     await expect(canvas.getByRole("region", { name: "Maybeboard" })).toBeVisible();
     // The whole sentence is the chip's accessible name as well as its tooltip: "Split X" alone
-    // names a thing rather than an action, and the name has to stand up read with no select
+    // names a thing rather than an action, and the name has to stand up read with no picker
     // beside it. It begins with the visible label all the same (WCAG 2.5.3).
     const chip = canvas.getByRole("button", { name: /^Split X/ });
     await expect(chip).toHaveAccessibleName(
@@ -445,14 +447,14 @@ export const GroupAndSort: Story = {
     await expect(chip).toHaveAttribute("aria-pressed");
     await expect(chip).toBeEnabled();
 
-    await userEvent.selectOptions(canvas.getByLabelText("Group by"), "type");
+    await pickOption(user, "Group by", "Type");
     await expect(await canvas.findByRole("region", { name: "Creature" })).toBeVisible();
     await expect(canvas.queryByRole("region", { name: "Mana value 1" })).toBeNull();
     // Gone with the grouping it qualifies.
     await expect(splitX()).toBeNull();
 
-    await userEvent.selectOptions(canvas.getByLabelText("Sort"), "price");
-    await expect(canvas.getByLabelText("Sort")).toHaveValue("price");
+    await pickOption(user, "Sort", "Price");
+    await expect(canvas.getByRole("button", { name: "Sort" })).toHaveTextContent("Price");
   },
 };
 
@@ -466,13 +468,14 @@ export const GroupAndSort: Story = {
  * `theory`/`type`/`manaCost` for exactly this — the other three decks carry the defaults, and a
  * seed where every deck read the same way could not show the memory at all.
  *
- * **Theory is the left-hand tab**, and that is the order the switch produces rather than a
- * preference: turning the plan on *moves* the live list into it, so the tab holding the cards is
- * the one a reader lands on and Live is the column that fills as they acquire them.
+ * **Theory is the left-hand tab again** (2026-08-26), which is also the order the switch
+ * produces rather than merely a preference: turning the plan on *moves* the live list into it, so
+ * the tab holding the cards is the one a reader lands on and `Actual` is the column that fills as
+ * they acquire them.
  *
  * Smuggler's Copter is the proof that the *list* changed and not just which button is lit — it is
- * in this deck's plan and in no part of what is sleeved up. Pressing Live is what the memory is
- * not: a starting point, never a lock.
+ * in this deck's plan and in no part of what is sleeved up. Pressing `Actual` is what the memory
+ * is not: a starting point, never a lock.
  *
  * **It is also the seeded half of {@link AutoPileArrivesWithItsCard}.** This deck's "Cut list" is
  * a pile the reader made and switched off, and the plan has nothing in it — so the heading is
@@ -487,19 +490,17 @@ export const ReopensOnThePlan: Story = {
     const canvas = within(canvasElement);
     const tabs = within(await canvas.findByRole("group", { name: "Deck list" }));
 
-    // Live first, Theory second — read off the DOM order, because "on the left" is the claim.
-    // Compare is the middle control in this group since 2026-08-24, a `Scale` glyph between the
-    // two lists it weighs, so the sequence is read off the names rather than the text.
-    const [live, compare, theory] = tabs.getAllByRole("button");
-    await expect(
-      [live, compare, theory].map((b) => b.getAttribute("aria-label") ?? b.textContent),
-    ).toEqual(["Live", "Compare", "Theory"]);
+    // Theory first, Actual second — read off the DOM order, because "on the left" is the claim.
+    // Compare stands *outside* this group since 2026-08-26 — an action about both lists rather
+    // than a third list — so the group holds exactly the two words.
+    const [theory, live] = tabs.getAllByRole("button");
+    await expect([theory, live].map((b) => b.textContent)).toEqual(["Theory", "Actual"]);
     // **The story's own claim is the pressed one, not the leftmost one**: this deck was left on
     // its plan, so Theory is what it reopens on wherever that tab is drawn.
     await expect(theory).toHaveAttribute("aria-pressed", "true");
 
-    await expect(canvas.getByLabelText("Group by")).toHaveValue("type");
-    await expect(canvas.getByLabelText("Sort")).toHaveValue("manaCost");
+    await expect(canvas.getByRole("button", { name: "Group by" })).toHaveTextContent("Type");
+    await expect(canvas.getByRole("button", { name: "Sort" })).toHaveTextContent("Mana cost");
 
     // Empty in the plan and drawn regardless, because the reader made it.
     await expect(
@@ -885,6 +886,7 @@ export const EmptyCommandZone: Story = {
 export const AutoPileArrivesWithItsCard: Story = {
   args: { deckId: null },
   play: async ({ canvasElement }) => {
+    const user = userEvent.setup();
     const canvas = within(canvasElement);
     const heading = (name: string) => canvas.queryByRole("region", { name });
     await canvas.findByRole("region", { name: "Sideboard" });
@@ -922,14 +924,14 @@ export const AutoPileArrivesWithItsCard: Story = {
     await waitFor(async () => await expect(heading("Ramp")).toBeNull(), { timeout: 4000 });
     // Empty since it was made, and still drawn: a place the reader chose to keep.
     await expect(canvas.getByRole("region", { name: "Combo pieces" })).toBeVisible();
-    // The row is still in `deck.categories`, which is what deck settings' "Add cards to" select
+    // The row is still in `deck.categories`, which is what deck settings' "Add cards to" picker
     // is built from — undrawn is not deleted, and the next Sol Ring lands back in it by name.
-    // That select was the docked panel's until 2026-08-15, when where an unfiled add lands
+    // That control was the docked panel's until 2026-08-15, when where an unfiled add lands
     // became a deck setting; the claim is unchanged and only the surface moved.
     await userEvent.click(canvas.getByRole("button", { name: "Deck settings" }));
-    const addTo = within(await canvas.findByLabelText("Add cards to"));
-    await expect(addTo.getByRole("option", { name: "Ramp" })).toBeInTheDocument();
-    await expect(addTo.getByRole("option", { name: "Combo pieces" })).toBeInTheDocument();
+    await openDropdown(user, "Add cards to");
+    await expect(canvas.getByRole("option", { name: "Ramp" })).toBeInTheDocument();
+    await expect(canvas.getByRole("option", { name: "Combo pieces" })).toBeInTheDocument();
   },
 };
 
@@ -1069,6 +1071,7 @@ export const Gone: Story = {
 export const SwapFolds: Story = {
   args: { deckId: 2 },
   play: async ({ canvasElement }) => {
+    const user = userEvent.setup();
     const canvas = within(canvasElement);
     // **The panel is open at rest again** (issue #183), so there is no disclosure to press
     // first — the card pane it used to trade width with is an overlay now and takes none. The
@@ -1095,11 +1098,7 @@ export const SwapFolds: Story = {
     // because a category's id is the fake's own row numbering and not something a story writes
     // down.
     await userEvent.click(canvas.getByRole("button", { name: "Deck settings" }));
-    const target = await canvas.findByLabelText("Add cards to");
-    await userEvent.selectOptions(
-      target,
-      within(target).getByRole("option", { name: "Main deck" }),
-    );
+    await pickOption(user, "Add cards to", "Main deck");
     await userEvent.click(canvas.getByRole("button", { name: "Close deck settings" }));
     await waitFor(async () => await expect(canvas.queryByRole("dialog")).toBeNull());
 

@@ -24,9 +24,11 @@ import { wishlistDestination } from "@/features/transfer/import/destinations/Wis
 import { ImportExportPair } from "@/features/transfer/ImportExportPair";
 import { ImportDialog } from "@/features/transfer/import/ImportDialog";
 import { FilterBar, type FilterLabels, type TrayCell } from "@/features/search/FilterBar";
-import { ToggleChip } from "@/components/FilterChips";
+import { NewFolderCard } from "@/components/NewFolderCard";
 import { count } from "@/lib/counts";
 import { DROP_MARK_ROOM } from "@/lib/dropMarks";
+import type { FolderDrag, FolderEdge } from "@/lib/folderDrag";
+import { reorderedLevel } from "@/lib/folderOrder";
 import { isFinish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
 import { buildFolderTree, folderDescendants, type FolderNode } from "@/lib/folderTree";
@@ -689,11 +691,12 @@ export function WishlistPage() {
    * Flatten closes whatever folder layer is open, and it does it by *deriving* rather than by
    * writing state from an effect.
    *
-   * With the filing ignored there are no folder cards and no `+ New folder`, so every trigger
-   * that could have opened one of these is off screen — a rename field left standing over a
-   * flattened list would be a layer with nothing on screen explaining what it is about. The
-   * derived value is what the whole page reads, `panel` itself only what the setters write, so
-   * pressing Flatten and pressing it back does not resurrect the layer.
+   * With the filing ignored the whole wall goes — `+ New folder`'s tile and every folder card's
+   * `⋯` with it, since all of them are drawn *inside* it — so every trigger that could have
+   * opened one of these is off screen. A rename field left standing over a flattened list would
+   * be a layer with nothing on screen explaining what it is about. The derived value is what the
+   * whole page reads, `panel` itself only what the setters write, so pressing Flatten and
+   * pressing it back does not resurrect the layer.
    */
   const openPanel = flatten ? null : panel;
 
@@ -749,14 +752,21 @@ export function WishlistPage() {
   }, []);
 
   /**
-   * `+ New folder`, from the filter bar — **inside the folder the reader is standing in**, which
-   * is the whole of what the button promises by being hidden while the list is flattened.
+   * `+ New folder`, the wall's own first tile — **inside the folder the reader is standing in**,
+   * which is the whole of what it promises by going away with the wall while the list is
+   * flattened.
+   *
+   * **`HTMLElement` rather than the `HTMLButtonElement` this took while it was wired to a
+   * `<button>` here.** {@link NewFolderCard} owns the element now and hands it over as an
+   * `HTMLElement`; under `strictFunctionTypes` a callback asking for the narrower type is not
+   * assignable to that prop at all, and it never needed the narrower one — {@link open} takes an
+   * `HTMLElement | null`, because all it does with the element is `focus()` it.
    *
    * `folders.create.reset()` for `DecksPage`'s reason: a refusal from the last attempt is not
    * news about this one.
    */
   const openNewFolder = useCallback(
-    (opener: HTMLButtonElement) => {
+    (opener: HTMLElement) => {
       folders.create.reset();
       open({ kind: "newFolder", parentId: folderId }, opener);
     },
@@ -871,6 +881,113 @@ export function WishlistPage() {
     [setFolder],
   );
 
+  /**
+   * What a folder let go on another folder means as a write — the destination level and that
+   * level's whole new order — or `null` for a drop this page will not make.
+   *
+   * **One function for both halves of the gesture**, because a mark that promised a write the
+   * drop then refused would be worse than no mark: `useFolderDropTarget` asks the question once
+   * per target per frame to decide what to draw, and again at the drop because the two can be a
+   * second apart and only the second one writes.
+   *
+   * **No ownership clause, and its absence is a fact about this cabinet rather than an omission.**
+   * `CollectionPage`'s twin of this function opens by fencing both ends to folders the reader
+   * made, because `collection_folders.kind` makes some of that table the app's — one row per deck
+   * plus the single `Recently removed` — and `collection_folders::reorder_folders` answers
+   * `FOLDER_NOT_YOURS` for either at either end. `wishlist_folders` carries **no `kind` column**:
+   * every row in it was made by the reader with `+ New folder`, `wishlist_folder_reorder` has
+   * nothing to refuse, and a clause here would be a check with no false case. If that table ever
+   * grows a row the app owns, this is the second place that has to learn it.
+   *
+   * **A folder may not land inside itself or inside anything it holds.** The backend refuses that
+   * one, and the guard is not cosmetic: `wishlist_folders.parent_id` is `ON DELETE CASCADE` **on
+   * itself**, so a cycle is a graph SQLite's recursive cascade would walk forever the day the
+   * folder is deleted. It is asked of the **destination parent** rather than of the card under
+   * the pointer, which is what covers all three landings at once — `inside` a descendant and
+   * `before` one are the same cycle, since a descendant's own parent is the dragged folder or
+   * something already under it. **No gesture on this page reaches it today**: the wall draws
+   * exactly one level, so every card on it is a sibling of every other and a descendant is never
+   * on screen beside its ancestor. It is the fence rather than the affordance, and the
+   * arrangement that would put the two together is a cabinet that already holds a cycle — which
+   * `buildFolderTree` draws at the root as leaves and which only corruption produces.
+   *
+   * **And a drop that would reproduce the order already on screen is not a write.**
+   * `reorderedLevel` is what says so; its `null` is a refusal rather than an error, because
+   * dropping a folder back where it already sits is a gesture a reader makes by accident every
+   * time they think better of one mid-drag, and a write for it would bump `updated_at` and
+   * re-read the list to arrive at what is already drawn.
+   *
+   * **Flatten is not a case this has to answer**, for the reason `filed` already encodes: with
+   * the filing ignored there are no folder cards at all, so there is nothing to pick up and
+   * nothing to point at.
+   */
+  const folderPlacement = useCallback(
+    (
+      drag: FolderDrag,
+      target: FolderNode<WishlistFolder>,
+      edge: FolderEdge,
+    ): { parentId: number | null; ids: number[] } | null => {
+      // `inside` says which drawer and the target *is* it; `before`/`after` say where in the
+      // level the target sits in, which is the level being drawn — `folderId`, never the target
+      // row's own `parentId`. `buildFolderTree` draws a folder whose parent this list does not
+      // carry at the root rather than dropping it, so an orphan's row names a folder that is
+      // gone, and sending that as the destination would be a reorder into nothing. What is on
+      // screen is the honest answer, and `wishlist_folder_reorder` writing `parent_id` from it
+      // files the orphan where the reader can already see it.
+      const parentId = edge === "inside" ? target.folder.id : folderId;
+      if (parentId !== null && parentId === drag.folderId) return null;
+      if (parentId !== null && folderDescendants(folders.folders, drag.folderId).has(parentId)) {
+        return null;
+      }
+      const ids = reorderedLevel({
+        // The target's own children for a nest — in the order the tree already draws them, so a
+        // nest re-states the level it is joining rather than re-sorting it — and the level on
+        // screen for the other two.
+        siblings:
+          edge === "inside"
+            ? target.children.map((child) => child.folder.id)
+            : childFolders.map((one) => one.folder.id),
+        dragged: drag.folderId,
+        target: target.folder.id,
+        edge,
+      });
+      return ids === null ? null : { parentId, ids: [...ids] };
+    },
+    [folderId, folders.folders, childFolders],
+  );
+
+  /**
+   * The two halves of {@link folderPlacement}, bound per card by the wall below.
+   *
+   * **A folder is deliberately not droppable on the breadcrumb, where a wish is**, and the two
+   * are not the same gesture wearing different payloads. `wishlist_set_folder` takes one
+   * destination and that is the whole of the write, so a trail segment names a complete answer —
+   * which is why `WishlistBreadcrumb` takes wish drops at all: without somewhere to drop a wish
+   * that moves it *up*, that gesture would only ever push wishes deeper.
+   * `wishlist_folder_reorder` takes a destination **and that level's whole order**, and the order
+   * is what this gesture is for — a quarter of every folder card means "beside this one, here"
+   * (`EDGE_ZONE`). A segment is one word with no order to point into, so the only thing a drop on
+   * it could say is "last, in a level that is not on screen", and the folder would leave the wall
+   * with nothing drawn saying where it went. The way back out is `Move to folder…`, on the card's
+   * own `⋯`, which names every destination including the root — so unlike a wish, a folder is not
+   * one gesture short of a route home. If this is revisited, the thing to change is the *mark*,
+   * not the target: a segment would need to say "last" before it could honestly take one.
+   */
+  const canPlaceFolder = useCallback(
+    (drag: FolderDrag, target: FolderNode<WishlistFolder>, edge: FolderEdge) =>
+      folderPlacement(drag, target, edge) !== null,
+    [folderPlacement],
+  );
+  const placeFolder = useCallback(
+    (drag: FolderDrag, target: FolderNode<WishlistFolder>, edge: FolderEdge) => {
+      const plan = folderPlacement(drag, target, edge);
+      // A `null` writes **nothing at all** — not a reorder of the level as it stands, which would
+      // be a transaction to arrive at the list already on screen.
+      if (plan !== null) folders.reorder.mutate(plan);
+    },
+    [folderPlacement, folders.reorder],
+  );
+
   const failure = query.isError ? ipcError(query.error) : null;
   // The *latest* write on the screen, not whichever is still holding an error: a refused stepper
   // press would otherwise leave "Could not change your wishlist" up while the reader went on to
@@ -885,14 +1002,42 @@ export function WishlistPage() {
     folders.create,
     folders.rename,
     folders.move,
+    folders.reorder,
     folders.remove,
   ]);
   const empty = rows.length === 0;
-  // The cabinet is drawn only where there is one. At the root of a wishlist nobody has filed,
-  // a lone inert "Wishlist" under a ribbon that already says Wishlist is the subheading this
-  // page's own `sr-only` heading exists to avoid — and there are no cards to put under it.
+  // **The trail is drawn only where there is a cabinet to walk.** At the root of a wishlist
+  // nobody has filed, a lone inert "Wishlist" under a ribbon that already says Wishlist is the
+  // subheading this page's own `sr-only` heading exists to avoid, and there is nowhere for it to
+  // lead. It is also what the export dialog's extra clause is gated on, below.
+  //
+  // **Not the wall's gate** — see {@link cabinet}. The wall is drawn over an empty cabinet
+  // because the tile that makes the first folder lives in it.
   const hasFolders = folders.folders.length > 0;
+  /**
+   * **Does this level hold drawers of its own** — the question {@link statusOf} asks, and the
+   * only one this value answers.
+   *
+   * A level whose content is folder cards is not an empty level, so the status line stays out of
+   * their way. `+ New folder` is not content: a wall holding nothing but the tile that makes the
+   * first folder is still a level with nothing in it, and it still has to say so.
+   */
   const filed = !flatten && childFolders.length > 0;
+  /**
+   * **Whether the cabinet is drawn at all — and it is drawn over an empty one on purpose.**
+   *
+   * Deliberately *not* {@link filed}. Gating the wall on “there is at least one folder” was free
+   * while `+ New folder` sat in a row of its own; with the tile living **inside** the wall it
+   * would be a trap door — a reader whose wishlist has never been filed would have no folder
+   * card to draw, therefore no wall, therefore no way to make their first folder, and the cabinet
+   * could never be opened by anyone who did not already have one.
+   *
+   * Flatten is the whole of what closes it, which is where the `+ New folder` note went: a
+   * flattened list has no current folder to create one inside, so the control that promises
+   * “here” goes with the level it was promising about — one gate now instead of that condition
+   * written twice.
+   */
+  const cabinet = !flatten;
 
   /**
    * What the export dialog's two sentences have to say about where the reader is standing.
@@ -989,16 +1134,33 @@ export function WishlistPage() {
         sortRows={wishlist.sortRows}
         tray={WISHLIST_TRAY}
         layoutFor="wishlist"
+        // On, it ignores the filing entirely: no folder cards, no drill-down, and every wish in
+        // the list at once, each captioned with the folder it is filed in instead — the only way
+        // a reader sees a card's folder without opening it. One press either way, since there is
+        // no third state to walk.
+        flatten={{ pressed: wishlist.flatten, onToggle: wishlist.toggleFlatten }}
       />
 
       <div className="flex min-h-0 flex-1 flex-col gap-2">
-        {/* **The drawers' own controls, and they are deliberately not in the filter row.** Where
-            the reader is standing and how much of the tree is on screen are navigation rather
-            than a narrowing — `useWishlist` says so of both `folderId` and `flatten`, and
-            `resetAll` leaves them alone — so either one among the filters would be a control that
-            Reset all could not undo. They sit with the breadcrumb and the folder cards instead. */}
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-          {hasFolders && (
+        {/* **The fence is “not among the filters”, and it was never “not on the bar” — which is
+            the half of this note that changed when Flatten moved.** `resetAll` leaves both
+            `folderId` and `flatten` alone (`useWishlist` says so of each), so either one drawn as
+            a *filter* would be the one control in that row Reset all could not undo. But the bar
+            already has a home for controls that are not filters: past the second hairline, beside
+            the sort and the grid-or-table pair, where every control says how the list is **drawn**
+            rather than which rows are in it — and `FilterBar`'s own comment above `ViewToggle`
+            says in as many words that nothing there is counted or cleared by Reset all. Flatten
+            is exactly that kind of statement, so it rides the bar on the far side of the hairline
+            and satisfies the fence rather than breaking it.
+
+            **The breadcrumb does not follow it, and that is the surviving half.** Where the reader
+            is standing is not a way of drawing the list — it is a *place*, one the folder cards
+            below are the doors into — so the drill-down and the trail back out stay down here with
+            the cabinet they are about. This row is the whole of what is left of the old one, so it
+            is drawn only where there is a trail to draw: an empty flex row is chrome with nothing
+            in it. */}
+        {hasFolders && (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
             <div className="min-w-0 flex-1">
               <WishlistBreadcrumb
                 // Root-most first and **without the root**, which the breadcrumb prepends itself:
@@ -1011,31 +1173,8 @@ export function WishlistPage() {
                 onDropWish={fileWish}
               />
             </div>
-          )}
-          {/* On, it ignores the filing entirely: no folder cards, no drill-down, and every wish in
-              the list at once, each captioned with the folder it is filed in instead — the only
-              way a reader sees a card's folder without opening it. One press either way, since
-              there is no third state to walk. */}
-          <ToggleChip
-            label="Flatten"
-            pressed={wishlist.flatten}
-            onClick={wishlist.toggleFlatten}
-            className="ml-auto"
-          />
-          {/* Hidden while flattened: a flattened list has no current folder to create one inside. */}
-          {!wishlist.flatten && (
-            <button
-              type="button"
-              onClick={(e) => openNewFolder(e.currentTarget)}
-              className={cn(
-                "h-8 shrink-0 rounded-md border border-border px-3 text-sm hover:bg-surface",
-                FOCUS,
-              )}
-            >
-              + New folder
-            </button>
-          )}
-        </div>
+          </div>
+        )}
 
         {/* **One strip for all four folder layers, and it is not a placement decision so much as
             the only place there is.** Every other anchored layer in this app hangs off a
@@ -1125,7 +1264,7 @@ export function WishlistPage() {
           </div>
         )}
 
-        {filed && (
+        {cabinet && (
           // **The scroller is what makes the cabinet a band rather than the page.** A reader with
           // twenty drawers must not lose the wall to them, so the row of cards is bounded and
           // scrolls inside itself.
@@ -1138,6 +1277,14 @@ export function WishlistPage() {
           // the same fix. `relative` for the rule beside it: a scroll container has to be the
           // containing block for its own absolutely positioned content, or an `sr-only` label
           // inside stretches the document. jsdom has no layout engine and can see none of this.
+          //
+          // **`max-h-44` is a ceiling and not a height, which is what makes a wall holding only
+          // the `New folder` tile look right** — measured 2026-08-26 in headless Edge over the
+          // built stylesheet, at the story decorator's 1032px content column. The tile alone
+          // draws this box **74px** tall (62 for the tile, `p-1.5` either side) rather than
+          // standing 176px of empty band under one card; the tile and a folder card measure the
+          // same 62, so the first row is never ragged; and thirteen cards still want 214 and are
+          // clamped to 176 with a scrollbar, which is the case this `max-h` was written for.
           <div
             className={cn("relative max-h-44 shrink-0 overflow-y-auto", DROP_MARK_ROOM)}
           >
@@ -1145,6 +1292,15 @@ export function WishlistPage() {
               aria-label="Folders"
               className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-2"
             >
+              {/* **First, and shaped like the cards it makes.** A wall of drawers is where a
+                  reader looks for the drawer they want, so it is also where they look for the one
+                  that is not there yet — and the tile is the only thing in this `<ul>` on a
+                  wishlist nobody has filed, which is what {@link cabinet} exists to allow.
+
+                  It is handed {@link openNewFolder} directly rather than through an arrow: the
+                  panel this raises has to give the caret back to the control it was raised from,
+                  and `NewFolderCard` hands over its own button for exactly that. */}
+              <NewFolderCard onClick={openNewFolder} />
               {childFolders.map((node) => (
                 <WishFolderCard
                   key={node.folder.id}
@@ -1172,6 +1328,11 @@ export function WishlistPage() {
                   rowMenu={folderRowMenu(node.folder)}
                   canDrop={(drag) => canFile(drag, node.folder.id)}
                   onDropWish={(drag) => fileWish(drag, node.folder.id)}
+                  // The card asks about the folder in the air and where on itself it is; the
+                  // page adds which card that is, because only the page holds the level and the
+                  // tree the answer is worked out from.
+                  canDropFolder={(drag, edge) => canPlaceFolder(drag, node, edge)}
+                  onDropFolder={(drag, edge) => placeFolder(drag, node, edge)}
                 />
               ))}
             </ul>

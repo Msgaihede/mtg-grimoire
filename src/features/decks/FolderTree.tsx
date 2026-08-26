@@ -9,10 +9,17 @@ import {
 } from "react";
 import { Check, Folder, FolderOpen, FolderPlus, Layers } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
+import { FolderDropLine } from "@/components/FolderDropLine";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { plural } from "@/lib/counts";
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
+import {
+  folderDraggable,
+  useFolderDropTarget,
+  type FolderDrag,
+  type FolderEdge,
+} from "@/lib/folderDrag";
 import { FOCUS } from "@/lib/focus";
 import type { DeckFolder } from "@/lib/ipc";
 import { statusLine } from "@/lib/motion";
@@ -76,6 +83,53 @@ export type FolderNaming =
  *  element* by the time the layer is gone, so a ref taken when it opened points at nothing. */
 export const FOLDER_ROW_ATTR = "data-folder-id";
 
+/**
+ * A folder that can be picked up — a row here, or a card on the wall.
+ *
+ * **One hook for the gallery's two drawings of a folder**, which is why it is exported rather
+ * than written twice: `FolderCard.tsx` already reaches this module for the tree and the deck
+ * drag, and two copies of a registration whose whole subtlety is *when it re-registers* would
+ * drift the first time either surface grew a prop.
+ *
+ * `folderDraggable` takes a callback and this reads it out of a **ref** for that callback's own
+ * reason: `node.folder` is a fresh object on every refetch, so an effect keyed on it would tear
+ * the source down and rebuild it in the middle of a gesture — `useFolderDropTarget` keeps its two
+ * callbacks in a ref against exactly that. Registration is keyed on the id alone, which is what a
+ * row is keyed on, so it happens once per folder for the life of the row.
+ *
+ * `null` for the tree's "All decks" row, which is the root rather than a folder: there is nothing
+ * to pick up.
+ */
+export function useFolderDragSource(
+  ref: RefObject<HTMLElement | null>,
+  folder: DeckFolder | null,
+): void {
+  const latest = useRef(folder);
+  useEffect(() => {
+    latest.current = folder;
+  });
+
+  const id = folder?.id ?? null;
+  useEffect(() => {
+    const element = ref.current;
+    if (element === null || id === null) return;
+    return folderDraggable({
+      element,
+      // The name and the parent are read at `dragstart`, so a folder renamed or re-filed since
+      // its row mounted carries what it is now — and its current parent is what lets a nest that
+      // would move it nowhere be refused before the drop. The ref holds this same folder for the
+      // whole life of the registration (a row is keyed on its id, and only a folder registers),
+      // so the fallbacks below stand for a state that cannot arise rather than for one that can.
+      folder: () => ({
+        folderId: id,
+        name: latest.current?.name ?? "",
+        parentId: latest.current?.parentId ?? null,
+        scope: "deck",
+      }),
+    });
+  }, [ref, id]);
+}
+
 /** A row's two doors into one menu — a right-click, and Shift+F10 or the ContextMenu key. */
 export interface FolderRowMenu {
   onContextMenu: MouseEventHandler<HTMLButtonElement>;
@@ -93,6 +147,20 @@ export interface FolderTreeProps {
   drag: DeckDrag | null;
   canDropIn: (drag: DeckDrag, folderId: number | null) => boolean;
   onDropIn: (drag: DeckDrag, folderId: number | null) => void;
+  /**
+   * The other drag: a **folder** let go on this row, and where it would land relative to it.
+   *
+   * There is no `drag` prop beside these the way there is for a deck, and that is the shape of
+   * the mechanism rather than an omission: `useFolderDropTarget` runs a monitor **per target**
+   * gated by this same question, so a row answers "could I take it?" for itself. No two rows
+   * answer the same — one refuses itself, one refuses a nest that would move nothing, one refuses
+   * a cycle — which is what a single `drag` prop could not express.
+   *
+   * `folderId` is `null` for the "All decks" row: see the tree's own call below for what the root
+   * takes and why.
+   */
+  canDropFolder: (drag: FolderDrag, folderId: number | null, edge: FolderEdge) => boolean;
+  onDropFolder: (drag: FolderDrag, folderId: number | null, edge: FolderEdge) => void;
   /** The one open field, or `null`. Held by the page so it is the page's single dismissible
    *  layer — two Escape peers are not ordered by the handshake at all. */
   naming: FolderNaming | null;
@@ -154,6 +222,8 @@ export function FolderTree({
   drag,
   canDropIn,
   onDropIn,
+  canDropFolder,
+  onDropFolder,
   naming,
   onOpenNew,
   onOpenRename,
@@ -216,6 +286,17 @@ export function FolderTree({
       </AnimatePresence>
 
       <ul className="flex flex-col gap-0.5">
+        {/* **The root takes a folder, and only into itself.**
+            "All decks" is not a folder — it cannot be picked up, renamed or deleted — but it is
+            the one row that means *the top level*, and filing a folder back there is otherwise
+            unreachable by this gesture: every other row is a folder, so dragging a folder **out**
+            of a drawer would always mean dragging it **into** another one. The pointer needs
+            somewhere that is nowhere, and this is it.
+            Its two positional landings are refused instead. A line above or below this row would
+            promise a place in a level it does not itself sit in — it stands above every top-level
+            folder rather than among them — and the position it looks like it offers ("first at
+            the top level") is already the first folder's own leading edge, which is the same drop
+            spelled once. */}
         <FolderRow
           label="All decks"
           count={totalDecks}
@@ -225,6 +306,8 @@ export function FolderTree({
           drag={drag}
           canDrop={(d) => canDropIn(d, null)}
           onDropDeck={(d) => onDropIn(d, null)}
+          canDropFolder={(d, at) => canDropFolder(d, null, at)}
+          onDropFolder={(d, at) => onDropFolder(d, null, at)}
           onSelect={() => onSelect(null)}
         />
 
@@ -246,7 +329,7 @@ export function FolderTree({
           ) : (
             <FolderRow
               key={node.folder.id}
-              folderId={node.folder.id}
+              folder={node.folder}
               label={node.folder.name}
               count={node.count}
               depth={node.depth + 1}
@@ -255,6 +338,8 @@ export function FolderTree({
               drag={drag}
               canDrop={(d) => canDropIn(d, node.folder.id)}
               onDropDeck={(d) => onDropIn(d, node.folder.id)}
+              canDropFolder={(d, at) => canDropFolder(d, node.folder.id, at)}
+              onDropFolder={(d, at) => onDropFolder(d, node.folder.id, at)}
               onSelect={() => onSelect(node.folder.id)}
               onRename={() => onOpenRename(node.folder.id)}
               onNewChild={(opener) => onOpenNew(node.folder.id, opener)}
@@ -308,7 +393,7 @@ export function FolderTree({
  * one the wall is showing.
  */
 function FolderRow({
-  folderId,
+  folder,
   label,
   count,
   depth,
@@ -317,6 +402,8 @@ function FolderRow({
   drag,
   canDrop,
   onDropDeck,
+  canDropFolder,
+  onDropFolder,
   onSelect,
   onRename,
   onNewChild,
@@ -325,8 +412,9 @@ function FolderRow({
   menuOpenerRef,
   children,
 }: {
-  /** Absent on "All decks", which is the tree's root and not a folder. */
-  folderId?: number;
+  /** Absent on "All decks", which is the tree's root and not a folder — so that row carries no
+   *  id, cannot be picked up, and offers no menu. */
+  folder?: DeckFolder;
   label: string;
   count: number;
   depth: number;
@@ -335,6 +423,10 @@ function FolderRow({
   drag: DeckDrag | null;
   canDrop: (drag: DeckDrag) => boolean;
   onDropDeck: (drag: DeckDrag) => void;
+  /** The folder drag's pair, bound to this row already — see
+   *  {@link FolderTreeProps.canDropFolder}. */
+  canDropFolder: (drag: FolderDrag, edge: FolderEdge) => boolean;
+  onDropFolder: (drag: FolderDrag, edge: FolderEdge) => void;
   onSelect: () => void;
   /** F2, the file manager's own key. Absent on "All decks". */
   onRename?: () => void;
@@ -350,8 +442,18 @@ function FolderRow({
   children?: ReactNode;
 }) {
   const ref = useRef<HTMLDivElement>(null);
+  const folderRef = useRef<HTMLDivElement>(null);
   const tip = useTooltip();
+  const folderId = folder?.id;
   const over = useDeckDropTarget({ ref, canDrop, onDrop: onDropDeck });
+  useFolderDragSource(folderRef, folder ?? null);
+  const { armed, edge } = useFolderDropTarget({
+    ref: folderRef,
+    scope: "deck",
+    axis: "vertical",
+    canDrop: canDropFolder,
+    onDrop: onDropFolder,
+  });
   // The ring says "this drawer could take the deck you are holding", the wash says "this is the
   // one it would go into" — `AppShell`'s sidebar vocabulary, because these are the same claim
   // made about the same gesture two panels apart.
@@ -359,93 +461,131 @@ function FolderRow({
 
   return (
     <li>
+      {/* **Two boxes for two drags, and it is the drag library that insists.**
+          `dropTargetForElements` keeps **one** registration per element — a second `set` on the
+          same key replaces the first in its `WeakMap` and warns in dev — so the deck drop and the
+          folder drop cannot share a box however alike they look. Measured here: the row filed a
+          deck until the folder target was added and then silently stopped.
+          The outer box is the deck's, unchanged. The inner one is the folder's, and it is also
+          where the folder is picked up, so one element is the whole of what the folder gesture
+          reads and writes. They are the same rectangle — no padding between them — which matters
+          because the inner one is *measured*: `folderEdge` divides its box into the three
+          landings, and a box that was not the row would put the thresholds somewhere else. */}
       <div
         ref={ref}
         className={cn("group relative rounded-md", eligible && DROP_RING, over && DROP_OVER)}
       >
-        <button
-          type="button"
-          // How the page hands the caret back to this row after the rename field that replaced
-          // it closes. See {@link FOLDER_ROW_ATTR}.
-          {...(folderId === undefined ? {} : { [FOLDER_ROW_ATTR]: folderId })}
-          // The count is drawn as a figure and said as a sentence: a bare "2" after a folder's
-          // name tells a screen reader nothing about what two of. The visible label is the
-          // prefix, which is what WCAG 2.5.3 asks of a control labelled on screen.
-          aria-label={`${label}, ${plural(count, "deck")}`}
-          aria-current={selected ? "true" : undefined}
-          onClick={onSelect}
-          // **The row's menu, on the row's own `<button>`** — not on the `<li>` and not on the
-          // box in between, and both exclusions are load-bearing.
-          //
-          // *Focus*: the panel hands the caret back to the element the menu was opened on, and
-          // this is the only focusable one here — which is also why it is the element Shift+F10
-          // can land on at all.
-          //
-          // *The field*: a "New folder in …" field is drawn **inside this row's `<li>`**, as a
-          // sibling of the box above (see the tree's `children`), so a handler on either of
-          // those would answer a right-click inside a text field — and its own
-          // `preventDefault()`/`stopPropagation()` would keep the provider's document-level
-          // carve-out from ever running, taking cut, copy, paste, undo and the spellcheck
-          // suggestions with it. `isTextField` inside the primitive is the fence; this is the
-          // element that does not need it. (The *rename* field is a different case again: it
-          // replaces the row whole, so there is no row here at all while it is up.)
-          //
-          // The stash is this handler's own line and `e.currentTarget` is this button, exactly
-          // as the deck tile writes its own. It is written even for a press the menu then
-          // declines, which is harmless: nothing reads the opener until a menu *row* is chosen,
-          // and that can only follow a menu that opened.
-          onContextMenu={(e) => {
-            if (menuOpenerRef) menuOpenerRef.current = e.currentTarget;
-            menu?.onContextMenu(e);
-          }}
-          // F2 renames the row the caret is on — the file manager's key, and the keyboard's
-          // route to a rename whose pointer route is this row's own menu. A shortcut rather than
-          // the only way in: nothing here is reachable by this key alone.
-          //
-          // **Composed with the menu key, never replaced by it.** The two answer different
-          // presses, so the order is immaterial and the `defaultPrevented` check is the belt:
-          // what matters is that wiring a menu onto this element did not take the rename off it.
-          onKeyDown={(e) => {
-            if (menuOpenerRef) menuOpenerRef.current = e.currentTarget;
-            menu?.onKeyDown(e);
-            if (e.defaultPrevented) return;
-            if (e.key !== "F2" || onRename === undefined) return;
-            e.preventDefault();
-            onRename();
-          }}
-          style={indent(depth)}
+        {/* **The folder drag borrows the deck's two marks rather than inventing a pair**, and it
+            can because only one drag is ever in the air: `armed` is "this row could take the
+            folder you are holding" and an `inside` landing is "this is the drawer it would go
+            into" — word for word the two claims one box out, about the other payload. What the
+            folder drag adds is the third landing, which a deck has no equivalent of: `before` and
+            `after` are positions *between* rows rather than a row taking anything, so they are
+            drawn as a line and `FolderDropLine` draws nothing for the other two. No mark at all
+            means no drop — `edge` is `null` both off this row and over a part of it that would
+            refuse.
+            `relative` because the line is `absolute` against it; the `+` control below is
+            `absolute` too and this box is the same rectangle as the one it used to be positioned
+            against, so it does not move. */}
+        <div
+          ref={folderRef}
           className={cn(
-            "flex w-full items-center gap-2 rounded-md py-1.5 pr-8 text-left text-sm",
-            "transition-colors duration-150 motion-reduce:transition-none",
-            selected ? "bg-surface text-text" : "text-dim hover:bg-surface/60 hover:text-text",
-            FOCUS,
+            "relative rounded-md",
+            armed && DROP_RING,
+            edge === "inside" && DROP_OVER,
           )}
         >
-          <Glyph
-            className={cn("size-3.5 flex-none", selected && "text-accent")}
-            aria-hidden="true"
-          />
-          <span className="min-w-0 flex-1 truncate">{label}</span>
-          <span className="flex-none font-mono text-[0.7rem] tabular-nums text-dim">{count}</span>
-        </button>
-
-        {onNewChild && (
+          <FolderDropLine edge={edge} axis="vertical" />
           <button
             type="button"
-            aria-label={`New folder in ${label}`}
-            aria-expanded={addingChild}
-            {...tip(`New folder in ${label}`, { describes: false })}
-            onClick={(e) => onNewChild(e.currentTarget)}
+            // How the page hands the caret back to this row after the rename field that replaced
+            // it closes. See {@link FOLDER_ROW_ATTR}.
+            {...(folderId === undefined ? {} : { [FOLDER_ROW_ATTR]: folderId })}
+            // The count is drawn as a figure and said as a sentence: a bare "2" after a folder's
+            // name tells a screen reader nothing about what two of. The visible label is the
+            // prefix, which is what WCAG 2.5.3 asks of a control labelled on screen.
+            aria-label={`${label}, ${plural(count, "deck")}`}
+            aria-current={selected ? "true" : undefined}
+            onClick={onSelect}
+            // **The row's menu, on the row's own `<button>`** — not on the `<li>` and not on the
+            // box in between, and both exclusions are load-bearing.
+            //
+            // *Focus*: the panel hands the caret back to the element the menu was opened on, and
+            // this is the only focusable one here — which is also why it is the element Shift+F10
+            // can land on at all.
+            //
+            // *The field*: a "New folder in …" field is drawn **inside this row's `<li>`**, as a
+            // sibling of the box above (see the tree's `children`), so a handler on either of
+            // those would answer a right-click inside a text field — and its own
+            // `preventDefault()`/`stopPropagation()` would keep the provider's document-level
+            // carve-out from ever running, taking cut, copy, paste, undo and the spellcheck
+            // suggestions with it. `isTextField` inside the primitive is the fence; this is the
+            // element that does not need it. (The *rename* field is a different case again: it
+            // replaces the row whole, so there is no row here at all while it is up.)
+            //
+            // The stash is this handler's own line and `e.currentTarget` is this button, exactly
+            // as the deck tile writes its own. It is written even for a press the menu then
+            // declines, which is harmless: nothing reads the opener until a menu *row* is chosen,
+            // and that can only follow a menu that opened.
+            onContextMenu={(e) => {
+              if (menuOpenerRef) menuOpenerRef.current = e.currentTarget;
+              menu?.onContextMenu(e);
+            }}
+            // F2 renames the row the caret is on — the file manager's key, and the keyboard's
+            // route to a rename whose pointer route is this row's own menu. A shortcut rather than
+            // the only way in: nothing here is reachable by this key alone.
+            //
+            // **Composed with the menu key, never replaced by it.** The two answer different
+            // presses, so the order is immaterial and the `defaultPrevented` check is the belt:
+            // what matters is that wiring a menu onto this element did not take the rename off it.
+            onKeyDown={(e) => {
+              if (menuOpenerRef) menuOpenerRef.current = e.currentTarget;
+              menu?.onKeyDown(e);
+              if (e.defaultPrevented) return;
+              if (e.key !== "F2" || onRename === undefined) return;
+              e.preventDefault();
+              onRename();
+            }}
+            style={indent(depth)}
             className={cn(
-              "absolute right-1 top-1 grid size-6 place-items-center rounded-md text-dim",
-              "transition-colors duration-150 hover:text-accent motion-reduce:transition-none",
-              REVEAL_ON_HOVER,
+              "flex w-full items-center gap-2 rounded-md py-1.5 pr-8 text-left text-sm",
+              "transition-colors duration-150 motion-reduce:transition-none",
+              selected ? "bg-surface text-text" : "text-dim hover:bg-surface/60 hover:text-text",
               FOCUS,
             )}
           >
-            <FolderPlus className="size-3.5" aria-hidden="true" />
+            <Glyph
+              className={cn("size-3.5 flex-none", selected && "text-accent")}
+              aria-hidden="true"
+            />
+            <span className="min-w-0 flex-1 truncate">{label}</span>
+            <span className="flex-none font-mono text-[0.7rem] tabular-nums text-dim">{count}</span>
           </button>
-        )}
+
+          {onNewChild && (
+            <button
+              type="button"
+              // **The row above it is a drag source now, and Chromium starts a drag from the
+              // nearest draggable *ancestor* of whatever was pressed** — so without this mark a
+              // press here plus five pixels of travel files the folder somewhere instead of opening
+              // the field. `dnd.ts`'s `NOT_A_DRAG` is the selector; the rule it states is that
+              // anything inside a draggable which owns its own press marks itself.
+              data-no-drag=""
+              aria-label={`New folder in ${label}`}
+              aria-expanded={addingChild}
+              {...tip(`New folder in ${label}`, { describes: false })}
+              onClick={(e) => onNewChild(e.currentTarget)}
+              className={cn(
+                "absolute right-1 top-1 grid size-6 place-items-center rounded-md text-dim",
+                "transition-colors duration-150 hover:text-accent motion-reduce:transition-none",
+                REVEAL_ON_HOVER,
+                FOCUS,
+              )}
+            >
+              <FolderPlus className="size-3.5" aria-hidden="true" />
+            </button>
+          )}
+        </div>
       </div>
       {children}
     </li>

@@ -11,9 +11,8 @@ import { useAppStore } from "./store";
  * it changes, and putting a live element in zustand would make every zoom gesture a subscription
  * update carrying a pointer into the document.
  *
- * At most one element per section — the four sections are four distinct surfaces, and two
- * `CardGrid`s claiming `search` at once would be a bug in the call sites rather than a case to
- * model here.
+ * At most one element per section — each section is a distinct surface, and two `CardGrid`s
+ * claiming `search` at once would be a bug in the call sites rather than a case to model here.
  */
 const sectionElements = new Map<ZoomSection, HTMLElement>();
 

@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, waitFor, within } from "storybook/test";
+import { openDropdown } from "@/test-dropdown";
 import { DeckSettingsDialog } from "./DeckSettingsDialog";
 
 /** How long a `waitFor` will wait for `Dialog`'s first frame — the shell's panel carries its
@@ -59,7 +60,7 @@ type Story = StoryObj<typeof meta>;
  * Deck 1, the Modern shell: a cover it can credit, sixty cards' worth of art to choose from, and
  * a deck filed nowhere.
  *
- * "Top level" is a real answer rather than a placeholder — the select's `""` is
+ * "Top level" is a real answer rather than a placeholder — the dropdown's `""` is
  * `deckSetFolder(id, null)`, the one thing a `DeckPatch` cannot express, because
  * `coalesce(?n, folder_id)` reads a bound NULL as "leave it".
  */
@@ -71,9 +72,9 @@ export const Default: Story = {
     // Scryfall's image policy: an `art` crop has no printed frame, so the illustrator is
     // credited wherever one is shown.
     await expect(canvas.getByText(/^Art by /)).toBeInTheDocument();
-    await expect(canvas.getByLabelText("Format")).toHaveValue("modern");
-    await expect(canvas.getByLabelText("Folder")).toHaveValue("");
-    // The caption beside the label, not the option inside the select — both say the words, and
+    await expect(canvas.getByRole("button", { name: "Format" })).toHaveTextContent("Modern");
+    await expect(canvas.getByRole("button", { name: "Folder" })).toHaveTextContent("Top level");
+    // The caption beside the label, not the option inside the dropdown — both say the words, and
     // only one of them is the deck's own state.
     //
     // **`waitFor`, because this dialog is a `motion` surface**: its first painted frame carries
@@ -102,21 +103,28 @@ export const Default: Story = {
  * exists as a command rather than as a `DeckPatch` field.
  *
  * The options are **paths**, not names: two folders may be called the same thing in different
- * parents, and a select that offered "Commander" twice would be a control the reader cannot use.
+ * parents, and a dropdown that offered "Commander" twice would be a control the reader cannot
+ * use.
  */
 export const FilingTheDeck: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    const select = await canvas.findByLabelText("Folder");
-    // The caption, which is the deck's own state — the select carries the same words as options.
+    await canvas.findByLabelText("Name");
+    // The caption, which is the deck's own state — the trigger carries the same words as an
+    // option.
     const caption = within(canvas.getByText("Folder").closest("div") as HTMLElement);
 
-    await userEvent.selectOptions(select, "Constructed › Commander");
+    // Opened before asserting the row exists — the folder list is a query the deck's own read
+    // does not wait on, so the panel can mount before it has arrived and `findByRole` is what
+    // gives it room to.
+    await openDropdown(userEvent.setup(), "Folder");
+    await userEvent.click(await canvas.findByRole("option", { name: "Constructed › Commander" }));
     await waitFor(async () => {
       await expect(caption.getByText("Constructed › Commander")).toBeVisible();
     });
 
-    await userEvent.selectOptions(select, "");
+    await openDropdown(userEvent.setup(), "Folder");
+    await userEvent.click(await canvas.findByRole("option", { name: "Top level" }));
     await waitFor(async () => {
       await expect(caption.getByText("Top level")).toBeVisible();
     });

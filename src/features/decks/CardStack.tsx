@@ -36,7 +36,7 @@ import {
   type DeckCardActions,
 } from "./cardControl";
 import { deckCardSlot } from "./dnd";
-import { matchesTheory } from "./theoryMatch";
+import { theoryMatchDelta } from "./theoryMatch";
 import { ruleBreak } from "./violations";
 import type { ValidationIssue } from "./validation/types";
 
@@ -552,11 +552,11 @@ export interface CardStackProps {
    */
   violations?: Map<string, ValidationIssue[]>;
   /**
-   * Which rows the deck's plan also asks for, as `theoryMatch.ts`'s set of slots — handed in
-   * whole for `violations`' reason, and `undefined` for a deck that keeps no plan or a reader
-   * looking at the plan itself.
+   * What the deck's plan says about each row, as `theoryMatch.ts`'s map of slot → how far the
+   * live list is from the planned count — handed in whole for `violations`' reason, and
+   * `undefined` for a deck that keeps no plan or a reader looking at the plan itself.
    */
-  theoryMatches?: ReadonlySet<string>;
+  theoryMatches?: ReadonlyMap<string, number>;
   /**
    * Open this card. The whole row is passed rather than an id, because the pane needs the
    * slot: the same printing sits in two categories often enough that "which one was pressed"
@@ -715,7 +715,7 @@ export function CardStack({
           onRelease={release}
           transition={reduced ? STILL : stackCard}
           ruleBreakText={ruleBreak(violations?.get(card.cardId))}
-          inTheory={matchesTheory(theoryMatches, card)}
+          theoryDelta={theoryMatchDelta(theoryMatches, card)}
           onSelect={onSelect}
           actions={actions}
         />
@@ -770,7 +770,7 @@ function StackedCard({
   onRelease,
   transition,
   ruleBreakText,
-  inTheory,
+  theoryDelta,
   onSelect,
   actions,
 }: {
@@ -798,9 +798,11 @@ function StackedCard({
   transition: Transition;
   /** The sentence the `RULE BREAK` mark carries, or `null` when there is nothing wrong. */
   ruleBreakText: string | null;
-  /** The deck's plan asks for this row too — `theoryMatch.ts`, resolved by the stack so this card
-   *  is handed a boolean rather than a set to look itself up in. */
-  inTheory: boolean;
+  /** What the deck's plan says about this row — `theoryMatch.ts`'s `theoryMatchDelta`, resolved by
+   *  the stack so this card is handed an answer rather than a map to look itself up in. `null` is
+   *  a card the plan does not ask for, `0` the card it asks for exactly, and a signed number is
+   *  how far the live list is from the planned count. */
+  theoryDelta: number | null;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
 }) {
@@ -916,7 +918,7 @@ function StackedCard({
         type="button"
         // Every mark below is `aria-hidden`, so this string is the whole of what a keyboard
         // reader gets — including the red shortage figure, which nothing else would say.
-        aria-label={deckCardName(card, ruleBreakText, inTheory)}
+        aria-label={deckCardName(card, ruleBreakText, theoryDelta)}
         // How the card pane hands the caret back after a printing swap replaces this card.
         {...deckCardProps(card)}
         {...deckCardPress(card, onSelect, actions)}
@@ -1014,7 +1016,6 @@ function StackedCard({
               // Decoration: the button already says the card's name, and an `alt` repeating it
               // would have a screen reader read every card twice.
               alt=""
-              draggable={false}
               // Lazy, because a deck's groups are plain scrollers rather than virtualised
               // walls — a hundred-card category really is a hundred mounted cards, and the
               // browser's gate is the only thing bounding what they ask for.
@@ -1057,7 +1058,7 @@ function StackedCard({
                 stack is the one surface where that is not a collision: it draws the overlay with
                 `mark={false}` and says the finish in its foot instead, which is why this corner
                 was free for the `RULE BREAK` mark to have held until now. */}
-            {inTheory && <TheoryMatchMark className="ml-auto" />}
+            {theoryDelta !== null && <TheoryMatchMark delta={theoryDelta} className="ml-auto" />}
           </span>
 
           {/* **Bottom-left, moved out of the top-right corner on 2026-08-20**, and the move is

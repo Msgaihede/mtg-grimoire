@@ -56,6 +56,8 @@ import {
   draggable,
   dropTargetForElements,
 } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
+import { Dropdown } from "@/components/Dropdown/Dropdown";
+import type { DropdownOption } from "@/components/Dropdown/types";
 import { ToggleChip } from "@/components/FilterChips";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { FOCUS } from "@/lib/focus";
@@ -578,13 +580,27 @@ export function DeleteCategory({
   onCancel: () => void;
   onDeleted: () => void;
 }) {
-  /** `"delete"` or a category id as text — one `<select>` value, because the two outcomes are
+  /** `"delete"` or a category id as text — one dropdown value, because the two outcomes are
    *  one decision and a checkbox beside a picker would be two. */
   const [choice, setChoice] = useState<string>(() =>
     // The safe answer is the default: a reader who presses through without reading keeps their
     // cards. Reaching the destructive one takes a deliberate pick.
     others.length > 0 ? String(others[0].id) : "delete",
   );
+
+  // **Deliberately not alphabetical** — one of the exceptions `src/lib/options.ts` names.
+  // `others` is this dialog's own list minus this row, in `sort_order`: the order the reader
+  // dragged these piles into, on the very screen where they dragged them. Alphabetising it
+  // would make the dropdown disagree with the list it sits inside. The destructive answer is
+  // pinned **last**, and never first: it must not be what the dropdown opens on.
+  const choiceOptions: readonly DropdownOption[] = [
+    ...others.map((c) => ({ value: String(c.id), label: `move to “${c.name}”` })),
+    // It read `are deleted with it` until schema v25, and that had become the one wrong half of
+    // a true sentence: the `deck_cards` rows do go, but the copies the reader physically owns
+    // are filed into `Recently removed` rather than destroyed. `go with it` is what is true of
+    // both halves, and the sentence below says where the cards themselves end up.
+    { value: "delete", label: "go with it" },
+  ];
 
   // The caret moves into the question, as it does for every other layer in this app
   // (`DecksPage`'s `DeleteConfirm`, `FolderTree`'s, both of the deck's meta dialogs). **The
@@ -622,38 +638,24 @@ export function DeleteCategory({
 
       {choosing && (
         <div className="mt-1.5 flex items-center gap-2">
-          <label htmlFor={`delete-${category.id}-cards`} className="text-[0.6875rem] text-dim">
+          <label
+            id={`delete-${category.id}-cards-label`}
+            htmlFor={`delete-${category.id}-cards`}
+            className="text-[0.6875rem] text-dim"
+          >
             Its {count}
           </label>
-          {/* **Deliberately not alphabetical** — one of the exceptions `src/lib/options.ts`
-              names. `others` is this dialog's own list minus this row, in `sort_order`: the
-              order the reader dragged these piles into, on the very screen where they dragged
-              them. Alphabetising it would make the dropdown disagree with the list it sits
-              inside. The destructive answer stays **last** whatever the order, below. */}
-          <select
-            id={`delete-${category.id}-cards`}
-            value={choice}
-            onChange={(e) => setChoice(e.target.value)}
-            className={cn(
-              "h-8 min-w-0 flex-1 rounded-md border border-border bg-surface px-2 text-xs",
-              FOCUS,
-            )}
-          >
-            {others.map((c) => (
-              <option key={c.id} value={String(c.id)}>
-                move to “{c.name}”
-              </option>
-            ))}
-            {/* Last, and never first: the destructive answer must not be what the select opens
-                on. Pinned below the moves whatever order they are in.
-
-                It read `are deleted with it` until schema v25, and that had become the one
-                wrong half of a true sentence: the `deck_cards` rows do go, but the copies the
-                reader physically owns are filed into `Recently removed` rather than destroyed.
-                `go with it` is what is true of both halves, and the line below says where the
-                cards themselves end up. */}
-            <option value="delete">go with it</option>
-          </select>
+          <div className="min-w-0 flex-1">
+            <Dropdown
+              id={`delete-${category.id}-cards`}
+              labelledBy={`delete-${category.id}-cards-label`}
+              value={choice}
+              onChange={setChoice}
+              options={choiceOptions}
+              size="sm"
+              fill
+            />
+          </div>
         </div>
       )}
 

@@ -5,6 +5,7 @@ import { expect, fireEvent, userEvent, waitFor, within } from "storybook/test";
 import { useAppStore } from "@/lib/store";
 import { printing } from "../../../.storybook/fake/fixtures";
 import { seed } from "../../../.storybook/fake/seeds";
+import { pickOption } from "@/test-dropdown";
 import { CardDetailPane } from "./CardDetailPane";
 import type { PrintingGroupBy } from "./printings";
 import { PRINTING_GROUP_BY_KEY } from "./usePrintingGroupBy";
@@ -742,9 +743,9 @@ export const Printings: Story = {
     // `find`, not `get`: the section draws its heading while the printings query is still in
     // flight, so the region exists a commit before its rows do.
     await expect(await within(list).findByText("4 printings · 4 artists")).toBeInTheDocument();
-    await expect(within(list).getByRole("combobox", { name: "Group printings by" })).toHaveValue(
-      "artist",
-    );
+    await expect(
+      within(list).getByRole("button", { name: "Group printings by" }),
+    ).toHaveTextContent("Artist");
 
     // One heading per artist, **in alphabetical order** — `getAllByText` answers in document
     // order, which is the only thing that can say the sort ran.
@@ -822,7 +823,7 @@ export const SharedArtist: Story = {
  * renders midnight UTC as the evening *before* anywhere west of Greenwich — one day early for
  * every card in the game, on exactly the machines least likely to be the ones testing it.
  *
- * Opened already in this mode by seeding the setting rather than by driving the select, which
+ * Opened already in this mode by seeding the setting rather than by driving the control, which
  * is what a reader who chose it last week sees; {@link ChoosingHowToGroup} is the interaction.
  *
  * Measured 2026-08-13 over `CARDS`: four printings, four distinct dates, so the counts match
@@ -833,11 +834,11 @@ export const GroupedByReleaseDate: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const list = await canvas.findByRole("region", { name: "Printings" });
-    // The seeded mode is the one the control shows: the select and the list read the same
+    // The seeded mode is the one the control shows: the trigger and the list read the same
     // answer, so a story cannot stage a header that disagrees with what is under it.
-    await expect(within(list).getByRole("combobox", { name: "Group printings by" })).toHaveValue(
-      "released",
-    );
+    await expect(
+      within(list).getByRole("button", { name: "Group printings by" }),
+    ).toHaveTextContent("Release date");
     await expect(
       await within(list).findByText("4 printings · 4 release dates"),
     ).toBeInTheDocument();
@@ -884,9 +885,9 @@ export const GroupedByPrice: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const list = await canvas.findByRole("region", { name: "Printings" });
-    await expect(within(list).getByRole("combobox", { name: "Group printings by" })).toHaveValue(
-      "price",
-    );
+    await expect(
+      within(list).getByRole("button", { name: "Group printings by" }),
+    ).toHaveTextContent("Price");
     // The count, and **nothing after it** — no "· 1 price", no group word at all. Asserted
     // against the whole line rather than by looking a substring up, because the `·` this mode
     // drops is a character every row's own set line uses.
@@ -934,9 +935,9 @@ export const GroupedBySet: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     const list = await canvas.findByRole("region", { name: "Printings" });
-    await expect(within(list).getByRole("combobox", { name: "Group printings by" })).toHaveValue(
-      "set",
-    );
+    await expect(
+      within(list).getByRole("button", { name: "Group printings by" }),
+    ).toHaveTextContent("Set");
     await expect(await within(list).findByText("4 printings · 4 sets")).toBeInTheDocument();
 
     await expect(
@@ -968,7 +969,7 @@ export const GroupedBySet: Story = {
  * would be the worst of both. What a refusal costs is only that the next launch opens on the
  * mode before it.
  *
- * The select is labelled for a screen reader alone. Every other "Group by" in the app carries a
+ * The trigger is labelled for a screen reader alone. Every other "Group by" in the app carries a
  * visible `<label>` — the deck editor's toolbar, two inches to the left, is the control this one
  * is copied from — but that toolbar has a window's width and this pane has 352px of content
  * column, already spent on the heading. The name says what it groups rather than just "Group
@@ -978,26 +979,27 @@ export const GroupedBySet: Story = {
 export const ChoosingHowToGroup: Story = {
   args: { cardId: BOLT_LEA },
   play: async ({ canvasElement }) => {
+    const user = userEvent.setup();
     const canvas = within(canvasElement);
     const list = await canvas.findByRole("region", { name: "Printings" });
     // Where a reader who has never touched it starts.
     await expect(await within(list).findByText("4 printings · 4 artists")).toBeInTheDocument();
-    const groupBy = within(list).getByRole("combobox", { name: "Group printings by" });
-    await expect(groupBy).toHaveValue("artist");
+    const groupBy = within(list).getByRole("button", { name: "Group printings by" });
+    await expect(groupBy).toHaveTextContent("Artist");
 
-    await userEvent.selectOptions(groupBy, "set");
+    await pickOption(user, "Group printings by", "Set");
 
     // The same four rows, cut four different ways — the count line, the headings and the
     // groups all move together, because all three are read off the one array.
     await expect(await within(list).findByText("4 printings · 4 sets")).toBeInTheDocument();
-    await expect(groupBy).toHaveValue("set");
+    await expect(groupBy).toHaveTextContent("Set");
     await expect(within(list).getByText("Secret Lair Drop")).toBeInTheDocument();
     await expect(within(list).queryByText("Desmuncubic")).toBeNull();
     // And the rows themselves are the same rows: nothing was refetched to reorder them.
     await expect(within(list).getByRole("button", { name: "Show SLD · 1638" })).toBeEnabled();
 
     // Price is the one that changes the *shape* of the list rather than its headings.
-    await userEvent.selectOptions(groupBy, "price");
+    await pickOption(user, "Group printings by", "Price");
     await expect(await within(list).findByText("4 printings")).toBeInTheDocument();
     await expect(within(list).getAllByRole("list")).toHaveLength(1);
     await expect(within(list).queryByText("Secret Lair Drop")).toBeNull();

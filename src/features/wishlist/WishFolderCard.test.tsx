@@ -2,9 +2,17 @@ import { useEffect, useRef } from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { monitorForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
+import { FOLDER_DROP_LINE_ATTR } from "@/components/FolderDropLine";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { useContextMenu } from "@/components/menu/useContextMenu";
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
+import {
+  folderDraggable,
+  readFolderDrag,
+  type FolderDrag,
+  type FolderEdge,
+} from "@/lib/folderDrag";
 import type { FolderNode } from "@/lib/folderTree";
 import type { WishlistFolder } from "@/lib/ipc";
 import { startDrag } from "@/test-drag";
@@ -70,6 +78,44 @@ function Source({ wish = WISH }: { wish?: WishDrag }) {
   return <div ref={ref}>the wish</div>;
 }
 
+/**
+ * A sibling drawer, in the air.
+ *
+ * Its own `folderDraggable` rather than a second `WishFolderCard`, for {@link Source}'s reason one
+ * payload over: every test below is about what the card *under the pointer* does, and a second
+ * card would put a second drop target in the way of that.
+ */
+const OTHER_FOLDER: FolderDrag = {
+  folderId: 9,
+  name: "Someday",
+  parentId: null,
+  scope: "wishlist",
+};
+
+function FolderSource({ drag = OTHER_FOLDER }: { drag?: FolderDrag }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    return folderDraggable({ element, folder: () => drag });
+  }, [drag]);
+  return <div ref={ref}>the folder</div>;
+}
+
+/**
+ * Three boxes, each placed so that the one coordinate `test-drag` sends — `clientX` 8 — falls in
+ * a different zone of a card laid out **horizontally**.
+ *
+ * jsdom has no layout engine, so every real `getBoundingClientRect` here is four zeroes and
+ * `folderEdge` answers `inside` for all of them: an edge-dependent test has to state the box
+ * itself rather than hope for one. Moving the box under a stationary pointer is the same relative
+ * move as moving the pointer over a still box, and it is the only one a jsdom drag can make —
+ * `folderDrag.test.ts`'s arrangement, read along the other axis.
+ */
+const AT_START = new DOMRect(0, 0, 100, 100);
+const AT_MIDDLE = new DOMRect(-50, -50, 100, 100);
+const AT_END = new DOMRect(-85, -85, 100, 100);
+
 /** A folder card wired to the real `useContextMenu`, for the one test that is about *which*
  *  handle the trigger is on rather than about the card handing a press somewhere. */
 function MenuHost() {
@@ -91,6 +137,8 @@ function MenuHost() {
         }}
         canDrop={() => false}
         onDropWish={onDropWish}
+        canDropFolder={() => false}
+        onDropFolder={onDropFolder}
       />
     </ul>
   );
@@ -98,6 +146,7 @@ function MenuHost() {
 
 const onOpen = vi.fn();
 const onDropWish = vi.fn();
+const onDropFolder = vi.fn();
 const onContextMenu = vi.fn();
 const onKeyDown = vi.fn();
 const onClickMenu = vi.fn();
@@ -105,6 +154,7 @@ const onClickMenu = vi.fn();
 beforeEach(() => {
   onOpen.mockReset();
   onDropWish.mockReset();
+  onDropFolder.mockReset();
   onContextMenu.mockReset();
   onKeyDown.mockReset();
   onClickMenu.mockReset();
@@ -116,40 +166,81 @@ afterEach(() => vi.restoreAllMocks());
 
 describe("WishFolderCard", () => {
   function mount({
+    on = node(EXPENSIVE),
     summary = { wishes: 6, missing: 6, cost: 312, unpriced: 0 },
     currency = "usd" as const,
     canDrop = () => true,
+    canDropFolder = () => true,
     withSource = false,
+    withFolder = false,
+    folderDrag,
   }: {
+    /** Which drawer this card draws. Only the payload test below changes it. */
+    on?: FolderNode<WishlistFolder>;
     summary?: { wishes: number; missing: number; cost: number; unpriced: number } | null;
     currency?: "usd" | "eur";
     canDrop?: (drag: WishDrag) => boolean;
+    canDropFolder?: (drag: FolderDrag, edge: FolderEdge) => boolean;
     withSource?: boolean;
+    /** A sibling drawer in the air — the second payload this card reads, under its own key. */
+    withFolder?: boolean;
+    folderDrag?: FolderDrag;
   } = {}) {
     render(
       <>
         {withSource && <Source />}
+        {withFolder && <FolderSource drag={folderDrag} />}
         {/* Inside a `<ul>`, because the card is an `<li>` — `FolderCard`'s shape, and a wall of
             folders is a list. */}
         <ul>
           <WishFolderCard
-            node={node(EXPENSIVE)}
+            node={on}
             summary={summary}
             currency={currency}
             onOpen={onOpen}
             rowMenu={{ onContextMenu, onKeyDown, onClick: onClickMenu }}
             canDrop={canDrop}
             onDropWish={onDropWish}
+            canDropFolder={canDropFolder}
+            onDropFolder={onDropFolder}
           />
         </ul>
       </>,
     );
   }
 
-  /** The card's own box — the element the ring is drawn on, and the one registered as a target. */
-  function card(): HTMLElement {
-    return screen.getByRole("button", { name: /^Expensive folder/ }).closest("li")!;
+  /** The card's own box — the element the ring is drawn on, the one registered as a wish target,
+   *  and the one a reader picks the folder up by. */
+  function card(name = "Expensive"): HTMLElement {
+    return screen.getByRole("button", { name: new RegExp(`^${name} folder`) }).closest("li")!;
   }
+
+  /** The face inside it, which is what wears the wash — and the element a real pointer is over
+   *  for all but the `⋯`'s corner, so it is where the folder drags below are aimed. */
+  const face = () => card().querySelector("button")!;
+
+  /**
+   * The box the **folder** drop target is registered on: an inner wrapper rather than the `<li>`,
+   * because the drag library keeps one element drop target per element and the wish drag already
+   * owns the `<li>`. A drag aimed at {@link face} finds it by walking up, exactly as a pointer
+   * does; this is the handle for the one thing a walk cannot do, which is state the box.
+   */
+  const slot = () => card().firstElementChild as HTMLElement;
+
+  /**
+   * Which end the drop line is on, or `null` for no line at all.
+   *
+   * The attribute rather than a class: the side is a Tailwind utility and jsdom applies no
+   * stylesheet, so a class assertion would be a check on this repo's source text rather than on
+   * the drawing. `FolderDropLine` carries the edge as that attribute's *value* for exactly this.
+   */
+  const line = () =>
+    card().querySelector(`[${FOLDER_DROP_LINE_ATTR}]`)?.getAttribute(FOLDER_DROP_LINE_ATTR) ?? null;
+
+  /** Slide the card under the stationary pointer — see the three boxes above. */
+  const stand = (at: DOMRect) => {
+    slot().getBoundingClientRect = () => at;
+  };
 
   it("names the folder and says what is in it", () => {
     mount();
@@ -331,6 +422,173 @@ describe("WishFolderCard", () => {
     await held.over(card());
     await held.drop();
     expect(onDropWish).toHaveBeenCalledWith(WISH);
+  });
+
+  /* ------------------------------------------------------ the folder drag ------- */
+
+  /**
+   * **The card is a drag *source* as well as a target now, and what it carries is read at
+   * `dragstart`.** `parentId` travels because it is what lets the folder's own parent refuse a
+   * nest that would move it nowhere — a fact about where the folder sits, not about the drawer it
+   * is being carried over, so nothing downstream can work it out.
+   */
+  it("is a drawer a reader can pick up, carrying where it currently sits", async () => {
+    mount({ on: node(SOMEDAY) });
+    const carried: (FolderDrag | null)[] = [];
+    const stop = monitorForElements({
+      onDragStart: ({ source }) => carried.push(readFolderDrag(source.data, "wishlist")),
+    });
+
+    const held = await startDrag(card("Someday"));
+    expect(held.started).toBe(true);
+    await held.cancel();
+    stop();
+
+    expect(carried).toEqual([{ folderId: 9, name: "Someday", parentId: 3, scope: "wishlist" }]);
+  });
+
+  /**
+   * **A press on the folder's own `⋯` is a press on the menu.** Chromium starts a drag from the
+   * nearest draggable *ancestor* of whatever was pressed, so without `data-no-drag` on the
+   * trigger a press there plus five pixels of travel files this drawer somewhere and the click
+   * that was meant is never delivered. The press and the drag land on two different elements
+   * here, exactly as the platform sends them.
+   */
+  it("does not start a drag from a press on its manage trigger", async () => {
+    mount();
+    const refused = await startDrag(card(), {
+      pressOn: screen.getByRole("button", { name: "Manage Expensive" }),
+    });
+    expect(refused.started).toBe(false);
+    await refused.cancel();
+
+    // And the folder's face still is a grab handle — the guard is about a control's press, not
+    // about the card.
+    const again = await startDrag(card(), { pressOn: face() });
+    expect(again.started).toBe(true);
+    await again.cancel();
+  });
+
+  /** The middle of a drawer means *into* it, and it wears the same wash a wish over it does —
+   *  only one thing is ever in the air, so the two claims are one mark rather than two. */
+  it("rings for a folder it can take, and washes over the middle it would nest in", async () => {
+    mount({ withFolder: true });
+    stand(AT_MIDDLE);
+    const held = await startDrag(screen.getByText("the folder"));
+    expect(marked(card(), DROP_RING)).toBe(true);
+    expect(marked(face(), DROP_OVER)).toBe(false);
+
+    await held.over(face());
+    expect(marked(face(), DROP_OVER)).toBe(true);
+    // No line with the wash: `inside` is a folder taking the drag rather than a position between
+    // two of them, so one meaning wears one mark.
+    expect(line()).toBeNull();
+
+    await held.cancel();
+  });
+
+  /**
+   * **Which end the line is on *is* the fact under test** — a mark on the wrong side of a card is
+   * a promise to file the folder in the wrong place — and it moves within one card rather than
+   * answering once on entry, because the whole gesture is that one drawer means three things at
+   * three places along it.
+   */
+  it("draws a line at the end a folder would land beside, and no wash with it", async () => {
+    mount({ withFolder: true });
+    stand(AT_START);
+    const held = await startDrag(screen.getByText("the folder"));
+
+    await held.over(face());
+    expect(line()).toBe("before");
+    expect(marked(face(), DROP_OVER)).toBe(false);
+
+    stand(AT_END);
+    await held.over(face());
+    expect(line()).toBe("after");
+
+    await held.cancel();
+  });
+
+  /**
+   * **No mark means no drop.** `useFolderDropTarget` reports `edge: null` over a part of the card
+   * the page refuses, deliberately keeping the whole element in the library's hierarchy so the
+   * reported edge keeps following the pointer — so the card has to draw nothing there rather than
+   * a line leading to a write that never happens. The ring stays up, because this drawer *would*
+   * take the folder beside it.
+   */
+  it("draws nothing at all over a landing the page refuses, and refuses the drop too", async () => {
+    mount({ withFolder: true, canDropFolder: (_drag, edge) => edge !== "inside" });
+    stand(AT_MIDDLE);
+    const held = await startDrag(screen.getByText("the folder"));
+    expect(marked(card(), DROP_RING)).toBe(true);
+
+    await held.over(face());
+    expect(marked(face(), DROP_OVER)).toBe(false);
+    expect(line()).toBeNull();
+
+    await held.drop();
+    expect(onDropFolder).not.toHaveBeenCalled();
+  });
+
+  it("draws no ring at all for a folder the page refuses outright", async () => {
+    mount({ withFolder: true, canDropFolder: () => false });
+    const held = await startDrag(screen.getByText("the folder"));
+    expect(marked(card(), DROP_RING)).toBe(false);
+
+    await held.over(face());
+    await held.drop();
+    expect(onDropFolder).not.toHaveBeenCalled();
+  });
+
+  it("hands the page the folder and where it landed", async () => {
+    mount({ withFolder: true });
+    stand(AT_END);
+    const held = await startDrag(screen.getByText("the folder"));
+    await held.over(face());
+    await held.drop();
+    expect(onDropFolder).toHaveBeenCalledWith(OTHER_FOLDER, "after");
+  });
+
+  /**
+   * **The sidebar's deck-folder tree is mounted beside this page all day**, and folder `9` exists
+   * in all three `*_folders` tables — so a deck folder carried over a wishlist drawer is a gesture
+   * a reader can really make, and a card that took it would file a real row in the wrong cabinet.
+   * The refusal is `readFolderDrag`'s, reached by this card passing its own scope.
+   */
+  it("refuses a folder belonging to another cabinet", async () => {
+    mount({
+      withFolder: true,
+      folderDrag: { folderId: 9, name: "Standard", parentId: null, scope: "deck" },
+    });
+    const held = await startDrag(screen.getByText("the folder"));
+    expect(marked(card(), DROP_RING)).toBe(false);
+
+    await held.over(face());
+    await held.drop();
+    expect(onDropFolder).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **The two drags stay two.** They carry different marks under different keys, so each reader
+   * answers `null` for the other's payload — which is what lets one card be a wish's destination
+   * and a folder's neighbour at once without either handler learning about the other.
+   */
+  it("keeps the wish drag and the folder drag apart, in both directions", async () => {
+    mount({ withSource: true, withFolder: true });
+    stand(AT_MIDDLE);
+
+    const wish = await startDrag(screen.getByText("the wish"));
+    await wish.over(face());
+    await wish.drop();
+    expect(onDropWish).toHaveBeenCalledWith(WISH);
+    expect(onDropFolder).not.toHaveBeenCalled();
+
+    onDropWish.mockReset();
+    const drawer = await startDrag(screen.getByText("the folder"));
+    await drawer.over(face());
+    await drawer.drop();
+    expect(onDropFolder).toHaveBeenCalledWith(OTHER_FOLDER, "inside");
+    expect(onDropWish).not.toHaveBeenCalled();
   });
 });
 

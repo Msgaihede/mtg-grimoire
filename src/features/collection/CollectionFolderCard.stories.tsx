@@ -4,11 +4,18 @@ import { expect, fn, userEvent, waitFor, within } from "storybook/test";
 import { useContextMenu } from "@/components/menu/useContextMenu";
 import type { MenuItem } from "@/components/menu/types";
 import { DROP_MARK_ROOM, DROP_OVER, DROP_RING } from "@/lib/dropMarks";
+import { folderDraggable, type FolderDrag } from "@/lib/folderDrag";
 import type { FolderNode } from "@/lib/folderTree";
 import type { CollectionFolder } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
 import { CollectionFolderCard } from "./CollectionFolderCard";
-import { collectionDraggable, type CollectionDrag } from "./collectionDrag";
+import {
+  collectionDraggable,
+  collectionTileDraggable,
+  type CollectionDrag,
+  type CollectionDrop,
+  type CollectionTileDrag,
+} from "./collectionDrag";
 
 /**
  * How long a `waitFor` will wait for a state a drag has to travel to reach.
@@ -97,10 +104,24 @@ const meta = {
     currency: "usd",
     onOpen: fn(),
     onDropCard: fn(),
-    // The page's own answer, verbatim: a folder takes any copy that is not already filed in it.
-    // Stated once here rather than per story, because it is the rule rather than a property of one
-    // tile; only {@link DropTarget} ever puts a copy in the air to ask it.
-    canDrop: (drag: CollectionDrag): boolean => drag.folderId !== BINDER.id,
+    // The page's own answer, verbatim, for both shapes a collection drop can be: a folder takes
+    // any copy that is not already filed in it. A *tile* is takeable when **at least one** of the
+    // copies behind it is somewhere else — a printing with copies in three folders is a real thing
+    // to file, and refusing it because one copy is already here would leave the other two
+    // unreachable by the gesture. Stated once here rather than per story, because it is the rule
+    // rather than a property of one tile; only the two drag stories below ever put anything in the
+    // air to ask it.
+    canDrop: (drop: CollectionDrop): boolean =>
+      drop.kind === "entry"
+        ? drop.entry.folderId !== BINDER.id
+        : drop.tile.copies.some((copy) => copy.folderId !== BINDER.id),
+    // The page's rule for the *other* drag, cut down to the one drawer this wall draws: a folder
+    // takes a sibling at any of the three landings, and refuses the folder that **is** it — which
+    // is `reorderedLevel`'s first line said in the workbench's terms. Everything else the page
+    // checks (the `kind` fence, the cycle, the order that would not change) needs a cabinet, and
+    // a cabinet is `CollectionPage`'s story rather than this one's.
+    canDropFolder: (drag: FolderDrag): boolean => drag.folderId !== BINDER.id,
+    onDropFolder: fn(),
     act: fn(),
   },
   decorators: [
@@ -315,6 +336,13 @@ async function pickUp(source: Element) {
       send(target, "dragover", data);
       await frame();
     },
+    /** Let go over a target — `AppShell.stories.tsx`'s copy of this helper, verbatim: the platform
+     *  sends the `drop` to the element and the `dragend` back to the source it came from. */
+    drop: async (target: Element) => {
+      send(target, "drop", data);
+      send(source, "dragend", data);
+      await frame();
+    },
     cancel: async () => {
       send(source, "dragend", data);
       await frame();
@@ -322,8 +350,48 @@ async function pickUp(source: Element) {
   };
 }
 
+/**
+ * Whether an element wears one of `dropMarks.ts`'s marks.
+ *
+ * `classList.contains` per class, never `className.includes`: several of the classes around these
+ * are `hover:` variants, and a substring test against the whole attribute passes before any state
+ * has changed — a vacuous assertion that reads exactly like a real one.
+ * **Not exported**: CSF indexes every named export of a story file as a story.
+ */
+const marked = (element: Element, mark: string) =>
+  mark.split(" ").every((one) => element.classList.contains(one));
+
 /** A copy at the root, which is where most of a collection sits and what a drawer is for. */
 const LOOSE_COPY: CollectionDrag = { entryId: 7, name: "Sol Ring", folderId: null };
+
+/**
+ * The same printing as the **wall** offers it: one card and every copy the tile summed behind it.
+ *
+ * Three copies in two places, because that is the shape the collection's grid view actually has
+ * and the shape no `CollectionDrag` can state — a tile merges every entry for a printing across
+ * finishes, conditions, languages *and folders*, so it has no single `entryId` and needs a payload
+ * of its own.
+ */
+const LOOSE_TILE: CollectionTileDrag = {
+  cardId: "sol-ring",
+  name: "Sol Ring",
+  copies: [
+    { entryId: 7, folderId: null },
+    { entryId: 8, folderId: null },
+    { entryId: 9, folderId: 3 },
+  ],
+};
+
+/** A printing whose every copy is already in this drawer — the tile the folder refuses, and the
+ *  only way to see the `some` in the page's rule doing anything. */
+const FILED_TILE: CollectionTileDrag = {
+  cardId: "arcane-signet",
+  name: "Arcane Signet",
+  copies: [
+    { entryId: 11, folderId: 3 },
+    { entryId: 12, folderId: 3 },
+  ],
+};
 
 /**
  * Something to pick up: `collectionDraggable` rather than the library's `draggable`, so the
@@ -348,6 +416,35 @@ function Source({ entry }: { entry: CollectionDrag }) {
       className="inline-block w-max cursor-grab rounded-md border border-border bg-surface px-3 py-2 text-sm"
     >
       {entry.name}
+    </div>
+  );
+}
+
+/**
+ * The wall's source beside the table's: `collectionTileDraggable`, which composes the same card
+ * payload with the **tile** key rather than the entry one.
+ *
+ * A second component rather than a prop on {@link Source}, because what the story below is about is
+ * that **one target** takes both payloads without being told which is coming — a card that had to
+ * be configured for a shape would be documenting the opposite.
+ */
+function TileSource({ tile }: { tile: CollectionTileDrag }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    return collectionTileDraggable({
+      element,
+      tile: () => tile,
+      card: () => ({ kind: "card", cardId: tile.cardId, name: tile.name, typeLine: "Artifact" }),
+    });
+  }, [tile]);
+  return (
+    <div
+      ref={ref}
+      className="inline-block w-max cursor-grab rounded-md border border-border bg-surface px-3 py-2 text-sm"
+    >
+      {tile.name}
     </div>
   );
 }
@@ -384,11 +481,6 @@ export const DropTarget: Story = {
     const tile = canvas.getByRole("button", { name: /^Trade binder folder/ });
     // The ring lives on the `<li>`, which is where the page's scroller has to leave room for it.
     const item = tile.closest("li")!;
-    const marked = (element: Element, mark: string) =>
-      // `classList.contains` per class, never `className.includes`: several classes around these
-      // are `hover:` variants, and a substring test against the whole attribute passes before any
-      // state has changed — a vacuous assertion that reads exactly like a real one.
-      mark.split(" ").every((one) => element.classList.contains(one));
 
     await expect(marked(item, DROP_RING)).toBe(false);
 
@@ -408,4 +500,130 @@ export const DropTarget: Story = {
     await waitFor(() => expect(marked(item, DROP_RING)).toBe(false), { timeout: DRAG_WAIT });
     await expect(args.onDropCard).not.toHaveBeenCalled();
   },
+};
+
+/**
+ * The same drawer, taking the **wall's** payload instead of the table's.
+ *
+ * A collection tile merges every entry for one printing — across finishes, conditions, languages
+ * and folders — so it has no single `entryId`, and that is precisely why the grid view registered
+ * no drag at all until this shape existed. `collectionTileDragData` puts the printing and *every*
+ * copy behind it under a third key, and `readCollectionDrop` is the one reader both this card and
+ * the breadcrumb ask; the card itself never learns which shape it is holding.
+ *
+ * **`Sol Ring` has copies in two places and `Arcane Signet` is entirely in this drawer**, which is
+ * what makes the page's rule visible rather than merely stated: a folder takes a tile when **at
+ * least one** copy behind it is somewhere else, and the tile whose every copy is already filed here
+ * draws no ring at all — the same refusal a row already gets, one grain finer. Refusing the first
+ * of those instead would leave the two loose copies unreachable by the gesture, which is the whole
+ * failure the `some` prevents.
+ */
+export const TileDropTarget: Story = {
+  render: (args) => (
+    <div className="flex w-[32rem] flex-col gap-4">
+      <Wall {...args} />
+      <div className="flex flex-wrap gap-2">
+        <TileSource tile={LOOSE_TILE} />
+        <TileSource tile={FILED_TILE} />
+      </div>
+    </div>
+  ),
+  play: async ({ args, canvasElement }) => {
+    const canvas = within(canvasElement);
+    const tile = canvas.getByRole("button", { name: /^Trade binder folder/ });
+    const item = tile.closest("li")!;
+
+    const loose = await pickUp(canvas.getByText("Sol Ring"));
+    try {
+      await waitFor(() => expect(marked(item, DROP_RING)).toBe(true), { timeout: DRAG_WAIT });
+      await loose.over(item);
+      await waitFor(() => expect(marked(tile, DROP_OVER)).toBe(true), { timeout: DRAG_WAIT });
+      await loose.drop(item);
+    } finally {
+      // Inert after a drop — there is no drag left to end — and the fence for every path out of
+      // the block above: the library keeps one global "a drag is active" flag, and a story that
+      // walked away holding a tile leaves the next one unable to pick anything up.
+      await loose.cancel();
+    }
+    // The whole payload arrives, every copy of it, discriminated as a tile — which is what the
+    // page needs to write three moves rather than one.
+    await expect(args.onDropCard).toHaveBeenCalledTimes(1);
+    await expect(args.onDropCard).toHaveBeenCalledWith({ kind: "tile", tile: LOOSE_TILE });
+
+    // …and the printing this drawer already holds every copy of raises nothing, and is refused on
+    // the drop as well rather than merely going unadvertised. A ring leading to a write that moved
+    // no row and bumped `updated_at` would be worse than no ring.
+    const filed = await pickUp(canvas.getByText("Arcane Signet"));
+    try {
+      await waitFor(() => expect(marked(item, DROP_RING)).toBe(false), { timeout: DRAG_WAIT });
+      await filed.over(item);
+      await filed.drop(item);
+    } finally {
+      await filed.cancel();
+    }
+    await expect(args.onDropCard).toHaveBeenCalledTimes(1);
+  },
+};
+
+/* ------------------------------------------------------ the other drag ------- */
+
+/** A sibling drawer, in the air — `folderDraggable` rather than a whole second card, so this wall
+ *  keeps one drop target and the story stays about what happens to the card under the pointer. */
+function FolderSource({ drag }: { drag: FolderDrag }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    return folderDraggable({ element, folder: () => drag });
+  }, [drag]);
+  return (
+    <div
+      ref={ref}
+      className="inline-block w-max cursor-grab rounded-md border border-dashed border-border bg-surface px-3 py-2 text-sm"
+    >
+      {drag.name}
+    </div>
+  );
+}
+
+/** The drawer the story below carries, and the card itself as something to pick up. */
+const OTHER_FOLDER: FolderDrag = {
+  folderId: 8,
+  name: "Sealed",
+  parentId: null,
+  scope: "collection",
+};
+
+/**
+ * **A folder card is a drag source and a drop target for _folders_ as well as for copies**, and
+ * this is the story to drag in rather than to read: the three landings only exist under a pointer.
+ *
+ * Drop `Sealed` on the **middle** of the binder and it goes *inside* it — the same gold wash a copy
+ * gets, because only one thing is ever in the air and both mean "what you are holding lands in
+ * here". Drop it near either **end** and a 2px line appears on that side: it lands *beside* the
+ * binder, and the line is honest because a folder has a `sortOrder` a cabinet can keep. The outer
+ * quarter of each end is the reorder zone and the middle half is the nest — a quarter is the only
+ * split at which a reorder and a nest are the same size of target, and `EDGE_ZONE` proves it.
+ *
+ * Two things are deliberately **not** marked. `inside` draws no line: it is a folder taking the
+ * drag rather than a position between two of them, and the app already has a mark for that. And a
+ * landing the page refuses draws nothing at all — no line, no wash — because a mark leading to a
+ * write that never happens is worse than no mark.
+ *
+ * The `⋯` is `data-no-drag`, so a press there opens the menu instead of picking the drawer up. That
+ * guard is not decoration: Chromium starts a drag from the nearest draggable *ancestor* of whatever
+ * was pressed.
+ *
+ * **The card carries two drop targets on two boxes**, which is a fact about the library rather than
+ * a preference — `@atlaskit/pragmatic-drag-and-drop` keeps one element drop target per element and
+ * a second registration silently replaces the first. The copy's is the `<li>`; the folder's is an
+ * inner wrapper that covers every pixel of the card, and a pointer finds both by walking up.
+ */
+export const FolderTarget: Story = {
+  render: (args) => (
+    <div className="flex w-[32rem] flex-col gap-4">
+      <Wall {...args} />
+      <FolderSource drag={OTHER_FOLDER} />
+    </div>
+  ),
 };

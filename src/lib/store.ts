@@ -146,6 +146,46 @@ export const LIST_VIEW_FIELD = {
 } as const satisfies Record<ListSection, string>;
 
 /**
+ * The two pages that have a cabinet to ignore — and the keys the `flatten_state` `app_meta` row
+ * is written under.
+ *
+ * **Two, not {@link LIST_SECTIONS}' four, and it must not be widened into them.** Flatten means
+ * "draw every folder's cards at once instead of the one I am standing in", which is a sentence
+ * only a page with folders can say: the card search is a query over the whole corpus and the Tags
+ * page is a query over a taxonomy, and neither has any filing for a switch to ignore. Reusing
+ * `ListSection` here would put two sections in the row that nothing can ever write and that
+ * {@link AppState.hydrateFlatten} would have to invent a field for — `LIST_SECTIONS`' own
+ * argument about not being derived from {@link ViewId}, one row over.
+ */
+export const FLATTEN_SECTIONS = ["collection", "wishlist"] as const;
+
+/** One of the two pages whose flatten switch is remembered — {@link FLATTEN_SECTIONS}. */
+export type FlattenSection = (typeof FLATTEN_SECTIONS)[number];
+
+/**
+ * Is this a page this build files cards in? {@link isListSection}'s job for the row next door —
+ * the backend stores whatever section name it is handed, deliberately, because *which* pages have
+ * a cabinet is this side's vocabulary.
+ */
+export function isFlattenSection(value: string): value is FlattenSection {
+  return (FLATTEN_SECTIONS as readonly string[]).includes(value);
+}
+
+/**
+ * Which store field each page's flatten switch lives in.
+ *
+ * {@link LIST_VIEW_FIELD}'s shape and its reason: the two fields stay two fields rather than
+ * becoming one map, because every reader of them is a component selecting exactly one —
+ * `useAppStore((s) => s.collectionFlattened)` re-renders on that boolean alone, where a map would
+ * re-render both pages' subscribers on either press. This record is the one place that needs them
+ * addressed by name, which is the seam between the store's shape and the row's.
+ */
+export const FLATTEN_FIELD = {
+  collection: "collectionFlattened",
+  wishlist: "wishlistFlattened",
+} as const satisfies Record<FlattenSection, string>;
+
+/**
  * What one surface's export dialog opens holding — see {@link AppState.exportPrefs}, which is
  * where the per-surface argument and `arenaOnly`'s exemption from the format switch are made.
  *
@@ -217,6 +257,78 @@ interface AppState {
    * sub-second window the reader has by definition reached only one list.
    */
   hydrateListViews: (stored: Readonly<Record<string, string>>) => void;
+  /**
+   * Whether the collection ignores its filing and draws every folder's cards at once.
+   *
+   * **`true`, where the wishlist's is `false`, and the asymmetry is a decision with a measurement
+   * behind it rather than an oversight.** Since schema v25 every card in a deck lives in that
+   * deck's group folder, and the collection's root has been narrowed to mean "filed nowhere" — so
+   * an unflattened first launch draws the root, and the root is very often empty. Measured on the
+   * maintainer's real database (read-only `node:sqlite` probe, 2026-08-26): **275 of 275
+   * collection entries are filed in deck groups and 0 are unfiled**, which draws
+   * `Cards 0 · Unique 0 · $0.00` over a binder holding 327 copies worth $3,475.20. A default that
+   * opens the app's most-used page blank is not a default worth defending.
+   *
+   * It is also the weakest kind of claim there is now that the choice outlives the process: the
+   * reader's own last state replaces it from the second launch onward, and the ungrouped root is
+   * one press away. See {@link AppState.wishlistFlattened} for why that page keeps the other
+   * answer.
+   */
+  collectionFlattened: boolean;
+  /**
+   * Whether the wishlist ignores its filing and draws every folder's wishes at once.
+   *
+   * **`false` — today's behaviour, unchanged.** Its root has always meant "the wishes filed
+   * nowhere" too, and readers keep wishes there, so an unflattened wishlist opens on something.
+   * That is the whole of the difference from {@link AppState.collectionFlattened}: one rule
+   * ("open on cards"), asked of two cabinets that are filled differently, answering twice.
+   */
+  wishlistFlattened: boolean;
+  /**
+   * Flip the collection's switch.
+   *
+   * **A toggle rather than a `setCollectionFlattened(value)`, and that is deliberate.** The only
+   * writer is a switch, so no caller has a value of its own to contribute — and a setter taking
+   * one invites the next caller to compute the next state from a `flatten` it captured in a stale
+   * closure, which is a render's worth of staleness turning a press into a no-op. The store
+   * already holds the current answer; a press only ever means "the other one".
+   */
+  toggleCollectionFlattened: () => void;
+  /** Flip the wishlist's switch. {@link AppState.toggleCollectionFlattened}'s shape and its
+   *  argument for a toggle rather than a setter. */
+  toggleWishlistFlattened: () => void;
+  /**
+   * Bumped by both toggles above — **that a switch was pressed**, as distinct from what it was
+   * pressed to.
+   *
+   * {@link AppState.listViewPulse}'s shape and its reason exactly: a value-watcher would write
+   * back both switches {@link AppState.hydrateFlatten} had just seeded, which is two round trips
+   * at launch to tell the database what it said a moment earlier. A press is the thing worth
+   * remembering, so the press is what is counted.
+   */
+  flattenPulse: number;
+  /** Which page the last press was on, so the write knows which section to store. `null` before
+   *  the first one. */
+  flattenSection: FlattenSection | null;
+  /**
+   * Seed both switches from the stored `flatten_state` row — **once, at launch**, from
+   * `useFlattenPersistence`.
+   *
+   * A section the row says nothing about, names a page this build does not file cards in, or
+   * holds something that is not a boolean keeps the default it was built with: the row is the
+   * reader's memory, not an authority, and every one of those is a state a hand-edit or another
+   * build can leave behind. `Record<string, unknown>` rather than `Record<string, boolean>`
+   * because that is what an object off the IPC boundary honestly is — the type says `boolean`,
+   * the wire does not promise it, and the whole job of this function is to be the place that
+   * checks.
+   *
+   * **A press already made wins**, which is what `flattenPulse !== 0` buys — {@link
+   * AppState.hydrateListViews}' guard verbatim. The read is a round trip, so a reader who flips
+   * the switch inside it would otherwise watch last session's answer overwrite theirs a moment
+   * later. Whole-store rather than per-section because that is what the pulse can answer, and
+   * inside a sub-second window the reader has by definition reached only one page.
+   */
+  hydrateFlatten: (stored: Readonly<Record<string, unknown>>) => void;
   /**
    * How large the card tiles are drawn, as a multiplier on whatever size a surface calls its
    * own — one of `ZOOM_STEPS` per section, all starting at `DEFAULT_ZOOM`.
@@ -766,6 +878,52 @@ export const useAppStore = create<AppState>((set) => ({
       } = {};
       for (const [section, view] of Object.entries(stored)) {
         if (isListSection(section) && isSearchView(view)) next[LIST_VIEW_FIELD[section]] = view;
+      }
+      return next;
+    }),
+  // **Flattened by default, and the wishlist below is not.** The interface above carries the
+  // measurement: with every deck's cards filed into that deck's group folder, the collection's
+  // root is "filed nowhere" and on a real database that was 0 of 275 entries — an unflattened
+  // first launch draws an empty page over a full binder. The pulse is what makes this a starting
+  // point rather than an opinion: from the second launch onward the reader's own last press is
+  // what the page opens on.
+  collectionFlattened: true,
+  // **Not flattened, which is what this page has always done.** Its root means "filed nowhere"
+  // too, but readers keep wishes there, so it opens on something. Two cabinets filled differently,
+  // one rule about opening on cards, two answers.
+  wishlistFlattened: false,
+  // A toggle, never a `set(value)` — the interface above has the argument, and it is about stale
+  // closures rather than about brevity.
+  toggleCollectionFlattened: () =>
+    set((s) => ({
+      collectionFlattened: !s.collectionFlattened,
+      flattenPulse: s.flattenPulse + 1,
+      flattenSection: "collection",
+    })),
+  toggleWishlistFlattened: () =>
+    set((s) => ({
+      wishlistFlattened: !s.wishlistFlattened,
+      flattenPulse: s.flattenPulse + 1,
+      flattenSection: "wishlist",
+    })),
+  flattenPulse: 0,
+  flattenSection: null,
+  // No pulse and no section: this is a value arriving, not a press happening — `hydrateListViews`
+  // above, verbatim, including the `flattenPulse !== 0` guard that is the whole of "a reader who
+  // flipped the switch during the read keeps what they asked for".
+  //
+  // A partial rather than a full object, so a row naming one page leaves the other on the default
+  // it was built with. And the value is checked as well as the key: the object crossed an IPC
+  // boundary, where `boolean` is a claim rather than a fact, so a `"1"` or a `null` a hand-edit or
+  // another build left behind is dropped rather than coerced into an answer nobody chose.
+  hydrateFlatten: (stored) =>
+    set((s) => {
+      if (s.flattenPulse !== 0) return {};
+      const next: { collectionFlattened?: boolean; wishlistFlattened?: boolean } = {};
+      for (const [section, flattened] of Object.entries(stored)) {
+        if (isFlattenSection(section) && typeof flattened === "boolean") {
+          next[FLATTEN_FIELD[section]] = flattened;
+        }
       }
       return next;
     }),

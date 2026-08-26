@@ -35,6 +35,13 @@ Every one of these has its measurement and its story in
   decodes, and every card frame here belongs to a _slot_ rather than to a card — so without the
   key the picture lags the caption by the length of the fetch. **This is invisible to the DOM
   and therefore to a test in the obvious place**; assert element _identity_.
+  **It also refuses to be dragged itself**, and that is the component's guarantee rather than a
+  call site's: an `<img>` is draggable by default and the browser starts a drag from the
+  *nearest* draggable ancestor, so a frame inside a draggable tile steals the gesture and the
+  tile's own drag never begins. Two frames passed the prop by hand and two did not — the deck
+  gallery's cover and the card pane's printing rows — so a deck tile dragged by its name and not
+  by its picture, which is what a reader reports as "drag and drop is broken". It is written
+  before the spread, so a frame that really is the drag source can still say so.
 - **A card frame is `components/CardArt`** — the 5:7 box, `CardImage`, `useImageRetry`, the
   no-art fallback and the foil marking, in one place. **Every wall of card faces draws it**: the
   search's, the collection's, the deck editor's docked search column and — since 2026-08-16 —
@@ -319,10 +326,21 @@ Every one of these has its measurement and its story in
   surface that has two layouts — which is where a reader now looks for it on all four card views,
   and why the collection's and the wishlist's Import/Export pair moved up into the figures band
   rather than staying beside the filters.
-  **Folder controls are deliberately not on it**: where the reader is standing, and how much of a
-  tree is on screen, are navigation rather than a narrowing, so `+ New folder` and `Flatten` sit
-  with the breadcrumb and the folder cards. A folder control among the filters would be the one
-  thing in that row Reset all could not undo.
+  **No folder control sits among the filters, and the fence is "not among the filters" rather
+  than "not on the bar"** — a distinction the first draft of this rule collapsed. Where the reader
+  is *standing* is navigation, so the breadcrumb and the drill-down stay off the row entirely:
+  either one among the filters would be the one thing in it Reset all could not undo. The other two
+  moved, and each moved to the place that already says what it is. **`+ New folder` is the first
+  tile of the folder wall** (`NewFolderCard`), shaped to a folder card's footprint and
+  solid-bordered where the folders are dashed — the dash means *container, not a thing you own*,
+  and a button wearing it would spend that vocabulary. It is drawn wherever the wall is, which is
+  why the wall now renders at zero folders: gated on the folder count, a reader with an empty
+  cabinet had no way to make their first one. **`Flatten` rides the bar past the hairline
+  divider**, beside the grid-or-table pair. That end of the row is already the home for controls
+  about how the list is *drawn* rather than which rows are in it, and it is already untouched by
+  Reset all — so Flatten satisfies the fence on the far side of the rule rather than breaking it.
+  Both card views with a cabinet pass it the same way, as one `flatten={{ pressed, onToggle }}`
+  prop that cannot be handed over half.
   Two rules carry it and both have a measured failure behind them
   ([frontend-design.md](../docs/reference/frontend-design.md)): the arrangement is **`order` plus
   a `basis-full` break**, never one `<div>` per breakpoint with `hidden` on the rest — that build

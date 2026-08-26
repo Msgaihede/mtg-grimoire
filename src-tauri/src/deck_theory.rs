@@ -47,6 +47,23 @@ const LIVE: &str = crate::schema::DECK_VARIANTS[0];
 /// What the deck is being built toward.
 const THEORY: &str = crate::schema::DECK_VARIANTS[1];
 
+/// One card the plan asks for — [`theory_slots`]' row, and the deck editor's theory tick.
+///
+/// Two fields and no third: this is a mark's whole input, and every column that is *not* here
+/// (the name, the set, the price, the pile) is one the tick would have to be told to ignore.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TheorySlot {
+    /// [`group_key`]'s own string — `` `{card_id}|{finish}` ``, the regular copy spelling its
+    /// half empty. **This module's function rather than a pair the caller reassembles**, which
+    /// is what stops the tick and the shopping list drifting apart: "the same planned card" is
+    /// one definition, and both surfaces spell it with this code.
+    pub key: String,
+    /// How many copies the plan asks for, **summed across every active pile it filed them in** —
+    /// see [`theory_slots`] on why the fold is here rather than in the caller.
+    pub quantity: i64,
+}
+
 /// One card the theory list wants more of than the live list has.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -744,7 +761,7 @@ fn unfinished(e: tauri::Error) -> String {
     format!("the deck could not be written: {e}")
 }
 
-/// Every card the plan asks for, as [`group_key`] strings and nothing else.
+/// Every card the plan asks for, as a [`group_key`] and the number of copies it wants.
 ///
 /// The deck editor's theory tick: a reader on the **Live** list wants to know which of the cards
 /// in front of them are the deck they designed and which are the proxies standing in until the
@@ -761,7 +778,7 @@ fn unfinished(e: tauri::Error) -> String {
 /// every row, joins categories and rolls up what the deck's group holds, which is a great deal
 /// of work for a mark.
 /// This command answers neither a comparison nor a priced row: one indexed scan of `deck_cards`,
-/// two columns, no join to `cards` and no marketplace. `DeckEditor.test.tsx` pins the first
+/// three columns, no join to `cards` and no marketplace. `DeckEditor.test.tsx` pins the first
 /// reason from the frontend side — nothing may call `deck_get` for the list the reader is not on.
 ///
 /// **It answers [`group_key`] itself rather than a pair**, which is the whole reason the tick and
@@ -775,26 +792,47 @@ fn unfinished(e: tauri::Error) -> String {
 /// same card filed as Ramp in the plan and Main deck in the deck is one planned card, which is
 /// what makes the mark survive a re-filing.
 ///
-/// Deliberately a `Vec` rather than a set: the caller builds the lookup, duplicates fold there,
-/// and a JSON array is what crosses the IPC boundary anyway.
-pub fn theory_slots(conn: &Connection, deck_id: i64) -> Result<Vec<String>, String> {
+/// ## The quantity joined the key on 2026-08-26, and the folding moved here with it
+///
+/// [Issue #212](https://github.com/Msgaihede/mtg-grimoire/issues/212) asked the tick to say *how
+/// far off* the live count is wherever the two lists disagree about a card they both hold — which
+/// is a question no list of keys can answer. So a slot carries what the plan asks for.
+///
+/// **The rows therefore fold here rather than in the caller**, which is the one thing that had to
+/// change with it: two `Vec` entries spelling one key were harmless while a set was being built
+/// out of them, and would be a silently halved quantity now. `GROUP BY dc.card_id, dc.finish` is
+/// exactly [`group_key`]'s own grain — SQLite groups two NULL finishes together, which is the
+/// regular copy — so the same card filed as Ramp and as Main deck is still **one** planned card,
+/// now with both piles counted rather than one key printed twice.
+///
+/// Still a `Vec` rather than a map: a JSON array is what crosses the IPC boundary anyway, and the
+/// caller builds the lookup it wants.
+pub fn theory_slots(conn: &Connection, deck_id: i64) -> Result<Vec<TheorySlot>, String> {
     let mut stmt = conn
         .prepare(
-            "SELECT dc.card_id, dc.finish
+            "SELECT dc.card_id, dc.finish, SUM(dc.quantity)
                FROM deck_cards dc
                JOIN deck_categories cat ON cat.id = dc.category_id
-              WHERE dc.deck_id = ?1 AND dc.variant = ?2 AND cat.is_active = 1",
+              WHERE dc.deck_id = ?1 AND dc.variant = ?2 AND cat.is_active = 1
+              GROUP BY dc.card_id, dc.finish",
         )
         .map_err(|e| e.to_string())?;
     let rows = stmt
         .query_map(params![deck_id, THEORY], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Option<String>>(1)?,
+                r.get::<_, i64>(2)?,
+            ))
         })
         .map_err(|e| e.to_string())?;
     let mut slots = Vec::new();
     for row in rows {
-        let (card_id, finish) = row.map_err(|e| e.to_string())?;
-        slots.push(group_key(&card_id, finish.as_deref()));
+        let (card_id, finish, quantity) = row.map_err(|e| e.to_string())?;
+        slots.push(TheorySlot {
+            key: group_key(&card_id, finish.as_deref()),
+            quantity,
+        });
     }
     Ok(slots)
 }
@@ -805,7 +843,7 @@ pub fn theory_slots(conn: &Connection, deck_id: i64) -> Result<Vec<String>, Stri
 pub async fn deck_theory_slots(
     state: tauri::State<'_, Arc<AppState>>,
     deck_id: i64,
-) -> Result<Vec<String>, String> {
+) -> Result<Vec<TheorySlot>, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
         theory_slots(&crate::sync::lock_db_read(&state), deck_id)
@@ -1959,10 +1997,26 @@ mod tests {
         assert_eq!(price("bolt-lea", Manapool), Some(390.0));
     }
 
-    /// Sorted, because `theory_slots` answers in whatever order the scan returns and every
-    /// assertion below is about the *set*.
+    /// The keys alone, sorted — `theory_slots` answers in whatever order the scan returns and
+    /// most assertions below are about the *set*. [`slot_counts`] is for the ones that are about
+    /// what the plan asks for.
     fn slots(conn: &Connection, deck_id: i64) -> Vec<String> {
-        let mut out = theory_slots(conn, deck_id).unwrap();
+        let mut out: Vec<String> = theory_slots(conn, deck_id)
+            .unwrap()
+            .into_iter()
+            .map(|s| s.key)
+            .collect();
+        out.sort();
+        out
+    }
+
+    /// The same rows as `(key, quantity)` pairs, sorted.
+    fn slot_counts(conn: &Connection, deck_id: i64) -> Vec<(String, i64)> {
+        let mut out: Vec<(String, i64)> = theory_slots(conn, deck_id)
+            .unwrap()
+            .into_iter()
+            .map(|s| (s.key, s.quantity))
+            .collect();
         out.sort();
         out
     }
@@ -2010,6 +2064,10 @@ mod tests {
 
     /// A pile is invisible to this, which is what lets the mark survive a re-filing — the same
     /// card planned as Ramp and sleeved into Main deck is one planned card. One key, not two.
+    ///
+    /// **And the two piles are *summed* rather than folded to one of them** — the fold moved
+    /// into the SQL when the quantity joined the key, and a plan asking for two Bolts across two
+    /// piles asks for two Bolts.
     #[test]
     fn theory_slots_does_not_care_which_pile_the_plan_files_a_card_in() {
         let conn = seeded();
@@ -2020,8 +2078,45 @@ mod tests {
         add(&conn, d, "bolt-lea", ramp, THEORY, 1);
         add(&conn, d, "bolt-lea", main, THEORY, 1);
 
-        // Two rows, one planned card — the caller's set folds them.
-        assert_eq!(slots(&conn, d), vec!["bolt-lea|", "bolt-lea|"]);
+        assert_eq!(slot_counts(&conn, d), vec![("bolt-lea|".to_owned(), 2)]);
+    }
+
+    /// The number the tick's difference is measured against — what the plan asks for, per slot,
+    /// with the finishes told apart exactly as the key tells them apart.
+    #[test]
+    fn theory_slots_answer_how_many_copies_the_plan_asks_for() {
+        let conn = seeded();
+        let d = deck(&conn, "Burn");
+        set_theory(&conn, d, true);
+        let main = category(&conn, d, "Main deck");
+        add_finish(&conn, d, "bolt-lea", main, THEORY, None, 4);
+        add_finish(&conn, d, "bolt-lea", main, THEORY, Some("foil"), 1);
+
+        assert_eq!(
+            slot_counts(&conn, d),
+            vec![("bolt-lea|".to_owned(), 4), ("bolt-lea|foil".to_owned(), 1)]
+        );
+    }
+
+    /// An inactive pile is excluded from the **quantity** too, not merely from the key list —
+    /// the plan is not asking for a card it has parked in the Maybeboard, so those copies may
+    /// not swell the number the tick counts down from.
+    #[test]
+    fn theory_slots_leave_a_switched_off_pile_out_of_the_count() {
+        let conn = seeded();
+        let d = deck(&conn, "Burn");
+        set_theory(&conn, d, true);
+        let main = category(&conn, d, "Main deck");
+        let maybe = category(&conn, d, "Maybeboard");
+        add(&conn, d, "bolt-lea", main, THEORY, 2);
+        add(&conn, d, "bolt-lea", maybe, THEORY, 3);
+        conn.execute(
+            "UPDATE deck_categories SET is_active = 0 WHERE id = ?1",
+            params![maybe],
+        )
+        .unwrap();
+
+        assert_eq!(slot_counts(&conn, d), vec![("bolt-lea|".to_owned(), 2)]);
     }
 
     /// `diff_select`'s rule, read by the same reasoning: a card parked in an inactive pile is
@@ -2081,6 +2176,22 @@ mod tests {
                 "setCode": "lea", "collectorNumber": "161", "finish": "foil", "ownedSpare": 1,
                 "heldAsOtherPrinting": 1
             })
+        );
+    }
+
+    /// The tick's own wire contract, pinned for [`TheoryDiffRow`]'s reason — this one crosses to
+    /// `src/lib/ipc.ts`'s `TheorySlot` and to `.storybook/fake/db.ts`, and a renamed field would
+    /// otherwise reach the mark as `undefined` and read as a deck with no plan.
+    #[test]
+    fn theory_slot_json_uses_the_camel_case_names_the_frontend_expects() {
+        let value = serde_json::to_value(TheorySlot {
+            key: "bolt-lea|foil".to_owned(),
+            quantity: 4,
+        })
+        .unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({ "key": "bolt-lea|foil", "quantity": 4 })
         );
     }
 }

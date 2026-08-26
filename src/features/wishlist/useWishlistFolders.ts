@@ -128,6 +128,46 @@ export function useWishlistFolders() {
   });
 
   /**
+   * **`["wishlist", "folders"]` alone — the one write here that does not take the whole root**, and
+   * the narrowing is the point rather than an oversight.
+   *
+   * `invalidate` above takes `["wishlist"]` because the other four writes reach **wishes** this
+   * hook never mentions: `wishlist_entries.folder_id` is `ON DELETE SET NULL`, so a delete surfaces
+   * the wishes inside at the root and leaves the wall, the header and both folder subtotals wrong.
+   * A reorder reaches none of that. It writes `wishlist_folders.sort_order` and
+   * `wishlist_folders.parent_id`; no wish's `folder_id` moves, so no count, no `missing` and no
+   * `cost` can be different — and `["wishlist", "folderSummary", marketplace]` is a `GROUP BY` over
+   * every wish carrying the owned-copies subquery and a price expression, which is the most
+   * expensive thing on the page to throw away for nothing.
+   *
+   * **The re-parent half does not widen it either.** What a re-parent changes is the *tree*, and
+   * the tree — including the child totals a folder card rolls up, which
+   * {@link WishlistFolderSummary} leaves to the tree builder precisely because they are not the
+   * query's — is built in TypeScript from these flat rows. Re-reading the list is exactly what
+   * makes that shape true again.
+   *
+   * On error as well as on success, `writes`' rule: a refusal is a busy database or an id in `ids`
+   * another surface has already deleted, and the second must not leave a tree drawing a node that
+   * is gone.
+   */
+  const settleOrder = () =>
+    void queryClient.invalidateQueries({ queryKey: ["wishlist", "folders"] });
+
+  /**
+   * Place a whole level: `ids` is **every** child of `parentId`, in the order they are to sit in.
+   *
+   * `sortOrder` is written from position and `parentId` from the argument, in one transaction — so
+   * one gesture both re-parents and places, and a reader never sees half of it. Sending only the
+   * folder that moved is the mistake the name invites; see `ipc.wishlistFolderReorder`.
+   */
+  const reorder = useMutation({
+    mutationFn: ({ parentId, ids }: { parentId: number | null; ids: number[] }) =>
+      ipc.wishlistFolderReorder(parentId, ids),
+    onSuccess: settleOrder,
+    onError: settleOrder,
+  });
+
+  /**
    * Delete a folder. Named `remove` for `useDecks`' reason — `delete` is a reserved word.
    *
    * **Its wishes are not deleted**, and a confirmation must say so: they surface at the root,
@@ -150,6 +190,7 @@ export function useWishlistFolders() {
     create,
     rename,
     move,
+    reorder,
     remove,
   };
 }

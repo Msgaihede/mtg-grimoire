@@ -9,6 +9,7 @@ import {
   FILTER_FIELD,
   FILTER_FOCUS,
   FILTER_LABEL,
+  filterChipState,
   FiltersButton,
   LayoutToggle,
   ManaChip,
@@ -416,11 +417,13 @@ export const NothingToReset: Story = {
  * The way into every filter that is not on the bar, in the four readings it has — and the point
  * of the picture is that the two treatments are **independent**.
  *
- * **The border is the count; the fill is the tray.** Off, it is a `text-dim` word over a
- * transparent border that brightens under the mouse, which is `filterChipState`'s off exactly; a
- * live count gives it the gold border and gold text every other on control on this row wears; an
- * open tray fills it with that panel's own `bg-surface`, which is why each case is drawn over the
- * tray it opens. Both readings are legal at once and both are drawn.
+ * **The border and the word are the count; the fill is the tray.** The pair is
+ * `filterChipState(count > 0)` itself rather than a copy — a hairline and a dim word off,
+ * brightening under the mouse, exactly like the `ToggleChip` two stories up; gold border and gold
+ * word on. An open tray adds that panel's own `bg-surface` and touches neither, which is why each
+ * case here is drawn over the tray it opens. Read the third and fourth columns against each other
+ * for the thing worth checking: **opening the tray never turns the word gold, and a live count
+ * keeps it gold with the tray up.**
  *
  * **It was gold-bordered at rest until 2026-08-26**, on the argument that a disclosure has to say
  * "there is more in here" before anything has been pressed. What that cost was the row's one
@@ -429,10 +432,10 @@ export const NothingToReset: Story = {
  * to learn it was not. The badge is now the only thing that says "there is more in here", and it
  * says how much.
  *
- * **The border's _width_ never goes, only its colour.** `FILTER_SHAPE` puts a 1px box on every
- * control in this row; dropping the width at zero would shrink the button by 2px the moment the
- * last filter came off — under the finger that took it off — which is the same rule `ResetAll`
- * greys in place for.
+ * **The first fix overshot and went borderless**, for one commit. Dropping the gold at rest was
+ * right; dropping the hairline with it left the only control on the row with no edge at all, so
+ * it read as a label rather than as something to press. The bar is that it looks like the other
+ * buttons, and the other buttons have a border.
  */
 export const Disclosures: Story = {
   args: { label: "Owned", pressed: false },
@@ -449,21 +452,29 @@ export const Disclosures: Story = {
     const canvas = within(canvasElement);
     const [quiet, active, open, both] = canvas.getAllByRole("button", { name: /filters/i });
 
-    // `toHaveClass` reads `classList`, so these are real tokens rather than a substring of the
-    // `className` string — which is what makes the negative assertions mean anything.
-    await expect(quiet).toHaveClass("border-transparent", "text-dim");
-    await expect(quiet).not.toHaveClass("border-accent", "bg-surface");
+    // The row's own recipe, asked for rather than typed out — the claim is that this control
+    // wears `filterChipState` and not a lookalike. `toHaveClass` reads `classList`, so these are
+    // real tokens rather than a substring of `className`, which is what makes the negatives mean
+    // anything.
+    const off = filterChipState(false).split(" ");
+    const on = filterChipState(true).split(" ");
 
-    await expect(active).toHaveClass("border-accent", "text-accent");
+    await expect(quiet).toHaveClass(...off);
+    await expect(quiet).not.toHaveClass("border-accent", "text-accent", "bg-surface");
+
+    await expect(active).toHaveClass(...on);
     await expect(active).not.toHaveClass("bg-surface");
 
-    await expect(open).toHaveClass("bg-surface", "border-transparent");
-    await expect(both).toHaveClass("bg-surface", "border-accent");
+    // Open with nothing on keeps the dim word; open with a count keeps the gold one. The fill is
+    // the only thing the tray moves.
+    await expect(open).toHaveClass("bg-surface", ...off);
+    await expect(both).toHaveClass("bg-surface", ...on);
 
-    // The fill follows the tray and leaves the border alone: pressing the quiet one puts the grey
-    // under it without inventing a count, which is the independence the story is about.
+    // Pressing the quiet one puts the grey under it without inventing a count, which is the
+    // independence the story is about.
     await userEvent.click(quiet);
-    await expect(quiet).toHaveClass("bg-surface", "border-transparent");
+    await expect(quiet).toHaveClass("bg-surface", ...off);
+    await expect(quiet).not.toHaveClass("border-accent", "text-accent");
     await expect(quiet).toHaveAccessibleName("Hide filters — 0 active");
   },
 };

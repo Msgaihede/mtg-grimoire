@@ -10,6 +10,7 @@ import {
   TooltipProvider,
 } from "@/components/tooltip/TooltipProvider";
 import { readDragData } from "@/features/decks/dnd";
+import { folderDraggable, type FolderDrag } from "@/lib/folderDrag";
 import type {
   CollectionFolder,
   CollectionQuery,
@@ -22,6 +23,8 @@ import { MARKETPLACES } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
 import { MARKETPLACE_KEY } from "@/lib/useMarketplace";
 import { startDrag } from "@/test-drag";
+import { openDropdown, pickOption } from "@/test-dropdown";
+import { readCollectionTileDrag } from "./collectionDrag";
 
 const collectionList = vi.hoisted(() => vi.fn());
 const collectionSummary = vi.hoisted(() => vi.fn());
@@ -66,6 +69,7 @@ const collectionFolderSummary = vi.hoisted(() => vi.fn());
 const collectionFolderCreate = vi.hoisted(() => vi.fn());
 const collectionFolderRename = vi.hoisted(() => vi.fn());
 const collectionFolderMove = vi.hoisted(() => vi.fn());
+const collectionFolderReorder = vi.hoisted(() => vi.fn());
 const collectionFolderDelete = vi.hoisted(() => vi.fn());
 const collectionSetFolder = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
@@ -92,6 +96,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     collectionFolderCreate,
     collectionFolderRename,
     collectionFolderMove,
+    collectionFolderReorder,
     collectionFolderDelete,
     collectionSetFolder,
   },
@@ -214,6 +219,30 @@ const FOILS: CollectionFolder = {
   sortOrder: 0,
 };
 
+/** A **second** drawer at the top level, so the wall has a *level* to rearrange rather than one
+ *  card. `sortOrder` 1 puts it after `Trade binder`, which is the order every reorder below is
+ *  measured against. */
+const SEALED: CollectionFolder = {
+  id: 4,
+  parentId: null,
+  name: "Sealed",
+  kind: "user",
+  deckId: null,
+  sortOrder: 1,
+};
+
+/** A drawer whose parent this list does not carry — another window deleted it between the two
+ *  reads. `buildFolderTree` draws it at the **root** rather than dropping it, so its row names a
+ *  folder that is gone while the wall it appears on is the top level. */
+const ORPHAN: CollectionFolder = {
+  id: 5,
+  parentId: 99,
+  name: "Odds and ends",
+  kind: "user",
+  deckId: null,
+  sortOrder: 2,
+};
+
 /**
  * The two kinds the **app** owns, which schema v25 creates and nothing on this page can make,
  * rename or delete: one folder per deck, and exactly one holding area.
@@ -290,24 +319,29 @@ const sweepCallsAt = (marketplace: string) =>
  * `SORT_HINT` — since the tooltip sweep, a hover tooltip rather than a `title` — but a header's
  * own **accessible name** can still contain "Sort" (`headerLabel`, e.g. "Value. Prices as of…"),
  * so `/sort/i` on `getByLabelText` would still risk matching the whole header row rather than
- * only the control this file means.
+ * only the control this file means. A dropdown's trigger is a `button`, not a `combobox` — the
+ * combobox role belongs to a `searchable` dropdown's search box, and this one has none.
  */
 // **`Sort results` and not the bare `Sort` this page drew before it shared `FilterBar`.**
-// That row is mounted on four surfaces and one of them — the deck editor — already has a
+// That row is mounted on four surfaces and one of them - the deck editor - already has a
 // `Sort` of its own, so the shared control names what it orders. `FilterBar`'s own label
 // carries the argument.
-const sortSelect = () => screen.getByRole("combobox", { name: "Sort results" });
+//
+// **A `button`, not a `combobox`.** The control became a `Dropdown` on 2026-08-26: the combobox
+// role belongs to a `searchable` dropdown's search box and this one has none, so the trigger is
+// a plain disclosure button whose content is the picked order.
+const sortSelect = () => screen.getByRole("button", { name: "Sort results" });
 /**
  * Open the filter tray, so a cell behind the Filters disclosure can be pressed.
  *
  * Everything but the box, the colours, the order and the layout pair lives behind that button
- * since this page started drawing `FilterBar` — so a suite that reached straight for a chip is
+ * since this page started drawing `FilterBar` - so a suite that reached straight for a chip is
  * now reaching into a tray that is not mounted. Matched on a prefix: the button's name carries
- * the live count (`Show filters — 2 active`), which moves as a case presses things.
+ * the live count (`Show filters - 2 active`), which moves as a case presses things.
  */
 async function openTray(user: {
   // Structural, so the bare `userEvent` module and a `userEvent.setup()` instance both satisfy it
-  // — this file uses each in different cases, and the two are not the same type.
+  // - this file uses each in different cases, and the two are not the same type.
   click: (element: Element) => Promise<unknown>;
 }): Promise<void> {
   await user.click(screen.getByRole("button", { name: /^Show filters/ }));
@@ -348,6 +382,51 @@ function wrap(ui: ReactElement) {
 function rightClick(element: HTMLElement): void {
   element.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
 }
+
+/**
+ * The **card** drag sources on screen, in document order.
+ *
+ * A bare `[draggable="true"]` used to mean "a table row or a wall tile" and stopped meaning it the
+ * day folder cards became draggable: the reader's cabinet is drawn *above* the table, so the first
+ * match on a page with folders is a drawer. Filtering by the wall it sits in rather than by the
+ * element's own shape, because both are `<li>`s and both are draggable — the difference is which
+ * list they belong to.
+ */
+const cardSources = (container: HTMLElement): HTMLElement[] =>
+  [...container.querySelectorAll<HTMLElement>('[draggable="true"]')].filter(
+    (element) => element.closest('[aria-label="Folders"]') === null,
+  );
+
+/**
+ * A folder card by name, and the inner box its **folder** drop target is registered on.
+ *
+ * Two boxes rather than one because the drag library keeps a single element drop target per
+ * element and the copy drag already owns the `<li>` — `CollectionFolderCard` carries the whole
+ * reason. A drag aimed at the card's face finds the inner one by walking up, exactly as a pointer
+ * does, which is why {@link folderFace} is what these tests drop on.
+ */
+const folderCard = (name: string): HTMLElement =>
+  screen.getByRole("button", { name: new RegExp(`^${name} folder`) }).closest("li")!;
+const folderFace = (name: string): HTMLElement =>
+  screen.getByRole("button", { name: new RegExp(`^${name} folder`) });
+const folderSlot = (name: string): HTMLElement =>
+  folderCard(name).firstElementChild as HTMLElement;
+
+/**
+ * Three boxes, each placed so that the one coordinate `test-drag` sends — `clientX` 8 — falls in a
+ * different zone of a folder card laid out **horizontally**.
+ *
+ * jsdom has no layout engine, so every real `getBoundingClientRect` is four zeroes and
+ * `folderEdge` answers `inside` for all of them: an edge-dependent test has to state the box.
+ */
+const AT_START = new DOMRect(0, 0, 100, 100);
+const AT_MIDDLE = new DOMRect(-50, -50, 100, 100);
+const AT_END = new DOMRect(-85, -85, 100, 100);
+
+/** Slide a folder card under the stationary pointer. */
+const stand = (name: string, at: DOMRect) => {
+  folderSlot(name).getBoundingClientRect = () => at;
+};
 
 /**
  * jsdom lays nothing out, so the virtualiser measures a scroller of zero height and renders
@@ -394,12 +473,28 @@ beforeEach(() => {
   collectionFolderCreate.mockReset().mockResolvedValue(BINDER);
   collectionFolderRename.mockReset().mockResolvedValue(BINDER);
   collectionFolderMove.mockReset().mockResolvedValue(BINDER);
+  // The whole cabinet, flat, is what `collection_folder_reorder` answers — but the hook settles by
+  // invalidating the folder list rather than seeding the cache from it, so what it resolves with
+  // reaches nothing here and the empty array is the honest fixture.
+  collectionFolderReorder.mockReset().mockResolvedValue([]);
   collectionFolderDelete.mockReset().mockResolvedValue(undefined);
   collectionSetFolder.mockReset().mockResolvedValue({ id: 7, quantity: 2, removed: false });
   useAppStore.setState({
     collectionView: "table",
     selectedCardId: null,
     importDefaults: { condition: "NM", finish: null },
+    // **Flatten lives in the store now, so it survives a `cleanup()` and leaks into the next
+    // test unless something puts it back.** It did: the blocks below press the chip, and every
+    // describe after them inherited whichever way the last press had left it — which is how the
+    // `New folder` tile's own cases came to pass over a cabinet nothing had asked to be drawn.
+    //
+    // Restated as the store's *own* default rather than as this file's convenience, because that
+    // is what the page opens on for a reader: since v25 every card in a deck sits in that deck's
+    // group and the root means "filed nowhere", so an unflattened first launch draws
+    // `Cards 0 · Unique 0` over a full binder (275 of 275 entries filed in deck groups on the
+    // maintainer's own database). Each block below whose subject **is** the cabinet says
+    // `collectionFlattened: false` for itself, because no wall is drawn while this is on.
+    collectionFlattened: true,
   });
 });
 
@@ -593,7 +688,7 @@ describe("CollectionPage", () => {
     const { container } = wrap(<CollectionPage />);
     await screen.findByText("Lightning Bolt");
 
-    const rows = [...container.querySelectorAll('[draggable="true"]')];
+    const rows = cardSources(container);
     expect(rows).toHaveLength(1);
     expect(rows[0]).toHaveTextContent("Lightning Bolt");
 
@@ -621,7 +716,7 @@ describe("CollectionPage", () => {
   it("does not drag a row when the press landed on its stepper", async () => {
     const { container } = wrap(<CollectionPage />);
     await screen.findByText("Lightning Bolt");
-    const row = container.querySelector('[draggable="true"]')!;
+    const row = cardSources(container)[0];
 
     const held = await startDrag(row, {
       pressOn: screen.getByRole("button", {
@@ -889,13 +984,14 @@ describe("CollectionPage", () => {
   });
 
   it("sends the collection's own filters and its sort", async () => {
+    const user = userEvent.setup();
     wrap(<CollectionPage />);
     await screen.findByText("Lightning Bolt");
 
     await openTray(userEvent);
     await userEvent.click(screen.getByRole("button", { name: "Etched" }));
     await userEvent.click(screen.getByRole("button", { name: /^LP/ }));
-    await userEvent.selectOptions(sortSelect(), "price");
+    await pickOption(user, "Sort results", "Highest price");
 
     await waitFor(() => {
       const q = lastQuery();
@@ -923,17 +1019,23 @@ describe("CollectionPage", () => {
     wrap(<CollectionPage />);
     await screen.findByText("Lightning Bolt");
 
-    // **It opens on the order it is actually in, and `Custom…` is not there to open on.** A
-    // controlled `<select>` whose value matches no option silently reports the **first** one —
-    // alphabetically `Highest price` here — so this is the assertion that tells "the sort is name
-    // order" from "the control fell back to row zero", and the two look identical on screen.
-    expect(sortSelect()).toHaveValue("name");
+    // **It opens on the order it is actually in, and `Custom…` is not there to open on.** The
+    // trap this guards has changed shape but not gone away: a controlled `<select>` whose value
+    // matched no option silently reported the **first** one — alphabetically `Highest price`
+    // here — and a `Dropdown` draws its placeholder dash instead. Either way "the sort is name
+    // order" and "the control fell back" look identical on screen, so the trigger's own text is
+    // what tells them apart. Read as text rather than `toHaveValue`, which a `<button>` has none
+    // of: the trigger says the picked row's **label**, not its key.
+    expect(sortSelect()).toHaveTextContent("Name");
+    // Closed, so there are no rows at all — which is the honest form of this assertion now. A
+    // `Dropdown` renders its listbox only while open, so a `queryByRole("option")` here proves
+    // the panel is shut rather than proving `Custom…` is absent from it.
     expect(screen.queryByRole("option", { name: "Custom…" })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Copies" }));
     await waitFor(() => expect(lastQuery().sort).toEqual([{ key: "quantity", dir: "desc" }]));
     // A header the select also offers reads back on it.
-    expect(sortSelect()).toHaveValue("quantity");
+    expect(sortSelect()).toHaveTextContent("Most copies");
 
     await user.keyboard("{Shift>}");
     await user.click(screen.getByRole("button", { name: /^Value/ }));
@@ -947,13 +1049,17 @@ describe("CollectionPage", () => {
 
     // Still "Most copies": the select reads the sort's *first* term, and that is still one
     // it knows.
-    expect(sortSelect()).toHaveValue("quantity");
+    expect(sortSelect()).toHaveTextContent("Most copies");
 
     // Now start from Value alone, which the select has no option for at all.
     await user.click(screen.getByRole("button", { name: /^Value/ }));
     await waitFor(() => expect(lastQuery().sort).toEqual([{ key: "value", dir: "desc" }]));
-    expect(sortSelect()).toHaveValue("");
-    expect(screen.getByRole("option", { name: "Custom…" })).toBeDisabled();
+    expect(sortSelect()).toHaveTextContent("Custom…");
+    await openDropdown(user, "Sort results");
+    expect(screen.getByRole("option", { name: "Custom…" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
   });
 
   /**
@@ -1131,7 +1237,9 @@ describe("CollectionPage", () => {
     // The collection's own preview: a condition/finish default pair the deck's importer has
     // no equivalent of, and an `add`/`set` mode radio rather than `merge`/`replace`.
     expect(await screen.findByText(/will be added to your collection/)).toBeInTheDocument();
-    expect(within(dialog).getByLabelText("Condition when the file doesn't say")).toHaveValue("NM");
+    expect(
+      within(dialog).getByRole("button", { name: "Condition when the file doesn't say" }),
+    ).toHaveTextContent("Near mint");
 
     // Scoped to the dialog: the page's own trigger is still on screen behind it and shares the
     // same accessible name.
@@ -1742,35 +1850,63 @@ describe("the walk it publishes for the printings modal", () => {
  * level on screen and nothing here filters.
  */
 describe("the collection's folders", () => {
-  /** A collection nobody has filed draws no cabinet at all: a lone inert "Collection" under a
-   *  ribbon that already says Collection is a subheading repeating its own heading. */
-  it("draws nothing at all when there are no folders", async () => {
+  /**
+   * **The cabinet, said out loud.** Every case below is about a wall, a breadcrumb, a drop target
+   * or a level — none of which is drawn while the list is flattened, which is what the page now
+   * opens on. So the block asks for the cabinet rather than inheriting it, and the two cases here
+   * that are *about* Flatten press the chip from this side, where the press is a real flip.
+   */
+  beforeEach(() => useAppStore.setState({ collectionFlattened: false }));
+
+  /**
+   * A collection nobody has filed draws **no breadcrumb** — a lone inert "Collection" under a
+   * ribbon that already says Collection is a subheading repeating its own heading, and there is
+   * nowhere for it to lead.
+   *
+   * **The wall is drawn over that same empty cabinet, and that is the half this asserts.** It was
+   * gated on the folder count while `+ New folder` sat in a row of its own; with the tile living
+   * *inside* the wall that gate is a trap door — no folder card, therefore no wall, therefore no
+   * way to make a first folder, and the cabinet could never be opened by anyone who did not
+   * already have one.
+   */
+  it("draws the wall over an empty cabinet, holding only the tile that makes the first folder", async () => {
     wrap(<CollectionPage />);
     await screen.findByText("Lightning Bolt");
 
     expect(
       screen.queryByRole("navigation", { name: "Collection folders" }),
     ).not.toBeInTheDocument();
-    expect(screen.queryByRole("list", { name: "Folders" })).not.toBeInTheDocument();
+    const wall = screen.getByRole("list", { name: "Folders" });
+    const tiles = within(wall).getAllByRole("listitem");
+    expect(tiles).toHaveLength(1);
+    expect(within(tiles[0]).getByRole("button", { name: "New folder" })).toBeInTheDocument();
   });
 
   /**
-   * **The root of this cabinet is every folder, which is where the collection parts company with
-   * the wishlist.** `CollectionQuery.folderId` absent means "every folder" rather than "the copies
-   * filed nowhere", so opening the page still asks the question it always asked — and a reader who
-   * has made drawers still sees their whole binder until they open one.
+   * **The root of this cabinet is the copies filed nowhere, and this reverses what it was.**
+   * `CollectionQuery.folderId` absent used to mean "every folder", so the page opened on the whole
+   * binder; it is `rootOnly: true` now — the wishlist's own reading, reached from the other
+   * direction — and Flatten is what puts the whole binder back on screen. For a reader with decks
+   * that visibly empties the default view, because since v25 every card in a deck sits in that
+   * deck's group, and that is the requested behaviour rather than a regression.
+   *
+   * Both fields are asserted at both ends: `rootOnly` riding along *into* a folder would narrow
+   * the drawer to nothing, and the backend reads `folderId` as outranking it, so a payload
+   * carrying both would be a bug nothing on screen could show.
    */
-  it("asks for every folder at the root, and for one folder once opened", async () => {
+  it("asks for the copies filed nowhere at the root, and for one folder once opened", async () => {
     collectionFolderList.mockResolvedValue([BINDER]);
     collectionFolderSummary.mockResolvedValue([{ folderId: 3, cards: 12, value: 340.25 }]);
     wrap(<CollectionPage />);
     await screen.findByText("Lightning Bolt");
 
     expect(lastQuery().folderId).toBeUndefined();
+    expect(lastQuery().rootOnly).toBe(true);
 
     await userEvent.click(await screen.findByRole("button", { name: /^Trade binder folder/ }));
 
     await waitFor(() => expect(lastQuery().folderId).toBe(3));
+    expect(lastQuery().rootOnly).toBeUndefined();
   });
 
   /** The recursive total, never the summary's own row: that one is direct per folder, and a drawer
@@ -1801,16 +1937,19 @@ describe("the collection's folders", () => {
   });
 
   /**
-   * `+ New folder` makes one **inside the folder the reader is standing in**, which at the root is
+   * `New folder` makes one **inside the folder the reader is standing in**, which at the root is
    * the top level — and the field says so in words for a reader who cannot see which level the
    * strip is drawn over.
+   *
+   * `"New folder"` and no longer `"+ New folder"`: the plus was a control's decoration and the
+   * tile is shaped like the folder cards it stands among, which name themselves without one.
    */
   it("makes a folder inside the level the reader is standing in", async () => {
     const user = userEvent.setup();
     wrap(<CollectionPage />);
     await screen.findByText("Lightning Bolt");
 
-    await user.click(screen.getByRole("button", { name: "+ New folder" }));
+    await user.click(screen.getByRole("button", { name: "New folder" }));
     expect(screen.getByText("in Collection")).toBeInTheDocument();
     await user.type(screen.getByRole("textbox", { name: "New folder name" }), "Trade binder");
     await user.click(screen.getByRole("button", { name: "Create folder" }));
@@ -1841,7 +1980,7 @@ describe("the collection's folders", () => {
     )!;
     const invalidate = vi.spyOn(client, "invalidateQueries");
 
-    const row = container.querySelector('[draggable="true"]')!;
+    const row = cardSources(container)[0];
     const held = await startDrag(row, { pressOn: screen.getByText("Lightning Bolt") });
     await held.over(card);
     await held.drop();
@@ -1873,7 +2012,7 @@ describe("the collection's folders", () => {
       "li",
     )!;
 
-    const row = container.querySelector('[draggable="true"]')!;
+    const row = cardSources(container)[0];
     const held = await startDrag(row, { pressOn: screen.getByText("Lightning Bolt") });
     expect(card.classList.contains("ring-2")).toBe(false);
 
@@ -1900,10 +2039,11 @@ describe("the collection's folders", () => {
     await screen.findByRole("button", { name: /^Trade binder folder/ });
     expect(await screen.findByRole("button", { name: /^Mono-Red Aggro deck/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Recently removed folder/ })).toBeInTheDocument();
-    // One card in the reader's own wall, and it is the drawer they made.
-    expect(
-      within(screen.getByRole("list", { name: "Folders" })).getAllByRole("listitem"),
-    ).toHaveLength(1);
+    // Two tiles in the reader's own wall: the drawer they made, and the one that makes the next
+    // one. Nothing the app owns is among them, which is the whole of what this counts.
+    const wall = screen.getByRole("list", { name: "Folders" });
+    expect(within(wall).getAllByRole("listitem")).toHaveLength(2);
+    expect(within(wall).getByRole("button", { name: "New folder" })).toBeInTheDocument();
     // And each pinned kind is in its own list, so a reader scanning under "Decks" for their decks
     // does not find the holding area among them.
     expect(
@@ -1953,7 +2093,7 @@ describe("the collection's folders", () => {
       "li",
     )!;
 
-    const row = container.querySelector('[draggable="true"]')!;
+    const row = cardSources(container)[0];
     const held = await startDrag(row, { pressOn: screen.getByText("Lightning Bolt") });
     expect(group.classList.contains("ring-2")).toBe(false);
 
@@ -1984,13 +2124,166 @@ describe("the collection's folders", () => {
       "li",
     )!;
 
-    const row = container.querySelector('[draggable="true"]')!;
+    const row = cardSources(container)[0];
     const held = await startDrag(row, { pressOn: screen.getByText("Lightning Bolt") });
     expect(binder.classList.contains("ring-2")).toBe(false);
 
     await held.over(binder);
     await held.drop();
     expect(collectionSetFolder).not.toHaveBeenCalled();
+  });
+
+  /* ---------------------------------------------------------------------------------------- *
+   * The wall is a drag source too, and a tile is not one row
+   * ---------------------------------------------------------------------------------------- */
+
+  /**
+   * **A tile's drag means two things at once, and both readers have to answer the same payload.**
+   * The card half is what a deck category and the sidebar's Decks entry have always taken from
+   * this page's *table*; the tile half is what a folder card reads. They travel under different
+   * keys so neither can see the other's — `collectionDrag.ts` carries the argument — and a wall
+   * that carried only one of them would either lose the deck drop or lose the filing.
+   */
+  it("picks a wall tile up as a card and as the rows behind the art at once", async () => {
+    useAppStore.setState({ collectionView: "grid" });
+    collectionList.mockResolvedValue(page([BOLT, { ...BOLT, id: 8, finish: "foil" }]));
+    const { container } = wrap(<CollectionPage />);
+    await screen.findByRole("button", { name: "Lightning Bolt" });
+
+    const tiles = cardSources(container);
+    expect(tiles).toHaveLength(1);
+
+    const carried: Record<string, unknown>[] = [];
+    const stop = monitorForElements({ onDragStart: ({ source }) => carried.push(source.data) });
+    const held = await startDrag(tiles[0], {
+      pressOn: screen.getByRole("button", { name: "Lightning Bolt" }),
+    });
+    await held.cancel();
+    stop();
+
+    expect(carried.map(readDragData)).toEqual([
+      { kind: "card", cardId: "c1", name: "Lightning Bolt", typeLine: "Instant" },
+    ]);
+    // The same payload, read by the other key: both entries behind the art, with where each
+    // one sits — which is what lets a folder refuse the copies already in it.
+    expect(carried.map(readCollectionTileDrag)).toEqual([
+      {
+        cardId: "c1",
+        name: "Lightning Bolt",
+        copies: [
+          { entryId: 7, folderId: null },
+          { entryId: 8, folderId: null },
+        ],
+      },
+    ]);
+  });
+
+  /**
+   * **One row behind the art is not a question**, and this is the common case: most printings are
+   * held once. A dialog here would be a press for a choice with one answer.
+   */
+  it("files a tile that stands for one row without asking", async () => {
+    useAppStore.setState({ collectionView: "grid" });
+    collectionFolderList.mockResolvedValue([BINDER]);
+    collectionList.mockResolvedValue(page([BOLT]));
+    const { container } = wrap(<CollectionPage />);
+    await screen.findByRole("button", { name: "Lightning Bolt" });
+    const binder = (await screen.findByRole("button", { name: /^Trade binder folder/ })).closest(
+      "li",
+    )!;
+
+    const tile = cardSources(container)[0];
+    const held = await startDrag(tile, {
+      pressOn: screen.getByRole("button", { name: "Lightning Bolt" }),
+    });
+    await held.over(binder);
+    await held.drop();
+
+    await waitFor(() => expect(collectionSetFolder).toHaveBeenCalledWith(7, 3));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  /**
+   * **The question the wall's drag exists to ask.** A tile merges every entry for one printing
+   * across finishes, conditions, languages and folders, so "file the card" is not something the
+   * app can do without choosing — and choosing on the reader's behalf is the one answer that is
+   * always wrong for somebody. The drag says *where*; only the reader knows *which*.
+   */
+  it("asks which copies when the art stands for more than one row", async () => {
+    useAppStore.setState({ collectionView: "grid" });
+    const user = userEvent.setup();
+    collectionFolderList.mockResolvedValue([BINDER]);
+    collectionList.mockResolvedValue(page([BOLT, { ...BOLT, id: 8, finish: "foil" }]));
+    const { container } = wrap(<CollectionPage />);
+    await screen.findByRole("button", { name: "Lightning Bolt" });
+    const binder = (await screen.findByRole("button", { name: /^Trade binder folder/ })).closest(
+      "li",
+    )!;
+
+    const tile = cardSources(container)[0];
+    const held = await startDrag(tile, {
+      pressOn: screen.getByRole("button", { name: "Lightning Bolt" }),
+    });
+    await held.over(binder);
+    await held.drop();
+
+    // Nothing is written by the drop itself: the gesture opened a question.
+    await screen.findByRole("dialog");
+    expect(collectionSetFolder).not.toHaveBeenCalled();
+
+    // **Four, not two** — the button counts *copies* and each of these rows holds two of them.
+    // That is the honest number: a reader is filing cardboard, and "2" over four cards would be
+    // counting the app's rows at them.
+    await user.click(screen.getByRole("button", { name: "Move 4 copies to Trade binder" }));
+    await waitFor(() => expect(collectionSetFolder).toHaveBeenCalledWith(7, 3));
+    expect(collectionSetFolder).toHaveBeenCalledWith(8, 3);
+  });
+
+  /**
+   * **A copy in a deck's group is drawn and refused, never silently dropped.**
+   * `collection_folders::set_entry_folder` answers `ENTRY_IN_A_DECK` for it, and the row says so
+   * rather than merely being missing — a tile that claimed three copies and filed two without a
+   * word is the app losing one behind the reader's back.
+   *
+   * The ring is still raised, because the *other* copy genuinely can move: refusing the whole
+   * tile for one stuck row would strand the copies that have somewhere to go.
+   */
+  it("greys a copy that is in a deck, says what to do instead, and never files it", async () => {
+    useAppStore.setState({ collectionView: "grid" });
+    const user = userEvent.setup();
+    collectionFolderList.mockResolvedValue([BINDER, DECK_GROUP, REMOVED]);
+    collectionList.mockResolvedValue(
+      page([
+        BOLT,
+        { ...BOLT, id: 8, finish: "foil", folderId: 20, folderName: "Mono-Red Aggro" },
+      ]),
+    );
+    const { container } = wrap(<CollectionPage />);
+    await screen.findByRole("button", { name: "Lightning Bolt" });
+    const binder = (await screen.findByRole("button", { name: /^Trade binder folder/ })).closest(
+      "li",
+    )!;
+
+    const tile = cardSources(container)[0];
+    const held = await startDrag(tile, {
+      pressOn: screen.getByRole("button", { name: "Lightning Bolt" }),
+    });
+    await held.over(binder);
+    expect(binder.classList.contains("ring-2")).toBe(true);
+    await held.drop();
+
+    await screen.findByRole("dialog");
+    // A regex, because a greyed row's accessible name carries its reason — an exact-name query
+    // reads as "the row is missing" when it is really the reason that moved the name.
+    const stuck = screen.getByRole("checkbox", { name: /Mono-Red Aggro/ });
+    expect(stuck).toBeDisabled();
+    expect(stuck).not.toBeChecked();
+    expect(stuck).toHaveAccessibleName(/Cut the card from the deck/);
+
+    // Two copies rather than four: the deck's row is not counted, because it is not going.
+    await user.click(screen.getByRole("button", { name: "Move 2 copies to Trade binder" }));
+    await waitFor(() => expect(collectionSetFolder).toHaveBeenCalledWith(7, 3));
+    expect(collectionSetFolder).not.toHaveBeenCalledWith(8, 3);
   });
 
   /**
@@ -2028,7 +2321,7 @@ describe("the collection's folders", () => {
     )!;
     const invalidate = vi.spyOn(client, "invalidateQueries");
 
-    const row = container.querySelector('[draggable="true"]')!;
+    const row = cardSources(container)[0];
     const held = await startDrag(row, { pressOn: screen.getByText("Lightning Bolt") });
     await held.over(binder);
     await held.drop();
@@ -2103,6 +2396,702 @@ describe("the collection's folders", () => {
     expect(within(dialog).getByText(/in Trade binder/)).toBeInTheDocument();
     expect(within(dialog).getByText(/ignoring the filters and folders/)).toBeInTheDocument();
   });
+
+  /**
+   * **The root narrows now, so the export has to offer to widen past it — and the census it asks
+   * is the whole one, not the reader's own drawers.**
+   *
+   * `rootOnly` leaves every folder out, including the ones the app owns: a copy in a deck's group
+   * is missing from this sweep exactly as one in a binder is. So the clause is gated on there
+   * being *any* folder, which is why this case has none of the reader's own and still expects it —
+   * a predicate reading `userFolders` would drop the offer for precisely the reader whose cards
+   * are all in decks.
+   *
+   * There is no drawer to name at the root, deliberately: `Collection` is also the dialog's word
+   * for the whole list, so `12 cards in Collection` would read as all of it.
+   */
+  it("offers to widen past the root, on the strength of folders the reader did not make", async () => {
+    collectionFolderList.mockResolvedValue([DECK_GROUP, REMOVED]);
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await screen.findByRole("button", { name: /^Mono-Red Aggro deck/ });
+
+    await user.click(screen.getAllByRole("button", { name: "Export collection" })[0]);
+
+    const dialog = await screen.findByRole("dialog", { name: /export/i });
+    expect(within(dialog).queryByText(/in Collection/)).toBeNull();
+    expect(within(dialog).getByText(/ignoring the filters and folders/)).toBeInTheDocument();
+  });
+
+  /** Flattened, the level on screen already **is** every folder, so there is nothing left for the
+   *  clause to offer — and no drawer to name either. */
+  it("drops the folders clause while the list is flattened", async () => {
+    collectionFolderList.mockResolvedValue([BINDER]);
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await user.click(await screen.findByRole("button", { name: /^Trade binder folder/ }));
+    await waitFor(() => expect(lastQuery().folderId).toBe(3));
+    await user.click(screen.getByRole("button", { name: "Flatten" }));
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Flatten" })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      ),
+    );
+
+    await user.click(screen.getAllByRole("button", { name: "Export collection" })[0]);
+
+    const dialog = await screen.findByRole("dialog", { name: /export/i });
+    expect(within(dialog).queryByText(/in Trade binder/)).toBeNull();
+    expect(within(dialog).getByText(/ignoring the filters$/)).toBeInTheDocument();
+  });
+
+  /**
+   * **A flattened list that comes back empty is an empty collection, not an empty level.** The
+   * status line's two folder-shaped answers — "the cards below are the drawers" and "Nothing filed
+   * here yet." — are both about a *level*, and there is no level on screen while the filing is
+   * ignored. Both inputs carry `!flatten` for that reason, and either one left behind would answer
+   * a question the reader did not ask.
+   */
+  it("says the collection is empty, not the folder, while flattened", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, FOILS]);
+    collectionList.mockResolvedValue(page([]));
+    collectionSummary.mockResolvedValue(summary());
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    // Standing **inside** `Trade binder`, which also holds `Foils` — so both folder-shaped
+    // answers are armed at once and either input left un-flattened picks one of them: `filed`
+    // says nothing at all ("the drawers below are the content"), `inFolder` says "Nothing filed
+    // here yet." Neither is true of a list that is ignoring the filing.
+    await user.click(await screen.findByRole("button", { name: /^Trade binder folder/ }));
+    await waitFor(() => expect(lastQuery().folderId).toBe(3));
+
+    await user.click(screen.getByRole("button", { name: "Flatten" }));
+
+    expect(
+      await screen.findByText(
+        "Nothing here yet. Add cards from search, or import a collection file.",
+      ),
+    ).toBeInTheDocument();
+  });
+});
+
+/**
+ * **Flatten, which is the collection's answer to a root that now narrows.**
+ *
+ * The root asks for the copies filed *nowhere* since this PR, which for a reader with decks is a
+ * visibly smaller list than the one they used to open on — every card in a deck sits in that
+ * deck's group. Flatten is the one press that puts the whole binder back on screen, and the whole
+ * of what it does is ignore the filing: no breadcrumb, no folder wall, no pinned strip, and every
+ * tile captioned with the drawer its copies are in instead.
+ *
+ * `useCollection` owns the flag and the two fields it sends; what is driven here is the page —
+ * which controls go, which come back, and what the tiles say while they are gone.
+ */
+describe("Flatten", () => {
+  const flattenChip = () => screen.getByRole("button", { name: "Flatten" });
+
+  /**
+   * **Off, so that every press below is a real flip.** The chip is a toggle over one store field,
+   * and a case that clicked it from an unknown starting position would assert about whichever way
+   * it happened to land — which, before the switch moved into the store, is exactly what the
+   * blocks after this one were doing with the state these presses left behind. The one case that
+   * is about the *opening* state says so for itself, immediately below.
+   */
+  beforeEach(() => useAppStore.setState({ collectionFlattened: false }));
+
+  /**
+   * **The collection opens flattened, and that is the decision this whole switch was moved for.**
+   *
+   * Since schema v25 every card in a deck lives in that deck's group folder, and this cabinet's
+   * root was narrowed to mean "filed nowhere" — measured on the maintainer's own database, 275 of
+   * 275 entries are filed in deck groups and none is unfiled, so an unflattened first launch draws
+   * `Cards 0 · Unique 0 · $0.00` over a binder holding 327 copies. Flattened is the honest opening
+   * state, and the wishlist deliberately keeps the other one because it has no such problem.
+   *
+   * The initial state is read rather than assumed: this file's own `beforeEach` overrides the
+   * field, so a test that only set it and asserted the page would be pinning its own setup. Both
+   * halves are here — what the store says, and what the page draws when it says it — because the
+   * two could drift apart in either direction and only the pair is the claim.
+   */
+  it("opens flattened, because a root that means “filed nowhere” is empty for a reader with decks", async () => {
+    expect(useAppStore.getInitialState().collectionFlattened).toBe(true);
+    useAppStore.setState({ collectionFlattened: true });
+    // Nothing of the reader's own, and every copy in a deck's group: the shape the flip is about.
+    collectionFolderList.mockResolvedValue([DECK_GROUP, REMOVED]);
+    wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+
+    expect(flattenChip()).toHaveAttribute("aria-pressed", "true");
+    // Neither field reaches the wire, which is what "every copy, wherever it is filed" is: an
+    // opening read carrying `rootOnly` would be the empty page this default exists to prevent.
+    expect(lastQuery().rootOnly).toBeUndefined();
+    expect(lastQuery().folderId).toBeUndefined();
+    // And no cabinet, the pinned strip included — the filing is off screen, not merely widened.
+    expect(screen.queryByRole("list", { name: "Folders" })).toBeNull();
+    expect(screen.queryByRole("list", { name: "Deck folders" })).toBeNull();
+  });
+
+  /**
+   * **It rides the filter bar, past the hairline, beside the grid-and-table pair** — the end of
+   * that row where every control is about how the list is *drawn* rather than which rows are in
+   * it, and where nothing is counted by the filter badge or cleared by Reset all.
+   *
+   * The assertion is the shared ancestor and not a class: the two are in one wrapper on purpose,
+   * so that `flex-wrap` cannot break between them and strand Flatten on the line above the pair
+   * it was moved next to. A test that only checked "the chip exists" would pass with it back in a
+   * row of its own under the breadcrumb, which is exactly the placement this moved away from.
+   */
+  it("draws Flatten on the filter bar, in one wrapper with the layout pair", async () => {
+    wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+
+    const chip = flattenChip();
+    expect(chip).toHaveAttribute("aria-pressed", "false");
+    const group = chip.parentElement!;
+    expect(within(group).getByRole("button", { name: "Card view" })).toBeInTheDocument();
+    expect(within(group).getByRole("button", { name: "Table view" })).toBeInTheDocument();
+  });
+
+  /**
+   * **On, the filing goes off screen — all three pieces of it.**
+   *
+   * The pinned strip is the one worth spelling out, because it is the half a reader might expect
+   * to survive: a deck group is the app's record rather than the reader's filing, and leaving the
+   * strip up would leave doors into levels the list is deliberately ignoring, so a press would
+   * silently un-flatten by drilling in. Nothing is lost — those copies are *in* the flat list.
+   *
+   * The press and the read are deliberately two steps: clicking and asserting in one go answers
+   * about the frame before React re-rendered.
+   */
+  it("takes the folder wall and the pinned strip away, and keeps the bar that says why", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, DECK_GROUP, REMOVED]);
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await screen.findByRole("button", { name: /^Trade binder folder/ });
+    expect(screen.getByRole("navigation", { name: "Collection folders" })).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: "Deck folders" })).toBeInTheDocument();
+
+    await user.click(flattenChip());
+
+    await waitFor(() => expect(flattenChip()).toHaveAttribute("aria-pressed", "true"));
+    expect(screen.queryByRole("list", { name: "Folders" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "New folder" })).toBeNull();
+    expect(screen.queryByRole("list", { name: "Deck folders" })).toBeNull();
+    expect(screen.queryByRole("list", { name: "Removed cards" })).toBeNull();
+    // **The bar stays, and it is the only thing on screen explaining the three bands that just
+    // went.** `WishlistBreadcrumb` does exactly this under the same flag — see
+    // `CollectionBreadcrumb` for why the argument for hiding it here did not survive being
+    // checked against the page it claimed to distinguish.
+    const bar = screen.getByRole("navigation", { name: "Collection folders" });
+    expect(bar).toHaveTextContent(/Collection\s*·\s*all folders/);
+    // Inert words, not a trail: with every folder on screen there is no level to walk to, so the
+    // segments must not still be doors. (`\s*` because a CSS gap between inline boxes is not a
+    // space to the accname algorithm, and jsdom cannot referee that either way.)
+    expect(within(bar).queryByRole("button")).toBeNull();
+    expect(within(bar).queryByRole("listitem")).toBeNull();
+    // And the rows are still there: Flatten widens the list, it does not empty the page.
+    expect(screen.getByText("Lightning Bolt")).toBeInTheDocument();
+  });
+
+  /**
+   * **The one sentence that could outlive the wall it is about.** `folderId` survives the press —
+   * deliberately, so that un-flattening puts the reader back where they were — which leaves
+   * `inRemoved` true under a page drawing no folder cards at all. Left un-gated, "Drag a card onto
+   * a folder" would be an instruction naming a row of targets that is not on screen.
+   *
+   * Found by reading rather than by a failure, which is why it is pinned: nothing else on the page
+   * would look wrong.
+   */
+  it("takes the refile sentence with the wall it captions", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, DECK_GROUP, REMOVED]);
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+    await user.click(await screen.findByRole("button", { name: /^Recently removed folder/ }));
+    await waitFor(() => expect(lastQuery().folderId).toBe(21));
+    expect(
+      screen.getByText(/drag a card onto a folder to file it back into your collection/i),
+    ).toBeInTheDocument();
+
+    await user.click(flattenChip());
+
+    await waitFor(() =>
+      expect(
+        screen.queryByText(/drag a card onto a folder to file it back into your collection/i),
+      ).toBeNull(),
+    );
+  });
+
+  /**
+   * **The caption is the whole reason a flattened wall is readable.** With no breadcrumb and no
+   * folder cards, a tile that said only `LEA · 161` would be a copy whose drawer the reader cannot
+   * see without opening it — and seeing where a copy is filed is what Flatten is for.
+   *
+   * The `sr-only` preposition is asserted with the name rather than instead of it: a bare "Trade
+   * binder" in a caption reads as part of the printing beside it. Hedged with `\s*` because the
+   * two are separate elements and a CSS gap between them is not a character.
+   */
+  it("captions a flattened tile with the drawer its copies are in", async () => {
+    useAppStore.setState({ collectionView: "grid" });
+    collectionFolderList.mockResolvedValue([BINDER]);
+    collectionList.mockResolvedValue(page([{ ...BOLT, folderId: 3, folderName: "Trade binder" }]));
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await screen.findByAltText("Lightning Bolt");
+
+    await user.click(flattenChip());
+
+    const mark = await screen.findByText("Filed in");
+    expect(mark.parentElement).toHaveTextContent(/Filed in\s*Trade binder/);
+  });
+
+  /** Inside a level, the caption would be that level's own name on every tile — said once in the
+   *  breadcrumb above — so the wall keeps its plain `SET · number`. */
+  it("captions nothing while the list is not flattened", async () => {
+    useAppStore.setState({ collectionView: "grid" });
+    collectionFolderList.mockResolvedValue([BINDER]);
+    collectionList.mockResolvedValue(page([{ ...BOLT, folderId: 3, folderName: "Trade binder" }]));
+    wrap(<CollectionPage />);
+
+    await screen.findByAltText("Lightning Bolt");
+    expect(screen.getByText("LEA · 161")).toBeInTheDocument();
+    expect(screen.queryByText("Filed in")).toBeNull();
+  });
+
+  /**
+   * **A tile stands for a printing and a filing is a row**, so a card the reader keeps in two
+   * places has no single drawer to name — and naming the first of them would be the caption
+   * claiming the other copies are somewhere they are not. It counts instead.
+   */
+  it("counts the drawers when one printing is filed in more than one", async () => {
+    useAppStore.setState({ collectionView: "grid" });
+    collectionFolderList.mockResolvedValue([BINDER, FOILS]);
+    collectionList.mockResolvedValue(
+      page([
+        { ...BOLT, folderId: 3, folderName: "Trade binder" },
+        { ...BOLT, id: 8, finish: "nonfoil", folderId: 9, folderName: "Foils" },
+      ]),
+    );
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await screen.findByAltText("Lightning Bolt");
+
+    await user.click(flattenChip());
+
+    const mark = await screen.findByText("Filed in");
+    expect(mark.parentElement).toHaveTextContent(/Filed in\s*2 folders/);
+  });
+
+  /**
+   * **No folder layer survives Flatten, and pressing it back does not bring one back.** With the
+   * filing off screen every trigger that could have opened one of these is gone with it, so a
+   * naming field left standing over a flattened list would be a layer with nothing on screen
+   * explaining what it is about.
+   *
+   * **Two things close it and only the nearer one is observable here.** All three panel arms carry
+   * the same "clicking or tabbing away discards a half-made decision" blur, so the press on the
+   * chip closes the layer before Flatten is even read — which is why mutating `openPanel` back to
+   * a plain `panel` leaves this green (checked). The derivation is the fence behind that: it is
+   * what the page *reads*, so a fourth arm added without a blur handler cannot leave a layer
+   * standing, and `panel` staying the setters' own value is what stops a press back re-opening one.
+   * `WishlistPage` carries the same pair for the same reason.
+   */
+  it("closes an open folder layer, and pressing it back does not bring the layer back", async () => {
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+    await user.click(screen.getByRole("button", { name: "New folder" }));
+    expect(await screen.findByRole("textbox", { name: "New folder name" })).toBeInTheDocument();
+
+    await user.click(flattenChip());
+
+    await waitFor(() =>
+      expect(screen.queryByRole("textbox", { name: "New folder name" })).toBeNull(),
+    );
+
+    await user.click(flattenChip());
+
+    await waitFor(() => expect(flattenChip()).toHaveAttribute("aria-pressed", "false"));
+    expect(screen.queryByRole("textbox", { name: "New folder name" })).toBeNull();
+  });
+
+  /**
+   * **Flatten is deliberately not a rung of the Escape ladder**, and this is the fence that says
+   * so. It is not a place the reader walked into, so there is no level on screen to leave — and a
+   * press that walked *out* of the `folderId` still set underneath would silently move where
+   * un-flattening puts them back, with nothing on screen to show it had happened.
+   *
+   * The assertion is `defaultPrevented` and not the folder, for the reason the root case gives:
+   * a rung that wrongly consumed the press would draw exactly the same screen.
+   */
+  it("hands Escape on while flattened, even from inside a folder", async () => {
+    collectionFolderList.mockResolvedValue([BINDER]);
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await user.click(await screen.findByRole("button", { name: /^Trade binder folder/ }));
+    await waitFor(() => expect(lastQuery().folderId).toBe(3));
+
+    await user.click(flattenChip());
+    await waitFor(() => expect(flattenChip()).toHaveAttribute("aria-pressed", "true"));
+
+    expect(fireEvent.keyDown(document.body, { key: "Escape", code: "Escape" })).toBe(true);
+  });
+
+  /**
+   * **Reset all is about the filters, and Flatten is not one.** `useCollection` leaves both
+   * `folderId` and `flatten` alone on purpose — where the reader is standing and how much of the
+   * cabinet is on screen are navigation — and this is exactly the kind of fence that rots
+   * silently, because a Reset that also un-flattened would look like the button working.
+   */
+  it("survives Reset all", async () => {
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+    await user.click(flattenChip());
+    await waitFor(() => expect(flattenChip()).toHaveAttribute("aria-pressed", "true"));
+    await user.type(screen.getByRole("searchbox", { name: "Search your collection" }), "bolt");
+
+    await openTray(user);
+    await user.click(screen.getByRole("button", { name: /^Reset all/ }));
+
+    await waitFor(() =>
+      expect(screen.getByRole("searchbox", { name: "Search your collection" })).toHaveValue(""),
+    );
+    expect(flattenChip()).toHaveAttribute("aria-pressed", "true");
+  });
+});
+
+/**
+ * **`New folder` is a tile of the wall now, and where it is drawn is a fence rather than a
+ * decoration.**
+ */
+describe("the New folder tile", () => {
+  /**
+   * **The tile is a card of the wall, so the wall has to be drawn.** Every case here passed for
+   * one run without this line, on the state the block above them happened to leave behind — which
+   * is the whole hazard of a switch that lives in a module singleton: the assertions were right,
+   * and nothing in the file said which page they were about.
+   */
+  beforeEach(() => useAppStore.setState({ collectionFlattened: false }));
+
+  /** First, so a reader scanning a wall of drawers for the one that is not there yet finds it
+   *  before the twelve that are. */
+  it("is the first item of the Folders list", async () => {
+    collectionFolderList.mockResolvedValue([BINDER]);
+    wrap(<CollectionPage />);
+    await screen.findByRole("button", { name: /^Trade binder folder/ });
+
+    const tiles = within(screen.getByRole("list", { name: "Folders" })).getAllByRole("listitem");
+    expect(within(tiles[0]).getByRole("button", { name: "New folder" })).toBeInTheDocument();
+  });
+
+  /**
+   * **Not inside `Recently removed`, and this is the collection's own clause — the wishlist has
+   * no equivalent, because only this cabinet has folders the app owns.**
+   *
+   * `create_folder` calls `user_folder` on the parent and answers `FOLDER_NOT_YOURS` for the
+   * holding area, and the tile always names the level the reader is standing in — so a tile here
+   * would be a press whose only possible outcome is a sentence explaining that it does not work.
+   * It bites hardest in exactly this folder, where the wall is *not* this level's children but the
+   * reader's own top level: every other tile in the row is a live drop target, and this one would
+   * be the one control among them that is not.
+   */
+  it("is not drawn inside Recently removed, where a folder cannot be made", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, DECK_GROUP, REMOVED]);
+    wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+    expect(screen.getByRole("button", { name: "New folder" })).toBeInTheDocument();
+
+    await userEvent.click(await screen.findByRole("button", { name: /^Recently removed folder/ }));
+    await waitFor(() => expect(lastQuery().folderId).toBe(21));
+
+    // The reader's own binders are still drawn — that substitution is #209's feature — so this is
+    // a claim about the tile and not about the wall having gone.
+    expect(await screen.findByRole("button", { name: /^Trade binder folder/ })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "New folder" })).toBeNull();
+  });
+
+  /** The same fence one folder over: a deck group is the app's too. */
+  it("is not drawn inside a deck group", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, DECK_GROUP, REMOVED]);
+    wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+
+    await userEvent.click(await screen.findByRole("button", { name: /^Mono-Red Aggro deck/ }));
+    await waitFor(() => expect(lastQuery().folderId).toBe(20));
+
+    expect(screen.queryByRole("button", { name: "New folder" })).toBeNull();
+  });
+
+  /**
+   * **Driven by clicking, which is the caret a reader can actually produce.** A flow started with
+   * `element.focus()` tests a caret nobody has — the failure a past session recorded — and the
+   * whole point of the tile handing its own element to `onClick` is that Cancel can put the caret
+   * back on it.
+   */
+  it("opens the naming panel, and Cancel hands the caret back to the tile", async () => {
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+
+    await user.click(screen.getByRole("button", { name: "New folder" }));
+
+    expect(await screen.findByRole("textbox", { name: "New folder name" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole("textbox", { name: "New folder name" })).toBeNull(),
+    );
+    expect(screen.getByRole("button", { name: "New folder" })).toHaveFocus();
+  });
+});
+
+/**
+ * **Rearranging the cabinet itself** — a drawer dropped on another drawer's middle goes inside it,
+ * and one dropped near an edge lands beside it.
+ *
+ * The write is always `collection_folder_reorder(parentId, ids)` and `ids` is the **whole** level,
+ * in order: `sort_order` is written from position and `parent_id` from the argument, in one
+ * transaction, so one gesture both re-parents and places. Sending only the folder that moved is
+ * the mistake the command's name invites, which is why every assertion below names the whole list.
+ *
+ * **The three landings are driven by stating the box.** jsdom has no layout engine, so every real
+ * `getBoundingClientRect` is four zeroes and `folderEdge` would answer `inside` for every drop —
+ * a test that hoped for a rect would pass over any threshold at all. {@link stand} slides the card
+ * under the one coordinate `test-drag` sends instead.
+ */
+describe("rearranging the collection's cabinet", () => {
+  /** Two drawers at the top level and one inside the first — enough for a nest, a reorder and the
+   *  drop that would change nothing. */
+  beforeEach(() => {
+    // **The wall is what this whole block drags, and a flattened list draws none of it.**
+    // \collectionFlattened\ ships **on** (\store.ts\), so every folder-card test in this file
+    // turns it off for itself — the two blocks above do the same, for the same reason.
+    useAppStore.setState({ collectionFlattened: false });
+    collectionFolderList.mockResolvedValue([BINDER, SEALED, FOILS]);
+    collectionFolderSummary.mockResolvedValue([]);
+  });
+
+  /** Both root drawers on screen, which every test here starts from. */
+  const wall = async () => {
+    await screen.findByRole("button", { name: /^Trade binder folder/ });
+    await screen.findByRole("button", { name: /^Sealed folder/ });
+  };
+
+  it("files a drawer inside the one it is dropped on the middle of", async () => {
+    wrap(<CollectionPage />);
+    await wall();
+    stand("Trade binder", AT_MIDDLE);
+
+    const held = await startDrag(folderCard("Sealed"));
+    await held.over(folderFace("Trade binder"));
+    await held.drop();
+
+    // `Trade binder`'s own children, then the folder that just arrived: `inside` says which drawer
+    // and nothing about where in it, so there is no second position in the gesture for the reader
+    // to have meant.
+    await waitFor(() => expect(collectionFolderReorder).toHaveBeenCalledWith(3, [9, 4]));
+  });
+
+  it("places a drawer before the one it is dropped on the leading edge of", async () => {
+    wrap(<CollectionPage />);
+    await wall();
+    stand("Trade binder", AT_START);
+
+    const held = await startDrag(folderCard("Sealed"));
+    await held.over(folderFace("Trade binder"));
+    await held.drop();
+
+    // The root level, re-ordered — `null` is the destination parent and a real place rather than
+    // an omission.
+    await waitFor(() => expect(collectionFolderReorder).toHaveBeenCalledWith(null, [4, 3]));
+  });
+
+  /**
+   * **A drop that would reproduce the order already on screen writes nothing at all** — not a
+   * reorder of the level as it stands, which would be a transaction to arrive at the list already
+   * drawn, bumping `updated_at` and re-reading the cabinet for it.
+   *
+   * `Sealed` already follows `Trade binder`, so "after Trade binder" is where it is. The mark goes
+   * with the write: `edge` is `null` over a landing the page refuses, so no line is drawn either —
+   * which is the honest thing to show and the opposite of a line leading nowhere.
+   */
+  it("draws no line and writes nothing for a drop that would change nothing", async () => {
+    wrap(<CollectionPage />);
+    await wall();
+    stand("Trade binder", AT_END);
+
+    const held = await startDrag(folderCard("Sealed"));
+    await held.over(folderFace("Trade binder"));
+    expect(folderCard("Trade binder").querySelector("[data-folder-drop-line]")).toBeNull();
+
+    await held.drop();
+    expect(collectionFolderReorder).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **The destination level is read off the wall, never off the target row's own `parentId`**, and
+   * an orphan is where the two stop agreeing.
+   *
+   * `buildFolderTree` draws a folder whose parent this list does not carry at the root rather than
+   * dropping it, so `Odds and ends` is on the top level while its row still names folder 99.
+   * Sending 99 as the destination would be a reorder into nothing — and, because the `kind` fence
+   * asks whether the destination is one of the reader's drawers, it would in fact write nothing at
+   * all. What is on screen is the honest answer, and `collection_folder_reorder` writing
+   * `parent_id` from it files the orphan where the reader can already see it.
+   */
+  it("reorders into the level on screen, even beside a drawer whose parent is gone", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, SEALED, ORPHAN, FOILS]);
+    wrap(<CollectionPage />);
+    await wall();
+    await screen.findByRole("button", { name: /^Odds and ends folder/ });
+    stand("Odds and ends", AT_END);
+
+    const held = await startDrag(folderCard("Sealed"));
+    await held.over(folderFace("Odds and ends"));
+    await held.drop();
+
+    await waitFor(() => expect(collectionFolderReorder).toHaveBeenCalledWith(null, [3, 5, 4]));
+  });
+
+  /** A folder dropped on itself is the gesture a reader makes most often by accident — the pointer
+   *  is *on* the folder being dragged for the first few pixels of every drag. */
+  it("refuses a drawer dropped on itself, at every landing", async () => {
+    wrap(<CollectionPage />);
+    await wall();
+
+    for (const at of [AT_START, AT_MIDDLE, AT_END]) {
+      stand("Sealed", at);
+      const held = await startDrag(folderCard("Sealed"));
+      await held.over(folderFace("Sealed"));
+      await held.drop();
+    }
+    expect(collectionFolderReorder).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **The `kind` fence, which is this cabinet's alone.**
+   * `collection_folders::reorder_folders` calls `user_folder` on the destination *and* on every id
+   * it is handed, so a deck's group or `Recently removed` at either end is `FOLDER_NOT_YOURS` in
+   * words. **No gesture on this page reaches it**: `PinnedFolders` registers neither a drop target
+   * nor a drag source, which the test below this one pins from the other side. So the payload is
+   * built by hand here — the drag a future "make the pinned entries draggable" change would
+   * create, refused today.
+   */
+  it("refuses a folder the app owns, even when something puts one in the air", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, SEALED, DECK_GROUP, REMOVED]);
+    const { container } = wrap(<CollectionPage />);
+    await wall();
+
+    const source = document.createElement("div");
+    source.textContent = "the deck group";
+    container.append(source);
+    const stop = folderDraggable({
+      element: source,
+      folder: (): FolderDrag => ({
+        folderId: DECK_GROUP.id,
+        name: DECK_GROUP.name,
+        parentId: null,
+        scope: "collection",
+      }),
+    });
+
+    stand("Trade binder", AT_MIDDLE);
+    const held = await startDrag(source);
+    // Not even armed: no drawer on the wall would take it at any landing.
+    expect(folderCard("Trade binder").classList.contains("ring-2")).toBe(false);
+
+    await held.over(folderFace("Trade binder"));
+    await held.drop();
+    stop();
+    source.remove();
+    expect(collectionFolderReorder).not.toHaveBeenCalled();
+  });
+
+  /** The other end of the same fence, and the reason the one above is unreachable: a pinned entry
+   *  is not something a reader can pick up, and it lights nothing up when a drawer is in the air. */
+  it("leaves the app's own folders out of the gesture entirely", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, SEALED, DECK_GROUP, REMOVED]);
+    wrap(<CollectionPage />);
+    await wall();
+    const group = screen
+      .getByRole("button", { name: /^Mono-Red Aggro deck/ })
+      .closest("li") as HTMLElement;
+    expect(group.getAttribute("draggable")).toBeNull();
+
+    const held = await startDrag(folderCard("Sealed"));
+    expect(group.classList.contains("ring-2")).toBe(false);
+    await held.cancel();
+  });
+
+  /**
+   * **The cycle fence.** `collection_folders.parent_id` is `ON DELETE CASCADE` on itself, so a
+   * cycle is a graph SQLite's recursive cascade would walk forever the day the folder is deleted —
+   * and the backend refuses the move in words. Asked of the *destination parent*, which is what
+   * covers `inside` a descendant and `before` one with a single clause.
+   *
+   * **No gesture on this page reaches it either**, and for a different reason from the `kind`
+   * fence: the wall draws exactly one level, so every card on it is a **sibling** of every other
+   * and a descendant is never on screen beside its ancestor. Standing inside `Trade binder` puts
+   * its child `Foils` on the wall and `Trade binder` itself only in the breadcrumb — so the drag
+   * is built by hand, as the one a second surface drawing two levels at once would produce.
+   */
+  it("refuses a drawer dropped into something it holds", async () => {
+    const user = userEvent.setup();
+    const { container } = wrap(<CollectionPage />);
+    await wall();
+    await user.click(screen.getByRole("button", { name: /^Trade binder folder/ }));
+    await screen.findByRole("button", { name: /^Foils folder/ });
+
+    const source = document.createElement("div");
+    source.textContent = "the parent";
+    container.append(source);
+    const stop = folderDraggable({
+      element: source,
+      folder: (): FolderDrag => ({
+        folderId: BINDER.id,
+        name: BINDER.name,
+        parentId: null,
+        scope: "collection",
+      }),
+    });
+
+    // Every landing on the only card at this level is a cycle: `inside Foils` files the parent
+    // under its own child, and `before`/`after Foils` file it into `Trade binder`, which is
+    // itself.
+    for (const at of [AT_START, AT_MIDDLE, AT_END]) {
+      stand("Foils", at);
+      const held = await startDrag(source);
+      expect(folderCard("Foils").classList.contains("ring-2")).toBe(false);
+      await held.over(folderFace("Foils"));
+      await held.drop();
+    }
+    stop();
+    source.remove();
+    expect(collectionFolderReorder).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **The copy drag still files a copy**, which is the thing this change could have taken away
+   * without a single folder test noticing: the drag library keeps **one element drop target per
+   * element** and a second registration silently replaces the first, so a folder target on the
+   * `<li>` would have stopped the drawer accepting cards while everything above stayed green.
+   */
+  it("still files a copy dropped on a drawer", async () => {
+    const { container } = wrap(<CollectionPage />);
+    await wall();
+    await screen.findByText("Lightning Bolt");
+
+    const held = await startDrag(cardSources(container)[0], {
+      pressOn: screen.getByText("Lightning Bolt"),
+    });
+    await held.over(folderCard("Trade binder"));
+    await held.drop();
+
+    await waitFor(() => expect(collectionSetFolder).toHaveBeenCalledWith(7, 3));
+    expect(collectionFolderReorder).not.toHaveBeenCalled();
+  });
 });
 
 /**
@@ -2134,6 +3123,13 @@ describe("Escape walks out of a folder", () => {
     fireEvent.keyDown(on, { key: "Escape", code: "Escape" });
 
   const filterBox = () => screen.getByRole("searchbox", { name: "Search your collection" });
+
+  /**
+   * **A level to leave, which is what the whole rung is about.** Flattened there is none — the
+   * `Flatten` block above pins that the press falls through in that state — so this block asks for
+   * the cabinet rather than taking whichever way the last press in the file left the switch.
+   */
+  beforeEach(() => useAppStore.setState({ collectionFlattened: false }));
 
   /** One level, not all the way out: the parent is the trail's second-to-last segment, which is
    *  the breadcrumb's own last pressable one. */
@@ -2254,7 +3250,7 @@ describe("Escape walks out of a folder", () => {
     wrap(<CollectionPage />);
     await user.click(await screen.findByRole("button", { name: /^Trade binder folder/ }));
     await waitFor(() => expect(lastQuery().folderId).toBe(3));
-    await user.click(screen.getByRole("button", { name: "+ New folder" }));
+    await user.click(screen.getByRole("button", { name: "New folder" }));
     expect(screen.getByRole("textbox", { name: "New folder name" })).toBeInTheDocument();
 
     expect(escape()).toBe(false);

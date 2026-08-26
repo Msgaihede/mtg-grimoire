@@ -357,9 +357,10 @@ export function StackView({
    *  card's own unit price. One value for the whole view, so the two cannot disagree. */
   marketplace: Marketplace;
   violations?: Map<string, ValidationIssue[]>;
-  /** Which rows the deck's plan also asks for — `theoryMatch.ts`'s set of slots, handed down
-   *  whole like `violations` beside it. `undefined` for a deck with no plan. */
-  theoryMatches?: ReadonlySet<string>;
+  /** What the deck's plan says about each row — `theoryMatch.ts`'s map of slot → how far the
+   *  live list is from the planned count, handed down whole like `violations` beside it.
+   *  `undefined` for a deck with no plan. */
+  theoryMatches?: ReadonlyMap<string, number>;
   onSelect?: (card: DeckCard) => void;
   /** What may be done to a card here, and where a dropped one lands. See
    *  {@link DeckCardActions}; omitted, this view is exactly what it always was. */
@@ -951,9 +952,10 @@ function StackGroup({
   group: CardGroup;
   marketplace: Marketplace;
   violations?: Map<string, ValidationIssue[]>;
-  /** Which rows the deck's plan also asks for — `theoryMatch.ts`'s set of slots, handed down
-   *  whole like `violations` beside it. `undefined` for a deck with no plan. */
-  theoryMatches?: ReadonlySet<string>;
+  /** What the deck's plan says about each row — `theoryMatch.ts`'s map of slot → how far the
+   *  live list is from the planned count, handed down whole like `violations` beside it.
+   *  `undefined` for a deck with no plan. */
+  theoryMatches?: ReadonlyMap<string, number>;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
   /** Handed through to the stack — see {@link StackView}'s own props. */

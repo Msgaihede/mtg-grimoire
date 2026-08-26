@@ -142,6 +142,53 @@ export function useCollectionFolders() {
   });
 
   /**
+   * **`["collection", "folders"]` alone — the one write on this page that does not take a root** —
+   * and the narrowing is the point rather than an oversight, because the comments either side of
+   * it are arguments for the two biggest settle sets in the app.
+   *
+   * `invalidate` above takes the whole `["collection"]` root because the other four writes reach
+   * **entries**: a delete re-files the sub-tree by hand, so copies surface at the root and the
+   * table, both folder subtotals and the header are all suddenly wrong. And
+   * {@link useSetCollectionFolder} adds `["decks"]` on top of that, because since schema v25 a deck
+   * owns exactly the copies filed in its own group and filing a copy is how one enters or leaves.
+   *
+   * **A reorder is neither of those.** It writes `collection_folders.sort_order` and
+   * `collection_folders.parent_id`; it moves no `collection_entries.folder_id`, so no quantity, no
+   * membership and no folder's contents change. Every number counted from entries is therefore
+   * still true — `["collection", "list", …]`, `["collection", "summary", …]`, and
+   * `["collection", "folderSummary", marketplace]`, which is a `GROUP BY` over every entry
+   * carrying a price expression and is the most expensive query on the page to throw away for
+   * nothing. Nor can any deck's owned count have moved, which is the whole reason `["decks"]` is
+   * in the set below and is absent here.
+   *
+   * **The re-parent half is what tempts a wider set, and it is answered by the same key.** A
+   * folder card's recursive total is summed by the *tree builder*, in TypeScript, over these flat
+   * rows — so a folder that moved to a different branch changes which subtree its (unchanged)
+   * numbers roll up into, and re-reading the list is precisely what recomputes that. The summary
+   * map is keyed by folder id and is untouched by where the folder sits.
+   *
+   * On error as well as on success, `writes`' rule: a refusal is a busy database, a cycle, or an
+   * id in `ids` another surface has already deleted — and the last must not leave a tree drawing a
+   * node that is gone.
+   */
+  const settleOrder = () =>
+    void queryClient.invalidateQueries({ queryKey: ["collection", "folders"] });
+
+  /**
+   * Place a whole level: `ids` is **every** child of `parentId`, in the order they are to sit in.
+   *
+   * `sortOrder` is written from position and `parentId` from the argument, in one transaction — so
+   * one gesture both re-parents and places, and a reader never sees half of it. Sending only the
+   * folder that moved is the mistake the name invites; see `ipc.collectionFolderReorder`.
+   */
+  const reorder = useMutation({
+    mutationFn: ({ parentId, ids }: { parentId: number | null; ids: number[] }) =>
+      ipc.collectionFolderReorder(parentId, ids),
+    onSuccess: settleOrder,
+    onError: settleOrder,
+  });
+
+  /**
    * Delete a folder. Named `remove` for `useDecks`' reason — `delete` is a reserved word.
    *
    * **Its cards are not deleted**, and a confirmation must say so: they surface at the root, filed
@@ -165,6 +212,7 @@ export function useCollectionFolders() {
     create,
     rename,
     move,
+    reorder,
     remove,
   };
 }

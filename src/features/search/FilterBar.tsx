@@ -1,6 +1,8 @@
 import { useId, useMemo, useState, type ReactNode } from "react";
 import { ArrowUp } from "lucide-react";
 import { motion } from "motion/react";
+import { Dropdown } from "@/components/Dropdown/Dropdown";
+import type { DropdownOption } from "@/components/Dropdown/types";
 import {
   ActiveFilterChip,
   FILTER_CONTROL,
@@ -493,10 +495,11 @@ function activeChips<SortKey extends string>(
  * The controls themselves live in `@/components/FilterChips`, which the collection view builds
  * its own row out of. This file owns the layout and *which* filters the search offers.
  *
- * Not every control on it is a filter. The sort picker, the printings mode and the layout pair
- * each say how the results are *shown* rather than which ones there are — so none of them is
- * counted by the Reset all badge or cleared by pressing it, and the sort in particular is one
- * piece of state shared with the table's headers rather than something this row owns.
+ * Not every control on it is a filter. The sort picker, the printings mode, the layout pair and
+ * the Flatten switch beside it each say how the results are *shown* rather than which ones there
+ * are — so none of them is counted by the Reset all badge or cleared by pressing it, and the sort
+ * in particular is one piece of state shared with the table's headers rather than something this
+ * row owns.
  */
 export function FilterBar<SortKey extends string>({
   search,
@@ -505,6 +508,7 @@ export function FilterBar<SortKey extends string>({
   labels = SEARCH_LABELS,
   layoutToggle = true,
   layoutFor = "search",
+  flatten,
 }: {
   search: FilterSurface<SortKey>;
   /** What this surface calls its search box, and the `id` stem its labels bind through — see
@@ -555,6 +559,33 @@ export function FilterBar<SortKey extends string>({
    * list rather than a third opinion beside it.
    */
   layoutFor?: ListSection;
+  /**
+   * The **Flatten** switch, drawn immediately left of the layout pair and in the same wrapper.
+   *
+   * **Two surfaces pass it: the wishlist and the collection**, which are the two lists here that
+   * are filed into folders at all.
+   *
+   * **It sits past the divider for the layout pair's own reason.** Flatten is not a statement
+   * about which cards qualify — it is a statement about how much of the *tree* is drawn, which is
+   * the same kind of thing as how the *rows* are drawn. Both hooks already say so structurally:
+   * `flatten` lives outside their filter state, so `activeFilterCount` never sees it and
+   * `resetAll` deliberately leaves it alone — a reader clearing a search must not also be dropped
+   * back into the filing. That is exactly the property the pair past the hairline has, so this
+   * belongs on the same side of it, and in the same wrapper so the two can never wrap apart.
+   *
+   * **One object rather than a `pressed`/`onToggle` pair**, which is {@link FilterBar.layoutFor}'s
+   * argument one control along: a binding that cannot be passed half. A switch with a state and no
+   * setter is a control that ignores the press; one with a setter and no state is a control that
+   * lies about what it is doing. Neither should be spellable.
+   *
+   * **Deliberately not a member of {@link FilterSurface}.** Everything optional on that interface
+   * is a *filter* some surface cannot ask for, and this is not a filter. It is also not a question
+   * the other surfaces have an answer to: the card search and the Tags page are lists of
+   * Scryfall's printings and the deck editor's docked panel is a search over one, so none of them
+   * has any filing to ignore. A field there would be a question most implementers could only
+   * answer with `undefined`.
+   */
+  flatten?: { pressed: boolean; onToggle: () => void };
 }) {
   /**
    * Whether the tray is open, and **this component's own state rather than the store's.**
@@ -617,6 +648,13 @@ export function FilterBar<SortKey extends string>({
    *
    * With no facets at all `optionDisabled` is false for every key, so both halves collapse
    * into one plain alphabetical list without a branch for it.
+   *
+   * **Belt and braces since the 2026-08-25 move to `<Dropdown>`, not the only defence any
+   * more.** The shell no longer falls back to a wrong row on an unmatched value the way the old
+   * `<select>` did — it draws its own placeholder dash instead (`DEFAULT_PLACEHOLDER`,
+   * `Dropdown.tsx`) — but a dash reading "no format at all" while a seeded format goes on
+   * narrowing the results underneath is still a control that lies about the list beside it, just
+   * a quieter lie than `Any card`'s. The list still has to come from whoever owns the value.
    */
   const formatOptions = useMemo(
     () =>
@@ -638,6 +676,35 @@ export function FilterBar<SortKey extends string>({
   const tip = useTooltip();
   const currency = search.marketplace.currency;
   const chips = activeChips(search, currency);
+  /**
+   * **Every row comes from the prop, pinned one included** — see {@link SEARCH_SORT_ROWS}, which
+   * is the default and carries the argument for the row that is pinned. It was written into this
+   * markup until 2026-08-25, which made `Best match` a fact about the *control* rather than about
+   * the search behind it; the collection has no ranking to fall back to and every row of its
+   * picker is a real column, so a hard-coded first row would be a destination one of the two
+   * surfaces cannot go to.
+   *
+   * **`disabled` rides on the row and never on this markup**, which is what lets one picker serve
+   * three surfaces. No row of the *card search's* list is ever disabled — every one of them is a
+   * real destination. The collection's `Custom…` is, and the two look alike while being opposites:
+   * that one is a state the control can only be *put* into, from a column header this picker has
+   * no option for. So the surface that has such a state says so on its own row, and the one that
+   * does not says nothing.
+   *
+   * **The flag has to be carried through here or it is lost.** These options are the whole of what
+   * the panel draws, so a mapper that took only `value` and `label` would silently make the
+   * collection's `Custom…` pickable — a control that offers a destination it cannot reach. It read
+   * that way for one commit while this file and `sortRows` were being merged.
+   *
+   * `aria-disabled` rather than `disabled` once it reaches a row: a `<Dropdown>` row is never in
+   * the tab order at all — the walk is `aria-activedescendant` — so the house rule lands on the
+   * same attribute a native `<option>` reached by being exempt from it.
+   */
+  const sortDropdownOptions: readonly DropdownOption[] = sortRows.map((s) => ({
+    value: s.value,
+    label: s.label,
+    disabled: s.disabled,
+  }));
 
   return (
     // **A named container, and the name is what keeps it from being claimed by another.**
@@ -773,69 +840,53 @@ export function FilterBar<SortKey extends string>({
             — a direction with its order on the line above is a button about nothing. 4px apart,
             like the layout pair at the far end of the row.
 
-            It costs the docked panel nothing at its 206px floor. A `<select>` is as wide as its
-            widest option, and this one's widest rows are `Best match` and `Mana value` at ten
-            characters each — the same count as the `Any format` in the tray. The `Default order`
-            rename **shrank** it: 119px with that as the widest row against 111px with `Best
-            match`, measured against the built stylesheet with the app's own fonts loaded
-            (2026-08-24), so nothing that fitted before can stop fitting now. **Below 640 it does
-            not have to fit anything** — the select is `flex-1` on a line of its own, so the
-            measurement is what the *widest* layouts spend rather than what the narrowest survives,
-            and the break at `order-[28]` above is what makes that line its own. */}
+            It costs the docked panel nothing at its 206px floor, for a different reason since the
+            2026-08-25 move to `<Dropdown>`. The old `<select>` was as wide as its widest option
+            — `Best match` and `Mana value`, both ten characters, the same count as the `Any
+            format` in the tray — measured at 119px against the built stylesheet with the app's
+            own fonts loaded (2026-08-24), a floor no narrow panel could shrink under whichever
+            row was picked. A `<Dropdown>` trigger sizes to its own **picked** text instead, never
+            to the widest row it could show, so it is narrower than that measurement for every
+            order shorter than the widest and the docked panel has more headroom than it used to
+            need rather than exactly as much. **Below 640 it still does not have to fit
+            anything** — the trigger is `flex-1` on a line of its own, so neither sizing rule
+            matters at the panel's floor, and the break at `order-[28]` above is what makes that
+            line its own. */}
         <div className="order-[30] flex min-w-0 flex-1 items-center gap-1 @min-[640px]/fb:flex-none @min-[1500px]/fb:order-[7]">
           {/* **`Sort results`, and never shortened back to `Sort`.** The collection's twin is a bare
               `Sort` and this one may not copy it, because this row is drawn on two surfaces and one
               of them already has a `Sort`: the deck editor's toolbar sorts **the deck**, this sorts
               **the search results**, and with the docked panel open both lists are on screen at
-              once. Two comboboxes with one name is not a WCAG failure — it is a control that cannot
+              once. Two controls with one name is not a WCAG failure — it is a control that cannot
               be addressed unambiguously, by a screen reader walking the form, by anyone driving the
-              app by voice, or by a `getByLabelText("Sort")` that starts throwing "found multiple".
+              app by voice, or by a `getByRole("button", { name: "Sort" })` that starts throwing
+              "found multiple".
 
               The widening goes here rather than on the deck editor's label for the reason that
               decides every one of these: that one has only to be unambiguous where it is mounted,
               and this one has to be unambiguous *wherever* it is. `PrintingsFilterBar.tsx:380` made
               the same call and wrote down the same trap — a bare verb names an action and not the
               thing it acts on, which is why it draws `Sort printings by` and not `Sort by`. */}
-          <label htmlFor={`${labels.idStem}-sort`} className="sr-only">
+          <label
+            id={`${labels.idStem}-sort-label`}
+            htmlFor={`${labels.idStem}-sort`}
+            className="sr-only"
+          >
             Sort results
           </label>
-          <select
+          <Dropdown
             id={`${labels.idStem}-sort`}
+            labelledBy={`${labels.idStem}-sort-label`}
             value={search.sortSelection}
-            onChange={(e) => search.setSortKey(e.target.value as SortKey)}
-            // **Never gold**, unlike the format select in the tray. Accent there means "this is
-            // not where the control opens", which is a state a filter can be in and out of. A
-            // list is always in *some* order, so a sort cannot be inactive — and a gold sort
-            // picker would be saying "a filter is on" about the one control on this row that is
-            // not a filter, and that Reset all deliberately does not clear.
-            className={cn(
-              FILTER_CONTROL,
-              FILTER_FOCUS,
-              "min-w-0 flex-1 border-border bg-surface px-2 text-dim @min-[640px]/fb:flex-none",
-            )}
-          >
-            {/* **Every row comes from the prop, pinned one included** — see
-                {@link SEARCH_SORT_ROWS}, which is the default and carries the argument for the
-                row that is pinned. It was written into this markup until 2026-08-25, which made
-                `Best match` a fact about the *control* rather than about the search behind it;
-                the collection has no ranking to fall back to and every row of its picker is a
-                real column, so a hard-coded first row would be a destination one of the two
-                surfaces cannot go to.
-
-                **No row of the card search's list is ever `disabled`, and the collection's
-                `Custom…` is.** The two look alike and are opposites: that one is a state the
-                control can only be *put* into, from a header this select has no option for, where
-                every row of this one is a real destination. So the flag rides on the row rather
-                than on this markup — the surface that has such a state says so, and the one that
-                does not says nothing. `disabled` and not `aria-disabled`: a native `<option>` is
-                the house rule's one exception, because the reason behind that rule — a disabled
-                control leaves the tab order — is about something that was in it to begin with. */}
-            {sortRows.map((s) => (
-              <option key={s.value} value={s.value} disabled={s.disabled}>
-                {s.label}
-              </option>
-            ))}
-          </select>
+            onChange={(key) => search.setSortKey(key as SortKey)}
+            options={sortDropdownOptions}
+            // **Never gold** — no `active` passed, unlike the format picker in the tray. Accent
+            // there means "this is not where the control opens", which is a state a filter can be
+            // in and out of. A list is always in *some* order, so a sort cannot be inactive — and
+            // a gold sort picker would be saying "a filter is on" about the one control on this
+            // row that is not a filter, and that Reset all deliberately does not clear.
+            className="min-w-0 flex-1 @min-[640px]/fb:flex-none"
+          />
 
           {/* One arrow, turned over — never `ArrowDown` swapped in for `ArrowUp`. That is the rule
               `SortableHeader.tsx:51-55` states and this is the reason it states it: a different
@@ -899,19 +950,60 @@ export function FilterBar<SortKey extends string>({
           </span>
         </div>
 
-        {/* The second hairline, before the layout pair — drawn wherever that pair is, because it
-            is what says the two icons are about the drawing rather than about the cards. */}
-        {layoutToggle && (
+        {/* The second hairline, and it precedes a **group** rather than one pair: Flatten, the
+            grid-or-table pair, or both. What it says is the same either way — the controls past it
+            are about the *drawing* rather than about which cards there are, so none of them is
+            counted by the badge or cleared by Reset all. Drawn wherever the group has anything in
+            it, because a row carrying only Flatten needs the line for exactly the reason a row
+            carrying only the pair does. */}
+        {(layoutToggle || flatten) && (
           <div
             aria-hidden="true"
             className="order-[8] hidden h-9 w-px bg-border @min-[640px]/fb:block"
           />
         )}
 
-        {/* A view mode rather than a filter, so it sits past the divider with the sort rather than
-            among the statements about which cards to show — and, like them, it is untouched by
-            Reset all. */}
-        {layoutToggle && <ViewToggle section={layoutFor} />}
+        {/* **The two controls that are about the drawing, in one wrapper so they cannot wrap
+            apart.** Both are view modes rather than filters — how much of the tree is on screen,
+            and how the rows are laid out — so they sit past the divider with the sort rather than
+            among the statements about which cards to show, and, like the sort, neither is touched
+            by Reset all. Flatten leads, because it says which *rows* there are to lay out and the
+            pair says how they are laid out.
+
+            The wrapper is the layout pair's own, lifted out of {@link ViewToggle} so that the
+            second control could join it: two siblings in the row's own flex would be two items the
+            `flex-wrap` is free to break between, and a Flatten chip on the line above the pair it
+            was moved next to is the whole of what this change was for. The 8px inside it is the
+            row's own gap at the narrowest band and *tighter* than it at the two wider ones, where
+            the row opens to 10px and 12px — so the group closes up as the bar grows and reads as
+            one object rather than as two more items in the row.
+
+            **`ml-auto` on `LayoutToggle`'s own group survives this and does nothing**, which was
+            worth checking rather than assuming: an auto margin absorbs positive free space, and
+            this wrapper is a flex item at `flex: 0 1 auto` whose base size is its contents — so
+            there is none to absorb. Swept in headless Chromium over this row's real markup and the
+            app's own compiled stylesheet, 206px to 1700px in 2px steps (2026-08-26):
+            `margin-left` computes to `0px` at every width, the chip stands exactly the wrapper's
+            8px from the pair at every width, the two never land on different lines, and forcing
+            the margin to zero changes no measurement. **jsdom applies no container query and loads
+            no stylesheet**, so none of that is visible to the suite — what the suite pins instead
+            is the tree the wrapping rests on.
+
+            **`order-[40]`, and not `order-[9]` unconditionally.** At 640 and up the group rides
+            the first line past the divider, which is where the design puts it; below that there is
+            no first line to ride — the colours already share theirs with Filters — so an
+            `order-[9]` would strand it on a line of its own between the colours and the mana
+            values. Ordered past the sort instead, it shares that line, which is the other control
+            on this bar that is about how the results are *shown* rather than which ones there
+            are. */}
+        {(layoutToggle || flatten) && (
+          <div className="order-[40] flex items-center gap-2 @min-[640px]/fb:order-[9]">
+            {flatten && (
+              <ToggleChip label="Flatten" pressed={flatten.pressed} onClick={flatten.onToggle} />
+            )}
+            {layoutToggle && <ViewToggle section={layoutFor} />}
+          </div>
+        )}
 
         {/* **The line break.** A `basis-full` flex item consumes the rest of its line, so
             everything ordered after it starts a new one. Gone at 1500, where the whole bar is one
@@ -1063,6 +1155,41 @@ function FilterTray<SortKey extends string>({
    * list is a string array and the fields it needs are optional — so they are made here, once,
    * where the failure is a missing box rather than a dead control.
    */
+  /**
+   * **Two pinned rows above the sorted list, widest first — and they are what used to be a
+   * select and an `Unplayable` chip.** Neither is a format: one is "no format filter at all" and
+   * the other "no format filter, and no format required either", so both belong where a reader
+   * reaches for them blind — first — whatever the alphabet and the facets do to the formats
+   * below.
+   *
+   * They read as a ladder rather than as an alphabet: every card, every card that is legal
+   * *somewhere*, then one named format. `Any format` is the default and the middle rung, which
+   * is the shape a reader can predict without being told.
+   *
+   * Neither carries a `title`. Unlike a native `<option>` — which Windows never draws one for,
+   * whatever the markup says — a `DropdownOption.title` here *would* show as a real hover
+   * tooltip through `Row`'s `useTooltip` binding; it stays off because neither pinned row needs a
+   * sentence beyond its own label, not because the platform would swallow it.
+   */
+  const formatDropdownOptions: readonly DropdownOption[] = [
+    // **`Any card` only where the surface narrows the corpus.** Three of the four surfaces this
+    // row is drawn on already answer about a fixed set of cards — a deck, the collection, the
+    // wishlist — so "every card, art cards included" is not a widening they can offer, and a row
+    // that set `format` to a value the caller cannot honour would be a destination that goes
+    // nowhere. `FilterSurface.anyCard` is what says which surface this is.
+    //
+    // It was drawn unconditionally for one commit while this file was merged: my conversion
+    // rewrote this block into an array and, in resolving the conflict, took my side whole —
+    // which silently dropped the guard `main` had just added to the markup it replaced. The
+    // suite caught it, which is the only reason this comment is here rather than a bug.
+    ...(search.anyCard ? [{ value: ANY_CARD, label: "Any card" }] : []),
+    { value: "", label: "Any format" },
+    // The one place a real `disabled` was right on the old markup — `<option disabled>` is
+    // native, and a listbox option is not a tab stop there is anything to lose. `DropdownOption`'s
+    // own `disabled` is the shell's `aria-disabled` now, which is the same rule for the same
+    // reason: a row here is never in the tab order either way, so there is nothing to strand.
+    ...formatOptions.map((f) => ({ value: f.value, label: f.label, disabled: f.disabled })),
+  ];
   const drawn: Record<TrayCell, ReactNode> = {
     set: (
       <TrayField key="set" label="Set">
@@ -1081,57 +1208,29 @@ function FilterTray<SortKey extends string>({
     ),
 
     format: (
-      <TrayField key="format" label="Format" htmlFor={`${labels.idStem}-format`}>
-          <select
-            id={`${labels.idStem}-format`}
-            value={search.format}
-            onChange={(e) => search.setFormat(e.target.value)}
-            className={cn(
-              FILTER_CONTROL,
-              FILTER_FOCUS,
-              "w-full bg-bg px-2",
-              // Accent means "this is not where the control opens", which is a wider claim than
-              // "a filter is on" — `Any card` is a *widening* and lights the same way, because the
-              // reader needs to see that the wall in front of them has art cards and tokens in it.
-              // `Any format` is the default and the only value that reads as untouched.
-              //
-              // It matters more in a tray than it did on the bar: a shut tray is a filter the
-              // reader cannot see, so the gold is what the Filters badge is counting on their
-              // behalf.
-              search.format ? "border-accent text-accent" : "border-border text-dim",
-            )}
-          >
-            {/* **Up to two pinned rows above the sorted list, widest first — and they are what
-                used to be a select and an `Unplayable` chip.** Neither is a format: one is "no
-                format filter at all" and the other "no format filter, and no format required
-                either", so both belong where a reader reaches for them blind — first — whatever
-                the alphabet and the facets do to the formats below. The widest of the two is drawn
-                only where it means something ({@link FilterSurface.anyCard}); on the other three
-                surfaces the ladder is two rungs rather than three.
-
-                They read as a ladder rather than as an alphabet: every card, every card that is
-                legal *somewhere*, then one named format. `Any format` is the default and the
-                middle rung, which is the shape a reader can predict without being told.
-
-                Neither carries a `title`. A `title` on an `<option>` is not drawn by Windows'
-                native dropdown, so the sentence explaining that "any card" means art cards, tokens
-                and emblems could only be read by a screen reader. */}
-            {/* Only where the surface's corpus is narrowed to begin with — see
-                {@link FilterSurface.anyCard}. Drawn unconditionally, this row set `format` to a
-                sentinel a collection's backend reads as a legalities key nothing matches, and the
-                wall went empty. */}
-            {search.anyCard && <option value={ANY_CARD}>Any card</option>}
-            <option value="">Any format</option>
-            {formatOptions.map((f) => (
-              // The one place a real `disabled` is right: `<option disabled>` is native, and a
-              // listbox option is not a tab stop there is anything to lose. No count rides here
-              // — a `title` on an `<option>` is not drawn by Windows' native dropdown, so it
-              // would be a sentence nobody can read.
-              <option key={f.value} value={f.value} disabled={f.disabled}>
-                {f.label}
-              </option>
-            ))}
-          </select>
+      <TrayField
+        key="format"
+        label="Format"
+        htmlFor={`${labels.idStem}-format`}
+        labelId={`${labels.idStem}-format-label`}
+      >
+        <Dropdown
+          id={`${labels.idStem}-format`}
+          labelledBy={`${labels.idStem}-format-label`}
+          value={search.format}
+          onChange={search.setFormat}
+          options={formatDropdownOptions}
+          fill
+          searchable
+          // Gold means "this is not where the control opens", which is a wider claim than "a
+          // filter is on" — `Any card` is a *widening* and lights the same way, because the
+          // reader needs to see that the wall in front of them has art cards and tokens in it.
+          // `Any format` is the default and the only value that reads as untouched.
+          //
+          // It matters more in a tray than it did on the bar: a shut tray is a filter the reader
+          // cannot see, so the gold is what the Filters badge is counting on their behalf.
+          active={search.format !== ""}
+        />
       </TrayField>
     ),
 
@@ -1368,25 +1467,38 @@ function FilterTray<SortKey extends string>({
 /**
  * One captioned cell of the tray.
  *
- * `htmlFor` where the control is a single native element and the caption can really be its
- * `<label>`; a plain `<span>` where the cell holds two buttons or a composite, because a `<label>`
- * pointing at a group is a label the browser wires to whichever control it finds first. Those
- * cells' controls carry their own names — `ToggleChip` and `RarityChip` build an `aria-label`
- * apiece, `SetCombobox` an `aria-labelledby` — so nothing is unnamed either way.
+ * `htmlFor` where the control is a single element and the caption can really be its `<label>`; a
+ * plain `<span>` where the cell holds two buttons or a composite, because a `<label>` pointing at
+ * a group is a label the browser wires to whichever control it finds first. Those cells' controls
+ * carry their own names — `ToggleChip` and `RarityChip` build an `aria-label` apiece, `SetCombobox`
+ * a `label` prop — so nothing is unnamed either way.
+ *
+ * **`labelId` is the other half of `htmlFor`, carried since the format cell's control became a
+ * `<Dropdown>`.** A native `<label htmlFor>` reaches a `<button>`'s accessible name the same way
+ * it reaches a `<select>`'s — `<button>` is labelable too — so `labelId` is not what makes the
+ * connection; it is what states it outright rather than leaving it to an association a later
+ * refactor could break, and the button's own content is the picked value, so a trigger left
+ * unnamed either way would say the value and nothing about which field it is (see `SharedProps`
+ * in `Dropdown.tsx`). `htmlFor` still keeps the pointer behaviour; `labelId` is what pins the
+ * name.
  */
 function TrayField({
   label,
   htmlFor,
+  labelId,
   children,
 }: {
   label: string;
   htmlFor?: string;
+  /** id on the `<label>`, for a control whose `labelledBy` needs one to point at. Only meaningful
+   *  alongside `htmlFor` — there is no `<label>` element to carry it otherwise. */
+  labelId?: string;
   children: ReactNode;
 }) {
   return (
     <div className="flex min-w-0 flex-col gap-1.5">
       {htmlFor ? (
-        <label htmlFor={htmlFor} className={FILTER_LABEL}>
+        <label id={labelId} htmlFor={htmlFor} className={FILTER_LABEL}>
           {label}
         </label>
       ) : (
@@ -1411,6 +1523,12 @@ function TrayField({
  * The pair is picked out of records rather than by a chain of ternaries, so adding a fifth list is
  * a line in {@link LIST_SECTIONS} and a line in each record instead of a conditional that has to
  * stay in step with itself in two places.
+ *
+ * **The store read, and nothing else.** The box this used to draw around itself — the `order`
+ * numbers that place it on the row — belongs to the group it now shares with the Flatten switch,
+ * so it lives at that group's site in {@link FilterBar} with the reasoning that goes with it. What
+ * is left here is the one thing a wrapper cannot do: turn a section name into the preference this
+ * page's pair is bound to.
  */
 function ViewToggle({ section }: { section: ListSection }) {
   const searchView = useAppStore((s) => s.searchView);
@@ -1433,15 +1551,5 @@ function ViewToggle({ section }: { section: ListSection }) {
     collection: setCollectionView,
     wishlist: setWishlistView,
   }[section];
-  return (
-    // **Last of everything in the stacked layout, and beside the sort above it.** At 640 and up
-    // the pair rides the first line past the divider, which is where the design puts it; below
-    // that there is no first line to ride — the colours already share theirs with Filters — so
-    // an `order-[9]` would strand the toggle on a line of its own between the colours and the
-    // mana values. Ordered past the sort instead, it shares that line, which is the other control
-    // on this bar that is about how the results are *shown* rather than which ones there are.
-    <div className="order-[40] flex @min-[640px]/fb:order-[9]">
-      <LayoutToggle view={view} onChange={onChange} />
-    </div>
-  );
+  return <LayoutToggle view={view} onChange={onChange} />;
 }
