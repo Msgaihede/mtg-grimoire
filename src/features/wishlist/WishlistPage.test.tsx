@@ -1407,6 +1407,41 @@ describe("the wall", () => {
     await user.click(screen.getByRole("button", { name: "Card view" }));
     expect(await screen.findByAltText("Lightning Bolt")).toBeInTheDocument();
   });
+
+  /**
+   * **Spec §5: a price is never shown without saying how old it is.** Every tile's chin quotes
+   * what one copy of that printing costs as of 2026-08-26, and this wall had no sentence anywhere
+   * — which is what driving the shipped window found.
+   *
+   * **The corner's tooltip is not this line and never was.** `WishlistGrid` binds `pricesAsOf`
+   * onto the cost *still to buy*, which is `unit × copies missing`; it is drawn on no wish the
+   * reader has finished, and it says nothing about the chin's figure, which is on every tile. It
+   * stays where it is — it dates a number the line below does not describe — and it is invisible
+   * to the count here anyway, being a `useTooltip()` binding rather than text.
+   *
+   * Once, under the wall — not on forty tooltips, which is one statement made forty times.
+   *
+   * **Through `pricesAsOf` rather than the sentence typed out here**: spelling it would pin a copy
+   * of the wording rather than the function, so a reworded sentence would go red in a place with
+   * nothing to say about it while a wall drawing a *stale* sentence stayed green.
+   *
+   * The table is asserted to draw none of it, which is what proves this is the grid's line rather
+   * than something the page draws in both views over a column header that already says it.
+   */
+  it("says how old the wall's prices are, once, under the grid", async () => {
+    useAppStore.setState({ wishlistView: "grid" });
+    const user = userEvent.setup();
+    wrap(<WishlistPage />);
+
+    await screen.findByAltText("Lightning Bolt");
+    expect(screen.getAllByText(pricesAsOf(MARKETPLACES.tcgplayer))).toHaveLength(1);
+
+    await user.click(screen.getByRole("button", { name: "Table view" }));
+
+    // The table says it in the Cost column's header instead — as a tooltip and an accessible
+    // name, not as text — so the grid's line goes with the grid.
+    expect(screen.queryByText(pricesAsOf(MARKETPLACES.tcgplayer))).toBeNull();
+  });
 });
 
 /**

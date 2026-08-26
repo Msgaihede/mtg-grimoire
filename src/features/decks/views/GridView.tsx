@@ -532,10 +532,27 @@ function GridCard({
         // **`"art"`, not the stack's.** This tile's face is `CardArt`, whose own edge stops where
         // this bar begins rather than enclosing it — so the chin supplies all three of its own and
         // the two are one outline. Under the stack's bordered card it must not, or the foot is 2px
-        // and everything else is 1px. The rule break is still a `ring-2` on the face rather than
-        // an edge, which is why the face's own edge stays neutral while `tone` reddens this bar.
+        // and everything else is 1px.
         seam="art"
-        tone={ruleBreakText !== null ? "destructive" : "default"}
+        // **No `tone`, and that is the whole of this tile's rule-break answer being the ring.**
+        //
+        // `CardChin`'s `tone` exists so the chin's edge can match the *card's* edge, and the stack
+        // is where that is load-bearing: its card really is bordered in destructive, so a chin
+        // left at the neutral edge would put 28px of the wrong colour back through the left and
+        // right edges of that outline — the one thing the outline exists to prevent, stated at the
+        // prop and again at `CardStack`'s foot.
+        //
+        // Here the argument runs the other way. `CardArt` grew an edge of its own on 2026-08-26 so
+        // the picture and this bar would read as one outlined object, and that edge is **neutral**
+        // — a rule break on this surface is the `ring-2 ring-destructive` on the face above, which
+        // is drawn outside the border box and leaves the border alone. Reddening only the chin
+        // therefore ran the card's outline grey down the art and red across its foot, so the card
+        // stopped reading as one object at exactly the join the border was added to close.
+        //
+        // The fix is this absence rather than a red edge on `CardArt`: the ring already says it,
+        // an outline saying it as well is one fact drawn twice, and `CardArt`'s two callers
+        // disagree about how a rule break is marked — so the colour is not that component's
+        // decision to take.
       />
 
       {/* Over the art, as in the stack. Absolute, so the tile is exactly as wide and as tall as

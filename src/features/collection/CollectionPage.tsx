@@ -44,7 +44,7 @@ import {
   type CollectionRow,
 } from "@/lib/ipc";
 import { statusLine } from "@/lib/motion";
-import { formatPrice } from "@/lib/prices";
+import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
 import { tileKeyOf } from "@/lib/tileKey";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
@@ -2195,6 +2195,27 @@ export function CollectionPage() {
               </p>
             </>
           ))}
+
+        {/* **Spec §5: a price is never shown without saying how old it is** — and, with five
+            marketplaces in the picker, whose it is. `pricesAsOf` answers both, and names which of
+            the two clocks this marketplace runs on: the card-data sync for the blob-backed pair,
+            the last price-feed refresh for the two this app downloads itself.
+
+            **The rule reaches this wall as of 2026-08-26**, when the tiles' chins started quoting
+            what one copy costs; before that the grid drew no money at all and had nothing to date.
+
+            **Said once, under the wall, rather than on every tile** — the argument the search
+            page, the Tags page, the printings modal and the deck's docked panel all make, and the
+            reason the chin's money slot is a plain string rather than a tooltip binding: forty
+            tiles would be one sentence said forty times.
+
+            **Grid only.** The table states it in the Value column's own header (`CollectionTable`'s
+            `columnsFor`), so drawing it here as well would say it twice in one view. Drawn rather
+            than hung on a `title`, for the reason the card pane and `TheoryDiffDialog` decided the
+            same way: a hover is not a reader. */}
+        {!empty && view === "grid" && (
+          <p className="shrink-0 text-[0.7rem] text-dim">{pricesAsOf(marketplace)}</p>
+        )}
       </div>
 
       {/* The question a drop or a `Move to` asks when the art stands for more than one row.

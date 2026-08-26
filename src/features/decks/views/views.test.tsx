@@ -2541,6 +2541,53 @@ describe("GridView tiles", () => {
     expect(button.getAttribute("aria-label")).not.toContain("C21");
     expect(button.getAttribute("aria-label")).not.toContain("1.99");
   });
+
+  /**
+   * **A rule break is the ring on the face here, and the card's outline stays one colour** —
+   * which is `CardStack`'s foot argument applied in reverse, on a surface where the premise is
+   * the other way round.
+   *
+   * The stack's card really is bordered in destructive, so its chin **must** take `tone` or the
+   * bar puts 28px of `border-border` back through the left and right edges of that outline. This
+   * tile has no such border: `CardArt` grew an edge on 2026-08-26 so the picture and the chin read
+   * as one outlined object, and that edge is neutral whatever the card is doing — the rule break
+   * is a `ring-2`, painted outside the border box. So a `tone="destructive"` chin here ran the
+   * outline grey down the art and red across the foot, and the card stopped reading as one object
+   * at exactly the join the border was added to close.
+   *
+   * **The pair is asserted together on purpose.** Dropping the tone is only right because the
+   * ring still says it; a change that took the ring away as well would leave this tile with no
+   * rule-break edge at all and would pass an assertion about the chin alone.
+   *
+   * **`classList.contains`, never `className.toContain`.** `"border-border"` contains the
+   * substring `border-b`, and `"border-destructive"` is a substring of nothing here but is the
+   * same trap read the other way — the seam case above walks through it.
+   */
+  it("keeps the tile's outline one colour, with the rule break on the face's ring", () => {
+    render(
+      <GridView
+        groups={buildGroups([card({ name: "Sol Ring" })], [RAMP], "category", "alphabetical")}
+        marketplace={TCG}
+        violations={VIOLATIONS}
+      />,
+    );
+
+    // The card is really breaking a rule on this render — otherwise every assertion below is a
+    // claim about a clean card and the whole case is vacuous.
+    expect(tile().querySelector("button")!.getAttribute("aria-label")).toContain(
+      "rule break: Sol Ring is banned here.",
+    );
+
+    // The face, which is the button's only element child — the box `CardArt` is wrapped in so the
+    // deck's own marks have something positioned to hang off.
+    const face = tile().querySelector("button")!.firstElementChild as HTMLElement;
+    expect(face.classList.contains("ring-2")).toBe(true);
+    expect(face.classList.contains("ring-destructive")).toBe(true);
+
+    // And the chin is the neutral edge the art's own is, so the two are one outline.
+    expect(foot().classList.contains("border-destructive")).toBe(false);
+    expect(foot().classList.contains("border-border")).toBe(true);
+  });
 });
 
 /**

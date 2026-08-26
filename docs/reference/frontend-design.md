@@ -3103,10 +3103,21 @@ chin rides up, so the outline pinches ~1px before the bar's straight edge resume
 derived from the stack's 7px face radius, where the same excursion is 0.68px; at the art's 10px it
 is 2px, of which the bar covers all but the top hairline.
 
-**`tone` is the other half of the same join.** The bar is `relative` and later in the document than
-the face, so its border paints *over* the card's along its whole height. A rule-breaking deck card
-is outlined in destructive, and a chin that kept the default border would put the wrong colour back
-through the card's left and right edges — the one thing that outline exists to say.
+**`tone` is the other half of the same join, and the deck stack is its one caller.** The bar is
+`relative` and later in the document than the face, so its border paints *over* the card's along its
+whole height. A rule-breaking *stacked* card is outlined in destructive, and a chin that kept the
+default border would put the wrong colour back through the card's left and right edges — the one
+thing that outline exists to say.
+
+**The deck's grid tile is the same argument run backwards, and it passes no `tone` at all** (the
+same day, once the frame above had an edge). That tile's outline is `CardArt`'s new
+`border border-border`, which is *neutral* whatever the card is doing, because a rule break there is
+the `ring-2 ring-destructive` on the face — an outset shadow, painted outside the border box, which
+is why the two do not compete. So a reddened chin under a grey frame ran the card's outline grey
+down the art and red across its foot: the tile stopped reading as one object at exactly the join the
+frame was given an edge to close. Reddening `CardArt` instead was refused — it draws the same fact
+twice beside the ring, and that component's two callers mark a rule break differently, so the colour
+is not its decision to take.
 
 **The printing line is a union, not four loose optionals.** A caller either supplies `setCode` and
 `collectorNumber` — the default `SET · number` — or supplies a `printing` node of its own *and* the

@@ -1402,6 +1402,41 @@ describe("CollectionPage", () => {
   });
 
   /**
+   * **Spec §5: a price is never shown without saying how old it is.** This wall drew no money at
+   * all until the chin landed on 2026-08-26, so the rule reaches it now where before it reached
+   * only the table's Value column header — and it arrived here with no sentence anywhere, which
+   * is what driving the shipped window found.
+   *
+   * Once, under the wall — not on forty tooltips, which is one statement made forty times and is
+   * the reason the chin's money slot is a plain string.
+   *
+   * **Through `pricesAsOf` rather than the sentence typed out here**: spelling it would pin a copy
+   * of the wording rather than the function, so a reworded sentence would go red in a place with
+   * nothing to say about it while a wall drawing a *stale* sentence stayed green.
+   *
+   * The table is asserted to draw none of it, which is what proves this is the grid's line rather
+   * than something the page draws in both views over a column header that already says it. The
+   * header's own `Value (USD)` figure carries the same sentence and is **not** counted either way:
+   * it is a `useTooltip()` binding, so it is an attribute and a panel that has not been opened,
+   * never text on screen.
+   */
+  it("says how old the wall's prices are, once, under the grid", async () => {
+    useAppStore.setState({ collectionView: "grid" });
+    collectionList.mockResolvedValue(page([{ ...BOLT, unitPrice: 9 }]));
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+
+    await screen.findByAltText("Lightning Bolt");
+    expect(screen.getAllByText(pricesAsOf(MARKETPLACES.tcgplayer))).toHaveLength(1);
+
+    await user.click(screen.getByRole("button", { name: "Table view" }));
+
+    // The table says it in the Value column's header instead — as a tooltip and an accessible
+    // name, not as text — so the grid's line goes with the grid.
+    expect(screen.queryByText(pricesAsOf(MARKETPLACES.tcgplayer))).toBeNull();
+  });
+
+  /**
    * **Task 11's first export entry point outside the deck editor.** The list here is a
    * `useInfiniteQuery` at 100 rows a page, so what is in memory is a scroll position rather
    * than a decision — exporting it would silently truncate a filtered collection to whatever
