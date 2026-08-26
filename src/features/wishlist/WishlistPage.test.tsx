@@ -1269,9 +1269,12 @@ describe("the wall", () => {
 
     expect(await screen.findByAltText("Ancestral Recall")).toBeInTheDocument();
     expect(screen.getByText("Any printing")).toBeInTheDocument();
-    // And a pinned wish's caption is its printing *and* its finish, which together are what
-    // make two wishes for one card two wishes.
-    expect(screen.getByText("LEA · 161 · Foil")).toBeInTheDocument();
+    // And a pinned wish's caption is its printing. The finish is still said — it is the other
+    // half of what makes two wishes for one card two wishes — but on the *wall* it is said by
+    // the chin's glyph, whose accessible name is the word, rather than by the word as well:
+    // `WishlistGrid.test.tsx`'s `the printing line` is where that split is pinned on both views.
+    expect(screen.getByText("LEA · 161")).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Foil" })).toBeInTheDocument();
   });
 
   /**
@@ -1311,7 +1314,14 @@ describe("the wall", () => {
     expect(within(tile).getByText("$1,201.50")).toBeInTheDocument();
   });
 
-  /** Nothing left to buy is nothing to say: the corner collapses rather than quoting $0.00. */
+  /**
+   * Nothing left to buy is nothing to say: the **corner** collapses rather than quoting $0.00.
+   *
+   * The claim is about the corner alone, and it stopped being sayable as "no figure anywhere on
+   * the tile" once the chin arrived — the chin quotes what **one copy** of this printing costs,
+   * which is a fact about the cardboard and is true of a wish the reader has already finished.
+   * So the tile carries exactly one price, and it is the chin's.
+   */
   it("draws no cost on a wish the collection already covers", async () => {
     useAppStore.setState({ wishlistView: "grid" });
     wishlistList.mockResolvedValue(page([{ ...BOLT, ownedQuantity: 4 }]));
@@ -1321,7 +1331,12 @@ describe("the wall", () => {
       "[data-grid-index]",
     ) as HTMLElement;
     expect(within(tile).getByText("4/4")).toBeInTheDocument();
-    expect(within(tile).queryByText(/^\$/)).not.toBeInTheDocument();
+    const prices = within(tile).getAllByText(/^\$/);
+    expect(prices).toHaveLength(1);
+    // `CardChin` is the only element in a tile with a vertical border, which is how the one
+    // surviving figure is placed without counting `parentElement` hops through two components.
+    expect(prices[0].closest("span.border-x")).not.toBeNull();
+    expect(prices[0]).toHaveTextContent("$400.50");
   });
 
   /**

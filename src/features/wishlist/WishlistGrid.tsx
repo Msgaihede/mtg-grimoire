@@ -54,8 +54,11 @@ function toTile(wish: WishRow): WishTile {
  * `printingOf` rather than the wall's own `SET · number`, and that is the reason `CardGrid` has
  * a caption slot at all — an unpinned wish is drawn as a printing it is not for, and a caption
  * reading "DSK · 123" under that picture would say the reader had asked for that piece of
- * cardboard. It also carries the preferred finish, which is the other half of what makes two
- * wishes for one card two wishes.
+ * cardboard.
+ *
+ * **{@link wallPrinting}, not `printingOf` itself, because this line sits beside a glyph and the
+ * table's does not.** See that function: the finish is the other half of what makes two wishes for
+ * one card two wishes, and it is still said here — by the chin's own mark where there is one.
  *
  * **The two marks share this line rather than taking a corner or a second row**, and both halves
  * of that are forced. Every corner of a tile already has an owner — bottom-left the progress
@@ -74,27 +77,66 @@ const captionFor =
   (folderNameOf: (folderId: number | null) => string | null, flattened: boolean) =>
   (tile: WishTile) => (
     <span className="flex min-w-0 items-center gap-[calc(0.375rem*var(--mark-scale,1))]">
-      <span className="min-w-0 truncate">{printingOf(tile.wish)}</span>
+      <span className="min-w-0 truncate">{wallPrinting(tile.wish)}</span>
       <ElsewhereMark count={tile.wish.elsewhere} />
       {flattened && <WishFolderCaption name={folderNameOf(tile.wish.folderId)} />}
     </span>
   );
 
 /**
- * The finish this wish is **for**, as the sheen and corner chip over the art.
+ * The finish this wish is **for**, where the app has an enum's word for it.
  *
  * Where the search derives this from the printing's own finish list, a wish simply says it: a
  * wish for the foil is a different wish and is not filled by the nonfoil. `isFinish` guards it
  * because `wishlist_entries.preferred_finish` is TEXT with a CHECK rather than an enum this side
- * knows. No preference draws nothing, which is right — "no preference" is not nonfoil.
+ * knows. No preference answers `null`, which is right — "no preference" is not nonfoil.
+ */
+const preferredFinishOf = (wish: WishRow): Finish | null => {
+  const preferred = wish.preferredFinish;
+  return preferred !== null && isFinish(preferred) ? preferred : null;
+};
+
+/**
+ * The same fact as the sheen and corner chip `CardArt` draws over the picture.
  *
  * Module scope, like the drag beside it: the wall re-registers a tile when a callback's identity
  * changes.
  */
-const tileFinish = (tile: WishTile): Finish | null => {
-  const preferred = tile.wish.preferredFinish;
-  return preferred !== null && isFinish(preferred) ? preferred : null;
-};
+const tileFinish = (tile: WishTile): Finish | null => preferredFinishOf(tile.wish);
+
+/**
+ * The printing this wish is for **as the wall says it** — which is the table's sentence minus
+ * whatever the chin's own glyph is already saying.
+ *
+ * The wall and the table draw the same fact into two different surroundings, and the right answer
+ * differs for that reason alone. The table has no art, no chin and no glyph, so the word is the
+ * only statement of the finish there and `printingOf` stays exactly as it is for it. The wall's
+ * caption is now the chin's printing line, one gutter away from `FinishMark` — so `LEA · 161 ·
+ * Foil ✦` said "Foil" twice, once in a word and once in a glyph whose accessible name is that
+ * same word, on the surface with the least room in the app to say anything twice.
+ *
+ * **The word is dropped exactly where the glyph replaces it, and nowhere else** — which is why
+ * this asks {@link preferredFinishOf} rather than testing `preferredFinish` for truthiness:
+ *
+ * * **`nonfoil` keeps its word.** `FinishMark` returns `null` for it — nonfoil is the finish a
+ *   price is assumed to be — so a blanket drop would leave a wish *for the nonfoil* looking
+ *   identical to a wish with no preference. Those are two different wishes and the whole of
+ *   `WISH_PREFERRED_FINISH`'s note in `wishlist.rs` is that they must not be collapsed.
+ * * **A value `isFinish` does not know keeps its word** for the same reason: `tileFinish` hands
+ *   `CardGrid` a `null` for it, so no glyph is drawn and the caption is again the only statement.
+ *
+ * It is built by handing `printingOf` a row with the finish taken off rather than by rebuilding
+ * the `SET · number` half here, so there is still exactly one definition of *which printing* —
+ * and **"Any printing" therefore survives untouched**, which is the one thing this caption exists
+ * to protect: a wish for the card is drawn as a printing it is not for, and no wall may caption
+ * that picture with the cardboard's own name.
+ */
+function wallPrinting(wish: WishRow): string {
+  const spoken = preferredFinishOf(wish);
+  return spoken !== null && spoken !== "nonfoil"
+    ? printingOf({ ...wish, preferredFinish: null })
+    : printingOf(wish);
+}
 
 /**
  * What a tile carries when it is dragged — spec §1's third drag source, and since spec §9 a
@@ -285,7 +327,38 @@ export function WishlistGrid({
       onNeedNextPage={onNeedNextPage}
       caption={caption}
       finish={tileFinish}
+      // **What one copy costs**, at the printing and the finish this wish is *for* — the same
+      // statement the chin makes on every other wall in the app, which is the whole reason it is
+      // one component: a reader who has learnt what the bar under a card says in their collection
+      // has learnt what it says here.
+      //
+      // The wish's own `unitPrice`, which is quoted at the finish it names and falls down the
+      // printing's `nonfoil → foil → etched` chain where it names none — so a foil-only printing
+      // is priced rather than left blank, and "no preference" is not read as nonfoil.
+      //
+      // **On an any-printing wish this is the same printing the tile is a picture of**, which is
+      // what makes the figure honest under a caption that refuses to name one: `WishRow`'s
+      // `unit_price` and its `art_card_id` come off one join, at the *cheapest* printing of the
+      // oracle card — the one a reader acting on the wish would actually buy.
+      //
+      // **Not the cost still to buy**, which stays in the corner above: that is `unit × copies
+      // missing`, it is what the page header's own "Still to buy" sums and what the table's Cost
+      // column shows, and folding it in here would leave a wish quoted at four times another's
+      // price for being three copies further from finished.
+      //
+      // Spec §5: a price is never shown without saying how old it is. `pricesAsOf` is under this
+      // wall already, said once — which is why this is a bare figure rather than a tooltip on
+      // every one of forty tiles. The corner keeps its own, because arithmetic over a wish is not
+      // a figure the sentence under the wall is about.
+      money={(tile) => formatPrice(tile.wish.unitPrice, currency)}
       badge={(tile) => <WishProgress wish={tile.wish} />}
+      // **Below the printed title bar, not on it.** The search wall leaves its corner at 4px *on
+      // purpose* — there the mark is a printings count and the nameplate is the quietest place on
+      // the card to put one. Here the mark is a red sentence and a price, and the same 4px lands
+      // on the card's own **name**, which is the one thing a reader identifies a tile by on a wall
+      // of forty. The two walls want two answers and both are right, which is what the prop is
+      // for; `CardGrid` carries the measurement behind the offset.
+      topLeftPlacement="clear"
       // The top-left corner carries two facts, in one chip because a tile has four corners and
       // this is the only one free: what the reconciler found, and what the wish still costs.
       //
