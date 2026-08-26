@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   FILTER_CONTROL,
   FILTER_FOCUS,
+  filterChipState,
   FiltersButton,
   ManaValueChips,
   ResetAll,
@@ -319,39 +320,49 @@ describe("FiltersButton", () => {
   const button = () => screen.getByRole("button", { name: /filters/i });
 
   /**
-   * **The border is the count and the fill is the tray**, and the two are independent — which is
-   * the whole of what this control was changed to say (2026-08-26). It used to wear the gold
-   * border whether or not anything was on, so it was the one control on the row drawn in the
-   * on-treatment while off; a reader sweeping the row for what is switched on found it every
-   * time and had to read the badge to learn it was not.
+   * **The border and the word are the count; the fill is the tray** — and the two are
+   * independent, which is the whole of what this control was changed to say (2026-08-26). It used
+   * to wear the gold border whether or not anything was on, so it was the one control on the row
+   * drawn in the on-treatment while off; a reader sweeping the row for what is switched on found
+   * it every time and had to read the badge to learn it was not.
+   *
+   * **The off pair is asserted against `filterChipState` rather than typed out**, because that is
+   * the claim: this control wears the row's own recipe, not a lookalike. Typing `border-border`
+   * here would keep passing if the component grew a hand-copied pair of its own and the recipe
+   * then moved.
    *
    * `toHaveClass` reads `classList`, so these are real tokens rather than a substring of the
    * `className` string — a `hover:` variant would pass either way and is deliberately not
    * asserted here (it is a state jsdom cannot enter).
    */
-  it("takes its border from the count and its fill from the tray, independently", () => {
+  it("takes its border and word from the count, and its fill from the tray", () => {
+    const off = filterChipState(false).split(" ");
+    const on = filterChipState(true).split(" ");
+
     const { rerender } = render(
       <FiltersButton open={false} count={0} onToggle={vi.fn()} controls="tray" />,
     );
 
-    // Quiet: no gold anywhere, and the border **width** stays — see the component's note. A
-    // dropped border would shrink the button by 2px the moment the last filter came off.
-    expect(button()).toHaveClass("border-transparent", "text-dim");
-    expect(button()).not.toHaveClass("border-accent", "bg-surface");
+    // Nothing on: the row's own off treatment — a hairline and a dim word, like every other
+    // bordered control here — and no fill.
+    expect(button()).toHaveClass(...off);
+    expect(button()).not.toHaveClass("border-accent", "text-accent", "bg-surface");
 
     rerender(<FiltersButton open={false} count={2} onToggle={vi.fn()} controls="tray" />);
-    expect(button()).toHaveClass("border-accent", "text-accent");
-    expect(button()).not.toHaveClass("border-transparent", "bg-surface");
+    expect(button()).toHaveClass(...on);
+    expect(button()).not.toHaveClass("bg-surface");
 
     // Open with nothing on: the tray's own grey, and still no gold — gold on this row means "a
     // filter is on", which is the border's sentence rather than the fill's.
     rerender(<FiltersButton open count={0} onToggle={vi.fn()} controls="tray" />);
-    expect(button()).toHaveClass("bg-surface", "border-transparent");
-    expect(button()).not.toHaveClass("border-accent");
+    expect(button()).toHaveClass("bg-surface", ...off);
+    expect(button()).not.toHaveClass("border-accent", "text-accent");
 
-    // Both readings are legal at once and both are drawn, which is `filterChipState`'s rule.
+    // **The word stays gold with the tray up**, which is the one thing opening must not undo:
+    // the count is still on, and a reader who opened the tray to change it has not changed it
+    // yet. Both readings are drawn at once, which is `filterChipState`'s rule too.
     rerender(<FiltersButton open count={2} onToggle={vi.fn()} controls="tray" />);
-    expect(button()).toHaveClass("bg-surface", "border-accent");
+    expect(button()).toHaveClass("bg-surface", ...on);
   });
 
   /** The badge is drawn only when there is something to say — a `0` on every quiet row teaches
