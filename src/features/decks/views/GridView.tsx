@@ -7,7 +7,7 @@
 import { useRef } from "react";
 import { CardArt } from "@/components/CardArt";
 import { RarityGem } from "@/components/RarityGem";
-import { cardScaleVars, scaled } from "@/lib/cardZoom";
+import { atLeast, cardScaleVars, scaled } from "@/lib/cardZoom";
 import { DROP_MARK_ROOM, DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { playedFinish } from "@/lib/finish";
 import { finishTreatments } from "@/lib/treatment";
@@ -66,26 +66,6 @@ const TILE_WIDTH = 150;
 const CAPTION_HEIGHT = 20;
 const CAPTION_TEXT = 9;
 const TILE_GAP = 10;
-
-/**
- * A base that **grows with the zoom and never shrinks below itself** — and, since the marks
- * themselves learnt to scale, the rule for exactly one thing on this wall: the gutter.
- *
- * It used to govern the foot and the type in it as well, on the argument that the card is a picture
- * and scales in both directions honestly while the things around it do not. That was true while
- * they did not: a 9px caption under a halved card would have become 4px, which is not type. It is
- * false now — the caption, the gem, the copy count and the stepper all follow `--mark-scale`
- * (`lib/cardZoom.ts`), so a floored budget is a 20px strip around 5px of type, which is the same
- * fault the other way up.
- *
- * The gutter keeps the floor because it is the one measurement here that is **between** cards
- * rather than **on** one: 10px is what stops a wall of cards reading as one sheet, and halving it
- * at 0.5× is precisely the zoom a reader chose in order to see more cards at once. Nothing is being
- * contained, so there is nothing for it to stay in step with.
- */
-function atLeast(base: number, zoom: number): number {
-  return Math.max(base, scaled(base, zoom));
-}
 
 export function GridView({
   groups,

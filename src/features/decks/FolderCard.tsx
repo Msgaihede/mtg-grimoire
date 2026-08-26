@@ -9,6 +9,7 @@
 import { useRef } from "react";
 import { CardImage } from "@/components/CardImage";
 import { useTooltip } from "@/components/tooltip/useTooltip";
+import { cardScaleVars } from "@/lib/cardZoom";
 import { plural } from "@/lib/counts";
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { FOCUS } from "@/lib/focus";
@@ -55,6 +56,7 @@ export function decksUnder(
 export function FolderCard({
   node,
   members,
+  zoom,
   drag,
   canDrop,
   onDropDeck,
@@ -62,6 +64,16 @@ export function FolderCard({
 }: {
   node: FolderNode;
   members: readonly DeckRow[];
+  /**
+   * How large the reader draws the wall — `cardZoom.deckGallery`, the same number the deck tiles
+   * beside this one are handed and the same number the page sized the grid track with.
+   *
+   * A folder card scales for a reason a deck tile does not have: its picture is a **strip** of
+   * three crops at a fixed height, so without this the tiles around it would grow and the strip
+   * would stay a 96px band — the one thing on the wall that ignored the gesture, which is how a
+   * zoom starts looking broken.
+   */
+  zoom: number;
   drag: DeckDrag | null;
   canDrop: (drag: DeckDrag) => boolean;
   onDropDeck: (drag: DeckDrag) => void;
@@ -92,7 +104,14 @@ export function FolderCard({
   const artists = [...new Set(arts.map((art) => art.artist))].join(", ");
 
   return (
-    <li ref={ref} className={cn("group relative rounded-xl", eligible && DROP_RING)}>
+    <li
+      ref={ref}
+      // The wall's two scale variables, set here for the reason `DeckTile` sets them: everything
+      // inside the card inherits them, so the strip, the name, the count and the credit follow
+      // one number and nothing has to be threaded down.
+      style={cardScaleVars(zoom)}
+      className={cn("group relative rounded-xl", eligible && DROP_RING)}
+    >
       <button
         type="button"
         // Starts with the visible label, then says the two things the card's marks say — WCAG
@@ -100,17 +119,28 @@ export function FolderCard({
         aria-label={`${node.folder.name} folder, ${plural(node.count, "deck")}`}
         onClick={() => onOpen(node.folder.id)}
         className={cn(
-          "block w-full rounded-xl border border-dashed border-border p-2.5 text-left",
+          "block w-full rounded-xl border border-dashed border-border text-left",
+          "p-[calc(0.625rem*var(--mark-scale,1))]",
           "transition-colors duration-150 hover:border-accent motion-reduce:transition-none",
           over && cn("border-accent", DROP_OVER),
           FOCUS,
         )}
       >
-        <span className="flex h-24 gap-[3px] overflow-hidden rounded-md bg-surface">
+        {/* The strip's height is the one measurement on this card that a deck tile has no
+            equivalent of: a tile's cover is a full-width box on a fixed aspect and follows the
+            grid track for free, and three crops side by side have no aspect to follow. 6rem is
+            the 96px the strip has always been. The 3px seams between them scale with it, so
+            three pictures stay three pictures rather than becoming one at 2×. */}
+        <span
+          className={cn(
+            "flex overflow-hidden rounded-md bg-surface",
+            "h-[calc(6rem*var(--mark-scale,1))] gap-[calc(3px*var(--mark-scale,1))]",
+          )}
+        >
           {arts.length === 0 ? (
             <span
               aria-hidden="true"
-              className="grid w-full place-items-center text-[0.7rem] text-dim"
+              className="grid w-full place-items-center text-[calc(0.7rem*var(--mark-scale,1))] text-dim"
             >
               {node.count === 0 ? "Empty" : "No cover art"}
             </span>
@@ -118,19 +148,47 @@ export function FolderCard({
             arts.map((art) => <MemberArt key={art.id} cardId={art.cardId} />)
           )}
         </span>
-        <span className="mt-2 flex items-baseline gap-2">
-          <span className="min-w-0 flex-1 truncate text-sm">{node.folder.name}</span>
-          <span className="flex-none font-mono text-[0.7rem] tabular-nums text-dim">
+        {/* The same four sizes a deck tile scales, in the same order and off the same variable —
+            the two cards sit in one grid track and a name that disagreed about its own size
+            would be the first thing a reader saw. */}
+        <span
+          className={cn(
+            "flex items-baseline",
+            "mt-[calc(0.5rem*var(--mark-scale,1))] gap-[calc(0.5rem*var(--mark-scale,1))]",
+          )}
+        >
+          <span
+            className={cn(
+              "min-w-0 flex-1 truncate",
+              "text-[calc(0.875rem*var(--mark-scale,1))] leading-[calc(1.25rem*var(--mark-scale,1))]",
+            )}
+          >
+            {node.folder.name}
+          </span>
+          <span className="flex-none font-mono text-[calc(0.7rem*var(--mark-scale,1))] tabular-nums text-dim">
             {node.count}
           </span>
         </span>
-        <span className="mt-0.5 block text-xs text-dim">Folder</span>
+        <span
+          className={cn(
+            "mt-[calc(0.125rem*var(--mark-scale,1))] block text-dim",
+            "text-[calc(0.75rem*var(--mark-scale,1))] leading-[calc(1rem*var(--mark-scale,1))]",
+          )}
+        >
+          Folder
+        </span>
       </button>
 
       {/* The price of the crop, per folder card, exactly as it is per tile: an art crop carries
           no printed frame, so every illustrator whose work is on this card is named. */}
       {artists && (
-        <p className="mt-0.5 truncate text-[0.7rem] text-dim" {...tip(artists, { whenClipped: true })}>
+        <p
+          className={cn(
+            "mt-[calc(0.125rem*var(--mark-scale,1))] truncate text-dim",
+            "text-[calc(0.7rem*var(--mark-scale,1))] leading-[calc(1rem*var(--mark-scale,1))]",
+          )}
+          {...tip(artists, { whenClipped: true })}
+        >
           Art by {artists}
         </p>
       )}
