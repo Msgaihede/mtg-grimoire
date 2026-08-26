@@ -71,9 +71,11 @@ const meta = {
           "made the tab the panel opens on look like a different application from the tab beside " +
           "it.\n\n" +
           "The grain question is answered where a picture cannot help: `foldCopies` folds the " +
-          "copies of a printing into one tile and **`pickCopy` chooses which of them a press " +
-          "moves** — the desk before a deck, a real card before a proxy, the oldest entry first. " +
-          "So a copy another deck is holding is still never taken silently.\n\n" +
+          "copies of a printing **in one finish** into one tile and **`pickCopy` chooses which of " +
+          "them a press moves** — the desk before a deck, a real card before a proxy, the oldest " +
+          "entry first. So a copy another deck is holding is still never taken silently. A foil " +
+          "and a played nonfoil are two objects at two prices, so they stay two tiles, each " +
+          "quoting its own price in the chin.\n\n" +
           "Driven end to end by `.storybook/fake/`. The `starter` seed was built with this screen " +
           "in mind: deck 1's group holds three copies (drawn as **already in this deck**), and " +
           "exactly one row sits in **deck 2's** group — the one press on this page that takes a " +

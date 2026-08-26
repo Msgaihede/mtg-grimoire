@@ -518,8 +518,22 @@ interface AppState {
    * it" is structural rather than a rule six call sites have to remember. The two openers
    * exclude each other — this clears the deck context and that one clears this — so the pane can
    * never be told it came from both sides at once.
+   *
+   * **The finish is optional and travels with the press** (2026-08-26). The panel's Collection tab
+   * draws one tile per printing *and* finish — a foil and a played nonfoil are two objects at two
+   * prices sharing only a set and a number — so a press there is about one of them and the pane
+   * has to be told which, exactly as {@link openCardAsFinish} tells it for the collection page's
+   * own wall. **Widened rather than joined by a fifth opener**, so {@link paneFinish} keeps the
+   * invariant every field here has: every opener writes it in its own `set`, and "the pane came
+   * from this surface, as this finish" stays a fact about one write rather than an agreement
+   * between call sites. Omitted, it means what it has always meant — no surface named a finish —
+   * which is the `All cards` tab.
+   *
+   * **It can no longer be handed to `CardGrid`'s `onSelect` as a bare reference, and the compiler
+   * says so.** That slot calls `(cardId, card)`, so a bare reference would land a whole card
+   * object in `finish`; both tabs pass an arrow that names what they mean instead.
    */
-  openCardFromDeckSearch: (cardId: string) => void;
+  openCardFromDeckSearch: (cardId: string, finish?: Finish | null) => void;
   /**
    * The finish the pane was opened **as**, or `null` when no surface named one.
    *
@@ -995,8 +1009,8 @@ export const useAppStore = create<AppState>((set) => ({
       paneFinish: null,
     }),
   paneFromDeckSearch: false,
-  openCardFromDeckSearch: (selectedCardId) =>
-    set({ selectedCardId, paneDeckContext: null, paneFromDeckSearch: true, paneFinish: null }),
+  openCardFromDeckSearch: (selectedCardId, paneFinish = null) =>
+    set({ selectedCardId, paneDeckContext: null, paneFromDeckSearch: true, paneFinish }),
   paneFinish: null,
   openCardAsFinish: (selectedCardId, paneFinish) =>
     set({ selectedCardId, paneFinish, paneDeckContext: null, paneFromDeckSearch: false }),

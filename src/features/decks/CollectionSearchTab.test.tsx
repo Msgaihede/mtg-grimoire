@@ -23,6 +23,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
   },
 }));
 
+import { useAppStore } from "@/lib/store";
 import { AUTO_CATEGORY } from "./autoCategory";
 import { CollectionSearchTab } from "./CollectionSearchTab";
 
@@ -139,6 +140,20 @@ const ALREADY_HERE = row({ id: 4, folderId: THIS_GROUP.id, folderName: THIS_GROU
  * `collectionTiles.test.ts` went red and this file did not.
  */
 const LOOSE_LATER = row({ id: 9, quantity: 1 });
+/**
+ * {@link SPOKEN_FOR} in the finish the loose copies are in — **which is what makes `pickCopy`'s
+ * ranking reachable at all since the wall split on finish** (2026-08-26).
+ *
+ * A foil and a nonfoil are two tiles now, each ranking only its own rows, so a fixture pair in
+ * two finishes tests nothing about the desk-before-deck key: each tile would have exactly one
+ * candidate. The two copies have to be the same object for there to be a choice to make.
+ */
+const SPOKEN_FOR_PLAIN = row({
+  id: 3,
+  folderId: OTHER_GROUP.id,
+  folderName: OTHER_GROUP.name,
+  quantity: 1,
+});
 
 /**
  * jsdom lays nothing out, so the virtualiser measures a scroll container of zero height and
@@ -226,23 +241,123 @@ async function openTray(): Promise<HTMLElement> {
 
 describe("CollectionSearchTab", () => {
   /**
-   * **One tile per printing, whatever the copies behind it are** — the fold this wall replaced a
-   * list of text rows with.
+   * **One tile per printing and finish, whatever else the copies behind it differ in** — the fold
+   * this wall replaced a list of text rows with.
    *
    * Three rows of one card here: loose on the desk, in a drawer, and a foil in another deck's
-   * group. A list drew three lines; the wall draws one piece of art with `×5` over it, because
-   * three drawings of one illustration read as a rendering fault rather than as three choices.
-   * Which of the three a press moves is {@link pickCopy}'s answer and is asserted below.
+   * group. A list drew three lines; the wall draws the two nonfoils as one piece of art with `×4`
+   * over it, because a drawer is not a different object — three drawings of one illustration read
+   * as a rendering fault rather than as three choices. Which of the two a press moves is
+   * {@link pickCopy}'s answer and is asserted below.
+   *
+   * **The foil is the exception, and it asserted `×5` on one tile until 2026-08-26.** A foil and a
+   * played nonfoil are two objects at two prices sharing only a set and a number, so they are two
+   * tiles — and the chin under each of them can then quote its own money.
    */
-  it("folds every copy of a printing into one tile", async () => {
+  it("folds every copy of a printing in one finish into one tile", async () => {
     collectionList.mockResolvedValue({ items: [LOOSE, FILED, SPOKEN_FOR], total: 3 });
     tab();
 
     // One Add button is one tile: `CardGrid` draws exactly one `action` per row it is handed.
     const adds = await screen.findAllByRole("button", { name: /^Add Lightning Bolt/ });
-    expect(adds).toHaveLength(1);
-    // The copies of all three rows, summed — 3 loose + 1 filed + 1 foil.
-    expect(await screen.findByText("5 in your collection")).toBeInTheDocument();
+    expect(adds).toHaveLength(2);
+    // The two nonfoils summed — 3 loose + 1 filed — and the foil counted on its own.
+    expect(await screen.findByText("4 in your collection")).toBeInTheDocument();
+    expect(await screen.findByText("1 in your collection")).toBeInTheDocument();
+  });
+
+  /**
+   * **The chin quotes one copy of the tile's own object**, which is the other half of what the
+   * finish split buys: the two tiles of one printing cost different money, and a wall that merged
+   * them had no honest figure to draw under the art.
+   *
+   * `CollectionRow.unitPrice` is already per copy, per finish, at the marketplace the query named,
+   * so this asserts a figure that arrived rather than one computed here.
+   */
+  it("quotes each finish at its own price", async () => {
+    collectionList.mockResolvedValue({
+      items: [row({ id: 1, unitPrice: 1 }), row({ id: 2, finish: "foil", unitPrice: 9 })],
+      total: 2,
+    });
+    tab();
+
+    expect(await screen.findByText("$1.00")).toBeInTheDocument();
+    expect(await screen.findByText("$9.00")).toBeInTheDocument();
+  });
+
+  /**
+   * A printing this marketplace does not quote draws an em dash — never another marketplace's
+   * number wearing this one's currency sign, and never the printing's own fallback chain, which
+   * would price a plain copy at foil rates.
+   */
+  it("draws an em dash for a copy this marketplace cannot price", async () => {
+    collectionList.mockResolvedValue({ items: [row({ unitPrice: null })], total: 1 });
+    tab();
+
+    expect(await screen.findByText("—")).toBeInTheDocument();
+  });
+
+  /**
+   * A foil and a nonfoil of one printing, told apart by the money in their own chins — a tile's
+   * accessible name is its **card's**, and both of these are Lightning Bolt.
+   */
+  async function twoFinishes() {
+    collectionList.mockResolvedValue({
+      items: [row({ id: 1, unitPrice: 1 }), row({ id: 2, finish: "foil", unitPrice: 9 })],
+      total: 2,
+    });
+    tab();
+    const foil = (await screen.findByText("$9.00")).closest<HTMLElement>("[data-grid-index]")!;
+    const nonfoil = screen.getByText("$1.00").closest<HTMLElement>("[data-grid-index]")!;
+    return { foil, nonfoil };
+  }
+
+  /**
+   * The gold ring, which `CardArt` draws for a selected tile.
+   *
+   * **Read on the tile rather than counted over the document**, because the ring means two things
+   * at once on this wall — the card the pane is open on, and a member of a Ctrl-clicked set — and
+   * the tests below are each about one of them.
+   */
+  const ringed = (tile: HTMLElement) => tile.querySelector(".ring-accent") !== null;
+
+  /**
+   * **The half of the split that nothing in the type system protects.** A tile is a printing *and*
+   * a finish, so `CardGrid` compares `selectedId` against the tile's **key** — and the pane's card
+   * id alone is a `string` that matches no key at all: it rings nothing, raises nothing, and reads
+   * as the ring having been forgotten. So the wall composes the key back out of the two facts the
+   * pane holds.
+   *
+   * **The pane is seeded rather than opened by a press, and that is what makes this test able to
+   * fail.** A press also *picks* the tile, and a picked tile wears the same gold ring — so a test
+   * that clicked and then looked for a ring passed with `selectedId` handed the bare card id,
+   * which is the very defect it was written for. Proved by mutation, 2026-08-26.
+   */
+  it("rings the tile the pane is open on, not its sibling of the same printing", async () => {
+    useAppStore.setState({ selectedCardId: "bolt", paneFinish: "foil", cardSelection: null });
+
+    const { foil, nonfoil } = await twoFinishes();
+
+    expect(ringed(foil)).toBe(true);
+    expect(ringed(nonfoil)).toBe(false);
+  });
+
+  /**
+   * And the press is where that pair comes from: the card id opens the **printing**, which is what
+   * a pane shows, and the finish beside it is what says which of the two tiles it came from.
+   *
+   * `openCardFromDeckSearch` carries both in one `set` — the widening this needed — rather than
+   * `openCardAsFinish`, which would tell the editor the card came from somewhere that is not this
+   * column and draw the pane over the column itself (issue #183).
+   */
+  it("carries the finish the tile was pressed on into the pane", async () => {
+    useAppStore.setState({ selectedCardId: null, paneFinish: null, cardSelection: null });
+
+    const { foil } = await twoFinishes();
+    await userEvent.click(within(foil).getByRole("button", { name: "Lightning Bolt" }));
+
+    expect(useAppStore.getState().selectedCardId).toBe("bolt");
+    expect(useAppStore.getState().paneFinish).toBe("foil");
   });
 
   /**
@@ -255,10 +370,12 @@ describe("CollectionSearchTab", () => {
    *
    * **{@link LOOSE_LATER} rather than {@link LOOSE}, and the id is the whole reason** — see that
    * fixture. With the loose copy at the lowest id this test passes with the desk-before-deck key
-   * deleted, on the tie-break.
+   * deleted, on the tie-break. **{@link SPOKEN_FOR_PLAIN} rather than {@link SPOKEN_FOR}** for the
+   * reason on that fixture: since the wall splits on finish, a foil beside a nonfoil is two tiles
+   * with one candidate each and there is no ranking left to test.
    */
   it("takes a free copy rather than one another deck is holding", async () => {
-    collectionList.mockResolvedValue({ items: [SPOKEN_FOR, LOOSE_LATER], total: 2 });
+    collectionList.mockResolvedValue({ items: [SPOKEN_FOR_PLAIN, LOOSE_LATER], total: 2 });
     tab();
 
     await userEvent.click(await screen.findByRole("button", { name: /^Add Lightning Bolt/ }));
