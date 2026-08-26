@@ -33,7 +33,7 @@ import {
   GameChangerBadge,
   rowMarkColor,
   TagDot,
-  THEORY_MATCH_LABEL,
+  theoryMatchLabel,
   TheoryMatchBadge,
 } from "../CardMarks";
 import {
@@ -51,7 +51,7 @@ import {
 } from "../cardControl";
 import { DropIndicator } from "../DropIndicator";
 import type { CardGroup } from "../grouping";
-import { matchesTheory } from "../theoryMatch";
+import { theoryMatchDelta } from "../theoryMatch";
 import { ruleBreak } from "../violations";
 import type { ValidationIssue } from "../validation/types";
 import { GroupHeader } from "./GroupHeader";
@@ -70,9 +70,10 @@ type Row =
       group: CardGroup;
       card: DeckCard;
       ruleBreakText: string | null;
-      /** The deck's plan asks for this row too — `theoryMatch.ts`. Resolved into the row rather
-       *  than looked up in the cell, so the memo below is the one place the set is read. */
-      inTheory: boolean;
+      /** What the deck's plan says about this row — `theoryMatch.ts`'s `theoryMatchDelta`.
+       *  Resolved into the row rather than looked up in the cell, so the memo below is the one
+       *  place the map is read. `null` is a card the plan does not ask for. */
+      theoryDelta: number | null;
     };
 
 /**
@@ -110,9 +111,10 @@ export function TableView({
    *  the whole view, so a band and the rows under it cannot name two currencies. */
   marketplace: Marketplace;
   violations?: Map<string, ValidationIssue[]>;
-  /** Which rows the deck's plan also asks for — `theoryMatch.ts`'s set of slots, handed in whole
-   *  like `violations` beside it. `undefined` for a deck with no plan. */
-  theoryMatches?: ReadonlySet<string>;
+  /** What the deck's plan says about each row — `theoryMatch.ts`'s map of slot → how far the
+   *  live list is from the planned count, handed in whole like `violations` beside it.
+   *  `undefined` for a deck with no plan. */
+  theoryMatches?: ReadonlyMap<string, number>;
   onSelect?: (card: DeckCard) => void;
   /**
    * What may be done to a card here — see {@link DeckCardActions}.
@@ -143,7 +145,7 @@ export function TableView({
           group,
           card,
           ruleBreakText: ruleBreak(violations?.get(card.cardId)),
-          inTheory: matchesTheory(theoryMatches, card),
+          theoryDelta: theoryMatchDelta(theoryMatches, card),
         })),
       ]),
     [groups, violations, theoryMatches],
@@ -227,10 +229,10 @@ export function TableView({
               {/* The plan's tick, and the `sr-only` twin the other three views cannot have:
                   a cell's text is really read, so this is the surface where the badge's word is
                   said rather than folded into `deckCardName`. */}
-              {row.inTheory && (
+              {row.theoryDelta !== null && (
                 <>
-                  <TheoryMatchBadge />
-                  <span className="sr-only">{THEORY_MATCH_LABEL}</span>
+                  <TheoryMatchBadge delta={row.theoryDelta} />
+                  <span className="sr-only">{theoryMatchLabel(row.theoryDelta)}</span>
                 </>
               )}
               {row.ruleBreakText !== null && (

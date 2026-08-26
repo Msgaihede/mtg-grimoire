@@ -940,18 +940,29 @@ export const KeyboardWalk: Story = {
  * opposite the `RULE BREAK` mark — see `CardMarks.tsx` for why those two are never allowed to
  * share one.
  *
+ * **Two of the four marks are counts rather than ticks**, which is issue #212 and is why this
+ * story is worth looking at rather than merely running: the fixture's plan asks for twice the
+ * Island the deck holds and half the Boros Charm, so `-2` and `+1` are drawn in the same box, the
+ * same azure and the same corner as the tick the other two wear. The tick is the card that
+ * matches; a number is the card that does not.
+ *
  * `theoryMatches` is `undefined` in every other story in this file, which is what a deck with the
  * theory list switched off looks like and what the **Theory** tab itself looks like: no plan to
- * compare against, so no ticks.
+ * compare against, so no marks.
  */
 export const TheoryMatches: Story = {
   args: { theoryMatches: deckTheoryMatches() },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    // Four ticked cards. The mark is `aria-hidden` and carries no `title` any more — it is
-    // bound `describes: false`, so `THEORY_MATCH_ATTR` is CardMarks.tsx's own handle for
-    // finding it after the fact. The words below are read off the button instead.
-    expect(canvasElement.querySelectorAll(`[${THEORY_MATCH_ATTR}]`)).toHaveLength(4);
+    // Four marked cards, and **two of the four are numbers rather than ticks** (issue #212): the
+    // fixture asks for twice the Island the deck holds and half the Boros Charm, so this is the
+    // one place both of the mark's drawings are seen side by side. The mark is `aria-hidden` and
+    // carries no `title` — it is bound `describes: false`, so `THEORY_MATCH_ATTR` is
+    // `CardMarks.tsx`'s own handle for finding it after the fact, and a tick's element has no
+    // text at all (it is an `<svg>`). The words are read off the button instead.
+    const marks = [...canvasElement.querySelectorAll(`[${THEORY_MATCH_ATTR}]`)];
+    expect(marks).toHaveLength(4);
+    expect(marks.map((mark) => mark.textContent).sort()).toEqual(["", "", "+1", "-2"]);
 
     // The card carrying both marks: in the plan **and** breaking a rule. The two facts are in
     // one sentence because a button's `aria-label` replaces everything inside it.

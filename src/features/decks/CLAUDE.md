@@ -653,6 +653,20 @@ reader to configure the deck they had just made; it now asks all of them.
   which rows are the deck they designed and which are the proxies and stand-ins waiting to be
   replaced. `TheoryMatchMark` — a tick in `CountTag`'s own banner, top-right — says it, on all four
   views, and `TheoryMatchBadge` is the same fact for the two that draw no art.
+  **Since 2026-08-26 it says *how far off* the count is as well** (issue #212): a card the plan
+  asks for a different number of draws `+2` or `-8` in place of the tick, in the same box and the
+  same azure, and the tick is what the **matching** card wears. The two are never drawn together —
+  a tick beside a `-8` is two clauses of one sentence in a 25px box. Two rules carry it and both
+  live in `theoryMatch.ts`: the difference is `live − planned` at the **slot's** grain, with both
+  sides summed across their piles before they are subtracted (per-row arithmetic draws `-1` and
+  `-4` on a plan of 4-in-Main + 1-in-Sideboard the reader has got exactly right), and there is no
+  difference at all unless one side is above one, which is what keeps the number off every card of
+  a singleton deck. `deckTheorySlots` grew a `quantity` for it and folds its rows in the SQL.
+  **The box's width moved with it** and that is issue #212's other half: #182's `6/1` paddings left
+  the mark visibly the smaller of the strip's two bookends, so `COUNT_TAG_BOX_MIRRORED` is `8/3`
+  over a `min-w` of one digit's advance plus `COUNT_TAG_BOX`'s own paddings — the quantity tag's
+  width holding a single digit, by construction. Paddings alone could not settle it, because the
+  content is a glyph on one card and two characters on the next.
   **The grain is `(cardId, finish)` and deliberately not the category**: a card planned as Ramp and
   sleeved into Main deck is still the card that was planned, and a mark that went dark because a
   pile was renamed is a mark nobody can learn to trust. `finish` is read **raw**, never through
@@ -673,18 +687,20 @@ reader to configure the deck they had just made; it now asks all of them.
   not apply: what was removed re-implemented the comparison `deck_theory_diff` owns (it counted
   disagreement on `(categoryId, cardId)`, both directions, so a card filed in two piles scored
   twice), while this asks for rows no command answers. The **cost** half is answered by the
-  command: two columns of one indexed scan, no join to `cards`, no prices, no owned roll-up,
+  command: three columns of one indexed scan, no join to `cards`, no prices, no owned roll-up,
   no marketplace — against a `deck_get` that does all four. It is enabled only when
   `theoryEnabled && variant === "live"`, so a deck with no plan and the whole Theory tab pay
   nothing at all.
-  `undefined` rather than an empty set is the other distinction `theoryMatchSet` keeps: no plan is
-  not the same statement as a plan that wants none of this.
+  `undefined` rather than an empty map is the other distinction `theoryMatchPlan` keeps: no plan
+  is not the same statement as a plan that wants none of this — and `null` rather than `0` is the
+  same distinction one level down, in `theoryMatchDelta`, where `0` is the card that matches and
+  draws the tick.
   **That `enabled` is a statement about _cost_ and never about the mark, and reading it as both
   was issue #159.** A disabled `useQuery` still serves whatever sits in the cache under its key,
   and the key is `["decks", "theorySlots", deckId]` — the **deck's**, deliberately, so both tabs
   share one entry — so pressing `Theory` after Live had loaded carried Live's answer over and
   ticked every row of the plan, which matches it by definition. The gate that means it lives on
-  the **derivation** in `DeckEditor` (`variant === "live" ? theoryMatchSet(…) : undefined`);
+  the **derivation** in `DeckEditor` (`variant === "live" ? theoryMatchPlan(…) : undefined`);
   `enabled` promises only that no query is spent. It read as intermittent because it needs the
   Live tab to have been on screen first — the report came from a printing swapped through
   `View all printings`, which invalidates `["decks"]` and refills that cache. **Any second reader

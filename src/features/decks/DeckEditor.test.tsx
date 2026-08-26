@@ -3318,7 +3318,7 @@ describe("DeckEditor", () => {
    * every row** (issue #159).
    *
    * On the plan every row *is* the plan, so a tick on all of them is a mark that says nothing —
-   * which is why `theoryMatchSet` keeps `undefined` apart from the empty set and why the slots
+   * which is why `theoryMatchPlan` keeps `undefined` apart from the empty map and why the slots
    * query is not enabled on this tab. **Not being enabled turned out not to be enough.**
    * `useQuery` serves whatever sits in the cache under its key whether or not it may fetch, and
    * that key is the *deck*'s rather than the tab's — so a reader who had Live on screen first,
@@ -3332,7 +3332,7 @@ describe("DeckEditor", () => {
    */
   it("takes the theory tick off every row when the reader switches to the plan", async () => {
     withPlan();
-    deckTheorySlots.mockResolvedValue([theorySlot(bolt())]);
+    deckTheorySlots.mockResolvedValue([{ key: theorySlot(bolt()), quantity: 1 }]);
 
     await open();
 
@@ -3345,6 +3345,37 @@ describe("DeckEditor", () => {
     // The plan's own card, so the press has actually landed before the count below is read.
     await screen.findByRole("button", { name: /^Bear/ });
     expect(document.querySelectorAll(`[${THEORY_MATCH_ATTR}]`)).toHaveLength(0);
+  });
+
+  /**
+   * **The count reaches the mark from the two reads the editor already makes**
+   * ([issue #212](https://github.com/Msgaihede/mtg-grimoire/issues/212)).
+   *
+   * `theoryMatchDelta`'s arithmetic is unit-tested and `CardStack` is tested against a map handed
+   * to it directly; neither says the editor *joins* the plan's quantities to the live list's. This
+   * is that wiring — `deckTheorySlots`' `quantity` against `deck.cards`' own — and it is the half
+   * that can be fully correct and reach nothing.
+   *
+   * `withPlan` sleeves up four Bolts and this plan asks for two, so the mark says `+2` rather than
+   * the tick: the live list is two copies **over** the plan, which is a cut the reader has not
+   * made yet.
+   */
+  it("says how far the live count is from the plan on the card itself", async () => {
+    withPlan();
+    deckTheorySlots.mockResolvedValue([{ key: theorySlot(bolt()), quantity: 2 }]);
+
+    await open();
+
+    await waitFor(() =>
+      expect(document.querySelectorAll(`[${THEORY_MATCH_ATTR}]`).length).toBeGreaterThan(0),
+    );
+    for (const mark of document.querySelectorAll(`[${THEORY_MATCH_ATTR}]`)) {
+      expect(mark).toHaveTextContent("+2");
+    }
+    // …and in words, on the one thing a keyboard reader gets from the card.
+    expect(screen.getByRole("button", { name: /^Lightning Bolt/ })).toHaveAccessibleName(
+      expect.stringContaining("in the theory list · 2 more than planned"),
+    );
   });
 
   /**

@@ -39,7 +39,7 @@ import {
   useDeckCardDrag,
   type DeckCardActions,
 } from "../cardControl";
-import { matchesTheory } from "../theoryMatch";
+import { theoryMatchDelta } from "../theoryMatch";
 import { DropIndicator } from "../DropIndicator";
 import type { CardGroup } from "../grouping";
 import { ruleBreak } from "../violations";
@@ -83,10 +83,10 @@ export function GridView({
    *  tile's own unit price. */
   marketplace: Marketplace;
   violations?: Map<string, ValidationIssue[]>;
-  /** Which rows the deck's plan also asks for — `theoryMatch.ts`'s set of slots, handed down
-   *  whole like `violations` beside it. `undefined` for a deck with no plan, and on the plan
-   *  itself. */
-  theoryMatches?: ReadonlySet<string>;
+  /** What the deck's plan says about each row — `theoryMatch.ts`'s map of slot → how far the
+   *  live list is from the planned count, handed down whole like `violations` beside it.
+   *  `undefined` for a deck with no plan, and on the plan itself. */
+  theoryMatches?: ReadonlyMap<string, number>;
   onSelect?: (card: DeckCard) => void;
   /** What may be done to a card here — see {@link DeckCardActions}. */
   actions?: DeckCardActions;
@@ -182,7 +182,7 @@ function GridGroup({
   marketplace: Marketplace;
   violations?: Map<string, ValidationIssue[]>;
   /** Handed through to the tiles — see {@link GridView}'s own props. */
-  theoryMatches?: ReadonlySet<string>;
+  theoryMatches?: ReadonlyMap<string, number>;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
   /** Handed through to the tiles — see {@link GridView}'s own props. */
@@ -238,7 +238,7 @@ function GridGroup({
               card={card}
               currency={marketplace.currency}
               ruleBreakText={ruleBreak(violations?.get(card.cardId))}
-              inTheory={matchesTheory(theoryMatches, card)}
+              theoryDelta={theoryMatchDelta(theoryMatches, card)}
               onSelect={onSelect}
               actions={actions}
               selected={deckCardMarked(card, selectedSlot, actions)}
@@ -280,7 +280,7 @@ function GridCard({
   card,
   currency,
   ruleBreakText,
-  inTheory,
+  theoryDelta,
   onSelect,
   actions,
   selected,
@@ -291,9 +291,10 @@ function GridCard({
   /** How the tile's foot writes the row's one unit price. */
   currency: Currency;
   ruleBreakText: string | null;
-  /** The deck's plan asks for this row too — resolved by the group, so a tile is handed a
-   *  boolean rather than a set to look itself up in. */
-  inTheory: boolean;
+  /** What the deck's plan says about this row — `theoryMatchDelta`, resolved by the group so a
+   *  tile is handed an answer rather than a map to look itself up in. `null` is a card the plan
+   *  does not ask for, `0` the card it asks for exactly. */
+  theoryDelta: number | null;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
   /** This is the card the pane is open on. */
@@ -355,7 +356,7 @@ function GridCard({
     >
       <button
         type="button"
-        aria-label={deckCardName(card, ruleBreakText, inTheory)}
+        aria-label={deckCardName(card, ruleBreakText, theoryDelta)}
         {...deckCardProps(card)}
         {...deckCardPress(card, onSelect, actions)}
         // Inset, for the stacked card's reason: the button holds a face that clips its own
@@ -451,7 +452,7 @@ function GridCard({
               spells it (`finish !== null || gameChanger`), because a chip is drawn for **either**
               fact and reading only the finish would put the tick under an empty corner on every
               non-foil game changer. */}
-          {inTheory && (
+          {theoryDelta !== null && (
             <span
               className={cn(
                 "absolute right-[calc(0.25rem*var(--mark-scale,1))]",
@@ -461,7 +462,7 @@ function GridCard({
               )}
             >
               {/* The tile's own quantity chip, not the stack's banner — see the component. */}
-              <TheoryMatchMark variant="chip" />
+              <TheoryMatchMark variant="chip" delta={theoryDelta} />
             </span>
           )}
 
