@@ -493,10 +493,11 @@ function activeChips<SortKey extends string>(
  * The controls themselves live in `@/components/FilterChips`, which the collection view builds
  * its own row out of. This file owns the layout and *which* filters the search offers.
  *
- * Not every control on it is a filter. The sort picker, the printings mode and the layout pair
- * each say how the results are *shown* rather than which ones there are — so none of them is
- * counted by the Reset all badge or cleared by pressing it, and the sort in particular is one
- * piece of state shared with the table's headers rather than something this row owns.
+ * Not every control on it is a filter. The sort picker, the printings mode, the layout pair and
+ * the Flatten switch beside it each say how the results are *shown* rather than which ones there
+ * are — so none of them is counted by the Reset all badge or cleared by pressing it, and the sort
+ * in particular is one piece of state shared with the table's headers rather than something this
+ * row owns.
  */
 export function FilterBar<SortKey extends string>({
   search,
@@ -505,6 +506,7 @@ export function FilterBar<SortKey extends string>({
   labels = SEARCH_LABELS,
   layoutToggle = true,
   layoutFor = "search",
+  flatten,
 }: {
   search: FilterSurface<SortKey>;
   /** What this surface calls its search box, and the `id` stem its labels bind through — see
@@ -555,6 +557,33 @@ export function FilterBar<SortKey extends string>({
    * list rather than a third opinion beside it.
    */
   layoutFor?: ListSection;
+  /**
+   * The **Flatten** switch, drawn immediately left of the layout pair and in the same wrapper.
+   *
+   * **Two surfaces pass it: the wishlist and the collection**, which are the two lists here that
+   * are filed into folders at all.
+   *
+   * **It sits past the divider for the layout pair's own reason.** Flatten is not a statement
+   * about which cards qualify — it is a statement about how much of the *tree* is drawn, which is
+   * the same kind of thing as how the *rows* are drawn. Both hooks already say so structurally:
+   * `flatten` lives outside their filter state, so `activeFilterCount` never sees it and
+   * `resetAll` deliberately leaves it alone — a reader clearing a search must not also be dropped
+   * back into the filing. That is exactly the property the pair past the hairline has, so this
+   * belongs on the same side of it, and in the same wrapper so the two can never wrap apart.
+   *
+   * **One object rather than a `pressed`/`onToggle` pair**, which is {@link FilterBar.layoutFor}'s
+   * argument one control along: a binding that cannot be passed half. A switch with a state and no
+   * setter is a control that ignores the press; one with a setter and no state is a control that
+   * lies about what it is doing. Neither should be spellable.
+   *
+   * **Deliberately not a member of {@link FilterSurface}.** Everything optional on that interface
+   * is a *filter* some surface cannot ask for, and this is not a filter. It is also not a question
+   * the other surfaces have an answer to: the card search and the Tags page are lists of
+   * Scryfall's printings and the deck editor's docked panel is a search over one, so none of them
+   * has any filing to ignore. A field there would be a question most implementers could only
+   * answer with `undefined`.
+   */
+  flatten?: { pressed: boolean; onToggle: () => void };
 }) {
   /**
    * Whether the tray is open, and **this component's own state rather than the store's.**
@@ -899,19 +928,60 @@ export function FilterBar<SortKey extends string>({
           </span>
         </div>
 
-        {/* The second hairline, before the layout pair — drawn wherever that pair is, because it
-            is what says the two icons are about the drawing rather than about the cards. */}
-        {layoutToggle && (
+        {/* The second hairline, and it precedes a **group** rather than one pair: Flatten, the
+            grid-or-table pair, or both. What it says is the same either way — the controls past it
+            are about the *drawing* rather than about which cards there are, so none of them is
+            counted by the badge or cleared by Reset all. Drawn wherever the group has anything in
+            it, because a row carrying only Flatten needs the line for exactly the reason a row
+            carrying only the pair does. */}
+        {(layoutToggle || flatten) && (
           <div
             aria-hidden="true"
             className="order-[8] hidden h-9 w-px bg-border @min-[640px]/fb:block"
           />
         )}
 
-        {/* A view mode rather than a filter, so it sits past the divider with the sort rather than
-            among the statements about which cards to show — and, like them, it is untouched by
-            Reset all. */}
-        {layoutToggle && <ViewToggle section={layoutFor} />}
+        {/* **The two controls that are about the drawing, in one wrapper so they cannot wrap
+            apart.** Both are view modes rather than filters — how much of the tree is on screen,
+            and how the rows are laid out — so they sit past the divider with the sort rather than
+            among the statements about which cards to show, and, like the sort, neither is touched
+            by Reset all. Flatten leads, because it says which *rows* there are to lay out and the
+            pair says how they are laid out.
+
+            The wrapper is the layout pair's own, lifted out of {@link ViewToggle} so that the
+            second control could join it: two siblings in the row's own flex would be two items the
+            `flex-wrap` is free to break between, and a Flatten chip on the line above the pair it
+            was moved next to is the whole of what this change was for. The 8px inside it is the
+            row's own gap at the narrowest band and *tighter* than it at the two wider ones, where
+            the row opens to 10px and 12px — so the group closes up as the bar grows and reads as
+            one object rather than as two more items in the row.
+
+            **`ml-auto` on `LayoutToggle`'s own group survives this and does nothing**, which was
+            worth checking rather than assuming: an auto margin absorbs positive free space, and
+            this wrapper is a flex item at `flex: 0 1 auto` whose base size is its contents — so
+            there is none to absorb. Swept in headless Chromium over this row's real markup and the
+            app's own compiled stylesheet, 206px to 1700px in 2px steps (2026-08-26):
+            `margin-left` computes to `0px` at every width, the chip stands exactly the wrapper's
+            8px from the pair at every width, the two never land on different lines, and forcing
+            the margin to zero changes no measurement. **jsdom applies no container query and loads
+            no stylesheet**, so none of that is visible to the suite — what the suite pins instead
+            is the tree the wrapping rests on.
+
+            **`order-[40]`, and not `order-[9]` unconditionally.** At 640 and up the group rides
+            the first line past the divider, which is where the design puts it; below that there is
+            no first line to ride — the colours already share theirs with Filters — so an
+            `order-[9]` would strand it on a line of its own between the colours and the mana
+            values. Ordered past the sort instead, it shares that line, which is the other control
+            on this bar that is about how the results are *shown* rather than which ones there
+            are. */}
+        {(layoutToggle || flatten) && (
+          <div className="order-[40] flex items-center gap-2 @min-[640px]/fb:order-[9]">
+            {flatten && (
+              <ToggleChip label="Flatten" pressed={flatten.pressed} onClick={flatten.onToggle} />
+            )}
+            {layoutToggle && <ViewToggle section={layoutFor} />}
+          </div>
+        )}
 
         {/* **The line break.** A `basis-full` flex item consumes the rest of its line, so
             everything ordered after it starts a new one. Gone at 1500, where the whole bar is one
@@ -1411,6 +1481,12 @@ function TrayField({
  * The pair is picked out of records rather than by a chain of ternaries, so adding a fifth list is
  * a line in {@link LIST_SECTIONS} and a line in each record instead of a conditional that has to
  * stay in step with itself in two places.
+ *
+ * **The store read, and nothing else.** The box this used to draw around itself — the `order`
+ * numbers that place it on the row — belongs to the group it now shares with the Flatten switch,
+ * so it lives at that group's site in {@link FilterBar} with the reasoning that goes with it. What
+ * is left here is the one thing a wrapper cannot do: turn a section name into the preference this
+ * page's pair is bound to.
  */
 function ViewToggle({ section }: { section: ListSection }) {
   const searchView = useAppStore((s) => s.searchView);
@@ -1433,15 +1509,5 @@ function ViewToggle({ section }: { section: ListSection }) {
     collection: setCollectionView,
     wishlist: setWishlistView,
   }[section];
-  return (
-    // **Last of everything in the stacked layout, and beside the sort above it.** At 640 and up
-    // the pair rides the first line past the divider, which is where the design puts it; below
-    // that there is no first line to ride — the colours already share theirs with Filters — so
-    // an `order-[9]` would strand the toggle on a line of its own between the colours and the
-    // mana values. Ordered past the sort instead, it shares that line, which is the other control
-    // on this bar that is about how the results are *shown* rather than which ones there are.
-    <div className="order-[40] flex @min-[640px]/fb:order-[9]">
-      <LayoutToggle view={view} onChange={onChange} />
-    </div>
-  );
+  return <LayoutToggle view={view} onChange={onChange} />;
 }

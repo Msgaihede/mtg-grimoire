@@ -950,6 +950,26 @@ export interface FakeDb {
    */
   listView: Record<string, string>;
   /**
+   * `app_meta.flatten_state` — whether each page with a cabinet was last left ignoring its
+   * filing, as section name → flattened.
+   *
+   * The third row here whose value is an *object*, and the one that is **half of each** of the
+   * two shapes above it. Like {@link FakeDb.listView} the keys are whatever some build wrote, so
+   * it is `Record<string, boolean>` rather than `Record<FlattenSection, boolean>` — a page this
+   * build does not file cards in is a state a story wants. Unlike it, the *values* have no junk
+   * state at all: a `bool` off the IPC boundary is one of two things, which is
+   * {@link FakeDb.navCollapsed}'s whole argument arriving inside a map.
+   *
+   * `{}` for "nothing stored", and here that absence carries more than it does for its two
+   * neighbours: the two pages' defaults **differ** — the collection opens flattened and the
+   * wishlist does not — so an absent key is not "the same default as the other one" but the only
+   * way a story can stand in a switch nobody has pressed.
+   *
+   * **The read drops only what it cannot key and the write refuses only that** — see
+   * {@link readHandlers.flatten_state} and {@link writeHandlers.set_flatten_state}.
+   */
+  flattenState: Record<string, boolean>;
+  /**
    * `app_meta.nav_collapsed` — whether the reader has collapsed the global navigation sidebar
    * down to its icons.
    *
@@ -1343,6 +1363,11 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // sections it cares about and leaves the rest out — an absent key is a wall nobody has zoomed.
     cardZoom: {},
     listView: {},
+    // Empty for the same reason a third time, and here the emptiness is what makes a fresh world
+    // draw the *store's* two defaults rather than one answer for both pages: the collection opens
+    // flattened, the wishlist opens on its root. A story that wants a restored session passes the
+    // page it cares about and leaves the other out.
+    flattenState: {},
     // The fifth row, and the first whose default is a *value* rather than an absence: a shell
     // nobody has collapsed. `false` is what the backend answers for the row never having been
     // written and for its holding something unreadable alike, so there is no third state for
@@ -3155,13 +3180,28 @@ function collectionScope(db: FakeDb, q: CollectionQuery): FakeEntry[] {
     if (!inList(e.condition, q.conditions, CONDITIONS)) return false;
     if (q.needsReview === true && e.needsReview === null) return false;
     if (q.needsReview === false && e.needsReview !== null) return false;
+    // **Three states over two fields, and the fake must fall for none of the traps.**
+    //
     // **Absent and `null` are one state here, and that is not {@link wishlistScope}'s rule.**
     // `CollectionQuery.folderId` is `Option<i64>` on the wire, where a JSON `null` deserializes
-    // to the same `None` an absent field does — so "every folder" is the only thing either can
-    // mean, and the fake must not be able to answer "the root and nothing else" when the app
-    // cannot be asked it. The wishlist needs a second field (`flatten`) for exactly this reason
-    // and the collection has not needed the third state yet.
-    if ((q.folderId ?? null) !== null && e.folderId !== q.folderId) return false;
+    // to the same `None` an absent field does — so neither can mean "the root", and an absent
+    // one is **every folder**: what this query has always answered, and what the mirror, the
+    // export sweep, the deck panel and the importer's preview all still ask by saying nothing.
+    //
+    // `rootOnly` is the third state, and it is `WishlistQuery.flatten` read from the other end:
+    // there the root is the default and a flag widens it, here every folder is the default and
+    // the flag narrows. Same three states, opposite polarity — because this field was added to
+    // a query whose old callers had to keep their answer.
+    //
+    // **`folderId` outranks `rootOnly` rather than intersecting with it**, which is the arm a
+    // test has to hold: a stale flag riding beside a folder id would otherwise answer the empty
+    // intersection and read as an emptied drawer.
+    const named = q.folderId ?? null;
+    if (named !== null) {
+      if (e.folderId !== named) return false;
+    } else if (q.rootOnly === true && e.folderId !== null) {
+      return false;
+    }
     // `"unallocated"` drops the copies a **deck** is holding and nothing else: the root, a
     // folder the reader made and `Recently removed` are all cards on their desk. Since schema
     // v25 every deck has a group and `collection_to_deck` files copies into it, so this is a
@@ -5410,6 +5450,30 @@ export function readHandlers(db: FakeDb) {
           ([section, view]) => section !== "" && isSearchView(view),
         ),
       ),
+
+    /**
+     * `flatten::flatten_state` — every cabinet's remembered Flatten switch.
+     *
+     * The seventh `app_meta` setting and the third whose value is an object, so
+     * {@link readHandlers.list_view}'s per-entry rule applies unchanged: one unusable key costs
+     * that page its memory and leaves the other intact.
+     *
+     * **What is missing from the filter is the point.** Its two neighbours drop a bad *value* as
+     * well as a bad key — a zoom off the ladder, a word that is not a layout — because the row
+     * can hold text a build cannot place. This one cannot: `flatten.rs` stores a `bool` and the
+     * frontend reads a `bool`, so there is no third state to drop and a fake that invented one
+     * would be storying the app against a backend it does not have. The blank key is all that is
+     * left, and it is here for the same reason it is there — `set_flatten_state` refuses it, so a
+     * row holding one was hand-edited.
+     *
+     * The **section** name is unfiltered, exactly as the zoom's and the layout's are: which pages
+     * have a cabinet is TypeScript's vocabulary, and `isFlattenSection` on the frontend is what
+     * that split exists for.
+     *
+     * A read, so it answers through every second of a sync — the write below does not.
+     */
+    flatten_state: (): Record<string, boolean> =>
+      Object.fromEntries(Object.entries(db.flattenState).filter(([section]) => section !== "")),
 
     /**
      * `nav::nav_collapsed` — whether the global navigation sidebar was left collapsed to icons.
@@ -10280,6 +10344,38 @@ export function writeHandlers(db: FakeDb) {
         );
       }
       db.listView = { ...db.listView, [args.section]: args.view };
+    },
+
+    /**
+     * `flatten::set_flatten_state` — remember whether one page is showing its whole cabinet.
+     *
+     * **The blank section is the whole of the validation, and the absence of a second check is
+     * the note worth reading.** {@link writeHandlers.set_card_zoom} and
+     * {@link writeHandlers.set_list_view} each refuse a value as well, because the read beside
+     * them drops what it cannot use *in silence* — so a fake that accepted anything would let a
+     * story save a setting, read back nothing, and look like it worked. There is no third
+     * instance of that here: a `bool` off the IPC boundary has no junk state, Tauri's
+     * deserializer having refused anything that is not `true` or `false` before this handler is
+     * reached at all. {@link writeHandlers.set_nav_collapsed} makes the argument in full; this is
+     * the same argument inside a map, which is why one half of it survives and the other does
+     * not.
+     *
+     * The **section** is unchecked past being non-empty, for its neighbours' asymmetry: which
+     * pages have a cabinet is TypeScript's vocabulary and `flatten.rs` deliberately does not know
+     * it. And only the named section is touched, so the page beside it keeps its own answer —
+     * which matters more here than for the two rows above, because the two defaults differ.
+     *
+     * **`false` writes an entry rather than removing one**: a reader who flattens a page and then
+     * un-flattens it has made a second choice, not withdrawn the first, and on the collection
+     * that second choice is the only thing that can beat a `true` default.
+     *
+     * It honours `busy` like every other ordinary write — `flatten.rs` takes the write connection
+     * through `sync::with_write`, and the lock comes first.
+     */
+    set_flatten_state: (args: { section: string; flattened: boolean }): void => {
+      refuseIfBusy(db);
+      if (args.section === "") throw refuse("A flatten section cannot be blank.");
+      db.flattenState = { ...db.flattenState, [args.section]: args.flattened };
     },
 
     /**

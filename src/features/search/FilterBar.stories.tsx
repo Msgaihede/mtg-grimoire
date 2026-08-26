@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 import { TOOLTIP_OPEN_MS, TOOLTIP_PANEL_ID } from "@/components/tooltip/TooltipProvider";
@@ -44,16 +44,31 @@ const AT_MIN_WIDTH = "w-[776px]";
 function SearchFilters({
   preset,
   layoutToggle,
+  flatten = false,
   width = AT_1280,
 }: {
   preset?: Preset;
   /** `FilterBar`'s own prop, passed straight through. */
   layoutToggle?: boolean;
+  /**
+   * Whether the row draws the **Flatten** switch — on where the list is filed into folders, which
+   * is the wishlist and the collection and neither of the two surfaces `useCardSearch` stands for
+   * here.
+   *
+   * **The state behind it is this wrapper's `useState`, and that is not the hand-built object this
+   * file exists to avoid.** `FilterBar`'s `search` prop is a whole `CardSearch` with six toggle
+   * rules and the badge's arithmetic behind it, which is why the real hook is used for that.
+   * Flatten is a boolean with no third state, nothing derived from it and no arithmetic anywhere —
+   * `useWishlist` holds exactly this `useState` — so a story owning it copies no rule that could
+   * drift.
+   */
+  flatten?: boolean;
   /** A Tailwind width class for the box the row has to fit in — the whole subject of the
    *  wrapping stories, and a live control on every other one. */
   width?: string;
 }) {
   const search = useCardSearch();
+  const [flattened, setFlattened] = useState(false);
   const applied = useRef(false);
   useEffect(() => {
     if (applied.current || !preset) return;
@@ -62,7 +77,15 @@ function SearchFilters({
   });
   return (
     <div className={width}>
-      <FilterBar search={search} layoutToggle={layoutToggle} />
+      <FilterBar
+        search={search}
+        layoutToggle={layoutToggle}
+        flatten={
+          flatten
+            ? { pressed: flattened, onToggle: () => setFlattened((on) => !on) }
+            : undefined
+        }
+      />
     </div>
   );
 }
@@ -628,6 +651,52 @@ export const DockedPanel: Story = {
   },
 };
 
+/**
+ * **Flatten, beside the layout pair** — the wishlist's and the collection's switch, and the two
+ * ends of it in one story.
+ *
+ * It sat down beside the breadcrumb and the folder cards until now, on the argument that where a
+ * reader is standing is navigation rather than a narrowing. That argument still holds and it is
+ * not what decides the placement: this row has a hairline across it, and everything past that
+ * hairline is a statement about how the results are **drawn** rather than about which ones there
+ * are. Flatten is that kind of statement one level up — how much of the *tree* is on screen — and
+ * both hooks already treat it that way, keeping it out of their filter state and out of
+ * `resetAll`. So it goes where the other controls Reset all cannot reach already are.
+ *
+ * **The two are in one wrapper, which is a fact about wrapping and not about tidiness.** The row
+ * is `flex-wrap`, so two adjacent items are two items the wrap may break between — and a Flatten
+ * chip on the line above the pair it was moved next to would be the whole change undone. Drag the
+ * width control down to the docked panel's 371px to watch the group move as one.
+ *
+ * The badge is the other half: the switch is **on** by the end of the play and Reset all still
+ * reads zero, because none of this narrows anything.
+ */
+export const FlattenSwitch: Story = {
+  args: { flatten: true },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const chip = await canvas.findByRole("button", { name: "Flatten" });
+    await expect(chip).toHaveAttribute("aria-pressed", "false");
+
+    // One wrapper, said as the tree rather than as a class: the pair's group is the chip's own
+    // next sibling, so nothing can be ordered between them and no wrap can separate them.
+    const layout = canvas.getByRole("group", { name: "Result layout" });
+    await expect(chip.nextElementSibling).toBe(layout);
+
+    await userEvent.click(chip);
+
+    await waitFor(async () => {
+      await expect(canvas.getByRole("button", { name: "Flatten" })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
+    });
+    // Nothing about the filing is a filter, so the press moved neither number on the row.
+    await expect(canvas.getByRole("button", { name: /^Reset all/ })).toHaveAccessibleName(
+      "Reset all — 0 filters active",
+    );
+  },
+};
 
 /**
  * Scryfall's tagger syntax, typed straight into the search box.

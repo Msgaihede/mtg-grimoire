@@ -13,6 +13,7 @@ import {
 import { ipc, type WishlistQuery, type WishlistSortKey } from "@/lib/ipc";
 import { sortOptions } from "@/lib/options";
 import { applySort, type SortDir, type SortSpec } from "@/lib/sort";
+import { useAppStore } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
 
 /**
@@ -142,10 +143,24 @@ export function useWishlist() {
   // something the reader narrowed, so `activeFilterCount` never sees it and `resetAll` leaves
   // it alone, the same reason `sort` does.
   const [folderId, setFolderId] = useState<number | null>(null);
-  // `true` ignores `folderId` and answers every wish wherever it is filed. Also navigation
-  // rather than a filter, for the same reason `folderId` is — Flatten is "how much of the
-  // tree am I looking at", not "which wishes qualify".
-  const [flatten, setFlatten] = useState(false);
+  /**
+   * `true` ignores `folderId` and answers every wish wherever it is filed. Also navigation
+   * rather than a filter, for the same reason `folderId` is — Flatten is "how much of the
+   * tree am I looking at", not "which wishes qualify".
+   *
+   * **The one piece of this hook's state that is not `useState`**, `useCollection`'s twin and
+   * for its reason: whether the reader reads their list flat is how they read it at all, so it
+   * is held in the app store and persisted behind it. **`wishlistFlattened` is its own field
+   * and starts `false`**, where the collection's starts `true` — a shopping list of tens of rows
+   * is usually read whole, but its folders are how the reader groups what they are saving *for*,
+   * and a reader who flattened their cabinet was not saying anything about that.
+   *
+   * **Two selectors, never one object literal**: a selector returning a fresh object is a new
+   * reference on every store write, so this hook would re-render on a card zoom or a view
+   * switch. `FilterBar`'s `ViewToggle` reads its eight fields the same way.
+   */
+  const flatten = useAppStore((s) => s.wishlistFlattened);
+  const toggleFlatten = useAppStore((s) => s.toggleWishlistFlattened);
   const [debouncedText, setDebouncedText] = useState("");
 
   useEffect(() => {
@@ -380,7 +395,13 @@ export function useWishlist() {
      *  reads, not what they are looking at. `folderId` and `flatten` stay for the same
      *  reason: where the reader is standing, and whether they are ignoring the filing, are
      *  navigation rather than something they narrowed, so clearing a search must not also
-     *  march them back to the root or drop them out of Flatten. */
+     *  march them back to the root or drop them out of Flatten.
+     *
+     *  **`flatten` now lives in the app store (`wishlistFlattened`) and is persisted, which makes
+     *  that exclusion sharper rather than looser**: this function is a list of `set*` calls over
+     *  local state, and the one thing it must never grow is a reach into the store. A Reset all
+     *  that cleared it would write the reader's saved preference away, and it would still be gone
+     *  the next time they launched the app. */
     resetAll: () => {
       setText("");
       setFormat("");
@@ -406,10 +427,15 @@ export function useWishlist() {
      * no drill-down, and every wish captioned with where it is filed instead. Also
      * navigation, for the reason `folderId` is: it says how much of the tree is on screen,
      * not which wishes qualify.
+     *
+     * The store's `wishlistFlattened`, read straight through: the page and the filter bar are
+     * unchanged, so this pair is still the whole of what a caller sees.
      */
     flatten,
-    /** Off shows the current folder; on shows the whole wishlist. */
-    toggleFlatten: () => setFlatten((current) => !current),
+    /** Off shows the current folder; on shows the whole wishlist. The store's own action —
+     *  **toggle-only on purpose**, because a `set(value)` invites a caller to compute the next
+     *  state from a `flatten` it captured a render ago. */
+    toggleFlatten,
     /**
      * The marketplace every price on this view is quoted from — its label for the as-of
      * sentence and its currency for the formatter. The figures were decided by the query this
