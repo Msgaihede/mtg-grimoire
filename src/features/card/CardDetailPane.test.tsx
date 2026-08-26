@@ -1290,12 +1290,16 @@ describe("grouping the printings list", () => {
 });
 
 /**
- * **What this printing looks like shiny** — a view, and nothing more.
+ * **What this printing looks like shiny.**
  *
  * There is no foil photograph to fetch: Scryfall publishes one image per printing and it is the
  * plain one, so what the toggle turns on is this app's own overlay. It is offered because a
- * reader choosing between forty printings wants to see it, and it says nothing whatever about
- * which finish they own — that question belongs to a collection entry's own `finish`.
+ * reader choosing between forty printings wants to see it.
+ *
+ * It says nothing about which finish the reader owns **unless a surface that knows named one** —
+ * a deck row plays a specific object and a collection tile *is* one, and both seed it through the
+ * store's `paneFinish`, which the seeding tests below drive. Opened from a search wall, from Tags
+ * or from a printings row there is no such fact, and it is the view it has always been.
  */
 describe("the foil view", () => {
   it("offers a printing sold in both finishes as the shiny one, and says which it is showing", async () => {
