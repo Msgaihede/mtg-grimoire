@@ -18,8 +18,14 @@ import type { UserEvent } from "@testing-library/user-event";
 export async function openDropdown(user: UserEvent, name: string | RegExp): Promise<HTMLElement> {
   const trigger = screen.getByRole("button", { name });
   await user.click(trigger);
-  // The listbox is mounted inside an AnimatePresence, so it exists on the same tick the click
-  // flushes — getByRole works synchronously and is more efficient than waiting with findByRole.
+  // The listbox is a plain conditional render ({open && ...}), so it commits synchronously to
+  // the DOM with the click — nothing is deferred or awaited. This means `getByRole` finds it
+  // immediately, which is faster and more importantly **fail-fast**: if the panel never mounts,
+  // the query throws now rather than masking the error behind a 1000ms timeout. Note that
+  // `getByRole` gates only on `hidden`, `aria-hidden` and `display: none` (per `isSubtreeInaccessible`
+  // in `src/test-setup.ts`), not on `opacity` the way `toBeVisible` does — so the query works
+  // even mid-animation. Never reach for `toBeVisible` to assert presence here; it would fail on
+  // an element that is correctly mounted but still transitioning in.
   screen.getByRole("listbox");
   return trigger;
 }
