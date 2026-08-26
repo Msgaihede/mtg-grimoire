@@ -1,4 +1,4 @@
-import { useState, type ComponentProps } from "react";
+import { useId, useState, type ComponentProps } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, within } from "storybook/test";
 import { TOOLTIP_OPEN_MS, TOOLTIP_PANEL_ID } from "@/components/tooltip/TooltipProvider";
@@ -8,6 +8,8 @@ import { cn } from "@/lib/utils";
 import {
   FILTER_FIELD,
   FILTER_FOCUS,
+  FILTER_LABEL,
+  FiltersButton,
   LayoutToggle,
   ManaChip,
   ManaValueChips,
@@ -106,6 +108,50 @@ function ResettableAll({ initial }: { initial: number }) {
 }
 
 /**
+ * One reading of the disclosure, captioned, over the tray it actually opens.
+ *
+ * The stub panel is not decoration: the open button's fill **is** `FilterBar`'s tray fill, and
+ * that only reads as one object when the two are drawn touching. The `count` is the search's and
+ * therefore seeded rather than owned — this wrapper holds the half the button owns, which is
+ * whether the tray is up, so a reader can press each case and watch the fill arrive and go.
+ */
+function Disclosure({
+  caption,
+  count,
+  initialOpen = false,
+}: {
+  caption: string;
+  count: number;
+  initialOpen?: boolean;
+}) {
+  const [open, setOpen] = useState(initialOpen);
+  const trayId = useId();
+  return (
+    <div className="flex w-44 flex-col items-start gap-2">
+      {/* `FILTER_LABEL`, the tray's own caption recipe, rather than four utilities copied
+          out of it — this row of cases is a tray of unlike things too. */}
+      <span className={FILTER_LABEL}>{caption}</span>
+      <FiltersButton
+        open={open}
+        count={count}
+        controls={trayId}
+        onToggle={() => setOpen((was) => !was)}
+      />
+      {/* `FilterBar`'s tray, cut down to the one thing this story is about — its fill. Kept in
+          the tree while shut rather than unmounted, so `aria-controls` above points at something
+          real the way it does on the real row. */}
+      <div
+        id={trayId}
+        hidden={!open}
+        className="w-full rounded-lg border border-border bg-surface px-4 py-3.5 text-sm text-dim"
+      >
+        The tray.
+      </div>
+    </div>
+  );
+}
+
+/**
  * A required callback whose call the story has nothing to say about.
  *
  * Module-level rather than an inline `fn()`, because a render body runs on every render and an
@@ -117,14 +163,18 @@ const noop = fn();
 
 const meta = {
   title: "Primitives/FilterChips",
-  // `FilterChips.tsx` is a family rather than a component: five controls, plus the three class
-  // recipes that keep them one family — and Storybook takes one `component` per file.
-  // `ToggleChip` is the plain member and the one with props worth a Controls panel; the other
-  // four ride as subcomponents, which is what gives each of them a props table on this page.
-  // (The build carries react-docgen metadata for all four — grepped in `storybook-static` —
-  // but no eye has seen the page it feeds; that is Task 17's.)
+  // `FilterChips.tsx` is a family rather than a component: a row's worth of controls, plus the
+  // class recipes that keep them one family — and Storybook takes one `component` per file.
+  // `ToggleChip` is the plain member and the one with props worth a Controls panel; the rest
+  // ride as subcomponents, which is what gives each of them a props table on this page. The
+  // build carries react-docgen metadata for each of them — grepped in `storybook-static` — but
+  // no eye has seen the page it feeds; that is Task 17's.
+  //
+  // No count of them is written here any more: `grep '^export function' FilterChips.tsx`
+  // answers it, and the number that used to sit in this comment had been wrong since the
+  // module last grew.
   component: ToggleChip,
-  subcomponents: { ManaChip, ManaValueChips, LayoutToggle, ResetAll },
+  subcomponents: { ManaChip, ManaValueChips, LayoutToggle, ResetAll, FiltersButton },
   tags: ["autodocs"],
   // Keyed on the seed, like `QuantityStepper.stories.tsx`: Storybook re-renders a story when an
   // arg changes rather than remounting it, and `useState`'s initial value is read once — so
@@ -359,6 +409,62 @@ export const NothingToReset: Story = {
     // `FilterChips.test.tsx`'s to assert — the shared `noop` here is called by other stories.
     reset.focus();
     await expect(reset).toHaveFocus();
+  },
+};
+
+/**
+ * The way into every filter that is not on the bar, in the four readings it has — and the point
+ * of the picture is that the two treatments are **independent**.
+ *
+ * **The border is the count; the fill is the tray.** Off, it is a `text-dim` word over a
+ * transparent border that brightens under the mouse, which is `filterChipState`'s off exactly; a
+ * live count gives it the gold border and gold text every other on control on this row wears; an
+ * open tray fills it with that panel's own `bg-surface`, which is why each case is drawn over the
+ * tray it opens. Both readings are legal at once and both are drawn.
+ *
+ * **It was gold-bordered at rest until 2026-08-26**, on the argument that a disclosure has to say
+ * "there is more in here" before anything has been pressed. What that cost was the row's one
+ * consistent sentence: this was the only control in it drawn in the on-treatment while off, so a
+ * reader sweeping for what was switched on found it every single time and had to read the badge
+ * to learn it was not. The badge is now the only thing that says "there is more in here", and it
+ * says how much.
+ *
+ * **The border's _width_ never goes, only its colour.** `FILTER_SHAPE` puts a 1px box on every
+ * control in this row; dropping the width at zero would shrink the button by 2px the moment the
+ * last filter came off — under the finger that took it off — which is the same rule `ResetAll`
+ * greys in place for.
+ */
+export const Disclosures: Story = {
+  args: { label: "Owned", pressed: false },
+  parameters: { controls: { disable: true } },
+  render: () => (
+    <div className="flex flex-wrap items-start gap-6">
+      <Disclosure caption="Quiet" count={0} />
+      <Disclosure caption="2 on" count={2} />
+      <Disclosure caption="Open" count={0} initialOpen />
+      <Disclosure caption="Open, 2 on" count={2} initialOpen />
+    </div>
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const [quiet, active, open, both] = canvas.getAllByRole("button", { name: /filters/i });
+
+    // `toHaveClass` reads `classList`, so these are real tokens rather than a substring of the
+    // `className` string — which is what makes the negative assertions mean anything.
+    await expect(quiet).toHaveClass("border-transparent", "text-dim");
+    await expect(quiet).not.toHaveClass("border-accent", "bg-surface");
+
+    await expect(active).toHaveClass("border-accent", "text-accent");
+    await expect(active).not.toHaveClass("bg-surface");
+
+    await expect(open).toHaveClass("bg-surface", "border-transparent");
+    await expect(both).toHaveClass("bg-surface", "border-accent");
+
+    // The fill follows the tray and leaves the border alone: pressing the quiet one puts the grey
+    // under it without inventing a count, which is the independence the story is about.
+    await userEvent.click(quiet);
+    await expect(quiet).toHaveClass("bg-surface", "border-transparent");
+    await expect(quiet).toHaveAccessibleName("Hide filters — 0 active");
   },
 };
 
