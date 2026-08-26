@@ -46,7 +46,7 @@ import { finishTreatments, treatmentName } from "@/lib/treatment";
 import type { ImageVariant } from "@/lib/images";
 import type { DeckCard } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
-import { THEORY_MATCH_LABEL } from "./CardMarks";
+import { theoryMatchLabel } from "./CardMarks";
 import {
   cardDraggable,
   deckCardSlot,
@@ -336,10 +336,17 @@ export function keepsSelection(target: EventTarget | null): boolean {
 export function deckCardName(
   card: DeckCard,
   ruleBreakText: string | null,
-  /** Whether the deck's plan also asks for this row — `theoryMatch.ts`'s answer, and `false` for
-   *  every card of a deck that keeps no plan. The mark itself is `TheoryMatchMark`, which is a
-   *  tick and therefore says nothing at all to a reader who cannot see it. */
-  inTheory = false,
+  /**
+   * What the deck's plan says about this row — `theoryMatch.ts`'s `theoryMatchDelta`, and `null`
+   * for every card of a deck that keeps no plan. `0` is the card the plan asks for exactly, and a
+   * signed number is how far the live list is from it.
+   *
+   * The mark itself is `TheoryMatchMark`, which is a tick or two characters of type and therefore
+   * says nothing at all to a reader who cannot see it. **`null` and `0` are not the same
+   * statement** and the clause below turns on the difference: absent draws no mark and says
+   * nothing, `0` says the sentence, and anything else says it with the count on the end.
+   */
+  theoryDelta: number | null = null,
 ): string {
   // The allocator claims no copy for an inactive category, so every card in one reads 0 owned
   // by construction — announcing a shortage there would report one the reader does not have.
@@ -368,7 +375,11 @@ export function deckCardName(
     // Before the rule break, because it is the milder fact and this list runs from what the card
     // *is* to what is wrong with it — and lowercased like every other clause here, since the
     // constant is written as a tooltip (a fragment on its own) and this is a sentence.
-    inTheory ? THEORY_MATCH_LABEL.toLowerCase() : null,
+    //
+    // `theoryMatchLabel` is the same sentence the mark's own tooltip and the table's `sr-only`
+    // twin say, so a reader who cannot see the `-8` still gets "8 fewer than planned" rather than
+    // the bare "in the theory list" this said before issue #212.
+    theoryDelta === null ? null : theoryMatchLabel(theoryDelta).toLowerCase(),
     ruleBreakText === null ? null : `rule break: ${ruleBreakText}`,
   ]
     .filter((part): part is string => part !== null)

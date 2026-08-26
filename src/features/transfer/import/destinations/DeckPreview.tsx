@@ -432,9 +432,13 @@ export function OwnCopies({
 }
 
 /** The variant as a reader names it. Two words, and both of them are in the editor's own
- *  switch — so the sentence about what a `replace` clears uses the label they pressed. */
+ *  switch — so the sentence about what a `replace` clears uses the label they pressed.
+ *
+ *  **Which is why `live` reads `Actual`** (2026-08-26): the value is the one the database, the
+ *  IPC and this function's own argument keep, and the word is the one on the button. This
+ *  function is the join between them, and it exists so that the two may differ. */
 export function variantName(variant: DeckVariant): string {
-  return variant === "live" ? "Live" : "Theory";
+  return variant === "live" ? "Actual" : "Theory";
 }
 
 /**

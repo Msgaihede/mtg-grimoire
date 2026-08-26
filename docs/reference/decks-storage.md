@@ -205,8 +205,9 @@ preferred_finish`'s nullability one table over.
   shows under both views **at its full quantity**, because the count on screen is what a press
   writes. That is the discipline `owned_spare` is held to one field over, stated on the other axis.
 - **`deck_theory_missing_to_wishlist` takes an include list and writes a _pinned_ wish**
-  (2026-08-22). `only` is a list of `group_key` strings — the spelling `deck_theory_slots` already
-  answers in, so nothing new crosses the boundary — and an absent one still means the whole
+  (2026-08-22). `only` is a list of `group_key` strings — the spelling `deck_theory_slots` still
+  answers **in the `key` half of** its rows, so nothing new crosses the boundary — and an absent
+  one still means the whole
   difference. It is an **include** list although the gesture it serves is exclusion ("drop three of
   these and send the rest"): the two differ only for rows that appeared between the read and the
   press, and those are rows the reader never saw. The diff is re-read inside the write, so a key

@@ -628,15 +628,21 @@ export const FILTER_LABEL = "text-[0.6875rem] uppercase tracking-[0.08em] text-d
  * The way into every filter that is not on the bar — a disclosure, with the number of filters
  * that are on riding on it.
  *
- * **Quiet at rest, and its two states are told apart by kind: the border is the *count*, the
- * fill is the *tray*.** It was gold-bordered at rest until 2026-08-26, on the argument that a
- * disclosure has to say "there is more in here" before anything has been pressed — but that made
- * it the one control on the row wearing the on-treatment while off, so a reader sweeping the row
- * for what is switched on found it every single time and had to read the badge to learn it was
- * not. Off it is now a hairline-less `text-dim` word that brightens under the mouse, exactly like
- * {@link filterChipState}'s off; a live count gives it that recipe's gold border and gold text;
- * an open tray fills it with the panel's own grey. Both at once is a legal reading and draws
- * both, which is that function's rule too.
+ * **Its two states are told apart by kind: the border and the word are the *count*, the fill is
+ * the *tray*.** It was gold-bordered at rest until 2026-08-26, on the argument that a disclosure
+ * has to say "there is more in here" before anything has been pressed — but that made it the one
+ * control on the row wearing the on-treatment while off, so a reader sweeping the row for what is
+ * switched on found it every single time and had to read the badge to learn it was not. It is
+ * {@link filterChipState} now, unmodified, over `count > 0`: a hairline and a dim word off,
+ * brightening under the mouse, exactly like every other bordered control here; gold border and
+ * gold word on. An open tray adds the panel's own grey fill and touches neither — so opening the
+ * tray never turns the word gold, and a live count turns it gold whether the tray is up or not.
+ * Both readings at once is legal and draws both, which is that function's rule too.
+ *
+ * **It went borderless at rest for one commit and that was a step too far** (`dc96695`, reverted
+ * here the same day). Dropping the gold was right; dropping the hairline with it left the one
+ * control on the row with no edge, so it read as a label rather than as something to press —
+ * "similar to our other buttons" is the bar, and the other buttons have a border.
  *
  * The badge is what says how much is on, and it is drawn only when there is something to say — a
  * `0` on every quiet row is chrome that teaches the eye to skip the control it is attached to.
@@ -692,15 +698,19 @@ export function FiltersButton({
         FILTER_CONTROL,
         FILTER_FOCUS,
         "inline-flex shrink-0 items-center justify-center gap-2 px-3",
-        // `border-transparent` and not a dropped border: `FILTER_SHAPE` puts a 1px box on every
-        // control in the row, and taking the *width* away would shrink this button by 2px the
-        // moment the last filter came off — under the finger that just took it off. Only the
-        // colour goes.
-        count > 0 ? "border-accent text-accent" : "border-transparent text-dim hover:text-text",
+        // **{@link filterChipState} itself, not a copy of it** — this control is told apart by its
+        // border like every other one in the row, so "a hairline and dim text off, gold border and
+        // gold text on, brightening on hover" is one function's answer rather than a class pair
+        // hand-written here that drifts the first time that one moves. The argument it takes is
+        // the *count*, so the gold says exactly what it says everywhere else on the row: a filter
+        // is on. Nothing about the tray reaches it — see the fill below.
+        filterChipState(count > 0),
         // The panel below is this button's own extension, so an open tray draws the control that
         // opened it in the panel's own fill rather than leaving it looking like one more thing to
         // press. Grey (`bg-surface`, the tray's own) and not the gold tint it was: on this row
-        // gold means "a filter is on", which is the border's sentence above and not this one's.
+        // gold means "a filter is on", which is the border's sentence above and not this one's —
+        // so an open tray never turns the word gold, and a live count turns it gold whether the
+        // tray is up or not.
         open && "bg-surface",
         className,
       )}

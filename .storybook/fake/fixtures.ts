@@ -30,7 +30,7 @@ import { CARDS, type FakeCard } from "./cards";
 import { finishPrice } from "@/lib/finish";
 import { buildGroups, type GroupBy } from "@/features/decks/grouping";
 import type { SortBy } from "@/features/decks/sorting";
-import { theoryMatchSet } from "@/features/decks/theoryMatch";
+import { theoryMatchPlan } from "@/features/decks/theoryMatch";
 import type { ValidationIssue } from "@/features/decks/validation/types";
 import type {
   CategoryKind,
@@ -494,24 +494,31 @@ export function deckViolations(): Map<string, ValidationIssue[]> {
 }
 
 /**
- * The plan behind {@link deckGroups}, as the set of slots `theoryMatch.ts` answers with — so a
- * view story can draw the theory tick beside the two marks it must never be confusable with.
+ * The plan behind {@link deckGroups}, as the lookup `theoryMatch.ts` answers with — so a view
+ * story can draw the theory mark beside the two it must never be confusable with.
  *
  * **Four of the ten cards and deliberately not all of them.** A fixture where every card carried
  * the mark would prove the mark renders and nothing else; the reader's question on this surface
  * is *which* of these cards is the plan, so the fixture has to be able to answer it wrongly. The
- * four are picked to put the tick against each of the other marks in turn:
+ * four are picked to put the mark against each of the other marks in turn:
  *
  * * `lea 288` (Island) is the one {@link deckViolations} reports — a 2-of in a singleton format —
  *   so this is the card carrying **both** marks, in the opposite corners `CardMarks.tsx` moved
  *   the rule break down to get.
- * * `lea 161` (Lightning Bolt) is the **game changer**, so the tick sits under the crown chip on
+ * * `lea 161` (Lightning Bolt) is the **game changer**, so the mark sits under the crown chip on
  *   the Grid tile and at the other end of the gold ribbon on the stacked card.
  * * `mh2 138` (Ragavan) carries a **tag**, so the stack's quantity tag is drawn in a colour and
- *   the tick at the far end of the same strip has to hold its own against it.
+ *   the mark at the far end of the same strip has to hold its own against it.
  * * `gtc 148` (Boros Charm) is a plain 2-of no other mark touches — the control.
  *
- * What is left unticked matters as much: `dom 168` (Llanowar Elves) is the commander, and
+ * **Since issue #212 the quantities are picked to draw all three states at once**, which is the
+ * other thing this fixture has to be able to answer wrongly: `lea 288` is asked for **twice** what
+ * the deck holds and draws `-2`, `gtc 148` is asked for **half** of it and draws `+1`, and the
+ * other two match exactly and draw the tick. Two ticks and two numbers, so a story shows what the
+ * mark's two drawings look like beside each other in one pile — which is the comparison neither a
+ * unit test nor a screenshot of a single card can make.
+ *
+ * What is left unmarked matters as much: `dom 168` (Llanowar Elves) is the commander, and
  * `nph 57` (Dismember) is the card the reader owns none of — so a story can show that "in the
  * plan" and "not yet acquired" are two different statements about one deck.
  *
@@ -519,16 +526,32 @@ export function deckViolations(): Map<string, ValidationIssue[]> {
  * is generated and may be regenerated against a newer sync, and a hardcoded name would go on
  * reading as true while pointing at whatever printing that slot had become.
  */
-export function deckTheoryMatches(): ReadonlySet<string> {
-  return theoryMatchSet(
-    [printing("lea", "288"), printing("lea", "161"), printing("mh2", "138"), printing("gtc", "148")]
-      // The wire format `deck_theory_slots` answers with, spelled the way the backend spells it
-      // rather than through `theorySlot` — a fixture generating the key with the same function
-      // the code looks it up with would pass whatever separator either happened to use.
-      // `deckCard` builds every fixture row with `finish: null`, so these are the regular
-      // copies, which is the case the grain is strictest about.
-      .map((card) => `${card.id}|`),
-  ) as ReadonlySet<string>;
+export function deckTheoryMatches(): ReadonlyMap<string, number> {
+  const slots = [
+    // A plan asking for **twice** what is sleeved up, on the card that also breaks a rule: the
+    // `-2` and the `RULE BREAK` are the two marks in opposite corners, one of them now a number.
+    { card: printing("lea", "288"), quantity: 4 },
+    // Exactly what the plan asks for — the tick, beside the gold crown chip.
+    { card: printing("lea", "161"), quantity: 1 },
+    // The tick again, at the far end of a strip whose other mark is a coloured tag.
+    { card: printing("mh2", "138"), quantity: 1 },
+    // **A surplus**, on the one card in the plan that no other mark touches, so `+1` is read
+    // against a bare card face. A 2-of the plan wants one of is a cut the reader has not made.
+    { card: printing("gtc", "148"), quantity: 1 },
+  ]
+    // The wire format `deck_theory_slots` answers with, spelled the way the backend spells it
+    // rather than through `theorySlot` — a fixture generating the key with the same function
+    // the code looks it up with would pass whatever separator either happened to use.
+    // `deckCard` builds every fixture row with `finish: null`, so these are the regular
+    // copies, which is the case the grain is strictest about.
+    .map((slot) => ({ key: `${slot.card.id}|`, quantity: slot.quantity }));
+  // Through the real function over the real fixture deck, so the three states a story shows are
+  // the three the shipped arithmetic produces rather than three numbers typed here — the same
+  // argument `deckGroups` makes for building its groups with `buildGroups`.
+  return theoryMatchPlan(
+    slots,
+    deckGroups().flatMap((group) => group.cards),
+  ) as ReadonlyMap<string, number>;
 }
 
 /* ------------------------------------------------------------------- the updater ------- */

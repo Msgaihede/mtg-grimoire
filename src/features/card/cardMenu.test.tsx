@@ -643,7 +643,7 @@ describe("buildDeckTargetItems", () => {
     expect(choose).toHaveBeenCalledWith(10, "live");
   });
 
-  it("asks Theory before Live for a deck that keeps both", () => {
+  it("asks Theory before Actual for a deck that keeps both", () => {
     const choose = vi.fn();
     const items = buildDeckTargetItems(
       [],
@@ -655,7 +655,7 @@ describe("buildDeckTargetItems", () => {
     // once theory is switched on, so it is the likelier target of the two. **Not the editor's
     // tab order any more** — that reads `Live | Theory` since 2026-08-24, and this did not follow
     // it: a ranked guess and a strip a reader reads left to right are different questions.
-    expect(labels(row.items)).toEqual(["Theory", "Live"]);
+    expect(labels(row.items)).toEqual(["Theory", "Actual"]);
     (row.items[0] as MenuAction).onSelect();
     expect(choose).toHaveBeenCalledWith(10, "theory");
   });
