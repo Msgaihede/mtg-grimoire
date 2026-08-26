@@ -249,6 +249,31 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   never been measured before — `sorting::printing_price_expr` says so in as many words — and it
   dwarfs what this change added to it.
 
+- **What the wishlist's cheapest-printing join costs — _not measured yet_.** The subquery that
+  picks the printing an **any-printing** wish is drawn as used to order by `released_at DESC,
+  id ASC`, an indexed column; since 2026-08-26 it orders by the wish's own price expression first
+  (`sorting::row_price_expr`, `ASC NULLS LAST`, with the old clause demoted to a tiebreak), so it is
+  correlated on a **price** rather than on an index. See
+  [wishlist-folders.md](wishlist-folders.md) for the rule and why the picture has to move with the
+  price.
+
+  | Measurement | Figure |
+  | --- | --- |
+  | An unpinned wish's printing pick, per page | — pending, see Task 14 |
+
+  **Three things bound it before anything is measured.** `coalesce` short-circuits, so the subquery
+  runs **once per _unpinned_ wish** and never for a pinned one — 0 of 88 wishes in the dev database
+  name no printing. A page is at most `MAX_LIMIT` (500) rows. And the feed marketplaces probe
+  `marketplace_prices` on its own `(marketplace, card_id, finish)` primary key, which is a
+  `WITHOUT ROWID` PK lookup per candidate printing rather than a scan. The one place the page bound
+  does **not** apply is `wishlist_folders::folder_summary`, which carries the same subquery over
+  every wish in every folder.
+
+  The figure has to come off the shipped window and is Task 14 of
+  [the plan](../superpowers/plans/2026-08-26-card-chin-and-exact-prices.md). It is left blank on
+  purpose: a prose-only edit routes to neither CI job, so a number written before it was measured
+  would sit here unchallenged.
+
 - **The group key is `coalesce(c.oracle_id, c.id)`, and the status subqueries must _not_ be.**
   `oracle_id` is nullable, so a bare `GROUP BY c.oracle_id` merges every null-oracle printing
   into one card — silently, with a printing count and price range spanning unrelated cards.

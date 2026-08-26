@@ -701,9 +701,12 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   each budget and its contents are one proportion and `atLeast` has one consumer left —
   `GridView`'s **gutter**, which measures the space _between_ two cards rather than anything drawn
   on one, contains nothing, and would otherwise halve into a wall that reads as a single sheet of
-  card backs. `CardGrid`'s caption is also **derived** rather than written down now
-  (`ceil(24 × CONTROL_SHRINK) + 4` = 25), because the button it is a budget for is no longer 24px
-  and the two drifting apart is exactly the row overlap the constant exists to prevent.
+  card backs. `CardGrid`'s caption was also **derived** rather than written down
+  (`ceil(24 × CONTROL_SHRINK) + 4` = 25), because the button it was a budget for was no longer 24px
+  and the two drifting apart is exactly the row overlap the constant existed to prevent.
+  **That constant is gone as of 2026-08-26** — the caption became `components/CardChin` and the
+  budget became `chinHeight(zoom) - CHIN_RISE`, with the quick-add moved off the foot and over the
+  art where it costs the wall no height at all. See the chin's own section at the end of this page.
   The stack's padding and border are the mirror rule — **added, never multiplied**, since chrome is
   not part of a card, and `stackColumnWidth` derives the column _from_ the card for that reason
   (210 + 12 + 2 = 224 at 1×, which is the `14rem` it replaced, exactly). **That border term is the
@@ -1741,6 +1744,18 @@ out of the image cache, the components' own class strings pasted onto the markup
 `msedge --headless=new --screenshot`. Before and after in one frame, and candidates side by side —
 which is the whole reason it can settle a question a test cannot. **The shipped-window pass was
 owed and was run on 2026-08-21** — see the alignment section below, which is what it found.
+
+**The recipe has one trap, and it is silent: over `file://` it measures the wrong font**
+(found 2026-08-26, while sizing the price walls' as-of sentence). `dist`'s CSS references its faces
+with **absolute** `/assets/…` URLs, so from a `file://` page they resolve to the drive root, never
+load, and every width taken is a width of the generic `sans-serif`. **Serve `dist` over http
+instead.** The tell is to measure one string twice, once in the app's own stack and once forced to
+`sans-serif`: identical widths mean the real face never loaded. On the pass that found it that was
+**265.2px for both** over `file://`, against **272.78 vs 265.2** served, with `document.fonts.check`
+going `false` → `true`. It costs a comparison of glyph shapes or colours nothing; it costs any
+*width* the answer. The 2026-08-24 container sweep further up this page was taken the same way and
+has not been re-run: its four bands are **container** widths, which no font can move, but any
+figure in it that came from a run of text is exposed and should be re-read before being relied on.
 
 - **The fill is `--color-pie-u`, not `bg-accent`.** Gold was the obvious first choice — a chip on
   a card usually is — and in the frame it read as an *extension of the Game Changer banner*: two
@@ -3006,3 +3021,87 @@ trigger and the box. Tracing it resolves in favour: the `fixed` frame's containi
 dialog panel, the scroller is not in that chain, and `Dialog.tsx` records that the panel
 deliberately does not clip its content. But that is **two subtle facts holding it up, neither
 measured**. The first in-dialog migration should take the reading rather than inherit this one.
+
+## The card's chin, and the one foot under every card in the app
+
+`src/components/CardChin.tsx`, 2026-08-26. Three surfaces drew a foot under a card and each held
+its own numbers, which is how a shared look stops being shared:
+
+| Surface | Foot at 1× | Type at 1× | The bar |
+| --- | --- | --- | --- |
+| `CardStack` — the deck's stacks | **28px** | **10px** | `bg-surface`, `border-x`, the face's own 7px bottom corners, riding 4px up into it |
+| `CardGrid` — every wall of tiles | **25px** | **12px** | none — a bare caption, with a 4px gap between it and the art |
+| `GridView` — the deck's grid | **20px** | **9px** | none |
+
+Only the first read as *part of* the card; the other two read as a label under a picture. There is
+one component now, and `chinHeight(zoom)` in `src/lib/cardZoom.ts` is the height every surface
+budgets from. `CardStack` keeps `STACK_DATA_HEIGHT`, `STACK_DATA_RISE` and `stackDataHeight` as its
+names for `CHIN_HEIGHT`, `CHIN_RISE` and `chinHeight`, so its geometry sums — and every assertion
+written against them — keep the names they were written under.
+
+**The type belongs to the component and no caller passes one.** It is the stack's
+`text-[calc(0.625rem*var(--mark-scale,1))]`, written once inside `CardChin`, which is why
+`GridView` no longer has a `CAPTION_TEXT` constant and `CardGrid` no longer has `CAPTION_HEIGHT` or
+`CAPTION_GAP`. There is deliberately **no `chinText` function** to go beside `chinHeight`: a height
+is a number the *host* has to budget for, and a type size is not.
+
+**What each host actually pays, because the spec's arithmetic was out.** The bar is 28px at 1× on
+every surface; what a host *adds to its tile* is `chinHeight(zoom) - CHIN_RISE`, **24px at 1×**,
+since the bar rides up into the face. So a `CardGrid` tile's foot went 25 → **24, one pixel
+_less_** — not the "+3px at 1×" the design doc claimed off `28 − 25`, because the old 25 was
+`ceil(24 × CONTROL_SHRINK) + CAPTION_GAP` with a 4px gap already inside it and the chin has no gap
+at all. The deck's grid used to add a 20px bar and now adds 24 of a 28px one; it **budgets
+nothing**, being a plain scroller rather than a virtualiser, and its `footHeight` local only
+positions the controls strip that sits on the chin's top edge. The stacks did not move at all: 28
+is where the number came from, and `stackCardHeight` has always subtracted the rise.
+
+**`CHIN_RISE` is 4px at every zoom, and that is a derivation rather than an oversight.** The chin
+rides up so the face's clipped corners cover its square ones; butted flush, two hairlines of
+background show through the gap. The radius it hides under is a Tailwind class and does not scale,
+so neither does the overlap. Everything *inside* the bar does — the gem, the gutters, the glyph and
+the words are all `calc(… * var(--mark-scale, 1))`, so the bar and its contents are one proportion.
+That is also why the floor those two feet used to take went with them: a floored bar is 28px of
+empty felt under a 105px card once the type inside it has learnt to shrink.
+
+**`seam` is required, has no default, and that is the point.** It says whose outline the chin
+joins, and the two hosts own their outline differently: `"card"` sits under a bordered card and
+takes `border-x` only, ridden `-mx-px` onto the card's own border so the two are one line;
+`"art"` sits under a bare `CardArt` frame, which has no border at all, and supplies all three edges
+itself. **A `border-b` on the `"card"` seam is the defect the prop exists to prevent** — the card's
+border already *is* the bottom edge, so a second one sits 1px above it and draws a card with a 2px
+foot and a 1px everything-else. A defaulted prop would have served whichever host is in the
+minority, and a call site that simply forgot it would compile, pass, and ship that foot: jsdom
+cannot see it and a screenshot barely can. `CardChin.test.tsx` pins both seams and `views.test.tsx`
+pins the deck grid's own bottom edge, all through **`classList.contains("border-b")`** and never
+`className.toContain` — because the string `"border-border"` *contains* the substring `border-b`,
+so the obvious spelling passes on both seams and asserts nothing. That is this repo's recurring
+vacuous-assertion shape, and it is what makes the difference between a pinned prop and a pinned
+nothing.
+
+**`tone` is the other half of the same join.** The bar is `relative` and later in the document than
+the face, so its border paints *over* the card's along its whole height. A rule-breaking deck card
+is outlined in destructive, and a chin that kept the default border would put the wrong colour back
+through the card's left and right edges — the one thing that outline exists to say.
+
+**The printing line is a union, not four loose optionals.** A caller either supplies `setCode` and
+`collectorNumber` — the default `SET · number` — or supplies a `printing` node of its own *and* the
+`printingTitle` that goes with it. Independent optionals would let a chin with neither compile and
+then draw a bare `" · "` on a wall of forty cards; and making `printingTitle` required on the
+caller's arm stops the wishlist's "Any printing" from inheriting a hover that names the very
+cardboard the line refuses to name.
+
+**The chin is a sibling of the card's button, never a child of it.** Everything in it is a *fact*
+about the printing rather than a mark on the picture, so unlike the overlays on the art it is
+announced instead of being swallowed into the button's accessible name. The price and the printing
+had no reader at all while they were inside it.
+
+**Two dated readings earlier on this page are superseded rather than wrong.** The 2026-08-17
+mark-scale pass records a search-wall `caption type 6 / 12 / 24px` and a deck-grid `foot 10 / 40`;
+both are readings of feet that no longer exist, taken correctly at the time. The same pass's
+`data line 14 / 28 / 56 at 5 / 10 / 20px` on the deck stack is the chin, and still stands — it is
+the one of the three that did not move.
+
+**The geometry has not been driven in the shipped window yet.** The seam at 0.5×, 1× and 2× on all
+three hosts is exactly the half no suite can see, and it is Task 14 of
+[the plan](../superpowers/plans/2026-08-26-card-chin-and-exact-prices.md). The class assertions
+above pin a string rather than a pixel and do not retire it.
