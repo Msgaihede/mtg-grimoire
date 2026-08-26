@@ -14,7 +14,7 @@ import { FINISH_LABEL, type Finish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
 import { ipcError, type CollectionRow, type DeckCategory } from "@/lib/ipc";
 import { statusLine } from "@/lib/motion";
-import { formatPrice } from "@/lib/prices";
+import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
 import { tileKeyOf } from "@/lib/tileKey";
 import { cn } from "@/lib/utils";
@@ -479,6 +479,35 @@ export function CollectionSearchTab({
           }}
         />
       )}
+
+      {/**
+       * **Spec §5: a price is never shown without saying how old it is** — said once under the
+       * wall, in the same words, the same element and the same voice as the tab one press away.
+       *
+       * **The two tabs of this column had to agree, and for two days they did not.** The chins
+       * here started quoting money on 2026-08-26 and this line did not come with them, so a
+       * reader toggling `Search → Collection` in a 384px column watched the dates disappear while
+       * the prices stayed — one control answering the same question two ways, which is the exact
+       * failure the shared `FilterBar` and the shared `CardGrid` exist to remove.
+       *
+       * `DeckSearchPanel`'s note is the record for the rest, and its measurements are this
+       * column's: **two wrapped lines, 33.59px**, at the 193px content box `MIN_PANEL_WIDTH_PX`
+       * leaves, and **one line, 16.8px**, at the panel's 384px opening width. Drawn
+       * unconditionally within `!empty` either way — **the rule has no narrow-surface exemption,
+       * and a price with no date is worse than a wall one line shorter.** `shrink-0` so the wall
+       * gives up the height rather than this being squeezed to nothing.
+       *
+       * **Unconditional on the layout**, where the collection page's and the wishlist's are gated
+       * to their grid: each of those has a table that states the same thing in a column header of
+       * its own — the collection's `Value`, the wishlist's `Cost` — so drawing it under both would
+       * say it twice in one view. This tab has no table at all (`layoutToggle={false}` above, for
+       * `OpenPanel`'s reason), so the wall is the only thing that can be on screen here.
+       *
+       * Above the failure below rather than below it, so the sentence stays against the wall it
+       * dates: that alert is drawn *under* rows query-core has kept, and a caption that moved a
+       * line whenever a refresh failed would be answering about something else.
+       */}
+      {!empty && <p className="shrink-0 text-[0.7rem] text-dim">{pricesAsOf(marketplace)}</p>}
 
       {/* **The failure that arrives with rows still on screen.** query-core keeps the pages it has
           when a fetch fails, so this is drawn under the wall rather than instead of it — the same

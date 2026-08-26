@@ -989,9 +989,17 @@ where a reader gets those apart.
 folds rows in `CollectionPage`'s `tiles` memo; the deck editor's docked Collection tab folds the
 same rows in `collectionTiles.ts`'s `foldCopies`. They were written apart and keyed the same way, so
 splitting one alone would have made two drawings of one collection disagree about what a tile *is*.
-Both key on `` `${cardId}:${finish}` `` now, and each file has its own `tileKeyOf` so that its
-wall's tile key and its wall's ring composite come from one function rather than from two spellings
-of one string with nothing enforcing the agreement.
+Both key on `` `${cardId}:${finish}` `` now, through **one** `tileKeyOf`, in `src/lib/tileKey.ts`.
+Each fold stamps a tile with it and each wall builds the ring composite back out of the pane's card
+and finish with it, so the two ends of that ring cannot be two spellings of one string — both are
+plain `string` and nothing in the type system relates them, which is why a missed spelling would be
+a wall where pressing a tile rings nothing at all, silently and with nothing red. The `?? "nonfoil"`
+that makes the two ends meet is spelled there once, for both walls.
+
+**It was written out twice before that module existed, byte for byte, each copy carrying a doc
+block arguing that the duplication is what must not happen.** `src/lib/` is where the survivor went
+rather than either feature: an import between `features/collection` and `features/decks` would be a
+dependency in the wrong direction for one of the pair whichever way it pointed.
 
 **The key uses the raw `row.finish`, never the narrowed one.** `collection_entries.finish` is TEXT
 with a CHECK rather than an enum the frontend knows, so a row spelling a word this build cannot name
@@ -1377,8 +1385,9 @@ React never sees** — go through
 | `src/lib/folderTree.ts` | `buildFolderTree` and friends, shared with the deck gallery and the wishlist, **unchanged** |
 | `src/features/collection/collectionDrag.ts` | Both payloads under their own keys, the row and the tile that offer them, the targets that take either |
 | `src/features/collection/PickCopies.tsx` | The question a drop asks when the art stands for more than one row |
-| `src/features/collection/CollectionPage.tsx` | `tileKeyOf`, the `tiles` memo, `copiesByTile`, `entryIdsOf` — the wall's own printing-and-finish grain |
-| `src/features/decks/collectionTiles.ts` | `foldCopies` and its own `tileKeyOf` — the *other* fold of the same rows, split the same way |
+| `src/lib/tileKey.ts` | `tileKeyOf` — **the one place** `` `${cardId}:${finish}` `` is spelled, and the `?? "nonfoil"` the ring composite meets a tile's key on. Both folds and both walls call it |
+| `src/features/collection/CollectionPage.tsx` | The `tiles` memo, `copiesByTile`, `entryIdsOf` — the wall's own printing-and-finish grain, keyed through `tileKeyOf` |
+| `src/features/decks/collectionTiles.ts` | `foldCopies` — the *other* fold of the same rows, split the same way and keyed through the same `tileKeyOf` |
 | `src/features/search/CardGrid.tsx` | `GridCard.key` and `tileKey` — a tile's identity where it differs from its card's |
 | `src/features/collection/CollectionFolderCard.tsx` | The tile, `folderFace`, and its stories beside it |
 | `src/features/collection/PinnedFolders.tsx` | The app's own folders — pinned, flat and locked — `DECK_KIND`, `REMOVED_KIND`, and neither one a drop target |

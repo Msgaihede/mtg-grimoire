@@ -457,10 +457,18 @@ pub fn add_wish(conn: &Connection, input: &WishInput) -> Result<EntryChange, Str
     })
 }
 
-/// The oracle card's name, read from whichever printing the list would join to.
+/// The oracle card's name, read from **any** printing of it.
 ///
-/// Same ordering as [`list_wishes`]' `LEFT JOIN` on purpose: the name stored on the row and
-/// the printing the list reads a rarity and a price from are then the same card.
+/// `cards.name` is a fact about the *card* rather than about the printing — every printing of one
+/// oracle card carries the same string — so which row this lands on cannot change the answer. The
+/// `ORDER BY` is here to make the pick deterministic and for nothing else.
+///
+/// **It does not chase [`list_wishes`]' `LEFT JOIN`, and stopped claiming to on 2026-08-26.** That
+/// join picks the **cheapest** printing at the query's marketplace, because what it chooses is the
+/// card a wish is *drawn as*: its art, its set code, its rarity and its price all come off that
+/// row, and a wish whose picture disagreed with its figure would be one card said two ways. A name
+/// needs none of that, and matching it would mean threading a marketplace into a write to reach a
+/// string that is identical either way.
 fn oracle_name(conn: &Connection, oracle_id: Option<&str>) -> Result<String, String> {
     let Some(oracle_id) = oracle_id else {
         return Err("a wish needs a card name".into());
