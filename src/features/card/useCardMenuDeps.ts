@@ -26,7 +26,13 @@ import type { Finish } from "@/lib/finish";
 import { ipc, ipcError } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
-import { DeckTargetSubmenu, type CardMenuDeps, type CardMenuTarget } from "./cardMenu";
+import { DEFAULT_VARIANT } from "@/features/decks/useDeck";
+import {
+  DeckTargetSubmenu,
+  useOptionalAddCardToDeck,
+  type CardMenuDeps,
+  type CardMenuTarget,
+} from "./cardMenu";
 
 /**
  * The condition a menu add records.
@@ -104,6 +110,24 @@ export function useCardMenuDeps(): CardMenuWiring {
    * second `useQuery` on one key costs is not a fetch, it is a second place for the key to drift.
    */
   const { folders: collectionFolders } = useCollectionFolderList();
+
+  /**
+   * The deck add, for the `Decks` rows inside "Add to → Collection" — or `null` where nothing has
+   * mounted it, in which case those rows are simply not offered.
+   *
+   * **The app's own drawers are part of the collection's cabinet, and a deck group is the one
+   * that is not a folder write.** `collection_folders::set_entry_folder` refuses a `deck`
+   * destination in words, because filing into one by hand would claim the deck holds these copies
+   * without writing the `deck_cards` row that makes it true. The deck's own add does both halves
+   * in one transaction, so the row routes there — which makes it exactly the write
+   * "Add to → Deck" makes, reached from the cabinet the reader was already looking at.
+   *
+   * **{@link useOptionalAddCardToDeck} and not `useAddCardToDeck`**, whose throw would fire on
+   * every surface that mounts this hook — and their suites render those pages under
+   * `ContextMenuProvider` and `TooltipProvider` alone. The optional reader carries the whole
+   * argument for why that is not a hole.
+   */
+  const addToDeck = useOptionalAddCardToDeck();
 
   /** The sentence a refused collection or wishlist add left behind. */
   const [refusal, setRefusal] = useState<string | null>(null);
@@ -226,6 +250,20 @@ export function useCardMenuDeps(): CardMenuWiring {
     (entryId: number, folderId: number | null) => moveCopy({ entryId, folderId }),
     [moveCopy],
   );
+  /**
+   * **`DEFAULT_VARIANT`, and the row does not ask.** "Add to → Deck" offers Theory then Live for a
+   * deck that keeps a plan, because that row is deck-building and the plan is the likelier
+   * target. This row is *filing*: the reader is pointing at a drawer in their collection and
+   * saying the copies live there, and a theory list is a plan rather than a place cardboard sits.
+   * A reader who means the plan has the deck picker one row up, which still asks.
+   */
+  const toDeck = useMemo(
+    () =>
+      addToDeck === null
+        ? undefined
+        : (target: CardMenuTarget, deckId: number) => addToDeck(target, deckId, DEFAULT_VARIANT),
+    [addToDeck],
+  );
 
   const deps = useMemo<CardMenuDeps>(
     () => ({
@@ -242,6 +280,9 @@ export function useCardMenuDeps(): CardMenuWiring {
       // them out of its destination lists. Handing over the whole list is what keeps that one
       // decision in one place.
       collectionFolders,
+      // The deck add behind the cabinet's `Decks` rows — `undefined` where nothing mounted the
+      // provider, which leaves those rows out rather than drawing ones that cannot write.
+      toDeck,
       // The write behind "Move to". Given on every surface, and the *item* is what is fenced —
       // a target with no `entryId` cannot name a row, so the row is never built.
       moveToFolder,
@@ -267,6 +308,7 @@ export function useCardMenuDeps(): CardMenuWiring {
       moveToFolder,
       wishlistFolders,
       collectionFolders,
+      toDeck,
       openAllPrintings,
     ],
   );

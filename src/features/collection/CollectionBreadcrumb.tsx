@@ -49,7 +49,7 @@ import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { FOCUS } from "@/lib/focus";
 import type { CollectionFolder } from "@/lib/ipc";
 import { cn } from "@/lib/utils";
-import { useCollectionDropTarget, type CollectionDrag } from "./collectionDrag";
+import { useCollectionDropTarget, type CollectionDrop } from "./collectionDrag";
 
 /** The top of the cabinet. Not a folder, and deliberately not spelled twice: it is the one
  *  destination whose id is `null`, which is a real place rather than an absent one. */
@@ -69,9 +69,10 @@ export function CollectionBreadcrumb({
   flattened: boolean;
   onOpen: (folderId: number | null) => void;
   /** Asked per segment rather than once for the bar — a copy already filed at the root refuses
-   *  the root and still accepts an ancestor, so only the page can answer, and only per place. */
-  canDrop: (drag: CollectionDrag, folderId: number | null) => boolean;
-  onDropCard: (drag: CollectionDrag, folderId: number | null) => void;
+   *  the root and still accepts an ancestor, so only the page can answer, and only per place.
+   *  Either shape of collection drop: a row's single entry, or a wall tile's whole shelf. */
+  canDrop: (drop: CollectionDrop, folderId: number | null) => boolean;
+  onDropCard: (drop: CollectionDrop, folderId: number | null) => void;
 }) {
   // Not a trail, because there is no level to be on: every folder is on screen at once, so each
   // segment would be a door to a place the reader is already standing. Drawn as words rather than
@@ -143,14 +144,14 @@ function Segment({
   folderId: number | null;
   name: string;
   onOpen: (folderId: number | null) => void;
-  canDrop: (drag: CollectionDrag, folderId: number | null) => boolean;
-  onDropCard: (drag: CollectionDrag, folderId: number | null) => void;
+  canDrop: (drop: CollectionDrop, folderId: number | null) => boolean;
+  onDropCard: (drop: CollectionDrop, folderId: number | null) => void;
 }) {
   const ref = useRef<HTMLButtonElement>(null);
   const { armed, over } = useCollectionDropTarget({
     ref,
-    canDrop: (drag) => canDrop(drag, folderId),
-    onDrop: (drag) => onDropCard(drag, folderId),
+    canDrop: (drop) => canDrop(drop, folderId),
+    onDrop: (drop) => onDropCard(drop, folderId),
   });
 
   return (

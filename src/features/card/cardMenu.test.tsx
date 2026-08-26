@@ -102,6 +102,20 @@ const binder = (
   kind = "user",
 ): CollectionFolder => ({ id, parentId, name, kind, deckId: null, sortOrder });
 
+/**
+ * One deck's group — the app's own folder, carrying the deck it stands for.
+ *
+ * `binder` cannot build one: it writes `deckId: null`, which is right for every other kind and is
+ * the half of the schema's `CHECK` that makes a `deck` folder without a deck impossible. A helper
+ * that took a fifth optional argument would let a test write that impossible row by accident.
+ */
+const deckGroup = (
+  id: number,
+  name: string,
+  deckId: number,
+  sortOrder = 0,
+): CollectionFolder => ({ id, parentId: null, name, kind: "deck", deckId, sortOrder });
+
 /** Everything the menu needs that is not the card, with every write a spy. A surface's real
  *  deps are its own; this is the shape, so a test can name the one it is about. */
 function deps(over: Partial<CardMenuDeps> = {}): CardMenuDeps {
@@ -368,6 +382,40 @@ describe("buildCardMenu", () => {
    * The two questions compose rather than flattening: which piece of cardboard, then which
    * drawer. A flat list would be `finishes × folders` rows and would grow with every folder.
    */
+  /**
+   * **Through `buildCardMenu`, not through `buildCollectionTargetItems` — which is the whole
+   * point of this test.** Every other case for the app's own folders calls that builder directly
+   * and hands it a list carrying a deck group, so every one of them passed while the shipped
+   * window drew no `Decks` submenu at all.
+   *
+   * What the direct calls could not see is what `collectionItem` *passes*: it holds a
+   * `userFolders(...)` list for its own "is there a cabinet at all" guard, and it handed that
+   * same filtered list to the builder — so the app section looked for `kind = 'deck'` rows in a
+   * list they had already been stripped from. Found by driving the real app against a database
+   * with three deck groups in the pinned band, one panel away from an empty picker.
+   */
+  it("offers the deck groups through the whole menu, not only through the builder", () => {
+    const toDeck = vi.fn();
+    const addTo = find(
+      buildCardMenu(
+        BOLT,
+        deps({
+          toDeck,
+          collectionFolders: [binder(1, "Binder"), deckGroup(20, "Mono-Red Aggro", 7)],
+        }),
+      ),
+      "Add to",
+    ) as MenuSubmenu;
+    const collection = find(addTo.items, "Collection") as MenuSubmenu;
+
+    const decks = find(collection.items, "Decks") as MenuSubmenu;
+    expect(labels(decks.items)).toEqual(["Mono-Red Aggro"]);
+
+    (find(decks.items, "Mono-Red Aggro") as MenuAction).onSelect();
+    // The **deck** id, never the group's folder id — the row writes through the deck's own add.
+    expect(toDeck).toHaveBeenCalledWith(BOLT, 7);
+  });
+
   it("asks for the finish first and the folder second when the printing has two", () => {
     const addToCollection = vi.fn();
     const target = { ...BOLT, finishes: '["nonfoil","foil"]' };
@@ -432,6 +480,72 @@ describe("buildCardMenu", () => {
     // already is — the whole row would be a press that does nothing.
     const items = buildCardMenu({ ...BOLT, entryId: 42 }, deps({ moveToFolder: vi.fn() }));
     expect(labels(items)).not.toContain("Move to");
+  });
+
+  /**
+   * A **tile** is the collection wall's summary of one printing — every entry of it, across
+   * finishes, conditions and drawers, drawn as one piece of cardboard. It names `entryIds` where
+   * a table row names `entryId`, and the difference is not cosmetic: several rows is a *question*
+   * about which copies the reader meant, and only the surface can ask it.
+   */
+  describe("Move to for a target that stands for several rows", () => {
+    it("asks which copies rather than filing all of them", () => {
+      const moveToFolder = vi.fn();
+      const pickCopies = vi.fn();
+      const items = buildCardMenu(
+        { ...BOLT, entryIds: [4, 9] },
+        deps({ moveToFolder, pickCopies, collectionFolders: [binder(1, "Binder")] }),
+      );
+      const move = find(items, "Move 2 cards to") as MenuSubmenu;
+
+      (find(move.items, "Binder") as MenuAction).onSelect();
+      expect(pickCopies).toHaveBeenCalledWith([4, 9], 1);
+      // The whole point: nothing is filed until the reader has said which copies.
+      expect(moveToFolder).not.toHaveBeenCalled();
+    });
+
+    it("files a tile that stands for exactly one row without asking", () => {
+      // One id is the copy the reader pointed at, so there is no question — and this is the path
+      // the collection's table has always taken.
+      const moveToFolder = vi.fn();
+      const pickCopies = vi.fn();
+      const items = buildCardMenu(
+        { ...BOLT, entryIds: [4] },
+        deps({ moveToFolder, pickCopies, collectionFolders: [binder(1, "Binder")] }),
+      );
+      const move = find(items, "Move to") as MenuSubmenu;
+
+      (find(move.items, "Binder") as MenuAction).onSelect();
+      expect(moveToFolder).toHaveBeenCalledWith(4, 1);
+      expect(pickCopies).not.toHaveBeenCalled();
+    });
+
+    it("loops the write where the surface wired no dialog", () => {
+      // Today's behaviour for a multi-picked set, kept: falling through to nothing would take a
+      // working row off a surface that never had a question to ask.
+      const moveToFolder = vi.fn();
+      const items = buildCardMenu(
+        { ...BOLT, entryIds: [4, 9] },
+        deps({ moveToFolder, collectionFolders: [binder(1, "Binder")] }),
+      );
+      const move = find(items, "Move 2 cards to") as MenuSubmenu;
+
+      (find(move.items, "Binder") as MenuAction).onSelect();
+      expect(moveToFolder.mock.calls).toEqual([
+        [4, 1],
+        [9, 1],
+      ]);
+    });
+
+    it("leaves Move to out for a tile that names no rows at all", () => {
+      // An empty list is a printing the page summed nothing into, which is not a thing the wall
+      // draws — but it must read as "no row to move" rather than as one.
+      const items = buildCardMenu(
+        { ...BOLT, entryIds: [] },
+        deps({ moveToFolder: vi.fn(), collectionFolders: [binder(1, "Binder")] }),
+      );
+      expect(labels(items)).not.toContain("Move to");
+    });
   });
 });
 
@@ -681,6 +795,112 @@ describe("buildCollectionTargetItems", () => {
       vi.fn(),
     );
     expect(labels(items)).toEqual(["Collection", "Sideboard"]);
+  });
+
+  /**
+   * The app's own folders, which are the ledger rather than the cabinet — *this deck holds these
+   * copies*, *these copies have left the collection*. They are offered only to a surface that has
+   * wired the sanctioned write, and never as a folder id.
+   */
+  describe("the app's own folders", () => {
+    it("draws none of them where the surface offers no deck row", () => {
+      // The third argument absent is every caller that existed before this row did, and the
+      // picker they get is the one they have always had.
+      const items = buildCollectionTargetItems(
+        [binder(1, "Binder"), deckGroup(2, "Mono red", 4)],
+        vi.fn(),
+      );
+      expect(labels(items)).toEqual(["Collection", "Binder"]);
+    });
+
+    it("draws them after the reader's own folders, behind a rule", () => {
+      const items = buildCollectionTargetItems(
+        [binder(1, "Binder"), deckGroup(2, "Mono red", 4)],
+        vi.fn(),
+        { toDeck: vi.fn() },
+      );
+      expect(items.map((i) => ("label" in i ? i.label : i.kind))).toEqual([
+        "Collection",
+        "separator",
+        "Binder",
+        "separator",
+        "Decks",
+        "Recently removed",
+      ]);
+    });
+
+    /**
+     * **A deck row hands over the deck, never the folder.** `set_entry_folder` calls
+     * `user_folder` on its destination and answers `FOLDER_NOT_YOURS` for a group; a copy reaches
+     * one only through `collection_to_deck`, which writes the `deck_cards` row in the same
+     * transaction. Calling `choose` here would file copies into a deck that does not list them.
+     */
+    it("hands the deck id to toDeck and leaves the folder chooser alone", () => {
+      const choose = vi.fn();
+      const toDeck = vi.fn();
+      const items = buildCollectionTargetItems(
+        [binder(1, "Binder"), deckGroup(2, "Mono red", 4)],
+        choose,
+        { toDeck },
+      );
+      const decks = find(items, "Decks") as MenuSubmenu;
+      expect(labels(decks.items)).toEqual(["Mono red"]);
+
+      (find(decks.items, "Mono red") as MenuAction).onSelect();
+      expect(toDeck).toHaveBeenCalledWith(4);
+      // The folder id 2 is the group's, and nothing may ever pass it to a folder write.
+      expect(choose).not.toHaveBeenCalled();
+    });
+
+    it("omits the Decks submenu where there is no deck group", () => {
+      // `deckLevel`'s rule rather than the folder tree's: a row that opens onto nothing is a
+      // promise with no destination behind it. `Recently removed` stays, because it is a place
+      // cards go whether or not the reader keeps a deck.
+      const items = buildCollectionTargetItems([binder(1, "Binder")], vi.fn(), {
+        toDeck: vi.fn(),
+      });
+      expect(labels(items)).not.toContain("Decks");
+      expect(labels(items)).toContain("Recently removed");
+    });
+
+    /**
+     * Schema v25 writes `sort_order = 0` on every group it creates, so the backend's
+     * `ORDER BY sort_order, id` is deck-**id** order — the order the decks happened to be made
+     * in. `PinnedFolders` sorts these by name for that reason and this picker follows it, while
+     * the reader's own tree keeps the backend's order because there `sort_order` is theirs.
+     */
+    it("orders deck groups by name rather than by the order the decks were made", () => {
+      // Both at `sort_order` 0, which is what v25 writes, so nothing but the name can order them.
+      const items = buildCollectionTargetItems(
+        [deckGroup(2, "Zoo", 9), deckGroup(3, "Affinity", 1)],
+        vi.fn(),
+        { toDeck: vi.fn() },
+      );
+      expect(labels((find(items, "Decks") as MenuSubmenu).items)).toEqual(["Affinity", "Zoo"]);
+    });
+
+    /**
+     * **`Recently removed` is greyed, and it can never stop being.** v25 dropped
+     * `deck_allocations`, so a collection entry carries no link to a `deck_cards` row, and a deck
+     * may hold one printing in two categories since v18 — there is no unambiguous row a cut could
+     * address. The reason on the row is the sanctioned route, which is the only thing drawing a
+     * dead row buys.
+     */
+    it("greys Recently removed and says on the row how to reach it", () => {
+      const choose = vi.fn();
+      const toDeck = vi.fn();
+      const items = buildCollectionTargetItems([binder(1, "Binder")], choose, { toDeck });
+      const removed = find(items, "Recently removed") as MenuAction;
+
+      expect(removed.disabled).toBe(true);
+      // The route, not an apology: the reason has to name the deck editor's cut.
+      expect(removed.reason).toMatch(/cut/i);
+      expect(removed.reason).toMatch(/deck/i);
+
+      removed.onSelect();
+      expect(choose).not.toHaveBeenCalled();
+      expect(toDeck).not.toHaveBeenCalled();
+    });
   });
 });
 
@@ -1190,5 +1410,30 @@ describe("buildCardMenu with a picked set", () => {
     (find(rowsOf(move), "Binder") as MenuAction).onSelect();
 
     expect(moveToFolder.mock.calls.map((call) => call[0] as number)).toEqual([3, 7]);
+  });
+
+  /**
+   * **A picked set can name one row twice**, because a page that draws a wall and a table draws
+   * both kinds of target: the tile summing entries 3 and 7, and the table row that *is* entry 3.
+   * Filing 3 twice would send the second write at a row the first has already merged away.
+   */
+  it("counts a row named by two picked targets once", () => {
+    const pickCopies = vi.fn();
+    const items = buildCardMenu(
+      { ...BOLT, entryIds: [3, 7] },
+      deps({
+        picked: [
+          { ...BOLT, entryIds: [3, 7] },
+          { ...HELIX, entryId: 3 },
+        ],
+        moveToFolder: vi.fn(),
+        pickCopies,
+        collectionFolders: [binder(1, "Binder")],
+      }),
+    );
+    const move = find(items, "Move 2 cards to");
+    (find(rowsOf(move), "Binder") as MenuAction).onSelect();
+
+    expect(pickCopies).toHaveBeenCalledWith([3, 7], 1);
   });
 });

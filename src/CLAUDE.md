@@ -35,6 +35,13 @@ Every one of these has its measurement and its story in
   decodes, and every card frame here belongs to a _slot_ rather than to a card — so without the
   key the picture lags the caption by the length of the fetch. **This is invisible to the DOM
   and therefore to a test in the obvious place**; assert element _identity_.
+  **It also refuses to be dragged itself**, and that is the component's guarantee rather than a
+  call site's: an `<img>` is draggable by default and the browser starts a drag from the
+  *nearest* draggable ancestor, so a frame inside a draggable tile steals the gesture and the
+  tile's own drag never begins. Two frames passed the prop by hand and two did not — the deck
+  gallery's cover and the card pane's printing rows — so a deck tile dragged by its name and not
+  by its picture, which is what a reader reports as "drag and drop is broken". It is written
+  before the spread, so a frame that really is the drag source can still say so.
 - **A card frame is `components/CardArt`** — the 5:7 box, `CardImage`, `useImageRetry`, the
   no-art fallback and the foil marking, in one place. **Every wall of card faces draws it**: the
   search's, the collection's, the deck editor's docked search column and — since 2026-08-16 —

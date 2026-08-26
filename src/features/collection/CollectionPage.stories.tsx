@@ -237,14 +237,20 @@ export const TheCabinet: Story = {
 };
 
 /**
- * The whole collection as a wall of art — and **not a drag source**.
+ * The same twelve entries as a wall of art — and **a drag source**, which reverses what this
+ * story asserted until 2026-08-26.
  *
- * Spec §1's card surfaces are the search wall, the collection *table*'s rows, pinned wishes and
- * the card pane's printings. This wall is not among them: `CollectionPage.tsx:291-304` hands
- * `CardGrid` rows, a label, a selection and a badge, and no `dragPayload` — so `cardDraggable`
- * is never attached and pragmatic-drag-and-drop never writes its `draggable="true"`. The pair of
- * claims only means anything together, so `Search/Page`'s `Default` asserts that the search wall
- * *does* carry the attribute.
+ * It used to pin the opposite, and the paragraph here argued it: spec §1's card surfaces were the
+ * search wall, the collection *table*'s rows, pinned wishes and the card pane's printings, and
+ * this wall was deliberately not among them because a tile has no `entryId` — it merges every
+ * entry for one printing across finishes, conditions, languages *and folders*, so no single row
+ * could be named. That reasoning was right about the payload and wrong about the conclusion: the
+ * answer is a payload carrying **all** of them (`collectionTileSource`) and a question to the
+ * reader when the art stands for more than one, rather than no gesture at all.
+ *
+ * The tile still carries the card payload too, which is what keeps it droppable on a deck
+ * category and the sidebar's Decks entry exactly as a table row already is — so the attribute
+ * below is a claim about both halves at once.
  *
  * A tile is a *card* where a row is an *entry*: a foil and a played nonfoil of one printing are
  * two rows to maintain and one piece of art to look at, so the tile carries the copies of both.
@@ -271,10 +277,23 @@ export const CardMode: Story = {
     // And the caption that makes a flattened wall readable: without it a tile is a copy whose
     // drawer the reader cannot see without opening it.
     await expect(canvas.getAllByText("Filed in").length).toBeGreaterThan(0);
-    // Nothing on this page can be picked up. Over the whole canvas rather than one tile: the
-    // claim is that the wall registered no draggable at all, and a single tile could pass while
-    // the rest did not. The card art is `draggable={false}` and so is not matched here.
-    await expect(canvasElement.querySelectorAll('[draggable="true"]')).toHaveLength(0);
+    // **Every tile the wall drew, not one and not a number written down here.** A wall where a
+    // single tile registered would pass a spot check while the rest stayed dead, and a literal
+    // count is a fact about this fixture that goes stale the day a row is added to it — so the
+    // claim is stated as an equality against the tiles themselves. `data-grid-index` is
+    // `CardGrid`'s own handle on a tile root, which is the element the draggable is registered on.
+    //
+    // The card art inside each tile is `draggable={false}` by `CardImage`'s default — that is what
+    // stops the picture stealing the gesture from the tile around it — so no `<img>` is matched.
+    //
+    // **This reverses what this story asserted on the branch that added the folder caption above**
+    // — `toHaveLength(0)`, "nothing on this page can be picked up" — which was true when that was
+    // written and stopped being true when the wall became a drag source (2026-08-26). Kept as a
+    // note because the two claims are each other's exact opposite, and a reader finding the old
+    // sentence in the history should see which one won and why.
+    const tiles = canvasElement.querySelectorAll("[data-grid-index]");
+    await expect(tiles.length).toBeGreaterThan(0);
+    await expect(canvasElement.querySelectorAll('[draggable="true"]')).toHaveLength(tiles.length);
   },
 };
 
