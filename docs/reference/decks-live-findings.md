@@ -1014,10 +1014,14 @@ right edge on the row's right edge (1745 = 1745)** — `flex-1` growing into the
   the button's (1532 = 1532), reading `Sideboard — Error: Commander decks have no sideboard.` and
   **no bracket anywhere in it**, which is the half of the split worth pinning live.
 - **The variant group** read `Theory` (58px) · `Compare` (36px, no text, `aria-label` only) ·
-  `Live` (42px) — the Scale glyph between the two lists it weighs. **The two words were swapped
-  after this pass** (2026-08-24, the reader's call): the group is `Live | Compare | Theory` now.
-  The widths are the same three numbers in the other order and the glyph is still in the middle,
-  so nothing measured here was re-taken.
+  `Live` (42px) — the Scale glyph between the two lists it weighs. **That group has been rebuilt
+  twice since and none of these three numbers still describes it.** On 2026-08-24 the two words
+  were swapped to `Live | Compare | Theory`, which was the same three widths in a different order.
+  On **2026-08-26** `Compare` moved *out* of the group — a worded button beside it, on the row's
+  `gap-2` — the order went back to Theory-first, and `Live` became **`Actual`**: so the group is
+  two buttons wide, not three, and the widest of them is a word this pass never measured. Read the
+  three figures above as the record of the 2026-08-24 pass; the 2026-08-26 arrangement is measured
+  in its own section at the foot of this file.
 
 ### The tooltips are bound exactly where the word is not
 
@@ -1046,3 +1050,63 @@ and it clears itself. Left as it is, deliberately.
   `section[aria-label^= Deck editor]` and throws. Filter a `querySelectorAll` in JS instead, then
   stamp the element and address it by a bare attribute.
 
+## `Compare` beside the switch, and `Theory | Actual` — 2026-08-26, `npm run tauri dev` (debug), a copy of the real db
+
+Three changes to one row, driven at three widths on deck **Azula** (Commander, 100 cards, theory
+on): `Compare` moved out of the variant group, the tabs went back to Theory-first, and `Live`
+became **`Actual`**. What a live pass adds to the suite here is entirely geometric — jsdom lays
+nothing out, so *where* the button sits and *when* its word goes are claims no test can make.
+
+### The button is a sibling of the group, at the row's own gap
+
+At **1920** (editor column 1657) the actions block is seven children on one line, `scrollWidth`
+1920 = `innerWidth`, no page scrollbar:
+
+| Child | Size | x |
+| --- | --- | --- |
+| `Deck list` (group) | 116 × 38 | 1094 |
+| `Compare` | **94 × 36** | **1217** |
+| `Import and export` (group) | 159 × 38 | 1319 |
+| `Categories` | 103 × 36 | 1486 |
+| `Tags` | 70 × 36 | 1597 |
+| `History` | 83 × 36 | 1675 |
+| `Deck settings` | 119 × 36 | 1766 |
+
+The group ends at 1210 and `Compare` starts at 1217 — **the row's own `gap-2`**, 8px, the same
+distance as every other pair on the line, which is the whole of the spacing decision. Inside the
+group are exactly two buttons, `Theory` (57px) and `Actual` (56px), and `group.contains(compare)`
+is false: it is an action *about* the two lists rather than a third list in a `role="group"` named
+`Deck list`.
+
+**`Compare` is 36px tall where the two joined groups are 38, and that is the row as it already
+was.** A group's own 1px borders sit outside its `h-9` children, so `Deck list` and
+`Import and export` measure 38 at y 118 while every standalone button — `Compare`,
+`Categories`, `Tags`, `History`, `Deck settings` — measures 36 at y 119. `Compare` is now
+byte-identical in geometry to the four beside it, which is what moving it onto `CONTROL` bought.
+
+### The word goes at `TIGHT_HEADER_PX` and the control does not
+
+At **1120** (column ~857, under the 900 threshold) `Compare` is `textContent` `""` and **36 × 36**
+— the bare `Scale` glyph — with the gap still 8px and `scrollWidth` 1120 = `innerWidth`. At 1920
+it reads `Compare` at 94px. The tabs are unaffected at both widths, as they should be: the word
+that gives way is this button's, exactly as `ACTIONS`' words do.
+
+### It costs the row nothing at the app's own window
+
+At **1280×800** the editor column measured **1017**, the documented figure. The actions block is
+**623px on one line** — the header row's own box is 50px tall, which is one 36px line plus the
+ribbon's `py-1.5`, so it has not wrapped — leaving 394px for the deck's name field. The word
+`Compare` is present at this width, which is the reason the threshold is 900 rather than 1100.
+
+### The rename reaches the dialog behind the button
+
+Pressing `Compare` opened the difference dialog named **`Theory to Actual difference`**, headed
+`Theory → Actual`, footed *"Only what Theory wants and Actual does not have. Cards in Actual but
+not in Theory are cuts you have already made, so they are not listed."* — which is the half of the
+rename worth driving, because a dialog still saying `Live` would be contradicting the button that
+opened it. Escape closed it.
+
+Pressing `Theory` flipped `aria-pressed` to `Theory=true` / `Actual=false` and re-read the deck
+(the plan's own pile headings replaced the live list's); pressing `Actual` put it back. Nothing
+about which tab is pressed or remembered moved with the order — `lastVariant` is still what
+decides that.
