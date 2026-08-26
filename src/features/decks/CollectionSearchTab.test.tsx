@@ -187,6 +187,11 @@ afterAll(() => {
 });
 
 beforeEach(() => {
+  // **The pane and the picked set are global**, and a test that leaves either set makes the next
+  // one lie: a picked tile wears the same `.ring-accent` the open card does, which is what made
+  // the first version of the ring test below pass under its own mutation. Reset here rather than
+  // per test, so a future ring assertion cannot inherit one.
+  useAppStore.setState({ selectedCardId: null, paneFinish: null, cardSelection: null });
   collectionList.mockReset().mockResolvedValue({ items: [LOOSE], total: 1 });
   collectionToDeck
     .mockReset()
@@ -351,8 +356,6 @@ describe("CollectionSearchTab", () => {
    * column and draw the pane over the column itself (issue #183).
    */
   it("carries the finish the tile was pressed on into the pane", async () => {
-    useAppStore.setState({ selectedCardId: null, paneFinish: null, cardSelection: null });
-
     const { foil } = await twoFinishes();
     await userEvent.click(within(foil).getByRole("button", { name: "Lightning Bolt" }));
 

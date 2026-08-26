@@ -166,8 +166,9 @@ describe("foldCopies", () => {
   });
 
   /** Two printings are two tiles, and the backend's order is kept — so the sort the reader picked
-   *  in the filter row survives the fold. */
-  it("keeps one tile per printing, in the order the rows arrived", () => {
+   *  in the filter row survives the fold. The fixture is all one finish, which is what keeps this
+   *  case about the **order** alone now that the finish is part of the key. */
+  it("keeps the tiles in the order the rows arrived", () => {
     const rows = [
       row({ id: 1, cardId: "sol", name: "Sol Ring" }),
       row({ id: 2, cardId: "bolt" }),
