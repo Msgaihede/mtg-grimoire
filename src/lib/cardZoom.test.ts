@@ -1,5 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  CHIN_HEIGHT,
+  CHIN_RISE,
   CONTROL_SCALE_VAR,
   CONTROL_SHRINK,
   DEFAULT_SECTION_ZOOMS,
@@ -10,6 +12,7 @@ import {
   ZOOM_SECTIONS,
   ZOOM_STEPS,
   cardScaleVars,
+  chinHeight,
   formatZoom,
   isZoomSection,
   scaled,
@@ -195,6 +198,37 @@ describe("scaled", () => {
 
   it("never leaves a fraction anywhere on the ladder", () => {
     for (const step of ZOOM_STEPS) expect(Number.isInteger(scaled(170, step))).toBe(true);
+  });
+});
+
+describe("the chin", () => {
+  /**
+   * The chin moves with the card in **both** directions, and it is the same sum on all three
+   * surfaces that draw one. It floored on two of them and the floor's failure mode has swapped
+   * ends: 28px of empty felt under a 105px card.
+   */
+  it("scales the chin with the card, with no floor", () => {
+    expect(chinHeight(DEFAULT_ZOOM)).toBe(CHIN_HEIGHT);
+    for (const step of ZOOM_STEPS) {
+      expect(chinHeight(step)).toBe(scaled(CHIN_HEIGHT, step));
+    }
+    expect(chinHeight(0.5)).toBeLessThan(CHIN_HEIGHT);
+  });
+
+  /**
+   * The rise does **not** scale, because the thing it is derived from does not: it is a Tailwind
+   * `rounded-[7px]` corner less its own 1px border, and that corner is 7px at every zoom. A rise
+   * that scaled would clear the seam at 1× and show two hairlines of background at 0.5×.
+   */
+  it("holds the rise still at every zoom", () => {
+    expect(CHIN_RISE).toBe(4);
+    // **The rise is subtracted from a scaled height, never scaled with it**, which is the one
+    // thing about this pair a future tidy-up could quietly break: folding the subtraction inside
+    // `scaled` reads as the same sum and is not. At 1× the two agree — which is why 1× cannot be
+    // the test — and everywhere else they differ by exactly the amount the seam would open by.
+    for (const step of [0.5, 2]) {
+      expect(chinHeight(step) - CHIN_RISE).not.toBe(scaled(CHIN_HEIGHT - CHIN_RISE, step));
+    }
   });
 });
 

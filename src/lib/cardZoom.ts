@@ -256,6 +256,43 @@ export function scaled(base: number, zoom: number): number {
 }
 
 /**
+ * The card's foot at 100% zoom — the bar under the face carrying the printing's own facts.
+ *
+ * **Promoted out of `CardStack`, where it was `STACK_DATA_HEIGHT`**, because three surfaces drew
+ * a foot and each held its own number: 28px on the deck's stacks, 25px on the five walls
+ * `CardGrid` draws, and 20px on the deck's grid. Three numbers is how a shared look stops being
+ * shared, and the type inside them had drifted the same way (10px, 12px, 9px). One constant here,
+ * one component in `components/CardChin.tsx`, and the next surface cannot disagree.
+ */
+export const CHIN_HEIGHT = 28;
+
+/**
+ * How far the chin rides **up** over the face's bottom corners.
+ *
+ * It is what joins the two boxes into one card: the face clips its own 7px corners, and a bar
+ * butted flush under them shows two hairlines of background through the gap. Four pixels is that
+ * radius less its own border, so the chin's square top corners are covered exactly where the face
+ * is still solid.
+ *
+ * **It does not zoom**, because the radius it is derived from does not — the corner is a Tailwind
+ * class, 7px at every stop, so the overlap that hides the seam is 4px at every stop too.
+ */
+export const CHIN_RISE = 4;
+
+/**
+ * The chin's height at this zoom — it moves with the card in **both** directions.
+ *
+ * It floored on two of the three surfaces, and the argument for the floor was sound while it
+ * lasted: the bar holds type, the type was fixed, and a plain multiply gave a 14px bar around
+ * 11px words at 0.5×. The gem, the finish glyph and the words all read `--mark-scale` now, so the
+ * bar and its contents are one proportion and a floored bar is 28px of empty felt under a 105px
+ * card.
+ */
+export function chinHeight(zoom: number): number {
+  return scaled(CHIN_HEIGHT, zoom);
+}
+
+/**
  * The custom property every mark laid on a card reads to size itself: the reader's zoom, as a
  * bare number, inherited down from the card's own root element.
  *
