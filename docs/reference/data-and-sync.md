@@ -249,7 +249,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   never been measured before — `sorting::printing_price_expr` says so in as many words — and it
   dwarfs what this change added to it.
 
-- **What the wishlist's cheapest-printing join costs — _not measured yet_.** The subquery that
+- **What the wishlist's cheapest-printing join costs.** The subquery that
   picks the printing an **any-printing** wish is drawn as used to order by `released_at DESC,
   id ASC`, an indexed column; since 2026-08-26 it orders by the wish's own price expression first
   (`sorting::row_price_expr`, `ASC NULLS LAST`, with the old clause demoted to a tiebreak), so it is

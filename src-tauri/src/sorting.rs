@@ -146,12 +146,20 @@ impl<'de> Deserialize<'de> for Marketplace {
 /// What one copy of a card costs at `market`, per **finish**.
 ///
 /// The one SQL fragment every price site in this crate uses. `finish` is the caller's SQL for
-/// the finish being priced — `e.finish` on the collection, `coalesce(w.preferred_finish,
-/// 'nonfoil')` on the wishlist, and each of [`finish_literals`] in turn where the caller holds a
-/// printing rather than a copy of one ([`printing_price_by_finish_expr`], the card pane's
-/// `FinishPrices`). **The printing itself is always the alias `c`**: every list in this
-/// crate joins `cards` as `c`, and hard-coding it here is what keeps the join key and the
-/// price from being spelled apart.
+/// the finish being priced — [`crate::collection::ENTRY_FINISH`] (`e.finish`) on the collection,
+/// [`crate::wishlist::WISH_PREFERRED_FINISH`] (`w.preferred_finish`, **bare**, reaching here
+/// through [`row_price_expr`]'s named arm) on the wishlist, and each of [`finish_literals`] in
+/// turn where the caller holds a printing rather than a copy of one
+/// ([`printing_price_by_finish_expr`], the card pane's `FinishPrices`).
+///
+/// **A caller wraps its column in nothing.** `coalesce(w.preferred_finish, 'nonfoil')` was the
+/// wishlist's spelling and was the bug: it reads "the reader has not said" as "the reader said
+/// nonfoil", which are two different wishes and, on a printing sold only in foil, two different
+/// answers.
+///
+/// **The printing itself is always the alias `c`**: every list in this crate joins `cards` as
+/// `c`, and hard-coding it here is what keeps the join key and the price from being spelled
+/// apart.
 ///
 /// Four marketplaces, two shapes:
 ///
@@ -206,10 +214,11 @@ fn feed_price(feed: &str, finish: &str) -> String {
 /// them reads: `nonfoil → foil → etched`, cheapest first.
 ///
 /// That builder's `finish` argument is normally the *caller's expression* for the finish being
-/// priced — `e.finish` on the collection, `coalesce(w.preferred_finish, 'nonfoil')` on the
-/// wishlist. The two callers here price a printing in all three at once instead, so each is a
-/// constant: [`printing_price_by_finish_expr`], and the card pane's `FinishPrices`, whose field
-/// order this also is.
+/// priced — `e.finish` on the collection, which always names one, and `w.preferred_finish` on the
+/// wishlist, which may not and is therefore handed over **bare**, through [`row_price_expr`], so
+/// that "has not said" is told from "said nonfoil". The two callers here price a printing in all
+/// three at once instead, so each is a constant: [`printing_price_by_finish_expr`], and the card
+/// pane's `FinishPrices`, whose field order this also is.
 ///
 /// **Derived from [`crate::schema::FINISHES`] rather than respelled**, which is the rule the
 /// rest of the crate's CHECK vocabularies already follow (`deck_audit::ADD` is

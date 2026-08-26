@@ -4,6 +4,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import type { CollectionFolder, CollectionRow, DeckCategory } from "@/lib/ipc";
+import { MARKETPLACES } from "@/lib/marketplace";
+import { pricesAsOf } from "@/lib/prices";
 
 const collectionList = vi.hoisted(() => vi.fn());
 const collectionToDeck = vi.hoisted(() => vi.fn());
@@ -300,6 +302,46 @@ describe("CollectionSearchTab", () => {
     tab();
 
     expect(await screen.findByText("—")).toBeInTheDocument();
+  });
+
+  /**
+   * **Spec §5: a price is never shown without saying how old it is** — said once under the wall,
+   * now that the chins above quote money.
+   *
+   * **The sibling tab in this same column draws the identical line** (`DeckSearchPanel.test.tsx`'s
+   * "says how old the wall's prices are, once, under it"), and this tab shipped without it for two
+   * days — so a reader toggling `Search → Collection` watched the dates disappear while the prices
+   * stayed. The two assertions are deliberately the same shape: what they pin is that the column
+   * answers one way whichever tab is on screen.
+   *
+   * **Through `pricesAsOf` rather than the sentence typed out here**, so this pins the function
+   * and not a copy of its wording — `getMarketplace` answers `tcgplayer` for this file, which is
+   * the card-sync arm of that sentence.
+   *
+   * `toHaveLength(1)` rather than `toBeInTheDocument`, because "once, under the wall" is half the
+   * rule: a per-tile treatment would draw it as many times as there are tiles and still pass a
+   * presence check. jsdom lays nothing out, so the two-wrapped-lines question at the 206px floor
+   * is a live one and is written up at the call site.
+   */
+  it("says how old the wall's prices are, once, under it", async () => {
+    collectionList.mockResolvedValue({ items: [LOOSE, SPOKEN_FOR], total: 2 });
+    tab();
+    await screen.findAllByRole("button", { name: /^Add Lightning Bolt/ });
+
+    expect(screen.getAllByText(pricesAsOf(MARKETPLACES.tcgplayer))).toHaveLength(1);
+  });
+
+  /**
+   * The other half of the same rule: the sentence dates *a wall*, so there is nothing to date when
+   * the search misses. The caption above says "No copies match" and this line is not drawn at all
+   * — which is what `!empty` buys, and the one arm a presence-only assertion above cannot see.
+   */
+  it("says nothing about price ages when nothing matched", async () => {
+    collectionList.mockResolvedValue({ items: [], total: 0 });
+    tab();
+    await screen.findByText("No copies match");
+
+    expect(screen.queryByText(pricesAsOf(MARKETPLACES.tcgplayer))).toBeNull();
   });
 
   /**
