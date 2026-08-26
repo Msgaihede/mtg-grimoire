@@ -21,7 +21,10 @@ import { MoveToFolder } from "@/features/decks/MoveToFolder";
 import { ExportDialog } from "@/features/transfer/export/ExportDialog";
 import { everythingLabel, scopeLabel, useExportScope } from "@/features/transfer/export/scope";
 import { wishlistDestination } from "@/features/transfer/import/destinations/WishlistPreview";
+import { ImportExportPair } from "@/features/transfer/ImportExportPair";
 import { ImportDialog } from "@/features/transfer/import/ImportDialog";
+import { FilterBar, type FilterLabels, type TrayCell } from "@/features/search/FilterBar";
+import { ToggleChip } from "@/components/FilterChips";
 import { count } from "@/lib/counts";
 import { DROP_MARK_ROOM } from "@/lib/dropMarks";
 import { isFinish } from "@/lib/finish";
@@ -42,7 +45,6 @@ import { cn } from "@/lib/utils";
 import { writeFailure } from "@/lib/writes";
 import { WishFolderCard } from "./WishFolderCard";
 import { WishlistBreadcrumb } from "./WishlistBreadcrumb";
-import { WishlistFilterBar } from "./WishlistFilterBar";
 import { WishlistGrid } from "./WishlistGrid";
 import { WishlistTable } from "./WishlistTable";
 import { useWishlist, type Wishlist } from "./useWishlist";
@@ -234,6 +236,28 @@ function subtotalsOf(
  * today. The filing itself is the backend's: `wishlist_list` takes the folder and the flatten
  * flag, so the rows below are already the rows of the level on screen and nothing here filters.
  */
+/**
+ * What this surface calls its search box, and the `id` stem its labels bind through — see
+ * `FilterLabels`, and `CollectionPage`'s twin, which is the same argument: one name over two lists
+ * is the control lying about which one it narrows.
+ */
+const WISHLIST_LABELS: FilterLabels = { idStem: "wishlist", search: "Search your wishlist" };
+
+/**
+ * Which of `FilterBar`'s tray cells this page offers, in the order it draws them.
+ *
+ * Three of the card search's, then the two only a shopping list can ask. **No `price` cell**, and
+ * that is the one absence here that is a fact about the wire rather than about the screen:
+ * `WishlistQuery` carries no `priceMin`/`priceMax`, so the band would be a control whose numbers
+ * reach nothing — which is why those three fields are the optional half of `FilterSurface`.
+ *
+ * **`needsReview` is drawn unconditionally**, where the chip it replaces appeared only once the
+ * reconciler had flagged something. That rule was about a *row*, where a control spending its
+ * whole life saying nothing is a control the reader learns to stop reading; in a shut tray it
+ * costs nothing, and a cell that came and went would be the one thing in this list that moved.
+ */
+const WISHLIST_TRAY: readonly TrayCell[] = ["set", "format", "rarity", "fulfilled", "needsReview"];
+
 export function WishlistPage() {
   const wishlist = useWishlist();
   const { query, rows, total, marketplace, folderId, flatten } = wishlist;
@@ -920,7 +944,18 @@ export function WishlistPage() {
           under it would be a subheading repeating its own heading. */}
       <h2 className="sr-only">Wishlist</h2>
 
-      <FigureRow>
+      <FigureRow
+        // The band's far end, where they used to sit beside the filter row — see `FigureRow`,
+        // which is where the placement is argued, and `CollectionPage`, whose twin this is.
+        actions={
+          <ImportExportPair
+            onImport={() => setImporting(true)}
+            onExport={() => setExporting(true)}
+            importLabel="Import wishes"
+            exportLabel="Export wishlist"
+          />
+        }
+      >
         {/* **Both figures describe what is on screen**, which is the folder the reader is
             standing in — or the whole list, one press of Flatten away from anywhere. Neither is
             arithmetic this page does to make that true: `wishlist_list` takes the folder and the
@@ -943,49 +978,64 @@ export function WishlistPage() {
         />
       </FigureRow>
 
-      <div className="flex flex-wrap items-start gap-2">
-        <div className="min-w-0 flex-1">
-          <WishlistFilterBar wishlist={wishlist} onNewFolder={openNewFolder} />
-        </div>
-        {/* The first export entry point outside the deck editor (Task 11), `CollectionPage`'s
-            twin; Import beside it since Task 14, over `wishlistDestination`. */}
-        <div className="flex shrink-0 items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setImporting(true)}
-            className={cn(
-              "h-8 rounded-md border border-border px-3 text-sm hover:bg-surface",
-              FOCUS,
-            )}
-          >
-            Import
-          </button>
-          <button
-            type="button"
-            onClick={() => setExporting(true)}
-            className={cn(
-              "h-8 rounded-md border border-border px-3 text-sm hover:bg-surface",
-              FOCUS,
-            )}
-          >
-            Export
-          </button>
-        </div>
-      </div>
+      {/* The same row the search, the Tags page and the collection draw, over this page's own
+          hook — see `FilterBar`, whose prop is a structural `FilterSurface` that `useWishlist`
+          satisfies. It is also where this list stopped being the app's odd page out: every card
+          filter on that row was already a field `wishlist_list` read (`WishlistQuery extends
+          CardFilters`) and this hook simply never sent one. */}
+      <FilterBar
+        search={wishlist}
+        labels={WISHLIST_LABELS}
+        sortRows={wishlist.sortRows}
+        tray={WISHLIST_TRAY}
+        layoutFor="wishlist"
+      />
 
       <div className="flex min-h-0 flex-1 flex-col gap-2">
-        {hasFolders && (
-          <WishlistBreadcrumb
-            // Root-most first and **without the root**, which the breadcrumb prepends itself:
-            // `null` is a destination rather than a folder, and only that component knows what
-            // it calls it.
-            trail={trail}
-            flattened={flatten}
-            onOpen={wishlist.openFolder}
-            canDrop={canFile}
-            onDropWish={fileWish}
+        {/* **The drawers' own controls, and they are deliberately not in the filter row.** Where
+            the reader is standing and how much of the tree is on screen are navigation rather
+            than a narrowing — `useWishlist` says so of both `folderId` and `flatten`, and
+            `resetAll` leaves them alone — so either one among the filters would be a control that
+            Reset all could not undo. They sit with the breadcrumb and the folder cards instead. */}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          {hasFolders && (
+            <div className="min-w-0 flex-1">
+              <WishlistBreadcrumb
+                // Root-most first and **without the root**, which the breadcrumb prepends itself:
+                // `null` is a destination rather than a folder, and only that component knows what
+                // it calls it.
+                trail={trail}
+                flattened={flatten}
+                onOpen={wishlist.openFolder}
+                canDrop={canFile}
+                onDropWish={fileWish}
+              />
+            </div>
+          )}
+          {/* On, it ignores the filing entirely: no folder cards, no drill-down, and every wish in
+              the list at once, each captioned with the folder it is filed in instead — the only
+              way a reader sees a card's folder without opening it. One press either way, since
+              there is no third state to walk. */}
+          <ToggleChip
+            label="Flatten"
+            pressed={wishlist.flatten}
+            onClick={wishlist.toggleFlatten}
+            className="ml-auto"
           />
-        )}
+          {/* Hidden while flattened: a flattened list has no current folder to create one inside. */}
+          {!wishlist.flatten && (
+            <button
+              type="button"
+              onClick={(e) => openNewFolder(e.currentTarget)}
+              className={cn(
+                "h-8 shrink-0 rounded-md border border-border px-3 text-sm hover:bg-surface",
+                FOCUS,
+              )}
+            >
+              + New folder
+            </button>
+          )}
+        </div>
 
         {/* **One strip for all four folder layers, and it is not a placement decision so much as
             the only place there is.** Every other anchored layer in this app hangs off a

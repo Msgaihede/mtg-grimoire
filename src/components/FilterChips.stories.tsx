@@ -43,7 +43,7 @@ function StatefulToggle({ pressed: seed, onClick, ...rest }: ComponentProps<type
  *
  * The `role="group"`/`aria-label="Color identity"`/`gap-1.5` wrapper is **the caller's markup,
  * not the component's** — `ManaChip` is one chip and knows nothing about the row. It is copied
- * here verbatim from `FilterBar` and `CollectionFilterBar`, which carry it identically, because
+ * here verbatim from `FilterBar`, which is the one row every card view draws, because
  * a story of six loose chips would be a row this app never draws.
  */
 function ColourRow({ initial }: { initial: readonly ManaKey[] }) {
@@ -164,7 +164,7 @@ export const TogglePressed: Story = { args: { label: "Foil", pressed: true } };
  * is drawn and the grade is spoken — and the accessible name **begins** with the visible text
  * (WCAG 2.5.3), so the chip is still addressable by what is written on it.
  *
- * The hint is lower-cased by the caller, not by the component: `CollectionFilterBar` passes
+ * The hint is lower-cased by the caller, not by the component: `FilterBar`'s Condition cell passes
  * `CONDITION_LABEL[c].toLowerCase()`, so `Damaged` reaches the chip as `damaged`.
  *
  * What the `play` reads is an `aria-label` and a tooltip, and a screenshot shows neither: one
@@ -380,7 +380,7 @@ export const NothingToReset: Story = {
  * The two recipes differ by that one utility and by nothing else, so the row still lines up.
  *
  * **The row's wrapping is not here.** `flex-wrap` lives on `FilterBar`'s and
- * `CollectionFilterBar`'s own containers, not on anything this module exports, so how a full
+ * `FilterBar`'s own containers, not on anything this module exports, so how a full
  * row breaks across lines is **Task 12's** story to tell.
  */
 export const OneFamily: Story = {

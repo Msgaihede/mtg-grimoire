@@ -18,13 +18,15 @@ import {
 } from "@/components/FilterChips";
 import { PriceRange } from "@/components/PriceRange";
 import { useTooltip } from "@/components/tooltip/useTooltip";
+import { CONDITIONS, CONDITION_LABEL, type Condition } from "@/lib/conditions";
+import { FINISHES, FINISH_LABEL, type Finish } from "@/lib/finish";
 import type { FacetResponse, SearchSortKey } from "@/lib/ipc";
 import { MANA_KEYS, MANA_LABEL } from "@/lib/mana";
 import { TRANSITION } from "@/lib/motion";
 import { sortOptions } from "@/lib/options";
 import { formatPrice } from "@/lib/prices";
 import type { SortDir } from "@/lib/sort";
-import { useAppStore } from "@/lib/store";
+import { useAppStore, type ListSection } from "@/lib/store";
 import { clearFieldOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { colorDisabled, countDisabled, facetTitle, optionDisabled } from "./facets";
@@ -32,6 +34,7 @@ import { SetCombobox } from "./SetCombobox";
 import { TagQueryRow, type TagQuerySurface } from "./TagQueryRow";
 import {
   ANY_CARD,
+  cycleTriState,
   SEARCH_SORT_OPTIONS,
   type ColorKey,
   type FormatFilterOption,
@@ -66,7 +69,11 @@ import {
  * label changed as the reader typed would be a control moving under them, and `Name` is right
  * there for anyone who wants alphabetical said out loud.
  */
-export const SEARCH_SORT_ROWS: readonly { value: SearchSortKey | ""; label: string }[] = [
+export const SEARCH_SORT_ROWS: readonly {
+  value: SearchSortKey | "";
+  label: string;
+  disabled?: boolean;
+}[] = [
   { value: "", label: "Best match" },
   ...sortOptions(SEARCH_SORT_OPTIONS, (s) => s.label),
 ];
@@ -80,7 +87,18 @@ export const SEARCH_SORT_ROWS: readonly { value: SearchSortKey | ""; label: stri
  * mounted, which is the same rule the row itself has always followed: this file owns the layout,
  * the caller owns *which* filters it offers.
  */
-export type TrayCell = "set" | "format" | "owned" | "decks" | "rarity" | "price" | "printings";
+export type TrayCell =
+  | "set"
+  | "format"
+  | "owned"
+  | "decks"
+  | "rarity"
+  | "price"
+  | "printings"
+  | "finish"
+  | "condition"
+  | "fulfilled"
+  | "needsReview";
 
 /** What the card search offers, which is every cell there is. The default, so the two surfaces
  *  that draw the whole tray say nothing. */
@@ -131,7 +149,7 @@ export const SEARCH_LABELS: FilterLabels = { idStem: "card-search", search: "Sea
  * losing: the two tabs of the deck editor's docked panel are two searches over two backends, and
  * a reader switching between them was meeting two different filter rows. The second was built out
  * of `@/components/FilterChips` the sanctioned way — which is still the right module boundary,
- * and is still how `CollectionFilterBar` is built — but *this* row and that one were the same
+ * and is still how `PrintingsFilterBar` is built — but *this* row and that one were the same
  * arrangement of the same controls written twice, and the two drifted the first time either
  * moved.
  *
@@ -159,9 +177,6 @@ export interface FilterSurface<SortKey extends string = string> extends TagQuery
   toggleManaValue: (value: number) => void;
   manaX: boolean;
   toggleManaX: () => void;
-  priceMin: number | undefined;
-  priceMax: number | undefined;
-  setPriceRange: (min: number | undefined, max: number | undefined) => void;
   /** How many printings each option would leave, or `undefined` when that is not known — which
    *  is what a cold index, a failed query, the first render **and a surface with no facet command
    *  at all** all arrive as. `facets.ts` reads it as "we don't know" and leaves the row live. */
@@ -184,6 +199,28 @@ export interface FilterSurface<SortKey extends string = string> extends TagQuery
   sortDir: SortDir | undefined;
   flipSortDir: () => void;
 
+  /**
+   * The band the Price cell sets. **Absent on a surface whose backend has no price bound**, which
+   * is what moved these three below the line: `WishlistQuery` carries no `priceMin`/`priceMax`,
+   * so a wishlist that answered them would be drawing a control whose numbers reach nothing.
+   */
+  priceMin?: number | undefined;
+  priceMax?: number | undefined;
+  setPriceRange?: (min: number | undefined, max: number | undefined) => void;
+  /**
+   * Whether the format picker offers `Any card`.
+   *
+   * **A capability and not a state**, which is the distinction that makes it worth a field. `Any
+   * card` is not a format — it is the row that puts back the printings *no* format allows, and it
+   * only means something on a surface whose default corpus leaves them out. The card search is
+   * that surface: every row of its picker but this one rides `playableOnly` (see `formatParams`).
+   * A collection and a wishlist are lists of cardboard the reader already owns or wants, filtered
+   * by nothing of the kind — so on them the row would set `format` to a sentinel their backend
+   * reads as a legalities key nothing matches, and answer an empty list.
+   *
+   * Absent is therefore the safe default and the one three of the four surfaces take.
+   */
+  anyCard?: boolean;
   /** The Owned/Missing pair. Absent on a surface where every row is a copy the reader has. */
   owned?: boolean | undefined;
   setOwned?: (next: boolean | undefined) => void;
@@ -194,6 +231,34 @@ export interface FilterSurface<SortKey extends string = string> extends TagQuery
   /** `Not in a deck`. Absent on a surface with no deck to be in. */
   allocation?: "all" | "unallocated";
   setAllocation?: (next: "all" | "unallocated") => void;
+  /**
+   * Which finishes a copy may be in. Absent on every surface whose rows are *printings* rather
+   * than copies — a printing exists in every finish it was published in, so the question has no
+   * answer there.
+   */
+  finishes?: readonly Finish[];
+  toggleFinish?: (finish: Finish) => void;
+  /** The grades a copy may be in. Absent for {@link FilterSurface.finishes}' reason: a printing
+   *  has no condition, only a piece of cardboard does. */
+  conditions?: readonly Condition[];
+  toggleCondition?: (condition: Condition) => void;
+  /** Whether the collection already covers a wish — the wishlist's own axis, and the one filter
+   *  in this interface that is about *two* lists at once. */
+  fulfilled?: boolean | undefined;
+  setFulfilled?: (next: boolean | undefined) => void;
+  /**
+   * Rows the reconciler flagged, the rows it did not, or neither question.
+   *
+   * Three states like {@link FilterSurface.owned}, and — like it — a **setter** rather than the
+   * cycling toggle each hook keeps for its own callers. The cycle belongs to the control that
+   * draws it, because this row needs two different moves on one field: the chip in the tray walks
+   * off → flagged → not flagged → off, and the × on the stated-filter chip has to *clear* the
+   * whole kind in one press, which is what every other chip under that rule does. A toggle can
+   * only offer the first of those, and pressing it twice to fake the second is a control that
+   * depends on knowing which rung it is standing on.
+   */
+  needsReview?: boolean | undefined;
+  setNeedsReview?: (next: boolean | undefined) => void;
 }
 
 /**
@@ -340,7 +405,51 @@ function activeChips<SortKey extends string>(
     });
   }
 
-  if (search.priceMin !== undefined || search.priceMax !== undefined) {
+  if (search.toggleFinish && search.finishes && search.finishes.length > 0) {
+    const { finishes, toggleFinish } = search;
+    chips.push({
+      label: `Finish: ${FINISHES.filter((f) => finishes.includes(f))
+        .map((f) => FINISH_LABEL[f])
+        .join(", ")}`,
+      remove: () => finishes.forEach((f) => toggleFinish(f)),
+    });
+  }
+
+  if (search.toggleCondition && search.conditions && search.conditions.length > 0) {
+    const { conditions, toggleCondition } = search;
+    chips.push({
+      // The grades as they are printed, which is what the chips carry — the spelled-out words are
+      // the tooltip's, and `Condition: Near Mint, Lightly Played` would be twice the width of the
+      // control that made it.
+      label: `Condition: ${CONDITIONS.filter((c) => conditions.includes(c)).join(", ")}`,
+      remove: () => conditions.forEach((c) => toggleCondition(c)),
+    });
+  }
+
+  // The **setter** and not the value, `owned`'s rule above and for its reason: `undefined` is a
+  // real third state on both of these, so a surface that cannot ask the question is told apart
+  // from one that is not currently asking it by which of the two fields is here at all. It is also
+  // what lets the × clear the kind in one press where the chip in the tray walks the cycle.
+  const { setFulfilled } = search;
+  if (setFulfilled && search.fulfilled !== undefined) {
+    chips.push({
+      // The word the tray's chip carries, so the statement and the control that made it use one
+      // vocabulary.
+      label: search.fulfilled ? "Fulfilled" : "Still missing",
+      remove: () => setFulfilled(undefined),
+    });
+  }
+
+  const { setNeedsReview } = search;
+  if (setNeedsReview && search.needsReview !== undefined) {
+    chips.push({
+      label: search.needsReview ? "Needs review" : "Not flagged",
+      remove: () => setNeedsReview(undefined),
+    });
+  }
+
+  const { setPriceRange } = search;
+  if (setPriceRange && (search.priceMin !== undefined || search.priceMax !== undefined)) {
     const low = search.priceMin === undefined ? null : formatPrice(search.priceMin, currency);
     const high = search.priceMax === undefined ? null : formatPrice(search.priceMax, currency);
     // Three sentences rather than one with an em dash and a hole in it: `Price: – $40` is a range
@@ -351,7 +460,7 @@ function activeChips<SortKey extends string>(
         : low !== null
           ? `Price: from ${low}`
           : `Price: up to ${high}`;
-    chips.push({ label, remove: () => search.setPriceRange(undefined, undefined) });
+    chips.push({ label, remove: () => setPriceRange(undefined, undefined) });
   }
 
   return chips;
@@ -410,7 +519,7 @@ export function FilterBar<SortKey extends string>({
    * collection has no ranking to fall back to and every row of its picker is a real column. One
    * array covering both would have to hold a row one of them cannot act on.
    */
-  sortRows?: readonly { value: SortKey; label: string }[];
+  sortRows?: readonly { value: SortKey; label: string; disabled?: boolean }[];
   /**
    * Which captioned cells the tray draws — see {@link TrayCell}. Defaults to
    * {@link SEARCH_TRAY}, so the two surfaces that offer every filter say nothing.
@@ -438,14 +547,14 @@ export function FilterBar<SortKey extends string>({
    * component that re-renders on a preference nothing above it reads costs the filter row
    * nothing.
    *
-   * **A closed union widened by hand, where `ZoomSection` and `ViewId` are derived** — so a
-   * third page with a wall of its own has to add its name here as well as to the store. That is
-   * the intended cost rather than an oversight: the two are not the same list (a zoom section
-   * exists for the printings modal, which draws no filter row) and deriving one from the other
-   * would tie a page's *layout* preference to whether it happens to be zoomable. Two entries is
-   * too few to be worth a mechanism; at four, derive it.
+   * **{@link ListSection}, and it is derived now where it was two names written out by hand.**
+   * The note that stood here said the union was worth spelling twice at two entries and worth
+   * deriving at four — this is four. It is deliberately not `ZoomSection` and not `ViewId`: a zoom
+   * section exists for the printings modal, which draws no filter row, and Decks and Settings draw
+   * no wall to lay out. So the store owns one list of *lists with a layout*, and this prop is that
+   * list rather than a third opinion beside it.
    */
-  layoutFor?: "search" | "tags";
+  layoutFor?: ListSection;
 }) {
   /**
    * Whether the tray is open, and **this component's own state rather than the store's.**
@@ -713,12 +822,16 @@ export function FilterBar<SortKey extends string>({
                 real column, so a hard-coded first row would be a destination one of the two
                 surfaces cannot go to.
 
-                No row is ever `disabled` here, unlike the collection page's `Custom…` — the two
-                look alike and are opposites. That one is a state the control can only be *put*
-                into, from a header this select has no option for. Every row of this one is a
-                real destination. */}
+                **No row of the card search's list is ever `disabled`, and the collection's
+                `Custom…` is.** The two look alike and are opposites: that one is a state the
+                control can only be *put* into, from a header this select has no option for, where
+                every row of this one is a real destination. So the flag rides on the row rather
+                than on this markup — the surface that has such a state says so, and the one that
+                does not says nothing. `disabled` and not `aria-disabled`: a native `<option>` is
+                the house rule's one exception, because the reason behind that rule — a disabled
+                control leaves the tab order — is about something that was in it to begin with. */}
             {sortRows.map((s) => (
-              <option key={s.value} value={s.value}>
+              <option key={s.value} value={s.value} disabled={s.disabled}>
                 {s.label}
               </option>
             ))}
@@ -988,11 +1101,13 @@ function FilterTray<SortKey extends string>({
               search.format ? "border-accent text-accent" : "border-border text-dim",
             )}
           >
-            {/* **Two pinned rows above the sorted list, widest first — and they are what used to
-                be a select and an `Unplayable` chip.** Neither is a format: one is "no format
-                filter at all" and the other "no format filter, and no format required either", so
-                both belong where a reader reaches for them blind — first — whatever the alphabet
-                and the facets do to the formats below.
+            {/* **Up to two pinned rows above the sorted list, widest first — and they are what
+                used to be a select and an `Unplayable` chip.** Neither is a format: one is "no
+                format filter at all" and the other "no format filter, and no format required
+                either", so both belong where a reader reaches for them blind — first — whatever
+                the alphabet and the facets do to the formats below. The widest of the two is drawn
+                only where it means something ({@link FilterSurface.anyCard}); on the other three
+                surfaces the ladder is two rungs rather than three.
 
                 They read as a ladder rather than as an alphabet: every card, every card that is
                 legal *somewhere*, then one named format. `Any format` is the default and the
@@ -1001,7 +1116,11 @@ function FilterTray<SortKey extends string>({
                 Neither carries a `title`. A `title` on an `<option>` is not drawn by Windows'
                 native dropdown, so the sentence explaining that "any card" means art cards, tokens
                 and emblems could only be read by a screen reader. */}
-            <option value={ANY_CARD}>Any card</option>
+            {/* Only where the surface's corpus is narrowed to begin with — see
+                {@link FilterSurface.anyCard}. Drawn unconditionally, this row set `format` to a
+                sentinel a collection's backend reads as a legalities key nothing matches, and the
+                wall went empty. */}
+            {search.anyCard && <option value={ANY_CARD}>Any card</option>}
             <option value="">Any format</option>
             {formatOptions.map((f) => (
               // The one place a real `disabled` is right: `<option disabled>` is native, and a
@@ -1119,11 +1238,8 @@ function FilterTray<SortKey extends string>({
        *printing's* fallback chain and the collection bands the copy's own finish, because each
        is what the Price beside it shows — `collection::scope` carries the contrast. This cell
        only has to name the currency both of them are in. */
-    price: (
-      <TrayField
-        key="price"
-        label={`Price (${search.marketplace.currency.toUpperCase()})`}
-      >
+    price: search.setPriceRange ? (
+      <TrayField key="price" label={`Price (${search.marketplace.currency.toUpperCase()})`}>
         <PriceRange
           min={search.priceMin}
           max={search.priceMax}
@@ -1131,13 +1247,97 @@ function FilterTray<SortKey extends string>({
           onChange={search.setPriceRange}
         />
       </TrayField>
-    ),
+    ) : null,
 
     /* A view mode rather than a filter — it says which *rows* the wall draws, one per card or
             one per printing — so it is untouched by Reset all and absent from the badge. In the
             tray rather than on the bar because it is the rarest press on this whole surface: the
             search answers "which cards exist", and this is the way through to "which printings",
             which is otherwise the card pane's question. */
+    /* The finishes as a copy can be in — **not as a printing was published in**, which is the
+       whole reason this cell is absent from the card search. A printing exists in every finish it
+       was printed in at once, so `Foil` over a wall of printings would be a filter with no
+       question behind it; a *copy* is one piece of cardboard and is exactly one of them.
+
+       No facet props, here or on the three cells below: no surface that draws them has a facet
+       command behind it, so every chip keeps its plain label and nothing greys — `facets.ts`'
+       "we don't know" arm, which fails open. */
+    finish: search.toggleFinish ? (
+      <TrayField key="finish" label="Finish">
+        <div role="group" aria-label="Finish" className="flex flex-wrap gap-1.5">
+          {FINISHES.map((f) => (
+            <ToggleChip
+              key={f}
+              label={FINISH_LABEL[f]}
+              pressed={search.finishes?.includes(f) ?? false}
+              onClick={() => search.toggleFinish?.(f)}
+              className="flex-1"
+            />
+          ))}
+        </div>
+      </TrayField>
+    ) : null,
+
+    /* The grades as they are printed on every listing the cards came from. Spelled out in the
+       accessible name and the tooltip, because `DMG` is vocabulary — and five spelled-out grades
+       are 400px of chrome, which is what put this cell in the tray rather than on the bar.
+
+       Three to a line below 640 and one line above it, the rarity cell's arrangement for its
+       reason: five chips do not fit one column of a narrow tray, and a chip that cannot shrink
+       hangs out of it. */
+    condition: search.toggleCondition ? (
+      <TrayField key="condition" label="Condition">
+        <div
+          role="group"
+          aria-label="Condition"
+          className="grid grid-cols-3 gap-1.5 @min-[640px]/fb:flex"
+        >
+          {CONDITIONS.map((c) => (
+            <ToggleChip
+              key={c}
+              label={c}
+              hint={CONDITION_LABEL[c].toLowerCase()}
+              pressed={search.conditions?.includes(c) ?? false}
+              onClick={() => search.toggleCondition?.(c)}
+              className="@min-[640px]/fb:flex-1"
+            />
+          ))}
+        </div>
+      </TrayField>
+    ) : null,
+
+    /* The one question a shopping list is for, and the reason it is one chip with a changing word
+       rather than the Owned pair above: `Still missing` and `Fulfilled` are the two ends of one
+       axis, where Owned and Missing are two questions a card search can ask independently. The
+       label opens on `Still missing` because that is what the list is usually open for. */
+    fulfilled: search.setFulfilled ? (
+      <TrayField key="fulfilled" label="Fulfilled">
+        <ToggleChip
+          label={search.fulfilled === true ? "Fulfilled" : "Still missing"}
+          pressed={search.fulfilled !== undefined}
+          onClick={() => search.setFulfilled?.(cycleTriState(search.fulfilled, false))}
+          className="w-full"
+        />
+      </TrayField>
+    ) : null,
+
+    /* The other half of what the flagged band under a row says: the band tells you an entry needs
+       looking at, and this is how you ask for only those. Off → flagged → not flagged → off, and
+       **the word on the chip is what says which of the three is on** — an unpressed chip cannot
+       mean "not flagged" and also be the same chip that means it when pressed. The flagged rows
+       come first because that is the only reason anybody presses this; the complement is where
+       the reader goes once they are dealt with. */
+    needsReview: search.setNeedsReview ? (
+      <TrayField key="needsReview" label="Needs review">
+        <ToggleChip
+          label={search.needsReview === false ? "Not flagged" : "Needs review"}
+          pressed={search.needsReview !== undefined}
+          onClick={() => search.setNeedsReview?.(cycleTriState(search.needsReview, true))}
+          className="w-full"
+        />
+      </TrayField>
+    ) : null,
+
     printings: search.toggleAllPrintings ? (
       <TrayField key="printings" label="Printings">
         {/* **One label, never flipped to `One per card` when it is off.** This is a plain
@@ -1198,20 +1398,41 @@ function TrayField({
 }
 
 /**
- * The layout pair, bound to one page's own preference — the collection and the wishlist keep
- * separate ones, because a search is for looking at cards and a collection for counting them.
+ * The layout pair, bound to one page's own preference — the four lists keep four, because they
+ * are looked at for four different reasons and a reader who put their collection in a table was
+ * not saying anything about their shopping list.
  *
- * **Both branches are read every render, and that is the hooks rule rather than waste.** A
+ * **All eight selectors are read every render, and that is the hooks rule rather than waste.** A
  * `useAppStore` call inside a conditional is a hook order that changes with a prop; zustand's
- * selector subscribes to the field it returns, so the cost of the pair is one extra subscription
- * to a string that moves when a reader presses this very control.
+ * selector subscribes to the field it returns, so the cost is three extra subscriptions to strings
+ * that move only when a reader presses this very control on one of the other three pages — and
+ * only one of the four pages is ever mounted at a time.
+ *
+ * The pair is picked out of records rather than by a chain of ternaries, so adding a fifth list is
+ * a line in {@link LIST_SECTIONS} and a line in each record instead of a conditional that has to
+ * stay in step with itself in two places.
  */
-function ViewToggle({ section }: { section: "search" | "tags" }) {
+function ViewToggle({ section }: { section: ListSection }) {
   const searchView = useAppStore((s) => s.searchView);
   const tagsView = useAppStore((s) => s.tagsView);
+  const collectionView = useAppStore((s) => s.collectionView);
+  const wishlistView = useAppStore((s) => s.wishlistView);
   const setSearchView = useAppStore((s) => s.setSearchView);
   const setTagsView = useAppStore((s) => s.setTagsView);
-  const tags = section === "tags";
+  const setCollectionView = useAppStore((s) => s.setCollectionView);
+  const setWishlistView = useAppStore((s) => s.setWishlistView);
+  const view = {
+    search: searchView,
+    tags: tagsView,
+    collection: collectionView,
+    wishlist: wishlistView,
+  }[section];
+  const onChange = {
+    search: setSearchView,
+    tags: setTagsView,
+    collection: setCollectionView,
+    wishlist: setWishlistView,
+  }[section];
   return (
     // **Last of everything in the stacked layout, and beside the sort above it.** At 640 and up
     // the pair rides the first line past the divider, which is where the design puts it; below
@@ -1220,10 +1441,7 @@ function ViewToggle({ section }: { section: "search" | "tags" }) {
     // mana values. Ordered past the sort instead, it shares that line, which is the other control
     // on this bar that is about how the results are *shown* rather than which ones there are.
     <div className="order-[40] flex @min-[640px]/fb:order-[9]">
-      <LayoutToggle
-        view={tags ? tagsView : searchView}
-        onChange={tags ? setTagsView : setSearchView}
-      />
+      <LayoutToggle view={view} onChange={onChange} />
     </div>
   );
 }

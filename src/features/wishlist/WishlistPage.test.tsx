@@ -212,7 +212,25 @@ const lastQuery = () =>
  * so `/sort/i` on `getByLabelText` would still risk matching the whole header row rather than
  * only the control this file means.
  */
-const sortSelect = () => screen.getByRole("combobox", { name: "Sort" });
+// **`Sort results` and not the bare `Sort` this page drew before it shared `FilterBar`** —
+// see `CollectionPage.test.tsx`, whose note this is, and `FilterBar`'s own label.
+const sortSelect = () => screen.getByRole("combobox", { name: "Sort results" });
+/**
+ * Open the filter tray, so a cell behind the Filters disclosure can be pressed.
+ *
+ * Everything but the box, the colours, the order and the layout pair lives behind that button
+ * since this page started drawing `FilterBar` — so a suite that reached straight for a chip is
+ * now reaching into a tray that is not mounted. Matched on a prefix: the button's name carries
+ * the live count (`Show filters — 2 active`), which moves as a case presses things.
+ */
+async function openTray(user: {
+  // Structural, so the bare `userEvent` module and a `userEvent.setup()` instance both satisfy it
+  // — this file uses each in different cases, and the two are not the same type.
+  click: (element: Element) => Promise<unknown>;
+}): Promise<void> {
+  await user.click(screen.getByRole("button", { name: /^Show filters/ }));
+}
+
 
 /**
  * The header's money figure, scoped — a two-row wishlist prints the same amount in the total
@@ -349,12 +367,14 @@ describe("WishlistPage", () => {
     wrap(<WishlistPage />);
     await screen.findByText("Lightning Bolt");
 
+    await openTray(userEvent);
     await userEvent.click(screen.getByRole("button", { name: "Still missing" }));
 
     await waitFor(() => expect(lastQuery().fulfilled).toBe(false));
 
     // And round the other way, because the opposite question — what did I already get? — is
-    // the reason a fulfilled wish is kept in the first place.
+    // the reason a fulfilled wish is kept in the first place. The tray is still open from the
+    // press above — it is a disclosure the reader opened, not a menu that closes behind them.
     await userEvent.click(screen.getByRole("button", { name: "Still missing" }));
 
     expect(await screen.findByRole("button", { name: "Fulfilled" })).toBeInTheDocument();
@@ -638,6 +658,7 @@ describe("WishlistPage", () => {
     wrap(<WishlistPage />);
     await screen.findByText("Lightning Bolt");
 
+    await openTray(userEvent);
     await userEvent.click(await screen.findByRole("button", { name: "Needs review" }));
 
     await waitFor(() => expect(lastQuery().needsReview).toBe(true));
@@ -707,6 +728,7 @@ describe("WishlistPage", () => {
     wrap(<WishlistPage />);
     await screen.findByText(/nothing on your wishlist yet/i);
 
+    await openTray(userEvent);
     await userEvent.click(screen.getByRole("button", { name: "Still missing" }));
 
     expect(await screen.findByText(/no wishes match these filters/i)).toBeVisible();
@@ -778,6 +800,12 @@ describe("WishlistPage", () => {
 
     expect(screen.getByRole("columnheader", { name: /^Printing/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Printing/ })).not.toBeInTheDocument();
+
+    // **It opens on the order it is actually in, and `Custom…` is not there to open on** —
+    // `CollectionPage.test.tsx`'s twin, and the trap is the same: a controlled `<select>` whose
+    // value matches no option silently reports the first row rather than drawing blank.
+    expect(sortSelect()).toHaveValue("name");
+    expect(screen.queryByRole("option", { name: "Custom…" })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Wanted" }));
     await waitFor(() => expect(lastQuery().sort).toEqual([{ key: "quantity", dir: "desc" }]));
@@ -947,7 +975,7 @@ describe("WishlistPage", () => {
     wrap(<WishlistPage />);
     await screen.findByText("Wish 1");
 
-    await user.click(await screen.findByRole("button", { name: "Export" }));
+    await user.click(await screen.findByRole("button", { name: "Export wishlist" }));
     await waitFor(() =>
       expect(wishlistList).toHaveBeenCalledWith(expect.objectContaining({ limit: 500 })),
     );
@@ -966,7 +994,7 @@ describe("WishlistPage", () => {
     wrap(<WishlistPage />);
     await screen.findByText("Lightning Bolt");
 
-    await user.click(screen.getByRole("button", { name: "Import" }));
+    await user.click(screen.getByRole("button", { name: "Import wishes" }));
     const dialog = await screen.findByRole("dialog", { name: "Import a decklist" });
     await user.click(within(dialog).getByLabelText("Decklist"));
     await user.paste("1 Sol Ring");
@@ -1934,7 +1962,7 @@ describe("the folders", () => {
     const user = userEvent.setup();
     wrap(<WishlistPage />);
     // At the root there is no drawer to name, but ticking the box still widens past the drawers.
-    await user.click(await screen.findByRole("button", { name: "Export" }));
+    await user.click(await screen.findByRole("button", { name: "Export wishlist" }));
     expect(
       await screen.findByRole("checkbox", {
         name: "Export everything, ignoring the filters and folders",
@@ -1944,7 +1972,7 @@ describe("the folders", () => {
 
     await user.click(await screen.findByRole("button", { name: /^Ordered folder/ }));
     await screen.findByText("Rhystic Study");
-    await user.click(screen.getByRole("button", { name: "Export" }));
+    await user.click(screen.getByRole("button", { name: "Export wishlist" }));
 
     expect(await screen.findByText("1 card in Ordered matching your filters")).toBeInTheDocument();
   });

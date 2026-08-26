@@ -91,6 +91,7 @@ import {
   isPrintingGroupBy,
 } from "@/features/card/printings";
 import { MAX_ZOOM, MIN_ZOOM } from "@/lib/cardZoom";
+import { isSearchView } from "@/lib/store";
 import { DEFAULT_GROUP_BY } from "@/features/decks/grouping";
 import { DEFAULT_SORT_BY } from "@/features/decks/sorting";
 import { SPECS } from "@/features/decks/validation/fixtures";
@@ -933,6 +934,21 @@ export interface FakeDb {
    */
   cardZoom: Record<string, number>;
   /**
+   * `app_meta.list_view` — how each list of cards was last left drawn, as section name →
+   * `"grid"` or `"table"`.
+   *
+   * {@link FakeDb.cardZoom}'s shape and its whole contract, one row over: an *object*, so
+   * `Record<string, string>` rather than `Record<ListSection, SearchView>` — the keys **and** the
+   * values are whatever some build wrote, and both states a narrowed field could not reach are
+   * ones a story wants: a list this build has never drawn, and a word that is not a layout. `{}`
+   * for "nothing stored", because there is no single default to fall back on — four lists have
+   * each been switched or not, and an absent key *is* the answer for one nobody has touched.
+   *
+   * **The read drops what it cannot use and the write refuses it** — see
+   * {@link readHandlers.list_view} and {@link writeHandlers.set_list_view}.
+   */
+  listView: Record<string, string>;
+  /**
    * `app_meta.nav_collapsed` — whether the reader has collapsed the global navigation sidebar
    * down to its icons.
    *
@@ -1325,6 +1341,7 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // says nothing about zoom is standing in. A story that wants a restored session passes the
     // sections it cares about and leaves the rest out — an absent key is a wall nobody has zoomed.
     cardZoom: {},
+    listView: {},
     // The fifth row, and the first whose default is a *value* rather than an absence: a shell
     // nobody has collapsed. `false` is what the backend answers for the row never having been
     // written and for its holding something unreadable alike, so there is no third state for
@@ -5356,6 +5373,28 @@ export function readHandlers(db: FakeDb) {
       Object.fromEntries(
         Object.entries(db.cardZoom).filter(
           ([section, zoom]) => section !== "" && isStorableZoom(zoom),
+        ),
+      ),
+
+    /**
+     * `listview::list_view` — every list's remembered layout, with the unusable entries dropped.
+     *
+     * {@link readHandlers.card_zoom}'s rule verbatim, including the part a fake most easily gets
+     * wrong: the fallback is **per entry**, so one hand-edited word costs that list its memory and
+     * leaves the other three intact.
+     *
+     * Where the zoom's bound is a number's range, this one's is a two-word vocabulary — and it is
+     * the *backend's* vocabulary rather than the frontend's, which is the reverse of the section
+     * name beside it. So an unknown layout is dropped here and an unknown *section* is not: that
+     * asymmetry is what `isListSection` on the frontend exists for, and a fake that filtered
+     * sections would hide it.
+     *
+     * A read, so it answers through every second of a sync — the write below does not.
+     */
+    list_view: (): Record<string, string> =>
+      Object.fromEntries(
+        Object.entries(db.listView).filter(
+          ([section, view]) => section !== "" && isSearchView(view),
         ),
       ),
 
@@ -10203,6 +10242,31 @@ export function writeHandlers(db: FakeDb) {
         );
       }
       db.cardZoom = { ...db.cardZoom, [args.section]: args.zoom };
+    },
+
+    /**
+     * `listview::set_list_view` — remember one list's layout, and refuse a word that could not be
+     * read back.
+     *
+     * {@link writeHandlers.set_card_zoom}'s three rules, one row over. The refusal is the half a
+     * fake is easiest to leave out — the read side drops what it cannot use, so a fake that
+     * accepted any string would let a story save `"cards"`, read back nothing, and look like it
+     * worked. The **section** is unchecked for the same asymmetry: which lists exist is
+     * TypeScript's vocabulary and `listview.rs` deliberately does not know it. And only the named
+     * section is touched, so an entry this build cannot use survives a write made beside it.
+     *
+     * It honours `busy` like every other ordinary write — `listview.rs` takes the write connection
+     * through `sync::with_write`, and the lock comes first.
+     */
+    set_list_view: (args: { section: string; view: string }): void => {
+      refuseIfBusy(db);
+      if (args.section === "") throw refuse("A list section cannot be blank.");
+      if (!isSearchView(args.view)) {
+        throw refuse(
+          `"${args.view}" is not a way this app draws a list. Expected one of: grid, table.`,
+        );
+      }
+      db.listView = { ...db.listView, [args.section]: args.view };
     },
 
     /**

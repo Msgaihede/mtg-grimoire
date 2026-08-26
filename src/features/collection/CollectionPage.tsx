@@ -22,7 +22,9 @@ import { CardGrid, type GridCard } from "@/features/search/CardGrid";
 import { ExportDialog } from "@/features/transfer/export/ExportDialog";
 import { everythingLabel, scopeLabel, useExportScope } from "@/features/transfer/export/scope";
 import { collectionDestination } from "@/features/transfer/import/destinations/CollectionPreview";
+import { ImportExportPair } from "@/features/transfer/ImportExportPair";
 import { ImportDialog } from "@/features/transfer/import/ImportDialog";
+import { FilterBar, type FilterLabels, type TrayCell } from "@/features/search/FilterBar";
 import { DROP_MARK_ROOM } from "@/lib/dropMarks";
 import { FINISHES, isFinish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
@@ -40,7 +42,6 @@ import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { writeFailure } from "@/lib/writes";
 import { CollectionBreadcrumb } from "./CollectionBreadcrumb";
-import { CollectionFilterBar } from "./CollectionFilterBar";
 import { CollectionFolderCard, type CollectionFolderTotals } from "./CollectionFolderCard";
 import { CollectionSummaryHeader } from "./CollectionSummary";
 import { CollectionTable } from "./CollectionTable";
@@ -296,6 +297,38 @@ function tileTarget(tile: CollectionTile): CardMenuTarget {
  * so it is the mono face, unemphasised, with no colour and no chrome. Everything loud on
  * this screen is card art, exactly as it is in search.
  */
+/**
+ * What this surface calls its search box, and the `id` stem its labels bind through.
+ *
+ * **`Search your collection` and never the search page's `Search cards`**, which is `FilterLabels`'
+ * whole reason: this box narrows the reader's own binder and that one narrows every printing
+ * Scryfall has published, so one name over both would be the control lying about which list it is
+ * over — and a `getByLabelText` could not tell the two apart.
+ */
+const COLLECTION_LABELS: FilterLabels = {
+  idStem: "collection",
+  search: "Search your collection",
+};
+
+/**
+ * Which of `FilterBar`'s tray cells this page offers, in the order it draws them.
+ *
+ * The four the card search shares, then the three only a collection can ask: what the copy *is*,
+ * what state it is in, and whether a sync left a question against it. The absences are each a fact
+ * about the list rather than an omission — there is no **Owned** pair because every row here is a
+ * copy the reader has, no **All printings** because these *are* their printings, and no **Decks**
+ * because that cell is the deck editor's Collection tab and asks about one deck.
+ */
+const COLLECTION_TRAY: readonly TrayCell[] = [
+  "set",
+  "format",
+  "rarity",
+  "price",
+  "finish",
+  "condition",
+  "needsReview",
+];
+
 export function CollectionPage() {
   const collection = useCollection();
   const { query, summary, rows, total, marketplace, folderId } = collection;
@@ -758,7 +791,7 @@ export function CollectionPage() {
    * day want the last one.
    *
    * The filter box is what makes this safe to have at all rather than a courtesy laid over it —
-   * `clearFieldOnEscape` in `CollectionFilterBar` — because Chromium empties an
+   * `clearFieldOnEscape` in `FilterBar` — because Chromium empties an
    * `<input type="search">` on Escape by itself and does **not** mark the press handled, so
    * without it one press would clear the box *and* walk the reader up a level.
    */
@@ -1011,7 +1044,22 @@ export function CollectionPage() {
           header below says what this view is far better than a title would. */}
       <h2 className="sr-only">Collection</h2>
 
-      <CollectionSummaryHeader summary={summary.data} marketplace={marketplace} />
+      <CollectionSummaryHeader
+        summary={summary.data}
+        marketplace={marketplace}
+        // The band's far end, where they used to sit beside the filter row — see `FigureRow`,
+        // which is where the placement is argued. The names say *what* is moved, because both
+        // dialogs carry a control called `Import` and two of those on one screen is a pair a
+        // screen reader can only tell apart by position.
+        actions={
+          <ImportExportPair
+            onImport={() => setImporting(true)}
+            onExport={() => setExporting(true)}
+            importLabel="Import cards"
+            exportLabel="Export collection"
+          />
+        }
+      />
 
       {/* The region is mounted for the life of the view and the banner is swapped into it: a
           live region that appears together with its own text announces nothing, because there
@@ -1050,49 +1098,53 @@ export function CollectionPage() {
         )}
       </div>
 
-      <div className="flex flex-wrap items-start gap-2">
-        <div className="min-w-0 flex-1">
-          <CollectionFilterBar collection={collection} onNewFolder={openNewFolder} />
-        </div>
-        {/* The first export entry point outside the deck editor (Task 11); Import beside it
-            since Task 14, over `collectionDestination` — the collection's own bulk-import
-            planner and preview. */}
-        <div className="flex shrink-0 items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setImporting(true)}
-            className={cn(
-              "h-8 rounded-md border border-border px-3 text-sm hover:bg-surface",
-              FOCUS,
-            )}
-          >
-            Import
-          </button>
-          <button
-            type="button"
-            onClick={() => setExporting(true)}
-            className={cn(
-              "h-8 rounded-md border border-border px-3 text-sm hover:bg-surface",
-              FOCUS,
-            )}
-          >
-            Export
-          </button>
-        </div>
-      </div>
+      {/* The same row the search and the Tags page draw, over this page's own hook — see
+          `FilterBar`, whose prop is a structural `FilterSurface` that `useCollection` satisfies.
+          What was a bespoke two-line row of fourteen controls is the shared four-on-the-bar plus a
+          tray, so a reader who has learned that row once does not have to learn it again here. */}
+      <FilterBar
+        search={collection}
+        labels={COLLECTION_LABELS}
+        sortRows={collection.sortRows}
+        tray={COLLECTION_TRAY}
+        layoutFor="collection"
+      />
 
       <div className="flex min-h-0 flex-1 flex-col gap-2">
-        {hasFolders && (
-          <CollectionBreadcrumb
-            // Root-most first and **without the root**, which the breadcrumb prepends itself:
-            // `null` is a destination rather than a folder, and only that component knows what it
-            // calls it.
-            trail={trail}
-            onOpen={collection.openFolder}
-            canDrop={canFile}
-            onDropCard={fileCard}
-          />
-        )}
+        {/* **The cabinet's own controls, and they are deliberately not in the filter row.**
+            Where the reader is standing and what drawers exist are navigation rather than a
+            narrowing — `useCollection.folderId` says so, and `resetAll` leaves both alone — so a
+            `+ New folder` among the filters would be the one control in that row that Reset all
+            could not undo. It sits with the breadcrumb and the folder cards instead, which is
+            where the thing it makes appears. */}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          {hasFolders && (
+            <div className="min-w-0 flex-1">
+              <CollectionBreadcrumb
+                // Root-most first and **without the root**, which the breadcrumb prepends itself:
+                // `null` is a destination rather than a folder, and only that component knows what
+                // it calls it.
+                trail={trail}
+                onOpen={collection.openFolder}
+                canDrop={canFile}
+                onDropCard={fileCard}
+              />
+            </div>
+          )}
+          {/* Always drawn, unlike the wishlist's twin, which hides while the list is flattened:
+              there is no flattened state here to hide from, and a new folder is made **inside the
+              one the reader is standing in** — which at the root is the top level. */}
+          <button
+            type="button"
+            onClick={(e) => openNewFolder(e.currentTarget)}
+            className={cn(
+              "ml-auto h-8 shrink-0 rounded-md border border-border px-3 text-sm hover:bg-surface",
+              FOCUS,
+            )}
+          >
+            + New folder
+          </button>
+        </div>
 
         {/* **One strip for all four folder layers, and it is not a placement decision so much as
             the only place there is.** Every other anchored layer in this app hangs off a

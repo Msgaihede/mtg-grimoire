@@ -4,6 +4,7 @@ import {
   colorParam,
   cycleTriState,
   DEBOUNCE_MS,
+  FORMATS,
   toggleColor,
   toggleIn,
   type ColorKey,
@@ -11,6 +12,7 @@ import {
 import { CONDITIONS, type Condition } from "@/lib/conditions";
 import { FINISHES, type Finish } from "@/lib/finish";
 import { ipc, type CollectionQuery, type CollectionSortKey } from "@/lib/ipc";
+import { sortOptions } from "@/lib/options";
 import { applySort, type SortDir, type SortSpec } from "@/lib/sort";
 import { useMarketplace } from "@/lib/useMarketplace";
 
@@ -26,7 +28,7 @@ export type CollectionSort = CollectionSortKey;
 /**
  * The orders the filter bar's select offers.
  *
- * **This array's order is its declaration order and nothing else.** `CollectionFilterBar`'s
+ * **This array's order is its declaration order and nothing else.** `FilterBar`'s
  * sort `<select>` draws it alphabetically by label through `sortOptions` (`lib/options.ts`),
  * and the only other reader — `sortSelection` below — asks which keys are *in* it. So
  * reordering these five lines changes nothing a reader sees; it only breaks the reasoning
@@ -77,6 +79,11 @@ export interface CollectionFilterState {
   /** The X chip — "also the cards with `{X}` in their printed cost". The other half of the
    *  question `manaValues` asks, and counted with it below for that reason. */
   manaX: boolean;
+  rarities: readonly string[];
+  /** The band the Price cell sets, at the marketplace the list is quoting. Either end alone is a
+   *  filter; both `undefined` is none. */
+  priceMin: number | undefined;
+  priceMax: number | undefined;
   finishes: readonly Finish[];
   conditions: readonly Condition[];
   /** `true` is the rows a sync flagged, `false` everything it did not touch. Three-way like
@@ -102,6 +109,11 @@ export function activeFilterCount(f: CollectionFilterState): number {
     // that same group and is OR'd with them, so "3 and X" is one thing to clear. In here at
     // all, though — an X-only filter that counted zero would hide the Reset all that clears it.
     f.manaValues.length > 0 || f.manaX,
+    f.rarities.length > 0,
+    // One kind for both ends, as the search counts it: `$5 – $20` is one band and one thing to
+    // clear, so a reader who set both ends and saw `Reset all 2` would have been told the wrong
+    // number about one control.
+    f.priceMin !== undefined || f.priceMax !== undefined,
     f.finishes.length > 0,
     f.conditions.length > 0,
     // Compared against `undefined`, never tested for truthiness: `false` — "the rows nothing
@@ -158,6 +170,14 @@ export function useCollection() {
   // Additive rather than exclusive, exactly as the search's is: `cmc` counts `{X}` as zero, so
   // a `{X}{B}{B}{B}` in the collection answers the `3` chip and this one both.
   const [manaX, setManaX] = useState(false);
+  // On the wire since `CardFilters` was shared and drawn since 2026-08-26 — the four gems the
+  // search's tray has always offered, over the reader's own binder.
+  const [rarities, setRarities] = useState<readonly string[]>([]);
+  // The band the Price cell sets. `collection::scope` bands the **copy's own per-finish price**
+  // rather than the printing's fallback chain, so a banded row is a row the Value column agrees
+  // with — the contrast is written down there.
+  const [priceMin, setPriceMin] = useState<number | undefined>(undefined);
+  const [priceMax, setPriceMax] = useState<number | undefined>(undefined);
   const [finishes, setFinishes] = useState<readonly Finish[]>([]);
   const [conditions, setConditions] = useState<readonly Condition[]>([]);
   const [needsReview, setNeedsReview] = useState<boolean | undefined>(undefined);
@@ -194,6 +214,7 @@ export function useCollection() {
   // chips do.
   const setsParam = sets.length > 0 ? [...sets].sort() : undefined;
   const manaParam = manaValues.length > 0 ? [...manaValues].sort((a, b) => a - b) : undefined;
+  const raritiesParam = rarities.length > 0 ? [...rarities].sort() : undefined;
   const finishParam =
     finishes.length > 0 ? FINISHES.filter((f) => finishes.includes(f)) : undefined;
   const conditionParam =
@@ -211,6 +232,11 @@ export function useCollection() {
     // filter, and a payload that said so would be lying about intent the way a blank `text`
     // would. `true` widens — it adds the `{X}` rows to whatever the numerals matched.
     manaX: manaX || undefined,
+    rarities: raritiesParam,
+    // Each end sent only where the reader set one, so a band open at the bottom is one bound on
+    // the wire rather than a zero the backend would have to tell apart from "no floor".
+    priceMin,
+    priceMax,
     finishes: finishParam,
     conditions: conditionParam,
     // Sent only when it is set — and `false`, "everything the sync did not touch", is
@@ -263,6 +289,12 @@ export function useCollection() {
     // built from the numerals alone would serve "3, and also X" out of the pages cached for
     // plain "3" — against local SQLite, instantly, with nothing on screen to notice.
     manaX ? "x" : "",
+    raritiesParam?.join(",") ?? "",
+    // `String(undefined)` is `"undefined"`, which is a segment as good as any other and cannot
+    // collide with a number — where an empty string could be read as a bound of zero by anyone
+    // debugging the key.
+    String(priceMin),
+    String(priceMax),
     finishParam?.join(",") ?? "",
     conditionParam?.join(",") ?? "",
     // Three terms, not two: the flagged rows and the rows nothing flagged are two different
@@ -313,10 +345,41 @@ export function useCollection() {
     setText,
     format,
     setFormat,
+    /**
+     * The rows the format picker offers — the shared {@link FORMATS} and nothing added to it.
+     *
+     * Unlike the deck editor's two search surfaces there is no default format to seed: nothing
+     * opens this page pointed at a format, so the picker can never be sitting on a key the list
+     * does not hold. `formatsWithDefault`'s whole job is that seeding, which is why it is not
+     * called here.
+     *
+     * **And no `anyCard`** — see `FilterSurface.anyCard`. Every row of this picker is a real
+     * `legalities` key or the empty string, because a collection's corpus is the reader's own
+     * cardboard and is narrowed by nothing a widening row could put back.
+     */
+    formats: FORMATS,
     colors,
     toggleColor: (key: ColorKey) => setColors((picked) => toggleColor(picked, key)),
     sets,
     toggleSet: (code: string) => setSets((picked) => toggleIn(picked, code)),
+    rarities,
+    toggleRarity: (rarity: string) => setRarities((picked) => toggleIn(picked, rarity)),
+    priceMin,
+    priceMax,
+    /** Both ends at once, because `PriceRange` moves them together — a slider drag can change
+     *  either, and two setters would be two renders and two query keys for one gesture. */
+    setPriceRange: (min: number | undefined, max: number | undefined) => {
+      setPriceMin(min);
+      setPriceMax(max);
+    },
+    /**
+     * **No facets, and that is a fact about this list rather than a gap.** `facets.ts` reads
+     * `undefined` as "we do not know", which leaves every chip live and nothing greyed — the
+     * honest state here, because `collection_list` has no facet command behind it the way
+     * `search_cards` does. Counting would be a second query per keystroke over the reader's whole
+     * binder, for a row of numbers beside a list already on screen.
+     */
+    facets: undefined,
     manaValues,
     toggleManaValue: (value: number) => setManaValues((picked) => toggleIn(picked, value)),
     /**
@@ -364,8 +427,43 @@ export function useCollection() {
           firstDir: COLLECTION_FIRST_DIR[key as CollectionSortKey] ?? "asc",
         }),
       ),
-    /** The filter bar's select: one term, replacing whatever was there. */
-    setSortKey: (key: CollectionSortKey) => setSort([{ key, dir: COLLECTION_FIRST_DIR[key] }]),
+    /**
+     * The filter bar's select: one term, replacing whatever was there.
+     *
+     * **It takes the `""` its own `Custom…` row carries**, which is a fact about the type rather
+     * than about a press: that row is `disabled`, so nothing on screen can send it. The row exists
+     * because the select's value has to be one its options carry ({@link sortRows}), and a
+     * setter that refused the value the control can *hold* would be a signature that could not be
+     * bound to it. It is written out rather than cast away — the empty spec is this list's name
+     * order, so the unreachable arm has a right answer and says it.
+     */
+    setSortKey: (key: CollectionSortKey | "") =>
+      setSort(key === "" ? [] : [{ key, dir: COLLECTION_FIRST_DIR[key] }]),
+    /**
+     * Which way the list runs — **never `undefined`, which is where this parts company with the
+     * card search's twin.**
+     *
+     * An empty spec is this list's name order rather than a ranking, so it has a direction and
+     * that direction is `COLLECTION_FIRST_DIR.name`. The search's empty spec is `Best match`,
+     * which has none, and its arrow greys there; greying this one would grey a button that works,
+     * on a list whose order is on screen in front of the reader.
+     */
+    sortDir: sort.length === 0 ? COLLECTION_FIRST_DIR.name : sort[0].dir,
+    /**
+     * Turn the first term over — the same control the table's headers drive, from the other end.
+     *
+     * **An empty spec is written out rather than left alone.** It *is* name order here, so the
+     * button is drawn live and pointing up; leaving it alone would be a control that visibly does
+     * nothing. Flipping it materialises the order the list was already in, reversed.
+     */
+    flipSortDir: () =>
+      setSort((spec) =>
+        spec.length === 0
+          ? [{ key: "name", dir: COLLECTION_FIRST_DIR.name === "asc" ? "desc" : "asc" }]
+          : spec.map((term, at) =>
+              at === 0 ? { key: term.key, dir: term.dir === "asc" ? "desc" : "asc" } : term,
+            ),
+      ),
     /**
      * What the select shows.
      *
@@ -380,6 +478,30 @@ export function useCollection() {
       : COLLECTION_SORTS.some((s) => s.value === sort[0].key)
         ? sort[0].key
         : "") as CollectionSortKey | "",
+    /**
+     * The rows that select draws, **including the `Custom…` the sort can only be *put* into.**
+     *
+     * It lives here rather than in `FilterBar` because it is a fact about this list's *state*
+     * rather than about the control: the Value and Finish headers sort by keys the select has no
+     * option for, so the select would otherwise be sitting on a value none of its rows carries —
+     * and a controlled `<select>` whose value matches no option silently reports the **first**
+     * one. That is the trap `FilterBar`'s format picker writes down at length, arriving on a
+     * different control.
+     *
+     * Drawn only while the sort is in that state, and `disabled` when it is: picking it would be
+     * picking the sort you already have. `disabled` and not `aria-disabled` — a native `<option>`
+     * is the house rule's one exception, because the reason behind that rule (a disabled control
+     * leaves the tab order) is about something that was in it to begin with.
+     *
+     * Sorted alphabetically by label like every other option list (`lib/options.ts`), with the
+     * pinned row outside the sort — it is the state of the control rather than an order to pick.
+     */
+    sortRows: [
+      ...(sort.length > 0 && !COLLECTION_SORTS.some((s) => s.value === sort[0].key)
+        ? ([{ value: "", label: "Custom…", disabled: true }] as const)
+        : []),
+      ...sortOptions(COLLECTION_SORTS, (s) => s.label),
+    ] as readonly { value: CollectionSortKey | ""; label: string; disabled?: boolean }[],
     /** How many kinds of filter are on — the number on the Reset all badge. */
     activeCount: activeFilterCount({
       text,
@@ -388,6 +510,9 @@ export function useCollection() {
       sets,
       manaValues,
       manaX,
+      rarities,
+      priceMin,
+      priceMax,
       finishes,
       conditions,
       needsReview,
@@ -403,6 +528,9 @@ export function useCollection() {
       setSets([]);
       setManaValues([]);
       setManaX(false);
+      setRarities([]);
+      setPriceMin(undefined);
+      setPriceMax(undefined);
       setFinishes([]);
       setConditions([]);
       setNeedsReview(undefined);

@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Figure, FigureRow } from "@/components/Figure";
 import { count } from "@/lib/counts";
 import type { CollectionSummary as Summary } from "@/lib/ipc";
@@ -37,16 +38,20 @@ import { formatPrice, pricesAsOf } from "@/lib/prices";
 export function CollectionSummaryHeader({
   summary,
   marketplace,
+  actions,
 }: {
   summary: Summary | undefined;
   /** Which marketplace's prices this row totals: its currency writes the figure, its label is
    *  the as-of sentence. The figure itself was summed by the query. */
   marketplace: Marketplace;
+  /** The far end of the band — the page's Import/Export pair. Passed straight through to
+   *  `FigureRow`, which is where the markup rule for it lives. */
+  actions?: ReactNode;
 }) {
   const value = summary ? summary.value : null;
   const unpriced = summary ? summary.unpriced : 0;
   return (
-    <FigureRow>
+    <FigureRow actions={actions}>
       {/* Copies, not rows — a row emptied to zero contributes nothing to what is owned. */}
       <Figure label="Cards" value={summary ? count(summary.totalCards) : "—"} />
       <Figure label="Unique" value={summary ? count(summary.uniqueCards) : "—"} />
