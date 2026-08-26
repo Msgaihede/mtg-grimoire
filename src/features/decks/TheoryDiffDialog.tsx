@@ -43,8 +43,8 @@ function rowKey(row: TheoryDiffRow): string {
  * says it, in words, where the number it qualifies is.
  */
 const ONE_DIRECTION =
-  "Only what Theory wants and Live does not have. Cards in Live but not in Theory are cuts you " +
-  "have already made, so they are not listed.";
+  "Only what Theory wants and Actual does not have. Cards in Actual but not in Theory are cuts " +
+  "you have already made, so they are not listed.";
 
 /**
  * The second sentence of the same kind, drawn beside the control it is about.
@@ -316,8 +316,8 @@ export interface TheoryDiffDialogProps {
  * The difference between the deck a reader is planning and the deck they have, as a shopping
  * list they can edit before they send it.
  *
- * **One direction, and the footer says so in words.** The other direction — what Live holds and
- * Theory dropped — is a cut the reader already made and needs no row. What *is* here is every
+ * **One direction, and the footer says so in words.** The other direction — what Actual holds
+ * and Theory dropped — is a cut the reader already made and needs no row. What *is* here is every
  * exact card the plan holds that the deck has not got — printing **and** finish — with the piles
  * they sit in ignored. That is a product decision
  * taken in `deck_theory.rs`; drawing it silently would make a correct list read as a broken one,
@@ -341,8 +341,8 @@ export interface TheoryDiffDialogProps {
  *
  * **The chrome is {@link Dialog}'s and no longer this file's** (2026-08-16) — the last of the
  * three copies to be folded in, and the one whose header needed the shell to grow. Its heading
- * is `Theory <span aria-hidden>→</span><span class="sr-only">to</span> Live`, because an arrow is
- * not a word: the shell's `title` is a `ReactNode` for this, and `ariaLabel` exists because a
+ * is `Theory <span aria-hidden>→</span><span class="sr-only">to</span> Actual`, because an arrow
+ * is not a word: the shell's `title` is a `ReactNode` for this, and `ariaLabel` exists because a
  * heading spelled half in a hidden glyph is not a *name* anything can be addressed by.
  * `DeckEditor.test.tsx`'s Tab sweep addresses this overlay by that string, and it is the only
  * thing that was holding this copy to the shell's behaviour.
@@ -388,13 +388,13 @@ export function TheoryDiffDialog({
       title={
         <>
           Theory <span aria-hidden="true">→</span>
-          <span className="sr-only">to</span> Live
+          <span className="sr-only">to</span> Actual
         </>
       }
       // The heading draws the arrow; the name says it in words. What a screen reader makes of
       // "→" ranges from "right arrow" to silence, so the panel cannot be labelled by a heading
       // that is half an `aria-hidden` glyph — see {@link DialogProps.ariaLabel}.
-      ariaLabel="Theory to Live difference"
+      ariaLabel="Theory to Actual difference"
       // Widened when the list stopped being purely a shopping list (2026-08-22): a row the live
       // deck already plays as another printing is not a card to buy or pull, and a subtitle that
       // named only those two would be describing the `Missing` view rather than the dialog.

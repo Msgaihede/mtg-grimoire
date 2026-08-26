@@ -466,13 +466,14 @@ export const GroupAndSort: Story = {
  * `theory`/`type`/`manaCost` for exactly this — the other three decks carry the defaults, and a
  * seed where every deck read the same way could not show the memory at all.
  *
- * **Theory is the left-hand tab**, and that is the order the switch produces rather than a
- * preference: turning the plan on *moves* the live list into it, so the tab holding the cards is
- * the one a reader lands on and Live is the column that fills as they acquire them.
+ * **Theory is the left-hand tab again** (2026-08-26), which is also the order the switch
+ * produces rather than merely a preference: turning the plan on *moves* the live list into it, so
+ * the tab holding the cards is the one a reader lands on and `Actual` is the column that fills as
+ * they acquire them.
  *
  * Smuggler's Copter is the proof that the *list* changed and not just which button is lit — it is
- * in this deck's plan and in no part of what is sleeved up. Pressing Live is what the memory is
- * not: a starting point, never a lock.
+ * in this deck's plan and in no part of what is sleeved up. Pressing `Actual` is what the memory
+ * is not: a starting point, never a lock.
  *
  * **It is also the seeded half of {@link AutoPileArrivesWithItsCard}.** This deck's "Cut list" is
  * a pile the reader made and switched off, and the plan has nothing in it — so the heading is
@@ -487,13 +488,11 @@ export const ReopensOnThePlan: Story = {
     const canvas = within(canvasElement);
     const tabs = within(await canvas.findByRole("group", { name: "Deck list" }));
 
-    // Live first, Theory second — read off the DOM order, because "on the left" is the claim.
-    // Compare is the middle control in this group since 2026-08-24, a `Scale` glyph between the
-    // two lists it weighs, so the sequence is read off the names rather than the text.
-    const [live, compare, theory] = tabs.getAllByRole("button");
-    await expect(
-      [live, compare, theory].map((b) => b.getAttribute("aria-label") ?? b.textContent),
-    ).toEqual(["Live", "Compare", "Theory"]);
+    // Theory first, Actual second — read off the DOM order, because "on the left" is the claim.
+    // Compare stands *outside* this group since 2026-08-26 — an action about both lists rather
+    // than a third list — so the group holds exactly the two words.
+    const [theory, live] = tabs.getAllByRole("button");
+    await expect([theory, live].map((b) => b.textContent)).toEqual(["Theory", "Actual"]);
     // **The story's own claim is the pressed one, not the leftmost one**: this deck was left on
     // its plan, so Theory is what it reopens on wherever that tab is drawn.
     await expect(theory).toHaveAttribute("aria-pressed", "true");

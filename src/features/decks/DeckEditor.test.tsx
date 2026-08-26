@@ -2830,7 +2830,7 @@ describe("DeckEditor", () => {
     ["Deck settings", "Deck settings", null],
     [
       "Compare",
-      "Theory to Live difference",
+      "Theory to Actual difference",
       () => {
         const live = detail({ theoryEnabled: true }, [bolt({ quantity: 4 })]);
         const theory = detail({ theoryEnabled: true }, [
@@ -2995,7 +2995,7 @@ describe("DeckEditor", () => {
 
     const dialog = await screen.findByRole("dialog", { name: "Import a decklist" });
     // Into *this* deck, so the choice the gallery's entry point cannot offer is here.
-    expect(within(dialog).getByText(/Into Burn · Live/)).toBeInTheDocument();
+    expect(within(dialog).getByText(/Into Burn · Actual/)).toBeInTheDocument();
   });
 
   /**
@@ -3186,7 +3186,7 @@ describe("DeckEditor", () => {
   });
 
   /**
-   * The Live/Theory switch, and the button that is the way to the difference dialog.
+   * The Theory/Actual switch, and the button that is the way to the difference dialog.
    *
    * **The button says `Compare` and carries no count** (2026-08-20). It used to read "N cards
    * differ", computed in `DeckEditor` over a second `deck_get` of the other variant — a second
@@ -3225,7 +3225,7 @@ describe("DeckEditor", () => {
   /** A deck with one list has no switch to press: the other half of a two-way control over a
    *  deck that keeps no plan is empty by construction. Deck settings is where a plan is
    *  started. */
-  it("offers no Live/Theory switch to a deck that keeps no plan", async () => {
+  it("offers no Theory/Actual switch to a deck that keeps no plan", async () => {
     await open();
 
     expect(screen.queryByRole("group", { name: "Deck list" })).not.toBeInTheDocument();
@@ -3238,7 +3238,7 @@ describe("DeckEditor", () => {
    * from before a press is a node the assertion after it would be reading out of a detached
    * tree.
    */
-  const tab = (name: "Live" | "Theory") =>
+  const tab = (name: "Actual" | "Theory") =>
     within(screen.getByRole("group", { name: "Deck list" })).getByRole("button", { name });
 
   /** Both lists on screen at once, so the pair can be read in the order they are drawn. */
@@ -3255,28 +3255,35 @@ describe("DeckEditor", () => {
   }
 
   /**
-   * The two tabs and the comparison between them, in the order they are painted. Asserted as a
-   * sequence, because all three being present says nothing about that — and over the *names*,
-   * because the middle one has no text at all.
+   * The two tabs, in the order they are painted, and `Compare` standing outside them.
    *
-   * **Live before Theory** since 2026-08-24, which reverses the order this test was written for.
-   * The old one argued that the plan is the list a deck is built in and so the tab the eye should
-   * land on first; what that argument is really about is where the caret lands when the switch is
-   * *turned on*, and that is `lastVariant`'s doing rather than this order's — the test below
-   * ("opens on the list the reader left it on") is the one that would catch it moving.
+   * Asserted as a sequence, because both being present says nothing about their order — and the
+   * group's membership is asserted too, which is the half that fails if `Compare` is folded back
+   * between the words: it is an action *about* the two lists rather than a third list, so a
+   * `role="group"` named `Deck list` is exactly what it must not be inside.
+   *
+   * **Theory before Actual** since 2026-08-26, which reverses the 2026-08-24 order this test was
+   * last written for. Neither flip is about where the caret lands when the switch is *turned on* —
+   * that is `lastVariant`'s doing, and the test below ("opens on the list the deck remembers") is
+   * the one that would catch it moving.
    */
-  it("draws the deck's tab before the plan's, with Compare between them", async () => {
+  it("draws the plan's tab before the deck's, with Compare beside the group", async () => {
     withPlan();
     await open();
 
-    const tabs = within(await screen.findByRole("group", { name: "Deck list" })).getAllByRole(
-      "button",
-    );
-    expect(tabs.map((b) => b.getAttribute("aria-label") ?? b.textContent)).toEqual([
-      "Live",
-      "Compare",
+    const group = await screen.findByRole("group", { name: "Deck list" });
+    expect(within(group).getAllByRole("button").map((b) => b.textContent)).toEqual([
       "Theory",
+      "Actual",
     ]);
+
+    // Outside the group, and immediately after it in the row.
+    const compare = screen.getByRole("button", { name: "Compare" });
+    expect(group.contains(compare)).toBe(false);
+    expect(group.nextElementSibling).toBe(compare);
+    // The word is drawn beside the glyph — jsdom lays nothing out, so the tight-header
+    // arrangement that drops it is never the one under test here.
+    expect(compare).toHaveTextContent("Compare");
   });
 
   /**
@@ -3302,7 +3309,7 @@ describe("DeckEditor", () => {
     await open();
 
     await screen.findByRole("group", { name: "Deck list" });
-    expect(tab("Live")).toHaveAttribute("aria-pressed", "true");
+    expect(tab("Actual")).toHaveAttribute("aria-pressed", "true");
     expect(tab("Theory")).toHaveAttribute("aria-pressed", "false");
   });
 
@@ -3426,10 +3433,10 @@ describe("DeckEditor", () => {
     await screen.findByRole("group", { name: "Deck list" });
     await waitFor(() => expect(tab("Theory")).toHaveAttribute("aria-pressed", "true"));
 
-    await userEvent.click(tab("Live"));
+    await userEvent.click(tab("Actual"));
 
     await waitFor(() => expect(deckSetViewState).toHaveBeenCalledWith(4, { variant: "live" }));
-    expect(tab("Live")).toHaveAttribute("aria-pressed", "true");
+    expect(tab("Actual")).toHaveAttribute("aria-pressed", "true");
   });
 
   /**
@@ -3465,7 +3472,7 @@ describe("DeckEditor", () => {
     // It settles, and on the tab the row it opened with asked for. The other row's answer is
     // read by nothing: a restore is honoured once per deck and switch, never once per value.
     await waitFor(() => expect(tab("Theory")).toHaveAttribute("aria-pressed", "true"));
-    expect(tab("Live")).toHaveAttribute("aria-pressed", "false");
+    expect(tab("Actual")).toHaveAttribute("aria-pressed", "false");
   });
 
   /** The one write on the stats aside, end to end: what the deck is short of becomes wishes,

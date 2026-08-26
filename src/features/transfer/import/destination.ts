@@ -36,7 +36,7 @@ export interface ImportDestination {
    * **It has to belong to the destination rather than to the host, because the header is drawn
    * on both steps and the destination radios are only on the first.** A host prop cannot vary
    * with the choice, so a reader who picked "a new deck" and pressed Preview would read
-   * `Into Burn · Live` over a step that is making a different deck entirely. That is not a
+   * `Into Burn · Actual` over a step that is making a different deck entirely. That is not a
    * hypothetical for long: the shell draws radios the moment a host passes two.
    *
    * Optional, and absent falls back to `ImportDialogProps.subtitle` — which is what a

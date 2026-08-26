@@ -55,7 +55,7 @@ export interface DialogProps {
    * **Under the heading rather than beside it**, which is one of the two shapes this replaced.
    * Beside it, a subtitle and a 20px Cinzel heading compete for one line and the *heading* is
    * what truncates; under it, the heading is never squeezed and the subtitle can be as long as
-   * the data makes it — `Into Removal · Burn · Live` is assembled from a pile name and a deck
+   * the data makes it — `Into Removal · Burn · Actual` is assembled from a pile name and a deck
    * name and has no length anybody controls.
    */
   subtitle?: ReactNode;
