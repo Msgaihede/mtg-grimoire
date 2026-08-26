@@ -139,11 +139,12 @@ export const Default: Story = {
     // as one — the newest of its oracle card — and captioned as what it actually is.
     await expect(canvas.getByText("Any printing")).toBeInTheDocument();
 
-    // **The Needs review chip is not drawn**, and its absence is the rule rather than an
-    // oversight: `WishlistFilterBar.tsx` offers it only where there is something to filter, so
-    // a list nothing flagged does not carry a control that would spend its whole life saying
-    // nothing. {@link NeedsReview} is the same page with the chip.
+    // **The Needs review cell is behind the Filters disclosure**, with everything else this row
+    // does not keep on the bar — so a shut tray is the state the page opens in and nothing on
+    // screen carries that name. It used to be a chip drawn only where there was something to
+    // filter; `WISHLIST_TRAY` in `WishlistPage.tsx` says why that rule did not survive the move.
     await expect(canvas.queryByRole("button", { name: "Needs review" })).toBeNull();
+    await expect(canvas.getByRole("button", { name: /^Show filters/ })).toBeInTheDocument();
   },
 };
 
@@ -361,7 +362,10 @@ export const FulfilledAndUnfulfilled: Story = {
     await canvas.findByText("Sol Ring");
     await expect(canvas.getByText("Counterspell")).toBeInTheDocument();
 
-    // Off → still missing.
+    // Off → still missing. Behind the Filters disclosure since this page started drawing the
+    // shared row — the box, the colours, the order and the layout pair are what stay on the bar.
+    await userEvent.click(canvas.getByRole("button", { name: /^Show filters/ }));
+
     await userEvent.click(canvas.getByRole("button", { name: "Still missing" }));
     await waitFor(async () => {
       await expect(canvas.queryByText("Sol Ring")).toBeNull();
@@ -418,9 +422,11 @@ export const Empty: Story = {
  * half of it is what to do about it — which is why the band carries the sentence as a `title` as
  * well, and why a screen reader gets all of it either way.
  *
- * The **Needs review** chip appears with the row, and only with it ({@link Default} asserts it
- * absent). It stays while the filter is on, including on the complement, where by definition no
- * row on screen carries a flag and the chip is the only way back off.
+ * The **Needs review** cell is in the filter tray, which this play opens — it is drawn there
+ * whether or not anything is flagged, where the chip it replaces appeared only once something
+ * was ({@link Default} is the same page with the tray shut). `WISHLIST_TRAY` carries the reason:
+ * a control that comes and goes costs a *row* the reader's attention, and costs a shut tray
+ * nothing at all.
  */
 export const NeedsReview: Story = {
   args: { view: "table" },
@@ -437,6 +443,7 @@ export const NeedsReview: Story = {
       "aria-rowcount",
       "7",
     );
+    await userEvent.click(canvas.getByRole("button", { name: /^Show filters/ }));
     await expect(canvas.getByRole("button", { name: "Needs review" })).toBeInTheDocument();
   },
 };

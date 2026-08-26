@@ -294,13 +294,42 @@ Every one of these has its measurement and its story in
   at 1280×800 and 2322 vs 2297 at 2560×1400 — because the panel's width does not move with the
   window. Only a live pass finds this one; the figures and the fix are in
   [frontend-design.md](../docs/reference/frontend-design.md).
-- **The search filter row lays out by its own width, in four bands, through `@container/fb` —
-  never a media query.** The same component is the search page's bar and the deck editor's docked
+- **`FilterBar` is the one filter row for every list of cards in this app**, and since 2026-08-26
+  that is all five surfaces: the Search page, the Tags page, both tabs of the deck editor's docked
+  panel, the Collection and the Wishlist. The last two had bespoke rows of their own until then
+  and the argument for deleting them is the one `CollectionSearchTab` already made — they were the
+  same arrangement of the same controls written a third and fourth time, and the four drifted the
+  first time any one of them moved. Its prop is a **structural `FilterSurface`**, never one hook's
+  `ReturnType`, which is what lets four different hooks over four different backends satisfy it.
+  Three things a new surface has to get right:
+  - **Everything below the line in `FilterSurface` is optional, and a control is drawn only where
+    its own setter is wired.** A `tray` naming a cell the surface cannot answer draws *nothing*
+    rather than a dead control. That is what lets the wishlist skip the price band — `WishlistQuery`
+    carries no `priceMin`/`priceMax`, so the numbers would reach nothing.
+  - **`anyCard` is a capability, not a state.** `Any card` is the row that puts back the printings
+    *no* format allows, and it only means something where the corpus is narrowed to begin with —
+    the card search pairs `playableOnly` with every other row of that picker. Drawn on a
+    collection, it sets `format` to a sentinel the backend reads as a legalities key nothing
+    matches, and the wall goes empty. Only `useCardSearch` sets it.
+  - **`labels` keeps each surface's box its own name.** `Search cards` over the reader's own
+    binder is the control lying about which list it narrows, and a `getByLabelText` cannot tell
+    two boxes with one name apart. The `idStem` is what stops two mounted rows sharing an `id`.
+- **It lays out by its own width, in four bands, through `@container/fb` — never a media query.**
+  The same component is the search page's bar and the deck editor's docked
   panel, which is draggable from **206px**, so a viewport query answers about the wrong box. Four
   controls never fold away — the search box, the colours, the mana values and the sort — and
-  everything else (set, format, owned, rarity, price, printings) is behind one `Filters`
+  everything else (set, format, owned, rarity, price, printings, finish, condition, fulfilled,
+  needs review) is behind one `Filters`
   disclosure, with the filters that are **on** stated as 26px chips under a rule. Thresholds are
   640 / 900 / 1500 and each is where a *line's own contents* stop fitting, not a device.
+  **The right-hand end of that row's first line belongs to the grid-or-table pair**, on every
+  surface that has two layouts — which is where a reader now looks for it on all four card views,
+  and why the collection's and the wishlist's Import/Export pair moved up into the figures band
+  rather than staying beside the filters.
+  **Folder controls are deliberately not on it**: where the reader is standing, and how much of a
+  tree is on screen, are navigation rather than a narrowing, so `+ New folder` and `Flatten` sit
+  with the breadcrumb and the folder cards. A folder control among the filters would be the one
+  thing in that row Reset all could not undo.
   Two rules carry it and both have a measured failure behind them
   ([frontend-design.md](../docs/reference/frontend-design.md)): the arrangement is **`order` plus
   a `basis-full` break**, never one `<div>` per breakpoint with `hidden` on the rest — that build

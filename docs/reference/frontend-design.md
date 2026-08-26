@@ -405,10 +405,26 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   answers it): `search`, `collection` and `wishlist`, the three list walls; `deckSearch`, the deck
   editor's docked search column, which is a fourth `CardGrid`; `deck`, the editor's desk — **one key
   for both deck views**, because Stacks and Grid are two drawings of the same pile and switching
-  between them must not resize the cards the reader just settled on; and `printings`, the modal's
-  wall, which opens *over* a wall the reader has already sized. `useCardZoomGesture(ref, section)`
-  names the section it is stepping. **The wishlist joined the list on 2026-08-20**, when it gained a
-  card view of its own; until then it was `VirtualTable` only and had no card section to zoom.
+  between them must not resize the cards the reader just settled on; `deckGallery`, the decks page's
+  wall of deck tiles and folder cards; and `printings`, the modal's wall, which opens *over* a wall
+  the reader has already sized. `useCardZoomGesture(ref, section)` names the section it is stepping.
+  **The wishlist joined the list on 2026-08-20**, when it gained a card view of its own; until then
+  it was `VirtualTable` only and had no card section to zoom.
+- **The decks gallery joined on 2026-08-26, and it is the one section whose tiles are not cards.**
+  A deck tile is a 626×457 art crop with a name, a format line, a LIVE/THEORY badge and a credit
+  under it — but the reader's question there is every other section's: how many of these at once,
+  against how well I can see each one. Three things about it are worth carrying:
+  - **`deckGallery`, not `decks`.** `deck` is already the editor's cards and both keys are read
+    inside `features/decks/`; two keys one character apart are a typo that steps a wall the reader
+    is not looking at, which reads as a gesture that does nothing rather than as a mistake.
+  - **The listener is on the tiles' scroller, not on the view.** The folder tree beside the wall is
+    navigation chrome at a fixed rail width with nothing to scale, so a ctrl+wheel over the rail is
+    the browser's business. `DecksPage.test.tsx`'s "ignores a ctrl+wheel over the folder tree" is
+    the case that pins it — every other assertion there passes just as well with the listener on
+    the whole page.
+  - **Rust needed nothing.** `zoom.rs` validates the multiplier and deliberately does not know the
+    section vocabulary (`a_section_this_build_does_not_know_is_stored_anyway`), so an eighth wall
+    is remembered across restarts by the machinery that was already there.
 - **What is drawn _on_ a card scales with it, through two inherited custom properties**
   (2026-08-17). Until then the zoom sized the tile and nothing else: the finish chip, the crown, the
   owned badge, the printings count, the rarity gem, the caption, the deck's copy count and tag dot,
@@ -474,7 +490,7 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   tiles on launch explains itself to nobody" — and the reversal is the same one the split above
   made, arriving late. That argument was written when there was **one** number for the whole app,
   where "the zoom" really was a momentary posture a single card could set for every wall at once.
-  Split seven ways it is not: a reader who sizes the deck editor so a 100-card pile fits the desk
+  Split per section it is not: a reader who sizes the deck editor so a 100-card pile fits the desk
   has configured *that wall*, and the app forgetting it every launch was the reported complaint.
   What survives of the old worry is answered by the split itself — a size is restored to the wall
   it was chosen on and nowhere else, so nothing done in the printings modal is waiting on the search
@@ -484,9 +500,9 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   (`src-tauri/src/zoom.rs`); `src/lib/useCardZoomPersistence.ts` is the whole of the frontend and
   `AppShell` is its only mount. Five decisions in it, each with a failure it is avoiding:
 
-  - **The row is an object, not seven keys.** Every wall is seeded in one pass at launch, so seven
-    keys would be seven reads of one table to answer one question. The cost is that a write is a
-    read-modify-write — one extra `SELECT` under a lock the writer already holds.
+  - **The row is an object, not one key per section.** Every wall is seeded in one pass at launch,
+    so a key each would be a read of that table each, to answer one question. The cost is that a
+    write is a read-modify-write — one extra `SELECT` under a lock the writer already holds.
   - **A write preserves entries this build cannot use**, which is the one thing an object row has
     to get right that a bare string does not: an eighth wall, or a multiplier past this build's
     ceiling, survives a write made beside it rather than being emptied by an older build pointed at
@@ -504,7 +520,7 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
     round trip keeps what they asked for, rather than watching the wall snap back under their hand.
   - **The writes hang off `zoomPulse`, not off `cardZoom`, on a 400ms trailing timer per section.**
     Watching the value gets two cases wrong in opposite directions: it writes back everything the
-    seed just applied (seven round trips to tell the database what it said a moment earlier), and it
+    seed just applied (a round trip per wall to tell the database what it said a moment earlier), and it
     *misses* a reader holding the wheel at 200%, whose gestures `stepZoom` answers with 200% forever
     — the value never moves, so the timer never restarts and the write lands mid-gesture. The
     debounce is not an optimisation: a trackpad pinch arrives as ctrl-flagged wheel events dozens a
@@ -513,6 +529,26 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
     failures — a read that never answers, a write refused with `BUSY` under a first-run sync — are
     swallowed: the first leaves every wall at `DEFAULT_ZOOM`, which is a complete app, and the
     second costs only the next launch's starting size.
+- **A list's grid-or-table choice is remembered too, and it is `card_zoom`'s mechanism with one
+  deliberate difference** (2026-08-26). One `app_meta` row, `list_view`, holding a JSON object of
+  section → `"grid"`/`"table"` (`src-tauri/src/listview.rs`); `src/lib/useListViewPersistence.ts`
+  is the whole of the frontend and `AppShell` is its only mount. It copies the object row, the
+  preserve-what-you-do-not-understand write, the per-entry fallback, the `hydrate…` seed with its
+  `pulse !== 0` guard, and the swallow-every-failure rule. Three things differ, and each is the same
+  argument reaching a different answer:
+
+  - **The bound is a vocabulary rather than a range.** Rust knows the two words `grid` and `table`
+    and refuses anything else at the write end — `card::store_group_by`'s shape — while it goes on
+    knowing nothing about *which lists exist*, because that is `LIST_SECTIONS` in `store.ts`. So an
+    unknown layout is dropped on the way out and an unknown section is not: the asymmetry is what
+    `isListSection` on the frontend exists for.
+  - **There is no debounce.** A zoom is a stream — a pinch arrives dozens of times a second — and a
+    layout is one deliberate press on one of two buttons. The write goes on the press, and the row
+    is touched exactly as often as the reader touches the control.
+  - **The default it protects moved.** The collection opened on the *table* until this landed, on
+    the argument that a collection is read for what is in it. All four lists open on art now,
+    because a default that survives one press is a much weaker claim than one re-made on every
+    launch — a reader who wants the table presses once, ever.
 - **The zoom rescales tile _geometry_; it is never a `transform: scale()`.** A transform was the
   obvious cheap answer and is wrong three times over: it resamples art that is already a downscale
   of a 672px `display` image, it leaves the virtualiser measuring pre-transform boxes so the scrollbar
