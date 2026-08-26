@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { EntryInput, WishInput } from "@/lib/ipc";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
+import { pickOption } from "@/test-dropdown";
 
 const collectionAdd = vi.fn();
 const wishlistAdd = vi.fn();
@@ -131,10 +132,11 @@ describe("AddToCollectionButton", () => {
   });
 
   it("records the finish and condition that were picked", async () => {
+    const user = userEvent.setup();
     await open();
 
     await userEvent.click(screen.getByRole("button", { name: "Foil" }));
-    await userEvent.selectOptions(screen.getByLabelText("Condition"), "MP");
+    await pickOption(user, "Condition", "Moderately played");
     await userEvent.click(
       screen.getByRole("button", { name: "Increase Quantity of Lightning Bolt" }),
     );
@@ -186,7 +188,7 @@ describe("AddToCollectionButton", () => {
 
     await userEvent.click(screen.getByRole("button", { name: "Wishlist" }));
     // A wish has no condition: you cannot ask for a card you do not have to be played.
-    expect(screen.queryByLabelText("Condition")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Condition" })).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: "Add to wishlist" }));
 

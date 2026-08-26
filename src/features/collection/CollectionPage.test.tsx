@@ -22,6 +22,7 @@ import { MARKETPLACES } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
 import { MARKETPLACE_KEY } from "@/lib/useMarketplace";
 import { startDrag } from "@/test-drag";
+import { openDropdown, pickOption } from "@/test-dropdown";
 import { readCollectionTileDrag } from "./collectionDrag";
 
 const collectionList = vi.hoisted(() => vi.fn());
@@ -291,24 +292,29 @@ const sweepCallsAt = (marketplace: string) =>
  * `SORT_HINT` — since the tooltip sweep, a hover tooltip rather than a `title` — but a header's
  * own **accessible name** can still contain "Sort" (`headerLabel`, e.g. "Value. Prices as of…"),
  * so `/sort/i` on `getByLabelText` would still risk matching the whole header row rather than
- * only the control this file means.
+ * only the control this file means. A dropdown's trigger is a `button`, not a `combobox` — the
+ * combobox role belongs to a `searchable` dropdown's search box, and this one has none.
  */
 // **`Sort results` and not the bare `Sort` this page drew before it shared `FilterBar`.**
-// That row is mounted on four surfaces and one of them — the deck editor — already has a
+// That row is mounted on four surfaces and one of them - the deck editor - already has a
 // `Sort` of its own, so the shared control names what it orders. `FilterBar`'s own label
 // carries the argument.
-const sortSelect = () => screen.getByRole("combobox", { name: "Sort results" });
+//
+// **A `button`, not a `combobox`.** The control became a `Dropdown` on 2026-08-26: the combobox
+// role belongs to a `searchable` dropdown's search box and this one has none, so the trigger is
+// a plain disclosure button whose content is the picked order.
+const sortSelect = () => screen.getByRole("button", { name: "Sort results" });
 /**
  * Open the filter tray, so a cell behind the Filters disclosure can be pressed.
  *
  * Everything but the box, the colours, the order and the layout pair lives behind that button
- * since this page started drawing `FilterBar` — so a suite that reached straight for a chip is
+ * since this page started drawing `FilterBar` - so a suite that reached straight for a chip is
  * now reaching into a tray that is not mounted. Matched on a prefix: the button's name carries
- * the live count (`Show filters — 2 active`), which moves as a case presses things.
+ * the live count (`Show filters - 2 active`), which moves as a case presses things.
  */
 async function openTray(user: {
   // Structural, so the bare `userEvent` module and a `userEvent.setup()` instance both satisfy it
-  // — this file uses each in different cases, and the two are not the same type.
+  // - this file uses each in different cases, and the two are not the same type.
   click: (element: Element) => Promise<unknown>;
 }): Promise<void> {
   await user.click(screen.getByRole("button", { name: /^Show filters/ }));
@@ -902,13 +908,14 @@ describe("CollectionPage", () => {
   });
 
   it("sends the collection's own filters and its sort", async () => {
+    const user = userEvent.setup();
     wrap(<CollectionPage />);
     await screen.findByText("Lightning Bolt");
 
     await openTray(userEvent);
     await userEvent.click(screen.getByRole("button", { name: "Etched" }));
     await userEvent.click(screen.getByRole("button", { name: /^LP/ }));
-    await userEvent.selectOptions(sortSelect(), "price");
+    await pickOption(user, "Sort results", "Highest price");
 
     await waitFor(() => {
       const q = lastQuery();
@@ -936,17 +943,23 @@ describe("CollectionPage", () => {
     wrap(<CollectionPage />);
     await screen.findByText("Lightning Bolt");
 
-    // **It opens on the order it is actually in, and `Custom…` is not there to open on.** A
-    // controlled `<select>` whose value matches no option silently reports the **first** one —
-    // alphabetically `Highest price` here — so this is the assertion that tells "the sort is name
-    // order" from "the control fell back to row zero", and the two look identical on screen.
-    expect(sortSelect()).toHaveValue("name");
+    // **It opens on the order it is actually in, and `Custom…` is not there to open on.** The
+    // trap this guards has changed shape but not gone away: a controlled `<select>` whose value
+    // matched no option silently reported the **first** one — alphabetically `Highest price`
+    // here — and a `Dropdown` draws its placeholder dash instead. Either way "the sort is name
+    // order" and "the control fell back" look identical on screen, so the trigger's own text is
+    // what tells them apart. Read as text rather than `toHaveValue`, which a `<button>` has none
+    // of: the trigger says the picked row's **label**, not its key.
+    expect(sortSelect()).toHaveTextContent("Name");
+    // Closed, so there are no rows at all — which is the honest form of this assertion now. A
+    // `Dropdown` renders its listbox only while open, so a `queryByRole("option")` here proves
+    // the panel is shut rather than proving `Custom…` is absent from it.
     expect(screen.queryByRole("option", { name: "Custom…" })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Copies" }));
     await waitFor(() => expect(lastQuery().sort).toEqual([{ key: "quantity", dir: "desc" }]));
     // A header the select also offers reads back on it.
-    expect(sortSelect()).toHaveValue("quantity");
+    expect(sortSelect()).toHaveTextContent("Most copies");
 
     await user.keyboard("{Shift>}");
     await user.click(screen.getByRole("button", { name: /^Value/ }));
@@ -960,13 +973,17 @@ describe("CollectionPage", () => {
 
     // Still "Most copies": the select reads the sort's *first* term, and that is still one
     // it knows.
-    expect(sortSelect()).toHaveValue("quantity");
+    expect(sortSelect()).toHaveTextContent("Most copies");
 
     // Now start from Value alone, which the select has no option for at all.
     await user.click(screen.getByRole("button", { name: /^Value/ }));
     await waitFor(() => expect(lastQuery().sort).toEqual([{ key: "value", dir: "desc" }]));
-    expect(sortSelect()).toHaveValue("");
-    expect(screen.getByRole("option", { name: "Custom…" })).toBeDisabled();
+    expect(sortSelect()).toHaveTextContent("Custom…");
+    await openDropdown(user, "Sort results");
+    expect(screen.getByRole("option", { name: "Custom…" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
   });
 
   /**
@@ -1144,7 +1161,9 @@ describe("CollectionPage", () => {
     // The collection's own preview: a condition/finish default pair the deck's importer has
     // no equivalent of, and an `add`/`set` mode radio rather than `merge`/`replace`.
     expect(await screen.findByText(/will be added to your collection/)).toBeInTheDocument();
-    expect(within(dialog).getByLabelText("Condition when the file doesn't say")).toHaveValue("NM");
+    expect(
+      within(dialog).getByRole("button", { name: "Condition when the file doesn't say" }),
+    ).toHaveTextContent("Near mint");
 
     // Scoped to the dialog: the page's own trigger is still on screen behind it and shares the
     // same accessible name.

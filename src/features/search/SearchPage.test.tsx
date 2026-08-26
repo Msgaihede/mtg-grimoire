@@ -11,6 +11,7 @@ import type { CardSummary, SearchRequest, SearchResponse, SetSummary, WishInput 
 import { MARKETPLACES } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
 import { startDrag } from "@/test-drag";
+import { pickOption } from "@/test-dropdown";
 
 const searchCards = vi.hoisted(() => vi.fn());
 // The set picker mounts with the page and asks for the set list on the way up, so the
@@ -438,10 +439,11 @@ describe("SearchPage", () => {
   });
 
   it("passes the format filter", async () => {
+    const user = userEvent.setup();
     wrap(<SearchPage />);
     await openTray();
 
-    await userEvent.selectOptions(screen.getByLabelText(/format/i), "modern");
+    await pickOption(user, "Format", "Modern");
 
     await waitFor(() =>
       expect(searchCards).toHaveBeenLastCalledWith(expect.objectContaining({ format: "modern" })),
@@ -499,16 +501,17 @@ describe("SearchPage", () => {
   });
 
   it("clears every filter in one request when Reset all is clicked", async () => {
+    const user = userEvent.setup();
     wrap(<SearchPage />);
     await waitFor(() => expect(searchCards).toHaveBeenCalled());
     await openTray();
 
-    await userEvent.selectOptions(screen.getByLabelText(/format/i), "modern");
-    await userEvent.click(screen.getByRole("button", { name: "Blue" }));
-    await userEvent.click(screen.getByRole("button", { name: "Mana value 3" }));
-    await userEvent.click(setPicker());
-    await userEvent.click(await screen.findByRole("option", { name: /Alpha/ }));
-    await userEvent.type(screen.getByPlaceholderText(/search cards/i), "bolt");
+    await pickOption(user, "Format", "Modern");
+    await user.click(screen.getByRole("button", { name: "Blue" }));
+    await user.click(screen.getByRole("button", { name: "Mana value 3" }));
+    await user.click(setPicker());
+    await user.click(await screen.findByRole("option", { name: /Alpha/ }));
+    await user.type(screen.getByPlaceholderText(/search cards/i), "bolt");
 
     await waitFor(() =>
       expect(searchCards).toHaveBeenLastCalledWith(
@@ -745,6 +748,7 @@ describe("SearchPage", () => {
   });
 
   it("keeps the previous rows on screen while a new filter is still loading", async () => {
+    const user = userEvent.setup();
     searchCards
       .mockResolvedValueOnce(page([BOLT]))
       // The refined search never answers — as a search waiting out an ingest's lock does.
@@ -753,7 +757,7 @@ describe("SearchPage", () => {
     expect(await screen.findByText("Lightning Bolt")).toBeInTheDocument();
     await openTray();
 
-    await userEvent.selectOptions(screen.getByLabelText(/format/i), "modern");
+    await pickOption(user, "Format", "Modern");
     await waitFor(() => expect(searchCards).toHaveBeenCalledTimes(2));
 
     // `keepPreviousData`: the list does not blank out while the new page is in flight.
@@ -762,12 +766,13 @@ describe("SearchPage", () => {
   });
 
   it("resets the scroll position when the search changes", async () => {
+    const user = userEvent.setup();
     wrap(<SearchPage />);
     await screen.findByText("Lightning Bolt");
     await openTray();
     scrollTo.mockClear();
 
-    await userEvent.selectOptions(screen.getByLabelText(/format/i), "modern");
+    await pickOption(user, "Format", "Modern");
 
     // Without this the browser clamps the old offset into the new, shorter list — which
     // strands the reader at the bottom and trips the paging effect immediately.

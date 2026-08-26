@@ -6,17 +6,17 @@
  * override either — `planCollectionImport` reads `extra.condition` and `line.finish` first and
  * only falls back to these — but most lines say nothing about either, and a hundred rows of
  * silent `NM`/regular is a hundred things to correct by hand afterwards if the reader meant
- * something else. The two selects are the store's `importDefaults`, shared with the wishlist's
+ * something else. The two dropdowns are the store's `importDefaults`, shared with the wishlist's
  * finish alone: a reader who has just told this dialog "assume Near Mint, foil" is answering a
  * question about their box, not about this screen.
  */
 import { useMemo, useState, type JSX } from "react";
+import { Dropdown } from "@/components/Dropdown/Dropdown";
+import type { DropdownOption } from "@/components/Dropdown/types";
 import { CONDITIONS, CONDITION_LABEL, type Condition } from "@/lib/conditions";
 import { plural } from "@/lib/counts";
-import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError, type DeckFinish, type TransferImportMode } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
-import { cn } from "@/lib/utils";
 import type { DestinationPreviewProps, ImportDestination, ImportModeOption } from "../destination";
 import { CommitBar, useImportCommit } from "../shared/CommitBar";
 import { ModeRadios } from "../shared/ModeRadios";
@@ -72,6 +72,22 @@ export function CollectionPreview({
     });
   };
 
+  // Exempt from `sortOptions`: a condition grade's order *is* the information — Near Mint
+  // to Damaged is a scale, not an alphabet (`src/CLAUDE.md`'s exemption rule) — so `CONDITIONS`'
+  // own order is drawn unchanged.
+  const conditionOptions: readonly DropdownOption[] = CONDITIONS.map((c) => ({
+    value: c,
+    label: CONDITION_LABEL[c],
+  }));
+
+  // Exempt from `sortOptions` for the same reason: a printing's finishes run plain before the
+  // premium treatments, and alphabetising would put Etched first.
+  const finishOptions: readonly DropdownOption[] = [
+    { value: "", label: "Regular" },
+    { value: "foil", label: "Foil" },
+    { value: "etched", label: "Etched" },
+  ];
+
   return (
     <form
       onSubmit={(e) => {
@@ -90,39 +106,44 @@ export function CollectionPreview({
             discovered afterwards in 300 rows they have to correct by hand. A CSV that carries
             the columns overrides these per row — see `planCollectionImport`. */}
         <div className="flex flex-wrap items-center gap-4 text-sm">
-          <label className="flex items-center gap-2">
-            Condition when the file doesn&apos;t say
-            <select
+          <div className="flex items-center gap-2">
+            {/* An id'd `<label>` plus `labelledBy`, not a wrapping one left to itself: a
+                `<label>` — wrapping or `for`/`id` — does reach a `<button>`'s accessible name the
+                same way it reaches a `<select>`'s, `<button>` being labelable too, so `labelledBy`
+                is not what makes the connection. It is what states the name outright rather than
+                leaving it to an association a later refactor of this markup could break, and
+                `htmlFor` alongside it keeps a click on the words opening the dropdown, the way it
+                used to focus the select. */}
+            <label id="collection-import-condition-label" htmlFor="collection-import-condition">
+              Condition when the file doesn&apos;t say
+            </label>
+            <Dropdown
+              id="collection-import-condition"
+              labelledBy="collection-import-condition-label"
+              size="sm"
               value={defaults.condition}
-              onChange={(e) =>
-                setDefaults({ ...defaults, condition: e.target.value as Condition })
-              }
-              className={cn("h-8 rounded-md border border-border bg-surface px-2", FOCUS)}
-            >
-              {CONDITIONS.map((c) => (
-                <option key={c} value={c}>
-                  {CONDITION_LABEL[c]}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="flex items-center gap-2">
-            Finish when the file doesn&apos;t say
-            <select
+              onChange={(v) => setDefaults({ ...defaults, condition: v as Condition })}
+              options={conditionOptions}
+              className="bg-surface"
+            />
+          </div>
+          <div className="flex items-center gap-2">
+            {/* Same treatment as Condition above, and the same reason. */}
+            <label id="collection-import-finish-label" htmlFor="collection-import-finish">
+              Finish when the file doesn&apos;t say
+            </label>
+            <Dropdown
+              id="collection-import-finish"
+              labelledBy="collection-import-finish-label"
+              size="sm"
               value={defaults.finish ?? ""}
-              onChange={(e) =>
-                setDefaults({
-                  ...defaults,
-                  finish: e.target.value === "" ? null : (e.target.value as DeckFinish),
-                })
+              onChange={(v) =>
+                setDefaults({ ...defaults, finish: v === "" ? null : (v as DeckFinish) })
               }
-              className={cn("h-8 rounded-md border border-border bg-surface px-2", FOCUS)}
-            >
-              <option value="">Regular</option>
-              <option value="foil">Foil</option>
-              <option value="etched">Etched</option>
-            </select>
-          </label>
+              options={finishOptions}
+              className="bg-surface"
+            />
+          </div>
         </div>
 
         <ModeRadios

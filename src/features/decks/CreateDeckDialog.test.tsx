@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState, type ReactElement } from "react";
 import type { CardDetail, CardSummary, DeckFolder, DeckRow, FormatSpec } from "@/lib/ipc";
 import { cardImageUrl } from "@/lib/images";
+import { openDropdown } from "@/test-dropdown";
 import { spec } from "./validation/fixtures";
 
 const deckCreate = vi.hoisted(() => vi.fn());
@@ -288,7 +289,8 @@ describe("the create deck dialog", () => {
     // that awaiting is what pushed this test past its 5000ms budget under `verify`'s build+lint
     // load (measured: reproducibly 5000ms+ under `verify`, 21/21 and ~1.9s standalone).
     await userEvent.type(await screen.findByLabelText("Name"), "Sunday burn", { delay: null });
-    await userEvent.selectOptions(screen.getByLabelText("Format"), "modern");
+    await openDropdown(userEvent.setup(), "Format");
+    await userEvent.click(await screen.findByRole("option", { name: "Modern" }));
     await userEvent.type(screen.getByLabelText("Description"), "Twenty damage, quickly.", {
       delay: null,
     });
@@ -298,7 +300,8 @@ describe("the create deck dialog", () => {
       { delay: null },
     );
     await userEvent.click(screen.getByRole("switch", { name: /Theory deck/ }));
-    await userEvent.selectOptions(screen.getByLabelText("Folder"), "2");
+    await openDropdown(userEvent.setup(), "Folder");
+    await userEvent.click(await screen.findByRole("option", { name: "Commander › Legends" }));
 
     // The cover comes from the picker's **search** arm, which is the one that works before the
     // deck exists — a deck being made has no cards of its own to offer.
@@ -687,27 +690,25 @@ describe("the create deck dialog", () => {
 
   /**
    * The seeded table is read once per session and is normally already in hand by the time this
-   * opens. On the one launch where it is not, the select still has to *say* something — and
+   * opens. On the one launch where it is not, the trigger still has to *say* something — and
    * what it says is what it would create.
    *
    * **It says `Casual` because this host never passes an empty list**, and that is the change
    * from the dialog's own `<select>`: `DeckSettingsValue` carries only a format *key*, so a form
    * handed nothing can do no better than label the option with the key, and the control would
-   * read `casual`. The one-row fallback also leaves the select live where the old one greyed
+   * read `casual`. The one-row fallback also leaves the dropdown live where the old one greyed
    * itself — a real `disabled` was right for an empty list and is not right for a list.
    */
   it("offers Casual when the format list has not arrived", async () => {
     formatSpecs.mockReturnValue(new Promise(() => {}));
     wrap(<Harness />);
 
-    const format = await screen.findByLabelText("Format");
-    expect(format).toHaveValue("casual");
-    expect(
-      within(format)
-        .getAllByRole("option")
-        .map((o) => o.textContent),
-    ).toEqual(["Casual"]);
+    const format = await screen.findByRole("button", { name: "Format" });
+    expect(format).toHaveTextContent("Casual");
     expect(format).toBeEnabled();
+
+    await openDropdown(userEvent.setup(), "Format");
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["Casual"]);
   });
 
   /**
@@ -724,13 +725,14 @@ describe("the create deck dialog", () => {
   it("offers the seeded formats alphabetically, without the one that is switched off", async () => {
     wrap(<Harness />);
 
-    const format = await screen.findByLabelText("Format");
+    await screen.findByLabelText("Name");
+    await openDropdown(userEvent.setup(), "Format");
     await waitFor(() =>
-      expect(
-        within(format)
-          .getAllByRole("option")
-          .map((o) => o.textContent),
-      ).toEqual(["Casual", "Modern", "Standard"]),
+      expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
+        "Casual",
+        "Modern",
+        "Standard",
+      ]),
     );
   });
 
@@ -740,24 +742,25 @@ describe("the create deck dialog", () => {
    *
    * The value is read into the draft in a lazy `useState` initializer at mount and is never
    * written again — the `waitFor` below is the format *list* arriving from `format_specs`, not
-   * the value changing. (A `<select>` cannot show a value its options do not carry, which is
-   * why the claim is made once the list is in hand; in the app the two cannot disagree, because
+   * the value changing. (A dropdown cannot show a value its options do not carry, which is why
+   * the claim is made once the list is in hand; in the app the two cannot disagree, because
    * `newDeckFormat` resolves against that same list.)
    */
   it("opens on the format the host resolved rather than on Casual", async () => {
     wrap(<Harness defaultFormatKey="modern" />);
 
-    const format = await screen.findByLabelText("Format");
+    await screen.findByLabelText("Name");
     // The list it is picked out of is the seed's, in the picker's own order…
+    await openDropdown(userEvent.setup(), "Format");
     await waitFor(() =>
-      expect(
-        within(format)
-          .getAllByRole("option")
-          .map((o) => o.textContent),
-      ).toEqual(["Casual", "Modern", "Standard"]),
+      expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
+        "Casual",
+        "Modern",
+        "Standard",
+      ]),
     );
-    // …and the row standing selected in it is the host's answer.
-    expect(format).toHaveValue("modern");
+    // …and the row standing shown on the trigger is the host's answer.
+    expect(screen.getByRole("button", { name: "Format" })).toHaveTextContent("Modern");
   });
 
   /**
@@ -771,12 +774,13 @@ describe("the create deck dialog", () => {
   it("lets the reader's own format win over the remembered one", async () => {
     wrap(<Harness defaultFormatKey="modern" />);
 
-    const format = await screen.findByLabelText("Format");
-    await waitFor(() => expect(within(format).getAllByRole("option")).toHaveLength(3));
-    await userEvent.selectOptions(format, "standard");
+    await screen.findByLabelText("Name");
+    await openDropdown(userEvent.setup(), "Format");
+    await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(3));
+    await userEvent.click(screen.getByRole("option", { name: "Standard" }));
     await userEvent.type(await screen.findByLabelText("Name"), "Sunday burn");
 
-    expect(format).toHaveValue("standard");
+    expect(screen.getByRole("button", { name: "Format" })).toHaveTextContent("Standard");
     await userEvent.click(submitButton());
     await waitFor(() =>
       expect(deckCreate).toHaveBeenCalledWith(
@@ -791,13 +795,14 @@ describe("the create deck dialog", () => {
   it("offers the folders as paths, under a pinned top level", async () => {
     wrap(<Harness />);
 
-    const folder = await screen.findByLabelText("Folder");
+    await screen.findByLabelText("Name");
+    await openDropdown(userEvent.setup(), "Folder");
     await waitFor(() =>
-      expect(
-        within(folder)
-          .getAllByRole("option")
-          .map((o) => o.textContent),
-      ).toEqual(["Top level", "Commander", "Commander › Legends"]),
+      expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
+        "Top level",
+        "Commander",
+        "Commander › Legends",
+      ]),
     );
   });
 

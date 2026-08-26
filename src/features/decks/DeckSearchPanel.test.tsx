@@ -11,6 +11,7 @@ import {
 import type { FormatFilterOption } from "@/features/search/useCardSearch";
 import type { CardSummary, CollectionRow, DeckCategory, SearchResponse } from "@/lib/ipc";
 import { startDrag } from "@/test-drag";
+import { pickOption } from "@/test-dropdown";
 import { readDragData } from "./dnd";
 
 const searchCards = vi.hoisted(() => vi.fn());
@@ -426,15 +427,17 @@ const COLLECTION = "Collection";
 const tab = (name: string) => screen.getByRole("button", { name });
 
 /**
- * The filter row's Format select, reached by its label.
+ * The filter row's Format picker, reached by its accessible name.
  *
- * `FilterBar`'s own, drawn inside this panel and named by an `sr-only` "Format" — the row's
- * other controls are deliberately worded to keep clear of that word, so the exact string matches
- * one control here. An `Unplayable` chip beside it used to be the one at risk of colliding, and
- * it is a row *inside* this select now (`Any card`): an `<option>` carries no label, so the
- * widest thing this control offers can be worded plainly.
+ * `FilterBar`'s own, drawn inside this panel — the row's other controls are deliberately worded
+ * to keep clear of the word "Format", so the exact string matches one control here. Named through
+ * `TrayField`'s `<label>` and the picker's own `labelledBy`, since a `<label htmlFor>` alone
+ * would reach only a `<select>`'s accessible name, never a `<button>`'s (see `SharedProps` in
+ * `Dropdown.tsx`). An `Unplayable` chip beside it used to be the one at risk of colliding, and it
+ * is a row *inside* this picker now (`Any card`): a listbox row carries no label of its own, so
+ * the widest thing this control offers can be worded plainly.
  */
-const formatSelect = (): HTMLSelectElement => screen.getByLabelText("Format") as HTMLSelectElement;
+const formatSelect = (): HTMLElement => screen.getByRole("button", { name: "Format" });
 
 /**
  * Open the filter row's tray, where Set, Format, Owned, Rarity, Price and Printings live since
@@ -579,27 +582,25 @@ describe("DeckSearchPanel", () => {
     await screen.findByRole("button", { name: "Lightning Bolt" });
     await openFilterTray();
 
-    expect(formatSelect()).toHaveValue("");
+    expect(formatSelect()).toHaveTextContent("Any format");
   });
 
   /**
    * A deck is built out of the cards it may legally hold, so the wall beside it starts there
    * rather than at the whole corpus.
    *
-   * The label as well as the value, because the two fail differently. A select holding a key
-   * none of its options carries reports the **first** option instead — `Any format`, pinned at
-   * the top of this list — so `value` reads back `""` and the first assertion below does catch
-   * it. What that one cannot say is which word is on screen, and the word is the whole of what
-   * the reader has; the second assertion is for that.
+   * The trigger's own text is the whole of what the reader has. A `<Dropdown>` given a value
+   * none of its options carries falls back to its own placeholder dash rather than to a picked
+   * row's label (`DEFAULT_PLACEHOLDER`, `Dropdown.tsx`) — so this one assertion is what would
+   * catch a seeded key the picker's own list has dropped, the way the old select's `value`
+   * reading back `""` used to.
    */
   it("opens on the deck's own format when it is handed one", async () => {
     await openPanel({ defaultFormat: COMMANDER });
     await screen.findByRole("button", { name: "Lightning Bolt" });
     await openFilterTray();
 
-    const select = formatSelect();
-    expect(select).toHaveValue(COMMANDER.value);
-    expect(select.selectedOptions[0]).toHaveTextContent(COMMANDER.label);
+    expect(formatSelect()).toHaveTextContent(COMMANDER.label);
   });
 
   /**
@@ -613,21 +614,22 @@ describe("DeckSearchPanel", () => {
    * own. `Any format` is one press further, which is the way back to the whole corpus.
    */
   it("lets the reader move the select off the deck's format, and keeps searching", async () => {
+    const user = userEvent.setup();
     await openPanel({ defaultFormat: COMMANDER });
     await screen.findByRole("button", { name: "Lightning Bolt" });
     await openFilterTray();
 
-    await userEvent.selectOptions(formatSelect(), "modern");
+    await pickOption(user, "Format", "Modern");
 
-    expect(formatSelect()).toHaveValue("modern");
+    expect(formatSelect()).toHaveTextContent("Modern");
     await waitFor(() =>
       expect(searchCards).toHaveBeenCalledWith(expect.objectContaining({ format: "modern" })),
     );
     expect(await screen.findByRole("button", { name: "Lightning Bolt" })).toBeInTheDocument();
 
-    await userEvent.selectOptions(formatSelect(), "");
+    await pickOption(user, "Format", "Any format");
 
-    expect(formatSelect()).toHaveValue("");
+    expect(formatSelect()).toHaveTextContent("Any format");
     await waitFor(() =>
       expect(searchCards).toHaveBeenCalledWith(expect.objectContaining({ format: undefined })),
     );
@@ -997,13 +999,14 @@ describe("DeckSearchPanel", () => {
    * all would have lost the distinction this whole component is built on.
    */
   it("keeps the reader's query and filters across a railing, and drops them on a collapse", async () => {
+    const user = userEvent.setup();
     const view = await openPanel({ defaultFormat: COMMANDER });
     await screen.findByRole("button", { name: "Lightning Bolt" });
 
-    await userEvent.type(screen.getByRole("searchbox", { name: "Search cards" }), "goblin");
+    await user.type(screen.getByRole("searchbox", { name: "Search cards" }), "goblin");
     await openFilterTray();
-    await userEvent.selectOptions(formatSelect(), "modern");
-    expect(formatSelect()).toHaveValue("modern");
+    await pickOption(user, "Format", "Modern");
+    expect(formatSelect()).toHaveTextContent("Modern");
 
     // The wrapper the body now hangs on generates **no box** while the panel is drawn, which is
     // what keeps `OpenPanel`'s children flex items of the panel's own column: the row's `gap-2`,
@@ -1026,16 +1029,16 @@ describe("DeckSearchPanel", () => {
 
     expect(screen.getByRole("searchbox", { name: "Search cards" })).toHaveValue("goblin");
     await openFilterTray();
-    expect(formatSelect()).toHaveValue("modern");
+    expect(formatSelect()).toHaveTextContent("Modern");
 
     // And a press is still a press: shutting the panel is the reader saying they are done, so
     // the next open is a clean search seeded from the deck's format again.
-    await userEvent.click(screen.getByRole("button", { name: PANEL_TOGGLE }));
-    await userEvent.click(screen.getByRole("button", { name: PANEL_TOGGLE }));
+    await user.click(screen.getByRole("button", { name: PANEL_TOGGLE }));
+    await user.click(screen.getByRole("button", { name: PANEL_TOGGLE }));
 
     expect(screen.getByRole("searchbox", { name: "Search cards" })).toHaveValue("");
     await openFilterTray();
-    expect(formatSelect()).toHaveValue(COMMANDER.value);
+    expect(formatSelect()).toHaveTextContent(COMMANDER.label);
   });
 
   /**

@@ -18,6 +18,7 @@ import type { MarketplaceId } from "@/lib/marketplace";
 // under the mock with `CardDetailPane`'s, where the hoisting order needs it.
 import type { PaneDeckContext } from "@/lib/store";
 import { startDrag } from "@/test-drag";
+import { pickOption } from "@/test-dropdown";
 
 const detail: CardDetail = {
   promoTypes: null,
@@ -1229,9 +1230,6 @@ describe("grouping the printings list", () => {
     }),
   ];
 
-  /** Named for a screen reader alone — the pane has no width for a visible label. */
-  const groupBy = () => screen.getByRole("combobox", { name: "Group printings by" });
-
   const list = () => within(screen.getByRole("region", { name: /printings/i }));
 
   /**
@@ -1257,10 +1255,11 @@ describe("grouping the printings list", () => {
   }
 
   it("re-orders the list and re-words the count when another grouping is picked", async () => {
+    const user = userEvent.setup();
     await openList();
     expect(headings()).toEqual(["Christopher Rush", "Nils Hamm"]);
 
-    await userEvent.selectOptions(groupBy(), "released");
+    await pickOption(user, "Group printings by", "Release date");
 
     expect(await screen.findByText(/3 printings · 3 release dates/)).toBeInTheDocument();
     expect(headings()).toEqual(["4 Oct 2011", "17 Jul 2009", "1 Dec 1993"]);
@@ -1274,9 +1273,10 @@ describe("grouping the printings list", () => {
    * runs with that is not a number already printed on the row.
    */
   it("draws price as one list with no headings at all, cheapest first", async () => {
+    const user = userEvent.setup();
     await openList();
 
-    await userEvent.selectOptions(groupBy(), "price");
+    await pickOption(user, "Group printings by", "Price");
 
     // The second half of the count line is dropped whole rather than reworded: there is one
     // group here and it has no heading, so "1 price" would be counting something invisible.

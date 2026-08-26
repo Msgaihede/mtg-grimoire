@@ -17,6 +17,7 @@ import type {
 import { MARKETPLACES } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
 import { dragOnto, startDrag } from "@/test-drag";
+import { openDropdown, pickOption } from "@/test-dropdown";
 
 const wishlistList = vi.hoisted(() => vi.fn());
 const wishlistSetQuantity = vi.hoisted(() => vi.fn());
@@ -204,28 +205,34 @@ const lastQuery = () =>
   wishlistList.mock.calls[wishlistList.mock.calls.length - 1][0] as WishlistQuery;
 
 /**
- * The filter bar's sort control.
+ * The filter bar's sort trigger.
  *
- * By role and exact name, not a loose label match. Every sortable column header carries a
- * `SORT_HINT` — since the tooltip sweep, a hover tooltip rather than a `title` — but a header's
- * own **accessible name** can still contain "Sort" (`headerLabel`, e.g. "Cost. Prices as of…"),
- * so `/sort/i` on `getByLabelText` would still risk matching the whole header row rather than
- * only the control this file means.
+ * By role and exact name, and more load-bearing than it used to be: a sortable column header is
+ * `role="button"` too, and a header's own **accessible name** can still contain "Sort"
+ * (`headerLabel`, e.g. "Cost. Prices as of…"). Before this control became a `Dropdown` its own
+ * `combobox` role kept the two apart by role alone; now both are buttons, so the exact-match
+ * `{ name: "Sort" }` — never a `/sort/i` regex — is the whole of what keeps this query off a
+ * header.
  */
-// **`Sort results` and not the bare `Sort` this page drew before it shared `FilterBar`** —
-// see `CollectionPage.test.tsx`, whose note this is, and `FilterBar`'s own label.
-const sortSelect = () => screen.getByRole("combobox", { name: "Sort results" });
+// **`Sort results` and not the bare `Sort` this page drew before it shared `FilterBar`** -
+// see `CollectionPage.test.tsx`, whose note this is, and `FilterBar`'s own label. The page
+// lost its own filter bar on 2026-08-26 and draws the shared row now, so the control is named
+// for what it orders.
+//
+// **A `button`, not a `combobox`** - it became a `Dropdown` in the same window. The combobox
+// role belongs to a `searchable` dropdown's search box and this one has none.
+const sortTrigger = () => screen.getByRole("button", { name: "Sort results" });
 /**
  * Open the filter tray, so a cell behind the Filters disclosure can be pressed.
  *
  * Everything but the box, the colours, the order and the layout pair lives behind that button
- * since this page started drawing `FilterBar` — so a suite that reached straight for a chip is
+ * since this page started drawing `FilterBar` - so a suite that reached straight for a chip is
  * now reaching into a tray that is not mounted. Matched on a prefix: the button's name carries
- * the live count (`Show filters — 2 active`), which moves as a case presses things.
+ * the live count (`Show filters - 2 active`), which moves as a case presses things.
  */
 async function openTray(user: {
   // Structural, so the bare `userEvent` module and a `userEvent.setup()` instance both satisfy it
-  // — this file uses each in different cases, and the two are not the same type.
+  // - this file uses each in different cases, and the two are not the same type.
   click: (element: Element) => Promise<unknown>;
 }): Promise<void> {
   await user.click(screen.getByRole("button", { name: /^Show filters/ }));
@@ -780,11 +787,12 @@ describe("WishlistPage", () => {
   });
 
   it("sends the wishlist's own filters and its sort", async () => {
+    const user = userEvent.setup();
     wrap(<WishlistPage />);
     await screen.findByText("Lightning Bolt");
 
-    await userEvent.type(screen.getByLabelText(/search your wishlist/i), "bolt");
-    await userEvent.selectOptions(sortSelect(), "price");
+    await user.type(screen.getByLabelText(/search your wishlist/i), "bolt");
+    await pickOption(user, "Sort results", "Highest price");
 
     await waitFor(() => {
       const q = lastQuery();
@@ -797,11 +805,11 @@ describe("WishlistPage", () => {
   });
 
   /**
-   * The select and the headers are one state seen from two ends — and the Printing column
+   * The trigger and the headers are one state seen from two ends — and the Printing column
    * is the one header in this app that is not a control at all: an any-printing wish names
    * no set, so there is nothing to sort by.
    */
-  it("drives one sort from the headers and the select together, and leaves Printing alone", async () => {
+  it("drives one sort from the headers and the trigger together, and leaves Printing alone", async () => {
     const user = userEvent.setup();
     wrap(<WishlistPage />);
     await screen.findByText("Lightning Bolt");
@@ -810,14 +818,18 @@ describe("WishlistPage", () => {
     expect(screen.queryByRole("button", { name: /^Printing/ })).not.toBeInTheDocument();
 
     // **It opens on the order it is actually in, and `Custom…` is not there to open on** —
-    // `CollectionPage.test.tsx`'s twin, and the trap is the same: a controlled `<select>` whose
-    // value matches no option silently reports the first row rather than drawing blank.
-    expect(sortSelect()).toHaveValue("name");
+    // `CollectionPage.test.tsx`'s twin, and the trap is the same one wearing new clothes: a
+    // controlled `<select>` whose value matched no option silently reported the first row, and a
+    // `Dropdown` draws its placeholder dash. Either way the honest order and the fallback look
+    // alike on screen, so the trigger's own text is what separates them — read as text, because
+    // a `<button>` has no value and the trigger says the picked row's **label**, not its key.
+    expect(sortTrigger()).toHaveTextContent("Name");
+    // Closed, so there are no rows at all — the panel exists only while open.
     expect(screen.queryByRole("option", { name: "Custom…" })).not.toBeInTheDocument();
 
     await user.click(screen.getByRole("button", { name: "Wanted" }));
     await waitFor(() => expect(lastQuery().sort).toEqual([{ key: "quantity", dir: "desc" }]));
-    expect(sortSelect()).toHaveValue("quantity");
+    expect(sortTrigger()).toHaveTextContent("Most wanted");
 
     await user.keyboard("{Shift>}");
     await user.click(screen.getByRole("button", { name: /^Cost/ }));
@@ -829,11 +841,15 @@ describe("WishlistPage", () => {
       ]),
     );
 
-    // Cost alone is an order the select has no option for — it offers the *unit* price.
+    // Cost alone is an order the trigger has no option for — it offers the *unit* price.
     await user.click(screen.getByRole("button", { name: /^Cost/ }));
     await waitFor(() => expect(lastQuery().sort).toEqual([{ key: "cost", dir: "desc" }]));
-    expect(sortSelect()).toHaveValue("");
-    expect(screen.getByRole("option", { name: "Custom…" })).toBeDisabled();
+    expect(sortTrigger()).toHaveTextContent("Custom…");
+    await openDropdown(user, "Sort results");
+    expect(screen.getByRole("option", { name: "Custom…" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
   });
 
   /**
@@ -853,19 +869,25 @@ describe("WishlistPage", () => {
     wrap(<WishlistPage />);
     await screen.findByText("Lightning Bolt");
 
-    const options = () =>
-      within(sortSelect())
+    // Opens the panel to read its rows, then closes it again — the options only mount while
+    // the dropdown is open, unlike a native `<select>`'s `<option>`s.
+    const options = async () => {
+      await openDropdown(user, "Sort results");
+      const labels = within(screen.getByRole("listbox"))
         .getAllByRole("option")
         .map((o) => o.textContent);
+      await user.keyboard("{Escape}");
+      return labels;
+    };
     const orders = ["Highest price", "Most wanted", "Name", "Recently added"];
-    expect(options()).toEqual(orders);
+    expect(await options()).toEqual(orders);
 
-    // A header this select has no option for is the only way to reach "Custom…": Cost sorts
-    // by what finishing the wish costs, where the select offers the *unit* price.
+    // A header this dropdown has no option for is the only way to reach "Custom…": Cost sorts
+    // by what finishing the wish costs, where the dropdown offers the *unit* price.
     await user.click(screen.getByRole("button", { name: /^Cost/ }));
 
-    await waitFor(() => expect(sortSelect()).toHaveValue(""));
-    expect(options()).toEqual(["Custom…", ...orders]);
+    await waitFor(() => expect(sortTrigger()).toHaveTextContent("Custom…"));
+    expect(await options()).toEqual(["Custom…", ...orders]);
   });
 
   /** Opening a card from a wish is how the reader checks what they are about to buy. */
