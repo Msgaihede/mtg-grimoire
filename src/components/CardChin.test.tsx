@@ -7,7 +7,7 @@ import { CardChin } from "./CardChin";
 describe("CardChin", () => {
   /** The default printing line is the set and the number, which is what fits on a card's foot. */
   it("writes the set and the number when given no printing of its own", () => {
-    render(<CardChin rarity="rare" zoom={1} setCode="c21" collectorNumber="179" />);
+    render(<CardChin rarity="rare" zoom={1} setCode="c21" collectorNumber="179" seam="card" />);
     expect(screen.getByText(/C21 · 179/)).toBeInTheDocument();
   });
 
@@ -15,19 +15,38 @@ describe("CardChin", () => {
    * The caller's words win, because a wish for *any* printing is drawn as one and must not be
    * captioned as one — a caption reading `DSK · 123` under that art would say the reader had
    * asked for that piece of cardboard.
+   *
+   * **The conflicting call this used to make is now a type error**: `ChinPrinting` is a union, so
+   * a caller cannot hand over `printing` *and* a set and number and leave the precedence to be
+   * discovered at runtime. What is left for a test is the runtime half — that the caller's line is
+   * what gets drawn, and that no default line is synthesised beside it. The separator is the
+   * witness: `·` appears nowhere else in a chin, so finding one here means a `SET · number` got
+   * built and printed anyway.
    */
   it("takes the caller's printing line over the default", () => {
-    render(
-      <CardChin rarity="rare" zoom={1} setCode="dsk" collectorNumber="123" printing="Any printing" />,
-    );
+    render(<CardChin rarity="rare" zoom={1} printing="Any printing" printingTitle={null} seam="art" />);
     expect(screen.getByText("Any printing")).toBeInTheDocument();
-    expect(screen.queryByText(/DSK · 123/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/·/)).not.toBeInTheDocument();
   });
 
   /** The money slot, and an em dash where a caller has nothing — never `$0.00`. */
   it("draws the money it is given", () => {
-    render(<CardChin rarity="rare" zoom={1} setCode="c21" collectorNumber="179" money="$12.32" />);
+    render(<CardChin rarity="rare" zoom={1} setCode="c21" collectorNumber="179" money="$12.32" seam="card" />);
     expect(screen.getByText("$12.32")).toBeInTheDocument();
+  });
+
+  /**
+   * **`null` is a caller with no price, not a caller with an empty one.** It is this codebase's
+   * word for the absent figure — `formatPrice(value: number | null, …)` — so a chin handed one
+   * must draw no slot rather than an empty box holding a place in the row. A caller that wants the
+   * em dash asks for it, by passing `formatPrice(null, currency)`.
+   */
+  it("draws no money slot at all where there is no price", () => {
+    const { container } = render(
+      <CardChin rarity="rare" zoom={1} setCode="c21" collectorNumber="179" money={null} seam="card" />,
+    );
+    const chin = container.firstElementChild as HTMLElement;
+    expect(chin.querySelector(".tabular-nums")).toBeNull();
   });
 
   /**
@@ -36,10 +55,10 @@ describe("CardChin", () => {
    */
   it("marks a foil and leaves a nonfoil unmarked", () => {
     const { rerender } = render(
-      <CardChin rarity="rare" zoom={1} setCode="c21" collectorNumber="179" finish="foil" />,
+      <CardChin rarity="rare" zoom={1} setCode="c21" collectorNumber="179" finish="foil" seam="card" />,
     );
     expect(screen.getByLabelText("Foil")).toBeInTheDocument();
-    rerender(<CardChin rarity="rare" zoom={1} setCode="c21" collectorNumber="179" finish="nonfoil" />);
+    rerender(<CardChin rarity="rare" zoom={1} setCode="c21" collectorNumber="179" finish="nonfoil" seam="card" />);
     expect(screen.queryByLabelText("Foil")).not.toBeInTheDocument();
   });
 
@@ -49,7 +68,7 @@ describe("CardChin", () => {
    */
   it("is as tall as the card's chin at this zoom, and rides up by the rise", () => {
     const { container } = render(
-      <CardChin rarity="rare" zoom={0.5} setCode="c21" collectorNumber="179" />,
+      <CardChin rarity="rare" zoom={0.5} setCode="c21" collectorNumber="179" seam="card" />,
     );
     const chin = container.firstElementChild as HTMLElement;
     expect(chin.style.height).toBe(`${chinHeight(0.5)}px`);
@@ -84,7 +103,7 @@ describe("CardChin", () => {
    */
   it("carries the card's own edge colour", () => {
     const { container } = render(
-      <CardChin rarity="rare" zoom={1} setCode="c21" collectorNumber="179" tone="destructive" />,
+      <CardChin rarity="rare" zoom={1} setCode="c21" collectorNumber="179" tone="destructive" seam="card" />,
     );
     const chin = container.firstElementChild as HTMLElement;
     expect(chin.classList.contains("border-destructive")).toBe(true);
@@ -141,6 +160,7 @@ describe("CardChin", () => {
         collectorNumber="179"
         money="$12.32"
         extra={<span>1/2</span>}
+        seam="card"
       />,
     );
     const money = screen.getByText("$12.32");
@@ -177,6 +197,7 @@ describe("CardChin", () => {
             setCode="c21"
             collectorNumber="179"
             printingTitle="Commander 2021 · #179"
+            seam="card"
           />
         </TooltipProvider>,
       );
@@ -196,10 +217,47 @@ describe("CardChin", () => {
     it("says nothing where the caller has no set name", () => {
       render(
         <TooltipProvider>
-          <CardChin rarity="rare" zoom={1} setCode="c21" collectorNumber="179" printingTitle={null} />
+          <CardChin
+            rarity="rare"
+            zoom={1}
+            setCode="c21"
+            collectorNumber="179"
+            printingTitle={null}
+            seam="card"
+          />
         </TooltipProvider>,
       );
       fireEvent.pointerEnter(screen.getByText("C21 · 179"));
+      act(() => void vi.advanceTimersByTime(TOOLTIP_OPEN_MS));
+
+      expect(screen.queryByRole("tooltip")).toBeNull();
+    });
+
+    /**
+     * **The wishlist's shape, and the one a future edit is most likely to regress.**
+     *
+     * A line the caller wrote refuses to name a particular piece of cardboard — so a hover that
+     * names one anyway contradicts it, which is the same defect `printing` exists to prevent, one
+     * layer down. `ChinPrinting` makes the title a *required* answer on this arm rather than one
+     * inherited from whatever the surface happened to have lying around; this is the assertion
+     * that the answer is honoured.
+     *
+     * Not a duplicate of the orphan case above: that one is the default line with nothing to say
+     * about its set, this one is a caller's own words with nothing it *may* say.
+     */
+    it("binds no tooltip to a printing line the caller wrote", () => {
+      render(
+        <TooltipProvider>
+          <CardChin
+            rarity="rare"
+            zoom={1}
+            printing="Any printing"
+            printingTitle={null}
+            seam="art"
+          />
+        </TooltipProvider>,
+      );
+      fireEvent.pointerEnter(screen.getByText("Any printing"));
       act(() => void vi.advanceTimersByTime(TOOLTIP_OPEN_MS));
 
       expect(screen.queryByRole("tooltip")).toBeNull();

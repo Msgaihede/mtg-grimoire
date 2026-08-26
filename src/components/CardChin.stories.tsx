@@ -52,6 +52,10 @@ const meta = {
     collectorNumber: "179",
     printingTitle: "Commander 2021 · #179",
     money: "$12.32",
+    // The majority answer, so the stories that are not *about* the seam do not have to have an
+    // opinion: one of the six surfaces being rewired is a bordered card and five are bare art.
+    // The three stories that are about it say so themselves.
+    seam: "art",
   },
   parameters: {
     docs: {
@@ -85,7 +89,17 @@ const meta = {
 } satisfies Meta<typeof CardChin>;
 
 export default meta;
-type Story = StoryObj<typeof meta>;
+/**
+ * `typeof CardChin` and not `typeof meta`, which is this repo's usual spelling.
+ *
+ * `StoryObj<typeof meta>` subtracts the args the meta already supplies so a story is made to
+ * declare the ones still missing — and that set arithmetic collapses to `never` against
+ * {@link ChinPrinting}'s union, taking every story in the file with it. Typing the stories off the
+ * component keeps each one's args checked against the real props; what is lost is only the
+ * "you forgot a required arg" nudge, which the union and a required `seam` now ask for at the
+ * component itself, where all six call sites are answerable rather than just these ten.
+ */
+type Story = StoryObj<typeof CardChin>;
 
 /**
  * The deck stack's foot, whole: the bordered card above it, the shortage after the price.
@@ -203,14 +217,29 @@ export const Unpriced: Story = {
  * The caller's words win over `SET · number`.
  *
  * The wishlist's "Any printing" is the live case: a wish for *any* printing is drawn as one
- * particular one, and a caption reading `DSK · 123` under that art would say the reader had
- * asked for that piece of cardboard.
+ * particular one, and a caption naming that cardboard would say the reader had asked for it.
+ *
+ * **The title is `null` and that is a required answer rather than a re-null.** `ChinPrinting`'s
+ * two arms make this the one story that cannot spread the meta's args: Storybook merges
+ * `meta.args` into every story at *runtime*, so a `setCode` and a `collectorNumber` would ride in
+ * underneath a `printing` the union exists to keep them away from. It builds its own props
+ * instead — which is also the clearest statement of what a caller on this arm actually passes.
  */
 export const CallerPrinting: Story = {
-  args: { setCode: "dsk", collectorNumber: "123", printing: "Any printing", printingTitle: null },
+  render: ({ rarity, zoom, seam, money }) => (
+    <CardChin
+      rarity={rarity}
+      zoom={zoom}
+      seam={seam}
+      money={money}
+      printing="Any printing"
+      printingTitle={null}
+    />
+  ),
   play: async ({ canvas }) => {
     await expect(canvas.getByText("Any printing")).toBeInTheDocument();
-    await expect(canvas.queryByText(/DSK · 123/)).toBeNull();
+    // No `SET · number` built beside it — the separator appears nowhere else in a chin.
+    await expect(canvas.queryByText(/·/)).toBeNull();
   },
 };
 
