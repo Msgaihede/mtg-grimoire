@@ -158,21 +158,27 @@ export const CardMode: Story = {
     const canvas = within(canvasElement);
     await expect(await canvas.findByRole("group", { name: "Your collection" })).toBeInTheDocument();
     await expect(await canvas.findByRole("button", { name: "Black Lotus" })).toBeInTheDocument();
-    // Every tile, not one: a wall where a single tile registered would pass a spot check while
-    // the rest of it stayed dead. The count is the tiles the fixture draws — the card art inside
-    // each one is `draggable={false}` by `CardImage`'s own default, which is what stops the
-    // picture stealing the gesture from the tile around it, so no `<img>` is matched here.
-    // **Every tile the wall drew, not one and not a number written down here.** A wall where a
-    // single tile registered would pass a spot check while the rest stayed dead, and a literal
-    // count is a fact about this fixture that goes stale the day a row is added to it — so the
-    // claim is stated as an equality against the tiles themselves. `data-grid-index` is
-    // `CardGrid`'s own handle on a tile root, which is the element the draggable is registered on.
+    // **Every tile the wall drew, and not a number written down here.** A wall where a single
+    // tile registered would pass a spot check while the rest stayed dead, and a literal count is
+    // a fact about this fixture that goes stale the day a row is added to it — so the claim is
+    // stated over the tiles themselves. `data-grid-index` is `CardGrid`'s own handle on a tile
+    // root, which is the element the draggable is registered on.
     //
-    // The card art inside each tile is `draggable={false}` by `CardImage`'s default — that is what
-    // stops the picture stealing the gesture from the tile around it — so no `<img>` is matched.
-    const tiles = canvasElement.querySelectorAll("[data-grid-index]");
+    // **Asked of the tiles rather than of the canvas, which is newer than it looks.** This
+    // counted every `draggable` element on the page until the folder cards above the wall became
+    // drag sources of their own — folders can be reordered and re-filed by dragging now — and a
+    // canvas-wide count then read three folder cards as three unregistered tiles. The honest
+    // claim was always *every tile is a handle*, and it is blind to whatever else on the page has
+    // learnt to be dragged since.
+    //
+    // The card art inside each tile is `draggable={false}` by `CardImage`'s default — that is
+    // what stops the picture stealing the gesture from the tile around it — so no `<img>` is
+    // matched either way.
+    const tiles = [...canvasElement.querySelectorAll("[data-grid-index]")];
     await expect(tiles.length).toBeGreaterThan(0);
-    await expect(canvasElement.querySelectorAll('[draggable="true"]')).toHaveLength(tiles.length);
+    await expect(tiles.filter((tile) => tile.getAttribute("draggable") === "true")).toHaveLength(
+      tiles.length,
+    );
   },
 };
 

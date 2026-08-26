@@ -5500,8 +5500,16 @@ describe("the busy fault", () => {
     // to take two arguments of its own, `set_card_zoom` being the first, and it shares that one's
     // `section` name — which is why the record above carries one `section` and two values beside
     // it rather than two sections.
+    // Folder reordering then added **three**, 69 -> 72 — one per cabinet
+    // (`deck_folder_reorder`, `collection_folder_reorder`, `wishlist_folder_reorder`), and for
+    // once the handler count and the delta are the same figure. All three take
+    // `sync::with_write` like every other folder write, so none of them joined `unlocked`: a
+    // reorder is `sort_order` and `parent_id` on one table and has no read half to answer
+    // through a sync. They are also the first writes in this table whose `ids` is a list of
+    // **folder** ids rather than category ids — which the record above does not need to know,
+    // because every one of them reaches `refuseIfBusy` before it looks at an argument.
     const names = Object.keys(w).filter((n) => !unlocked.includes(n));
-    expect(names).toHaveLength(69);
+    expect(names).toHaveLength(72);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,

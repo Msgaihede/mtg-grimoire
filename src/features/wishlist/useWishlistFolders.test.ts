@@ -8,6 +8,7 @@ const wishlistFolderList = vi.hoisted(() => vi.fn());
 const wishlistFolderCreate = vi.hoisted(() => vi.fn());
 const wishlistFolderRename = vi.hoisted(() => vi.fn());
 const wishlistFolderMove = vi.hoisted(() => vi.fn());
+const wishlistFolderReorder = vi.hoisted(() => vi.fn());
 const wishlistFolderDelete = vi.hoisted(() => vi.fn());
 const wishlistFolderSummary = vi.hoisted(() => vi.fn());
 // `useWishlistFolders` reads `useMarketplace()`, which is the real hook here rather than a
@@ -22,6 +23,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     wishlistFolderCreate,
     wishlistFolderRename,
     wishlistFolderMove,
+    wishlistFolderReorder,
     wishlistFolderDelete,
     wishlistFolderSummary,
     getMarketplace,
@@ -65,6 +67,11 @@ beforeEach(() => {
   wishlistFolderCreate.mockReset().mockResolvedValue(STAPLES);
   wishlistFolderRename.mockReset().mockResolvedValue({ ...WANTS, name: "Wishlist" });
   wishlistFolderMove.mockReset().mockResolvedValue({ ...STAPLES, parentId: null });
+  // The whole cabinet, flat, as it now stands — `wishlist_folders::reorder_folders` ends in the
+  // same `list_folders` the plain read does, so this is not scoped to the level that was written.
+  wishlistFolderReorder
+    .mockReset()
+    .mockResolvedValue([{ ...STAPLES, parentId: null, sortOrder: 0 }, { ...WANTS, sortOrder: 1 }]);
   wishlistFolderDelete.mockReset().mockResolvedValue(undefined);
   wishlistFolderSummary.mockReset().mockResolvedValue([WANTS_SUMMARY, STAPLES_SUMMARY]);
   // Matches `DEFAULT_MARKETPLACE`, so a test that does not care about marketplace settles with
@@ -228,5 +235,66 @@ describe("useWishlistFolders", () => {
     expect(client.getQueryData(["wishlist", "folderSummary", "cardkingdom"])).toEqual([
       { ...WANTS_SUMMARY, wishes: 999 },
     ]);
+  });
+
+  /**
+   * **`ids` is the whole level, in order — not a move, and not one folder's new index.**
+   *
+   * `sort_order` is written from position and `parent_id` from the argument, in one transaction,
+   * so the single call below takes `Staples` out of `Wants` **and** puts it first at the root.
+   * Pinning the array by value is what makes the order load-bearing: a hook that sent the ids in
+   * any other arrangement would be writing a different `sort_order` to every row it named.
+   */
+  it("sends the whole level in order, with the parent that level belongs to", async () => {
+    const { result } = renderHook(() => useWishlistFolders(), { wrapper });
+    await waitFor(() => expect(result.current.folders).toHaveLength(2));
+
+    await result.current.reorder.mutateAsync({ parentId: null, ids: [2, 1] });
+    expect(wishlistFolderReorder).toHaveBeenCalledWith(null, [2, 1]);
+
+    // `parentId` is passed through rather than derived from the ids — a level inside a folder is
+    // the same call with the folder's own id, and `null` above was the root rather than an
+    // omission.
+    await result.current.reorder.mutateAsync({ parentId: 1, ids: [2] });
+    expect(wishlistFolderReorder).toHaveBeenLastCalledWith(1, [2]);
+  });
+
+  /**
+   * **The one write in this hook that does not take the whole `["wishlist"]` root**, and the
+   * assertion is the exact call list rather than a pair of `toHaveBeenCalledWith`s, because both
+   * halves of the claim are failures worth catching: dropping the invalidation leaves a tree
+   * drawing yesterday's order, and widening it to `["wishlist"]` refetches the wall, the header
+   * and `wishlist_folder_summary` — a `GROUP BY` over every wish carrying the owned-copies
+   * subquery and a price expression — to redraw a row of folder cards.
+   *
+   * A reorder writes `wishlist_folders.sort_order` and `wishlist_folders.parent_id` and nothing
+   * else: no wish's `folder_id` moves, so no count, no `missing` and no `cost` can be different.
+   */
+  it("re-reads the folder list after a reorder, and nothing else under wishlist", async () => {
+    const { result } = renderHook(() => useWishlistFolders(), { wrapper });
+    await waitFor(() => expect(result.current.folders).toHaveLength(2));
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    await result.current.reorder.mutateAsync({ parentId: null, ids: [2, 1] });
+
+    expect(invalidate.mock.calls).toEqual([[{ queryKey: ["wishlist", "folders"] }]]);
+  });
+
+  /** A refused reorder re-reads too, `move`'s rule: the refusal is a busy database or an id in
+   *  `ids` another surface has already deleted, and the second leaves a tree drawing a node that
+   *  is gone. */
+  it("re-reads the folder list when a reorder is refused", async () => {
+    wishlistFolderReorder.mockRejectedValue("A folder cannot be moved inside itself.");
+    const { result } = renderHook(() => useWishlistFolders(), { wrapper });
+    await waitFor(() => expect(result.current.folders).toHaveLength(2));
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    await expect(result.current.reorder.mutateAsync({ parentId: 2, ids: [1] })).rejects.toBe(
+      "A folder cannot be moved inside itself.",
+    );
+
+    await waitFor(() =>
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist", "folders"] }),
+    );
   });
 });

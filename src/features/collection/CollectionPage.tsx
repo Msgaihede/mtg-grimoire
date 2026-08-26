@@ -29,6 +29,8 @@ import { ImportExportPair } from "@/features/transfer/ImportExportPair";
 import { ImportDialog } from "@/features/transfer/import/ImportDialog";
 import { CONDITION_LABEL, CONDITIONS } from "@/lib/conditions";
 import { DROP_MARK_ROOM } from "@/lib/dropMarks";
+import type { FolderDrag, FolderEdge } from "@/lib/folderDrag";
+import { reorderedLevel } from "@/lib/folderOrder";
 import { FINISHES, FINISH_LABEL, isFinish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
 import { buildFolderTree, folderDescendants, type FolderNode } from "@/lib/folderTree";
@@ -1212,6 +1214,7 @@ export function CollectionPage() {
     folders.create,
     folders.rename,
     folders.move,
+    folders.reorder,
     folders.remove,
   ]);
   const empty = rows.length === 0;
@@ -1243,6 +1246,131 @@ export function CollectionPage() {
    * wall of drawers that every ring refuses would be an invitation to a gesture that does nothing.
    */
   const wall = inRemoved ? nodes : childFolders;
+
+  /**
+   * The level the wall is drawing: the parent every card on it is a child of, and that level's
+   * ids in the order they are drawn.
+   *
+   * **Read off the wall rather than off the target card's own `parentId`, and the two are not
+   * always the same word.** `buildFolderTree` draws a folder whose parent this list does not
+   * carry at the **root** rather than dropping it, so an orphan's row still names a folder that
+   * is gone — sending that as a destination would be a reorder into nothing. What is on screen is
+   * the honest answer, and writing it down also files the orphan where the reader can already see
+   * it: `collection_folder_reorder` writes `parent_id` from this argument for every id in the
+   * list, which is that same paragraph read from the other end.
+   *
+   * `null` inside `Recently removed`, which is the one level whose wall is not its own children —
+   * the substitution #209 asked for, and therefore the one place `folderId` is not the parent of
+   * what is drawn.
+   */
+  const wallLevel = useMemo(
+    () => ({ parentId: inRemoved ? null : folderId, ids: wall.map((one) => one.folder.id) }),
+    [inRemoved, folderId, wall],
+  );
+
+  /**
+   * What a folder let go on another folder means as a write — the destination level and that
+   * level's whole new order — or `null` for a drop this page will not make.
+   *
+   * **One function for both halves of the gesture**, because a mark that promised a write the
+   * drop then refused would be worse than no mark: `useFolderDropTarget` asks the question once
+   * per target per frame to decide what to draw, and again at the drop because the two can be a
+   * second apart and only the second one writes. Three of the four clauses below are refusals the
+   * **backend** makes in words, said early enough to be a missing ring rather than a red banner.
+   *
+   * **Both ends must be a folder the reader made, and that clause is this cabinet's alone.**
+   * `collection_folders.kind` is one of `user`, `deck` and `removed`, and
+   * `collection_folders::reorder_folders` calls `user_folder` on the destination *and* on every
+   * id it is handed — a deck's group or `Recently removed` at either end is `FOLDER_NOT_YOURS`.
+   * `deck_folders` and `wishlist_folders` carry no such column, which is why the wishlist's twin
+   * of this function has one clause fewer rather than having forgotten one. **No gesture on this
+   * page reaches it today and that is deliberate**: `PinnedFolders` registers neither a drop
+   * target nor a drag source, so a pinned entry can be neither picked up nor pointed at, and the
+   * wall this guards is built from `userFolders`. It is the fence rather than the affordance —
+   * {@link canMoveCopy}'s third clause, for the same reason and with the same warning attached:
+   * it is what keeps the invariant local the day somebody makes a pinned entry draggable
+   * "because the ring looked missing".
+   *
+   * **A folder may not land inside itself or inside anything it holds.** The backend refuses that
+   * too, and the guard is not cosmetic: `collection_folders.parent_id` is `ON DELETE CASCADE`
+   * **on itself**, so a cycle is a graph SQLite's recursive cascade would walk forever the day
+   * the folder is deleted. It is asked of the **destination parent** rather than of the card
+   * under the pointer, which is what covers all three landings at once — `inside` a descendant
+   * and `before` one are the same cycle, since a descendant's own parent is the dragged folder or
+   * something already under it. This one is unreachable from this page for a different reason
+   * than the clause above: the wall draws exactly **one level**, so every card on it is a sibling
+   * of every other and a descendant is never on screen beside its ancestor. The arrangement that
+   * does put them there is a cabinet that already holds a cycle, which `buildFolderTree` draws at
+   * the root as leaves and which only corruption produces.
+   *
+   * **And a drop that would reproduce the order already on screen is not a write.**
+   * `reorderedLevel` is what says so; its `null` is a refusal rather than an error, because
+   * dropping a folder back where it already sits is a gesture a reader makes by accident every
+   * time they think better of one mid-drag, and a write for it would bump `updated_at` and
+   * re-read the list to arrive at what is already drawn.
+   */
+  const folderPlacement = useCallback(
+    (
+      drag: FolderDrag,
+      target: FolderNode<CollectionFolder>,
+      edge: FolderEdge,
+    ): { parentId: number | null; ids: number[] } | null => {
+      // `inside` says which drawer and the target *is* it; `before`/`after` say where in the
+      // level the target sits in, which is the level being drawn.
+      const parentId = edge === "inside" ? target.folder.id : wallLevel.parentId;
+      if (!userFolderIds.has(drag.folderId) || !userFolderIds.has(target.folder.id)) return null;
+      if (parentId !== null && !userFolderIds.has(parentId)) return null;
+      if (parentId !== null && parentId === drag.folderId) return null;
+      if (parentId !== null && folderDescendants(userFolders, drag.folderId).has(parentId)) {
+        return null;
+      }
+      const ids = reorderedLevel({
+        // The target's own children for a nest — in the order the tree already draws them, so a
+        // nest re-states the level it is joining rather than re-sorting it — and the level on
+        // screen for the other two.
+        siblings:
+          edge === "inside" ? target.children.map((child) => child.folder.id) : wallLevel.ids,
+        dragged: drag.folderId,
+        target: target.folder.id,
+        edge,
+      });
+      return ids === null ? null : { parentId, ids: [...ids] };
+    },
+    [userFolderIds, userFolders, wallLevel],
+  );
+
+  /**
+   * The two halves of {@link folderPlacement}, bound per card by the wall below.
+   *
+   * **A folder is deliberately not droppable on the breadcrumb, where a copy is**, and the two
+   * are not the same gesture wearing different payloads. `collection_set_folder` takes one
+   * destination and that is the whole of the write, so a trail segment names a complete answer —
+   * which is why `CollectionBreadcrumb` takes card drops at all: without somewhere to drop a copy
+   * that moves it *up*, that gesture would only ever push copies deeper.
+   * `collection_folder_reorder` takes a destination **and that level's whole order**, and the
+   * order is what this gesture is for — a quarter of every folder card means "beside this one,
+   * here" (`EDGE_ZONE`). A segment is one word with no order to point into, so the only thing a
+   * drop on it could say is "last, in a level that is not on screen", and the folder would leave
+   * the wall with nothing drawn saying where it went. The way back out is `Move to folder…`, on
+   * the card's own `⋯`, which names every destination including the root — so unlike a copy, a
+   * folder is not one gesture short of a route home. If this is revisited, the thing to change is
+   * the *mark*, not the target: a segment would need to say "last" before it could honestly take
+   * one.
+   */
+  const canPlaceFolder = useCallback(
+    (drag: FolderDrag, target: FolderNode<CollectionFolder>, edge: FolderEdge) =>
+      folderPlacement(drag, target, edge) !== null,
+    [folderPlacement],
+  );
+  const placeFolder = useCallback(
+    (drag: FolderDrag, target: FolderNode<CollectionFolder>, edge: FolderEdge) => {
+      const plan = folderPlacement(drag, target, edge);
+      // A `null` writes **nothing at all** — not a reorder of the level as it stands, which would
+      // be a transaction to arrive at the list already on screen.
+      if (plan !== null) folders.reorder.mutate(plan);
+    },
+    [folderPlacement, folders.reorder],
+  );
 
   /**
    * What the export dialog's two sentences have to say about where the reader is standing.
@@ -1507,6 +1635,11 @@ export function CollectionPage() {
                   rowMenu={folderRowMenu(node.folder)}
                   canDrop={(drag) => canFile(drag, node.folder.id)}
                   onDropCard={(drag) => fileCard(drag, node.folder.id)}
+                  // The card asks about the folder in the air and where on itself it is; the
+                  // page adds which card that is, because only the page holds the level and the
+                  // tree the answer is worked out from.
+                  canDropFolder={(drag, edge) => canPlaceFolder(drag, node, edge)}
+                  onDropFolder={(drag, edge) => placeFolder(drag, node, edge)}
                 />
               ))}
             </ul>
