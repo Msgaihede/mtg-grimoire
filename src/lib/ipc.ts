@@ -3746,6 +3746,43 @@ export const ipc = {
   collectionFolderMove: (id: number, parentId: number | null) =>
     invoke<CollectionFolder>("collection_folder_move", { id, parentId }),
   /**
+   * Place a whole level. **`ids` is the full new list of `parentId`'s children, in the order they
+   * are to sit in** — this is the first of the three folder reorders and the one the other two
+   * point at, so the contract is written out once, here.
+   *
+   * Two things follow from that sentence, and neither is legible from the name:
+   *
+   * * **It is the order, not a move.** `sort_order` is written from each id's *position*, so the
+   *   caller sends every child of that level — {@link ipc.deckCategoryReorder}'s rule, ported.
+   *   There is no way to say "put folder 7 third" without also saying what the rest of the level
+   *   is, because position is the only thing this command reads.
+   * * **`parent_id` is written from `parentId` in the same transaction.** An id in the list that
+   *   was living somewhere else is re-parented *and* placed by the one call, which is what a drag
+   *   actually is: a folder lifted out of one drawer and dropped third inside another says both
+   *   things at once. Spelling it as {@link ipc.collectionFolderMove} followed by a reorder would
+   *   be two transactions with a state between them a reader can see — the folder at the end of
+   *   its new level, or, if the second call never lands, filed somewhere they did not drop it.
+   *
+   * Writing `parent_id` is what makes {@link ipc.collectionFolderMove}'s cycle refusal this
+   * command's too, and for that comment's reason: `collection_folders.parent_id` is
+   * `ON DELETE CASCADE` **on itself**.
+   *
+   * **Every folder named is fenced to the reader's own, on both sides** — the destination and
+   * every id — so a deck's group or `Recently removed` in `ids` is refused in words. This is the
+   * one of the three cabinets with that fence, because it is the only one whose folders can
+   * belong to the app ({@link CollectionFolder.kind}); `deck_folders` and `wishlist_folders`
+   * carry no such column, so their reorders have nothing to refuse.
+   *
+   * Answers the **whole cabinet**, flat — `collection_folders::reorder_folders` ends in the same
+   * `list_folders` {@link ipc.collectionFolderList} calls, not in a read of the level it just
+   * wrote. Worth knowing rather than assuming from the argument: a re-parent moves a folder
+   * *between* levels, so an answer scoped to `parentId` could not describe the level the folder
+   * left. The three hooks still settle by invalidating the folder list rather than seeding the
+   * cache from this, which is the shape every other folder write here has.
+   */
+  collectionFolderReorder: (parentId: number | null, ids: number[]) =>
+    invoke<CollectionFolder[]>("collection_folder_reorder", { parentId, ids }),
+  /**
    * Delete a folder. **Its cards are not deleted** — they surface at the root, filed nowhere and
    * otherwise exactly as they were, and the backend re-files them by hand before the row goes so
    * two copies of one printing landing at the root merge instead of colliding on the grain.
@@ -3886,6 +3923,15 @@ export const ipc = {
    */
   wishlistFolderMove: (id: number, parentId: number | null) =>
     invoke<WishlistFolder>("wishlist_folder_move", { id, parentId }),
+  /**
+   * Place a whole level — **{@link ipc.collectionFolderReorder}'s contract verbatim, and read that
+   * one before calling this**: `ids` is the *full* new list of `parentId`'s children in order, and
+   * one transaction writes both `sort_order` (from position) and `parent_id` (from `parentId`), so
+   * a drag that re-parents *and* places is never seen half done. Sending only the folder that
+   * moved is the mistake the name invites.
+   */
+  wishlistFolderReorder: (parentId: number | null, ids: number[]) =>
+    invoke<WishlistFolder[]>("wishlist_folder_reorder", { parentId, ids }),
   /**
    * Delete a folder. **Its wishes are not deleted** — `wishlist_entries.folder_id` is
    * `ON DELETE SET NULL`, so they surface at the root, filed nowhere and otherwise exactly as
@@ -4163,6 +4209,15 @@ export const ipc = {
    */
   deckFolderMove: (id: number, parentId: number | null) =>
     invoke<DeckFolder>("deck_folder_move", { id, parentId }),
+  /**
+   * Place a whole level — **{@link ipc.collectionFolderReorder}'s contract verbatim, and read that
+   * one before calling this**: `ids` is the *full* new list of `parentId`'s children in order, and
+   * one transaction writes both `sort_order` (from position) and `parent_id` (from `parentId`), so
+   * a drag that re-parents *and* places is never seen half done. Sending only the folder that
+   * moved is the mistake the name invites.
+   */
+  deckFolderReorder: (parentId: number | null, ids: number[]) =>
+    invoke<DeckFolder[]>("deck_folder_reorder", { parentId, ids }),
   /**
    * Delete a folder. **Its decks are not deleted** — `decks.folder_id` is `ON DELETE SET
    * NULL`, so they surface at the root, filed nowhere and otherwise exactly as they were.

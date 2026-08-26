@@ -277,23 +277,35 @@ export const CardMode: Story = {
     // And the caption that makes a flattened wall readable: without it a tile is a copy whose
     // drawer the reader cannot see without opening it.
     await expect(canvas.getAllByText("Filed in").length).toBeGreaterThan(0);
-    // **Every tile the wall drew, not one and not a number written down here.** A wall where a
-    // single tile registered would pass a spot check while the rest stayed dead, and a literal
-    // count is a fact about this fixture that goes stale the day a row is added to it — so the
-    // claim is stated as an equality against the tiles themselves. `data-grid-index` is
-    // `CardGrid`'s own handle on a tile root, which is the element the draggable is registered on.
+    // **Every tile the wall drew, and not a number written down here.** A wall where a single
+    // tile registered would pass a spot check while the rest stayed dead, and a literal count is
+    // a fact about this fixture that goes stale the day a row is added to it — so the claim is
+    // stated over the tiles themselves. `data-grid-index` is `CardGrid`'s own handle on a tile
+    // root, which is the element the draggable is registered on.
     //
-    // The card art inside each tile is `draggable={false}` by `CardImage`'s default — that is what
-    // stops the picture stealing the gesture from the tile around it — so no `<img>` is matched.
+    // **Asked of the tiles rather than of the canvas, which is newer than it looks.** This
+    // counted every `draggable` element on the page until the folder cards above the wall became
+    // drag sources of their own — folders can be reordered and re-filed by dragging now — and a
+    // canvas-wide count then read those folder cards as unregistered tiles. The honest claim was
+    // always *every tile is a handle*, and it is blind to whatever else on the page has learnt to
+    // be dragged since.
     //
-    // **This reverses what this story asserted on the branch that added the folder caption above**
-    // — `toHaveLength(0)`, "nothing on this page can be picked up" — which was true when that was
-    // written and stopped being true when the wall became a drag source (2026-08-26). Kept as a
-    // note because the two claims are each other's exact opposite, and a reader finding the old
-    // sentence in the history should see which one won and why.
-    const tiles = canvasElement.querySelectorAll("[data-grid-index]");
+    // **It reverses what this story asserted before the wall became a drag source at all** —
+    // `toHaveLength(0)`, "nothing on this page can be picked up" — which was true when it was
+    // written and stopped being true on 2026-08-26. Kept as a note because the two claims are
+    // each other's exact opposite, and a reader finding the old sentence in the history should
+    // see which one won and why.
+    //
+    // The card art inside each tile is `draggable={false}` by `CardImage`'s default — that is
+    // what stops the picture stealing the gesture from the tile around it — so no `<img>` is
+    // matched either way.
+    //
+    // Spread rather than the raw `NodeList`, which has no `.filter`.
+    const tiles = [...canvasElement.querySelectorAll("[data-grid-index]")];
     await expect(tiles.length).toBeGreaterThan(0);
-    await expect(canvasElement.querySelectorAll('[draggable="true"]')).toHaveLength(tiles.length);
+    await expect(tiles.filter((tile) => tile.getAttribute("draggable") === "true")).toHaveLength(
+      tiles.length,
+    );
   },
 };
 

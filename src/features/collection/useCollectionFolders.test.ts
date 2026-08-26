@@ -8,6 +8,7 @@ const collectionFolderList = vi.hoisted(() => vi.fn());
 const collectionFolderCreate = vi.hoisted(() => vi.fn());
 const collectionFolderRename = vi.hoisted(() => vi.fn());
 const collectionFolderMove = vi.hoisted(() => vi.fn());
+const collectionFolderReorder = vi.hoisted(() => vi.fn());
 const collectionFolderDelete = vi.hoisted(() => vi.fn());
 const collectionFolderSummary = vi.hoisted(() => vi.fn());
 // `useCollectionFolders` reads `useMarketplace()`, which is the real hook here rather than a
@@ -22,6 +23,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     collectionFolderCreate,
     collectionFolderRename,
     collectionFolderMove,
+    collectionFolderReorder,
     collectionFolderDelete,
     collectionFolderSummary,
     getMarketplace,
@@ -68,6 +70,11 @@ beforeEach(() => {
   collectionFolderCreate.mockReset().mockResolvedValue(FOILS);
   collectionFolderRename.mockReset().mockResolvedValue({ ...BINDER, name: "Binder" });
   collectionFolderMove.mockReset().mockResolvedValue({ ...FOILS, parentId: null });
+  // The whole cabinet, flat, as it now stands — `collection_folders::reorder_folders` ends in the
+  // same `list_folders` the plain read does, so this is not scoped to the level that was written.
+  collectionFolderReorder
+    .mockReset()
+    .mockResolvedValue([{ ...FOILS, parentId: null, sortOrder: 0 }, { ...BINDER, sortOrder: 1 }]);
   collectionFolderDelete.mockReset().mockResolvedValue(undefined);
   collectionFolderSummary.mockReset().mockResolvedValue([BINDER_SUMMARY, FOILS_SUMMARY]);
   // Matches `DEFAULT_MARKETPLACE`, so a test that does not care about marketplace settles with no
@@ -248,5 +255,69 @@ describe("useCollectionFolders", () => {
     expect(result.current.summary.has(2)).toBe(false);
     // And the folder itself is still in the census, which is the half a tree is built from.
     expect(result.current.folders.map((f) => f.id)).toEqual([1, 2]);
+  });
+
+  /**
+   * **`ids` is the whole level, in order — not a move, and not one folder's new index.**
+   *
+   * `sort_order` is written from position and `parent_id` from the argument, in one transaction,
+   * so the single call below takes `Foils` out of `Trade binder` **and** puts it first at the
+   * root. Pinning the array by value is what makes the order load-bearing: a hook that sent the
+   * ids in any other arrangement would be writing a different `sort_order` to every row it named.
+   */
+  it("sends the whole level in order, with the parent that level belongs to", async () => {
+    const { result } = renderHook(() => useCollectionFolders(), { wrapper });
+    await waitFor(() => expect(result.current.folders).toHaveLength(2));
+
+    await result.current.reorder.mutateAsync({ parentId: null, ids: [2, 1] });
+    expect(collectionFolderReorder).toHaveBeenCalledWith(null, [2, 1]);
+
+    // `parentId` is passed through rather than derived from the ids — a level inside a drawer is
+    // the same call with the drawer's own id, and `null` above was the root rather than an
+    // omission.
+    await result.current.reorder.mutateAsync({ parentId: 1, ids: [2] });
+    expect(collectionFolderReorder).toHaveBeenLastCalledWith(1, [2]);
+  });
+
+  /**
+   * **The one write on this page that settles on a key rather than a root**, and the assertion is
+   * the exact call list rather than a pair of `toHaveBeenCalledWith`s, because three different
+   * failures are worth catching at once.
+   *
+   * Dropping the invalidation leaves a tree drawing yesterday's order. Widening it to
+   * `["collection"]` — which is what the other four folder writes take, and rightly, since a
+   * delete re-files copies — refetches the table, the header and `collection_folder_summary`, a
+   * `GROUP BY` over every entry carrying a price expression, to redraw a row of folder cards.
+   * And adding `["decks"]` — which {@link useSetCollectionFolder} takes, and rightly, because
+   * filing a copy is how one enters or leaves a deck's group since schema v25 — would be copying
+   * the largest set in the file onto the one write that moves no `collection_entries.folder_id`
+   * at all.
+   */
+  it("re-reads the folder list after a reorder, and nothing else", async () => {
+    const { result } = renderHook(() => useCollectionFolders(), { wrapper });
+    await waitFor(() => expect(result.current.folders).toHaveLength(2));
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    await result.current.reorder.mutateAsync({ parentId: null, ids: [2, 1] });
+
+    expect(invalidate.mock.calls).toEqual([[{ queryKey: ["collection", "folders"] }]]);
+  });
+
+  /** A refused reorder re-reads too, `move`'s rule: the refusal is a busy database, a cycle, or an
+   *  id in `ids` another surface has already deleted — and the last leaves a tree drawing a node
+   *  that is gone. */
+  it("re-reads the folder list when a reorder is refused", async () => {
+    collectionFolderReorder.mockRejectedValue("A folder cannot be moved inside itself.");
+    const { result } = renderHook(() => useCollectionFolders(), { wrapper });
+    await waitFor(() => expect(result.current.folders).toHaveLength(2));
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    await expect(result.current.reorder.mutateAsync({ parentId: 2, ids: [1] })).rejects.toBe(
+      "A folder cannot be moved inside itself.",
+    );
+
+    await waitFor(() =>
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ["collection", "folders"] }),
+    );
   });
 });

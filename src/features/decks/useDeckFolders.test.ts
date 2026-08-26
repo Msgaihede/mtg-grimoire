@@ -8,10 +8,18 @@ const deckFolderList = vi.hoisted(() => vi.fn());
 const deckFolderCreate = vi.hoisted(() => vi.fn());
 const deckFolderRename = vi.hoisted(() => vi.fn());
 const deckFolderMove = vi.hoisted(() => vi.fn());
+const deckFolderReorder = vi.hoisted(() => vi.fn());
 const deckFolderDelete = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
-  ipc: { deckFolderList, deckFolderCreate, deckFolderRename, deckFolderMove, deckFolderDelete },
+  ipc: {
+    deckFolderList,
+    deckFolderCreate,
+    deckFolderRename,
+    deckFolderMove,
+    deckFolderReorder,
+    deckFolderDelete,
+  },
 }));
 
 import { useDeckFolders } from "./useDeckFolders";
@@ -34,6 +42,11 @@ beforeEach(() => {
   deckFolderCreate.mockReset().mockResolvedValue(LEGENDS);
   deckFolderRename.mockReset().mockResolvedValue({ ...EDH, name: "EDH" });
   deckFolderMove.mockReset().mockResolvedValue({ ...LEGENDS, parentId: null });
+  // The whole cabinet, flat, as it now stands — `deck_meta::reorder_folders` ends in the same
+  // `list_folders` the plain read does, so this is not scoped to the level that was written.
+  deckFolderReorder
+    .mockReset()
+    .mockResolvedValue([{ ...LEGENDS, parentId: null, sortOrder: 0 }, { ...EDH, sortOrder: 1 }]);
   deckFolderDelete.mockReset().mockResolvedValue(undefined);
 });
 
@@ -110,5 +123,66 @@ describe("useDeckFolders", () => {
     );
 
     await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] }));
+  });
+
+  /**
+   * **`ids` is the whole level, in order — not a move, and not one folder's new index.**
+   *
+   * `sort_order` is written from position and `parent_id` from the argument, in one transaction,
+   * so the single call below takes `Legends` out of `Commander` **and** puts it first at the root.
+   * Pinning the array by value is what makes the order load-bearing: a hook that sent the ids in
+   * any other arrangement would be writing a different `sort_order` to every row it named.
+   */
+  it("sends the whole level in order, with the parent that level belongs to", async () => {
+    const { result } = renderHook(() => useDeckFolders(), { wrapper });
+    await waitFor(() => expect(result.current.folders).toHaveLength(2));
+
+    await result.current.reorder.mutateAsync({ parentId: null, ids: [2, 1] });
+    expect(deckFolderReorder).toHaveBeenCalledWith(null, [2, 1]);
+
+    // `parentId` is passed through rather than derived from the ids — a level inside a folder is
+    // the same call with the folder's own id, and `null` above was the root rather than an
+    // omission.
+    await result.current.reorder.mutateAsync({ parentId: 1, ids: [2] });
+    expect(deckFolderReorder).toHaveBeenLastCalledWith(1, [2]);
+  });
+
+  /**
+   * **The one write in this hook that does not take the whole `["decks"]` root**, and the
+   * assertion is the exact call list rather than a pair of `toHaveBeenCalledWith`s, because both
+   * halves of the claim are failures worth catching: dropping the invalidation leaves a tree
+   * drawing yesterday's order, and widening it to `["decks"]` refetches the gallery, every open
+   * deck's categories, its audit and its undo cursor to redraw a row of folder cards.
+   *
+   * A reorder writes `deck_folders.sort_order` and `deck_folders.parent_id` and nothing else — no
+   * deck's `folder_id` moves, because the folder a deck is filed in is the same folder afterwards
+   * and is merely sitting somewhere else.
+   */
+  it("re-reads the folder list after a reorder, and nothing else under decks", async () => {
+    const { result } = renderHook(() => useDeckFolders(), { wrapper });
+    await waitFor(() => expect(result.current.folders).toHaveLength(2));
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    await result.current.reorder.mutateAsync({ parentId: null, ids: [2, 1] });
+
+    expect(invalidate.mock.calls).toEqual([[{ queryKey: ["decks", "folders"] }]]);
+  });
+
+  /** A refused reorder re-reads too, `move`'s rule: the refusal is a busy database or an id in
+   *  `ids` another surface has already deleted, and the second leaves a tree drawing a node that
+   *  is gone. */
+  it("re-reads the folder list when a reorder is refused", async () => {
+    deckFolderReorder.mockRejectedValue("A folder cannot be moved inside itself.");
+    const { result } = renderHook(() => useDeckFolders(), { wrapper });
+    await waitFor(() => expect(result.current.folders).toHaveLength(2));
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    await expect(result.current.reorder.mutateAsync({ parentId: 2, ids: [1] })).rejects.toBe(
+      "A folder cannot be moved inside itself.",
+    );
+
+    await waitFor(() =>
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks", "folders"] }),
+    );
   });
 });

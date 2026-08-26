@@ -7808,6 +7808,54 @@ export function writeHandlers(db: FakeDb) {
     },
 
     /**
+     * `collection_folders::reorder_folders`.
+     *
+     * **One write doing both jobs.** `ids` is the whole level in its new order, and each row
+     * takes `parent_id` from the argument and `sort_order` from its position — so one gesture
+     * re-parents *and* places, in one transaction, where a move followed by a reorder would
+     * let a reader see half of it.
+     *
+     * **Every fence runs before the first write**, which is the crate's order and is what the
+     * single transaction guarantees: a level whose second member is refused leaves the first
+     * exactly where it was. Fake this the other way round and a story would show a half-applied
+     * reorder that the app can never produce.
+     *
+     * The `kind` fence is this cabinet's alone — `deck_folders` and `wishlist_folders` have no
+     * such column — and it applies at **both** ends: neither a folder the app owns nor a
+     * destination it owns is the reader's to arrange.
+     *
+     * It answers the **whole flat cabinet**, not the level, because a re-parent moves a folder
+     * *between* levels and a level-scoped answer could not describe the one it left.
+     */
+    collection_folder_reorder: (args: {
+      parentId: number | null;
+      ids: number[];
+    }): CollectionFolder[] => {
+      refuseIfBusy(db);
+      if (args.parentId !== null) userCollectionFolder(db, args.parentId);
+      for (const id of args.ids) {
+        userCollectionFolder(db, id);
+        let cursor: number | null = args.parentId;
+        for (let hops = 0; cursor !== null; hops += 1) {
+          if (cursor === id) throw refuse(FOLDER_CYCLE);
+          // Out of budget: the only thing a chain that long can be is a loop.
+          if (hops >= MAX_FOLDER_DEPTH) throw refuse(FOLDER_CYCLE);
+          cursor = collectionFolderById(db, cursor)?.parentId ?? null;
+        }
+      }
+      args.ids.forEach((id, index) => {
+        const row = collectionFolderById(db, id);
+        if (row) {
+          row.parentId = args.parentId;
+          row.sortOrder = index;
+        }
+      });
+      return [...db.collectionFolders]
+        .sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id)
+        .map(toCollectionFolder);
+    },
+
+    /**
      * `collection_folders::delete_folder`. **Its cards are not deleted** —
      * `collection_entries.folder_id` is `ON DELETE SET NULL`, so they surface at the root, filed
      * nowhere and otherwise exactly as they were. **Sub-folders do go with it**, `parent_id`
@@ -8461,6 +8509,38 @@ export function writeHandlers(db: FakeDb) {
       if (!folder) throw refuse(FOLDER_GONE);
       folder.parentId = args.parentId;
       return toWishlistFolder(folder);
+    },
+
+    /**
+     * `wishlist_folders::reorder_folders` — {@link collection_folder_reorder}'s rules, minus the
+     * `kind` fence, because this table has no such column. See that handler for why the fences
+     * all run before the first write and why the answer is the whole cabinet.
+     */
+    wishlist_folder_reorder: (args: {
+      parentId: number | null;
+      ids: number[];
+    }): WishlistFolder[] => {
+      refuseIfBusy(db);
+      if (args.parentId !== null && !wishFolderById(db, args.parentId)) throw refuse(FOLDER_GONE);
+      for (const id of args.ids) {
+        if (!wishFolderById(db, id)) throw refuse(FOLDER_GONE);
+        let cursor = args.parentId;
+        for (let hops = 0; cursor !== null; hops += 1) {
+          if (cursor === id) throw refuse(FOLDER_CYCLE);
+          if (hops >= MAX_FOLDER_DEPTH) throw refuse(FOLDER_CYCLE);
+          cursor = wishFolderById(db, cursor)?.parentId ?? null;
+        }
+      }
+      args.ids.forEach((id, index) => {
+        const row = wishFolderById(db, id);
+        if (row) {
+          row.parentId = args.parentId;
+          row.sortOrder = index;
+        }
+      });
+      return [...db.wishlistFolders]
+        .sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id)
+        .map(toWishlistFolder);
     },
 
     /**
@@ -9963,6 +10043,37 @@ export function writeHandlers(db: FakeDb) {
     },
 
     /**
+     * `deck_meta::reorder_folders` — {@link collection_folder_reorder}'s rules, minus the `kind`
+     * fence, because this table has no such column.
+     *
+     * **The destination hole is left open here too, and deliberately.** `deck_folder_move` above
+     * does not check that `parentId` names a folder that exists, and this does not either —
+     * `CLAUDE.md`'s rule that fixing one side of a ported pair is worse than fixing neither. The
+     * two must answer the same way or a story disagrees with itself.
+     */
+    deck_folder_reorder: (args: { parentId: number | null; ids: number[] }): DeckFolder[] => {
+      refuseIfBusy(db);
+      for (const id of args.ids) {
+        if (!folderById(db, id)) throw refuse(FOLDER_GONE);
+        let cursor = args.parentId;
+        while (cursor !== null) {
+          if (cursor === id) throw refuse(FOLDER_CYCLE);
+          cursor = folderById(db, cursor)?.parentId ?? null;
+        }
+      }
+      args.ids.forEach((id, index) => {
+        const row = folderById(db, id);
+        if (row) {
+          row.parentId = args.parentId;
+          row.sortOrder = index;
+        }
+      });
+      return [...db.deckFolders]
+        .sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id)
+        .map(toDeckFolder);
+    },
+
+    /**
      * `deck_meta::delete_folder`. **Its decks are not deleted** — `decks.folder_id` is
      * `ON DELETE SET NULL`, so they surface at the root, filed nowhere and otherwise exactly as
      * they were. **Sub-folders do go with it**, `parent_id` being `ON DELETE CASCADE` on itself.
@@ -11019,6 +11130,9 @@ const NO_UNDO_STEP: ReadonlySet<string> = new Set([
   "deck_folder_create",
   "deck_folder_rename",
   "deck_folder_move",
+  // A folder belongs to no deck, so `deck_audit.deck_id` has nothing to key on — the same
+  // reason every other deck *folder* write is on this list.
+  "deck_folder_reorder",
   "deck_folder_delete",
   "collection_to_deck",
   "deck_to_collection",

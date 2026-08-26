@@ -21,6 +21,9 @@ const deckFolderList = vi.hoisted(() => vi.fn());
 const deckFolderCreate = vi.hoisted(() => vi.fn());
 const deckFolderRename = vi.hoisted(() => vi.fn());
 const deckFolderMove = vi.hoisted(() => vi.fn());
+/** The folder drag's whole write: one command places a level, `sort_order` from each id's
+ *  position and `parent_id` from the argument. */
+const deckFolderReorder = vi.hoisted(() => vi.fn());
 const deckFolderDelete = vi.hoisted(() => vi.fn());
 const formatSpecs = vi.hoisted(() => vi.fn());
 /** The one `app_meta` row behind "what does a new deck start on" — read by this screen and
@@ -53,6 +56,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckFolderCreate,
     deckFolderRename,
     deckFolderMove,
+    deckFolderReorder,
     deckFolderDelete,
     formatSpecs,
     deckLastFormat,
@@ -65,8 +69,10 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 
 import { DecksPage } from "./DecksPage";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
+import { FOLDER_DROP_LINE_ATTR } from "@/components/FolderDropLine";
 import { DEFAULT_SECTION_ZOOMS, DEFAULT_ZOOM, ZOOM_SECTIONS } from "@/lib/cardZoom";
 import { useAppStore } from "@/lib/store";
+import { startDrag } from "@/test-drag";
 
 /** A deck with a cover, which is the only kind that can carry an artist credit. */
 const BURN: DeckRow = {
@@ -247,6 +253,7 @@ beforeEach(() => {
   deckFolderCreate.mockReset().mockResolvedValue(LEGENDS);
   deckFolderRename.mockReset().mockResolvedValue({ ...EDH, name: "EDH" });
   deckFolderMove.mockReset().mockResolvedValue({ ...LEGENDS, parentId: null });
+  deckFolderReorder.mockReset().mockResolvedValue([]);
   deckFolderDelete.mockReset().mockResolvedValue(undefined);
   formatSpecs.mockReset().mockResolvedValue(PICKER);
   // Nobody has made a deck yet, so there is no remembered format: the two create surfaces get
@@ -1485,6 +1492,308 @@ describe("DecksPage folders", () => {
     expect(
       screen.getByText(/Could not read your folders — The card database is busy/),
     ).toBeInTheDocument();
+  });
+});
+
+/* ------------------------------------------------------------------------------------------ *
+ * Rearranging the cabinet by dragging a folder
+ * ------------------------------------------------------------------------------------------ */
+
+/** A second folder at the top level, so a *level* has two members and reordering one against the
+ *  other is a gesture that exists at all. */
+const MODERN: DeckFolder = { id: 3, parentId: null, name: "Modern", sortOrder: 1 };
+
+/**
+ * Three folders and no decks: `Commander` and `Modern` at the top level, `Legends` inside
+ * `Commander`.
+ *
+ * The smallest cabinet that has all three landings in it — two siblings to place against each
+ * other, and one of them holding a third to nest into and to refuse a cycle from. No decks on
+ * purpose: every case below is about where a *folder* lands, and a wall of tiles would only add
+ * card art to warm and more buttons for the name queries here to collide with.
+ */
+function withNestedFolders() {
+  deckFolderList.mockResolvedValue([EDH, LEGENDS, MODERN]);
+  deckList.mockResolvedValue([]);
+}
+
+/**
+ * **jsdom has no layout engine, so every box it measures is four zeroes** — and a drop on a box
+ * with no length is an `inside` by `folderEdge`'s own rule, so a suite that hoped for a real rect
+ * would pass over any threshold at all. Which landing a drop means is arithmetic over a rect, so
+ * the rect is what a test has to state.
+ *
+ * `test-drag` sends exactly one pointer position — `clientX`/`clientY` 8 — so the *folder* is slid
+ * under a stationary pointer rather than the pointer moved over a still folder. The two are the
+ * same relative move and only one of them is a gesture jsdom can make; `folderDrag.test.ts` uses
+ * these same three boxes for the same reason. They are square, so one set serves both axes.
+ */
+const LEADING = new DOMRect(0, 0, 100, 100);
+const MIDDLE = new DOMRect(-50, -50, 100, 100);
+const TRAILING = new DOMRect(-85, -85, 100, 100);
+
+/** Where a drop target is, as far as the drag is concerned. */
+function place(element: Element, rect: DOMRect) {
+  element.getBoundingClientRect = () => rect;
+}
+
+/**
+ * A folder's row in the sidebar, as **the folder gesture** sees it.
+ *
+ * Both surfaces draw two nested boxes, because the drag library keeps one drop target per element
+ * — the outer one is the deck's and the inner one is the folder's, and the inner one is also where
+ * the folder is picked up. So this is the row's button's own parent, and it is the single element
+ * every case below both starts a drag from and drops onto.
+ */
+async function folderRow(name: string): Promise<HTMLElement> {
+  const button = await screen.findByRole("button", { name: new RegExp(`^${name}, `) });
+  return button.parentElement as HTMLElement;
+}
+
+/** The same folder's other drawing: its card on the wall. Told from the row above by the word
+ *  the card's own label carries — "Commander folder, 0 decks" against "Commander, 0 decks". */
+async function folderCard(name: string): Promise<HTMLElement> {
+  const button = await screen.findByRole("button", { name: new RegExp(`^${name} folder, `) });
+  return button.parentElement as HTMLElement;
+}
+
+/** Pick a folder up, carry it over another one measured as `rect`, and let go. */
+async function dropOn(source: HTMLElement, target: HTMLElement, rect: DOMRect) {
+  place(target, rect);
+  const held = await startDrag(source);
+  expect(held.started).toBe(true);
+  await held.over(target);
+  await held.drop();
+}
+
+/**
+ * The line a target is drawing, as the edge it says a drop would land on — or `null` for none.
+ *
+ * An attribute because that is the only handle the mark has: which side it is on is a Tailwind
+ * class, jsdom applies no stylesheet, and a class assertion would be a check on the source text
+ * rather than on the drawing.
+ */
+const dropLine = (target: HTMLElement) =>
+  target.querySelector(`[${FOLDER_DROP_LINE_ATTR}]`)?.getAttribute(FOLDER_DROP_LINE_ATTR) ?? null;
+
+/** `DROP_RING` and `DROP_OVER`, asked of the class list rather than of the class string: a
+ *  substring test would pass on any class that merely contains these. */
+const ringed = (element: HTMLElement) => element.classList.contains("ring-2");
+const washed = (element: HTMLElement) => element.classList.contains("bg-accent/10");
+
+describe("dragging a folder", () => {
+  beforeEach(() => {
+    withNestedFolders();
+  });
+
+  /**
+   * The middle of a folder means *inside* it, and the write is the destination's **whole level**
+   * rather than the folder that moved — `sort_order` from each id's position, `parent_id` from
+   * the argument, one transaction, so a drag that re-parents *and* places is never seen half
+   * done.
+   */
+  it("files a folder inside the row it is dropped in the middle of", async () => {
+    wrap(<DecksPage />);
+
+    await dropOn(await folderRow("Modern"), await folderRow("Commander"), MIDDLE);
+
+    // Commander held Legends and now holds both, in that order: `inside` says which drawer and
+    // nothing about where in it, so the folder that arrives goes last.
+    await waitFor(() => expect(deckFolderReorder).toHaveBeenCalledWith(1, [2, 3]));
+    // The other drag is untouched by this one — a folder is not a deck being filed.
+    expect(deckSetFolder).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The edge of a folder means *beside* it, and the destination is the target's own level rather
+   * than the target. That difference is the whole of what the gesture reads off the pointer, and
+   * a drop that ignored it would file into the folder either way.
+   */
+  it("places a folder beside the row it is dropped near the edge of", async () => {
+    wrap(<DecksPage />);
+
+    await dropOn(await folderRow("Modern"), await folderRow("Commander"), LEADING);
+
+    await waitFor(() => expect(deckFolderReorder).toHaveBeenCalledWith(null, [3, 1]));
+  });
+
+  /**
+   * **One folder means three things at three heights, and the mark has to say which.** A line at
+   * the wrong end is a promise to file the folder in the wrong place; no line at all is the
+   * honest answer where a drop would be refused, which is what `useFolderDropTarget` reports as a
+   * `null` edge.
+   */
+  it("marks the landing the pointer is over, and nothing over a part it would refuse", async () => {
+    wrap(<DecksPage />);
+    const commander = await folderRow("Commander");
+
+    const held = await startDrag(await folderRow("Modern"));
+    // Armed the moment the folder leaves the ground: this row takes it somehow, and which way is
+    // not a question a `dragstart` has a pointer position to answer.
+    expect(ringed(commander)).toBe(true);
+
+    place(commander, LEADING);
+    await held.over(commander);
+    expect(dropLine(commander)).toBe("before");
+
+    place(commander, MIDDLE);
+    await held.over(commander);
+    // A nest wears the ring and the wash — the two marks the deck drag already draws for the same
+    // two claims — and never a line, which is a position between folders rather than a folder
+    // taking the drag.
+    expect(dropLine(commander)).toBeNull();
+    expect(washed(commander)).toBe(true);
+
+    place(commander, TRAILING);
+    await held.over(commander);
+    // "After Commander" is exactly where Modern already sits, so there is nothing to promise.
+    expect(dropLine(commander)).toBeNull();
+    expect(washed(commander)).toBe(false);
+
+    await held.cancel();
+    expect(ringed(commander)).toBe(false);
+  });
+
+  /**
+   * **A folder may not go inside itself or inside anything it holds.** The backend refuses it in
+   * words (`FOLDER_CYCLE`) and that refusal is a fence rather than the affordance:
+   * `deck_folders.parent_id` is `ON DELETE CASCADE` on itself, so a cycle is a graph SQLite would
+   * walk forever the day the folder is deleted.
+   *
+   * All three landings on this row are illegal and the row is dark for all three — the nest would
+   * make the cycle, and either positional drop would file `Commander` under its own child, which
+   * is the case the obvious spelling misses: neither the target nor the dragged folder is the
+   * cycle, the *level* is.
+   */
+  it("refuses every landing on a folder it holds, and draws no mark at all", async () => {
+    wrap(<DecksPage />);
+    const legends = await folderRow("Legends");
+
+    place(legends, MIDDLE);
+    const held = await startDrag(await folderRow("Commander"));
+    expect(ringed(legends)).toBe(false);
+
+    await held.over(legends);
+    expect(dropLine(legends)).toBeNull();
+    expect(washed(legends)).toBe(false);
+    await held.drop();
+
+    expect(deckFolderReorder).not.toHaveBeenCalled();
+  });
+
+  /** The pointer is *on* the folder being dragged for the first few pixels of every drag, so this
+   *  is the refusal a reader reaches most often — and a red banner would be a worse answer to it
+   *  than a gesture that quietly does nothing. */
+  it("writes nothing for a folder dropped on itself", async () => {
+    wrap(<DecksPage />);
+    const modern = await folderRow("Modern");
+
+    await dropOn(modern, modern, MIDDLE);
+
+    expect(deckFolderReorder).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A drop that would change nothing writes nothing. `Modern` already sits directly after
+   * `Commander` at the top level, so "after Commander" is the position it is in — and a write for
+   * it would bump `updated_at` and re-read the tree to arrive at the list already on screen.
+   */
+  it("writes nothing when the drop would land the folder where it already is", async () => {
+    wrap(<DecksPage />);
+
+    await dropOn(await folderRow("Modern"), await folderRow("Commander"), TRAILING);
+
+    expect(deckFolderReorder).not.toHaveBeenCalled();
+  });
+
+  /** `inside` says which drawer and nothing about where in it, so a folder already in that drawer
+   *  has nowhere to arrive. This is the refusal the payload's own `parentId` travels for. */
+  it("writes nothing for a nest into the drawer the folder is already in", async () => {
+    wrap(<DecksPage />);
+
+    await dropOn(await folderRow("Legends"), await folderRow("Commander"), MIDDLE);
+
+    expect(deckFolderReorder).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **The way out of a drawer.** Every other row in the tree is a folder, so dragging a folder
+   * *out* would always mean dragging it *into* something else; "All decks" is the one row that
+   * means the top level, and without it a nested folder could only be lifted out through the
+   * Move control.
+   */
+  it("files a folder back to the top level from the All decks row", async () => {
+    wrap(<DecksPage />);
+
+    await dropOn(await folderRow("Legends"), await folderRow("All decks"), MIDDLE);
+
+    await waitFor(() => expect(deckFolderReorder).toHaveBeenCalledWith(null, [1, 3, 2]));
+  });
+
+  /**
+   * …and only into itself. The root row is the level rather than a folder in one, so a line above
+   * or below it would promise a place among folders it does not sit among — and the position it
+   * looks like it offers, "first at the top level", is already the first folder's own leading
+   * edge. It stays armed all the same, because the nest in its middle is a real landing.
+   */
+  it("takes no positional drop on the All decks row", async () => {
+    wrap(<DecksPage />);
+    const root = await folderRow("All decks");
+
+    place(root, LEADING);
+    const held = await startDrag(await folderRow("Legends"));
+    expect(ringed(root)).toBe(true);
+
+    await held.over(root);
+    expect(dropLine(root)).toBeNull();
+    await held.drop();
+
+    expect(deckFolderReorder).not.toHaveBeenCalled();
+  });
+
+  /** The wall's cards are the same folders drawn the other way, so the same drop means the same
+   *  write there. */
+  it("files a folder inside the card it is dropped in the middle of", async () => {
+    wrap(<DecksPage />);
+
+    await dropOn(await folderCard("Modern"), await folderCard("Commander"), MIDDLE);
+
+    await waitFor(() => expect(deckFolderReorder).toHaveBeenCalledWith(1, [2, 3]));
+  });
+
+  /**
+   * **The axis is the whole of what the two drawings differ by.** A wall lays folders out left to
+   * right, so `before` is a card's leading *side* where it is a row's top edge — and the mark
+   * proves the card was measured along the axis it is laid out on rather than the tree's.
+   */
+  it("places a folder beside a card, reading the wall's own axis", async () => {
+    wrap(<DecksPage />);
+    const commander = await folderCard("Commander");
+
+    place(commander, LEADING);
+    const held = await startDrag(await folderCard("Modern"));
+    await held.over(commander);
+    expect(dropLine(commander)).toBe("before");
+    await held.drop();
+
+    await waitFor(() => expect(deckFolderReorder).toHaveBeenCalledWith(null, [3, 1]));
+  });
+
+  /**
+   * **The two drags are not one drag, and this is the half that would break silently.** They
+   * carry different marks under different keys, so each reader answers `null` for the other's
+   * payload — a deck let go on a folder is still filed, and no folder gesture can reach the deck
+   * write or the other way round.
+   */
+  it("still files a deck dropped on a folder, and reorders nothing for one", async () => {
+    deckList.mockResolvedValue([BURN]);
+    wrap(<DecksPage />);
+    const tile = (await tileFor("Burn")).closest("li") as HTMLElement;
+
+    await dropOn(tile, await folderRow("Commander"), MIDDLE);
+
+    await waitFor(() => expect(deckSetFolder).toHaveBeenCalledWith(BURN.id, 1));
+    expect(deckFolderReorder).not.toHaveBeenCalled();
   });
 });
 

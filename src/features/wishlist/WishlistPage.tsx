@@ -27,6 +27,8 @@ import { FilterBar, type FilterLabels, type TrayCell } from "@/features/search/F
 import { NewFolderCard } from "@/components/NewFolderCard";
 import { count } from "@/lib/counts";
 import { DROP_MARK_ROOM } from "@/lib/dropMarks";
+import type { FolderDrag, FolderEdge } from "@/lib/folderDrag";
+import { reorderedLevel } from "@/lib/folderOrder";
 import { isFinish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
 import { buildFolderTree, folderDescendants, type FolderNode } from "@/lib/folderTree";
@@ -879,6 +881,113 @@ export function WishlistPage() {
     [setFolder],
   );
 
+  /**
+   * What a folder let go on another folder means as a write — the destination level and that
+   * level's whole new order — or `null` for a drop this page will not make.
+   *
+   * **One function for both halves of the gesture**, because a mark that promised a write the
+   * drop then refused would be worse than no mark: `useFolderDropTarget` asks the question once
+   * per target per frame to decide what to draw, and again at the drop because the two can be a
+   * second apart and only the second one writes.
+   *
+   * **No ownership clause, and its absence is a fact about this cabinet rather than an omission.**
+   * `CollectionPage`'s twin of this function opens by fencing both ends to folders the reader
+   * made, because `collection_folders.kind` makes some of that table the app's — one row per deck
+   * plus the single `Recently removed` — and `collection_folders::reorder_folders` answers
+   * `FOLDER_NOT_YOURS` for either at either end. `wishlist_folders` carries **no `kind` column**:
+   * every row in it was made by the reader with `+ New folder`, `wishlist_folder_reorder` has
+   * nothing to refuse, and a clause here would be a check with no false case. If that table ever
+   * grows a row the app owns, this is the second place that has to learn it.
+   *
+   * **A folder may not land inside itself or inside anything it holds.** The backend refuses that
+   * one, and the guard is not cosmetic: `wishlist_folders.parent_id` is `ON DELETE CASCADE` **on
+   * itself**, so a cycle is a graph SQLite's recursive cascade would walk forever the day the
+   * folder is deleted. It is asked of the **destination parent** rather than of the card under
+   * the pointer, which is what covers all three landings at once — `inside` a descendant and
+   * `before` one are the same cycle, since a descendant's own parent is the dragged folder or
+   * something already under it. **No gesture on this page reaches it today**: the wall draws
+   * exactly one level, so every card on it is a sibling of every other and a descendant is never
+   * on screen beside its ancestor. It is the fence rather than the affordance, and the
+   * arrangement that would put the two together is a cabinet that already holds a cycle — which
+   * `buildFolderTree` draws at the root as leaves and which only corruption produces.
+   *
+   * **And a drop that would reproduce the order already on screen is not a write.**
+   * `reorderedLevel` is what says so; its `null` is a refusal rather than an error, because
+   * dropping a folder back where it already sits is a gesture a reader makes by accident every
+   * time they think better of one mid-drag, and a write for it would bump `updated_at` and
+   * re-read the list to arrive at what is already drawn.
+   *
+   * **Flatten is not a case this has to answer**, for the reason `filed` already encodes: with
+   * the filing ignored there are no folder cards at all, so there is nothing to pick up and
+   * nothing to point at.
+   */
+  const folderPlacement = useCallback(
+    (
+      drag: FolderDrag,
+      target: FolderNode<WishlistFolder>,
+      edge: FolderEdge,
+    ): { parentId: number | null; ids: number[] } | null => {
+      // `inside` says which drawer and the target *is* it; `before`/`after` say where in the
+      // level the target sits in, which is the level being drawn — `folderId`, never the target
+      // row's own `parentId`. `buildFolderTree` draws a folder whose parent this list does not
+      // carry at the root rather than dropping it, so an orphan's row names a folder that is
+      // gone, and sending that as the destination would be a reorder into nothing. What is on
+      // screen is the honest answer, and `wishlist_folder_reorder` writing `parent_id` from it
+      // files the orphan where the reader can already see it.
+      const parentId = edge === "inside" ? target.folder.id : folderId;
+      if (parentId !== null && parentId === drag.folderId) return null;
+      if (parentId !== null && folderDescendants(folders.folders, drag.folderId).has(parentId)) {
+        return null;
+      }
+      const ids = reorderedLevel({
+        // The target's own children for a nest — in the order the tree already draws them, so a
+        // nest re-states the level it is joining rather than re-sorting it — and the level on
+        // screen for the other two.
+        siblings:
+          edge === "inside"
+            ? target.children.map((child) => child.folder.id)
+            : childFolders.map((one) => one.folder.id),
+        dragged: drag.folderId,
+        target: target.folder.id,
+        edge,
+      });
+      return ids === null ? null : { parentId, ids: [...ids] };
+    },
+    [folderId, folders.folders, childFolders],
+  );
+
+  /**
+   * The two halves of {@link folderPlacement}, bound per card by the wall below.
+   *
+   * **A folder is deliberately not droppable on the breadcrumb, where a wish is**, and the two
+   * are not the same gesture wearing different payloads. `wishlist_set_folder` takes one
+   * destination and that is the whole of the write, so a trail segment names a complete answer —
+   * which is why `WishlistBreadcrumb` takes wish drops at all: without somewhere to drop a wish
+   * that moves it *up*, that gesture would only ever push wishes deeper.
+   * `wishlist_folder_reorder` takes a destination **and that level's whole order**, and the order
+   * is what this gesture is for — a quarter of every folder card means "beside this one, here"
+   * (`EDGE_ZONE`). A segment is one word with no order to point into, so the only thing a drop on
+   * it could say is "last, in a level that is not on screen", and the folder would leave the wall
+   * with nothing drawn saying where it went. The way back out is `Move to folder…`, on the card's
+   * own `⋯`, which names every destination including the root — so unlike a wish, a folder is not
+   * one gesture short of a route home. If this is revisited, the thing to change is the *mark*,
+   * not the target: a segment would need to say "last" before it could honestly take one.
+   */
+  const canPlaceFolder = useCallback(
+    (drag: FolderDrag, target: FolderNode<WishlistFolder>, edge: FolderEdge) =>
+      folderPlacement(drag, target, edge) !== null,
+    [folderPlacement],
+  );
+  const placeFolder = useCallback(
+    (drag: FolderDrag, target: FolderNode<WishlistFolder>, edge: FolderEdge) => {
+      const plan = folderPlacement(drag, target, edge);
+      // A `null` writes **nothing at all** — not a reorder of the level as it stands, which would
+      // be a transaction to arrive at the list already on screen.
+      if (plan !== null) folders.reorder.mutate(plan);
+    },
+    [folderPlacement, folders.reorder],
+  );
+
   const failure = query.isError ? ipcError(query.error) : null;
   // The *latest* write on the screen, not whichever is still holding an error: a refused stepper
   // press would otherwise leave "Could not change your wishlist" up while the reader went on to
@@ -893,6 +1002,7 @@ export function WishlistPage() {
     folders.create,
     folders.rename,
     folders.move,
+    folders.reorder,
     folders.remove,
   ]);
   const empty = rows.length === 0;
@@ -1218,6 +1328,11 @@ export function WishlistPage() {
                   rowMenu={folderRowMenu(node.folder)}
                   canDrop={(drag) => canFile(drag, node.folder.id)}
                   onDropWish={(drag) => fileWish(drag, node.folder.id)}
+                  // The card asks about the folder in the air and where on itself it is; the
+                  // page adds which card that is, because only the page holds the level and the
+                  // tree the answer is worked out from.
+                  canDropFolder={(drag, edge) => canPlaceFolder(drag, node, edge)}
+                  onDropFolder={(drag, edge) => placeFolder(drag, node, edge)}
                 />
               ))}
             </ul>

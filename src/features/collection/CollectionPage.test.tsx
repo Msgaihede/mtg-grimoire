@@ -10,6 +10,7 @@ import {
   TooltipProvider,
 } from "@/components/tooltip/TooltipProvider";
 import { readDragData } from "@/features/decks/dnd";
+import { folderDraggable, type FolderDrag } from "@/lib/folderDrag";
 import type {
   CollectionFolder,
   CollectionQuery,
@@ -68,6 +69,7 @@ const collectionFolderSummary = vi.hoisted(() => vi.fn());
 const collectionFolderCreate = vi.hoisted(() => vi.fn());
 const collectionFolderRename = vi.hoisted(() => vi.fn());
 const collectionFolderMove = vi.hoisted(() => vi.fn());
+const collectionFolderReorder = vi.hoisted(() => vi.fn());
 const collectionFolderDelete = vi.hoisted(() => vi.fn());
 const collectionSetFolder = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
@@ -94,6 +96,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     collectionFolderCreate,
     collectionFolderRename,
     collectionFolderMove,
+    collectionFolderReorder,
     collectionFolderDelete,
     collectionSetFolder,
   },
@@ -214,6 +217,30 @@ const FOILS: CollectionFolder = {
   kind: "user",
   deckId: null,
   sortOrder: 0,
+};
+
+/** A **second** drawer at the top level, so the wall has a *level* to rearrange rather than one
+ *  card. `sortOrder` 1 puts it after `Trade binder`, which is the order every reorder below is
+ *  measured against. */
+const SEALED: CollectionFolder = {
+  id: 4,
+  parentId: null,
+  name: "Sealed",
+  kind: "user",
+  deckId: null,
+  sortOrder: 1,
+};
+
+/** A drawer whose parent this list does not carry — another window deleted it between the two
+ *  reads. `buildFolderTree` draws it at the **root** rather than dropping it, so its row names a
+ *  folder that is gone while the wall it appears on is the top level. */
+const ORPHAN: CollectionFolder = {
+  id: 5,
+  parentId: 99,
+  name: "Odds and ends",
+  kind: "user",
+  deckId: null,
+  sortOrder: 2,
 };
 
 /**
@@ -357,6 +384,51 @@ function rightClick(element: HTMLElement): void {
 }
 
 /**
+ * The **card** drag sources on screen, in document order.
+ *
+ * A bare `[draggable="true"]` used to mean "a table row or a wall tile" and stopped meaning it the
+ * day folder cards became draggable: the reader's cabinet is drawn *above* the table, so the first
+ * match on a page with folders is a drawer. Filtering by the wall it sits in rather than by the
+ * element's own shape, because both are `<li>`s and both are draggable — the difference is which
+ * list they belong to.
+ */
+const cardSources = (container: HTMLElement): HTMLElement[] =>
+  [...container.querySelectorAll<HTMLElement>('[draggable="true"]')].filter(
+    (element) => element.closest('[aria-label="Folders"]') === null,
+  );
+
+/**
+ * A folder card by name, and the inner box its **folder** drop target is registered on.
+ *
+ * Two boxes rather than one because the drag library keeps a single element drop target per
+ * element and the copy drag already owns the `<li>` — `CollectionFolderCard` carries the whole
+ * reason. A drag aimed at the card's face finds the inner one by walking up, exactly as a pointer
+ * does, which is why {@link folderFace} is what these tests drop on.
+ */
+const folderCard = (name: string): HTMLElement =>
+  screen.getByRole("button", { name: new RegExp(`^${name} folder`) }).closest("li")!;
+const folderFace = (name: string): HTMLElement =>
+  screen.getByRole("button", { name: new RegExp(`^${name} folder`) });
+const folderSlot = (name: string): HTMLElement =>
+  folderCard(name).firstElementChild as HTMLElement;
+
+/**
+ * Three boxes, each placed so that the one coordinate `test-drag` sends — `clientX` 8 — falls in a
+ * different zone of a folder card laid out **horizontally**.
+ *
+ * jsdom has no layout engine, so every real `getBoundingClientRect` is four zeroes and
+ * `folderEdge` answers `inside` for all of them: an edge-dependent test has to state the box.
+ */
+const AT_START = new DOMRect(0, 0, 100, 100);
+const AT_MIDDLE = new DOMRect(-50, -50, 100, 100);
+const AT_END = new DOMRect(-85, -85, 100, 100);
+
+/** Slide a folder card under the stationary pointer. */
+const stand = (name: string, at: DOMRect) => {
+  folderSlot(name).getBoundingClientRect = () => at;
+};
+
+/**
  * jsdom lays nothing out, so the virtualiser measures a scroller of zero height and renders
  * no rows at all. `@tanstack/react-virtual` sizes it with `offsetHeight` and scrolls it with
  * `Element.scrollTo`, which jsdom does not implement either.
@@ -401,6 +473,10 @@ beforeEach(() => {
   collectionFolderCreate.mockReset().mockResolvedValue(BINDER);
   collectionFolderRename.mockReset().mockResolvedValue(BINDER);
   collectionFolderMove.mockReset().mockResolvedValue(BINDER);
+  // The whole cabinet, flat, is what `collection_folder_reorder` answers — but the hook settles by
+  // invalidating the folder list rather than seeding the cache from it, so what it resolves with
+  // reaches nothing here and the empty array is the honest fixture.
+  collectionFolderReorder.mockReset().mockResolvedValue([]);
   collectionFolderDelete.mockReset().mockResolvedValue(undefined);
   collectionSetFolder.mockReset().mockResolvedValue({ id: 7, quantity: 2, removed: false });
   useAppStore.setState({
@@ -612,7 +688,7 @@ describe("CollectionPage", () => {
     const { container } = wrap(<CollectionPage />);
     await screen.findByText("Lightning Bolt");
 
-    const rows = [...container.querySelectorAll('[draggable="true"]')];
+    const rows = cardSources(container);
     expect(rows).toHaveLength(1);
     expect(rows[0]).toHaveTextContent("Lightning Bolt");
 
@@ -640,7 +716,7 @@ describe("CollectionPage", () => {
   it("does not drag a row when the press landed on its stepper", async () => {
     const { container } = wrap(<CollectionPage />);
     await screen.findByText("Lightning Bolt");
-    const row = container.querySelector('[draggable="true"]')!;
+    const row = cardSources(container)[0];
 
     const held = await startDrag(row, {
       pressOn: screen.getByRole("button", {
@@ -1904,7 +1980,7 @@ describe("the collection's folders", () => {
     )!;
     const invalidate = vi.spyOn(client, "invalidateQueries");
 
-    const row = container.querySelector('[draggable="true"]')!;
+    const row = cardSources(container)[0];
     const held = await startDrag(row, { pressOn: screen.getByText("Lightning Bolt") });
     await held.over(card);
     await held.drop();
@@ -1936,7 +2012,7 @@ describe("the collection's folders", () => {
       "li",
     )!;
 
-    const row = container.querySelector('[draggable="true"]')!;
+    const row = cardSources(container)[0];
     const held = await startDrag(row, { pressOn: screen.getByText("Lightning Bolt") });
     expect(card.classList.contains("ring-2")).toBe(false);
 
@@ -2017,7 +2093,7 @@ describe("the collection's folders", () => {
       "li",
     )!;
 
-    const row = container.querySelector('[draggable="true"]')!;
+    const row = cardSources(container)[0];
     const held = await startDrag(row, { pressOn: screen.getByText("Lightning Bolt") });
     expect(group.classList.contains("ring-2")).toBe(false);
 
@@ -2048,7 +2124,7 @@ describe("the collection's folders", () => {
       "li",
     )!;
 
-    const row = container.querySelector('[draggable="true"]')!;
+    const row = cardSources(container)[0];
     const held = await startDrag(row, { pressOn: screen.getByText("Lightning Bolt") });
     expect(binder.classList.contains("ring-2")).toBe(false);
 
@@ -2074,7 +2150,7 @@ describe("the collection's folders", () => {
     const { container } = wrap(<CollectionPage />);
     await screen.findByRole("button", { name: "Lightning Bolt" });
 
-    const tiles = [...container.querySelectorAll('[draggable="true"]')];
+    const tiles = cardSources(container);
     expect(tiles).toHaveLength(1);
 
     const carried: Record<string, unknown>[] = [];
@@ -2116,7 +2192,7 @@ describe("the collection's folders", () => {
       "li",
     )!;
 
-    const tile = container.querySelector('[draggable="true"]')!;
+    const tile = cardSources(container)[0];
     const held = await startDrag(tile, {
       pressOn: screen.getByRole("button", { name: "Lightning Bolt" }),
     });
@@ -2144,7 +2220,7 @@ describe("the collection's folders", () => {
       "li",
     )!;
 
-    const tile = container.querySelector('[draggable="true"]')!;
+    const tile = cardSources(container)[0];
     const held = await startDrag(tile, {
       pressOn: screen.getByRole("button", { name: "Lightning Bolt" }),
     });
@@ -2188,7 +2264,7 @@ describe("the collection's folders", () => {
       "li",
     )!;
 
-    const tile = container.querySelector('[draggable="true"]')!;
+    const tile = cardSources(container)[0];
     const held = await startDrag(tile, {
       pressOn: screen.getByRole("button", { name: "Lightning Bolt" }),
     });
@@ -2245,7 +2321,7 @@ describe("the collection's folders", () => {
     )!;
     const invalidate = vi.spyOn(client, "invalidateQueries");
 
-    const row = container.querySelector('[draggable="true"]')!;
+    const row = cardSources(container)[0];
     const held = await startDrag(row, { pressOn: screen.getByText("Lightning Bolt") });
     await held.over(binder);
     await held.drop();
@@ -2768,6 +2844,253 @@ describe("the New folder tile", () => {
       expect(screen.queryByRole("textbox", { name: "New folder name" })).toBeNull(),
     );
     expect(screen.getByRole("button", { name: "New folder" })).toHaveFocus();
+  });
+});
+
+/**
+ * **Rearranging the cabinet itself** — a drawer dropped on another drawer's middle goes inside it,
+ * and one dropped near an edge lands beside it.
+ *
+ * The write is always `collection_folder_reorder(parentId, ids)` and `ids` is the **whole** level,
+ * in order: `sort_order` is written from position and `parent_id` from the argument, in one
+ * transaction, so one gesture both re-parents and places. Sending only the folder that moved is
+ * the mistake the command's name invites, which is why every assertion below names the whole list.
+ *
+ * **The three landings are driven by stating the box.** jsdom has no layout engine, so every real
+ * `getBoundingClientRect` is four zeroes and `folderEdge` would answer `inside` for every drop —
+ * a test that hoped for a rect would pass over any threshold at all. {@link stand} slides the card
+ * under the one coordinate `test-drag` sends instead.
+ */
+describe("rearranging the collection's cabinet", () => {
+  /** Two drawers at the top level and one inside the first — enough for a nest, a reorder and the
+   *  drop that would change nothing. */
+  beforeEach(() => {
+    // **The wall is what this whole block drags, and a flattened list draws none of it.**
+    // \collectionFlattened\ ships **on** (\store.ts\), so every folder-card test in this file
+    // turns it off for itself — the two blocks above do the same, for the same reason.
+    useAppStore.setState({ collectionFlattened: false });
+    collectionFolderList.mockResolvedValue([BINDER, SEALED, FOILS]);
+    collectionFolderSummary.mockResolvedValue([]);
+  });
+
+  /** Both root drawers on screen, which every test here starts from. */
+  const wall = async () => {
+    await screen.findByRole("button", { name: /^Trade binder folder/ });
+    await screen.findByRole("button", { name: /^Sealed folder/ });
+  };
+
+  it("files a drawer inside the one it is dropped on the middle of", async () => {
+    wrap(<CollectionPage />);
+    await wall();
+    stand("Trade binder", AT_MIDDLE);
+
+    const held = await startDrag(folderCard("Sealed"));
+    await held.over(folderFace("Trade binder"));
+    await held.drop();
+
+    // `Trade binder`'s own children, then the folder that just arrived: `inside` says which drawer
+    // and nothing about where in it, so there is no second position in the gesture for the reader
+    // to have meant.
+    await waitFor(() => expect(collectionFolderReorder).toHaveBeenCalledWith(3, [9, 4]));
+  });
+
+  it("places a drawer before the one it is dropped on the leading edge of", async () => {
+    wrap(<CollectionPage />);
+    await wall();
+    stand("Trade binder", AT_START);
+
+    const held = await startDrag(folderCard("Sealed"));
+    await held.over(folderFace("Trade binder"));
+    await held.drop();
+
+    // The root level, re-ordered — `null` is the destination parent and a real place rather than
+    // an omission.
+    await waitFor(() => expect(collectionFolderReorder).toHaveBeenCalledWith(null, [4, 3]));
+  });
+
+  /**
+   * **A drop that would reproduce the order already on screen writes nothing at all** — not a
+   * reorder of the level as it stands, which would be a transaction to arrive at the list already
+   * drawn, bumping `updated_at` and re-reading the cabinet for it.
+   *
+   * `Sealed` already follows `Trade binder`, so "after Trade binder" is where it is. The mark goes
+   * with the write: `edge` is `null` over a landing the page refuses, so no line is drawn either —
+   * which is the honest thing to show and the opposite of a line leading nowhere.
+   */
+  it("draws no line and writes nothing for a drop that would change nothing", async () => {
+    wrap(<CollectionPage />);
+    await wall();
+    stand("Trade binder", AT_END);
+
+    const held = await startDrag(folderCard("Sealed"));
+    await held.over(folderFace("Trade binder"));
+    expect(folderCard("Trade binder").querySelector("[data-folder-drop-line]")).toBeNull();
+
+    await held.drop();
+    expect(collectionFolderReorder).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **The destination level is read off the wall, never off the target row's own `parentId`**, and
+   * an orphan is where the two stop agreeing.
+   *
+   * `buildFolderTree` draws a folder whose parent this list does not carry at the root rather than
+   * dropping it, so `Odds and ends` is on the top level while its row still names folder 99.
+   * Sending 99 as the destination would be a reorder into nothing — and, because the `kind` fence
+   * asks whether the destination is one of the reader's drawers, it would in fact write nothing at
+   * all. What is on screen is the honest answer, and `collection_folder_reorder` writing
+   * `parent_id` from it files the orphan where the reader can already see it.
+   */
+  it("reorders into the level on screen, even beside a drawer whose parent is gone", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, SEALED, ORPHAN, FOILS]);
+    wrap(<CollectionPage />);
+    await wall();
+    await screen.findByRole("button", { name: /^Odds and ends folder/ });
+    stand("Odds and ends", AT_END);
+
+    const held = await startDrag(folderCard("Sealed"));
+    await held.over(folderFace("Odds and ends"));
+    await held.drop();
+
+    await waitFor(() => expect(collectionFolderReorder).toHaveBeenCalledWith(null, [3, 5, 4]));
+  });
+
+  /** A folder dropped on itself is the gesture a reader makes most often by accident — the pointer
+   *  is *on* the folder being dragged for the first few pixels of every drag. */
+  it("refuses a drawer dropped on itself, at every landing", async () => {
+    wrap(<CollectionPage />);
+    await wall();
+
+    for (const at of [AT_START, AT_MIDDLE, AT_END]) {
+      stand("Sealed", at);
+      const held = await startDrag(folderCard("Sealed"));
+      await held.over(folderFace("Sealed"));
+      await held.drop();
+    }
+    expect(collectionFolderReorder).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **The `kind` fence, which is this cabinet's alone.**
+   * `collection_folders::reorder_folders` calls `user_folder` on the destination *and* on every id
+   * it is handed, so a deck's group or `Recently removed` at either end is `FOLDER_NOT_YOURS` in
+   * words. **No gesture on this page reaches it**: `PinnedFolders` registers neither a drop target
+   * nor a drag source, which the test below this one pins from the other side. So the payload is
+   * built by hand here — the drag a future "make the pinned entries draggable" change would
+   * create, refused today.
+   */
+  it("refuses a folder the app owns, even when something puts one in the air", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, SEALED, DECK_GROUP, REMOVED]);
+    const { container } = wrap(<CollectionPage />);
+    await wall();
+
+    const source = document.createElement("div");
+    source.textContent = "the deck group";
+    container.append(source);
+    const stop = folderDraggable({
+      element: source,
+      folder: (): FolderDrag => ({
+        folderId: DECK_GROUP.id,
+        name: DECK_GROUP.name,
+        parentId: null,
+        scope: "collection",
+      }),
+    });
+
+    stand("Trade binder", AT_MIDDLE);
+    const held = await startDrag(source);
+    // Not even armed: no drawer on the wall would take it at any landing.
+    expect(folderCard("Trade binder").classList.contains("ring-2")).toBe(false);
+
+    await held.over(folderFace("Trade binder"));
+    await held.drop();
+    stop();
+    source.remove();
+    expect(collectionFolderReorder).not.toHaveBeenCalled();
+  });
+
+  /** The other end of the same fence, and the reason the one above is unreachable: a pinned entry
+   *  is not something a reader can pick up, and it lights nothing up when a drawer is in the air. */
+  it("leaves the app's own folders out of the gesture entirely", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, SEALED, DECK_GROUP, REMOVED]);
+    wrap(<CollectionPage />);
+    await wall();
+    const group = screen
+      .getByRole("button", { name: /^Mono-Red Aggro deck/ })
+      .closest("li") as HTMLElement;
+    expect(group.getAttribute("draggable")).toBeNull();
+
+    const held = await startDrag(folderCard("Sealed"));
+    expect(group.classList.contains("ring-2")).toBe(false);
+    await held.cancel();
+  });
+
+  /**
+   * **The cycle fence.** `collection_folders.parent_id` is `ON DELETE CASCADE` on itself, so a
+   * cycle is a graph SQLite's recursive cascade would walk forever the day the folder is deleted —
+   * and the backend refuses the move in words. Asked of the *destination parent*, which is what
+   * covers `inside` a descendant and `before` one with a single clause.
+   *
+   * **No gesture on this page reaches it either**, and for a different reason from the `kind`
+   * fence: the wall draws exactly one level, so every card on it is a **sibling** of every other
+   * and a descendant is never on screen beside its ancestor. Standing inside `Trade binder` puts
+   * its child `Foils` on the wall and `Trade binder` itself only in the breadcrumb — so the drag
+   * is built by hand, as the one a second surface drawing two levels at once would produce.
+   */
+  it("refuses a drawer dropped into something it holds", async () => {
+    const user = userEvent.setup();
+    const { container } = wrap(<CollectionPage />);
+    await wall();
+    await user.click(screen.getByRole("button", { name: /^Trade binder folder/ }));
+    await screen.findByRole("button", { name: /^Foils folder/ });
+
+    const source = document.createElement("div");
+    source.textContent = "the parent";
+    container.append(source);
+    const stop = folderDraggable({
+      element: source,
+      folder: (): FolderDrag => ({
+        folderId: BINDER.id,
+        name: BINDER.name,
+        parentId: null,
+        scope: "collection",
+      }),
+    });
+
+    // Every landing on the only card at this level is a cycle: `inside Foils` files the parent
+    // under its own child, and `before`/`after Foils` file it into `Trade binder`, which is
+    // itself.
+    for (const at of [AT_START, AT_MIDDLE, AT_END]) {
+      stand("Foils", at);
+      const held = await startDrag(source);
+      expect(folderCard("Foils").classList.contains("ring-2")).toBe(false);
+      await held.over(folderFace("Foils"));
+      await held.drop();
+    }
+    stop();
+    source.remove();
+    expect(collectionFolderReorder).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **The copy drag still files a copy**, which is the thing this change could have taken away
+   * without a single folder test noticing: the drag library keeps **one element drop target per
+   * element** and a second registration silently replaces the first, so a folder target on the
+   * `<li>` would have stopped the drawer accepting cards while everything above stayed green.
+   */
+  it("still files a copy dropped on a drawer", async () => {
+    const { container } = wrap(<CollectionPage />);
+    await wall();
+    await screen.findByText("Lightning Bolt");
+
+    const held = await startDrag(cardSources(container)[0], {
+      pressOn: screen.getByText("Lightning Bolt"),
+    });
+    await held.over(folderCard("Trade binder"));
+    await held.drop();
+
+    await waitFor(() => expect(collectionSetFolder).toHaveBeenCalledWith(7, 3));
+    expect(collectionFolderReorder).not.toHaveBeenCalled();
   });
 });
 

@@ -333,6 +333,15 @@ describe("ipc argument names match the Rust command signatures", () => {
     await ipc.wishlistRemove(2);
     expect(invoke).toHaveBeenCalledWith("wishlist_remove", { id: 2 });
 
+    // The whole level in order — {@link ipc.deckFolderReorder}'s rule, one cabinet over.
+    // **This cabinet's folder commands had no pins at all before this one**, which is worth
+    // knowing rather than quietly fixing: `invoke` matches by name, so a typo in any of them is
+    // a runtime rejection nothing in the suite can see. The three that predate this are still
+    // unpinned; adding them is not this change's business, but they are not covered.
+    invoke.mockResolvedValue([]);
+    await ipc.wishlistFolderReorder(null, [4, 1]);
+    expect(invoke).toHaveBeenCalledWith("wishlist_folder_reorder", { parentId: null, ids: [4, 1] });
+
     invoke.mockResolvedValue({ items: [], total: 0 });
     await ipc.wishlistList({ fulfilled: false, limit: 100, offset: 0 });
     expect(invoke).toHaveBeenCalledWith("wishlist_list", {
@@ -769,6 +778,14 @@ describe("ipc argument names match the Rust command signatures", () => {
 
     await ipc.deckFolderMove(3, null);
     expect(invoke).toHaveBeenCalledWith("deck_folder_move", { id: 3, parentId: null });
+
+    // **`ids` is the whole level, in its new order** — the command writes `sort_order` from
+    // position *and* `parent_id` from the argument, so one gesture both re-parents and places.
+    // Pinned by value rather than by length: an order-insensitive assertion would pass a
+    // reorder that shuffled the level.
+    invoke.mockResolvedValue([]);
+    await ipc.deckFolderReorder(null, [3, 2]);
+    expect(invoke).toHaveBeenCalledWith("deck_folder_reorder", { parentId: null, ids: [3, 2] });
 
     invoke.mockResolvedValue(undefined);
     await ipc.deckFolderDelete(3);
@@ -1366,6 +1383,12 @@ describe("the collection folder wrappers name the commands `collection_folders.r
     // `null` is the root and is a destination rather than an omission — the way back out.
     await ipc.collectionFolderMove(3, null);
     expect(invoke).toHaveBeenCalledWith("collection_folder_move", { id: 3, parentId: null });
+
+    // The whole level in order — {@link ipc.deckFolderReorder}'s rule, one cabinet over. This
+    // one alone fences the reader's own `kind`, because it is the only cabinet with one.
+    invoke.mockResolvedValue([]);
+    await ipc.collectionFolderReorder(2, [5, 3]);
+    expect(invoke).toHaveBeenCalledWith("collection_folder_reorder", { parentId: 2, ids: [5, 3] });
 
     invoke.mockResolvedValue(undefined);
     await ipc.collectionFolderDelete(3);

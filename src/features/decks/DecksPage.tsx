@@ -12,6 +12,8 @@ import { AnimatePresence, motion } from "motion/react";
 import { useContextMenu } from "@/components/menu/useContextMenu";
 import { atLeast, scaled } from "@/lib/cardZoom";
 import { plural } from "@/lib/counts";
+import type { FolderDrag, FolderEdge } from "@/lib/folderDrag";
+import { reorderedLevel } from "@/lib/folderOrder";
 import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError, type DeckFolder, type DeckRow } from "@/lib/ipc";
 import { writeFailure } from "@/lib/writes";
@@ -73,6 +75,24 @@ const TILE_MIN_WIDTH = 200;
 
 /** The gutter between tiles at 100% zoom (`gap-4`'s 16px), floored by {@link atLeast}. */
 const TILE_GAP = 16;
+
+/**
+ * The "All decks" row as {@link reorderedLevel} has to address it.
+ *
+ * That function takes the folder the pointer is over, and the root row is not one — it is the
+ * level itself. `deck_folders.id` is an `INTEGER PRIMARY KEY`, so every real folder id is
+ * positive and this addresses none of them, which keeps the `dragged === target` guard answering
+ * *no* rather than answering by luck. It is only ever passed for an `inside` drop, which is the
+ * one landing `reorderedLevel` ignores its `target` for; {@link DecksPage}'s `folderLanding`
+ * refuses the other two on the root before it gets this far.
+ *
+ * **So the root's positional refusal is stated twice, and that is worth knowing before either
+ * copy is tidied away.** `folderLanding`'s early return is the one that says *why*; this sentinel
+ * would refuse the same drop on its own, because an id no level carries takes `reorderedLevel`'s
+ * "the target has left the level" branch. Measured by mutation: removing either alone leaves
+ * `takes no positional drop on the All decks row` green, and removing both turns it red.
+ */
+const ROOT_TARGET = 0;
 
 /**
  * The wall — everything about it that is not a function of the zoom.
@@ -625,6 +645,116 @@ export function DecksPage() {
   );
 
   /**
+   * The cabinet as **levels** — each level's ids in the order they are drawn, and which level
+   * each folder sits in.
+   *
+   * Walked off `nodes` rather than read off `folders.folders`, and the two genuinely differ:
+   * `buildFolderTree` resolves a folder whose parent is missing, and a folder caught in a corrupt
+   * cycle, **to the root** — so a row's stored `parentId` can name a level that is nowhere on
+   * screen. A drop is a gesture made against what the reader can see, so the level a folder is
+   * placed in has to be the one it is drawn in. The order is the tree's own (`sortOrder`, then
+   * name, then id), which is what {@link reorderedLevel} means by "their current order" and what
+   * the backend writes back as `sort_order`.
+   */
+  const levels = useMemo(() => {
+    const ids = new Map<number | null, number[]>();
+    const parent = new Map<number, number | null>();
+    const walk = (level: readonly FolderNode[], parentId: number | null) => {
+      ids.set(
+        parentId,
+        level.map((n) => n.folder.id),
+      );
+      for (const node of level) {
+        parent.set(node.folder.id, parentId);
+        walk(node.children, node.folder.id);
+      }
+    };
+    walk(nodes, null);
+    return { ids, parent };
+  }, [nodes]);
+
+  /**
+   * What a folder drop **means**: the level it lands in, and that level's ids in their new order —
+   * or `null` for a drop that may not happen or would change nothing.
+   *
+   * One function for the question and the write, so a mark can never promise a write that will
+   * fail: `canDropFolder` is this answering non-`null` and {@link dropFolder} is this answering
+   * and then sending it. A ring drawn off one rule and a write made by another is two rules to
+   * keep in step, and the drag asks the question dozens of times per gesture.
+   *
+   * Three refusals, in the order they are cheapest to make.
+   *
+   * **The root row takes only a nest** — `folderId` is `null` for "All decks", and the tree says
+   * at its own call site what that row offers and why.
+   *
+   * **A folder may not go inside itself or inside anything it holds.** The backend refuses this in
+   * words (`FOLDER_CYCLE`) and that refusal is a fence rather than the affordance: `parent_id` is
+   * `ON DELETE CASCADE` on itself, so a cycle is a graph SQLite would walk forever the day the
+   * folder is deleted. It is asked about the **destination parent**, which is what catches the
+   * case the obvious spelling misses: dropping a folder *beside* one of its own grandchildren
+   * would file it under its own child, and neither the target nor the dragged folder is the
+   * cycle — the level is.
+   *
+   * **A nest into the drawer it is already in is nothing to do.** `inside` says which drawer and
+   * nothing about where in it, so a folder already there has nowhere to arrive; this is the
+   * refusal `FolderDrag.parentId` travels for, and it is what keeps a folder's own parent from
+   * drawing a mark that would move it to the end of a level it is already in.
+   *
+   * And last, {@link reorderedLevel}'s own `null`: dropped on itself, or landing exactly where it
+   * already sits. A write for one of those would bump `updated_at` and re-read the tree to arrive
+   * at the list already on screen.
+   */
+  const folderLanding = useCallback(
+    (
+      drag: FolderDrag,
+      folderId: number | null,
+      edge: FolderEdge,
+    ): { parentId: number | null; ids: number[] } | null => {
+      if (folderId === null && edge !== "inside") return null;
+      // `inside` files it in the target; `before`/`after` file it in the level the target sits
+      // in, which is the level it is *drawn* in rather than the one its own `parentId` names.
+      const parentId =
+        folderId === null
+          ? null
+          : edge === "inside"
+            ? folderId
+            : (levels.parent.get(folderId) ?? null);
+      const under = folderDescendants(folders.folders, drag.folderId);
+      if (parentId !== null && (parentId === drag.folderId || under.has(parentId))) return null;
+      if (edge === "inside" && drag.parentId === parentId) return null;
+      const ids = reorderedLevel({
+        siblings: levels.ids.get(parentId) ?? [],
+        dragged: drag.folderId,
+        target: folderId ?? ROOT_TARGET,
+        edge,
+      });
+      return ids === null ? null : { parentId, ids: [...ids] };
+    },
+    [levels, folders.folders],
+  );
+
+  const canDropFolder = useCallback(
+    (drag: FolderDrag, folderId: number | null, edge: FolderEdge) =>
+      folderLanding(drag, folderId, edge) !== null,
+    [folderLanding],
+  );
+
+  /**
+   * The write. One command places the **whole level** — `sort_order` from each id's position and
+   * `parent_id` from the argument, in one transaction — so a drag that re-parents *and* places is
+   * never seen half done. A refused landing writes nothing at all rather than sending the folder
+   * somewhere the reader was not shown.
+   */
+  const reorderFolders = folders.reorder.mutate;
+  const dropFolder = useCallback(
+    (drag: FolderDrag, folderId: number | null, edge: FolderEdge) => {
+      const landing = folderLanding(drag, folderId, edge);
+      if (landing !== null) reorderFolders(landing);
+    },
+    [folderLanding, reorderFolders],
+  );
+
+  /**
    * Renaming, from either route.
    *
    * `folders.rename.reset()` for `openCreate`'s reason — a refusal from the last attempt is not
@@ -733,6 +863,7 @@ export function DecksPage() {
     folders.create,
     folders.rename,
     folders.move,
+    folders.reorder,
     folders.remove,
   ]);
   // **Where the re-read after a refusal comes from, since it is not here.** The editor keeps a
@@ -784,6 +915,8 @@ export function DecksPage() {
           drag={drag}
           canDropIn={canFile}
           onDropIn={fileDeck}
+          canDropFolder={canDropFolder}
+          onDropFolder={dropFolder}
           naming={naming}
           onOpenNew={(parentId, opener) => {
             folders.create.reset();
@@ -1011,7 +1144,12 @@ export function DecksPage() {
                   drag={drag}
                   canDrop={(d) => canFile(d, node.folder.id)}
                   onDropDeck={(d) => fileDeck(d, node.folder.id)}
+                  canDropFolder={(d, at) => canDropFolder(d, node.folder.id, at)}
+                  onDropFolder={(d, at) => dropFolder(d, node.folder.id, at)}
                   onOpen={setSelectedFolderId}
+                  // The same menu the sidebar's row opens, from the same builder — so the two
+                  // drawings of one folder cannot come to two sets of verbs.
+                  rowMenu={folderRowMenu}
                 />
               ))}
               {here.map((deck) => (

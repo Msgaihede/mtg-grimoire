@@ -16,6 +16,7 @@ import type {
 } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
+import { folderDraggable, type FolderDrag } from "@/lib/folderDrag";
 import { dragOnto, startDrag } from "@/test-drag";
 import { openDropdown, pickOption } from "@/test-dropdown";
 
@@ -41,6 +42,7 @@ const wishlistFolderSummary = vi.hoisted(() => vi.fn());
 const wishlistFolderCreate = vi.hoisted(() => vi.fn());
 const wishlistFolderRename = vi.hoisted(() => vi.fn());
 const wishlistFolderMove = vi.hoisted(() => vi.fn());
+const wishlistFolderReorder = vi.hoisted(() => vi.fn());
 const wishlistFolderDelete = vi.hoisted(() => vi.fn());
 const wishlistSetFolder = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
@@ -60,6 +62,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     wishlistFolderCreate,
     wishlistFolderRename,
     wishlistFolderMove,
+    wishlistFolderReorder,
     wishlistFolderDelete,
     wishlistSetFolder,
   },
@@ -298,6 +301,51 @@ function rightClick(element: HTMLElement): void {
 }
 
 /**
+ * The **wish** drag sources on screen, in document order.
+ *
+ * A bare `[draggable="true"]` used to mean "a table row or a wall tile" and stopped meaning it the
+ * day folder cards became draggable: the cabinet is drawn *above* the list, so the first match on
+ * a page with folders is a drawer. Filtering by the wall it sits in rather than by the element's
+ * own shape, because both are `<li>`s and both are draggable — the difference is which list they
+ * belong to.
+ */
+const cardSources = (container: HTMLElement): HTMLElement[] =>
+  [...container.querySelectorAll<HTMLElement>('[draggable="true"]')].filter(
+    (element) => element.closest('[aria-label="Folders"]') === null,
+  );
+
+/**
+ * A folder card by name, and the inner box its **folder** drop target is registered on.
+ *
+ * Two boxes rather than one because the drag library keeps a single element drop target per
+ * element and the wish drag already owns the `<li>` — `WishFolderCard` carries the whole reason.
+ * A drag aimed at the card's face finds the inner one by walking up, exactly as a pointer does,
+ * which is why {@link folderFace} is what these tests drop on.
+ */
+const folderCard = (name: string): HTMLElement =>
+  screen.getByRole("button", { name: new RegExp(`^${name} folder`) }).closest("li")!;
+const folderFace = (name: string): HTMLElement =>
+  screen.getByRole("button", { name: new RegExp(`^${name} folder`) });
+const folderSlot = (name: string): HTMLElement =>
+  folderCard(name).firstElementChild as HTMLElement;
+
+/**
+ * Three boxes, each placed so that the one coordinate `test-drag` sends — `clientX` 8 — falls in a
+ * different zone of a folder card laid out **horizontally**.
+ *
+ * jsdom has no layout engine, so every real `getBoundingClientRect` is four zeroes and
+ * `folderEdge` answers `inside` for all of them: an edge-dependent test has to state the box.
+ */
+const AT_START = new DOMRect(0, 0, 100, 100);
+const AT_MIDDLE = new DOMRect(-50, -50, 100, 100);
+const AT_END = new DOMRect(-85, -85, 100, 100);
+
+/** Slide a folder card under the stationary pointer. */
+const stand = (name: string, at: DOMRect) => {
+  folderSlot(name).getBoundingClientRect = () => at;
+};
+
+/**
  * jsdom lays nothing out, so the virtualiser measures a scroller of zero height and renders
  * no rows at all. `@tanstack/react-virtual` sizes it with `offsetHeight` and scrolls it with
  * `Element.scrollTo`, which jsdom does not implement either.
@@ -329,6 +377,10 @@ beforeEach(() => {
   wishlistFolderCreate.mockReset().mockResolvedValue(SOMEDAY);
   wishlistFolderRename.mockReset().mockResolvedValue(ORDERED);
   wishlistFolderMove.mockReset().mockResolvedValue(ORDERED);
+  // The whole cabinet, flat, is what `wishlist_folder_reorder` answers — but the hook settles by
+  // invalidating the folder list rather than seeding the cache from it, so what it resolves with
+  // reaches nothing here and the empty array is the honest fixture.
+  wishlistFolderReorder.mockReset().mockResolvedValue([]);
   wishlistFolderDelete.mockReset().mockResolvedValue(undefined);
   wishlistSetFolder.mockReset().mockResolvedValue({ id: 7, quantity: 4, removed: false });
   // The table, which is not this view's default — the wall is (`store.ts`). Everything in the
@@ -927,7 +979,7 @@ describe("WishlistPage", () => {
     const { container } = wrap(<WishlistPage />);
     await screen.findByText("Lightning Bolt");
 
-    const rows = [...container.querySelectorAll('[draggable="true"]')];
+    const rows = cardSources(container);
     expect(rows).toHaveLength(2);
     expect(rows[0]).toHaveTextContent("Lightning Bolt");
     expect(rows[1]).toHaveTextContent("Ancestral Recall");
@@ -962,7 +1014,7 @@ describe("WishlistPage", () => {
   it("does not drag a wish when the press landed on its removal", async () => {
     const { container } = wrap(<WishlistPage />);
     await screen.findByText("Lightning Bolt");
-    const row = container.querySelector('[draggable="true"]')!;
+    const row = cardSources(container)[0];
 
     const held = await startDrag(row, {
       pressOn: screen.getByRole("button", {
@@ -1840,7 +1892,7 @@ describe("the folders", () => {
     await screen.findByText("Lightning Bolt");
 
     const card = (await screen.findByRole("button", { name: /^Ordered folder/ })).closest("li")!;
-    await dragOnto(container.querySelector('[draggable="true"]')!, card);
+    await dragOnto(cardSources(container)[0], card);
 
     expect(wishlistSetFolder).toHaveBeenCalledWith(7, 1);
     // The whole root, never the summary alone: the level being left, the level being joined and
@@ -2007,7 +2059,7 @@ describe("the folders", () => {
   it("files a wish dropped on a folder card", async () => {
     const { container } = wrap(<WishlistPage />);
     await screen.findByText("Lightning Bolt");
-    const row = container.querySelector('[draggable="true"]')!;
+    const row = cardSources(container)[0];
     const card = (await screen.findByRole("button", { name: /^Ordered folder/ })).closest("li")!;
 
     await dragOnto(row, card);
@@ -2024,7 +2076,7 @@ describe("the folders", () => {
     await userEvent.click(await screen.findByRole("button", { name: /^Ordered folder/ }));
     await screen.findByText("Rhystic Study");
 
-    const row = container.querySelector('[draggable="true"]')!;
+    const row = cardSources(container)[0];
     const trail = screen.getByRole("navigation", { name: "Wishlist folders" });
     await dragOnto(row, within(trail).getByRole("button", { name: "Wishlist" }));
 
@@ -2188,5 +2240,162 @@ describe("the folders", () => {
     await screen.findByRole("button", { name: /^Ordered folder/ });
     expect(screen.queryByText(/Nothing on your wishlist yet/)).not.toBeInTheDocument();
     expect(screen.queryByText("Nothing filed here yet.")).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * **Rearranging the cabinet itself** — a drawer dropped on another drawer's middle goes inside it,
+ * and one dropped near an edge lands beside it.
+ *
+ * The write is always `wishlist_folder_reorder(parentId, ids)` and `ids` is the **whole** level, in
+ * order: `sort_order` is written from position and `parent_id` from the argument, in one
+ * transaction, so one gesture both re-parents and places. Sending only the folder that moved is
+ * the mistake the command's name invites, which is why every assertion below names the whole list.
+ *
+ * **The three landings are driven by stating the box.** jsdom has no layout engine, so every real
+ * `getBoundingClientRect` is four zeroes and `folderEdge` would answer `inside` for every drop — a
+ * test that hoped for a rect would pass over any threshold at all. {@link stand} slides the card
+ * under the one coordinate `test-drag` sends instead.
+ */
+describe("rearranging the wishlist's cabinet", () => {
+  beforeEach(() => {
+    wishlistList.mockReset().mockImplementation(async () => page([BOLT, ANY]));
+    wishlistFolderList.mockResolvedValue(FOLDERS);
+    wishlistFolderSummary.mockResolvedValue(SUMMARY);
+  });
+
+  /** Both root drawers on screen, which every test here starts from. `Ordered` holds
+   *  `Backordered`; `Someday` is empty and sorts after it. */
+  const wall = async () => {
+    await screen.findByRole("button", { name: /^Ordered folder/ });
+    await screen.findByRole("button", { name: /^Someday folder/ });
+  };
+
+  it("files a drawer inside the one it is dropped on the middle of", async () => {
+    wrap(<WishlistPage />);
+    await wall();
+    stand("Ordered", AT_MIDDLE);
+
+    const held = await startDrag(folderCard("Someday"));
+    await held.over(folderFace("Ordered"));
+    await held.drop();
+
+    // `Ordered`'s own child, then the folder that just arrived: `inside` says which drawer and
+    // nothing about where in it, so there is no second position in the gesture to have meant.
+    await waitFor(() => expect(wishlistFolderReorder).toHaveBeenCalledWith(1, [2, 3]));
+  });
+
+  it("places a drawer before the one it is dropped on the leading edge of", async () => {
+    wrap(<WishlistPage />);
+    await wall();
+    stand("Ordered", AT_START);
+
+    const held = await startDrag(folderCard("Someday"));
+    await held.over(folderFace("Ordered"));
+    await held.drop();
+
+    // The root level, re-ordered — `null` is the destination parent and a real place rather than
+    // an omission.
+    await waitFor(() => expect(wishlistFolderReorder).toHaveBeenCalledWith(null, [3, 1]));
+  });
+
+  /**
+   * **A drop that would reproduce the order already on screen writes nothing at all** — not a
+   * reorder of the level as it stands, which would be a transaction to arrive at the list already
+   * drawn, bumping `updated_at` and re-reading the cabinet for it.
+   *
+   * `Someday` already follows `Ordered`, so "after Ordered" is where it is. The mark goes with the
+   * write: `edge` is `null` over a landing the page refuses, so no line is drawn either.
+   */
+  it("draws no line and writes nothing for a drop that would change nothing", async () => {
+    wrap(<WishlistPage />);
+    await wall();
+    stand("Ordered", AT_END);
+
+    const held = await startDrag(folderCard("Someday"));
+    await held.over(folderFace("Ordered"));
+    expect(folderCard("Ordered").querySelector("[data-folder-drop-line]")).toBeNull();
+
+    await held.drop();
+    expect(wishlistFolderReorder).not.toHaveBeenCalled();
+  });
+
+  /** A folder dropped on itself is the gesture a reader makes most often by accident — the pointer
+   *  is *on* the folder being dragged for the first few pixels of every drag. */
+  it("refuses a drawer dropped on itself, at every landing", async () => {
+    wrap(<WishlistPage />);
+    await wall();
+
+    for (const at of [AT_START, AT_MIDDLE, AT_END]) {
+      stand("Someday", at);
+      const held = await startDrag(folderCard("Someday"));
+      await held.over(folderFace("Someday"));
+      await held.drop();
+    }
+    expect(wishlistFolderReorder).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **The cycle fence.** `wishlist_folders.parent_id` is `ON DELETE CASCADE` on itself, so a cycle
+   * is a graph SQLite's recursive cascade would walk forever the day the folder is deleted — and
+   * the backend refuses the move in words. Asked of the *destination parent*, which is what covers
+   * `inside` a descendant and `before` one with a single clause.
+   *
+   * **No gesture on this page reaches it**: the wall draws exactly one level, so every card on it
+   * is a **sibling** of every other and a descendant is never on screen beside its ancestor.
+   * Standing inside `Ordered` puts its child `Backordered` on the wall and `Ordered` itself only
+   * in the breadcrumb — so the drag is built by hand, as the one a second surface drawing two
+   * levels at once would produce.
+   */
+  it("refuses a drawer dropped into something it holds", async () => {
+    const user = userEvent.setup();
+    const { container } = wrap(<WishlistPage />);
+    await wall();
+    await user.click(screen.getByRole("button", { name: /^Ordered folder/ }));
+    await screen.findByRole("button", { name: /^Backordered folder/ });
+
+    const source = document.createElement("div");
+    source.textContent = "the parent";
+    container.append(source);
+    const stop = folderDraggable({
+      element: source,
+      folder: (): FolderDrag => ({
+        folderId: ORDERED.id,
+        name: ORDERED.name,
+        parentId: null,
+        scope: "wishlist",
+      }),
+    });
+
+    // Every landing on the only card at this level is a cycle: `inside Backordered` files the
+    // parent under its own child, and `before`/`after Backordered` file it into `Ordered`, which
+    // is itself.
+    for (const at of [AT_START, AT_MIDDLE, AT_END]) {
+      stand("Backordered", at);
+      const held = await startDrag(source);
+      expect(folderCard("Backordered").classList.contains("ring-2")).toBe(false);
+      await held.over(folderFace("Backordered"));
+      await held.drop();
+    }
+    stop();
+    source.remove();
+    expect(wishlistFolderReorder).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **The wish drag still files a wish**, which is the thing this change could have taken away
+   * without a single folder test noticing: the drag library keeps **one element drop target per
+   * element** and a second registration silently replaces the first, so a folder target on the
+   * `<li>` would have stopped the drawer accepting wishes while everything above stayed green.
+   */
+  it("still files a wish dropped on a drawer", async () => {
+    const { container } = wrap(<WishlistPage />);
+    await wall();
+    await screen.findByText("Lightning Bolt");
+
+    await dragOnto(cardSources(container)[0], folderCard("Ordered"));
+
+    expect(wishlistSetFolder).toHaveBeenCalledWith(7, 1);
+    expect(wishlistFolderReorder).not.toHaveBeenCalled();
   });
 });

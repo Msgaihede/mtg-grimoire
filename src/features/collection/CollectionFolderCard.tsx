@@ -22,12 +22,35 @@
  * shape, and a row of folders genuinely is a list. The ring lives on that `<li>`, which means the
  * scroller around the wall has to carry `DROP_MARK_ROOM`; that is the wall's business rather than
  * the card's, and `dropMarks.ts` explains why padding one level in is not the same fix.
+ *
+ * **Two drags reach this card and they are deliberately two.** A *copy* dropped on it is filed
+ * into the drawer (`collectionDrag.ts`'s payload); a *folder* dropped on it is nested inside it
+ * or placed beside it (`lib/folderDrag.ts`'s). Each reader refuses the other's payload outright,
+ * because the two marks live under different keys — so a card carried over a folder can never be
+ * mistaken for a folder being re-filed, and neither target needs to know the other exists. Only
+ * one thing is ever in the air, so the pair share the two marks `dropMarks.ts` publishes rather
+ * than inventing a second vocabulary: {@link DROP_RING} on the `<li>` for "this drawer would take
+ * what you are holding" and {@link DROP_OVER} on the face for "and this is where it lands". The
+ * third landing is the one a copy has no equivalent of, and it is `FolderDropLine`.
  */
-import { useRef, type KeyboardEventHandler, type MouseEventHandler } from "react";
+import {
+  useEffect,
+  useRef,
+  type KeyboardEventHandler,
+  type MouseEventHandler,
+  type RefObject,
+} from "react";
 import { Folder, MoreHorizontal } from "lucide-react";
+import { FolderDropLine } from "@/components/FolderDropLine";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { count } from "@/lib/counts";
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
+import {
+  folderDraggable,
+  useFolderDropTarget,
+  type FolderDrag,
+  type FolderEdge,
+} from "@/lib/folderDrag";
 import type { FolderNode } from "@/lib/folderTree";
 import { FOCUS } from "@/lib/focus";
 import type { CollectionFolder } from "@/lib/ipc";
@@ -118,6 +141,8 @@ export function CollectionFolderCard({
   rowMenu,
   canDrop,
   onDropCard,
+  canDropFolder,
+  onDropFolder,
 }: {
   node: FolderNode<CollectionFolder>;
   /** The recursive total the caller summed — or `null` while the summary read is still in flight,
@@ -151,74 +176,177 @@ export function CollectionFolderCard({
    */
   canDrop: (drop: CollectionDrop) => boolean;
   onDropCard: (drop: CollectionDrop) => void;
+  /**
+   * The other drag: a **folder** let go on this card, and which of the three landings it would
+   * take — inside this drawer, or beside it on either side.
+   *
+   * Already bound to this card by the page, exactly as {@link canDrop} is, and with no `drag`
+   * prop beside it: `useFolderDropTarget` runs a monitor per target gated by this same question,
+   * so every card on the wall answers for itself and no two answer the same. The folder in the
+   * air refuses itself, its own parent refuses the nest that would move it nowhere, and a drop
+   * that would reproduce the order already on screen refuses all three.
+   *
+   * **The axis is the whole of what this drawing differs by**, and it is `"horizontal"` here: the
+   * page lays its drawers out as a grid of cards, so `before`/`after` are the leading and
+   * trailing sides where in the deck sidebar's vertical tree they are the top and bottom edges.
+   */
+  canDropFolder: (drag: FolderDrag, edge: FolderEdge) => boolean;
+  onDropFolder: (drag: FolderDrag, edge: FolderEdge) => void;
 }) {
   const ref = useRef<HTMLLIElement>(null);
+  /**
+   * The box the **folder** drop target is registered on, and why it is not the `<li>`.
+   *
+   * **`@atlaskit/pragmatic-drag-and-drop` keeps exactly one element drop target per element** —
+   * `makeDropTarget`'s registry is a `WeakMap` keyed by the node, so a second
+   * `dropTargetForElements` on the same element silently **replaces** the first (it warns in
+   * development and nothing goes red). Two payloads land on this card, so they need two boxes.
+   * The copy's keeps the `<li>`, because that is the box every existing target, test and story
+   * addresses; the folder's takes an inner wrapper that holds both buttons and therefore covers
+   * every pixel of the card, including the `⋯`'s corner.
+   *
+   * **Nesting is free**: `getActualDropTargets` walks up from whatever the pointer is over and
+   * collects *every* registered ancestor, skipping the ones whose `canDrop` says no — so a copy
+   * over the face falls through this wrapper to the `<li>`, and a folder over it stops here.
+   * A plain `<div>` with no positioning of its own, so the `⋯` still resolves against the `<li>`
+   * and nothing in the layout moves; its border box is the `<li>`'s, which is what
+   * {@link useFolderDropTarget} measures the three landings against.
+   */
+  const slot = useRef<HTMLDivElement>(null);
   const tip = useTooltip();
   const { armed, over } = useCollectionDropTarget({ ref, canDrop, onDrop: onDropCard });
+  useFolderDragSource(ref, node.folder);
+  const { armed: folderArmed, edge } = useFolderDropTarget({
+    ref: slot,
+    scope: "collection",
+    axis: "horizontal",
+    canDrop: canDropFolder,
+    onDrop: onDropFolder,
+  });
   const { shown, spoken } = folderFace(summary, currency);
 
   return (
-    <li ref={ref} className={cn("relative rounded-xl", armed && DROP_RING)}>
-      <button
-        type="button"
-        // Starts with the visible label and then says, in words, what the second line says in
-        // figures — WCAG 2.5.3, and `FolderCard`'s arrangement: the name is the prefix, and the
-        // count is a sentence rather than a bare number a screen reader cannot attach to
-        // anything.
-        aria-label={`${node.folder.name} folder, ${spoken}`}
-        onClick={onOpen}
-        // **The menu's two doors are on this button**, never on the `<li>` around it — the panel
-        // hands the caret back to the element a menu was opened on, and this is the focusable one.
-        // `FolderTree`'s rule, and the same reason it gives.
-        onContextMenu={rowMenu.onContextMenu}
-        onKeyDown={rowMenu.onKeyDown}
-        className={cn(
-          // `pr-9` leaves the manage trigger its corner: the trigger is a *sibling* rather than a
-          // child, because a button inside a button is not markup a browser will build.
-          "block w-full rounded-xl border border-dashed border-border p-2.5 pr-9 text-left",
-          "transition-colors duration-150 hover:border-accent motion-reduce:transition-none",
-          over && cn("border-accent", DROP_OVER),
-          FOCUS,
-        )}
-      >
-        <span className="flex items-center gap-2">
-          <Folder className="size-3.5 flex-none text-dim" aria-hidden="true" />
-          <span
-            className="min-w-0 flex-1 truncate text-sm"
-            {...tip(node.folder.name, { whenClipped: true })}
-          >
-            {node.folder.name}
+    <li ref={ref} className={cn("relative rounded-xl", (armed || folderArmed) && DROP_RING)}>
+      <div ref={slot}>
+        <button
+          type="button"
+          // Starts with the visible label and then says, in words, what the second line says in
+          // figures — WCAG 2.5.3, and `FolderCard`'s arrangement: the name is the prefix, and the
+          // count is a sentence rather than a bare number a screen reader cannot attach to
+          // anything.
+          aria-label={`${node.folder.name} folder, ${spoken}`}
+          onClick={onOpen}
+          // **The menu's two doors are on this button**, never on the `<li>` around it — the panel
+          // hands the caret back to the element a menu was opened on, and this is the focusable one.
+          // `FolderTree`'s rule, and the same reason it gives.
+          onContextMenu={rowMenu.onContextMenu}
+          onKeyDown={rowMenu.onKeyDown}
+          className={cn(
+            // `pr-9` leaves the manage trigger its corner: the trigger is a *sibling* rather than a
+            // child, because a button inside a button is not markup a browser will build.
+            "block w-full rounded-xl border border-dashed border-border p-2.5 pr-9 text-left",
+            "transition-colors duration-150 hover:border-accent motion-reduce:transition-none",
+            // One wash for both drags, because only one thing is ever in the air: a copy over this
+            // drawer and a folder over its middle are the same claim — what you are holding lands
+            // *in here*. The other two landings are a line rather than a wash, which is what keeps
+            // "inside this folder" and "beside this folder" from wearing one mark.
+            (over || edge === "inside") && cn("border-accent", DROP_OVER),
+            FOCUS,
+          )}
+        >
+          <span className="flex items-center gap-2">
+            <Folder className="size-3.5 flex-none text-dim" aria-hidden="true" />
+            <span
+              className="min-w-0 flex-1 truncate text-sm"
+              {...tip(node.folder.name, { whenClipped: true })}
+            >
+              {node.folder.name}
+            </span>
           </span>
-        </span>
-        <span className="mt-1 block truncate text-xs tabular-nums text-dim">{shown}</span>
-      </button>
+          <span className="mt-1 block truncate text-xs tabular-nums text-dim">{shown}</span>
+        </button>
 
-      {/* The visible way into the same menu the right-click opens — the affordance a reader who
-          does not know a card can be right-clicked has. Named for the folder, because a wall of
-          these is otherwise a row of controls all called "Manage": a screen reader reads them out
-          of context, one after another, with nothing to tell them apart.
+        {/* The visible way into the same menu the right-click opens — the affordance a reader who
+            does not know a card can be right-clicked has. Named for the folder, because a wall of
+            these is otherwise a row of controls all called "Manage": a screen reader reads them out
+            of context, one after another, with nothing to tell them apart.
 
-          `aria-haspopup="menu"` and no `aria-expanded`, which is the deliberately partial
-          declaration `WishFolderCard` argues in full: the popup *kind* is a fact about this
-          button and is free, while the expanded *state* is a fact about `ContextMenuProvider`,
-          which holds the one open menu at the app root and publishes only `openMenu`/`closeMenu`.
-          A static `aria-expanded="false"` would be an assertion, and it would be wrong for
-          exactly as long as the menu is up. */}
-      <button
-        type="button"
-        aria-label={`Manage ${node.folder.name}`}
-        aria-haspopup="menu"
-        onClick={rowMenu.onClick}
-        onKeyDown={rowMenu.onKeyDown}
-        className={cn(
-          "absolute right-1 top-1 grid size-7 place-items-center rounded-md text-dim",
-          "transition-colors duration-150 hover:bg-surface hover:text-text",
-          "motion-reduce:transition-none",
-          FOCUS,
-        )}
-      >
-        <MoreHorizontal className="size-4" aria-hidden="true" />
-      </button>
+            `aria-haspopup="menu"` and no `aria-expanded`, which is the deliberately partial
+            declaration `WishFolderCard` argues in full: the popup *kind* is a fact about this
+            button and is free, while the expanded *state* is a fact about `ContextMenuProvider`,
+            which holds the one open menu at the app root and publishes only `openMenu`/`closeMenu`.
+            A static `aria-expanded="false"` would be an assertion, and it would be wrong for
+            exactly as long as the menu is up. */}
+        <button
+          type="button"
+          aria-label={`Manage ${node.folder.name}`}
+          aria-haspopup="menu"
+          // `data-no-drag`, and it is load-bearing from the moment the card became draggable:
+          // Chromium starts a drag from the nearest draggable *ancestor* of whatever was pressed,
+          // so without it a press on the `⋯` plus five pixels of travel files this folder somewhere
+          // instead of opening its menu — and the click that was meant is never delivered.
+          // `composedDraggable`'s capture-phase guard is what reads it; `dnd.ts` has the measurement.
+          data-no-drag=""
+          onClick={rowMenu.onClick}
+          onKeyDown={rowMenu.onKeyDown}
+          className={cn(
+            "absolute right-1 top-1 grid size-7 place-items-center rounded-md text-dim",
+            "transition-colors duration-150 hover:bg-surface hover:text-text",
+            "motion-reduce:transition-none",
+            FOCUS,
+          )}
+        >
+          <MoreHorizontal className="size-4" aria-hidden="true" />
+        </button>
+      </div>
+
+      {/* Drawn straight off `edge`, which is `null` both when the pointer is elsewhere and when
+          it is over a part of this card that would refuse — so no line means no drop, rather than
+          a mark leading to a write that never happens. `absolute` against this `<li>`, which is
+          why the card's box is `relative`. */}
+      <FolderDropLine edge={edge} axis="horizontal" />
     </li>
   );
+}
+
+/**
+ * The card as something to pick **up**.
+ *
+ * **Not `features/decks/FolderTree.tsx`'s `useFolderDragSource`, which is the same twelve lines.**
+ * That one takes a `DeckFolder` and spells `scope: "deck"` into the payload, so reusing it here
+ * would mean widening it to `FolderLike` plus a scope argument *and* making a collection card
+ * import the deck gallery's tree module to get it. `folderDrag.ts` is where the shared part
+ * already lives; what is left over is a type and a word.
+ *
+ * `folderDraggable` takes a callback and this reads it out of a **ref** for that callback's own
+ * reason: `node.folder` is a fresh object on every refetch of the folder list, so an effect keyed
+ * on it would tear the source down and rebuild it in the middle of a gesture. Registration is
+ * keyed on the id alone — which is what the wall keys the card on — so it happens once per folder
+ * for the life of the card, and a folder renamed or re-filed since then still carries what it is
+ * now at `dragstart`. That last part is what lets a folder's current parent refuse a nest that
+ * would move it nowhere.
+ */
+function useFolderDragSource(
+  ref: RefObject<HTMLElement | null>,
+  folder: CollectionFolder,
+): void {
+  const latest = useRef(folder);
+  useEffect(() => {
+    latest.current = folder;
+  });
+
+  const id = folder.id;
+  useEffect(() => {
+    const element = ref.current;
+    if (element === null) return;
+    return folderDraggable({
+      element,
+      folder: () => ({
+        folderId: id,
+        name: latest.current.name,
+        parentId: latest.current.parentId,
+        scope: "collection",
+      }),
+    });
+  }, [ref, id]);
 }
