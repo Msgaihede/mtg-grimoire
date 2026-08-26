@@ -628,11 +628,18 @@ export const FILTER_LABEL = "text-[0.6875rem] uppercase tracking-[0.08em] text-d
  * The way into every filter that is not on the bar — a disclosure, with the number of filters
  * that are on riding on it.
  *
- * **Gold at rest, which no other quiet control on the row is.** Every other treatment here says
- * "a filter is on"; this one says "there is more in here", which a reader has to be able to see
- * *before* they have pressed anything. The badge is what says how much is on, and it is drawn
- * only when there is something to say — a `0` on every quiet row is chrome that teaches the eye
- * to skip the control it is attached to.
+ * **Quiet at rest, and its two states are told apart by kind: the border is the *count*, the
+ * fill is the *tray*.** It was gold-bordered at rest until 2026-08-26, on the argument that a
+ * disclosure has to say "there is more in here" before anything has been pressed — but that made
+ * it the one control on the row wearing the on-treatment while off, so a reader sweeping the row
+ * for what is switched on found it every single time and had to read the badge to learn it was
+ * not. Off it is now a hairline-less `text-dim` word that brightens under the mouse, exactly like
+ * {@link filterChipState}'s off; a live count gives it that recipe's gold border and gold text;
+ * an open tray fills it with the panel's own grey. Both at once is a legal reading and draws
+ * both, which is that function's rule too.
+ *
+ * The badge is what says how much is on, and it is drawn only when there is something to say — a
+ * `0` on every quiet row is chrome that teaches the eye to skip the control it is attached to.
  *
  * **The count is the whole search's and not the tray's**, deliberately. It is `activeCount`, the
  * same number Reset all wears, so the two cannot disagree about how much is on. A tray-only count
@@ -684,10 +691,17 @@ export function FiltersButton({
       className={cn(
         FILTER_CONTROL,
         FILTER_FOCUS,
-        "inline-flex shrink-0 items-center justify-center gap-2 border-accent px-3 text-accent",
-        // The panel below is this button's own extension, so an open tray tints the control that
-        // opened it rather than leaving it looking like one more thing to press.
-        open && "bg-accent/10",
+        "inline-flex shrink-0 items-center justify-center gap-2 px-3",
+        // `border-transparent` and not a dropped border: `FILTER_SHAPE` puts a 1px box on every
+        // control in the row, and taking the *width* away would shrink this button by 2px the
+        // moment the last filter came off — under the finger that just took it off. Only the
+        // colour goes.
+        count > 0 ? "border-accent text-accent" : "border-transparent text-dim hover:text-text",
+        // The panel below is this button's own extension, so an open tray draws the control that
+        // opened it in the panel's own fill rather than leaving it looking like one more thing to
+        // press. Grey (`bg-surface`, the tray's own) and not the gold tint it was: on this row
+        // gold means "a filter is on", which is the border's sentence above and not this one's.
+        open && "bg-surface",
         className,
       )}
     >
