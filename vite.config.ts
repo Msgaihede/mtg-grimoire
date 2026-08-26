@@ -37,7 +37,7 @@ export default defineConfig({
       : undefined,
     watch: {
       // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      ignored: ["**/src-tauri/**", "**/.claude/**"],
     },
   },
   test: {
@@ -101,6 +101,7 @@ export default defineConfig({
         // only ever runs in a browser.
         "src/vite-env.d.ts",
         "src/main.tsx",
+        ".claude/**/*",
       ],
     },
   },

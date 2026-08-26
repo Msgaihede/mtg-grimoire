@@ -1,7 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type RefObject,
+} from "react";
 import { ChevronRight, Plus } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { useContextMenu } from "@/components/menu/useContextMenu";
+import { atLeast, scaled } from "@/lib/cardZoom";
 import { plural } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError, type DeckFolder, type DeckRow } from "@/lib/ipc";
@@ -9,6 +18,7 @@ import { writeFailure } from "@/lib/writes";
 import { LAYER } from "@/lib/layers";
 import { PRESS, statusLine } from "@/lib/motion";
 import { useAppStore } from "@/lib/store";
+import { useCardZoomGesture } from "@/lib/useCardZoomGesture";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { CreateDeckDialog } from "./CreateDeckDialog";
@@ -51,13 +61,46 @@ import { useNewDeckFormat } from "./useNewDeckFormat";
 const NEW_DECK_SUBTITLE = "Paste a list or choose a file, and it becomes a deck of its own.";
 
 /**
- * The wall.
+ * A tile's narrowest track, in px, at 100% zoom — the number the reader's gesture multiplies.
+ *
+ * A constant rather than a class because it is arithmetic now: {@link wallStyle} builds the
+ * track out of it, and the tiles the track sizes carry the same zoom in their own type and
+ * marks. It is deliberately not spelled as a Tailwind arbitrary value anywhere in this file,
+ * comments included — this file is under Tailwind's `@source`, so writing one would go on
+ * emitting a rule for a utility nothing uses.
+ */
+const TILE_MIN_WIDTH = 200;
+
+/** The gutter between tiles at 100% zoom (`gap-4`'s 16px), floored by {@link atLeast}. */
+const TILE_GAP = 16;
+
+/**
+ * The wall — everything about it that is not a function of the zoom.
+ *
+ * The two tracks-and-gutter properties moved to {@link wallStyle} when the gallery learnt to
+ * zoom; what is left here is the display mode, which is the same at every size.
+ */
+const GRID = "grid";
+
+/**
+ * The wall's tracks and gutter at `zoom`.
  *
  * `auto-fill`, not `auto-fit`: with two decks in the gallery `auto-fit` collapses the empty
  * tracks and stretches those two across the whole window, which blows a 626 px art crop up to
- * half a screen. `auto-fill` keeps a tile a tile.
+ * half a screen. `auto-fill` keeps a tile a tile — and it is what makes the zoom read as *more
+ * decks on screen* rather than as bigger boxes, because the column count is what falls out of a
+ * track the reader has resized.
+ *
+ * The gutter takes {@link atLeast} rather than {@link scaled}: it is the one measurement here
+ * that sits **between** tiles rather than **on** one, and halving it at 0.5× is exactly the zoom
+ * a reader chose in order to see more decks at once.
  */
-const GRID = "grid grid-cols-[repeat(auto-fill,minmax(200px,1fr))] gap-4";
+function wallStyle(zoom: number): CSSProperties {
+  return {
+    gridTemplateColumns: `repeat(auto-fill, minmax(${scaled(TILE_MIN_WIDTH, zoom)}px, 1fr))`,
+    gap: atLeast(TILE_GAP, zoom),
+  };
+}
 
 /** The quiet controls in the wall's heading row — everything that is not "New deck". Same
  *  height as it, because a row of controls that disagree about their own size reads as two
@@ -124,6 +167,36 @@ export function DecksPage() {
   const [selectedFolderId, setSelectedFolderId] = useState<number | null>(null);
   const newDeckRef = useRef<HTMLButtonElement>(null);
   const wallRef = useRef<HTMLElement>(null);
+  /**
+   * The scroller the tiles are drawn in — the right-hand column, and the element the zoom
+   * gesture is attached to.
+   *
+   * Deliberately **not** {@link wallRef}, which is the whole view: a ctrl+wheel over the folder
+   * tree is not a request to resize a wall the reader is not pointing at, and the tree is
+   * navigation chrome at a fixed rail width that has nothing to scale. It is the same rule
+   * `GridView` follows one floor down — the listener goes on the thing that scrolls, because a
+   * wheel over the gap between two tiles belongs to the scroller and not to either of them.
+   */
+  const tilesRef = useRef<HTMLDivElement>(null);
+  /**
+   * How large the reader draws a deck, out of the one store the app keeps sizes in.
+   *
+   * **One read for the whole wall, handed down** rather than read inside each tile: a folder of
+   * forty decks is forty `DeckTile`s, and forty subscriptions to one number they all share is a
+   * re-render each per notch of a gesture that produces dozens.
+   *
+   * `deckGallery`, which is **not** the `deck` the editor's cards are drawn at. The two walls are
+   * never on screen together, and that is not the argument — the argument is that they are
+   * different questions: how many decks do I want to see at once, against how large is one deck's
+   * cards laid out. A reader who sized the editor for a 100-card pile did not ask for four deck
+   * tiles across the gallery.
+   */
+  const zoom = useAppStore((s) => s.cardZoom.deckGallery);
+  // Ctrl+wheel, through the hook rather than an `onWheel` prop: React registers `wheel` as a
+  // passive listener, and a passive listener's `preventDefault` does nothing — so without this
+  // WebView2 would apply its own page zoom on top of the wall's, scaling the sidebar, the ribbon
+  // and the title bar out from under a reader who asked one wall of decks to get bigger.
+  useCardZoomGesture(tilesRef, "deckGallery");
   /** Whatever opened the layer that is up, so Escape can hand the caret back to it. */
   const openerRef = useRef<HTMLButtonElement | null>(null);
   /**
@@ -726,7 +799,7 @@ export function DecksPage() {
           menuOpenerRef={menuOpenerRef}
         />
 
-        <div className="flex min-w-0 flex-1 flex-col gap-4 overflow-y-auto">
+        <div ref={tilesRef} className="flex min-w-0 flex-1 flex-col gap-4 overflow-y-auto">
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
             {/* A heading, not a caption: the tree's own `h2` is beside it and the wall is the
                 other half of the same outline. */}
@@ -928,12 +1001,13 @@ export function DecksPage() {
             // Named, the way the search's wall of art is (`CardGrid`'s `role="group"` +
             // `aria-label`) — but left a list rather than made a group, because these tiles are
             // countable and a list says how many there are on the way in.
-            <ul aria-label="Your decks" className={GRID}>
+            <ul aria-label="Your decks" className={GRID} style={wallStyle(zoom)}>
               {childFolders.map((node) => (
                 <FolderCard
                   key={node.folder.id}
                   node={node}
                   members={decksUnder(node, live, folderOf)}
+                  zoom={zoom}
                   drag={drag}
                   canDrop={(d) => canFile(d, node.folder.id)}
                   onDropDeck={(d) => fileDeck(d, node.folder.id)}
@@ -944,6 +1018,7 @@ export function DecksPage() {
                 <DeckTile
                   key={deck.id}
                   deck={deck}
+                  zoom={zoom}
                   decks={decks}
                   nodes={nodes}
                   folderId={folderOf(deck)}
@@ -999,12 +1074,15 @@ export function DecksPage() {
                 />
                 Archived <span className="font-mono tabular-nums">{archivedHere.length}</span>
               </button>
+              {/* The same tracks and the same gutter as the wall above it: filed decks are the
+                  same wall behind a disclosure, so one size answers for both. */}
               {showArchived && (
-                <ul aria-label="Archived decks" className={cn(GRID, "mt-3")}>
+                <ul aria-label="Archived decks" className={cn(GRID, "mt-3")} style={wallStyle(zoom)}>
                   {archivedHere.map((deck) => (
                     <DeckTile
                       key={deck.id}
                       deck={deck}
+                      zoom={zoom}
                       decks={decks}
                       nodes={nodes}
                       folderId={folderOf(deck)}

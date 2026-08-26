@@ -817,7 +817,7 @@ describe("the import dialog", () => {
 
     const merge = await screen.findByLabelText(/^Merge/);
     expect(merge).toBeChecked();
-    const replace = screen.getByLabelText("Replace — removes the 42 cards in Live first");
+    const replace = screen.getByLabelText("Replace — removes the 42 cards in Actual first");
     await userEvent.click(replace);
     await userEvent.click(screen.getByRole("button", { name: "Import" }));
 
@@ -948,12 +948,12 @@ describe("the import dialog", () => {
     expect(await screen.findByLabelText("Import into this deck")).toBeChecked();
     // The header line is the *chosen* destination's, which is why it cannot be a host prop: the
     // header is drawn on both steps and the radios only on the first.
-    expect(await screen.findByText("Into Sisay · Live")).toBeInTheDocument();
+    expect(await screen.findByText("Into Sisay · Actual")).toBeInTheDocument();
 
     await userEvent.click(screen.getByLabelText("Import into a new deck"));
 
     // The new deck has no deck to name, so it says nothing and the host's fallback stands.
-    await waitFor(() => expect(screen.queryByText("Into Sisay · Live")).not.toBeInTheDocument());
+    await waitFor(() => expect(screen.queryByText("Into Sisay · Actual")).not.toBeInTheDocument());
     expect(screen.getByText(HOST_SUBTITLE)).toBeInTheDocument();
 
     await preview("1 Sol Ring");

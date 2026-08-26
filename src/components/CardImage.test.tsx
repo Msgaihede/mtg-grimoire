@@ -40,12 +40,42 @@ describe("CardImage", () => {
     expect(screen.getByAltText("Lightning Bolt")).toBe(first);
   });
 
-  /** Whatever the caller hangs on it — this stands in for a bare `<img>`, not beside one. */
+  /**
+   * Whatever the caller hangs on it — this stands in for a bare `<img>`, not beside one.
+   *
+   * **`draggable` is deliberately not the example any more.** It was, and the assertion went
+   * vacuous the day this component started defaulting it off: the test would have passed with
+   * the prop deleted from the call, which is a check that can no longer fail.
+   */
   it("passes the caller's own attributes through to the image", () => {
-    render(<CardImage src={BOLT} alt="Lightning Bolt" draggable={false} className="size-full" />);
+    render(<CardImage src={BOLT} alt="Lightning Bolt" loading="lazy" className="size-full" />);
 
     const img = screen.getByAltText("Lightning Bolt");
-    expect(img).toHaveAttribute("draggable", "false");
+    expect(img).toHaveAttribute("loading", "lazy");
     expect(img).toHaveClass("size-full");
+  });
+
+  /**
+   * An `<img>` is draggable by default and the browser starts a drag from the *nearest*
+   * draggable ancestor, so a frame inside a draggable tile steals the gesture and the tile's
+   * own drag never begins. That is the bug a reader meets as "the picture will not drag but
+   * the name will" — found live on the deck gallery's tiles, whose cover never passed the prop
+   * two of its sibling frames did.
+   */
+  it("refuses to be dragged itself, so the tile around it can be", () => {
+    render(<CardImage src={BOLT} alt="Lightning Bolt" />);
+
+    expect(screen.getByAltText("Lightning Bolt")).toHaveAttribute("draggable", "false");
+  });
+
+  /**
+   * A default rather than a rule: it is written *before* the spread, so a frame that really is
+   * the drag source — nothing today — can still say so. The ordering is the whole difference
+   * between the two, and it is invisible in the rendered output of every other test here.
+   */
+  it("lets a caller take the drag back", () => {
+    render(<CardImage src={BOLT} alt="Lightning Bolt" draggable />);
+
+    expect(screen.getByAltText("Lightning Bolt")).toHaveAttribute("draggable", "true");
   });
 });

@@ -281,7 +281,7 @@ describe("the theory difference dialog", () => {
   it("says in the footer that the other direction is deliberately not listed", async () => {
     wrap(<TheoryDiffDialog {...props} />);
 
-    await screen.findByText(/Cards in Live but not in Theory are cuts you have already made/);
+    await screen.findByText(/Cards in Actual but not in Theory are cuts you have already made/);
     // Spec §5: this surface is nothing but prices, so the as-of sentence is drawn rather than
     // hung on a hover.
     expect(screen.getByText(pricesAsOf(MARKETPLACES.tcgplayer))).toBeInTheDocument();

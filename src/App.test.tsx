@@ -30,6 +30,10 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     // reason: a `.catch` cannot catch the synchronous TypeError of calling `undefined`. An
     // empty row is a database nobody has zoomed, so every wall opens at its default.
     cardZoom: vi.fn().mockResolvedValue({}),
+    // `useListViewPersistence`' launch read, beside the zoom's — `{}` leaves every list on
+    // its own default.
+    listView: vi.fn().mockResolvedValue({}),
+    setListView: vi.fn().mockResolvedValue(undefined),
     setCardZoom: vi.fn().mockResolvedValue(undefined),
     // The deck editor's search column reads which way it was last left, and writes on every
     // press. Mocked rather than left off for `cardZoom`'s reason one row up — the read is a
@@ -756,6 +760,10 @@ it("closes the card on Escape from inside a collection row's controls", async ()
     items: [BOLT_ENTRY, { ...BOLT_ENTRY, id: 8, name: "Counterspell", quantity: 0 }],
     total: 2,
   });
+  // **The table, said out loud**, because the collection opens on art since 2026-08-26 and this
+  // case is about a `role="row"` — the stepper it reaches for lives in a table cell, and a wall of
+  // tiles has neither. The default is not what is under test here; the Escape protocol is.
+  useAppStore.setState({ collectionView: "table" });
   render(<App />);
   await userEvent.click(screen.getByRole("button", { name: "Collection" }));
 

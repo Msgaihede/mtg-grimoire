@@ -23,6 +23,7 @@ import { pricesAsOf } from "@/lib/prices";
 import { MARKETPLACE_KEY } from "@/lib/useMarketplace";
 import { startDrag } from "@/test-drag";
 import { openDropdown, pickOption } from "@/test-dropdown";
+import { readCollectionTileDrag } from "./collectionDrag";
 
 const collectionList = vi.hoisted(() => vi.fn());
 const collectionSummary = vi.hoisted(() => vi.fn());
@@ -294,7 +295,31 @@ const sweepCallsAt = (marketplace: string) =>
  * only the control this file means. A dropdown's trigger is a `button`, not a `combobox` — the
  * combobox role belongs to a `searchable` dropdown's search box, and this one has none.
  */
-const sortSelect = () => screen.getByRole("button", { name: "Sort" });
+// **`Sort results` and not the bare `Sort` this page drew before it shared `FilterBar`.**
+// That row is mounted on four surfaces and one of them - the deck editor - already has a
+// `Sort` of its own, so the shared control names what it orders. `FilterBar`'s own label
+// carries the argument.
+//
+// **A `button`, not a `combobox`.** The control became a `Dropdown` on 2026-08-26: the combobox
+// role belongs to a `searchable` dropdown's search box and this one has none, so the trigger is
+// a plain disclosure button whose content is the picked order.
+const sortSelect = () => screen.getByRole("button", { name: "Sort results" });
+/**
+ * Open the filter tray, so a cell behind the Filters disclosure can be pressed.
+ *
+ * Everything but the box, the colours, the order and the layout pair lives behind that button
+ * since this page started drawing `FilterBar` - so a suite that reached straight for a chip is
+ * now reaching into a tray that is not mounted. Matched on a prefix: the button's name carries
+ * the live count (`Show filters - 2 active`), which moves as a case presses things.
+ */
+async function openTray(user: {
+  // Structural, so the bare `userEvent` module and a `userEvent.setup()` instance both satisfy it
+  // - this file uses each in different cases, and the two are not the same type.
+  click: (element: Element) => Promise<unknown>;
+}): Promise<void> {
+  await user.click(screen.getByRole("button", { name: /^Show filters/ }));
+}
+
 
 /**
  * The page, under the providers `App` mounts above it.
@@ -406,6 +431,7 @@ describe("CollectionPage", () => {
     wrap(<CollectionPage />);
     await screen.findByText(/nothing here yet/i);
 
+    await openTray(userEvent);
     await userEvent.click(screen.getByRole("button", { name: "Foil" }));
 
     expect(
@@ -426,6 +452,7 @@ describe("CollectionPage", () => {
     await waitFor(() => expect(prewarmCollection).toHaveBeenCalledTimes(1));
 
     // A filter click re-renders and re-fetches; the warm must not go again with it.
+    await openTray(userEvent);
     await userEvent.click(screen.getByRole("button", { name: "Foil" }));
     await waitFor(() => expect(collectionList.mock.calls.length).toBeGreaterThan(1));
     expect(prewarmCollection).toHaveBeenCalledTimes(1);
@@ -784,6 +811,7 @@ describe("CollectionPage", () => {
     const banner = screen.getByRole("status", { name: /needs review/i });
     await waitFor(() => expect(banner).toHaveTextContent("3"));
 
+    await openTray(userEvent);
     await userEvent.click(screen.getByRole("button", { name: "Needs review" }));
     await waitFor(() => expect(lastQuery().needsReview).toBe(true));
     expect(banner).toBeEmptyDOMElement();
@@ -872,9 +900,10 @@ describe("CollectionPage", () => {
     wrap(<CollectionPage />);
     await screen.findByText("Lightning Bolt");
 
+    await openTray(userEvent);
     await userEvent.click(screen.getByRole("button", { name: "Etched" }));
     await userEvent.click(screen.getByRole("button", { name: /^LP/ }));
-    await pickOption(user, "Sort", "Highest price");
+    await pickOption(user, "Sort results", "Highest price");
 
     await waitFor(() => {
       const q = lastQuery();
@@ -902,6 +931,19 @@ describe("CollectionPage", () => {
     wrap(<CollectionPage />);
     await screen.findByText("Lightning Bolt");
 
+    // **It opens on the order it is actually in, and `Custom…` is not there to open on.** The
+    // trap this guards has changed shape but not gone away: a controlled `<select>` whose value
+    // matched no option silently reported the **first** one — alphabetically `Highest price`
+    // here — and a `Dropdown` draws its placeholder dash instead. Either way "the sort is name
+    // order" and "the control fell back" look identical on screen, so the trigger's own text is
+    // what tells them apart. Read as text rather than `toHaveValue`, which a `<button>` has none
+    // of: the trigger says the picked row's **label**, not its key.
+    expect(sortSelect()).toHaveTextContent("Name");
+    // Closed, so there are no rows at all — which is the honest form of this assertion now. A
+    // `Dropdown` renders its listbox only while open, so a `queryByRole("option")` here proves
+    // the panel is shut rather than proving `Custom…` is absent from it.
+    expect(screen.queryByRole("option", { name: "Custom…" })).not.toBeInTheDocument();
+
     await user.click(screen.getByRole("button", { name: "Copies" }));
     await waitFor(() => expect(lastQuery().sort).toEqual([{ key: "quantity", dir: "desc" }]));
     // A header the select also offers reads back on it.
@@ -925,7 +967,7 @@ describe("CollectionPage", () => {
     await user.click(screen.getByRole("button", { name: /^Value/ }));
     await waitFor(() => expect(lastQuery().sort).toEqual([{ key: "value", dir: "desc" }]));
     expect(sortSelect()).toHaveTextContent("Custom…");
-    await openDropdown(user, "Sort");
+    await openDropdown(user, "Sort results");
     expect(screen.getByRole("option", { name: "Custom…" })).toHaveAttribute(
       "aria-disabled",
       "true",
@@ -1076,7 +1118,7 @@ describe("CollectionPage", () => {
     wrap(<CollectionPage />);
     await screen.findByText("Card 1");
 
-    await user.click(await screen.findByRole("button", { name: "Export" }));
+    await user.click(await screen.findByRole("button", { name: "Export collection" }));
     await waitFor(() =>
       expect(collectionList).toHaveBeenCalledWith(expect.objectContaining({ limit: 500 })),
     );
@@ -1098,7 +1140,7 @@ describe("CollectionPage", () => {
     wrap(<CollectionPage />);
     await screen.findByText("Lightning Bolt");
 
-    await user.click(screen.getByRole("button", { name: "Import" }));
+    await user.click(screen.getByRole("button", { name: "Import cards" }));
     const dialog = await screen.findByRole("dialog", { name: "Import a decklist" });
     await user.click(within(dialog).getByLabelText("Decklist"));
     await user.paste("1 Sol Ring");
@@ -1170,10 +1212,11 @@ describe("CollectionPage", () => {
 
     // A filter switched on, so there is something real for "everything" to have dropped — the
     // marketplace assertion below is not just "the field was never set to begin with".
+    await openTray(user);
     await user.click(screen.getByRole("button", { name: "Foil" }));
     await waitFor(() => expect(lastQuery().finishes).toEqual(["foil"]));
 
-    await user.click(await screen.findByRole("button", { name: "Export" }));
+    await user.click(await screen.findByRole("button", { name: "Export collection" }));
     await waitFor(() =>
       expect(collectionList).toHaveBeenCalledWith(expect.objectContaining({ limit: 500 })),
     );
@@ -1212,7 +1255,7 @@ describe("CollectionPage", () => {
     await screen.findByText("Lightning Bolt");
     await waitFor(() => expect(lastQuery().marketplace).toBe("tcgplayer"));
 
-    await user.click(await screen.findByRole("button", { name: "Export" }));
+    await user.click(await screen.findByRole("button", { name: "Export collection" }));
     await user.click(
       screen.getByRole("checkbox", { name: "Export everything, ignoring the filters" }),
     );
@@ -1970,6 +2013,159 @@ describe("the collection's folders", () => {
     expect(collectionSetFolder).not.toHaveBeenCalled();
   });
 
+  /* ---------------------------------------------------------------------------------------- *
+   * The wall is a drag source too, and a tile is not one row
+   * ---------------------------------------------------------------------------------------- */
+
+  /**
+   * **A tile's drag means two things at once, and both readers have to answer the same payload.**
+   * The card half is what a deck category and the sidebar's Decks entry have always taken from
+   * this page's *table*; the tile half is what a folder card reads. They travel under different
+   * keys so neither can see the other's — `collectionDrag.ts` carries the argument — and a wall
+   * that carried only one of them would either lose the deck drop or lose the filing.
+   */
+  it("picks a wall tile up as a card and as the rows behind the art at once", async () => {
+    useAppStore.setState({ collectionView: "grid" });
+    collectionList.mockResolvedValue(page([BOLT, { ...BOLT, id: 8, finish: "foil" }]));
+    const { container } = wrap(<CollectionPage />);
+    await screen.findByRole("button", { name: "Lightning Bolt" });
+
+    const tiles = [...container.querySelectorAll('[draggable="true"]')];
+    expect(tiles).toHaveLength(1);
+
+    const carried: Record<string, unknown>[] = [];
+    const stop = monitorForElements({ onDragStart: ({ source }) => carried.push(source.data) });
+    const held = await startDrag(tiles[0], {
+      pressOn: screen.getByRole("button", { name: "Lightning Bolt" }),
+    });
+    await held.cancel();
+    stop();
+
+    expect(carried.map(readDragData)).toEqual([
+      { kind: "card", cardId: "c1", name: "Lightning Bolt", typeLine: "Instant" },
+    ]);
+    // The same payload, read by the other key: both entries behind the art, with where each
+    // one sits — which is what lets a folder refuse the copies already in it.
+    expect(carried.map(readCollectionTileDrag)).toEqual([
+      {
+        cardId: "c1",
+        name: "Lightning Bolt",
+        copies: [
+          { entryId: 7, folderId: null },
+          { entryId: 8, folderId: null },
+        ],
+      },
+    ]);
+  });
+
+  /**
+   * **One row behind the art is not a question**, and this is the common case: most printings are
+   * held once. A dialog here would be a press for a choice with one answer.
+   */
+  it("files a tile that stands for one row without asking", async () => {
+    useAppStore.setState({ collectionView: "grid" });
+    collectionFolderList.mockResolvedValue([BINDER]);
+    collectionList.mockResolvedValue(page([BOLT]));
+    const { container } = wrap(<CollectionPage />);
+    await screen.findByRole("button", { name: "Lightning Bolt" });
+    const binder = (await screen.findByRole("button", { name: /^Trade binder folder/ })).closest(
+      "li",
+    )!;
+
+    const tile = container.querySelector('[draggable="true"]')!;
+    const held = await startDrag(tile, {
+      pressOn: screen.getByRole("button", { name: "Lightning Bolt" }),
+    });
+    await held.over(binder);
+    await held.drop();
+
+    await waitFor(() => expect(collectionSetFolder).toHaveBeenCalledWith(7, 3));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  /**
+   * **The question the wall's drag exists to ask.** A tile merges every entry for one printing
+   * across finishes, conditions, languages and folders, so "file the card" is not something the
+   * app can do without choosing — and choosing on the reader's behalf is the one answer that is
+   * always wrong for somebody. The drag says *where*; only the reader knows *which*.
+   */
+  it("asks which copies when the art stands for more than one row", async () => {
+    useAppStore.setState({ collectionView: "grid" });
+    const user = userEvent.setup();
+    collectionFolderList.mockResolvedValue([BINDER]);
+    collectionList.mockResolvedValue(page([BOLT, { ...BOLT, id: 8, finish: "foil" }]));
+    const { container } = wrap(<CollectionPage />);
+    await screen.findByRole("button", { name: "Lightning Bolt" });
+    const binder = (await screen.findByRole("button", { name: /^Trade binder folder/ })).closest(
+      "li",
+    )!;
+
+    const tile = container.querySelector('[draggable="true"]')!;
+    const held = await startDrag(tile, {
+      pressOn: screen.getByRole("button", { name: "Lightning Bolt" }),
+    });
+    await held.over(binder);
+    await held.drop();
+
+    // Nothing is written by the drop itself: the gesture opened a question.
+    await screen.findByRole("dialog");
+    expect(collectionSetFolder).not.toHaveBeenCalled();
+
+    // **Four, not two** — the button counts *copies* and each of these rows holds two of them.
+    // That is the honest number: a reader is filing cardboard, and "2" over four cards would be
+    // counting the app's rows at them.
+    await user.click(screen.getByRole("button", { name: "Move 4 copies to Trade binder" }));
+    await waitFor(() => expect(collectionSetFolder).toHaveBeenCalledWith(7, 3));
+    expect(collectionSetFolder).toHaveBeenCalledWith(8, 3);
+  });
+
+  /**
+   * **A copy in a deck's group is drawn and refused, never silently dropped.**
+   * `collection_folders::set_entry_folder` answers `ENTRY_IN_A_DECK` for it, and the row says so
+   * rather than merely being missing — a tile that claimed three copies and filed two without a
+   * word is the app losing one behind the reader's back.
+   *
+   * The ring is still raised, because the *other* copy genuinely can move: refusing the whole
+   * tile for one stuck row would strand the copies that have somewhere to go.
+   */
+  it("greys a copy that is in a deck, says what to do instead, and never files it", async () => {
+    useAppStore.setState({ collectionView: "grid" });
+    const user = userEvent.setup();
+    collectionFolderList.mockResolvedValue([BINDER, DECK_GROUP, REMOVED]);
+    collectionList.mockResolvedValue(
+      page([
+        BOLT,
+        { ...BOLT, id: 8, finish: "foil", folderId: 20, folderName: "Mono-Red Aggro" },
+      ]),
+    );
+    const { container } = wrap(<CollectionPage />);
+    await screen.findByRole("button", { name: "Lightning Bolt" });
+    const binder = (await screen.findByRole("button", { name: /^Trade binder folder/ })).closest(
+      "li",
+    )!;
+
+    const tile = container.querySelector('[draggable="true"]')!;
+    const held = await startDrag(tile, {
+      pressOn: screen.getByRole("button", { name: "Lightning Bolt" }),
+    });
+    await held.over(binder);
+    expect(binder.classList.contains("ring-2")).toBe(true);
+    await held.drop();
+
+    await screen.findByRole("dialog");
+    // A regex, because a greyed row's accessible name carries its reason — an exact-name query
+    // reads as "the row is missing" when it is really the reason that moved the name.
+    const stuck = screen.getByRole("checkbox", { name: /Mono-Red Aggro/ });
+    expect(stuck).toBeDisabled();
+    expect(stuck).not.toBeChecked();
+    expect(stuck).toHaveAccessibleName(/Cut the card from the deck/);
+
+    // Two copies rather than four: the deck's row is not counted, because it is not going.
+    await user.click(screen.getByRole("button", { name: "Move 2 copies to Trade binder" }));
+    await waitFor(() => expect(collectionSetFolder).toHaveBeenCalledWith(7, 3));
+    expect(collectionSetFolder).not.toHaveBeenCalledWith(8, 3);
+  });
+
   /**
    * **Issue #209's whole story, in one gesture.** Copies that leave a deck land in
    * `Recently removed` rather than vanishing, and the reader sorts them back into their collection
@@ -2074,7 +2270,7 @@ describe("the collection's folders", () => {
     await user.click(await screen.findByRole("button", { name: /^Trade binder folder/ }));
     await waitFor(() => expect(lastQuery().folderId).toBe(3));
 
-    await user.click(screen.getAllByRole("button", { name: "Export" })[0]);
+    await user.click(screen.getAllByRole("button", { name: "Export collection" })[0]);
 
     const dialog = await screen.findByRole("dialog", { name: /export/i });
     expect(within(dialog).getByText(/in Trade binder/)).toBeInTheDocument();

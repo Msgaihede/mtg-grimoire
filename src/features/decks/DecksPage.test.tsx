@@ -65,6 +65,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 
 import { DecksPage } from "./DecksPage";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
+import { DEFAULT_SECTION_ZOOMS, DEFAULT_ZOOM, ZOOM_SECTIONS } from "@/lib/cardZoom";
 import { useAppStore } from "@/lib/store";
 
 /** A deck with a cover, which is the only kind that can carry an artist credit. */
@@ -260,7 +261,14 @@ beforeEach(() => {
   importReadFile.mockReset().mockResolvedValue("");
   syncStatus.mockReset().mockResolvedValue(SYNCED);
   prefetchImages.mockClear();
-  useAppStore.setState({ openDeckId: null, returnToDeckId: null });
+  // A **copy** of `DEFAULT_SECTION_ZOOMS`, never the constant itself — a case that wrote through
+  // it would resize every wall in every file that has run since. The wall's geometry is a
+  // function of this, so a size left behind by the zoom cases below would follow the whole suite.
+  useAppStore.setState({
+    openDeckId: null,
+    returnToDeckId: null,
+    cardZoom: { ...DEFAULT_SECTION_ZOOMS },
+  });
 });
 
 describe("DecksPage", () => {
@@ -1901,5 +1909,174 @@ describe("the folder row's menu", () => {
     window.removeEventListener("keydown", listen);
 
     expect(heard).toEqual([false]);
+  });
+});
+
+/**
+ * The wall's own zoom — the gesture, what it writes, and the things on screen that read it.
+ *
+ * The gallery is the eighth card section (`lib/cardZoom.ts`) and the first whose tiles are decks
+ * rather than cards. **Persistence is deliberately not tested here**: `useCardZoomPersistence` is
+ * mounted once by `AppShell` and has its own suite, and this screen's whole part in remembering a
+ * size across restarts is writing the right key into the store.
+ */
+describe("DecksPage zoom", () => {
+  /** Every section at its default with `deckGallery` moved — a copy, for the `beforeEach`'s
+   *  reason. */
+  const atZoom = (zoom: number) =>
+    useAppStore.setState({ cardZoom: { ...DEFAULT_SECTION_ZOOMS, deckGallery: zoom } });
+
+  const wall = () => screen.getByRole("list", { name: "Your decks" });
+
+  /**
+   * **The gesture writes the gallery's section and only that one.**
+   *
+   * Driven as a real `wheel` on a tile, which is where a reader's pointer is: the hook attaches a
+   * native non-passive listener to the scroller, so a press that reaches the store from here also
+   * proves the listener is on an ancestor of the tiles rather than on the tile itself.
+   *
+   * The other sections are swept out of `ZOOM_SECTIONS` rather than named, so a ninth section
+   * added later is covered by this the day it exists. `deck` is the one that matters most and it
+   * is in that sweep: it is the editor's cards, its key is one character from this one, and a
+   * page that stepped it would resize a wall the reader cannot see.
+   */
+  it("steps only the deck gallery on a ctrl+wheel over the wall", async () => {
+    const before = useAppStore.getState().zoomPulse;
+
+    wrap(<DecksPage />);
+    fireEvent.wheel(await tileFor("Burn"), { deltaY: -100, ctrlKey: true });
+
+    const { cardZoom, zoomSection, zoomPulse } = useAppStore.getState();
+    expect(cardZoom.deckGallery).toBe(1.1);
+    for (const section of ZOOM_SECTIONS.filter((s) => s !== "deckGallery")) {
+      expect(cardZoom[section]).toBe(DEFAULT_ZOOM);
+    }
+    // What the badge draws itself over. A gesture that stepped the right number while naming the
+    // wrong section would put the figure in another wall's corner.
+    expect(zoomSection).toBe("deckGallery");
+    // One wheel, one pulse — read as a delta, because the counter is the session's and this file
+    // is not the only thing that has run in it.
+    expect(zoomPulse).toBe(before + 1);
+  });
+
+  /**
+   * **A plain wheel is a scroll and nothing else** — the guard the hook returns on before it
+   * measures anything. This wall scrolls for its whole life and zooms for a second of it.
+   */
+  it("leaves the zoom alone on a wheel with no ctrl held", async () => {
+    const before = useAppStore.getState().zoomPulse;
+
+    wrap(<DecksPage />);
+    fireEvent.wheel(await tileFor("Burn"), { deltaY: -100 });
+
+    expect(useAppStore.getState().cardZoom.deckGallery).toBe(DEFAULT_ZOOM);
+    expect(useAppStore.getState().zoomPulse).toBe(before);
+  });
+
+  /**
+   * **The folder tree is not part of the wall**, which is the decision the ref records: the
+   * listener is on the scroller that holds the tiles, not on the view. A gesture over the rail is
+   * therefore the browser's business, and the tree — navigation chrome at a fixed rail width —
+   * has nothing to resize.
+   *
+   * This is the case that pins *where* the listener is. Every other assertion in this block would
+   * pass just as well with it attached to the whole page.
+   */
+  it("ignores a ctrl+wheel over the folder tree", async () => {
+    const before = useAppStore.getState().zoomPulse;
+
+    wrap(<DecksPage />);
+    await tileFor("Burn");
+    fireEvent.wheel(screen.getByRole("navigation", { name: "Folders" }), {
+      deltaY: -100,
+      ctrlKey: true,
+    });
+
+    expect(useAppStore.getState().cardZoom.deckGallery).toBe(DEFAULT_ZOOM);
+    expect(useAppStore.getState().zoomPulse).toBe(before);
+  });
+
+  /**
+   * The wall's geometry is a function of the stored size: the track a tile is drawn in, and the
+   * gutter between two of them. 200 × 1.5 is 300, and the gutter at a zoom above 1 is the same
+   * multiplication — 16 × 1.5 is 24.
+   */
+  it("sizes the wall's tracks and gutter from the stored zoom", async () => {
+    atZoom(1.5);
+
+    wrap(<DecksPage />);
+    await tileFor("Burn");
+
+    expect(wall()).toHaveStyle({
+      gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
+      gap: "24px",
+    });
+  });
+
+  /**
+   * **The gutter has a floor and the track does not**, which is the one asymmetry on this wall: a
+   * gutter is space *between* tiles, and halving it at 0.5× is precisely the zoom a reader chose
+   * in order to fit more decks on screen. The tile itself is a picture and shrinks honestly.
+   */
+  it("shrinks the track below 1x and holds the gutter at its floor", async () => {
+    atZoom(0.5);
+
+    wrap(<DecksPage />);
+    await tileFor("Burn");
+
+    expect(wall()).toHaveStyle({
+      gridTemplateColumns: "repeat(auto-fill, minmax(100px, 1fr))",
+      gap: "16px",
+    });
+  });
+
+  /**
+   * The tiles carry the two variables everything drawn on them reads — the marks' scale, and the
+   * controls' 85% of it (`CONTROL_SHRINK`). Asserted on the `<li>` rather than on the type inside
+   * it because that is where the inheritance starts: a tile that set neither would draw a 14px
+   * name under a doubled crop, and jsdom resolves no `calc` off a variable that is not there.
+   */
+  it("hands both scale variables to a deck tile", async () => {
+    atZoom(1.5);
+
+    wrap(<DecksPage />);
+    const tile = (await tileFor("Burn")).closest("li");
+
+    expect(tile).toHaveStyle({ "--mark-scale": "1.5", "--control-scale": "1.275" });
+  });
+
+  /**
+   * And to a folder card, which needs it for a reason a deck tile does not have: its picture is a
+   * strip of three crops at a **fixed height**, where a tile's cover is a full-width box on an
+   * aspect and follows the grid track for free. A folder card that missed this would be the one
+   * thing on the wall that ignored the gesture.
+   */
+  it("hands both scale variables to a folder card", async () => {
+    withFolders();
+    atZoom(1.5);
+
+    wrap(<DecksPage />);
+    const card = (await screen.findByRole("button", { name: "Commander folder, 2 decks" })).closest(
+      "li",
+    );
+
+    expect(card).toHaveStyle({ "--mark-scale": "1.5", "--control-scale": "1.275" });
+  });
+
+  /**
+   * Filed decks are the same wall behind a disclosure, so one size answers for both — a reader
+   * who opens `Archived` after settling on a size must not find a second wall at 100%.
+   */
+  it("draws the archived wall at the same size", async () => {
+    atZoom(1.5);
+
+    wrap(<DecksPage />);
+    await tileFor("Burn");
+    await userEvent.click(screen.getByRole("button", { name: /^Archived/ }));
+
+    expect(screen.getByRole("list", { name: "Archived decks" })).toHaveStyle({
+      gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
+      gap: "24px",
+    });
   });
 });

@@ -57,5 +57,6 @@
   // it is the half that needs Node types and this half must never see them (see `types`
   // above). `npm run build` runs both.
   "include": ["src"],
+  "exclude": [".claude"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

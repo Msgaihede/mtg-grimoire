@@ -10,21 +10,26 @@ import {
 import { useMutation, useQueryClient, type InfiniteData } from "@tanstack/react-query";
 import { FolderInput, Pencil, Trash2 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
+import { Dialog } from "@/components/Dialog";
 import type { MenuItem } from "@/components/menu/types";
 import { useContextMenu } from "@/components/menu/useContextMenu";
 import { OwnedBadge } from "@/components/OwnedBadge";
-import { buildCardMenu, type CardMenuTarget } from "@/features/card/cardMenu";
+import { buildCardMenu, type CardMenuDeps, type CardMenuTarget } from "@/features/card/cardMenu";
 import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
 import { listWalkStops, usePublishCardWalk } from "@/features/card/cardWalk";
 import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
+import { dragData } from "@/features/decks/dnd";
 import { MoveToFolder } from "@/features/decks/MoveToFolder";
 import { CardGrid, type GridCard } from "@/features/search/CardGrid";
+import { FilterBar, type FilterLabels, type TrayCell } from "@/features/search/FilterBar";
 import { ExportDialog } from "@/features/transfer/export/ExportDialog";
 import { everythingLabel, scopeLabel, useExportScope } from "@/features/transfer/export/scope";
 import { collectionDestination } from "@/features/transfer/import/destinations/CollectionPreview";
+import { ImportExportPair } from "@/features/transfer/ImportExportPair";
 import { ImportDialog } from "@/features/transfer/import/ImportDialog";
+import { CONDITION_LABEL, CONDITIONS } from "@/lib/conditions";
 import { DROP_MARK_ROOM } from "@/lib/dropMarks";
-import { FINISHES, isFinish } from "@/lib/finish";
+import { FINISHES, FINISH_LABEL, isFinish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
 import { buildFolderTree, folderDescendants, type FolderNode } from "@/lib/folderTree";
 import {
@@ -40,11 +45,15 @@ import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { writeFailure } from "@/lib/writes";
 import { CollectionBreadcrumb } from "./CollectionBreadcrumb";
-import { CollectionFilterBar } from "./CollectionFilterBar";
 import { CollectionFolderCard, type CollectionFolderTotals } from "./CollectionFolderCard";
 import { CollectionSummaryHeader } from "./CollectionSummary";
 import { CollectionTable } from "./CollectionTable";
-import type { CollectionDrag } from "./collectionDrag";
+import {
+  collectionTileDragData,
+  type CollectionCopy,
+  type CollectionDrop,
+} from "./collectionDrag";
+import { PickCopies, type CopyChoice } from "./PickCopies";
 import { PinnedFolders, pinnedFolders } from "./PinnedFolders";
 import { useCollection, type Collection } from "./useCollection";
 import { useCollectionFolders, useSetCollectionFolder } from "./useCollectionFolders";
@@ -277,9 +286,29 @@ function rowTarget(row: CollectionRow): CardMenuTarget {
  * honest list a collection row can produce and is also the better one here — an add from this
  * wall is a copy of something already in the binder.
  */
-function tileTarget(tile: CollectionTile): CardMenuTarget {
+/**
+ * A stored grade as the app spells it, or the raw column where it is not one of the five.
+ *
+ * **A loop rather than a cast**, which is the only way to narrow a `string` onto
+ * `CONDITION_LABEL`'s keys without asserting something the column does not guarantee: the
+ * database holds text, and a row written by an import or by an older build may carry a word this
+ * build has never heard of. `lib/finish.ts` publishes an `isFinish` guard for its own column and
+ * `lib/conditions.ts` publishes none, so the narrowing is done here rather than by widening that
+ * module for one caller.
+ */
+function conditionLabel(raw: string): string {
+  for (const condition of CONDITIONS) if (condition === raw) return CONDITION_LABEL[condition];
+  return raw;
+}
+
+function tileTarget(tile: CollectionTile, entryIds: readonly number[] = []): CardMenuTarget {
   return {
     cardId: tile.id,
+    // **The rows behind the art, where a table row names its one `entryId`.** This is what
+    // unlocks `Move to` on a wall tile, and it is a *list* rather than a chosen id for the
+    // reason the paragraph above gives: picking one of them would be the app deciding which
+    // copy the reader meant. `moveItem` asks which when there is more than one.
+    entryIds,
     name: tile.name,
     setCode: tile.setCode,
     collectorNumber: tile.collectorNumber,
@@ -296,6 +325,38 @@ function tileTarget(tile: CollectionTile): CardMenuTarget {
  * so it is the mono face, unemphasised, with no colour and no chrome. Everything loud on
  * this screen is card art, exactly as it is in search.
  */
+/**
+ * What this surface calls its search box, and the `id` stem its labels bind through.
+ *
+ * **`Search your collection` and never the search page's `Search cards`**, which is `FilterLabels`'
+ * whole reason: this box narrows the reader's own binder and that one narrows every printing
+ * Scryfall has published, so one name over both would be the control lying about which list it is
+ * over — and a `getByLabelText` could not tell the two apart.
+ */
+const COLLECTION_LABELS: FilterLabels = {
+  idStem: "collection",
+  search: "Search your collection",
+};
+
+/**
+ * Which of `FilterBar`'s tray cells this page offers, in the order it draws them.
+ *
+ * The four the card search shares, then the three only a collection can ask: what the copy *is*,
+ * what state it is in, and whether a sync left a question against it. The absences are each a fact
+ * about the list rather than an omission — there is no **Owned** pair because every row here is a
+ * copy the reader has, no **All printings** because these *are* their printings, and no **Decks**
+ * because that cell is the deck editor's Collection tab and asks about one deck.
+ */
+const COLLECTION_TRAY: readonly TrayCell[] = [
+  "set",
+  "format",
+  "rarity",
+  "price",
+  "finish",
+  "condition",
+  "needsReview",
+];
+
 export function CollectionPage() {
   const collection = useCollection();
   const { query, summary, rows, total, marketplace, folderId } = collection;
@@ -545,6 +606,81 @@ export function CollectionPage() {
   }, [rows]);
 
   /**
+   * The rows behind each piece of art — the other half of {@link tiles}, kept apart from it
+   * because the wall draws one and the *drag* carries the other.
+   *
+   * A tile is a printing; the entries behind it are what a folder actually files, and they can
+   * differ in finish, condition, language and — the term that makes this a question at all —
+   * **folder**. So the drag hands a folder every one of them and the page decides what to do
+   * with the several ({@link fileCard}), rather than the wall inventing a single id it does not
+   * have.
+   *
+   * **Built from the loaded, filtered rows, which is exactly what the tile claims.** The tile's
+   * copy count is summed from these same rows, so "what moves" and "what the picture says it is"
+   * are one list by construction. A later page of the same printing is not in it — and must not
+   * be: the reader is filing what is on screen.
+   */
+  const copiesByCard = useMemo(() => {
+    const out = new Map<string, CollectionCopy[]>();
+    for (const row of rows) {
+      const held = out.get(row.cardId) ?? [];
+      held.push({ entryId: row.id, folderId: row.folderId });
+      out.set(row.cardId, held);
+    }
+    return out;
+  }, [rows]);
+
+  /**
+   * What a wall tile carries when it is picked up — **two marks in one flat record**, which is
+   * why this is `CardGrid`'s `dragRecord` and not its `dragPayload`.
+   *
+   * The card half is what a deck category and the sidebar's Decks entry have always taken from
+   * the collection's *table* rows; the tile half is what a folder card and a breadcrumb segment
+   * read. Neither reader can see the other's key, which is `collectionDrag.ts`'s whole argument.
+   *
+   * `null` for a printing with no loaded row — impossible while the tile is drawn from those very
+   * rows, and answered rather than asserted, because `CardGrid` reads this once at attach and
+   * again at `dragstart` and a `null` there is honestly "this cannot be picked up".
+   *
+   * Its identity moves only with {@link copiesByCard}, i.e. when the rows change — never on a
+   * bare re-render, which is what `CardGrid`'s own note asks for: a fresh arrow every render
+   * tears the registration down and rebuilds it on every scrolled row.
+   */
+  /** The rows behind one tile, as the ids a menu target carries. */
+  const entryIdsOf = useCallback(
+    (tile: CollectionTile) => (copiesByCard.get(tile.id) ?? []).map((copy) => copy.entryId),
+    [copiesByCard],
+  );
+
+  const tileDrag = useCallback(
+    (tile: CollectionTile): Record<string, unknown> | null => {
+      const copies = copiesByCard.get(tile.id) ?? [];
+      if (copies.length === 0) return null;
+      return {
+        ...dragData({
+          kind: "card",
+          cardId: tile.id,
+          name: tile.name,
+          typeLine: tile.typeLine,
+        }),
+        ...collectionTileDragData({ cardId: tile.id, name: tile.name, copies }),
+      };
+    },
+    [copiesByCard],
+  );
+
+  /**
+   * The question a drop asks when the tile it was given stands for more than one row, or `null`
+   * while nothing is being asked — the destination travels with it, because the folder card that
+   * took the drop is gone from the conversation by the time the reader answers.
+   */
+  const [picking, setPicking] = useState<{
+    cardName: string;
+    entryIds: readonly number[];
+    folderId: number | null;
+  } | null>(null);
+
+  /**
    * The collection as a **walk**, so the printings modal's chevrons and arrow keys step along it.
    *
    * **Built from {@link tiles} rather than from `rows`, and that is the honest source of the
@@ -584,8 +720,43 @@ export function CollectionPage() {
    * entries behind it are orphans — `CollectionRow.oracleId` is what makes that distinction
    * reachable, and it is passed through untouched by both adapters above.
    */
+  /**
+   * The menu's half of the same question the drag asks — `Move to → <folder>` on a wall tile.
+   *
+   * **The same dialog, opened from the other door.** `collection-folders.md` records that these
+   * two gestures have already drifted once, when the menu's settle set took `["decks"]` and the
+   * drag's did not; a second implementation of "which copies?" is the same mistake one layer up,
+   * so the row hands its ids here and this sets the very state a drop sets.
+   *
+   * The name is read off the first row rather than passed down: `moveItem` knows entry ids and
+   * nothing about printings, and the list is the page's.
+   */
+  const pickCopies = useCallback(
+    (entryIds: readonly number[], folderId: number | null) => {
+      const first = rows.find((row) => row.id === entryIds[0]);
+      setPicking({
+        cardName: first?.name ?? "these copies",
+        entryIds,
+        folderId,
+      });
+    },
+    [rows],
+  );
+
   const { menu, menuKey, menuClick } = useContextMenu();
-  const { deps: menuDeps, error: menuFailure } = useCardMenuDeps();
+  const { deps: baseMenuDeps, error: menuFailure } = useCardMenuDeps();
+  /**
+   * The app-wide deps plus the one write only this page can offer.
+   *
+   * `pickCopies` is here rather than in `useCardMenuDeps` because it is a fact about *this
+   * surface's targets*: a wall tile stands for several `collection_entries` rows, and no other
+   * surface in the app draws a target that does. Every other page leaves it out and `moveItem`
+   * files directly, exactly as it always has.
+   */
+  const menuDeps = useMemo<CardMenuDeps>(
+    () => ({ ...baseMenuDeps, pickCopies }),
+    [baseMenuDeps, pickCopies],
+  );
   /** One row's handler. The item list is a **thunk** inside `menu`, so a list of a thousand
    *  pays for nothing until a reader actually right-clicks one of them. */
   const rowMenu = useCallback(
@@ -600,15 +771,23 @@ export function CollectionPage() {
   );
   const tileMenu = useCallback(
     (tile: CollectionTile, picked: readonly CollectionTile[] = []) =>
-      menu(() => buildCardMenu(tileTarget(tile), { ...menuDeps, picked: picked.map(tileTarget) })),
-    [menu, menuDeps],
+      menu(() =>
+        buildCardMenu(tileTarget(tile, entryIdsOf(tile)), {
+          ...menuDeps,
+          picked: picked.map((one) => tileTarget(one, entryIdsOf(one))),
+        }),
+      ),
+    [menu, menuDeps, entryIdsOf],
   );
   const tileMenuKey = useCallback(
     (tile: CollectionTile, picked: readonly CollectionTile[] = []) =>
       menuKey(() =>
-        buildCardMenu(tileTarget(tile), { ...menuDeps, picked: picked.map(tileTarget) }),
+        buildCardMenu(tileTarget(tile, entryIdsOf(tile)), {
+          ...menuDeps,
+          picked: picked.map((one) => tileTarget(one, entryIdsOf(one))),
+        }),
       ),
-    [menuKey, menuDeps],
+    [menuKey, menuDeps, entryIdsOf],
   );
 
   /**
@@ -758,7 +937,7 @@ export function CollectionPage() {
    * day want the last one.
    *
    * The filter box is what makes this safe to have at all rather than a courtesy laid over it —
-   * `clearFieldOnEscape` in `CollectionFilterBar` — because Chromium empties an
+   * `clearFieldOnEscape` in `FilterBar` — because Chromium empties an
    * `<input type="search">` on Escape by itself and does **not** mark the press handled, so
    * without it one press would clear the box *and* walk the reader up a level.
    */
@@ -921,19 +1100,101 @@ export function CollectionPage() {
    * transaction. `Recently removed` is deliberately not in this set, at either end: dragging
    * *out* of the holding area is the whole of what #209 asked for.
    */
-  const canFile = useCallback(
-    (drag: CollectionDrag, to: number | null) => {
-      if (drag.folderId === to) return false;
+  const canMoveCopy = useCallback(
+    (from: number | null, to: number | null) => {
+      if (from === to) return false;
       if (to !== null && !userFolderIds.has(to)) return false;
-      return drag.folderId === null || !deckGroupIds.has(drag.folderId);
+      return from === null || !deckGroupIds.has(from);
     },
     [userFolderIds, deckGroupIds],
   );
+  /**
+   * The same three clauses asked of whichever shape is in the air.
+   *
+   * **A tile is taken when *any* copy behind it could move, never only when all of them could.**
+   * A printing a reader holds in two finishes, one of them already in this drawer, is the
+   * ordinary case — and a folder that refused the whole tile for it would strand the copy that
+   * genuinely has somewhere to go. Which of them actually moves is {@link fileCard}'s question,
+   * and where more than one row is behind the art the reader answers it rather than the page.
+   */
+  const canFile = useCallback(
+    (drop: CollectionDrop, to: number | null) =>
+      drop.kind === "entry"
+        ? canMoveCopy(drop.entry.folderId, to)
+        : drop.tile.copies.some((copy) => canMoveCopy(copy.folderId, to)),
+    [canMoveCopy],
+  );
+  /**
+   * The write, or the question that has to come before it.
+   *
+   * A table row is one entry and files straight away — the gesture has already said everything
+   * there is to say. A wall tile files straight away too **when it stands for a single row**,
+   * which is the common case and the one where a dialog would be a press for a choice with one
+   * answer. More than one row behind the art is the case the app cannot decide: the copies differ
+   * in finish, condition, language and folder, the reader can see none of that on a piece of
+   * card art, and choosing for them is the one answer that is always wrong for somebody.
+   */
   const fileCard = useCallback(
-    (drag: CollectionDrag, to: number | null) =>
-      setFolder.mutate({ entryId: drag.entryId, folderId: to }),
+    (drop: CollectionDrop, to: number | null) => {
+      if (drop.kind === "entry") {
+        setFolder.mutate({ entryId: drop.entry.entryId, folderId: to });
+        return;
+      }
+      const { copies, name } = drop.tile;
+      if (copies.length === 1) {
+        setFolder.mutate({ entryId: copies[0].entryId, folderId: to });
+        return;
+      }
+      setPicking({ cardName: name, entryIds: copies.map((copy) => copy.entryId), folderId: to });
+    },
     [setFolder],
   );
+
+  /**
+   * Why one copy cannot go where the reader pointed, or `null` when it can — the sentence the
+   * picker greys a row with.
+   *
+   * **Both refusals are the backend's, said early.** `collection_folders::set_entry_folder`
+   * answers `ENTRY_IN_A_DECK` for a row sitting in a deck's group, and the wording here is that
+   * sentence's job rather than a paraphrase of it: it names what to do instead, because there is
+   * something to do. "Already there" is not a refusal the backend makes at all — it would write
+   * the row back where it is and bump `updated_at` — and it is drawn because a row the reader
+   * cannot usefully tick has to say why it is not ticked.
+   */
+  const blockedReason = useCallback(
+    (row: CollectionRow, to: number | null): string | null => {
+      if (row.folderId === to) return `Already in ${folderNameOf(to) ?? ROOT_LABEL}.`;
+      if (row.folderId !== null && deckGroupIds.has(row.folderId)) {
+        return `In ${row.folderName ?? "a deck"}. Cut the card from the deck to get it back.`;
+      }
+      return null;
+    },
+    [deckGroupIds, folderNameOf],
+  );
+
+  /** The rows the open question is about, drawn from the list rather than from the drag: the
+   *  payload carries ids and folders, and a reader needs the finish, the grade and the count. */
+  const pickChoices = useMemo<CopyChoice[]>(() => {
+    if (picking === null) return [];
+    const byId = new Map(rows.map((row) => [row.id, row]));
+    return picking.entryIds.flatMap((entryId) => {
+      const row = byId.get(entryId);
+      // A row that has left the list under an open dialog — another surface removed it, or a
+      // refetch dropped it. Left out rather than drawn as an unnamed line.
+      if (row === undefined) return [];
+      return [
+        {
+          entryId,
+          finish: isFinish(row.finish) ? FINISH_LABEL[row.finish] : row.finish,
+          condition: conditionLabel(row.condition),
+          lang: row.lang,
+          quantity: row.quantity,
+          folderName: row.folderName,
+          blocked: blockedReason(row, picking.folderId),
+        },
+      ];
+    });
+  }, [picking, rows, blockedReason]);
 
   const failure = query.isError ? ipcError(query.error) : null;
   // The *latest* write on the screen, not whichever is still holding an error: with `isError` on
@@ -1011,7 +1272,22 @@ export function CollectionPage() {
           header below says what this view is far better than a title would. */}
       <h2 className="sr-only">Collection</h2>
 
-      <CollectionSummaryHeader summary={summary.data} marketplace={marketplace} />
+      <CollectionSummaryHeader
+        summary={summary.data}
+        marketplace={marketplace}
+        // The band's far end, where they used to sit beside the filter row — see `FigureRow`,
+        // which is where the placement is argued. The names say *what* is moved, because both
+        // dialogs carry a control called `Import` and two of those on one screen is a pair a
+        // screen reader can only tell apart by position.
+        actions={
+          <ImportExportPair
+            onImport={() => setImporting(true)}
+            onExport={() => setExporting(true)}
+            importLabel="Import cards"
+            exportLabel="Export collection"
+          />
+        }
+      />
 
       {/* The region is mounted for the life of the view and the banner is swapped into it: a
           live region that appears together with its own text announces nothing, because there
@@ -1050,49 +1326,53 @@ export function CollectionPage() {
         )}
       </div>
 
-      <div className="flex flex-wrap items-start gap-2">
-        <div className="min-w-0 flex-1">
-          <CollectionFilterBar collection={collection} onNewFolder={openNewFolder} />
-        </div>
-        {/* The first export entry point outside the deck editor (Task 11); Import beside it
-            since Task 14, over `collectionDestination` — the collection's own bulk-import
-            planner and preview. */}
-        <div className="flex shrink-0 items-center gap-2">
-          <button
-            type="button"
-            onClick={() => setImporting(true)}
-            className={cn(
-              "h-8 rounded-md border border-border px-3 text-sm hover:bg-surface",
-              FOCUS,
-            )}
-          >
-            Import
-          </button>
-          <button
-            type="button"
-            onClick={() => setExporting(true)}
-            className={cn(
-              "h-8 rounded-md border border-border px-3 text-sm hover:bg-surface",
-              FOCUS,
-            )}
-          >
-            Export
-          </button>
-        </div>
-      </div>
+      {/* The same row the search and the Tags page draw, over this page's own hook — see
+          `FilterBar`, whose prop is a structural `FilterSurface` that `useCollection` satisfies.
+          What was a bespoke two-line row of fourteen controls is the shared four-on-the-bar plus a
+          tray, so a reader who has learned that row once does not have to learn it again here. */}
+      <FilterBar
+        search={collection}
+        labels={COLLECTION_LABELS}
+        sortRows={collection.sortRows}
+        tray={COLLECTION_TRAY}
+        layoutFor="collection"
+      />
 
       <div className="flex min-h-0 flex-1 flex-col gap-2">
-        {hasFolders && (
-          <CollectionBreadcrumb
-            // Root-most first and **without the root**, which the breadcrumb prepends itself:
-            // `null` is a destination rather than a folder, and only that component knows what it
-            // calls it.
-            trail={trail}
-            onOpen={collection.openFolder}
-            canDrop={canFile}
-            onDropCard={fileCard}
-          />
-        )}
+        {/* **The cabinet's own controls, and they are deliberately not in the filter row.**
+            Where the reader is standing and what drawers exist are navigation rather than a
+            narrowing — `useCollection.folderId` says so, and `resetAll` leaves both alone — so a
+            `+ New folder` among the filters would be the one control in that row that Reset all
+            could not undo. It sits with the breadcrumb and the folder cards instead, which is
+            where the thing it makes appears. */}
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          {hasFolders && (
+            <div className="min-w-0 flex-1">
+              <CollectionBreadcrumb
+                // Root-most first and **without the root**, which the breadcrumb prepends itself:
+                // `null` is a destination rather than a folder, and only that component knows what
+                // it calls it.
+                trail={trail}
+                onOpen={collection.openFolder}
+                canDrop={canFile}
+                onDropCard={fileCard}
+              />
+            </div>
+          )}
+          {/* Always drawn, unlike the wishlist's twin, which hides while the list is flattened:
+              there is no flattened state here to hide from, and a new folder is made **inside the
+              one the reader is standing in** — which at the root is the top level. */}
+          <button
+            type="button"
+            onClick={(e) => openNewFolder(e.currentTarget)}
+            className={cn(
+              "ml-auto h-8 shrink-0 rounded-md border border-border px-3 text-sm hover:bg-surface",
+              FOCUS,
+            )}
+          >
+            + New folder
+          </button>
+        </div>
 
         {/* **One strip for all four folder layers, and it is not a placement decision so much as
             the only place there is.** Every other anchored layer in this app hangs off a
@@ -1300,10 +1580,15 @@ export function CollectionPage() {
               // search is not asking for a binder at 2× as well. `CardGrid`'s `zoomSection`
               // carries why it is required rather than defaulted.
               zoomSection="collection"
-              // Ctrl and Shift build a set of tiles (issue #214). This wall passes no
-              // `dragPayload` — see `CardGrid` for why the collection's *rows* are the drag
-              // source and its tiles are not — so what a set does here is put the card menu in
-              // the plural rather than start a multi-card drag.
+              // **The wall is a drag source now**, through `dragRecord` rather than
+              // `dragPayload`: a tile's drag means two things at once — a card, for the deck
+              // categories and the sidebar's Decks entry that have always taken one from this
+              // page's *table*; and the several `collection_entries` rows the wall summed into
+              // one piece of art, for a folder card and a breadcrumb segment. Two marks in one
+              // flat record is what that slot carries, and the wishlist's tiles reached the
+              // shape first. See {@link tileDrag}.
+              dragRecord={tileDrag}
+              // Ctrl and Shift build a set of tiles (issue #214).
               selectionScope="collection"
               selectedId={selectedCardId}
               onSelect={selectCard}
@@ -1352,6 +1637,45 @@ export function CollectionPage() {
             </>
           ))}
       </div>
+
+      {/* The question a drop or a `Move to` asks when the art stands for more than one row.
+          A **centred modal** rather than an anchored panel, which is `src/CLAUDE.md`'s rule for a
+          surface that is *consulted* — and here it is also the only shape both doors can use: a
+          drop has no opener element to anchor to, and the menu's panel has already closed by the
+          time a row's handler runs.
+
+          Keyed on what is being asked, because `PickCopies` seeds its ticks **mount-only**: two
+          drops in a row onto different folders are two questions, and a panel that kept the first
+          one's ticks would answer the second with the wrong rows. */}
+      <Dialog
+        open={picking !== null}
+        title="Which copies?"
+        closeLabel="Close the copy picker"
+        width="w-[30rem]"
+        onDismiss={() => setPicking(null)}
+        onClose={() => setPicking(null)}
+      >
+        {picking !== null && (
+          <PickCopies
+            key={`${picking.entryIds.join(",")}:${String(picking.folderId)}`}
+            cardName={picking.cardName}
+            destination={folderNameOf(picking.folderId) ?? ROOT_LABEL}
+            copies={pickChoices}
+            onConfirm={(entryIds) => {
+              // One write per copy, the loop `cardMenu.tsx`'s multi-picked `Move to` already
+              // makes: `collection_set_folder` addresses one row, and it **merges** rather than
+              // failing when the destination already holds the same eleven-column grain — so two
+              // copies of one printing landing in one drawer become one row with the quantities
+              // summed, which is the same thing that happens when the reader does it by hand.
+              for (const entryId of entryIds) {
+                setFolder.mutate({ entryId, folderId: picking.folderId });
+              }
+              setPicking(null);
+            }}
+            onCancel={() => setPicking(null)}
+          />
+        )}
+      </Dialog>
 
       {/* Mounted unconditionally, the same shape every other dialog in this app is — `Dialog`
           itself renders nothing while closed, and staying in the tree is what lets its scrim

@@ -1,7 +1,10 @@
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
+import { DEFAULT_SECTION_ZOOMS } from "@/lib/cardZoom";
 import { ipc } from "@/lib/ipc";
+import { useAppStore } from "@/lib/store";
 import { DecksPage } from "./DecksPage";
 
 /**
@@ -502,5 +505,53 @@ export const Busy: Story = {
     // Nothing was copied, and nothing else moved.
     await expect(canvas.queryByText("Modern Goodstuff (copy)")).toBeNull();
     await expect(canvas.getByText("Kenrith Two-Drops")).toBeInTheDocument();
+  },
+};
+
+/**
+ * The wall at 150%, which is what a ctrl+wheel over it leaves behind.
+ *
+ * The gallery is the eighth card section in `lib/cardZoom.ts` and the first whose tiles are decks
+ * rather than cards, so what the number sizes here is a 626px art crop and the four lines under
+ * it rather than a 5:7 face. **Both halves are the story**: the grid track, which is what turns a
+ * zoom into *fewer, larger* tiles rather than into bigger boxes; and the type on a tile, which
+ * follows the same number through the two inherited variables `cardScaleVars` sets on each
+ * `<li>`. A wall that scaled only its tracks would draw a doubled picture with a 14px name stuck
+ * under it.
+ *
+ * The size is written **during render** rather than in an effect — the lever
+ * `CardZoomIndicator.stories.tsx` uses, for its reason: an effect runs after the first paint, so
+ * the wall would be shown at 100% for a frame on its way to this. `zoomPulse` and `zoomSection`
+ * are left alone, so no badge is on screen: this story is the wall at a size, not the gesture
+ * that got it there.
+ *
+ * **Its own frame, because `useAppStore` is a module singleton.** Every other story on this page
+ * renders the same component inline, so a write during render here would be the last writer and
+ * would silently resize all of them (`.storybook/CLAUDE.md`).
+ */
+function ZoomedWall() {
+  useState(() => {
+    useAppStore.setState({ cardZoom: { ...DEFAULT_SECTION_ZOOMS, deckGallery: 1.5 } });
+  });
+  return <DecksPage />;
+}
+
+export const Zoomed: Story = {
+  render: () => <ZoomedWall />,
+  parameters: { docs: { story: { inline: false, height: "680px" } } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const wall = await canvas.findByRole("list", { name: "Your decks" });
+
+    // 200 × 1.5 for the track; the gutter takes `atLeast`, which above 1× is the same
+    // multiplication — 16 × 1.5.
+    await expect(wall).toHaveStyle({
+      gridTemplateColumns: "repeat(auto-fill, minmax(300px, 1fr))",
+      gap: "24px",
+    });
+    // And the tile's own chrome, which is the half a track cannot show: the marks' scale, and the
+    // controls' 85% of it.
+    const tile = canvas.getByText("Modern Goodstuff").closest("li");
+    await expect(tile).toHaveStyle({ "--mark-scale": "1.5", "--control-scale": "1.275" });
   },
 };

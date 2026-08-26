@@ -6,5 +6,22 @@
     "moduleResolution": "bundler",
     "allowSyntheticDefaultImports": true
   },
+  /* **`vite.config.ts` alone, and nothing under `src/` may join it — least of all
+     `src/lib/iconFont.ts`, which `vite.config.ts` imports.**
+
+     `composite: true` makes every file listed here an *output* of a referenced project, and
+     the root `tsconfig.json` includes `src`. List a file in both and `tsc` demands the built
+     declaration beside it: `error TS6305: Output file 'src/lib/iconFont.d.ts' has not been
+     built from source file 'src/lib/iconFont.ts'` — with `include pattern 'src'` named as the
+     reason. Nothing ever builds this project (see below), so that `.d.ts` cannot exist and
+     `npm run build` fails on a clean checkout. It shipped that way in `798e25e` and took
+     `main`'s CI red on two consecutive pushes.
+
+     The import is checked by nothing today and that is the honest reading of this file:
+     `npm run build` is `tsc && tsc -p .storybook && vite build`, so no script compiles this
+     project at all and the reference in `tsconfig.json` is a declared relationship rather
+     than a check. Vite type-strips its own config. If `vite.config.ts` is ever to be
+     genuinely type-checked, the way in is a build step of its own — not a wider `include`
+     here, which is the thing that breaks. */
   "include": ["vite.config.ts"]
 }

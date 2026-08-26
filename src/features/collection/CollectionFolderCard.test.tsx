@@ -8,7 +8,13 @@ import type { CollectionFolder } from "@/lib/ipc";
 import { startDrag } from "@/test-drag";
 import { CollectionBreadcrumb } from "./CollectionBreadcrumb";
 import { CollectionFolderCard, type CollectionFolderTotals } from "./CollectionFolderCard";
-import { collectionDraggable, type CollectionDrag } from "./collectionDrag";
+import {
+  collectionDraggable,
+  collectionTileDraggable,
+  type CollectionDrag,
+  type CollectionDrop,
+  type CollectionTileDrag,
+} from "./collectionDrag";
 
 /**
  * The two things the collection page draws around its cards: the dashed folder tile a reader
@@ -28,6 +34,23 @@ import { collectionDraggable, type CollectionDrag } from "./collectionDrag";
  */
 
 const ENTRY: CollectionDrag = { entryId: 7, name: "Lightning Bolt", folderId: null };
+
+/** What the *wall* offers, where the table offers {@link ENTRY}: one printing and every copy the
+ *  tile summed — here two, filed in two different places, which is the whole reason a tile needs a
+ *  payload of its own. */
+const TILE: CollectionTileDrag = {
+  cardId: "c1",
+  name: "Lightning Bolt",
+  copies: [
+    { entryId: 7, folderId: null },
+    { entryId: 8, folderId: 3 },
+  ],
+};
+
+/** What each source's drop arrives as, once `readCollectionDrop` has read it — spelled once,
+ *  because these are the two sentences every target below is asserted against. */
+const ENTRY_DROP: CollectionDrop = { kind: "entry", entry: ENTRY };
+const TILE_DROP: CollectionDrop = { kind: "tile", tile: TILE };
 
 function folder(
   over: Partial<CollectionFolder> & { id: number; name: string },
@@ -78,6 +101,29 @@ function Source({ entry = ENTRY }: { entry?: CollectionDrag }) {
   return <div ref={ref}>the copy</div>;
 }
 
+/**
+ * The wall's source beside the table's: `collectionTileDraggable`, so the tile payload travels the
+ * way the collection page's grid view sends it — the printing plus every copy behind it, under its
+ * own key, with the card half beside it exactly as a row carries one.
+ *
+ * A second source rather than a parameter on {@link Source}, because the point of every test below
+ * that uses it is that **the same target** takes two different payloads without knowing which one
+ * it is about to get.
+ */
+function TileSource({ tile = TILE }: { tile?: CollectionTileDrag }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    return collectionTileDraggable({
+      element,
+      tile: () => tile,
+      card: () => ({ kind: "card", cardId: tile.cardId, name: tile.name, typeLine: "Instant" }),
+    });
+  }, [tile]);
+  return <div ref={ref}>the tile</div>;
+}
+
 const onOpen = vi.fn();
 const onDropCard = vi.fn();
 const onContextMenu = vi.fn();
@@ -98,15 +144,20 @@ describe("CollectionFolderCard", () => {
     currency = "usd" as const,
     canDrop = () => true,
     withSource = false,
+    withTile = false,
   }: {
     summary?: CollectionFolderTotals | null;
     currency?: "usd" | "eur";
-    canDrop?: (drag: CollectionDrag) => boolean;
+    canDrop?: (drop: CollectionDrop) => boolean;
     withSource?: boolean;
+    /** The wall's tile in the air instead of the table's row — the same card, offered under the
+     *  other key. */
+    withTile?: boolean;
   } = {}) {
     render(
       <>
         {withSource && <Source />}
+        {withTile && <TileSource />}
         {/* Inside a `<ul>`, because the card is an `<li>` — `FolderCard`'s shape, and a row of
             folders genuinely is a list. */}
         <ul>
@@ -257,7 +308,54 @@ describe("CollectionFolderCard", () => {
     const held = await startDrag(screen.getByText("the copy"));
     await held.over(card());
     await held.drop();
-    expect(onDropCard).toHaveBeenCalledWith(ENTRY);
+    expect(onDropCard).toHaveBeenCalledWith(ENTRY_DROP);
+  });
+
+  /**
+   * The wall's tile is the other half of the same contract: one target, two payloads, and the card
+   * knowing which only because the drop says so. Every copy travels — the tile is what the reader
+   * grabbed, and dropping it half way would leave copies behind with nothing on screen saying so.
+   */
+  it("takes a whole tile too, and hands every copy behind it to the page", async () => {
+    mount({ withTile: true });
+    const held = await startDrag(screen.getByText("the tile"));
+    expect(marked(card(), DROP_RING)).toBe(true);
+
+    await held.over(card());
+    await held.drop();
+    expect(onDropCard).toHaveBeenCalledWith(TILE_DROP);
+  });
+
+  /**
+   * **`canDrop` is asked again on the drop itself**, which is what the hook's own comment claims
+   * and what nothing else here can see: the library never delivers a drop to a target that refused
+   * at `dragover`, so every other refusal test in this file passes whether that second question is
+   * asked or not. A policy that changes its mind *mid-drag* is the only way to reach the line —
+   * and it is not a contrivance, because the two questions can be a second apart with a refetch
+   * between them, and only the second one writes.
+   */
+  it("asks again at the drop, and refuses a copy it has stopped taking", async () => {
+    let takes = true;
+    mount({ withSource: true, canDrop: () => takes });
+    const held = await startDrag(screen.getByText("the copy"));
+    await held.over(card());
+    expect(marked(card().querySelector("button"), DROP_OVER)).toBe(true);
+
+    takes = false;
+    await held.drop();
+    expect(onDropCard).not.toHaveBeenCalled();
+  });
+
+  /** The card is dumb about the difference and the *page* is not: a policy that answers only for
+   *  rows leaves a tile with no ring at all, which is the discriminant doing its job. */
+  it("lets the page refuse one shape and take the other", async () => {
+    mount({ withTile: true, canDrop: (drop) => drop.kind === "entry" });
+    const held = await startDrag(screen.getByText("the tile"));
+    expect(marked(card(), DROP_RING)).toBe(false);
+
+    await held.over(card());
+    await held.drop();
+    expect(onDropCard).not.toHaveBeenCalled();
   });
 });
 
@@ -266,14 +364,17 @@ describe("CollectionBreadcrumb", () => {
     trail = [BINDER, FOILS] as readonly CollectionFolder[],
     canDrop = () => true,
     withSource = false,
+    withTile = false,
   }: {
     trail?: readonly CollectionFolder[];
-    canDrop?: (drag: CollectionDrag, folderId: number | null) => boolean;
+    canDrop?: (drop: CollectionDrop, folderId: number | null) => boolean;
     withSource?: boolean;
+    withTile?: boolean;
   } = {}) {
     render(
       <>
         {withSource && <Source />}
+        {withTile && <TileSource />}
         <CollectionBreadcrumb
           trail={trail}
           onOpen={onOpen}
@@ -319,7 +420,7 @@ describe("CollectionBreadcrumb", () => {
     await held.over(root);
     expect(marked(root, DROP_OVER)).toBe(true);
     await held.drop();
-    expect(onDropCard).toHaveBeenCalledWith(ENTRY, null);
+    expect(onDropCard).toHaveBeenCalledWith(ENTRY_DROP, null);
   });
 
   it("takes a copy dropped on an ancestor and moves it up", async () => {
@@ -327,7 +428,31 @@ describe("CollectionBreadcrumb", () => {
     const held = await startDrag(screen.getByText("the copy"));
     await held.over(screen.getByRole("button", { name: "Trade binder" }));
     await held.drop();
-    expect(onDropCard).toHaveBeenCalledWith(ENTRY, 3);
+    expect(onDropCard).toHaveBeenCalledWith(ENTRY_DROP, 3);
+  });
+
+  /** The way back out has to work for a tile as well, or the wall's drag is one-way: a reader who
+   *  filed a printing three folders down by dragging would have to reach for the menu to undo it. */
+  it("takes a whole tile dropped on the root and un-files every copy", async () => {
+    mount({ withTile: true });
+    const root = screen.getByRole("button", { name: "Collection" });
+    const held = await startDrag(screen.getByText("the tile"));
+    expect(marked(root, DROP_RING)).toBe(true);
+
+    await held.over(root);
+    await held.drop();
+    expect(onDropCard).toHaveBeenCalledWith(TILE_DROP, null);
+  });
+
+  /** One `canDrop` per segment *and* per shape — the page can answer differently about a tile at
+   *  the root than about the same tile on an ancestor, and only it knows why. */
+  it("asks the page about each segment separately for a tile too", async () => {
+    mount({ withTile: true, canDrop: (drop, folderId) => drop.kind === "tile" && folderId === 3 });
+    const held = await startDrag(screen.getByText("the tile"));
+    expect(marked(screen.getByRole("button", { name: "Trade binder" }), DROP_RING)).toBe(true);
+    expect(marked(screen.getByRole("button", { name: "Collection" }), DROP_RING)).toBe(false);
+
+    await held.cancel();
   });
 
   it("offers no drop on the folder the reader is already standing in", async () => {

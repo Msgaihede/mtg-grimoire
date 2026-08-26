@@ -653,6 +653,20 @@ reader to configure the deck they had just made; it now asks all of them.
   which rows are the deck they designed and which are the proxies and stand-ins waiting to be
   replaced. `TheoryMatchMark` — a tick in `CountTag`'s own banner, top-right — says it, on all four
   views, and `TheoryMatchBadge` is the same fact for the two that draw no art.
+  **Since 2026-08-26 it says *how far off* the count is as well** (issue #212): a card the plan
+  asks for a different number of draws `+2` or `-8` in place of the tick, in the same box and the
+  same azure, and the tick is what the **matching** card wears. The two are never drawn together —
+  a tick beside a `-8` is two clauses of one sentence in a 25px box. Two rules carry it and both
+  live in `theoryMatch.ts`: the difference is `live − planned` at the **slot's** grain, with both
+  sides summed across their piles before they are subtracted (per-row arithmetic draws `-1` and
+  `-4` on a plan of 4-in-Main + 1-in-Sideboard the reader has got exactly right), and there is no
+  difference at all unless one side is above one, which is what keeps the number off every card of
+  a singleton deck. `deckTheorySlots` grew a `quantity` for it and folds its rows in the SQL.
+  **The box's width moved with it** and that is issue #212's other half: #182's `6/1` paddings left
+  the mark visibly the smaller of the strip's two bookends, so `COUNT_TAG_BOX_MIRRORED` is `8/3`
+  over a `min-w` of one digit's advance plus `COUNT_TAG_BOX`'s own paddings — the quantity tag's
+  width holding a single digit, by construction. Paddings alone could not settle it, because the
+  content is a glyph on one card and two characters on the next.
   **The grain is `(cardId, finish)` and deliberately not the category**: a card planned as Ramp and
   sleeved into Main deck is still the card that was planned, and a mark that went dark because a
   pile was renamed is a mark nobody can learn to trust. `finish` is read **raw**, never through
@@ -673,18 +687,20 @@ reader to configure the deck they had just made; it now asks all of them.
   not apply: what was removed re-implemented the comparison `deck_theory_diff` owns (it counted
   disagreement on `(categoryId, cardId)`, both directions, so a card filed in two piles scored
   twice), while this asks for rows no command answers. The **cost** half is answered by the
-  command: two columns of one indexed scan, no join to `cards`, no prices, no owned roll-up,
+  command: three columns of one indexed scan, no join to `cards`, no prices, no owned roll-up,
   no marketplace — against a `deck_get` that does all four. It is enabled only when
   `theoryEnabled && variant === "live"`, so a deck with no plan and the whole Theory tab pay
   nothing at all.
-  `undefined` rather than an empty set is the other distinction `theoryMatchSet` keeps: no plan is
-  not the same statement as a plan that wants none of this.
+  `undefined` rather than an empty map is the other distinction `theoryMatchPlan` keeps: no plan
+  is not the same statement as a plan that wants none of this — and `null` rather than `0` is the
+  same distinction one level down, in `theoryMatchDelta`, where `0` is the card that matches and
+  draws the tick.
   **That `enabled` is a statement about _cost_ and never about the mark, and reading it as both
   was issue #159.** A disabled `useQuery` still serves whatever sits in the cache under its key,
   and the key is `["decks", "theorySlots", deckId]` — the **deck's**, deliberately, so both tabs
   share one entry — so pressing `Theory` after Live had loaded carried Live's answer over and
   ticked every row of the plan, which matches it by definition. The gate that means it lives on
-  the **derivation** in `DeckEditor` (`variant === "live" ? theoryMatchSet(…) : undefined`);
+  the **derivation** in `DeckEditor` (`variant === "live" ? theoryMatchPlan(…) : undefined`);
   `enabled` promises only that no query is spent. It read as intermittent because it needs the
   Live tab to have been on screen first — the report came from a printing swapped through
   `View all printings`, which invalidates `["decks"]` and refills that cache. **Any second reader
@@ -806,8 +822,9 @@ reader to configure the deck they had just made; it now asks all of them.
     wrapped. What had to stay is the answer, and it is the ledger's first term (see below).
     Reaching one from a test is a dialog and four presses now; the header's remaining one-act
     `deck_update` is the **name field**, which is what every "any deck write would do" test drives.
-  - **`Compare` is a `Scale` glyph inside the Live/Theory group**, between the two lists it weighs.
-    A verb between two nouns needs no word of its own.
+  - **`Compare` was a `Scale` glyph inside the variant group** — a verb between two nouns needing
+    no word of its own. It is a worded button beside that group since 2026-08-26; the bullet that
+    argues it is below, under the variant tabs.
   - **`Import cards` and `Export deck` are one joined pair** (`TRANSFER`), drawn as lucide's mirror
     pair `SquareArrowRightEnter`/`SquareArrowRightExit`. Their visible words are `Import` and
     `Export` — each *contained in* the accessible name beside it, which is what WCAG 2.5.3 asks
@@ -1006,7 +1023,7 @@ price | type`). An **inactive category stays its own group in all three grouping
   `CollectionPanel` wrapper between the branch and the tab for one PR; it called no hook and
   forwarded four props unchanged, so the argument above never applied to it and it is gone.
   - **`aria-pressed` over a `.map`, deliberately not `role="tab"`** — the same shape as the
-    editor's Theory/Live switch, and for the same reason: that role brings an arrow-key contract
+    editor's Theory/Actual switch, and for the same reason: that role brings an arrow-key contract
     this app implements nowhere else, so claiming it would be a promise the strip does not keep.
   - **The labels are two short words because the panel narrows to `MIN_PANEL_WIDTH_PX`** (206px,
     a 193px content box). Measured headless over the built stylesheet at that width: the strip is
@@ -1031,8 +1048,9 @@ price | type`). An **inactive category stays its own group in all three grouping
     [collection-folders.md](../../../docs/reference/collection-folders.md).
   - **The Collection tab draws `FilterBar`, and since 2026-08-25 that is the *same component* the
     `All cards` tab draws.** It had a filter row of its own for two days — built out of
-    `@/components/FilterChips`, which is the sanctioned reuse and is still how `CollectionFilterBar`
-    is built — and what was wrong with it is that it was the same arrangement of the same controls
+    `@/components/FilterChips`, which is the sanctioned reuse and is still how
+    `PrintingsFilterBar` is built — and what was wrong with it is that it was the same
+    arrangement of the same controls
     written twice, so a reader switching tabs met two different rows. `FilterBar`'s prop is a
     structural `FilterSurface` now, which `useCardSearch` and `useCollectionSearch` both satisfy;
     the hook split is untouched, so a reader who never leaves their binder still runs no
@@ -1041,7 +1059,13 @@ price | type`). An **inactive category stays its own group in all three grouping
       `decks`, `rarity`, `price` — and the two absences are facts about a collection. **No
       `owned`**: every row here is a copy the reader has, so a filter whose two states select the
       same list is a control that reads as broken. **No `printings`**: that switch folds a card's
-      printings together and these *are* the reader's printings.
+      printings together and these *are* the reader's printings. **And no `Any card` row in the
+      format picker since 2026-08-26** — `FilterSurface.anyCard`, which this tab does not set.
+      That row is not a format: it is what puts back the printings *no* format allows, and it only
+      means anything where `playableOnly` narrows the corpus to begin with. This tab has never sent
+      that flag, so picking the row put the `any-card` sentinel on the wire, `collection_list` read
+      it as a legalities key nothing matches, and the column went **empty**. It shipped that way
+      with the tray and nothing went red for it.
     - **`decks` is the cell no other surface has**, and it is what this tab is for: `Not in a deck`,
       pressed by default. **Counted by nothing and cleared by nothing** — a badge that counted it
       would open every deck reading `Reset all 1` for a state nobody touched, and Reset all leaves
@@ -1125,22 +1149,44 @@ price | type`). An **inactive category stays its own group in all three grouping
   reader who clears the filter and then picks the deck's own format back off the select reads as
   having asked nothing, so an empty answer there is captioned "waiting for the sync". Remembering
   the press instead would buy a caption in a case that also needs the database to be empty.
-- **The variant tabs read `Live | Theory`, live on the left** (2026-08-24, the design's order and
-  the reader's call). It reverses "theory on the left", whose argument was that switching the
-  theory list on **moves** the live deck into the plan, so the left-hand tab is the one holding
-  cards. **That argument survives the reversal untouched, because it was never about this
-  order**: where a reader lands after enabling theory is `lastVariant`'s doing — the write leaves
-  the deck on `theory` and the editor restores it — and that is as true of a tab drawn second as
-  of one drawn first. What is decided here is only the order the two words are painted in, and
-  left to right now reads reality → plan with `Compare` between them.
-  **Two things did not follow it**, each because it answers a different question: the card menu's
-  `Add to ▸ <deck> ▸` submenu still ranks Theory first (a guess at which list a card is for, not a
-  strip to read), and `deck_theory_diff` still counts plan → reality (a subtraction, and which way
-  round it goes is what the shopping list *means*).
-- **`Compare` is a `Scale` glyph inside the Live/Theory group since 2026-08-24**, between the two
-  lists it weighs against each other — a verb between two nouns needs no word of its own, and the
-  row it stood on had no width to spare. The group reads **`Live | Compare | Theory`**; the bullet
-  above is where that order is argued.
+- **The variant tabs read `Theory | Actual`, the plan on the left** (2026-08-26, the reader's
+  call), which reverses the `Live | Theory` of 2026-08-24 and restores the order before it. The
+  plan is the list a deck is *built* in, so it is the one the eye lands on first, and the live list
+  is what the plan has become so far.
+  **Neither flip touched where a reader _lands_, and that is worth stating because it is what both
+  arguments kept reaching for**: after enabling theory the reader arrives on `theory` because
+  `lastVariant` says so — the write moves the deck there and the editor restores it — and that is
+  as true of a tab drawn second as of one drawn first. What is decided here is only the order the
+  two words are painted in.
+  **`Live` is `Actual` in the same change, and only the word moved.** The stored variant is still
+  `live` — in the column, in the IPC, in every `deck_get` argument — because renaming a value to
+  match a label is a migration bought with nothing. The word is the one on the button, and the
+  join between them is `variantName` in
+  [`transfer/import/destinations/DeckPreview.tsx`](../transfer/import/destinations/DeckPreview.tsx).
+  **Three other surfaces name the same list and were renamed with it**: the Compare dialog's own
+  heading and footer sentence, the card menu's `Add to ▸ <deck> ▸` submenu, and the import
+  dialog's `Into <deck> · Actual` line and its `Replace` label. **What did not follow** is that
+  submenu's *order* — it still ranks Theory first as a guess at which list a card is for, which
+  happens to agree with the tabs again and is not derived from them — and `deck_theory_diff`, which
+  still counts plan → reality, that being what the shopping list *means*.
+  **No hairline between the two tabs**, unlike {@link TRANSFER}'s joined pair: one of them is
+  always pressed, so the filled half's own edge is the divider. The pair needed one while `Compare`
+  sat between them and carried it.
+- **`Compare` stands beside the variant group rather than inside it** (2026-08-26, the reader's
+  call), on the row's own `gap-2` like every other action. It was a `Scale` glyph between the two
+  words from 2026-08-24 — a verb between two nouns, on a row with no width for a third label — and
+  what that shape got wrong is that `Compare` is not one of the deck's two lists: a press inside a
+  `role="group"` named `Deck list` that answers a different question is a press a reader has to
+  learn is not a third list. Out here it carries its word again, on `CONTROL` like the row's other
+  standalone actions, and the word gives way at `TIGHT_HEADER_PX` exactly as {@link ACTIONS}' words
+  do — the word goes, never the control, and the tooltip is bound exactly when the word is not
+  there to be read.
+  **Driven in the shipped window 2026-08-26** at 1920, 1280 and 1120, which is the only way to
+  check any of this — jsdom lays nothing out, so where the button sits and when its word goes are
+  claims no test can make. The button is 8px past the group at every width, 94px with its word and
+  36 without it, and 36 x 36 at y 119 exactly like the four standalone actions beside it, where the
+  two joined groups are 38 at y 118. Every figure:
+  [decks-live-findings.md](../../../docs/reference/decks-live-findings.md).
 - **`Compare` stopped being a count, and the editor no longer counts anything itself**
   (2026-08-20). It read
   "N cards differ" and the number came from a `useMemo` in `DeckEditor` over a *second* `useDeck`

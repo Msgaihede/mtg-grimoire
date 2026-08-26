@@ -214,7 +214,30 @@ const lastQuery = () =>
  * `{ name: "Sort" }` — never a `/sort/i` regex — is the whole of what keeps this query off a
  * header.
  */
-const sortTrigger = () => screen.getByRole("button", { name: "Sort" });
+// **`Sort results` and not the bare `Sort` this page drew before it shared `FilterBar`** -
+// see `CollectionPage.test.tsx`, whose note this is, and `FilterBar`'s own label. The page
+// lost its own filter bar on 2026-08-26 and draws the shared row now, so the control is named
+// for what it orders.
+//
+// **A `button`, not a `combobox`** - it became a `Dropdown` in the same window. The combobox
+// role belongs to a `searchable` dropdown's search box and this one has none.
+const sortTrigger = () => screen.getByRole("button", { name: "Sort results" });
+/**
+ * Open the filter tray, so a cell behind the Filters disclosure can be pressed.
+ *
+ * Everything but the box, the colours, the order and the layout pair lives behind that button
+ * since this page started drawing `FilterBar` - so a suite that reached straight for a chip is
+ * now reaching into a tray that is not mounted. Matched on a prefix: the button's name carries
+ * the live count (`Show filters - 2 active`), which moves as a case presses things.
+ */
+async function openTray(user: {
+  // Structural, so the bare `userEvent` module and a `userEvent.setup()` instance both satisfy it
+  // - this file uses each in different cases, and the two are not the same type.
+  click: (element: Element) => Promise<unknown>;
+}): Promise<void> {
+  await user.click(screen.getByRole("button", { name: /^Show filters/ }));
+}
+
 
 /**
  * The header's money figure, scoped — a two-row wishlist prints the same amount in the total
@@ -351,12 +374,14 @@ describe("WishlistPage", () => {
     wrap(<WishlistPage />);
     await screen.findByText("Lightning Bolt");
 
+    await openTray(userEvent);
     await userEvent.click(screen.getByRole("button", { name: "Still missing" }));
 
     await waitFor(() => expect(lastQuery().fulfilled).toBe(false));
 
     // And round the other way, because the opposite question — what did I already get? — is
-    // the reason a fulfilled wish is kept in the first place.
+    // the reason a fulfilled wish is kept in the first place. The tray is still open from the
+    // press above — it is a disclosure the reader opened, not a menu that closes behind them.
     await userEvent.click(screen.getByRole("button", { name: "Still missing" }));
 
     expect(await screen.findByRole("button", { name: "Fulfilled" })).toBeInTheDocument();
@@ -640,6 +665,7 @@ describe("WishlistPage", () => {
     wrap(<WishlistPage />);
     await screen.findByText("Lightning Bolt");
 
+    await openTray(userEvent);
     await userEvent.click(await screen.findByRole("button", { name: "Needs review" }));
 
     await waitFor(() => expect(lastQuery().needsReview).toBe(true));
@@ -709,6 +735,7 @@ describe("WishlistPage", () => {
     wrap(<WishlistPage />);
     await screen.findByText(/nothing on your wishlist yet/i);
 
+    await openTray(userEvent);
     await userEvent.click(screen.getByRole("button", { name: "Still missing" }));
 
     expect(await screen.findByText(/no wishes match these filters/i)).toBeVisible();
@@ -757,7 +784,7 @@ describe("WishlistPage", () => {
     await screen.findByText("Lightning Bolt");
 
     await user.type(screen.getByLabelText(/search your wishlist/i), "bolt");
-    await pickOption(user, "Sort", "Highest price");
+    await pickOption(user, "Sort results", "Highest price");
 
     await waitFor(() => {
       const q = lastQuery();
@@ -782,6 +809,16 @@ describe("WishlistPage", () => {
     expect(screen.getByRole("columnheader", { name: /^Printing/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^Printing/ })).not.toBeInTheDocument();
 
+    // **It opens on the order it is actually in, and `Custom…` is not there to open on** —
+    // `CollectionPage.test.tsx`'s twin, and the trap is the same one wearing new clothes: a
+    // controlled `<select>` whose value matched no option silently reported the first row, and a
+    // `Dropdown` draws its placeholder dash. Either way the honest order and the fallback look
+    // alike on screen, so the trigger's own text is what separates them — read as text, because
+    // a `<button>` has no value and the trigger says the picked row's **label**, not its key.
+    expect(sortTrigger()).toHaveTextContent("Name");
+    // Closed, so there are no rows at all — the panel exists only while open.
+    expect(screen.queryByRole("option", { name: "Custom…" })).not.toBeInTheDocument();
+
     await user.click(screen.getByRole("button", { name: "Wanted" }));
     await waitFor(() => expect(lastQuery().sort).toEqual([{ key: "quantity", dir: "desc" }]));
     expect(sortTrigger()).toHaveTextContent("Most wanted");
@@ -800,7 +837,7 @@ describe("WishlistPage", () => {
     await user.click(screen.getByRole("button", { name: /^Cost/ }));
     await waitFor(() => expect(lastQuery().sort).toEqual([{ key: "cost", dir: "desc" }]));
     expect(sortTrigger()).toHaveTextContent("Custom…");
-    await openDropdown(user, "Sort");
+    await openDropdown(user, "Sort results");
     expect(screen.getByRole("option", { name: "Custom…" })).toHaveAttribute(
       "aria-disabled",
       "true",
@@ -827,7 +864,7 @@ describe("WishlistPage", () => {
     // Opens the panel to read its rows, then closes it again — the options only mount while
     // the dropdown is open, unlike a native `<select>`'s `<option>`s.
     const options = async () => {
-      await openDropdown(user, "Sort");
+      await openDropdown(user, "Sort results");
       const labels = within(screen.getByRole("listbox"))
         .getAllByRole("option")
         .map((o) => o.textContent);
@@ -960,7 +997,7 @@ describe("WishlistPage", () => {
     wrap(<WishlistPage />);
     await screen.findByText("Wish 1");
 
-    await user.click(await screen.findByRole("button", { name: "Export" }));
+    await user.click(await screen.findByRole("button", { name: "Export wishlist" }));
     await waitFor(() =>
       expect(wishlistList).toHaveBeenCalledWith(expect.objectContaining({ limit: 500 })),
     );
@@ -979,7 +1016,7 @@ describe("WishlistPage", () => {
     wrap(<WishlistPage />);
     await screen.findByText("Lightning Bolt");
 
-    await user.click(screen.getByRole("button", { name: "Import" }));
+    await user.click(screen.getByRole("button", { name: "Import wishes" }));
     const dialog = await screen.findByRole("dialog", { name: "Import a decklist" });
     await user.click(within(dialog).getByLabelText("Decklist"));
     await user.paste("1 Sol Ring");
@@ -1947,7 +1984,7 @@ describe("the folders", () => {
     const user = userEvent.setup();
     wrap(<WishlistPage />);
     // At the root there is no drawer to name, but ticking the box still widens past the drawers.
-    await user.click(await screen.findByRole("button", { name: "Export" }));
+    await user.click(await screen.findByRole("button", { name: "Export wishlist" }));
     expect(
       await screen.findByRole("checkbox", {
         name: "Export everything, ignoring the filters and folders",
@@ -1957,7 +1994,7 @@ describe("the folders", () => {
 
     await user.click(await screen.findByRole("button", { name: /^Ordered folder/ }));
     await screen.findByText("Rhystic Study");
-    await user.click(screen.getByRole("button", { name: "Export" }));
+    await user.click(screen.getByRole("button", { name: "Export wishlist" }));
 
     expect(await screen.findByText("1 card in Ordered matching your filters")).toBeInTheDocument();
   });

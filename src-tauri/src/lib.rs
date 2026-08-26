@@ -18,6 +18,7 @@ pub mod import;
 pub mod index;
 pub mod ingest;
 pub mod legalities;
+pub mod listview;
 pub mod maintenance;
 pub mod marketplace;
 pub mod marketplace_feed;
@@ -406,6 +407,8 @@ pub fn run() {
             zoom::set_card_zoom,
             nav::nav_collapsed,
             nav::set_nav_collapsed,
+            listview::list_view,
+            listview::set_list_view,
             marketplace_feed::marketplace_feed_refresh,
             marketplace_feed::marketplace_feed_status,
             tags::oracle::oracle_tags_refresh,

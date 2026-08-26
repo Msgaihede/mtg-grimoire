@@ -5322,6 +5322,11 @@ describe("the busy fault", () => {
       // fail this loop by answering `Ok` instead of BUSY rather than by answering the wrong error.
       section: "deck",
       zoom: 1.25,
+      // `set_list_view`'s second argument — it shares `section` with the zoom above, which is the
+      // one collision in this record and is harmless because `"deck"` is a section name neither
+      // write validates. Valid all the same, for `zoom`'s reason: a handler that validated before
+      // taking the lock would fail this loop by answering `Ok` instead of BUSY.
+      view: "grid",
       // `deck_set_view_state`'s, and empty is a real value for it: every field is optional and
       // absent means "leave it".
       viewState: {},
@@ -5488,8 +5493,15 @@ describe("the busy fault", () => {
     // `readHandlers` and not in this table at all. Measured after the change rather than
     // reasoned about, and this is the second entry here where a branch's handler count and its
     // delta to this number are different figures.
+    // The remembered list layout then added **one**, 68 → 69: `set_list_view`, the fifth write
+    // here whose whole body is a validation and a spread, on the same split as every preference
+    // before it — it takes `sync::with_write` and is refusable, while the read (`list_view`, on
+    // `db_read`) answers through every second of a sync. It is the **second** write in the table
+    // to take two arguments of its own, `set_card_zoom` being the first, and it shares that one's
+    // `section` name — which is why the record above carries one `section` and two values beside
+    // it rather than two sections.
     const names = Object.keys(w).filter((n) => !unlocked.includes(n));
-    expect(names).toHaveLength(68);
+    expect(names).toHaveLength(69);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,

@@ -672,12 +672,16 @@ Full detail, with the measurements and the traps behind each rule, is in
   `last_variant = 'theory'` and **reallocates in the same transaction**, because claims are held
   for `live` only and cards that just left it must release them.
   `deck_theory_slots` is the third read of the pair and the only one that is not a comparison:
-  every card the plan asks for, as `group_key` strings and nothing else, for the deck editor's
-  theory tick. **It answers `group_key` itself rather than a pair**, which is what stops the tick
-  and the shopping list drifting apart — "the same planned card" is one function in `deck_theory`,
-  and both surfaces spell it with that code. Two columns, one indexed scan, inactive categories
-  excluded on `diff_select`'s rule; deliberately **not** a `deck_get` of the other variant, which
-  prices every row and rolls up allocations for a mark that needs neither.
+  every card the plan asks for, as a `TheorySlot` — the `group_key` and **how many copies it
+  wants** — for the deck editor's theory mark. **It answers `group_key` itself rather than a
+  pair**, which is what stops the mark and the shopping list drifting apart — "the same planned
+  card" is one function in `deck_theory`, and both surfaces spell it with that code. Three
+  columns, one indexed scan, inactive categories excluded on `diff_select`'s rule; deliberately
+  **not** a `deck_get` of the other variant, which prices every row and rolls up allocations for
+  a mark that needs neither. **The quantity joined the key on 2026-08-26 (issue #212) and the
+  rows fold in the SQL with it** — `GROUP BY dc.card_id, dc.finish`, which is `group_key`'s own
+  grain: two `Vec` entries spelling one key were harmless while the caller built a set out of
+  them and would be a silently halved plan now.
   `deck_theory_copy_from_live` still means "copy what is sleeved up into the plan" and is no
   longer what the switch does.
 - **`decks.default_category_id` says where an add that names no pile lands, and `0` is `Auto`**

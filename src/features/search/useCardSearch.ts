@@ -989,6 +989,15 @@ export function useCardSearch(options: CardSearchOptions = {}) {
      * exactly as it sorted {@link FORMATS}, which is what it is when no default was passed.
      */
     formats,
+    /**
+     * **This is the surface `Any card` exists for**, and the only one of the four that offers it.
+     *
+     * Every other row of this picker rides `playableOnly` ({@link formatParams}), so the corpus
+     * this search draws from *is* narrowed by default and `Any card` is the way back to the
+     * printings no format allows. A collection and a wishlist filter by nothing of the kind — see
+     * `FilterSurface.anyCard`, where the empty wall it caused is written down.
+     */
+    anyCard: true,
     colors,
     toggleColor: (key: ColorKey) => setColors((picked) => toggleColor(picked, key)),
     sets,

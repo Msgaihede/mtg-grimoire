@@ -94,6 +94,57 @@ export interface PaneDeckContext {
 export type SearchView = "table" | "grid";
 
 /**
+ * Is this one of the two layouts? The narrowing the `list_view` row needs on the way in.
+ *
+ * The backend refuses anything else at the *write* end, so a row can only be holding a third word
+ * if a newer build wrote it or somebody edited the table — which is exactly the case this exists
+ * for, and it is answered by keeping the default rather than by failing.
+ */
+export function isSearchView(value: string): value is SearchView {
+  return value === "table" || value === "grid";
+}
+
+/**
+ * The four lists that keep a layout of their own — and the keys the `list_view` `app_meta` row is
+ * written under.
+ *
+ * **Deliberately not {@link ViewId}, which is longer, and not {@link ZoomSection}, which is
+ * shorter.** Decks and Settings draw no wall of cards to lay out, and the printings modal is a
+ * wall that draws no layout toggle — so this is its own list rather than either of theirs, the
+ * same argument `ZOOM_SECTIONS` makes about not being derived from `ViewId`. `FilterBar`'s
+ * `layoutFor` prop is this union by hand for the reason written there.
+ */
+export const LIST_SECTIONS = ["search", "tags", "collection", "wishlist"] as const;
+
+/** One of the four lists a layout is remembered for — {@link LIST_SECTIONS}. */
+export type ListSection = (typeof LIST_SECTIONS)[number];
+
+/**
+ * Is this a list this build lays out? The other half of the narrowing {@link isSearchView} starts
+ * — the backend stores whatever section name it is handed, deliberately, because *which* lists
+ * exist is this side's vocabulary.
+ */
+export function isListSection(value: string): value is ListSection {
+  return (LIST_SECTIONS as readonly string[]).includes(value);
+}
+
+/**
+ * Which store field each section's layout lives in.
+ *
+ * The four fields stay four fields rather than becoming one map, because every reader of them is
+ * a component selecting exactly one — `useAppStore((s) => s.collectionView)` re-renders on that
+ * string alone, where a map would re-render all four pages' subscribers on any press. This record
+ * is the one place that needs them addressed by name, which is the seam between the store's shape
+ * and the row's.
+ */
+export const LIST_VIEW_FIELD = {
+  search: "searchView",
+  tags: "tagsView",
+  collection: "collectionView",
+  wishlist: "wishlistView",
+} as const satisfies Record<ListSection, string>;
+
+/**
  * What one surface's export dialog opens holding — see {@link AppState.exportPrefs}, which is
  * where the per-surface argument and `arenaOnly`'s exemption from the format switch are made.
  *
@@ -135,6 +186,36 @@ interface AppState {
    */
   tagsView: SearchView;
   setTagsView: (view: SearchView) => void;
+  /**
+   * Bumped by each of the four setters above — **that a layout was chosen**, as distinct from what
+   * it was chosen to be.
+   *
+   * {@link AppState.zoomPulse}'s shape and for a sharpened version of its reason. A value-watcher
+   * would be wrong in both directions here: it would write back all four layouts that
+   * {@link hydrateListViews} had just seeded, which is four round trips at launch to tell the
+   * database what it said a moment earlier, and it would miss the press that lands a list on the
+   * layout it was already showing. A press is the thing worth remembering, so the press is what is
+   * counted.
+   */
+  listViewPulse: number;
+  /** Which list the last press was on, so the write knows which section to store. `null` before
+   *  the first one. */
+  listViewSection: ListSection | null;
+  /**
+   * Seed the four layouts from the stored `list_view` row — **once, at launch**, from
+   * `useListViewPersistence`.
+   *
+   * A section the row says nothing about, names a list this build does not draw, or holds a word
+   * that is not a layout keeps the default it was built with: the row is the reader's memory, not
+   * an authority, and every one of those is a state a hand-edit or another build can leave behind.
+   *
+   * **A press already made wins**, which is what `listViewPulse !== 0` buys — {@link
+   * hydrateCardZoom}'s guard verbatim. The read is a round trip, so a reader who presses the
+   * toggle inside it would otherwise watch last session's layout overwrite theirs a moment later.
+   * Whole-store rather than per-section because that is what the pulse can answer, and inside a
+   * sub-second window the reader has by definition reached only one list.
+   */
+  hydrateListViews: (stored: Readonly<Record<string, string>>) => void;
   /**
    * How large the card tiles are drawn, as a multiplier on whatever size a surface calls its
    * own — one of `ZOOM_STEPS` per section, all starting at `DEFAULT_ZOOM`.
@@ -600,24 +681,68 @@ export const useAppStore = create<AppState>((set) => ({
     }),
   // Art by default: this is a card app, and the table is the view you switch to when you
   // are comparing prices rather than looking at cards.
+  //
+  // **All four open on art now, and the pulse below is what makes that a starting point rather
+  // than an opinion**: the layout a reader last chose is read back at launch, so a default is
+  // only ever what a list looks like before anybody has said.
   searchView: "grid",
-  setSearchView: (searchView) => set({ searchView }),
-  // The table by default, where the search takes the art: a collection is read for what is
-  // in it — counts, conditions, what it is worth — and forty tiles answer none of that.
-  collectionView: "table",
-  setCollectionView: (collectionView) => set({ collectionView }),
+  setSearchView: (searchView) =>
+    set((s) => ({ searchView, listViewPulse: s.listViewPulse + 1, listViewSection: "search" })),
+  // Art by default **since 2026-08-26**, where this was the one of the four that opened on the
+  // table. The old argument was that a collection is read for what is in it — counts, conditions,
+  // what it is worth — and that forty tiles answer none of that. What overturned it is that the
+  // choice is now remembered: a reader who wants the table presses once, ever, and everyone else
+  // opens the page on the thing the app is for. A default that survives one press is a much
+  // weaker claim than one that is re-made on every launch.
+  collectionView: "grid",
+  setCollectionView: (collectionView) =>
+    set((s) => ({
+      collectionView,
+      listViewPulse: s.listViewPulse + 1,
+      listViewSection: "collection",
+    })),
   // Art by default, with the search rather than with the collection: a wishlist is what the
   // reader is going shopping for, and the cards on it are ones they have not held — the
   // picture is how you recognise the thing you are about to buy. The table is a press away
   // for the trip where the question is what it all costs.
   wishlistView: "grid",
-  setWishlistView: (wishlistView) => set({ wishlistView }),
+  setWishlistView: (wishlistView) =>
+    set((s) => ({
+      wishlistView,
+      listViewPulse: s.listViewPulse + 1,
+      listViewSection: "wishlist",
+    })),
   // Art by default, and this is the one of the four where the grid is not merely the better
   // opening but the whole point: the page's question is "what does this illustration show",
   // and a table of set codes and prices answers none of it. The table is still a press away
   // for the trip where the question is what a themed deck would cost.
   tagsView: "grid",
-  setTagsView: (tagsView) => set({ tagsView }),
+  setTagsView: (tagsView) =>
+    set((s) => ({ tagsView, listViewPulse: s.listViewPulse + 1, listViewSection: "tags" })),
+  listViewPulse: 0,
+  listViewSection: null,
+  // No pulse and no section: this is a value arriving, not a press happening. See the interface
+  // above for the `listViewPulse !== 0` guard, which is the whole of "a reader who pressed the
+  // toggle during the read keeps what they asked for".
+  //
+  // A partial rather than a full object, so a row naming one list leaves the other three on the
+  // defaults they were built with — the absence of an entry is the whole of what "never switched"
+  // looks like on the wire, and inventing a layout for it here would be a second opinion about a
+  // choice this file already made above.
+  hydrateListViews: (stored) =>
+    set((s) => {
+      if (s.listViewPulse !== 0) return {};
+      const next: {
+        searchView?: SearchView;
+        tagsView?: SearchView;
+        collectionView?: SearchView;
+        wishlistView?: SearchView;
+      } = {};
+      for (const [section, view] of Object.entries(stored)) {
+        if (isListSection(section) && isSearchView(view)) next[LIST_VIEW_FIELD[section]] = view;
+      }
+      return next;
+    }),
   // A copy, not the constant itself. `Readonly<>` is a compile-time fence and nothing more, so an
   // in-place `state.cardZoom.deck = …` would write *through* the initial state into the exported
   // `DEFAULT_SECTION_ZOOMS` — and several suites reset this store from it, so the damage would

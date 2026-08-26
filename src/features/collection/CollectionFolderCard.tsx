@@ -34,7 +34,7 @@ import type { CollectionFolder } from "@/lib/ipc";
 import type { Currency } from "@/lib/marketplace";
 import { formatPrice } from "@/lib/prices";
 import { cn } from "@/lib/utils";
-import { useCollectionDropTarget, type CollectionDrag } from "./collectionDrag";
+import { useCollectionDropTarget, type CollectionDrop } from "./collectionDrag";
 
 /**
  * What a folder card is drawn from: the copies filed in it and what they are worth.
@@ -140,10 +140,17 @@ export function CollectionFolderCard({
     onKeyDown: KeyboardEventHandler<HTMLButtonElement>;
     onClick: MouseEventHandler<HTMLButtonElement>;
   };
-  /** Whether *this* folder would take the row currently in the air — the folder a card is already
-   *  filed in refuses it, and draws no ring rather than a ring that does nothing. */
-  canDrop: (drag: CollectionDrag) => boolean;
-  onDropCard: (drag: CollectionDrag) => void;
+  /**
+   * Whether *this* folder would take what is currently in the air — the folder a card is already
+   * filed in refuses it, and draws no ring rather than a ring that does nothing.
+   *
+   * **Either shape of collection drop**, a table row's single entry or a wall tile's whole shelf
+   * of copies, and the card stays dumb about the difference: it hands the drop straight through
+   * and the page answers, because "which of these copies is already here" is a question about the
+   * cabinet rather than about this tile.
+   */
+  canDrop: (drop: CollectionDrop) => boolean;
+  onDropCard: (drop: CollectionDrop) => void;
 }) {
   const ref = useRef<HTMLLIElement>(null);
   const tip = useTooltip();

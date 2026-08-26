@@ -851,6 +851,16 @@ describe("DeckSearchPanel", () => {
       .filter((el) => el.style.writingMode === "vertical-rl");
     expect(sideways).toHaveLength(1);
     expect(sideways[0].classList.contains("select-none")).toBe(true);
+
+    // **And it is centred by `self-center`, never by `text-center`** (reported 2026-08-26). In
+    // `vertical-rl` the inline axis runs down the page and the block axis runs right to left, so
+    // `text-align` moves the words along the rail rather than across it and the stretched line
+    // box lands against the span's right edge — measured 7.63px right of the chevron's centre in
+    // a 36px column. `text-center` is asserted **absent** rather than merely unused: it is the
+    // class that reads as though it does this job, so a future edit reaching for it is the
+    // failure this fence is for, and jsdom lays nothing out so the offset itself is unseeable.
+    expect(sideways[0].classList.contains("self-center")).toBe(true);
+    expect(sideways[0].classList.contains("text-center")).toBe(false);
   });
 
   /**

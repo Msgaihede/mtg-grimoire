@@ -18,6 +18,7 @@ import { CardImage } from "@/components/CardImage";
 import { useContextMenu } from "@/components/menu/useContextMenu";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
+import { cardScaleVars } from "@/lib/cardZoom";
 import { FOCUS } from "@/lib/focus";
 import { ART_ASPECT, cardImageUrl, deckCoverUrl } from "@/lib/images";
 import type { DeckRow } from "@/lib/ipc";
@@ -40,10 +41,22 @@ import { ANY_GAME, gameLabel } from "./useFormatSpecs";
  * `HEADING_BUTTON` in `DecksPage.tsx` is the same press for the same reason, at that row's size.
  */
 const ICON_BUTTON = cn(
-  "grid size-6 place-items-center rounded-md text-dim hover:text-text",
+  "grid size-[calc(1.5rem*var(--control-scale,1))] place-items-center rounded-md",
+  "text-dim hover:text-text",
   PRESS,
   FOCUS,
 );
+
+/**
+ * The glyph inside one of those controls — 14px at 100%, and on `--control-scale` rather than
+ * `--mark-scale` because it is drawn *on* a picture and takes `CONTROL_SHRINK`'s 85% with the
+ * button around it.
+ *
+ * Its own constant because there are five of them (Archive and Restore are one control drawn two
+ * ways), and a glyph that disagreed with its own button's box would centre off by a pixel at one
+ * end of the ladder and overflow it at the other.
+ */
+const ICON = "size-[calc(0.875rem*var(--control-scale,1))]";
 
 /**
  * Which of a deck's two lists exist — the one thing a tile can say about a deck that a
@@ -113,6 +126,7 @@ export function DeckTile({
   decks,
   nodes,
   folderId,
+  zoom,
   panel,
   moving,
   onOpen,
@@ -132,6 +146,18 @@ export function DeckTile({
   nodes: readonly FolderNode[];
   /** The folder it is in now, normalised through the folder list this screen actually has. */
   folderId: number | null;
+  /**
+   * How large the reader draws a deck — `cardZoom.deckGallery`, read once by the page and handed
+   * to every tile on the wall.
+   *
+   * A prop rather than a store read of its own for the reason the page's own comment gives: a
+   * folder of forty decks would otherwise be forty subscriptions to one number. What it sizes is
+   * the tile's *chrome* — the name, the caption, the badge, the credit and the four controls —
+   * through the two variables {@link cardScaleVars} sets on the root below. The art needs
+   * nothing: the cover is a full-width box on a fixed aspect, so it follows the grid track the
+   * page sized with the same number.
+   */
+  zoom: number;
   panel: Panel;
   moving: boolean;
   onOpen: (id: number) => void;
@@ -182,7 +208,11 @@ export function DeckTile({
   const renaming = panel?.kind === "renameDeck" && panel.deckId === deck.id;
 
   return (
-    <li ref={ref} className="group relative">
+    // The two scale variables are set here, on the tile's own root, so everything drawn inside it
+    // inherits them — including the shared marks in `components/`, which read
+    // `var(--mark-scale, 1)` and get the fallback on every surface that is not a card. That is
+    // the whole mechanism: a table's 12px gem stays 12px without knowing this variable exists.
+    <li ref={ref} style={cardScaleVars(zoom)} className="group relative">
       {/* The art and the caption are one button — a deck is picked by looking at it, and a
           reader who aims at the name should not miss. The controls below are siblings of it
           rather than children: a button inside a button is invalid HTML. */}
@@ -240,14 +270,30 @@ export function DeckTile({
         className={cn("block w-full rounded-lg text-left", FOCUS)}
       >
         <Cover deck={deck} />
-        <span className="mt-2 block truncate text-sm">{deck.name}</span>
+        {/* The deck's name, and the first of the four sizes on this tile that move with the
+            zoom. Written as a `calc` off `--mark-scale` rather than as a scaled pixel prop for
+            `cardZoom.ts`'s reason: the variable is inherited, so the marks drawn inside a tile
+            follow it with no call site involved. 0.875rem is `text-sm`, 1.25rem its leading. */}
+        <span
+          className={cn(
+            "mt-[calc(0.5rem*var(--mark-scale,1))] block truncate",
+            "text-[calc(0.875rem*var(--mark-scale,1))] leading-[calc(1.25rem*var(--mark-scale,1))]",
+          )}
+        >
+          {deck.name}
+        </span>
         {/* `Modern · Arena · 60 cards`, and `Modern · 60 cards` on a deck that has been given
             no platform. **The `Any` row is deliberately not drawn**: it is what every deck is
             born as, so printing it would put a word that says nothing on nearly every tile in
             the gallery — and this caption already truncates in a narrow column. A deck that
             *has* been pinned is the one worth marking, which is the same argument the LIVE /
             THEORY badge above makes about the lists a deck keeps. */}
-        <span className="mt-0.5 block truncate text-xs text-dim">
+        <span
+          className={cn(
+            "mt-[calc(0.125rem*var(--mark-scale,1))] block truncate text-dim",
+            "text-[calc(0.75rem*var(--mark-scale,1))] leading-[calc(1rem*var(--mark-scale,1))]",
+          )}
+        >
           {deck.formatName ?? deck.formatKey}
           {deck.gameKey !== ANY_GAME && ` · ${gameLabel(deck.gameKey)}`} ·{" "}
           <span className="font-mono tabular-nums">{deck.cardCount}</span> {unit}
@@ -259,8 +305,14 @@ export function DeckTile({
           for its deck. `pointer-events-none` so a corner of the picture is not a dead spot. */}
       <span
         className={cn(
-          "pointer-events-none absolute left-1.5 top-1.5 rounded-sm border bg-bg/70 px-1.5",
-          "font-mono text-[0.6rem] leading-4 tracking-wide",
+          // The badge sits *on* the art, so its inset scales with the picture it is tucked into:
+          // 6px in from a 200px crop is a corner, and 6px in from a 400px one is a smudge against
+          // the edge. Its own type and padding follow for the same reason.
+          "pointer-events-none absolute rounded-sm border bg-bg/70",
+          "left-[calc(0.375rem*var(--mark-scale,1))] top-[calc(0.375rem*var(--mark-scale,1))]",
+          "px-[calc(0.375rem*var(--mark-scale,1))]",
+          "font-mono tracking-wide",
+          "text-[calc(0.6rem*var(--mark-scale,1))] leading-[calc(1rem*var(--mark-scale,1))]",
           badge === "LIVE" ? "border-border text-dim" : "border-accent text-accent",
           // Dashed means provisional, here as on a folder card: a theory list is a plan.
           badge === "THEORY ONLY" && "border-dashed",
@@ -281,7 +333,10 @@ export function DeckTile({
           must never do. `DeckCoverPicker`'s `CoverPreview` guards the same way. */}
       {deck.coverKind === "card_art" && deck.coverArtist && (
         <p
-          className="mt-0.5 truncate text-[0.7rem] text-dim"
+          className={cn(
+            "mt-[calc(0.125rem*var(--mark-scale,1))] truncate text-dim",
+            "text-[calc(0.7rem*var(--mark-scale,1))] leading-[calc(1rem*var(--mark-scale,1))]",
+          )}
           {...tip(deck.coverArtist, { whenClipped: true })}
         >
           Art by {deck.coverArtist}
@@ -322,7 +377,13 @@ export function DeckTile({
           open — `group-focus-within`, the same clause that answers a keyboard. */}
       <div
         className={cn(
-          "absolute right-1 top-1 flex gap-0.5 rounded-md bg-bg/85 p-0.5",
+          // The tray's own inset, gap and felt move with the controls it holds rather than with
+          // the marks, so the row stays one object at every stop: four buttons at 85% inside a
+          // 4px pad reads as a control, and four scaled buttons inside a fixed one reads as four
+          // buttons that have outgrown their tray.
+          "absolute flex rounded-md bg-bg/85",
+          "right-[calc(0.25rem*var(--control-scale,1))] top-[calc(0.25rem*var(--control-scale,1))]",
+          "gap-[calc(0.125rem*var(--control-scale,1))] p-[calc(0.125rem*var(--control-scale,1))]",
           REVEAL_ON_HOVER,
         )}
       >
@@ -336,7 +397,7 @@ export function DeckTile({
           onClick={(e) => (choosingFolder ? onCancelPanel() : onAskMove(deck, e.currentTarget))}
           className={ICON_BUTTON}
         >
-          <FolderInput className="size-3.5" aria-hidden="true" />
+          <FolderInput className={ICON} aria-hidden="true" />
         </button>
         <button
           type="button"
@@ -346,7 +407,7 @@ export function DeckTile({
           onClick={() => decks.duplicate.mutate(deck.id)}
           className={ICON_BUTTON}
         >
-          <Copy className="size-3.5" aria-hidden="true" />
+          <Copy className={ICON} aria-hidden="true" />
         </button>
         <button
           type="button"
@@ -357,9 +418,9 @@ export function DeckTile({
           className={ICON_BUTTON}
         >
           {deck.archived ? (
-            <ArchiveRestore className="size-3.5" aria-hidden="true" />
+            <ArchiveRestore className={ICON} aria-hidden="true" />
           ) : (
-            <Archive className="size-3.5" aria-hidden="true" />
+            <Archive className={ICON} aria-hidden="true" />
           )}
         </button>
         <button
@@ -370,7 +431,7 @@ export function DeckTile({
           onClick={(e) => onAskDelete(deck, e.currentTarget)}
           className={cn(ICON_BUTTON, "hover:text-destructive")}
         >
-          <Trash2 className="size-3.5" aria-hidden="true" />
+          <Trash2 className={ICON} aria-hidden="true" />
         </button>
       </div>
 
@@ -477,7 +538,10 @@ function Cover({ deck }: { deck: DeckRow }) {
         // a rendering fault — and tells "this deck has no cover yet" apart from "the art did
         // not arrive", which are two different things to do something about. Out of the
         // accessible name, which is the deck.
-        <span aria-hidden="true" className="text-[0.7rem] text-dim">
+        // Inside the frame, so it takes the frame's scale like everything else drawn on a tile —
+        // three words centred in a doubled box at their shipped size read as a caption that
+        // missed the zoom.
+        <span aria-hidden="true" className="text-[calc(0.7rem*var(--mark-scale,1))] text-dim">
           {!url ? "No cover" : image.retrying ? "Retrying…" : "No image"}
         </span>
       )}

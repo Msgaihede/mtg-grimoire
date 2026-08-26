@@ -628,11 +628,24 @@ export const FILTER_LABEL = "text-[0.6875rem] uppercase tracking-[0.08em] text-d
  * The way into every filter that is not on the bar — a disclosure, with the number of filters
  * that are on riding on it.
  *
- * **Gold at rest, which no other quiet control on the row is.** Every other treatment here says
- * "a filter is on"; this one says "there is more in here", which a reader has to be able to see
- * *before* they have pressed anything. The badge is what says how much is on, and it is drawn
- * only when there is something to say — a `0` on every quiet row is chrome that teaches the eye
- * to skip the control it is attached to.
+ * **Its two states are told apart by kind: the border and the word are the *count*, the fill is
+ * the *tray*.** It was gold-bordered at rest until 2026-08-26, on the argument that a disclosure
+ * has to say "there is more in here" before anything has been pressed — but that made it the one
+ * control on the row wearing the on-treatment while off, so a reader sweeping the row for what is
+ * switched on found it every single time and had to read the badge to learn it was not. It is
+ * {@link filterChipState} now, unmodified, over `count > 0`: a hairline and a dim word off,
+ * brightening under the mouse, exactly like every other bordered control here; gold border and
+ * gold word on. An open tray adds the panel's own grey fill and touches neither — so opening the
+ * tray never turns the word gold, and a live count turns it gold whether the tray is up or not.
+ * Both readings at once is legal and draws both, which is that function's rule too.
+ *
+ * **It went borderless at rest for one commit and that was a step too far** (`dc96695`, reverted
+ * here the same day). Dropping the gold was right; dropping the hairline with it left the one
+ * control on the row with no edge, so it read as a label rather than as something to press —
+ * "similar to our other buttons" is the bar, and the other buttons have a border.
+ *
+ * The badge is what says how much is on, and it is drawn only when there is something to say — a
+ * `0` on every quiet row is chrome that teaches the eye to skip the control it is attached to.
  *
  * **The count is the whole search's and not the tray's**, deliberately. It is `activeCount`, the
  * same number Reset all wears, so the two cannot disagree about how much is on. A tray-only count
@@ -684,10 +697,21 @@ export function FiltersButton({
       className={cn(
         FILTER_CONTROL,
         FILTER_FOCUS,
-        "inline-flex shrink-0 items-center justify-center gap-2 border-accent px-3 text-accent",
-        // The panel below is this button's own extension, so an open tray tints the control that
-        // opened it rather than leaving it looking like one more thing to press.
-        open && "bg-accent/10",
+        "inline-flex shrink-0 items-center justify-center gap-2 px-3",
+        // **{@link filterChipState} itself, not a copy of it** — this control is told apart by its
+        // border like every other one in the row, so "a hairline and dim text off, gold border and
+        // gold text on, brightening on hover" is one function's answer rather than a class pair
+        // hand-written here that drifts the first time that one moves. The argument it takes is
+        // the *count*, so the gold says exactly what it says everywhere else on the row: a filter
+        // is on. Nothing about the tray reaches it — see the fill below.
+        filterChipState(count > 0),
+        // The panel below is this button's own extension, so an open tray draws the control that
+        // opened it in the panel's own fill rather than leaving it looking like one more thing to
+        // press. Grey (`bg-surface`, the tray's own) and not the gold tint it was: on this row
+        // gold means "a filter is on", which is the border's sentence above and not this one's —
+        // so an open tray never turns the word gold, and a live count turns it gold whether the
+        // tray is up or not.
+        open && "bg-surface",
         className,
       )}
     >

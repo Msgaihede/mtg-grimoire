@@ -22,6 +22,10 @@ const search = (over: Record<string, unknown> = {}) =>
     // cases at the foot of this file. `FORMATS` is what the hook answers a caller that asked
     // for no default, so it is what the stub carries and every case here reads as it always did.
     formats: FORMATS,
+    // This stub stands for the **card search**, which is the one surface `Any card` is a real row
+    // on — see `FilterSurface.anyCard`. The collection and the wishlist leave it off, and their
+    // own page suites are where the two-rung ladder is asserted.
+    anyCard: true,
     colors: [] as string[],
     toggleColor: vi.fn(),
     sets: [] as string[],
@@ -768,6 +772,35 @@ describe("FilterBar, its format options in order", () => {
 
     expect(screen.getByRole("button", { name: "Format" })).toHaveTextContent("Any format");
     expect((await formatOrder(user)).slice(0, 2)).toEqual(["Any card", "Any format"]);
+  });
+
+  /**
+   * **The ladder is two rungs on a surface that does not narrow its corpus**, and this is the
+   * case the row shipped without.
+   *
+   * `Any card` is not a format — it is the row that puts back the printings *no* format allows,
+   * and it only means anything where every other row of the picker rides `playableOnly`
+   * (`formatParams`). The collection and the wishlist filter by nothing of the kind, and drawing
+   * it there set `format` to the `any-card` sentinel, which their backends read as a legalities
+   * key nothing matches: the list went empty and the control said `Any card`. So the row is
+   * gated on `FilterSurface.anyCard`, which only `useCardSearch` sets.
+   *
+   * Asserted as an absence *and* as the first row, because "not in the list" alone would pass on
+   * a build that drew it somewhere further down.
+   */
+  it("leaves Any card out where the surface does not narrow the corpus", async () => {
+    const user = userEvent.setup();
+    render(<FilterBar search={search({ anyCard: undefined })} />);
+
+    await openTray();
+
+    // `formatOrder` opens the panel, which is the only place the rows exist now: a `Dropdown`
+    // draws nothing until its trigger is pressed, so the absence below is asserted against an
+    // open listbox rather than against a closed control that has no rows either way.
+    const order = await formatOrder(user);
+    expect(order[0]).toBe("Any format");
+    expect(order).not.toContain("Any card");
+    expect(screen.queryByRole("option", { name: "Any card" })).not.toBeInTheDocument();
   });
 
   /**

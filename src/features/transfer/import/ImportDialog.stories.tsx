@@ -244,7 +244,7 @@ export const IntoExistingDeck: Story = {
 
     await expect(await canvas.findByLabelText(/^Merge/)).toBeChecked();
     await expect(
-      canvas.getByLabelText(/^Replace — removes the \d+ cards in Live first/),
+      canvas.getByLabelText(/^Replace — removes the \d+ cards in Actual first/),
     ).toBeInTheDocument();
   },
 };
