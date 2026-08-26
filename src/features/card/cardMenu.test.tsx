@@ -382,6 +382,40 @@ describe("buildCardMenu", () => {
    * The two questions compose rather than flattening: which piece of cardboard, then which
    * drawer. A flat list would be `finishes × folders` rows and would grow with every folder.
    */
+  /**
+   * **Through `buildCardMenu`, not through `buildCollectionTargetItems` — which is the whole
+   * point of this test.** Every other case for the app's own folders calls that builder directly
+   * and hands it a list carrying a deck group, so every one of them passed while the shipped
+   * window drew no `Decks` submenu at all.
+   *
+   * What the direct calls could not see is what `collectionItem` *passes*: it holds a
+   * `userFolders(...)` list for its own "is there a cabinet at all" guard, and it handed that
+   * same filtered list to the builder — so the app section looked for `kind = 'deck'` rows in a
+   * list they had already been stripped from. Found by driving the real app against a database
+   * with three deck groups in the pinned band, one panel away from an empty picker.
+   */
+  it("offers the deck groups through the whole menu, not only through the builder", () => {
+    const toDeck = vi.fn();
+    const addTo = find(
+      buildCardMenu(
+        BOLT,
+        deps({
+          toDeck,
+          collectionFolders: [binder(1, "Binder"), deckGroup(20, "Mono-Red Aggro", 7)],
+        }),
+      ),
+      "Add to",
+    ) as MenuSubmenu;
+    const collection = find(addTo.items, "Collection") as MenuSubmenu;
+
+    const decks = find(collection.items, "Decks") as MenuSubmenu;
+    expect(labels(decks.items)).toEqual(["Mono-Red Aggro"]);
+
+    (find(decks.items, "Mono-Red Aggro") as MenuAction).onSelect();
+    // The **deck** id, never the group's folder id — the row writes through the deck's own add.
+    expect(toDeck).toHaveBeenCalledWith(BOLT, 7);
+  });
+
   it("asks for the finish first and the folder second when the printing has two", () => {
     const addToCollection = vi.fn();
     const target = { ...BOLT, finishes: '["nonfoil","foil"]' };

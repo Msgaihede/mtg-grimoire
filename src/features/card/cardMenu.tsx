@@ -524,6 +524,19 @@ function collectionItem(
   deps: CardMenuDeps,
 ): MenuItem {
   const folders = userFolders(deps.collectionFolders);
+  /**
+   * **The whole cabinet, not {@link folders}, and the difference is a bug this shipped with for
+   * an afternoon.** `buildCollectionTargetItems` filters to the reader's own folders itself for
+   * the tree it draws — but its app section has to find the `kind = 'deck'` rows, and a list that
+   * has already been through `userFolders` has none. The picker then drew `Recently removed` and
+   * no `Decks` submenu at all, on a database with three deck groups in the pinned band one panel
+   * over. Every unit test passed, because they call that builder directly with an unfiltered
+   * list; only driving the shipped window found it.
+   *
+   * `folders` stays for the `length === 0` guards below, which really are asking about the
+   * reader's own cabinet: it is what decides whether this row is one press or a picker.
+   */
+  const cabinet = deps.collectionFolders ?? [];
   const { addToCollection } = deps;
   /**
    * The app's own drawers, for the cabinet below — **only under "Add to", never under "Move to"**.
@@ -574,7 +587,7 @@ function collectionItem(
       id: "add-collection",
       label: "Collection",
       Icon: LibraryBig,
-      items: buildCollectionTargetItems(folders, fileAll, app),
+      items: buildCollectionTargetItems(cabinet, fileAll, app),
     };
   }
 
@@ -595,7 +608,7 @@ function collectionItem(
       label: "Collection",
       Icon: LibraryBig,
       items: buildCollectionTargetItems(
-        folders,
+        cabinet,
         (folderId) => addToCollection(target, finish, folderId),
         app,
       ),
@@ -613,7 +626,13 @@ function collectionItem(
     label: "Collection",
     Icon: LibraryBig,
     items: choices.map((finish) =>
-      finishBranch(finish, folders, (folderId) => addToCollection(target, finish, folderId), app),
+      finishBranch(
+        finish,
+        folders,
+        cabinet,
+        (folderId) => addToCollection(target, finish, folderId),
+        app,
+      ),
     ),
   };
 }
@@ -622,7 +641,10 @@ function collectionItem(
  *  tree where it does. */
 function finishBranch(
   finish: Finish,
+  /** The reader's own, for the one question this level asks: is there a cabinet at all? */
   folders: readonly CollectionFolder[],
+  /** The whole list, for the builder — see {@link collectionItem}'s `cabinet`. */
+  cabinet: readonly CollectionFolder[],
   choose: (folderId: number | null) => void,
   app?: { toDeck?: (deckId: number) => void },
 ): MenuItem {
@@ -630,7 +652,7 @@ function finishBranch(
   if (folders.length === 0) {
     return { kind: "action", ...row, onSelect: () => choose(null) };
   }
-  return { kind: "submenu", ...row, items: buildCollectionTargetItems(folders, choose, app) };
+  return { kind: "submenu", ...row, items: buildCollectionTargetItems(cabinet, choose, app) };
 }
 
 function collectionRow(onSelect: () => void): MenuAction {
