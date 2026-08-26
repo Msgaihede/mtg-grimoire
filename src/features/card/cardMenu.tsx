@@ -1186,15 +1186,19 @@ function collectionLevel(
  *
  * A deck that keeps no theory list is a single row that adds to `live` — offering a plan the
  * deck does not have would be a second press for a choice with one answer. A deck that keeps
- * one asks, **Theory then Live**, and is deliberately not alphabetical: enabling the theory list
- * *moves* the live deck into the plan, so theory is where a deck's cards are and live is the
- * column that fills as the reader acquires them. This is a menu that has to guess which of two
- * lists a card is meant for, and the likelier one goes first.
+ * one asks, **Theory then Actual**, and is deliberately not alphabetical: enabling the theory
+ * list *moves* the live deck into the plan, so theory is where a deck's cards are and the actual
+ * list is the column that fills as the reader acquires them. This is a menu that has to guess
+ * which of two lists a card is meant for, and the likelier one goes first.
  *
- * **It used to cite the editor's own variant tabs and no longer can** (2026-08-24): those read
- * `Live | Theory` now. The order here did not follow them, because the two are not the same
- * question — a tab strip is two places a reader chooses between and reads left to right, and this
- * is a ranked guess. What is gone is the cross-reference, not the reason under it.
+ * **The editor's variant tabs read the same way again** (2026-08-26) — `Theory | Actual` — but
+ * that is a coincidence rather than a dependency, and this order did not follow them there and
+ * back. The two are not the same question: a tab strip is two places a reader chooses between
+ * and reads left to right, and this is a ranked guess. It went on being ranked while the tabs
+ * read the other way round for two days, which is the evidence for saying so.
+ *
+ * **`Actual` is the label; `live` is still the value** — see the editor's switch, where the
+ * choice not to rename the stored variant is argued.
  */
 function deckItem(deck: DeckRow, choose: (deckId: number, variant: DeckVariant) => void): MenuItem {
   if (!deck.theoryEnabled) {
@@ -1221,7 +1225,7 @@ function deckItem(deck: DeckRow, choose: (deckId: number, variant: DeckVariant) 
       {
         kind: "action",
         id: `deck-${deck.id}-live`,
-        label: "Live",
+        label: "Actual",
         onSelect: () => choose(deck.id, "live"),
       },
     ],

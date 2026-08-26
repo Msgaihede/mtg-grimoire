@@ -822,8 +822,9 @@ reader to configure the deck they had just made; it now asks all of them.
     wrapped. What had to stay is the answer, and it is the ledger's first term (see below).
     Reaching one from a test is a dialog and four presses now; the header's remaining one-act
     `deck_update` is the **name field**, which is what every "any deck write would do" test drives.
-  - **`Compare` is a `Scale` glyph inside the Live/Theory group**, between the two lists it weighs.
-    A verb between two nouns needs no word of its own.
+  - **`Compare` was a `Scale` glyph inside the variant group** — a verb between two nouns needing
+    no word of its own. It is a worded button beside that group since 2026-08-26; the bullet that
+    argues it is below, under the variant tabs.
   - **`Import cards` and `Export deck` are one joined pair** (`TRANSFER`), drawn as lucide's mirror
     pair `SquareArrowRightEnter`/`SquareArrowRightExit`. Their visible words are `Import` and
     `Export` — each *contained in* the accessible name beside it, which is what WCAG 2.5.3 asks
@@ -1022,7 +1023,7 @@ price | type`). An **inactive category stays its own group in all three grouping
   `CollectionPanel` wrapper between the branch and the tab for one PR; it called no hook and
   forwarded four props unchanged, so the argument above never applied to it and it is gone.
   - **`aria-pressed` over a `.map`, deliberately not `role="tab"`** — the same shape as the
-    editor's Theory/Live switch, and for the same reason: that role brings an arrow-key contract
+    editor's Theory/Actual switch, and for the same reason: that role brings an arrow-key contract
     this app implements nowhere else, so claiming it would be a promise the strip does not keep.
   - **The labels are two short words because the panel narrows to `MIN_PANEL_WIDTH_PX`** (206px,
     a 193px content box). Measured headless over the built stylesheet at that width: the strip is
@@ -1148,22 +1149,44 @@ price | type`). An **inactive category stays its own group in all three grouping
   reader who clears the filter and then picks the deck's own format back off the select reads as
   having asked nothing, so an empty answer there is captioned "waiting for the sync". Remembering
   the press instead would buy a caption in a case that also needs the database to be empty.
-- **The variant tabs read `Live | Theory`, live on the left** (2026-08-24, the design's order and
-  the reader's call). It reverses "theory on the left", whose argument was that switching the
-  theory list on **moves** the live deck into the plan, so the left-hand tab is the one holding
-  cards. **That argument survives the reversal untouched, because it was never about this
-  order**: where a reader lands after enabling theory is `lastVariant`'s doing — the write leaves
-  the deck on `theory` and the editor restores it — and that is as true of a tab drawn second as
-  of one drawn first. What is decided here is only the order the two words are painted in, and
-  left to right now reads reality → plan with `Compare` between them.
-  **Two things did not follow it**, each because it answers a different question: the card menu's
-  `Add to ▸ <deck> ▸` submenu still ranks Theory first (a guess at which list a card is for, not a
-  strip to read), and `deck_theory_diff` still counts plan → reality (a subtraction, and which way
-  round it goes is what the shopping list *means*).
-- **`Compare` is a `Scale` glyph inside the Live/Theory group since 2026-08-24**, between the two
-  lists it weighs against each other — a verb between two nouns needs no word of its own, and the
-  row it stood on had no width to spare. The group reads **`Live | Compare | Theory`**; the bullet
-  above is where that order is argued.
+- **The variant tabs read `Theory | Actual`, the plan on the left** (2026-08-26, the reader's
+  call), which reverses the `Live | Theory` of 2026-08-24 and restores the order before it. The
+  plan is the list a deck is *built* in, so it is the one the eye lands on first, and the live list
+  is what the plan has become so far.
+  **Neither flip touched where a reader _lands_, and that is worth stating because it is what both
+  arguments kept reaching for**: after enabling theory the reader arrives on `theory` because
+  `lastVariant` says so — the write moves the deck there and the editor restores it — and that is
+  as true of a tab drawn second as of one drawn first. What is decided here is only the order the
+  two words are painted in.
+  **`Live` is `Actual` in the same change, and only the word moved.** The stored variant is still
+  `live` — in the column, in the IPC, in every `deck_get` argument — because renaming a value to
+  match a label is a migration bought with nothing. The word is the one on the button, and the
+  join between them is `variantName` in
+  [`transfer/import/destinations/DeckPreview.tsx`](../transfer/import/destinations/DeckPreview.tsx).
+  **Three other surfaces name the same list and were renamed with it**: the Compare dialog's own
+  heading and footer sentence, the card menu's `Add to ▸ <deck> ▸` submenu, and the import
+  dialog's `Into <deck> · Actual` line and its `Replace` label. **What did not follow** is that
+  submenu's *order* — it still ranks Theory first as a guess at which list a card is for, which
+  happens to agree with the tabs again and is not derived from them — and `deck_theory_diff`, which
+  still counts plan → reality, that being what the shopping list *means*.
+  **No hairline between the two tabs**, unlike {@link TRANSFER}'s joined pair: one of them is
+  always pressed, so the filled half's own edge is the divider. The pair needed one while `Compare`
+  sat between them and carried it.
+- **`Compare` stands beside the variant group rather than inside it** (2026-08-26, the reader's
+  call), on the row's own `gap-2` like every other action. It was a `Scale` glyph between the two
+  words from 2026-08-24 — a verb between two nouns, on a row with no width for a third label — and
+  what that shape got wrong is that `Compare` is not one of the deck's two lists: a press inside a
+  `role="group"` named `Deck list` that answers a different question is a press a reader has to
+  learn is not a third list. Out here it carries its word again, on `CONTROL` like the row's other
+  standalone actions, and the word gives way at `TIGHT_HEADER_PX` exactly as {@link ACTIONS}' words
+  do — the word goes, never the control, and the tooltip is bound exactly when the word is not
+  there to be read.
+  **Driven in the shipped window 2026-08-26** at 1920, 1280 and 1120, which is the only way to
+  check any of this — jsdom lays nothing out, so where the button sits and when its word goes are
+  claims no test can make. The button is 8px past the group at every width, 94px with its word and
+  36 without it, and 36 x 36 at y 119 exactly like the four standalone actions beside it, where the
+  two joined groups are 38 at y 118. Every figure:
+  [decks-live-findings.md](../../../docs/reference/decks-live-findings.md).
 - **`Compare` stopped being a count, and the editor no longer counts anything itself**
   (2026-08-20). It read
   "N cards differ" and the number came from a `useMemo` in `DeckEditor` over a *second* `useDeck`
