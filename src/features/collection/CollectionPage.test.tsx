@@ -2865,6 +2865,10 @@ describe("rearranging the collection's cabinet", () => {
   /** Two drawers at the top level and one inside the first — enough for a nest, a reorder and the
    *  drop that would change nothing. */
   beforeEach(() => {
+    // **The wall is what this whole block drags, and a flattened list draws none of it.**
+    // \collectionFlattened\ ships **on** (\store.ts\), so every folder-card test in this file
+    // turns it off for itself — the two blocks above do the same, for the same reason.
+    useAppStore.setState({ collectionFlattened: false });
     collectionFolderList.mockResolvedValue([BINDER, SEALED, FOILS]);
     collectionFolderSummary.mockResolvedValue([]);
   });
