@@ -2,6 +2,7 @@ import { useState } from "react";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
+import { pickOption } from "@/test-dropdown";
 import { Dropdown, MultiDropdown } from "./Dropdown";
 import type { DropdownOption } from "./types";
 
@@ -212,6 +213,13 @@ describe("Dropdown", () => {
     expect(onReachEnd).not.toHaveBeenCalled();
     await user.keyboard("{End}"); // already there
     expect(onReachEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it("is driveable through the test helper", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+    await pickOption(user, "Format", "Commander");
+    expect(screen.getByRole("button", { name: "Format" })).toHaveTextContent("Commander");
   });
 });
 
