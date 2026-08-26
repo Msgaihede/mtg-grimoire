@@ -2835,7 +2835,8 @@ about affordance.
 
 ## The dropdown's panel, and the containing block that only a browser could refute
 
-**2026-08-26, `npm run build-storybook` (a debug static bundle) served on a throwaway port and
+**2026-08-26, `npm run build-storybook` — which is `storybook build`, a _production_ Vite bundle
+rather than a debug one — served on a throwaway port and
 driven in headless Edge 151 at 1280×800 — `documentElement.clientWidth` 1256 px and `clientHeight`
 708 px, identical to `innerWidth`/`innerHeight`, so no scrollbar separates the two in this
 document.** Every figure below is a reading from that window.
@@ -2858,14 +2859,28 @@ second jsdom reading of the same zeros.
   reading the whole approach stood on.** The probe's box carries `scale: 1` — what motion leaves on
   a `Dialog` panel at rest, and **not** `none` — so it is a containing block for a `fixed`
   descendant. The zero-size `fixed` frame the shell renders at `left: 0; top: 0` measured its own
-  rect at **`left 113 top 113`** instead of the viewport origin: proof the containing block is
-  real, in the one place a browser can give it. The panel's inline offsets came back **`left: 24px`,
-  `top: 64px`** against a trigger at viewport `left 137 top 137 bottom 173`, so `113 + 24 = 137`
-  and `113 + 64 = 177` — `panel.left − trigger.left` = **0 px**, gap = **4 px**. **Uncorrected the
-  panel would have sat at viewport `left 250`, 113 px to the right of the control that opened it** —
-  a styling bug to look at, and a coordinate bug in fact. The other two stories read `frameOrigin`
-  `left 0 top 0`, which is the control this reading needed: the correction is a no-op exactly where
-  no ancestor transforms, and 113 px where one does.
+  rect at **`left 113 top 113`** instead of the viewport origin. Against a trigger at viewport
+  `left 137 top 137 bottom 173`, the panel drew at `left 137 top 177` — `panel.left −
+  trigger.left` = **0 px**, gap = **4 px**. **Uncorrected the panel would have sat at viewport
+  `left 250`, 113 px to the right of the control that opened it** — a styling bug to look at, and a
+  coordinate bug in fact.
+
+  **Those two measurements are the whole proof, and it is worth being exact about which two.** They
+  are `frameOrigin ≠ (0,0)` — the containing block exists at all — and `deltaLeft == 0` — the
+  correction cancelled it exactly. **Adding the panel's inline offsets to the frame origin proves
+  nothing**: the panel is `absolute` inside the frame, so rendered-left is *identically*
+  frame-origin + inline-left, under any offset, with correct code or broken code. That sum cannot
+  fail, so it cannot be evidence. An earlier draft of this section rested on it; this paragraph is
+  the correction.
+
+  **Three independent checks say the `113` is the transform's doing and not the margin's.** First,
+  the counterfactual: with the same `ml-24 mt-24` margin but **no** transform, `fixed left-0 top-0`
+  is viewport-relative and the frame reads `(0,0)` *regardless of the margin* — so `113` is not the
+  margin, it is the margin **made visible by** the transform. Second, `InAScroller` is a real
+  control rather than an unpositioned story: same padded preview root, its own non-zero local
+  offsets, and it still reads `(0,0)` — which rules out both a transform on the preview root and
+  the frame being accidentally `absolute` against some positioned wrapper. Third, `113 = 16 + 96 +
+  1` is the containing block's padding-box origin exactly (preview-root padding + margin + border).
 - **At the bottom of the viewport it flips, and it flips from the right corner.** Trigger
   `top 660 bottom 696` against a 708 px viewport; panel `top 382 bottom 656` — **above** the
   trigger, `trigger.top − panel.bottom` = **4 px**, both edges inside the viewport. The class came
@@ -2882,9 +2897,22 @@ and positions from `getBoundingClientRect()`. And the panel's `min-width` came b
 all three — the trigger's own `offsetWidth` — so a picker never opens narrower than the control
 that produced it.
 
-**What this pass did not measure, stated rather than implied.** No story here forces the
-**horizontal** flip: all three came back `origin-*-left` with `flipX` false, because a 143 px panel
-at `left 29`, `137` and `12` cannot run past the far gutter of a 1256 px viewport. The
-`align: "end"` path and the `VIEWPORT_GUTTER` clamp are therefore still arithmetic-only — covered
-in `place.test.ts`, unproven in a browser. The first consumer that pins a wide panel to the right
-end of a filter row should take its own reading.
+**What this pass did not measure, stated rather than implied.** Two residuals, and neither is
+dismissed on the grounds that its failure would be obvious — because neither would be.
+
+**The horizontal flip was never forced.** All three stories came back `origin-*-left` with `flipX`
+false, because a 143 px panel at `left 29`, `137` and `12` cannot run past the far gutter of a
+1256 px viewport. The `align: "end"` path and the `VIEWPORT_GUTTER` clamp are therefore still
+arithmetic-only — covered in `place.test.ts`, unproven in a browser. **This is not a hypothetical
+path**: `place.ts` names two shipping set pickers that pass `"end"`. And its failure is *silent*
+rather than visible — `VIEWPORT_GUTTER`'s own comment is the reason, since nothing in this app clips
+a popup, so an overflowing panel gets no scrollbar and instead "scrolls the whole app sideways the
+moment anything calls `scrollIntoView` on it". Deferred as a known residual, not as a safe one.
+
+**Nothing here combines a transformed containing block with an intervening scroller — and that
+union is exactly what all eight in-dialog call sites are.** `InAScroller` escapes its scroller only
+because nothing transforms in that story, and `InATransformedBox` has no scroller between the
+trigger and the box. Tracing it resolves in favour: the `fixed` frame's containing block is the
+dialog panel, the scroller is not in that chain, and `Dialog.tsx` records that the panel
+deliberately does not clip its content. But that is **two subtle facts holding it up, neither
+measured**. The first in-dialog migration should take the reading rather than inherit this one.
