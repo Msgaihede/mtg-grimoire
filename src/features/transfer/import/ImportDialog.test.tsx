@@ -14,6 +14,7 @@ import type {
   SyncStatus,
 } from "@/lib/ipc";
 import { spec } from "@/features/decks/validation/fixtures";
+import { openDropdown, pickOption } from "@/test-dropdown";
 import { ARENA_LIST } from "./fixtures";
 
 const importResolve = vi.hoisted(() => vi.fn());
@@ -25,6 +26,12 @@ const deckGet = vi.hoisted(() => vi.fn());
 const formatSpecs = vi.hoisted(() => vi.fn());
 const syncStatus = vi.hoisted(() => vi.fn());
 const oracleTagsForPrintings = vi.hoisted(() => vi.fn());
+// The collection/wishlist destinations' own writes — added for the two Condition/Finish
+// dropdown tests below. Neither was ever needed before them: every other test in this file
+// either mounts a deck destination or, for "lets the reader choose the collection…", never
+// presses Import over one of these two.
+const collectionImportCommit = vi.hoisted(() => vi.fn());
+const wishlistImportCommit = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -37,6 +44,8 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     formatSpecs,
     syncStatus,
     oracleTagsForPrintings,
+    collectionImportCommit,
+    wishlistImportCommit,
   },
 }));
 
@@ -362,6 +371,8 @@ beforeEach(() => {
   // supported way to run it, and the state every claim below about a type-line pile is made
   // in. The tests that are about the tags stage their own answer.
   oracleTagsForPrintings.mockReset().mockResolvedValue([]);
+  collectionImportCommit.mockReset().mockResolvedValue({ added: 1, updated: 0, removed: 0 });
+  wishlistImportCommit.mockReset().mockResolvedValue({ added: 1, updated: 0, removed: 0 });
   pickFile.mockReset().mockResolvedValue(null);
   onDismiss.mockReset();
   onClose.mockReset();
@@ -449,7 +460,7 @@ describe("the import dialog", () => {
     // before it; either way the plan is rebuilt live, which is that arm's whole difference.
     wrap(<Harness />);
     await preview("1 Captain Sisay\n1 Kenrith, the Returned King");
-    await userEvent.selectOptions(await screen.findByLabelText("Format"), "modern");
+    await pickOption(userEvent.setup(), "Format", "Modern");
 
     expect(await screen.findByText("2 cards")).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: "Commander" })).not.toBeInTheDocument();
@@ -761,18 +772,19 @@ describe("the import dialog", () => {
    * than the value changing.
    */
   it("starts a new deck on the format the host resolved", async () => {
+    const user = userEvent.setup();
     wrap(<Harness defaultFormatKey="commander" />);
     await preview("1 Sol Ring");
 
-    const format = await screen.findByLabelText("Format");
+    await openDropdown(user, "Format");
     await waitFor(() =>
-      expect(
-        within(format)
-          .getAllByRole("option")
-          .map((o) => o.textContent),
-      ).toEqual(["Casual", "Commander", "Modern"]),
+      expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
+        "Casual",
+        "Commander",
+        "Modern",
+      ]),
     );
-    expect(format).toHaveValue("commander");
+    expect(screen.getByRole("button", { name: "Format" })).toHaveTextContent("Commander");
   });
 
   /**
@@ -782,12 +794,13 @@ describe("the import dialog", () => {
    * before the prop existed.
    */
   it("falls back to Casual when the host passes no default", async () => {
+    const user = userEvent.setup();
     wrap(<Harness />);
     await preview("1 Sol Ring");
 
-    const format = await screen.findByLabelText("Format");
-    await waitFor(() => expect(within(format).getAllByRole("option")).toHaveLength(3));
-    expect(format).toHaveValue("casual");
+    await openDropdown(user, "Format");
+    await waitFor(() => expect(screen.getAllByRole("option")).toHaveLength(3));
+    expect(screen.getByRole("button", { name: "Format" })).toHaveTextContent("Casual");
   });
 
   it("offers Merge and Replace only when importing into a deck", async () => {
@@ -1037,5 +1050,65 @@ describe("the import dialog", () => {
 
     expect(collection).toBeChecked();
     expect(screen.getByRole("radio", { name: "Import into your wishlist" })).not.toBeChecked();
+  });
+
+  /**
+   * **The condition/finish dropdowns' own mapping, proven by picking something other than the
+   * default — not merely by reading the default the store seeds.** Every other assertion in this
+   * file that touches `collectionDestination`/`wishlistDestination` either never presses Import
+   * over one of them or, in `CollectionPage.test.tsx`, only reads `defaults.condition` untouched.
+   * A broken `onChange` — the `"" ↔ null` round trip inverted, or the picked value simply never
+   * reaching `setDefaults` — would have passed every test that existed before this one. Found by
+   * mutating `CollectionPreview.tsx`'s Finish mapping during Task 11 and confirming nothing here
+   * reddened until this test was written.
+   */
+  it("sends the condition and finish the reader picked into the collection, not just the store default", async () => {
+    const user = userEvent.setup();
+    wrap(
+      <ImportDialog
+        destinations={[collectionDestination]}
+        open
+        onDismiss={onDismiss}
+        onClose={onClose}
+        onDone={vi.fn()}
+      />,
+    );
+    const go = await preview("1 Sol Ring");
+
+    await pickOption(user, "Condition when the file doesn't say", "Lightly played");
+    await pickOption(user, "Finish when the file doesn't say", "Foil");
+    await user.click(go);
+
+    await waitFor(() =>
+      expect(collectionImportCommit).toHaveBeenCalledWith(
+        expect.arrayContaining([expect.objectContaining({ condition: "LP", finish: "foil" })]),
+        "add",
+      ),
+    );
+  });
+
+  /** The wishlist's own half — one control, no condition question. */
+  it("sends the finish the reader picked into the wishlist, not just the store default", async () => {
+    const user = userEvent.setup();
+    wrap(
+      <ImportDialog
+        destinations={[wishlistDestination]}
+        open
+        onDismiss={onDismiss}
+        onClose={onClose}
+        onDone={vi.fn()}
+      />,
+    );
+    const go = await preview("1 Sol Ring");
+
+    await pickOption(user, "Finish when the file doesn't say", "Etched");
+    await user.click(go);
+
+    await waitFor(() =>
+      expect(wishlistImportCommit).toHaveBeenCalledWith(
+        expect.arrayContaining([expect.objectContaining({ preferredFinish: "etched" })]),
+        "add",
+      ),
+    );
   });
 });

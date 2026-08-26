@@ -12,6 +12,7 @@ import type {
   FormatSpec,
 } from "@/lib/ipc";
 import { cardImageUrl } from "@/lib/images";
+import { openDropdown, pickOption } from "@/test-dropdown";
 import { card, spec } from "./validation/fixtures";
 
 const deckGet = vi.hoisted(() => vi.fn());
@@ -145,7 +146,7 @@ beforeEach(() => {
  * ✕'s label — is pinned once in `Dialog.test.tsx`, against a body that is only a body. What
  * is left here is what only this host can say: that it wires `onDismiss` and `onClose` through,
  * that a closed dialog costs no `deck_get`, and that the trap holds over the **real** form, whose
- * selects, switch, textareas and occasionally disabled controls are the list `trapTab` reads on
+ * dropdowns, switch, textareas and occasionally disabled controls are the list `trapTab` reads on
  * every press. Everything else in this file is what it always was: which command each answer
  * writes.
  */
@@ -242,9 +243,12 @@ describe("DeckSettingsDialog", () => {
     deckGet.mockResolvedValue(detail({ folderId: 2 }));
     open();
     await loaded();
-    await screen.findByRole("option", { name: "Commander › Legends" });
 
-    await userEvent.selectOptions(screen.getByLabelText("Folder"), "");
+    // Opened before asserting the row exists — `useDeckFolders` is a query the deck's own read
+    // does not wait on, so the panel can mount before the list has arrived and `findByRole`
+    // (rather than `pickOption`'s synchronous lookup) is what gives it room to.
+    await openDropdown(userEvent.setup(), "Folder");
+    await userEvent.click(await screen.findByRole("option", { name: "Top level" }));
 
     await waitFor(() => expect(deckSetFolder).toHaveBeenCalledWith(4, null));
     expect(deckUpdate).not.toHaveBeenCalled();
@@ -254,9 +258,9 @@ describe("DeckSettingsDialog", () => {
   it("files a deck into a folder with deckSetFolder, never a patch", async () => {
     open();
     await loaded();
-    await screen.findByRole("option", { name: "Commander › Legends" });
 
-    await userEvent.selectOptions(screen.getByLabelText("Folder"), "2");
+    await openDropdown(userEvent.setup(), "Folder");
+    await userEvent.click(await screen.findByRole("option", { name: "Commander › Legends" }));
 
     await waitFor(() => expect(deckSetFolder).toHaveBeenCalledWith(4, 2));
     expect(deckUpdate).not.toHaveBeenCalled();
@@ -276,11 +280,10 @@ describe("DeckSettingsDialog", () => {
     open();
     await loaded();
 
-    const select = await screen.findByLabelText("Add cards to");
-    await userEvent.selectOptions(select, "12");
+    await pickOption(userEvent.setup(), "Add cards to", "Combo pieces");
     await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { defaultCategoryId: 12 }));
 
-    await userEvent.selectOptions(select, "0");
+    await pickOption(userEvent.setup(), "Add cards to", "Auto (by what it does)");
     await waitFor(() => expect(deckUpdate).toHaveBeenLastCalledWith(4, { defaultCategoryId: 0 }));
     expect(deckSetFolder).not.toHaveBeenCalled();
   });
@@ -291,8 +294,8 @@ describe("DeckSettingsDialog", () => {
     open();
     await loaded();
 
-    const select = (await screen.findByLabelText("Add cards to")) as HTMLSelectElement;
-    expect([...select.options].map((o) => o.textContent)).toEqual([
+    await openDropdown(userEvent.setup(), "Add cards to");
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
       "Auto (by what it does)",
       "Sideboard",
       "Combo pieces",
@@ -310,7 +313,7 @@ describe("DeckSettingsDialog", () => {
     expect(await screen.findByText("Commander › Legends", { selector: "p" })).toBeInTheDocument();
   });
 
-  /** A folder list that could not be read leaves a select that can only mislead, so it says
+  /** A folder list that could not be read leaves a dropdown that can only mislead, so it says
    *  what happened and stops offering the move. */
   it("reports a folder list it could not read, and disables the move", async () => {
     deckFolderList.mockRejectedValue("Database is busy.");
@@ -318,7 +321,7 @@ describe("DeckSettingsDialog", () => {
     await loaded();
 
     expect(await screen.findByText(/Could not read the folders/)).toBeInTheDocument();
-    expect(screen.getByLabelText("Folder")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Folder" })).toBeDisabled();
   });
 
   /**
@@ -567,15 +570,16 @@ describe("DeckSettingsDialog", () => {
     await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { theoryEnabled: true }));
   });
 
-  /** The format select drives the same command, and sends a key rather than a display name. */
+  /** The format dropdown drives the same command, and sends a key rather than a display name. */
   it("re-formats the deck by key", async () => {
     open();
     await loaded();
-    // Scoped to the format select: the folder select carries a "Commander" of its own.
-    const format = screen.getByLabelText("Format");
-    await within(format).findByRole("option", { name: "Commander" });
 
-    await userEvent.selectOptions(format, "commander");
+    // Opened before asserting the row exists — `useFormatSpecs` is a query the deck's own read
+    // does not wait on, so the panel can mount before the seed has arrived and `findByRole`
+    // (rather than `pickOption`'s synchronous lookup) is what gives it room to.
+    await openDropdown(userEvent.setup(), "Format");
+    await userEvent.click(await screen.findByRole("option", { name: "Commander" }));
 
     await waitFor(() => expect(deckUpdate).toHaveBeenCalledWith(4, { formatKey: "commander" }));
   });
@@ -590,22 +594,22 @@ describe("DeckSettingsDialog", () => {
     open();
     await loaded();
 
-    const format = screen.getByLabelText("Format");
-    await within(format).findByRole("option", { name: "Commander" });
-    expect(
-      within(format)
-        .getAllByRole("option")
-        .map((o) => o.textContent),
-    ).toEqual(["Casual", "Commander", "Modern"]);
+    await openDropdown(userEvent.setup(), "Format");
+    await screen.findByRole("option", { name: "Commander" });
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
+      "Casual",
+      "Commander",
+      "Modern",
+    ]);
   });
 
   /**
    * A deck on a format the seed no longer offers keeps showing its own — `decks.format_key` is
-   * deliberately not a foreign key, so this state exists, and a select that could not show its
+   * deliberately not a foreign key, so this state exists, and a trigger that could not show its
    * value would re-format the deck the next time anything else here was saved.
    *
    * **Folded into the alphabet rather than pinned first.** Historic between Commander and
-   * Modern is the assertion: the select's own `value` already says which one is current, so
+   * Modern is the assertion: the trigger's own content already says which one is current, so
    * putting it first would only cost the reader the place they would look for it.
    */
   it("folds the deck's own format into the list when the seed no longer offers it", async () => {
@@ -613,14 +617,15 @@ describe("DeckSettingsDialog", () => {
     open();
     await loaded();
 
-    const format = screen.getByLabelText("Format");
-    await within(format).findByRole("option", { name: "Historic" });
-    expect(format).toHaveValue("historic");
-    expect(
-      within(format)
-        .getAllByRole("option")
-        .map((o) => o.textContent),
-    ).toEqual(["Casual", "Commander", "Historic", "Modern"]);
+    await openDropdown(userEvent.setup(), "Format");
+    await screen.findByRole("option", { name: "Historic" });
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
+      "Casual",
+      "Commander",
+      "Historic",
+      "Modern",
+    ]);
+    expect(screen.getByRole("button", { name: "Format" })).toHaveTextContent("Historic");
   });
 
   /**
@@ -631,14 +636,14 @@ describe("DeckSettingsDialog", () => {
   it("keeps Top level first and the folders in path order", async () => {
     open();
     await loaded();
-    await screen.findByRole("option", { name: "Commander › Legends" });
 
-    const folder = screen.getByLabelText("Folder");
-    expect(
-      within(folder)
-        .getAllByRole("option")
-        .map((o) => o.textContent),
-    ).toEqual(["Top level", "Commander", "Commander › Legends"]);
+    await openDropdown(userEvent.setup(), "Folder");
+    await screen.findByRole("option", { name: "Commander › Legends" });
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual([
+      "Top level",
+      "Commander",
+      "Commander › Legends",
+    ]);
   });
 
   /** A refused write says so, once, and it is the *newest* write that owns the line — a refused
@@ -647,9 +652,9 @@ describe("DeckSettingsDialog", () => {
     deckSetFolder.mockRejectedValue("Database is busy.");
     open();
     await loaded();
-    await screen.findByRole("option", { name: "Commander › Legends" });
 
-    await userEvent.selectOptions(screen.getByLabelText("Folder"), "2");
+    await openDropdown(userEvent.setup(), "Folder");
+    await userEvent.click(await screen.findByRole("option", { name: "Commander › Legends" }));
 
     expect(await screen.findByRole("alert")).toHaveTextContent(
       "Could not save that change — Database is busy.",

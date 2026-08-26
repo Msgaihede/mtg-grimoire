@@ -3,6 +3,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 import { CardDetailPane } from "@/features/card/CardDetailPane";
 import { parseFinishes } from "@/lib/finish";
+import { openDropdown } from "@/test-dropdown";
 import { printing } from "../../../.storybook/fake/fixtures";
 import { AddToCollectionButton, type AddTarget } from "./AddToCollection";
 
@@ -180,7 +181,9 @@ export const Open: Story = {
       "aria-pressed",
       "true",
     );
-    await expect(within(popup).getByLabelText("Condition")).toHaveValue("NM");
+    await expect(within(popup).getByRole("button", { name: "Condition" })).toHaveTextContent(
+      "Near mint",
+    );
     await expect(
       within(popup).getByRole("spinbutton", { name: "Quantity of Lightning Bolt" }),
     ).toHaveValue(1);
@@ -280,24 +283,26 @@ export const FoilOnlyPrinting: Story = {
  */
 export const Conditions: Story = {
   play: async ({ canvasElement }) => {
+    const user = userEvent.setup();
     const canvas = within(canvasElement);
-    await userEvent.click(
+    await user.click(
       canvas.getByRole("button", { name: "Add Lightning Bolt (2X2 117) to collection" }),
     );
 
     const popup = canvas.getByRole("dialog", { name: "Add Lightning Bolt" });
-    const condition = within(popup).getByLabelText("Condition");
+    const condition = within(popup).getByRole("button", { name: "Condition" });
+    await openDropdown(user, "Condition");
     await expect(
-      within(condition)
+      within(popup)
         .getAllByRole("option")
         .map((o) => o.textContent),
     ).toEqual(["Near mint", "Lightly played", "Moderately played", "Heavily played", "Damaged"]);
 
-    await userEvent.selectOptions(condition, "HP");
-    await userEvent.click(
+    await user.click(within(popup).getByRole("option", { name: "Heavily played" }));
+    await user.click(
       within(popup).getByRole("button", { name: "Increase Quantity of Lightning Bolt" }),
     );
-    await userEvent.click(within(popup).getByRole("button", { name: "Add to collection" }));
+    await user.click(within(popup).getByRole("button", { name: "Add to collection" }));
 
     await waitFor(async () => {
       await expect(within(popup).getByRole("status")).toHaveTextContent(
@@ -305,7 +310,7 @@ export const Conditions: Story = {
       );
     });
     // Still open, still holding the answers — and no refusal.
-    await expect(condition).toHaveValue("HP");
+    await expect(condition).toHaveTextContent("Heavily played");
     await expect(
       within(popup).getByRole("spinbutton", { name: "Quantity of Lightning Bolt" }),
     ).toHaveValue(2);
@@ -345,7 +350,7 @@ export const WishlistMode: Story = {
       canvas.getByRole("button", { name: "Add Lightning Bolt (2X2 117) to wishlist" }),
     ).toBeInTheDocument();
     // No grade to record on a card nobody owns yet.
-    await expect(within(popup).queryByLabelText("Condition")).toBeNull();
+    await expect(within(popup).queryByRole("button", { name: "Condition" })).toBeNull();
 
     const which = within(popup).getByRole("group", { name: "Which printing" });
     await expect(within(which).getByRole("button", { name: "This printing" })).toHaveAttribute(

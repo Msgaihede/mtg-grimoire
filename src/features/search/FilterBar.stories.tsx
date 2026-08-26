@@ -1,7 +1,8 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 import { TOOLTIP_OPEN_MS, TOOLTIP_PANEL_ID } from "@/components/tooltip/TooltipProvider";
+import { openDropdown } from "@/test-dropdown";
 import { FilterBar } from "./FilterBar";
 import { useCardSearch, type CardSearch } from "./useCardSearch";
 
@@ -44,16 +45,31 @@ const AT_MIN_WIDTH = "w-[776px]";
 function SearchFilters({
   preset,
   layoutToggle,
+  flatten = false,
   width = AT_1280,
 }: {
   preset?: Preset;
   /** `FilterBar`'s own prop, passed straight through. */
   layoutToggle?: boolean;
+  /**
+   * Whether the row draws the **Flatten** switch — on where the list is filed into folders, which
+   * is the wishlist and the collection and neither of the two surfaces `useCardSearch` stands for
+   * here.
+   *
+   * **The state behind it is this wrapper's `useState`, and that is not the hand-built object this
+   * file exists to avoid.** `FilterBar`'s `search` prop is a whole `CardSearch` with six toggle
+   * rules and the badge's arithmetic behind it, which is why the real hook is used for that.
+   * Flatten is a boolean with no third state, nothing derived from it and no arithmetic anywhere —
+   * `useWishlist` holds exactly this `useState` — so a story owning it copies no rule that could
+   * drift.
+   */
+  flatten?: boolean;
   /** A Tailwind width class for the box the row has to fit in — the whole subject of the
    *  wrapping stories, and a live control on every other one. */
   width?: string;
 }) {
   const search = useCardSearch();
+  const [flattened, setFlattened] = useState(false);
   const applied = useRef(false);
   useEffect(() => {
     if (applied.current || !preset) return;
@@ -62,7 +78,15 @@ function SearchFilters({
   });
   return (
     <div className={width}>
-      <FilterBar search={search} layoutToggle={layoutToggle} />
+      <FilterBar
+        search={search}
+        layoutToggle={layoutToggle}
+        flatten={
+          flatten
+            ? { pressed: flattened, onToggle: () => setFlattened((on) => !on) }
+            : undefined
+        }
+      />
     </div>
   );
 }
@@ -158,7 +182,7 @@ export const Default: Story = {
       "Filters",
     );
     await openTray(canvas);
-    await expect(canvas.getByLabelText("Format")).toHaveValue("");
+    await expect(canvas.getByRole("button", { name: "Format" })).toHaveTextContent("Any format");
     await expect(canvas.getByRole("button", { name: /^Reset all/ })).toHaveAttribute(
       "aria-disabled",
       "true",
@@ -281,7 +305,7 @@ export const Cleared: Story = {
     await expect(reset).toHaveAttribute("aria-disabled", "true");
     await expect(reset).toHaveAccessibleName("Reset all — 0 filters active");
     await expect(canvas.getByLabelText("Search cards")).toHaveValue("");
-    await expect(canvas.getByLabelText("Format")).toHaveValue("");
+    await expect(canvas.getByRole("button", { name: "Format" })).toHaveTextContent("Any format");
     // Prefix matches throughout: every chip's accessible name now ends in the count the fake's
     // facets report for it, and the label is what has to come first.
     await expect(canvas.getByRole("button", { name: /^White\b/ })).toHaveAttribute(
@@ -376,12 +400,15 @@ export const SomeUnavailable: Story = {
       ).not.toHaveAttribute("aria-disabled");
     }
 
-    // The format select is the one place a real `disabled` is right — a native `<option>` is
-    // not a tab stop there is anything to lose.
+    // The format picker is the one place a real `aria-disabled` is right — a row here is
+    // never in the tab order either way, so there is nothing to strand.
     await openTray(canvas);
-    const format = canvas.getByLabelText("Format") as HTMLSelectElement;
-    const off = [...format.options].filter((o) => o.disabled).map((o) => o.value);
-    await expect(off).toEqual(["standard"]);
+    await openDropdown(userEvent.setup(), "Format");
+    const options = canvas.getAllByRole("option");
+    const off = options
+      .filter((o) => o.getAttribute("aria-disabled") === "true")
+      .map((o) => o.textContent);
+    await expect(off).toEqual(["Standard"]);
     // …and it is drawn *last*, which is the half of the ordering only a faceted story can
     // show: `FORMATS` writes Standard first, the alphabet would put it sixth, and the one
     // format this search has nothing legal in belongs under the six that would return cards.
@@ -390,16 +417,16 @@ export const SomeUnavailable: Story = {
     // The two pinned rows lead, widest first — they are the ladder out of the alphabet below
     // them, and `Any card` is the row that can widen a search this narrow rather than merely
     // unnarrow it.
-    await expect([...format.options].map((o) => o.value)).toEqual([
-      "any-card",
-      "",
-      "commander",
-      "legacy",
-      "modern",
-      "pauper",
-      "pioneer",
-      "vintage",
-      "standard",
+    await expect(options.map((o) => o.textContent)).toEqual([
+      "Any card",
+      "Any format",
+      "Commander",
+      "Legacy",
+      "Modern",
+      "Pauper",
+      "Pioneer",
+      "Vintage",
+      "Standard",
     ]);
   },
 };
@@ -456,11 +483,14 @@ export const MostlyUnavailable: Story = {
     }
 
     await openTray(canvas);
-    const format = canvas.getByLabelText("Format") as HTMLSelectElement;
-    const live = [...format.options].filter((o) => !o.disabled).map((o) => o.value);
+    await openDropdown(userEvent.setup(), "Format");
+    const live = canvas
+      .getAllByRole("option")
+      .filter((o) => o.getAttribute("aria-disabled") !== "true")
+      .map((o) => o.textContent);
     // Neither pinned row is ever greyed: "Any format" is how a format filter is taken off, and
-    // "any-card" is the one row that can *widen* a search greyed into a corner.
-    await expect(live).toEqual(["any-card", "", "vintage"]);
+    // "Any card" is the one row that can *widen* a search greyed into a corner.
+    await expect(live).toEqual(["Any card", "Any format", "Vintage"]);
 
     // The escape, and the whole reason this row is allowed to look like this. Presence is no
     // longer the claim — the button is on every row — so the claim is that it is *pressable*.
@@ -512,8 +542,11 @@ export const IndexCold: Story = {
       await expect(canvas.getByRole("button", { name: label })).toBeInTheDocument();
     }
 
-    const format = canvas.getByLabelText("Format") as HTMLSelectElement;
-    await expect([...format.options].filter((o) => o.disabled)).toHaveLength(0);
+    await openDropdown(userEvent.setup(), "Format");
+    const disabledOptions = canvas
+      .getAllByRole("option")
+      .filter((o) => o.getAttribute("aria-disabled") === "true");
+    await expect(disabledOptions).toHaveLength(0);
   },
 };
 
@@ -564,13 +597,13 @@ export const SortedDescending: Story = {
     );
     await userEvent.unhover(direction);
 
-    // `toHaveValue`, never the text of the selected option. A controlled `<select>` whose value
-    // matches no `<option>` does not draw blank — `react-dom` picks the first row that is not
-    // disabled, which here is `Best match` — so a picker that had lost its selection entirely
-    // would read exactly like one nobody has touched.
-    const sort = canvas.getByLabelText("Sort results") as HTMLSelectElement;
-    await expect(sort).toHaveValue("released");
-    await expect(sort.selectedOptions[0]).toHaveTextContent("Released");
+    // The trigger's own text is the claim now — there is no `.value` on a button. A native
+    // `<select>` whose value matched no `<option>` used to draw blank by picking the first row
+    // while still reporting the old one; `Dropdown` cannot make that mistake, since a picker
+    // that had lost its selection entirely draws its own em-dash placeholder rather than
+    // reading as one nobody had touched.
+    const sort = canvas.getByRole("button", { name: "Sort results" });
+    await expect(sort).toHaveTextContent("Released");
 
     // A sort is not a filter: the badge does not count it and Reset all does not clear it.
     await expect(canvas.getByRole("button", { name: /^Reset all/ })).toHaveAttribute(
@@ -628,6 +661,52 @@ export const DockedPanel: Story = {
   },
 };
 
+/**
+ * **Flatten, beside the layout pair** — the wishlist's and the collection's switch, and the two
+ * ends of it in one story.
+ *
+ * It sat down beside the breadcrumb and the folder cards until now, on the argument that where a
+ * reader is standing is navigation rather than a narrowing. That argument still holds and it is
+ * not what decides the placement: this row has a hairline across it, and everything past that
+ * hairline is a statement about how the results are **drawn** rather than about which ones there
+ * are. Flatten is that kind of statement one level up — how much of the *tree* is on screen — and
+ * both hooks already treat it that way, keeping it out of their filter state and out of
+ * `resetAll`. So it goes where the other controls Reset all cannot reach already are.
+ *
+ * **The two are in one wrapper, which is a fact about wrapping and not about tidiness.** The row
+ * is `flex-wrap`, so two adjacent items are two items the wrap may break between — and a Flatten
+ * chip on the line above the pair it was moved next to would be the whole change undone. Drag the
+ * width control down to the docked panel's 371px to watch the group move as one.
+ *
+ * The badge is the other half: the switch is **on** by the end of the play and Reset all still
+ * reads zero, because none of this narrows anything.
+ */
+export const FlattenSwitch: Story = {
+  args: { flatten: true },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const chip = await canvas.findByRole("button", { name: "Flatten" });
+    await expect(chip).toHaveAttribute("aria-pressed", "false");
+
+    // One wrapper, said as the tree rather than as a class: the pair's group is the chip's own
+    // next sibling, so nothing can be ordered between them and no wrap can separate them.
+    const layout = canvas.getByRole("group", { name: "Result layout" });
+    await expect(chip.nextElementSibling).toBe(layout);
+
+    await userEvent.click(chip);
+
+    await waitFor(async () => {
+      await expect(canvas.getByRole("button", { name: "Flatten" })).toHaveAttribute(
+        "aria-pressed",
+        "true",
+      );
+    });
+    // Nothing about the filing is a filter, so the press moved neither number on the row.
+    await expect(canvas.getByRole("button", { name: /^Reset all/ })).toHaveAccessibleName(
+      "Reset all — 0 filters active",
+    );
+  },
+};
 
 /**
  * Scryfall's tagger syntax, typed straight into the search box.

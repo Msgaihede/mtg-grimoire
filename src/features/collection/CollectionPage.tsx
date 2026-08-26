@@ -13,6 +13,7 @@ import { AnimatePresence, motion } from "motion/react";
 import { Dialog } from "@/components/Dialog";
 import type { MenuItem } from "@/components/menu/types";
 import { useContextMenu } from "@/components/menu/useContextMenu";
+import { NewFolderCard } from "@/components/NewFolderCard";
 import { OwnedBadge } from "@/components/OwnedBadge";
 import { buildCardMenu, type CardMenuDeps, type CardMenuTarget } from "@/features/card/cardMenu";
 import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
@@ -27,6 +28,7 @@ import { everythingLabel, scopeLabel, useExportScope } from "@/features/transfer
 import { collectionDestination } from "@/features/transfer/import/destinations/CollectionPreview";
 import { ImportExportPair } from "@/features/transfer/ImportExportPair";
 import { ImportDialog } from "@/features/transfer/import/ImportDialog";
+import { WishFolderCaption } from "@/features/wishlist/wishMarks";
 import { CONDITION_LABEL, CONDITIONS } from "@/lib/conditions";
 import { DROP_MARK_ROOM } from "@/lib/dropMarks";
 import type { FolderDrag, FolderEdge } from "@/lib/folderDrag";
@@ -207,7 +209,83 @@ interface CollectionTile extends GridCard {
    * and no nonfoil, which is the failure the whole finish rule exists to prevent.
    */
   finishes: string;
+  /**
+   * Which folders the copies behind this tile are filed in — every distinct one, `null` for the
+   * root, in the order the rows arrived.
+   *
+   * **A list rather than a folder, because a tile is a printing and a filing is a row.** The wall
+   * merges every entry for one piece of art (a foil and a played nonfoil are one picture), and
+   * since v24 the folder is part of what makes two rows two rows — so while the list is flattened
+   * one tile can perfectly well stand for copies in a binder, in a deck's group and at the root at
+   * once. Naming the first of them would be the app picking which copy the reader meant, which is
+   * exactly what {@link tileTarget} refuses to do about `entryId` one function down.
+   *
+   * Ids and not names, so this stays pure over `rows` and the tile can be built without the folder
+   * census: {@link filedIn} is where the words are chosen, at render, from the page's own map.
+   */
+  folders: readonly (number | null)[];
 }
+
+/**
+ * What a flattened tile's caption says about where its copies are — the words, or nothing.
+ *
+ * One folder is that folder's name (`Collection` at the root, which is `folderNameOf`'s own word
+ * for `null`). Two or more is a **count**, because there is no honest single name for a printing
+ * the reader keeps in three places, and the alternative — naming one of them — is the caption
+ * quietly claiming the other copies are somewhere they are not. `Filed in 2 folders` is the whole
+ * sentence a reader gets on the wall, and the table beside it is drawn at the row grain, where
+ * every copy names its own drawer.
+ *
+ * `null` draws nothing, which is {@link WishFolderCaption}'s own rule and the honest answer for a
+ * drawer another window deleted between the entry read and the folder read.
+ */
+function filedIn(
+  tile: CollectionTile,
+  folderNameOf: (id: number | null) => string | null,
+): string | null {
+  if (tile.folders.length === 0) return null;
+  if (tile.folders.length === 1) return folderNameOf(tile.folders[0]);
+  return `${tile.folders.length} folders`;
+}
+
+/**
+ * The caption a **flattened** wall draws: the printing, and the drawer its copies sit in.
+ *
+ * Built for that state and handed to `CardGrid` only there — unflattened the slot is left unset, so
+ * the wall draws its own `SET · number` and this file does not spell it at all. Flattened, the
+ * folder is the only way a reader sees where a copy is without opening it, which is the whole of
+ * what Flatten promises and exactly why `WishlistGrid` captions its own tiles the same way.
+ *
+ * **{@link WishFolderCaption} is reused across the feature boundary rather than twinned**, and its
+ * name is the only thing about it that is the wishlist's: it takes a folder name and draws a glyph,
+ * a truncating word and a `Filed in …` tooltip, scaling on `var(--mark-scale)` like every other
+ * mark drawn on a card. A local copy would be one fact rendered twice — two glyphs, two shades,
+ * two sentences, none of it decided — which is the drift `wishMarks.tsx`'s own header exists to
+ * prevent; and this app already imports the other way, `WishlistGrid` drawing the collection's
+ * `REVEAL_ON_HOVER`.
+ *
+ * **The line must stay one line.** `CardGrid` positions its virtual rows from `CAPTION_HEIGHT`,
+ * which is a *budget* rather than a minimum, so a caption that wrapped would be a wall whose rows
+ * overlap by the difference. Hence the printing truncates and the mark is `shrink-0` beside it —
+ * `WishlistGrid`'s arrangement, for its reason: at 170px a drawer the reader named is worth more
+ * than the last few characters of a set code.
+ *
+ * A closure over the page's one answer rather than module scope, which costs nothing here:
+ * `caption` is read on **render** rather than registered, unlike `dragRecord`/`tileRef` and the
+ * three card-fact slots `CardGrid` asks to be held still.
+ */
+const captionFor =
+  (folderNameOf: (folderId: number | null) => string | null) => (tile: CollectionTile) => (
+    <span className="flex min-w-0 items-center gap-[calc(0.375rem*var(--mark-scale,1))]">
+      {/* `CardGrid`'s own default text, restated because the slot is the whole of that line and
+          there is nothing to append to — see the component's `caption`, which is the *text* and
+          not the strip around it. */}
+      <span className="min-w-0 truncate">
+        {`${tile.setCode.toUpperCase()} · ${tile.collectorNumber}`}
+      </span>
+      <WishFolderCaption name={filedIn(tile, folderNameOf)} />
+    </span>
+  );
 
 /**
  * The entries' finishes for one printing, in the app's own order, as stored JSON.
@@ -361,7 +439,7 @@ const COLLECTION_TRAY: readonly TrayCell[] = [
 
 export function CollectionPage() {
   const collection = useCollection();
-  const { query, summary, rows, total, marketplace, folderId } = collection;
+  const { query, summary, rows, total, marketplace, folderId, flatten } = collection;
   const view = useAppStore((s) => s.collectionView);
   const selectCard = useAppStore((s) => s.setSelectedCardId);
   const selectedCardId = useAppStore((s) => s.selectedCardId);
@@ -372,9 +450,9 @@ export function CollectionPage() {
    * Which folder layer is open, and what the caret goes back to when it closes.
    *
    * **The opener is a ref rather than a piece of `Panel`** for the reason `DecksPage` gives: the
-   * three triggers here are the filter bar's `+ New folder` and, for the other two, whichever
-   * folder card's `⋯` a reader happened to press, so capturing the element when the layer opens is
-   * the only way one handler can serve a wall of them.
+   * three triggers here are all tiles of one wall — the `New folder` card, and for the other two
+   * whichever folder card's `⋯` a reader happened to press — so capturing the element when the
+   * layer opens is the only way one handler can serve a wall of them.
    */
   const [panel, setPanel] = useState<Panel>(null);
   const openerRef = useRef<HTMLElement | null>(null);
@@ -579,11 +657,18 @@ export function CollectionPage() {
     // The same walk, answering the tile's second question: *which finishes* those copies are in.
     // A second pass would be a second definition of "the entries behind this printing".
     const finishes = new Map<string, Set<string>>();
+    // And its third, which only a flattened wall draws: *where* those copies are filed. A `Set`
+    // because a printing held four times in one drawer is one folder, and insertion-ordered
+    // because a tile in exactly one folder must name the folder its rows named.
+    const filed = new Map<string, Set<number | null>>();
     for (const row of rows) {
       copies.set(row.cardId, (copies.get(row.cardId) ?? 0) + row.quantity);
       const held = finishes.get(row.cardId) ?? new Set<string>();
       held.add(row.finish);
       finishes.set(row.cardId, held);
+      const drawers = filed.get(row.cardId) ?? new Set<number | null>();
+      drawers.add(row.folderId);
+      filed.set(row.cardId, drawers);
     }
     const seen = new Set<string>();
     const out: CollectionTile[] = [];
@@ -602,6 +687,7 @@ export function CollectionPage() {
         typeLine: row.typeLine,
         oracleId: row.oracleId,
         finishes: ownedFinishes(finishes.get(row.cardId) ?? new Set()),
+        folders: [...(filed.get(row.cardId) ?? new Set<number | null>())],
       });
     }
     return out;
@@ -893,6 +979,19 @@ export function CollectionPage() {
     [folderNames],
   );
 
+  /**
+   * Flatten closes whatever folder layer is open, and it does it by *deriving* rather than by
+   * writing state from an effect.
+   *
+   * With the filing ignored the whole wall goes — `New folder`'s tile and every folder card's `⋯`
+   * with it, since all of them are drawn *inside* it — so every trigger that could have opened one
+   * of these is off screen. A rename field left standing over a flattened list would be a layer
+   * with nothing on screen explaining what it is about. The derived value is what the whole page
+   * reads, {@link panel} itself only what the setters write, so pressing Flatten and pressing it
+   * back does not resurrect the layer. `WishlistPage`'s twin, verbatim.
+   */
+  const openPanel = flatten ? null : panel;
+
   // Focus first, then close: the opener is still mounted at this point, and an element that
   // unmounts with the caret on it drops focus to `<body>` — after which the next Tab restarts from
   // the top of the app. This is the **keyboard** way out — Escape, and each panel's own Cancel.
@@ -905,16 +1004,17 @@ export function CollectionPage() {
   }, []);
   const close = useCallback(() => setPanel(null), []);
 
-  useDismissOnEscape({ layer: "inner", onDismiss: dismiss, enabled: panel !== null });
+  useDismissOnEscape({ layer: "inner", onDismiss: dismiss, enabled: openPanel !== null });
 
   /**
    * One level up — **the breadcrumb's own second-to-last segment, read rather than re-derived**.
    *
    * {@link trailOf} ends with the folder the reader is standing in, so the step before it is the
    * one the breadcrumb draws as the last *pressable* segment, and an empty step is the root. That
-   * is `null`, which for this cabinet is every folder rather than the copies filed nowhere
-   * (`useCollection.folderId`) — so the two ways out land in the same place by construction rather
-   * than by two pieces of arithmetic that happen to agree.
+   * is `null`, which for this cabinet is the copies filed **nowhere** — `useCollection` sends
+   * `rootOnly` for it, the wishlist's reading rather than the "every folder" this page opened on
+   * until Flatten arrived. Either way the two ways out land in the same place by construction
+   * rather than by two pieces of arithmetic that happen to agree.
    *
    * **A deck group and `Recently removed` need no branch here, and that is a fact about `trailOf`
    * rather than luck.** It is handed `folders.folders` — every kind — where the *tree* above it is
@@ -942,11 +1042,20 @@ export function CollectionPage() {
    * `clearFieldOnEscape` in `FilterBar` — because Chromium empties an
    * `<input type="search">` on Escape by itself and does **not** mark the press handled, so
    * without it one press would clear the box *and* walk the reader up a level.
+   *
+   * **Flatten is deliberately not a rung of this, and that is a decision rather than an
+   * oversight** — do not "fix" it by toggling the chip off here. `WishlistPage` states the
+   * argument in full and it holds one cabinet over: Flatten is not a place the reader walked into,
+   * it is the filing being ignored, so there is no level on screen to leave — the breadcrumb, the
+   * wall and the pinned strip are all off. With it on, Escape does nothing at all here, **including
+   * when a `folderId` is still set underneath**, because walking a level the reader cannot see
+   * would silently move where un-flattening puts them back. The chip is one press away and says
+   * which state it is in.
    */
   useDismissOnEscape({
     layer: "navigation",
     onDismiss: () => collection.openFolder(parentFolderId),
-    enabled: folderId !== null,
+    enabled: !flatten && folderId !== null,
   });
 
   const open = useCallback((next: NonNullable<Panel>, opener: HTMLElement | null) => {
@@ -955,14 +1064,21 @@ export function CollectionPage() {
   }, []);
 
   /**
-   * `+ New folder`, from the filter bar — **inside the folder the reader is standing in**, which at
-   * the root is the top level.
+   * `New folder`, the wall's own first tile — **inside the folder the reader is standing in**,
+   * which at the root is the top level, and which is the whole of what it promises by going away
+   * with the wall while the list is flattened.
+   *
+   * **`HTMLElement` rather than the `HTMLButtonElement` this took while it was wired to a
+   * `<button>` here.** {@link NewFolderCard} owns the element now and hands it over as an
+   * `HTMLElement`; under `strictFunctionTypes` a callback asking for the narrower type is not
+   * assignable to that prop at all, and it never needed the narrower one — {@link open} takes an
+   * `HTMLElement | null`, because all it does with the element is `focus()` it.
    *
    * `folders.create.reset()` for `DecksPage`'s reason: a refusal from the last attempt is not news
    * about this one.
    */
   const openNewFolder = useCallback(
-    (opener: HTMLButtonElement) => {
+    (opener: HTMLElement) => {
       folders.create.reset();
       open({ kind: "newFolder", parentId: folderId }, opener);
     },
@@ -1228,9 +1344,18 @@ export function CollectionPage() {
   // Without this clause the trail was gated on a list that folder is deliberately not in, so
   // opening a deck group closed the door behind them.
   const hasFolders = userFolders.length > 0 || folderId !== null;
-  /** Whether *this level* holds drawers of its own. The status line's question, and it stays the
-   *  reader's own children — the refile wall below is not this level's content. */
-  const filed = childFolders.length > 0;
+  /**
+   * **Does this level hold drawers of its own** — the question {@link statusOf} asks, and the only
+   * one this value answers. It stays the reader's own children: the refile wall drawn inside
+   * `Recently removed` is not that level's content.
+   *
+   * `!flatten` for the wishlist's reason, and it is a correctness clause rather than tidiness: a
+   * flattened list draws no folder cards at all, so "the cards below are the answer, leave them
+   * alone" would silence the one line an empty flattened collection has to say. `New folder` is
+   * not content either — a wall holding nothing but the tile that makes the first folder is still
+   * a level with nothing in it.
+   */
+  const filed = !flatten && childFolders.length > 0;
   /** Standing in the holding area, which is the one level whose wall is not its own children. */
   const inRemoved = pinned.removed !== null && folderId === pinned.removed.id;
   /**
@@ -1373,25 +1498,79 @@ export function CollectionPage() {
   );
 
   /**
+   * **Whether the cabinet is drawn at all — and it is drawn over an empty one on purpose.**
+   *
+   * Deliberately *not* {@link filed}, and deliberately not `wall.length > 0`, which is what gated
+   * it while `+ New folder` sat in a row of its own. With the tile living **inside** the wall that
+   * gate is a trap door: a reader who has filed nothing has no folder card to draw, therefore no
+   * wall, therefore no way to make their first folder, and the cabinet could never be opened by
+   * anyone who did not already have one.
+   *
+   * Flatten is the whole of what closes it, which is where the old `+ New folder` note went: a
+   * flattened list has no current folder to make one inside, so the control that promises "here"
+   * goes with the level it was promising about — one gate instead of that condition written twice.
+   */
+  const cabinet = !flatten;
+
+  /**
+   * Whether **this** level can hold a new folder — the tile's own gate, and a fence rather than an
+   * affordance.
+   *
+   * `create_folder` calls `user_folder` on the parent and answers `FOLDER_NOT_YOURS` for a deck
+   * group or `Recently removed` (`collection_folders.rs`), and {@link openNewFolder} always names
+   * the level the reader is standing in. So a tile drawn inside either would be a press whose only
+   * possible outcome is a sentence explaining that it does not work — `PinnedFolders`' argument for
+   * having no `⋯` at all, one level out. **It matters most inside `Recently removed`**, where the
+   * wall is *not* this level's children but the reader's own top level ({@link wall}): every card
+   * in that wall is a real drop target and the tile beside them would be the one control that is
+   * not, filing into an app-owned holding area.
+   *
+   * The root is a level too, and it is the one `null` names — hence the first arm rather than a
+   * lookup that would fail for it.
+   */
+  const canMakeFolder = folderId === null || userFolderIds.has(folderId);
+
+  /**
    * What the export dialog's two sentences have to say about where the reader is standing.
    *
-   * `folderId` is already in `collection.filters` and already in the sweep's key, so the export
-   * has always been *correct* — it is the words that would not have been. Standing in `Trade
-   * binder` with nothing typed, the dialog would say `12 cards matching your filters` and offer
-   * "Export everything, ignoring the filters", when the only thing narrowing anything was the
-   * drawer neither sentence mentioned.
+   * `folderId` is already in `collection.filters` and already in the sweep's key — as `rootOnly`
+   * and `flatten` now are — so the export has always been *correct* and it is the words that would
+   * not have been. Standing in `Trade binder` with nothing typed, the dialog would say `12 cards
+   * matching your filters` and offer "Export everything, ignoring the filters", when the only thing
+   * narrowing anything was the drawer neither sentence mentioned.
    *
-   * **`narrows` is "am I in a folder", which is where this parts company with the wishlist's
-   * twin.** There, the top level narrows too — an absent `folderId` asks for the wishes filed
-   * nowhere — so a reader at the root of a cabinet is looking at a sweep that leaves every drawer
-   * out. Here an absent `folderId` is every folder (spec §8.4), so the root narrows nothing and
-   * the extra clause would be about nothing.
+   * **`narrows` is not "am I in a folder", and the sentence that used to stand here — that an
+   * absent `folderId` is every folder, so the root narrows nothing — is false as of this PR.** The
+   * root is `rootOnly: true` now, the copies filed *nowhere*, so a reader standing at the top of a
+   * cabinet is looking at a sweep that leaves every drawer out. That is the wishlist's rule
+   * verbatim, and this page reached it from the other direction.
+   *
+   * **The input is the whole census and not {@link hasFolders}**, which counts only the drawers the
+   * reader made. Since v25 the app owns folders too — one per deck, and `Recently removed` — and a
+   * copy filed in a deck's group is left out of the root just as surely as one in a binder, so a
+   * predicate blind to them would drop the clause for exactly the reader whose cards are mostly in
+   * decks. The remaining `folderId !== null` arm is for the level rather than the cabinet: standing
+   * *in* a drawer narrows whatever the census says.
+   *
+   * It is off while the list is flattened, where the level on screen already is every folder, and
+   * off for a database with no folders at all — a fixture, in practice, since v25 gives every real
+   * one a holding area — where there is no cabinet to speak of and the clause would be about
+   * nothing.
+   *
+   * **And unlike the wishlist, the escape hatch needs no second field.** `everythingFilters`
+   * strips everything but `marketplace`, which here lands on `folderId` absent *and* `rootOnly`
+   * absent — the widest answer the backend has. The wishlist has to say `flatten: true` a second
+   * way because its own strip lands back on the root. The conclusion has not changed; the reason
+   * has, and it used to be "there is only one field to strip".
    */
   const exportFiling = {
-    folder: folderId !== null ? folderNameOf(folderId) : null,
-    narrows: folderId !== null,
+    folder: !flatten && folderId !== null ? folderNameOf(folderId) : null,
+    narrows: !flatten && (folders.folders.length > 0 || folderId !== null),
   };
-  const status = statusOf(collection, failure, { filed, inFolder: folderId !== null });
+  const status = statusOf(collection, failure, {
+    filed,
+    inFolder: !flatten && folderId !== null,
+  });
 
   return (
     <section className="flex h-full flex-col gap-4">
@@ -1464,86 +1643,100 @@ export function CollectionPage() {
         sortRows={collection.sortRows}
         tray={COLLECTION_TRAY}
         layoutFor="collection"
+        // On, it ignores the filing entirely: no folder cards, no breadcrumb, no pinned strip and
+        // no drill-down, and every copy in the list at once — each tile captioned with the drawer
+        // it is filed in instead, which is the only way a reader sees where a copy is without
+        // opening it. One press either way, since there is no third state to walk.
+        flatten={{ pressed: collection.flatten, onToggle: collection.toggleFlatten }}
       />
 
       <div className="flex min-h-0 flex-1 flex-col gap-2">
-        {/* **The cabinet's own controls, and they are deliberately not in the filter row.**
-            Where the reader is standing and what drawers exist are navigation rather than a
-            narrowing — `useCollection.folderId` says so, and `resetAll` leaves both alone — so a
-            `+ New folder` among the filters would be the one control in that row that Reset all
-            could not undo. It sits with the breadcrumb and the folder cards instead, which is
-            where the thing it makes appears. */}
-        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-          {hasFolders && (
-            <div className="min-w-0 flex-1">
-              <CollectionBreadcrumb
-                // Root-most first and **without the root**, which the breadcrumb prepends itself:
-                // `null` is a destination rather than a folder, and only that component knows what
-                // it calls it.
-                trail={trail}
-                onOpen={collection.openFolder}
-                canDrop={canFile}
-                onDropCard={fileCard}
-              />
-            </div>
-          )}
-          {/* Always drawn, unlike the wishlist's twin, which hides while the list is flattened:
-              there is no flattened state here to hide from, and a new folder is made **inside the
-              one the reader is standing in** — which at the root is the top level. */}
-          <button
-            type="button"
-            onClick={(e) => openNewFolder(e.currentTarget)}
-            className={cn(
-              "ml-auto h-8 shrink-0 rounded-md border border-border px-3 text-sm hover:bg-surface",
-              FOCUS,
-            )}
-          >
-            + New folder
-          </button>
-        </div>
+        {/* **The fence is "not among the filters", and it was never "not on the bar" — which is
+            the half of this note that changed when Flatten moved.** `resetAll` leaves both
+            `folderId` and `flatten` alone (`useCollection` says so of each), so either one drawn
+            as a *filter* would be the one control in that row Reset all could not undo. But the
+            bar already has a home for controls that are not filters: past the second hairline,
+            beside the sort and the grid-or-table pair, where every control says how the list is
+            **drawn** rather than which rows are in it — and `FilterBar`'s own comment above
+            `ViewToggle` says in as many words that nothing there is counted or cleared by Reset
+            all. Flatten is exactly that kind of statement, so it rides the bar on the far side of
+            the hairline and satisfies the fence rather than breaking it.
+
+            **The breadcrumb does not follow it, and that is the surviving half.** Where the reader
+            is standing is not a way of drawing the list — it is a *place*, one the folder cards
+            below are the doors into — so the drill-down and the trail back out stay down here with
+            the cabinet they are about. `+ New folder` left this row in the other direction: it is
+            the wall's first tile now (`NewFolderCard`), which is where a reader already looks for
+            drawers. So this row is the whole of what is left of the old one, and it is drawn
+            wherever there is a cabinet to speak of — an empty flex row is chrome with nothing in
+            it, but a *flattened* cabinet is not empty, it is being ignored, and the bar is what
+            says so. Hence `hasFolders` alone and no `cabinet` term. */}
+        {hasFolders && (
+          <div className="min-w-0">
+            <CollectionBreadcrumb
+              // Root-most first and **without the root**, which the breadcrumb prepends itself:
+              // `null` is a destination rather than a folder, and only that component knows what
+              // it calls it.
+              trail={trail}
+              // **Not gated on `cabinet`, and it is the one piece of the cabinet that is not.**
+              // The wall and the pinned strip go; this stays and says so, in the inert words the
+              // component draws for the state — which is `WishlistBreadcrumb`'s own behaviour
+              // under the same flag, and the reason the two pages read identically under one
+              // control. See that component for why the argument for hiding it did not hold.
+              flattened={flatten}
+              onOpen={collection.openFolder}
+              canDrop={canFile}
+              onDropCard={fileCard}
+            />
+          </div>
+        )}
 
         {/* **One strip for all four folder layers, and it is not a placement decision so much as
             the only place there is.** Every other anchored layer in this app hangs off a
-            `relative` wrapper around its own trigger; the two triggers here are the filter bar's
-            `+ New folder` and a folder card's `⋯`, and neither component has anywhere to hang a
-            panel — a card that hosted one would also clip it against the scroller below. So the
-            strip sits where the thing being named or moved is: directly above the row of cards,
-            under the breadcrumb that says which level they are. */}
-        {panel !== null && (
+            `relative` wrapper around its own trigger; both triggers here are tiles of the wall
+            below — `New folder`, and a folder card's `⋯` — and a card has nowhere to hang a panel
+            and would clip it against the scroller it sits in. So the strip sits where the thing
+            being named or moved is: directly above the row of cards, under the breadcrumb that
+            says which level they are. */}
+        {openPanel !== null && (
           <div className="w-full max-w-sm shrink-0 rounded-lg border border-border bg-surface p-2 text-xs">
-            {(panel.kind === "newFolder" || panel.kind === "renameFolder") && (
+            {(openPanel.kind === "newFolder" || openPanel.kind === "renameFolder") && (
               <FolderNameField
                 // Remounted between two openings, so a half-typed name never survives into the
                 // next question — the field holds its own draft, and `AnchoredPopup`'s trick of
                 // unmounting the body is not available to a strip that stays.
                 key={
-                  panel.kind === "renameFolder"
-                    ? `rename-${panel.folderId}`
-                    : `new-${panel.parentId ?? "root"}`
+                  openPanel.kind === "renameFolder"
+                    ? `rename-${openPanel.folderId}`
+                    : `new-${openPanel.parentId ?? "root"}`
                 }
-                initial={panel.kind === "renameFolder" ? (folderNameOf(panel.folderId) ?? "") : ""}
+                initial={
+                  openPanel.kind === "renameFolder"
+                    ? (folderNameOf(openPanel.folderId) ?? "")
+                    : ""
+                }
                 label={
-                  panel.kind === "renameFolder"
-                    ? `Rename ${folderNameOf(panel.folderId) ?? "folder"}`
+                  openPanel.kind === "renameFolder"
+                    ? `Rename ${folderNameOf(openPanel.folderId) ?? "folder"}`
                     : "New folder name"
                 }
                 where={
-                  panel.kind === "newFolder"
-                    ? `in ${folderNameOf(panel.parentId) ?? ROOT_LABEL}`
+                  openPanel.kind === "newFolder"
+                    ? `in ${folderNameOf(openPanel.parentId) ?? ROOT_LABEL}`
                     : undefined
                 }
-                submitLabel={panel.kind === "renameFolder" ? "Rename folder" : "Create folder"}
+                submitLabel={openPanel.kind === "renameFolder" ? "Rename folder" : "Create folder"}
                 pending={folders.create.isPending || folders.rename.isPending}
                 onCancel={dismiss}
                 onSubmit={nameFolder}
               />
             )}
 
-            {panel.kind === "moveFolder" && (
+            {openPanel.kind === "moveFolder" && (
               <MoveToFolder
-                label={`Move ${folderNameOf(panel.folderId) ?? "folder"} into a folder`}
+                label={`Move ${folderNameOf(openPanel.folderId) ?? "folder"} into a folder`}
                 nodes={nodes}
-                currentId={userFolders.find((f) => f.id === panel.folderId)?.parentId ?? null}
+                currentId={userFolders.find((f) => f.id === openPanel.folderId)?.parentId ?? null}
                 // The collection's own word for the top level. `MoveToFolder` defaults to the deck
                 // gallery's, which is the surface it was written for.
                 rootLabel={ROOT_LABEL}
@@ -1552,7 +1745,10 @@ export function CollectionPage() {
                 // cycle is a graph SQLite would walk forever the day the folder is deleted — and
                 // that refusal is a fence rather than the affordance.
                 forbidden={
-                  new Set([panel.folderId, ...folderDescendants(userFolders, panel.folderId)])
+                  new Set([
+                    openPanel.folderId,
+                    ...folderDescendants(userFolders, openPanel.folderId),
+                  ])
                 }
                 forbiddenReason="A folder cannot go inside itself, or inside anything it holds."
                 // Drawn **into** the strip rather than as a popup of its own: the strip is the
@@ -1561,17 +1757,17 @@ export function CollectionPage() {
                 inline
                 pending={folders.move.isPending}
                 onPick={(parentId) =>
-                  folders.move.mutate({ id: panel.folderId, parentId }, { onSuccess: dismiss })
+                  folders.move.mutate({ id: openPanel.folderId, parentId }, { onSuccess: dismiss })
                 }
                 onClose={close}
               />
             )}
 
-            {panel.kind === "deleteFolder" && (
+            {openPanel.kind === "deleteFolder" && (
               <DeleteFolderConfirm
-                name={folderNameOf(panel.folderId) ?? "this folder"}
+                name={folderNameOf(openPanel.folderId) ?? "this folder"}
                 pending={folders.remove.isPending}
-                onConfirm={() => folders.remove.mutate(panel.folderId, { onSuccess: dismiss })}
+                onConfirm={() => folders.remove.mutate(openPanel.folderId, { onSuccess: dismiss })}
                 onCancel={dismiss}
                 onClose={close}
               />
@@ -1584,14 +1780,24 @@ export function CollectionPage() {
             self-explaining, and the gesture it is inviting is one a reader has no reason to guess
             at. Not drawn in a drawer of their own, where the wall is that drawer's contents — and
             not over an *empty* holding area, where it would be inviting a drag of nothing beside a
-            line already saying there is nothing here. */}
-        {inRemoved && wall.length > 0 && !empty && (
+            line already saying there is nothing here.
+
+            **And not while the list is flattened**, which is the clause Flatten added: `folderId`
+            survives the press, so `inRemoved` stays true under a page that is no longer drawing
+            the wall this sentence is about — a caption for a row of folder cards that is not on
+            screen. It rides {@link cabinet} for exactly that reason rather than a fourth
+            condition of its own. */}
+        {cabinet && inRemoved && wall.length > 0 && !empty && (
           <p className="shrink-0 text-xs text-dim">
             Drag a card onto a folder to file it back into your collection.
           </p>
         )}
 
-        {wall.length > 0 && (
+        {/* Drawn wherever the cabinet is *and* there is something to put in it — a folder card, or
+            the tile that makes the first one. The two clauses are not the same: inside a deck
+            group or `Recently removed` the tile is refused ({@link canMakeFolder}), so a deck
+            group with no cards of its own would otherwise draw an empty bordered band. */}
+        {cabinet && (wall.length > 0 || canMakeFolder) && (
           // **The scroller is what makes the cabinet a band rather than the page.** A reader with
           // twenty drawers must not lose the wall to them, so the row of cards is bounded and
           // scrolls inside itself.
@@ -1609,6 +1815,21 @@ export function CollectionPage() {
               aria-label="Folders"
               className="grid grid-cols-[repeat(auto-fill,minmax(180px,1fr))] gap-2"
             >
+              {/* **First, and shaped like the cards it makes.** A wall of drawers is where a
+                  reader looks for the drawer they want, so it is also where they look for the one
+                  that is not there yet — and it is the only thing in this `<ul>` on a collection
+                  nobody has filed, which is what {@link cabinet} exists to allow.
+
+                  **Not drawn where the level cannot hold one** — see {@link canMakeFolder}. That
+                  is the collection's own clause and the wishlist has no equivalent: only this
+                  cabinet has folders the app owns, and only this page substitutes one level's wall
+                  for another's ({@link wall}), so `Recently removed` is the one place where every
+                  other tile in the row is a live drop target and this one would not be.
+
+                  It is handed {@link openNewFolder} directly rather than through an arrow: the
+                  panel this raises has to give the caret back to the control it was raised from,
+                  and `NewFolderCard` hands over its own button for exactly that. */}
+              {canMakeFolder && <NewFolderCard onClick={openNewFolder} />}
               {wall.map((node) => (
                 <CollectionFolderCard
                   key={node.folder.id}
@@ -1646,20 +1867,31 @@ export function CollectionPage() {
           </div>
         )}
 
-        {/* **Under the reader's own cabinet, and drawn at every level.** The wall above is what
-            the reader arranged and is the thing they came to this page for; this is the app's own
-            record of where the rest of their copies are, and it belongs beside that rather than
-            above it. Drawn at every level because *pinned* is the word the spec uses and it is
-            what makes `Recently removed` reachable from three drawers down — see the component
-            for the whole of what pinned, flat and locked each cost. */}
-        <PinnedFolders
-          decks={pinned.decks}
-          removed={pinned.removed}
-          totals={pinnedTotals}
-          currency={marketplace.currency}
-          openFolderId={folderId}
-          onOpen={collection.openFolder}
-        />
+        {/* **Under the reader's own cabinet, and drawn at every level — except the one that is not
+            a level.** The wall above is what the reader arranged and is the thing they came to
+            this page for; this is the app's own record of where the rest of their copies are, and
+            it belongs beside that rather than above it. Drawn at every level because *pinned* is
+            the word the spec uses and it is what makes `Recently removed` reachable from three
+            drawers down — see the component for the whole of what pinned, flat and locked cost.
+
+            **Flatten is the exception, and it is the one thing that could take this section away.**
+            Flatten's promise is that the filing is off screen and every copy is in the list; a
+            pinned strip surviving it would leave a row of doors into levels the list is
+            deliberately ignoring, so a press would silently un-flatten by drilling in. Nothing is
+            lost by the absence: the copies in every deck group and in the holding area are *in*
+            the flattened list, each tile captioned with the drawer it sits in ({@link captionFor})
+            and each table row naming it in the Folder column. What goes is the navigation, which
+            is the whole of what Flatten is for. */}
+        {cabinet && (
+          <PinnedFolders
+            decks={pinned.decks}
+            removed={pinned.removed}
+            totals={pinnedTotals}
+            currency={marketplace.currency}
+            openFolderId={folderId}
+            onOpen={collection.openFolder}
+          />
+        )}
 
         {/* One live region, mounted for the life of the view: a region that appears together
             with its text announces nothing, because there was no change for a screen reader
@@ -1738,6 +1970,12 @@ export function CollectionPage() {
               // what is wanted. A tile at zero copies draws nothing, which is the badge's
               // own guard and the reason this view no longer has a badge of its own.
               badge={(tile) => <OwnedBadge owned={tile.copies} />}
+              // **Only while flattened**, which is the one state where a tile cannot be read off
+              // the level it is drawn on: with the filing ignored there is no breadcrumb saying
+              // which drawer these are, so the caption has to say it per tile. Unset otherwise, so
+              // the wall draws its own `SET · number` and this page spells that text exactly once
+              // — in {@link captionFor}, which is the flattened line and nothing else.
+              caption={flatten ? captionFor(folderNameOf) : undefined}
               // The whole tile is the target: the art, its badge and the caption.
               cardMenu={tileMenu}
               cardMenuKey={tileMenuKey}

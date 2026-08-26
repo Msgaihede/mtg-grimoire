@@ -1262,21 +1262,53 @@ pub struct CollectionQuery {
     pub conditions: Option<Vec<String>>,
     /// `Some(true)` narrows to the rows a Scryfall migration or a vanished printing flagged.
     pub needs_review: Option<bool>,
-    /// One folder's direct members, or — absent — **every folder there is**.
+    /// Where the list is being read — **three states**, this field and [`Self::root_only`]
+    /// together:
+    ///
+    /// - `Some(id)`: that folder's direct members. **It wins over `root_only`**, which is not
+    ///   arbitration for its own sake — a query that names a folder has said where it is
+    ///   standing, and a stale flag riding beside it must not silently answer the empty
+    ///   intersection instead.
+    /// - `None` with `root_only` false: **every folder there is**. The reading this field has
+    ///   always had, and what an omitted payload sends.
+    /// - `None` with `root_only` true: `e.folder_id IS NULL` — the root, and only the root.
     ///
     /// **The opposite convention to [`crate::wishlist::WishlistQuery::folder_id`]**, where
-    /// `None` is the root and a second `all_folders` flag says "do not filter". That shape is
-    /// the better one and this is not it, for one reason: this field is being added to a query
-    /// that has always answered the whole collection, and every caller — the table, the export's
-    /// paged sweep, the summary header — must keep getting exactly what it got. A `None` that
-    /// meant the root would silently narrow all of them on the day it landed. The cost is that
-    /// "the root, and only the root" is not expressible here yet; the collection page draws a
-    /// tree rather than one folder at a time, so nothing asks the question.
+    /// `None` is the root and a second [`crate::wishlist::WishlistQuery::flatten`] flag says
+    /// "do not filter". That shape is the better one and this is not it, for one reason: this
+    /// field was added to a query that had always answered the whole collection, and every
+    /// caller — the mirror's `Source::WholeCollection`, the export's paged sweep, the deck
+    /// builder's collection panel, the table, the summary header — must keep getting exactly
+    /// what it got. A `None` that meant the root would silently narrow all of them on the day it
+    /// landed, and the failure would not look like a bug on a page: the plain-text mirror would
+    /// write a whole-collection backup holding only the rows nobody had filed, and raise nothing.
+    ///
+    /// **So "the root, and only the root" is a third field rather than a flip of this one.** It
+    /// *is* asked now — the collection page asks it on every render where the reader is standing
+    /// at the root with Flatten off, which is the wishlist's question one table over — and the
+    /// third state is how it gets asked without touching anybody else's answer. An unasked
+    /// question keeps today's answer, so a caller nobody updated cannot silently lose rows;
+    /// flipping the meaning of a field every caller already sends would have made "nobody
+    /// updated it" the *failure* mode instead of the safe one.
     ///
     /// Direct members only — a folder's page lists what is filed *in* it, never what is filed in
     /// the folders inside it, which is `collection_folders::folder_summary`'s rule and
     /// `folderTree.ts`'s job.
     pub folder_id: Option<i64>,
+    /// `true` narrows an absent [`Self::folder_id`] to the root — `e.folder_id IS NULL`, the
+    /// rows nobody has filed — where absent otherwise means every folder there is. Ignored
+    /// entirely when `folder_id` names a folder; see that field for the three states.
+    ///
+    /// **Default `false`**, which `#[serde(default)]` on this struct gives an omitted `rootOnly`
+    /// and `..Default::default()` gives every caller that never mentions it. That is the whole
+    /// point of it being a separate field: the narrowing has to be *asked for*, so the mirror,
+    /// the export sweep and the deck panel go on reading the whole collection without a line
+    /// changing anywhere.
+    ///
+    /// It is [`crate::wishlist::WishlistQuery::flatten`] read from the other end — that flag
+    /// widens the root to everything, this one narrows everything to the root — because the two
+    /// surfaces mean opposite things by an absent folder. Same page control, opposite polarity.
+    pub root_only: bool,
     /// Whether to leave out the copies a deck holds. Absent is [`Allocation::All`], which is
     /// what every caller written before folders existed asked for without saying so.
     pub allocation: Option<Allocation>,
@@ -1507,8 +1539,20 @@ fn scope(q: &CollectionQuery) -> crate::filters::Predicates {
         Some(false) => p.wheres.push("e.needs_review IS NULL".to_owned()),
         None => {}
     }
-    if let Some(folder) = q.folder_id {
-        p.push("e.folder_id = ?".to_owned(), Box::new(folder));
+    // Where the reader is standing, in the three states [`CollectionQuery::folder_id`] and
+    // [`CollectionQuery::root_only`] spell between them. The named folder wins, an unasked
+    // question pushes no term at all — which is this surface's default and every pre-folder
+    // caller's answer — and the root is the one state that had to be added rather than flipped
+    // into.
+    //
+    // `IS NULL` as a bare where-clause with nothing bound, rather than
+    // `crate::wishlist::scope`'s `folder_id IS ?`: there is no value to bind here, because the
+    // root is not a folder id this query carries. (The wishlist binds because its one term
+    // serves both the root and a named folder.)
+    match (q.folder_id, q.root_only) {
+        (Some(folder), _) => p.push("e.folder_id = ?".to_owned(), Box::new(folder)),
+        (None, true) => p.wheres.push("e.folder_id IS NULL".to_owned()),
+        (None, false) => {}
     }
     // A correlated lookup rather than a join, for [`from_sql`]'s reason: the page, the count
     // and the summary all read that one `FROM`, and widening it for a filter two of them do not
@@ -2401,6 +2445,158 @@ mod tests {
         // Absent is every folder there is, which is what every caller written before folders
         // existed asked for — the opposite of `WishlistQuery`, and its own field says why.
         assert_eq!(all.len(), 2);
+    }
+
+    /// **An unasked `root_only` answers exactly what this query answered before the field
+    /// existed**, which is the whole licence for adding a third state instead of flipping
+    /// `folder_id`'s.
+    ///
+    /// The mirror's `Source::WholeCollection`, the export's paged sweep and the deck builder's
+    /// collection panel all send an absent folder, fill this struct with
+    /// `..Default::default()`, and will never mention the new field. A default that narrowed
+    /// would not look like a bug on a page — it would put a whole-collection backup on disk
+    /// holding only the rows nobody had filed. So the assertion is today's behaviour verbatim:
+    /// both folders' rows, and a count that agrees with them.
+    #[test]
+    fn root_only_at_its_default_answers_every_folder() {
+        let conn = seeded();
+        let binder = folder(&conn, "user", "Binder");
+        let at_root = filed_in(&conn, "bolt-lea", None, 2);
+        let in_binder = filed_in(&conn, "bolt-lea", Some(binder), 3);
+
+        let q = CollectionQuery {
+            limit: 50,
+            ..Default::default()
+        };
+        assert!(!q.root_only, "the struct's own default is off");
+        let page = list_entries(&conn, &q).unwrap();
+        assert_eq!(
+            page.items.iter().map(|r| r.id).collect::<Vec<_>>(),
+            vec![at_root, in_binder],
+            "an unasked question keeps every folder there is"
+        );
+        assert_eq!(page.total, 2, "and the count is over the same scope");
+    }
+
+    /// **`root_only` is what makes "the root, and only the root" expressible**, and it narrows
+    /// the page, the count beside it and the summary together — [`scope`]'s reason for
+    /// existing, and the same assertion the price band and [`Allocation`] each make.
+    ///
+    /// `folder_id: None` goes on meaning every folder on this surface, so the root had to arrive
+    /// as a second field rather than as a new reading of the first —
+    /// [`crate::wishlist::WishlistQuery::flatten`] from the other end. **The total is asserted
+    /// as well as the items** because a predicate written into `list_entries` instead of `scope`
+    /// would pass on the page alone and leave a header counting rows the wall does not draw.
+    ///
+    /// Every row is the same printing at the same finish, condition and language, so they are
+    /// three rows only because `coalesce(folder_id, 0)` is `COLLECTION_GRAIN`'s eleventh term.
+    #[test]
+    fn root_only_narrows_the_page_the_count_and_the_summary_to_the_root() {
+        let conn = seeded();
+        let binder = folder(&conn, "user", "Binder");
+        let removed = folder(&conn, "removed", "Recently removed");
+        let at_root = filed_in(&conn, "bolt-lea", None, 2);
+        filed_in(&conn, "bolt-lea", Some(binder), 3);
+        filed_in(&conn, "bolt-lea", Some(removed), 4);
+
+        let q = CollectionQuery {
+            root_only: true,
+            limit: 50,
+            ..Default::default()
+        };
+        let page = list_entries(&conn, &q).unwrap();
+        assert_eq!(
+            page.items.iter().map(|r| r.id).collect::<Vec<_>>(),
+            vec![at_root],
+            "`e.folder_id IS NULL` — a filed row is somewhere else, whoever filed it"
+        );
+        assert_eq!(
+            page.total, 1,
+            "the caption narrows with the list, not just the items"
+        );
+
+        let header = summarise(
+            &conn,
+            &CollectionQuery {
+                root_only: true,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            (header.entries, header.total_cards),
+            (1, 2),
+            "and the summary describes the same rows the page draws"
+        );
+    }
+
+    /// **A named folder wins over `root_only`**, which is the third state's arbitration and not
+    /// an accident of match order.
+    ///
+    /// A query that names a folder has said where the reader is standing; a flag still set from
+    /// the render before must not turn that into the empty intersection — a folder's page that
+    /// silently lists nothing, with no error anywhere. The rows are asserted rather than the
+    /// count alone, because "the folder's members" and "the root's" are both one row here and a
+    /// length check could not tell them apart.
+    #[test]
+    fn a_named_folder_wins_over_root_only() {
+        let conn = seeded();
+        let binder = folder(&conn, "user", "Binder");
+        let at_root = filed_in(&conn, "bolt-lea", None, 2);
+        let in_binder = filed_in(&conn, "bolt-lea", Some(binder), 3);
+
+        let page = list_entries(
+            &conn,
+            &CollectionQuery {
+                folder_id: Some(binder),
+                root_only: true,
+                limit: 50,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            page.items.iter().map(|r| r.id).collect::<Vec<_>>(),
+            vec![in_binder],
+            "the folder decides, and the root's row is not what came back"
+        );
+        assert_eq!(page.total, 1);
+        assert!(
+            !page.items.iter().any(|r| r.id == at_root),
+            "the two terms are not ANDed into nothing, nor the root preferred"
+        );
+    }
+
+    /// The wire's spelling and its default, which is where `root_only` is really decided: the
+    /// page sends JSON, and `#[serde(rename_all = "camelCase", default)]` on the struct is what
+    /// makes an omitted field the *old* answer instead of a parse error.
+    ///
+    /// `wishlist::tests::the_page_and_the_query_carry_the_names_the_frontend_uses` is the model
+    /// and the contrast: that one pins an omitted `flatten` to "the root", this one pins an
+    /// omitted `rootOnly` to "every folder", and the pair is the record that the two surfaces
+    /// disagree on purpose.
+    #[test]
+    fn the_query_takes_root_only_from_the_wire_and_omitting_it_reads_every_folder() {
+        let bare: CollectionQuery = serde_json::from_str("{}").unwrap();
+        assert!(
+            !bare.root_only,
+            "an omitted `rootOnly` reads every folder rather than the root — which is what \
+             every caller written before the page grew a Flatten switch already asks for"
+        );
+        assert_eq!(
+            bare.folder_id, None,
+            "and the absent folder is still absent"
+        );
+
+        let root: CollectionQuery = serde_json::from_str(r#"{"rootOnly":true}"#).unwrap();
+        assert!(root.root_only, "camelCase on the way in, too");
+
+        // Both fields arrive together on every render of a folder's page with the switch off;
+        // `scope` is what decides the folder wins.
+        let filed: CollectionQuery =
+            serde_json::from_str(r#"{"folderId":4,"rootOnly":true}"#).unwrap();
+        assert_eq!(filed.folder_id, Some(4));
+        assert!(filed.root_only);
     }
 
     /// The default query, priced somewhere other than the default.

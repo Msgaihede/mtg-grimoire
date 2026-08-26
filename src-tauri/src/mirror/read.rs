@@ -60,6 +60,14 @@ pub fn cards_for(
         // the whole-collection list wants. See `CollectionQuery::folder_id`, and read it beside
         // `WishlistQuery::folder_id` below — the two surfaces mean opposite things by the same
         // absence.
+        //
+        // **And `root_only` is deliberately left at its default**, which `collection_cards`'
+        // `..Default::default()` gives it: `false`, no folder term pushed, every folder read.
+        // That field is the collection page's way of asking the *narrower* question — the root
+        // and only the root, with Flatten off — and a whole-collection backup is the one read
+        // that must never ask it. Setting it here would mirror a reader's entire collection as
+        // the handful of cards they never filed, which is the failure the wishlist arm below
+        // avoids from the opposite direction by saying `flatten` out loud.
         Source::WholeCollection => collection_cards(conn, None, marketplace),
         Source::CollectionFolder { id } => collection_cards(conn, Some(id), marketplace),
         // **An absent wishlist `folder_id` is the root, and only the root.** `flatten` is the

@@ -3333,7 +3333,7 @@ describe("the collection's folders", () => {
     expect(db.collectionEntries.map((e) => e.folderId)).toEqual([1, null]);
   });
 
-  it("reads every folder by default and one folder when asked", () => {
+  it("reads every folder by default, one folder when asked, and the root only when told", () => {
     const db = filed({
       collectionEntries: [
         entry({ id: 1, cardId: BOLT.id, folderId: null }),
@@ -3350,11 +3350,28 @@ describe("the collection's folders", () => {
         .sort((a, b) => a - b);
     // **Absent and `null` are one state here, and it is "every folder"** — the opposite of
     // `wishlist_list`, whose absent `folderId` is the root. `Option<i64>` cannot tell a JSON
-    // `null` from an omission, so the collection has two states where the wishlist has three.
+    // `null` from an omission, which is why the root is a second field here rather than a value
+    // of this one: the mirror, the export sweep, the deck panel and the importer's preview all
+    // ask by saying nothing, and had to keep the answer they already had.
     expect(list({})).toEqual([1, 2, 3]);
     expect(list({ folderId: null })).toEqual([1, 2, 3]);
+    expect(list({ rootOnly: false })).toEqual([1, 2, 3]);
     // Direct only: `Binder` does not answer for what is inside `Trade binder`.
     expect(list({ folderId: 1 })).toEqual([2]);
+    // The third state — `folder_id IS NULL`, the copies nobody has filed and only those. This
+    // is `WishlistQuery.flatten` read from the other end: there the flag widens the root to
+    // everything, here it narrows everything to the root.
+    expect(list({ rootOnly: true })).toEqual([1]);
+    expect(list({ folderId: null, rootOnly: true })).toEqual([1]);
+    // **A folder id wins rather than intersecting to nothing.** A stale flag beside an id would
+    // otherwise answer the empty intersection, which on screen reads as an emptied drawer.
+    expect(list({ folderId: 1, rootOnly: true })).toEqual([2]);
+    // The header is taken over the same rows — `collection_summary` reads `collectionScope` and
+    // nothing else, so a root-only list may not be summarised over the whole cabinet.
+    expect(
+      readHandlers(db).collection_summary({ query: { limit: 0, offset: 0, rootOnly: true } })
+        .entries,
+    ).toBe(1);
     // And the row carries its folder's name for the table's own column — a display string, so
     // the root reads `null` rather than a word.
     const rows = readHandlers(db).collection_list({ query: { limit: 10, offset: 0 } }).items;
@@ -5327,6 +5344,12 @@ describe("the busy fault", () => {
       // write validates. Valid all the same, for `zoom`'s reason: a handler that validated before
       // taking the lock would fail this loop by answering `Ok` instead of BUSY.
       view: "grid",
+      // `set_flatten_state`'s second argument, and the **third** write to share the `section`
+      // above — which is why that key carries three values beside it rather than three sections.
+      // `"deck"` is a section name none of the three validates, so all three are valid here for
+      // `zoom`'s reason: a handler that validated before taking the lock would fail this loop by
+      // answering `Ok` instead of BUSY.
+      flattened: true,
       // `deck_set_view_state`'s, and empty is a real value for it: every field is optional and
       // absent means "leave it".
       viewState: {},
@@ -5500,7 +5523,14 @@ describe("the busy fault", () => {
     // to take two arguments of its own, `set_card_zoom` being the first, and it shares that one's
     // `section` name — which is why the record above carries one `section` and two values beside
     // it rather than two sections.
-    // Folder reordering then added **three**, 69 -> 72 — one per cabinet
+    // The remembered Flatten switch then added **one**, 69 → 70: `set_flatten_state`, on the same
+    // split as every preference before it — it takes `sync::with_write` and is refusable, while
+    // the read (`flatten_state`, on `db_read`) answers through every second of a sync. It is the
+    // **third** write to take two arguments of its own and the third to share `section`, and it
+    // is the first of those three whose body is a spread with only *half* a validation: the
+    // section can be blank and the value cannot be junk, because a `bool` off the IPC boundary
+    // has no junk state.
+    // Folder reordering then added **three**, 70 -> 73 — one per cabinet
     // (`deck_folder_reorder`, `collection_folder_reorder`, `wishlist_folder_reorder`), and for
     // once the handler count and the delta are the same figure. All three take
     // `sync::with_write` like every other folder write, so none of them joined `unlocked`: a
@@ -5509,7 +5539,7 @@ describe("the busy fault", () => {
     // **folder** ids rather than category ids — which the record above does not need to know,
     // because every one of them reaches `refuseIfBusy` before it looks at an argument.
     const names = Object.keys(w).filter((n) => !unlocked.includes(n));
-    expect(names).toHaveLength(72);
+    expect(names).toHaveLength(73);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -5662,6 +5692,62 @@ describe("the whole command table", () => {
     expect(() => w.set_card_zoom({ section: "", zoom: 1 })).toThrow(/cannot be blank/);
     // Refused, and the entry each would have overwritten is still the one that was chosen.
     expect(db.cardZoom.deck).toBe(0.7);
+  });
+
+  /**
+   * The seventh `app_meta` row, and the one that is **half of each** of its two object-shaped
+   * neighbours — which is why the questions asked of it are a subset rather than a copy.
+   *
+   * Like the zoom's and the layout's, there is no single default to fall back on: the collection
+   * opens flattened and the wishlist does not, so an absent key is the only thing that can stand
+   * for a switch nobody has pressed, and the whole answer is the two pages the row actually
+   * names. Unlike them, there is no unusable **value** to ask about — a `bool` off the IPC
+   * boundary is one of two things — so the write's only refusal is the blank section, and the
+   * read's only filter is the same key.
+   *
+   * The round trip is what the pair is for, and it has to run **in both directions**: `false` is
+   * a choice a reader made rather than a switch withdrawn, and on the collection it is the only
+   * thing that can beat a `true` default. A fake that stored `true` and deleted on `false` would
+   * pass every flattening assertion and lose the un-flattening for good.
+   */
+  it("answers only the pages it has a switch for, remembers both directions, and refuses a blank section", () => {
+    expect(readHandlers(makeDb()).flatten_state()).toEqual({});
+    expect(readHandlers(makeDb({ flattenState: { collection: false } })).flatten_state()).toEqual({
+      collection: false,
+    });
+
+    // One unusable key costs one page. A blank section is what a hand-edit leaves behind — the
+    // write below refuses it — and it is no reason to forget the entry beside it.
+    expect(
+      readHandlers(makeDb({ flattenState: { wishlist: true, "": true } })).flatten_state(),
+    ).toEqual({ wishlist: true });
+
+    const db = makeDb();
+    const w = writeHandlers(db);
+    // Two cabinets, two independent memories — the whole reason the value is an object, and the
+    // reason it matters more here than for the two rows above: the defaults differ, so a write
+    // that leaked across would not merely be wrong, it would be wrong in a way that looks right.
+    w.set_flatten_state({ section: "collection", flattened: false });
+    w.set_flatten_state({ section: "wishlist", flattened: true });
+    expect(readHandlers(db).flatten_state()).toEqual({ collection: false, wishlist: true });
+
+    // The way back. `false` wrote an entry above; `true` has to overwrite it rather than the read
+    // falling back on the store's own default.
+    w.set_flatten_state({ section: "collection", flattened: true });
+    expect(readHandlers(db).flatten_state().collection).toBe(true);
+
+    // **The section name is not validated and must not be**: which pages have a cabinet is
+    // TypeScript's vocabulary and `flatten.rs` deliberately does not know them, which is what
+    // `isFlattenSection` exists for on the other side.
+    w.set_flatten_state({ section: "shoebox", flattened: true });
+    expect(readHandlers(db).flatten_state().shoebox).toBe(true);
+
+    // The blank one is the whole of the validation, and there is deliberately no second refusal
+    // beside it — see this test's note.
+    expect(() => w.set_flatten_state({ section: "", flattened: true })).toThrow(/cannot be blank/);
+    // `Object.keys` rather than `toHaveProperty("")` — an empty path is not a key vitest's
+    // matcher can be asked about, it throws inside the matcher itself.
+    expect(Object.keys(db.flattenState)).not.toContain("");
   });
 
   /**

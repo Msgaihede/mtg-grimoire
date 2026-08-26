@@ -2,6 +2,8 @@ import { useId, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { AnchoredPopup } from "@/components/AnchoredPopup";
+import { Dropdown } from "@/components/Dropdown/Dropdown";
+import type { DropdownOption } from "@/components/Dropdown/types";
 import { filterChipState } from "@/components/FilterChips";
 import { QuantityStepper } from "@/components/QuantityStepper";
 import { CONDITIONS, CONDITION_LABEL, type Condition } from "@/lib/conditions";
@@ -192,6 +194,17 @@ function AddForm({
     },
   });
 
+  /** **Deliberately not alphabetical — one of the exceptions `lib/options.ts` names,
+   *  the kind whose order *is* the information.** `CONDITIONS` is a grade scale,
+   *  best to worst, and the order every listing these cards were bought from prints
+   *  it in. Sorted by label it would open on "Damaged" and read Damaged / Heavily
+   *  played / Lightly played / Moderately played / Near mint, which is not a scale
+   *  in either direction. Leave `sortOptions` out of here. */
+  const conditionOptions: readonly DropdownOption[] = CONDITIONS.map((c) => ({
+    value: c,
+    label: CONDITION_LABEL[c],
+  }));
+
   return (
     <>
       <div role="group" aria-label="Add to" className="flex gap-1">
@@ -236,30 +249,21 @@ function AddForm({
         <div className="space-y-1">
           {/* A select shows its value, so its name has to be written beside it. The chips
               above are their own labels, which is why only this one is spelled out. */}
-          <label htmlFor={`${id}-condition`} className="block text-xs text-dim">
+          <label
+            id={`${id}-condition-label`}
+            htmlFor={`${id}-condition`}
+            className="block text-xs text-dim"
+          >
             Condition
           </label>
-          {/* **Deliberately not alphabetical — one of the exceptions `lib/options.ts` names,
-              the kind whose order *is* the information.** `CONDITIONS` is a grade scale,
-              best to worst, and the order every listing these cards were bought from prints
-              it in. Sorted by label it would open on "Damaged" and read Damaged / Heavily
-              played / Lightly played / Moderately played / Near mint, which is not a scale
-              in either direction. Leave `sortOptions` out of here. */}
-          <select
+          <Dropdown
             id={`${id}-condition`}
+            labelledBy={`${id}-condition-label`}
             value={condition}
-            onChange={(e) => setCondition(e.target.value as Condition)}
-            className={cn(
-              "h-9 w-full rounded-md border border-border bg-surface px-2 text-sm",
-              FOCUS,
-            )}
-          >
-            {CONDITIONS.map((c) => (
-              <option key={c} value={c}>
-                {CONDITION_LABEL[c]}
-              </option>
-            ))}
-          </select>
+            onChange={(v) => setCondition(v as Condition)}
+            options={conditionOptions}
+            fill
+          />
         </div>
       ) : (
         <div role="group" aria-label="Which printing" className="flex gap-1">

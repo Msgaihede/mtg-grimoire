@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { monitorForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
@@ -624,11 +624,13 @@ describe("CollectionBreadcrumb", () => {
     trail = [BINDER, FOILS] as readonly CollectionFolder[],
     canDrop = () => true,
     withSource = false,
+    flattened = false,
     withTile = false,
   }: {
     trail?: readonly CollectionFolder[];
     canDrop?: (drop: CollectionDrop, folderId: number | null) => boolean;
     withSource?: boolean;
+    flattened?: boolean;
     withTile?: boolean;
   } = {}) {
     render(
@@ -637,6 +639,7 @@ describe("CollectionBreadcrumb", () => {
         {withTile && <TileSource />}
         <CollectionBreadcrumb
           trail={trail}
+          flattened={flattened}
           onOpen={onOpen}
           canDrop={canDrop}
           onDropCard={onDropCard}
@@ -658,6 +661,29 @@ describe("CollectionBreadcrumb", () => {
     mount({ trail: [] });
     expect(screen.queryByRole("button", { name: "Collection" })).not.toBeInTheDocument();
     expect(screen.getByText("Collection")).toHaveAttribute("aria-current", "page");
+  });
+
+  /**
+   * **Flattened, the trail becomes a sentence about what is on screen.** With every folder drawn
+   * at once there is no level to walk to, so a segment would be a door into the place the reader
+   * is already standing — and, filed deeper, a drop target for a move that means nothing.
+   *
+   * The landmark and its name survive the switch on purpose: `CollectionPage` keeps this bar
+   * while it puts the wall and the pinned strip away, so this is the only thing on screen saying
+   * why three bands just vanished, and anything looking for `Collection folders` has to find it
+   * in either state.
+   */
+  it("says what is on screen instead of a trail, once the filing is ignored", () => {
+    mount({ flattened: true });
+    const bar = screen.getByRole("navigation", { name: "Collection folders" });
+    // `\s*` around the middot: a CSS gap between inline boxes is not a space to the accname
+    // algorithm, and jsdom cannot referee that either way.
+    expect(bar).toHaveTextContent(/Collection\s*·\s*all folders/);
+    expect(within(bar).queryByRole("button")).toBeNull();
+    // Not merely unlinked — the folder the reader was in is not named at all, because the list
+    // is no longer showing it rather than everything else.
+    expect(screen.queryByText("Trade binder")).not.toBeInTheDocument();
+    expect(screen.queryByText("Foils")).not.toBeInTheDocument();
   });
 
   it("climbs to the root and to an ancestor", async () => {

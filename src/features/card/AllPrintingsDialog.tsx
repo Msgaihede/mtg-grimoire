@@ -258,8 +258,17 @@ function LanguageMark({ lang }: { lang: string }) {
  *
  * `closest` rather than a tag test, because the press lands on whatever is under the caret and a
  * `contenteditable` region is a tree.
+ *
+ * **`select` was the original clause and is now the dead one.** `PrintingsFilterBar`'s controls
+ * became `Dropdown`s on 2026-08-26, so what has to be exempted is a dropdown's two shapes instead:
+ * the **trigger** while its panel is open — ArrowLeft/ArrowRight there belong to the control the
+ * reader is inside, not to the walk — and anything **inside the panel**, which is where the caret
+ * actually sits. `select` stays in the list because the app may grow one back, and a stale clause
+ * that matches nothing costs nothing.
  */
-const ARROW_OWNERS = "input, textarea, select, [contenteditable=''], [contenteditable='true']";
+const ARROW_OWNERS =
+  "input, textarea, select, [contenteditable=''], [contenteditable='true']," +
+  '[aria-haspopup="listbox"][aria-expanded="true"], [role="listbox"]';
 
 function ownsArrowKeys(target: EventTarget | null): boolean {
   return target instanceof Element && target.closest(ARROW_OWNERS) !== null;

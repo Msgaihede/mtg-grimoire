@@ -784,8 +784,13 @@ never the raw row.
 
 **A folder with nothing filed directly in it produces no row at all** — the query is
 `WHERE folder_id IS NOT NULL … GROUP BY folder_id`, so an empty folder simply is not in the answer,
-and the root, which is not a folder, has no tile to draw either (what is at the root is what the
-unfiltered table already shows). **A page therefore cannot build its folder tree from this
+and the root, which is not a folder, has no tile to draw either. **The parenthetical that used to
+close that sentence — "what is at the root is what the unfiltered table already shows" — stopped
+being true on 2026-08-26** and is recorded here rather than quietly deleted, because it was the
+reason nobody had asked for a root tile: the table at the root now shows the copies filed
+*nowhere*, not every copy, so the root has a count of its own that no tile carries and no summary
+row answers. See
+[The root is the ungrouped cards](#the-root-is-the-ungrouped-cards-and-flatten-is-the-whole-binder). **A page therefore cannot build its folder tree from this
 command.** `collection_folder_list` is the census — flat, every kind, `ORDER BY sort_order, id` —
 and the summary is a lookup layered onto it. A card whose folder has no summary row falls back to
 a zeroed total and draws `0 cards`, which is correct rather than an error state: an empty drawer is
@@ -883,6 +888,83 @@ as a cycle, which is the only thing a chain that long can be.
 The cycle walk cannot stand in for either kind check, either: `optional()?.flatten()` folds "no
 such folder" and "that folder is at the root" into one `None`, so the climb ends on the first hop
 and an id nothing answers to would sail through.
+
+## The root is the ungrouped cards, and Flatten is the whole binder
+
+**Until 2026-08-26 this cabinet had a root that was also the whole binder**, and the two could not
+be told apart by any press. `useCollection` sent no `folderId`, `CollectionQuery::folder_id` reads
+an absent one as *every folder* (spec §8.4), and so the level a reader stood on at the top of the
+tree listed every copy they owned — including the ones filed in drawers whose cards were drawn
+directly underneath it. The folder wall said "these are drawers" and the list under it had already
+emptied them onto the floor.
+
+It now works the way [the wishlist's](wishlist-folders.md) does. **The root is the copies filed
+nowhere, and `Flatten` is the control that puts every folder on screen at once**, captioning each
+tile with the drawer its copies sit in. Since v25 every card in a deck lives in that deck's group,
+so a reader with built decks sees a much smaller root than they used to — that is the cabinet
+working, not a regression, and the header figures are taken over the same scope so they still
+describe what is on screen rather than contradicting it.
+
+### The wire was widened, not flipped, and that was the whole design
+
+The obvious change is to make `folder_id: None` mean the root, which is `WishlistQuery`'s
+convention and the better shape read cold. **It was not done, and the reason is the blast radius of
+getting it wrong.** Four callers ask this query the wide question today by saying nothing:
+
+| Caller | What an accidental narrowing would have cost |
+| --- | --- |
+| `mirror::read`'s `Source::WholeCollection` | The plain-text backup — the copy a reader falls back on when the app will not open — would hold the handful of cards nobody filed |
+| `useExportScope`'s sweep | "Export everything, ignoring the filters" would export the root |
+| The deck editor's Collection Search | The panel would stop offering any card already in a binder |
+| The importer's preview | The fold would miss every existing copy that had been filed |
+
+A flip makes *"nobody updated this caller"* the failure mode, and every one of those failures is
+silent — a shorter list looks exactly like a shorter list. So the root arrived as a **third state**
+instead:
+
+| `folder_id` | `root_only` | Answers |
+| --- | --- | --- |
+| `Some(id)` | ignored | That folder's direct members |
+| `None` | `true` | `e.folder_id IS NULL` — the root, and only the root |
+| `None` | `false` (the default) | **Every folder there is** — unchanged, so an unasked question keeps today's answer |
+
+`root_only` defaults `false`, so all four callers above kept their behaviour without being touched.
+The arbitration is an exhaustive `match` on the pair rather than a chain of `if`s, so a fourth
+state cannot be added without the compiler naming every site that has to decide about it.
+
+**`root_only` is `WishlistQuery::flatten` read from the other end.** That field widens the root to
+everything; this one narrows everything to the root. They are the same axis approached from the two
+different defaults their surfaces were born with.
+
+### The export's escape hatch needs no second field, and the reason changed
+
+`everythingFilters` returns `{ marketplace }` and nothing else, so it strips `folderId` and
+`rootOnly` together — landing on "every folder", which is exactly what *Export everything* means.
+The wishlist cannot do this: stripping its `folderId` lands on the **root**, so its sweep has to
+say `flatten: true` a second, explicit way.
+
+The conclusion here ("stripping is sufficient") is the same one that stood before the root
+narrowed, but **its reason is not**, and the difference is worth keeping: it used to hold because
+there was only one field and absent meant wide. It holds now because *both* fields strip to their
+wide default. A third folder field added later without that property would break the escape hatch
+while this sentence still looked true.
+
+### What the page draws, and what it puts away
+
+`Flatten` is one flag, `cabinet`, and it governs three things at once — the breadcrumb, the
+reader's own folder wall, and the pinned strip of deck groups and `Recently removed`. All three are
+*filing*, and a list that is ignoring the filing should not be surrounded by controls for it. The
+cards are all still there, each captioned with its drawer.
+
+Two consequences that are easy to miss and are each pinned by a test:
+
+- **The wall is drawn whenever the cabinet is, not when it holds folders.** Gated on the folder
+  count, a reader with an empty cabinet had no way to make their first folder once `+ New folder`
+  moved into the wall. It also means the wall is on screen *before* the folder list answers, so a
+  `findByRole("list", { name: "Folders" })` resolves one card early.
+- **The `Recently removed` refile sentence had to follow the wall.** `folderId` survives a press of
+  Flatten by design, so `inRemoved` stayed true under a page drawing no folder cards at all, and
+  the caption invited a drag onto targets that were not there.
 
 ## The page, and the drag payload's own key
 

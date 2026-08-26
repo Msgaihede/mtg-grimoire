@@ -1,15 +1,8 @@
 import { useEffect, useMemo } from "react";
-import { FOCUS } from "@/lib/focus";
+import { Dropdown } from "@/components/Dropdown/Dropdown";
+import type { DropdownOption } from "@/components/Dropdown/types";
 import type { DeckGame } from "@/lib/ipc";
-import { cn } from "@/lib/utils";
 import { ANY_GAME, GAME_OPTIONS, pickerFormats, useFormatSpecs } from "./useFormatSpecs";
-
-/** The one `<select>` recipe both controls in this file draw, and the settings form's third. */
-export const SELECT = cn(
-  "h-9 w-full rounded-md border border-border bg-surface px-2 text-sm",
-  "disabled:opacity-60",
-  FOCUS,
-);
 
 /**
  * What a new deck's format is until the reader says otherwise — `decks.format_key`'s own DDL
@@ -50,7 +43,7 @@ export function FormatSelect({
   onChange,
   game = ANY_GAME,
 }: {
-  /** The `<select>`'s own id, so the caller can keep one `useId` prefix for its whole form. */
+  /** The dropdown's own id, so the caller can keep one `useId` prefix for its whole form. */
   id: string;
   value: string;
   onChange: (formatKey: string) => void;
@@ -71,17 +64,21 @@ export function FormatSelect({
    * Keep the caller's value among the options.
    *
    * **This control owns the list, so it owns "the value has to be in it".** A controlled
-   * `<select>` whose `value` matches no option shows its *first* row while still reporting the
-   * old one — so a reader who picks Modern and then sets the game to Arena would be looking at
-   * `Alchemy` and importing into a Modern deck. Reporting the change up is what keeps the host's
-   * state and the screen the same answer.
+   * trigger whose `value` matches no option used to show a native `<select>`'s *first* row
+   * while still reporting the old one — so a reader who picked Modern and then set the game to
+   * Arena would be looking at `Alchemy` and importing into a Modern deck. `Dropdown` cannot
+   * make that mistake; it draws its own em-dash placeholder for an unmatched value instead — so
+   * the failure mode changed rather than went away: the screen would show nothing under a value
+   * that still says Modern. Reporting the change up is what keeps the host's state and the
+   * screen the same answer.
    *
    * **Not while the list is empty.** That is the one launch where `format_specs` has not
-   * answered yet, the select is drawing its `Casual` fallback, and there is nothing to repair
+   * answered yet, the trigger is drawing its `Casual` fallback, and there is nothing to repair
    * *to* — a write here would overwrite the reader's format with a placeholder.
    *
-   * The first row rather than {@link DEFAULT_FORMAT}: it is what the select is already showing,
-   * so the value moves to agree with the screen rather than to a third answer neither showed.
+   * The first row rather than {@link DEFAULT_FORMAT}: it is what the trigger is already
+   * showing, so the value moves to agree with the screen rather than to a third answer neither
+   * showed.
    *
    * **`CreateDeckDialog` solves the same problem by *deriving* instead, and the difference is
    * ownership rather than taste.** That host holds the draft *and* calls `pickerFormats` itself,
@@ -97,33 +94,34 @@ export function FormatSelect({
     onChange(picker[0].key);
   }, [picker, value, onChange]);
 
+  const options: readonly DropdownOption[] = useMemo(
+    () =>
+      picker.length === 0
+        ? [{ value: DEFAULT_FORMAT, label: "Casual" }]
+        : picker.map((f) => ({ value: f.key, label: f.name })),
+    [picker],
+  );
+
   return (
     <>
-      <label htmlFor={id} className="mb-1 block text-xs text-dim">
+      <label id={`${id}-label`} htmlFor={id} className="mb-1 block text-xs text-dim">
         Format
       </label>
-      <select
+      <Dropdown
         id={id}
+        labelledBy={`${id}-label`}
         value={value}
-        onChange={(e) => onChange(e.target.value)}
+        onChange={onChange}
+        options={options}
         // The seeded table is read once per session and is normally already in hand by the time
-        // a dialog opens; on the one launch where it is not, the select still has to *say*
+        // a dialog opens; on the one launch where it is not, the trigger still has to *say*
         // something, and what it says is what it would create. The one place a real `disabled`
         // is right on a control that greys: there is no reader input to make it grey, and a
-        // select with a single option is not a choice to keep in the tab order.
+        // dropdown with a single option is not a choice to keep in the tab order.
         disabled={picker.length === 0}
-        className={SELECT}
-      >
-        {picker.length === 0 ? (
-          <option value={DEFAULT_FORMAT}>Casual</option>
-        ) : (
-          picker.map((f) => (
-            <option key={f.key} value={f.key}>
-              {f.name}
-            </option>
-          ))
-        )}
-      </select>
+        searchable
+        fill
+      />
     </>
   );
 }
@@ -148,26 +146,27 @@ export function GameSelect({
   value: DeckGame;
   onChange: (gameKey: DeckGame) => void;
 }): React.JSX.Element {
+  const options: readonly DropdownOption[] = GAME_OPTIONS.map((g) => ({
+    value: g.key,
+    label: g.name,
+  }));
+
   return (
     <>
-      <label htmlFor={id} className="mb-1 block text-xs text-dim">
+      <label id={`${id}-label`} htmlFor={id} className="mb-1 block text-xs text-dim">
         Game
       </label>
-      <select
+      <Dropdown
         id={id}
+        labelledBy={`${id}-label`}
         value={value}
         // The cast is safe by construction and is the narrowing a native `<select>` cannot do
         // for itself: every option below is written out of `GAME_OPTIONS`, so the only strings
         // this handler can ever meet are that list's own keys.
-        onChange={(e) => onChange(e.target.value as DeckGame)}
-        className={SELECT}
-      >
-        {GAME_OPTIONS.map((g) => (
-          <option key={g.key} value={g.key}>
-            {g.name}
-          </option>
-        ))}
-      </select>
+        onChange={(v) => onChange(v as DeckGame)}
+        options={options}
+        fill
+      />
     </>
   );
 }

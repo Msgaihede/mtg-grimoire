@@ -3,6 +3,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, waitFor, within } from "storybook/test";
 import { deckCoverUrl } from "@/lib/images";
 import type { DeckCard, DeckCategory, DeckRow } from "@/lib/ipc";
+import { openDropdown, pickOption } from "@/test-dropdown";
 import { AUTO_CATEGORY } from "./autoCategory";
 import type { DeckCoverPickerProps } from "./DeckCoverPicker";
 import { DeckSettingsForm, folderPaths, type DeckSettingsValue } from "./DeckSettingsForm";
@@ -231,9 +232,9 @@ export const Default: Story = {
     const canvas = within(canvasElement);
 
     await expect(await canvas.findByLabelText("Name")).toHaveValue("Modern Goodstuff");
-    await expect(canvas.getByLabelText("Format")).toHaveValue("modern");
-    await expect(canvas.getByLabelText("Folder")).toHaveValue("");
-    // The caption beside the label, not the option inside the select — both say the words, and
+    await expect(canvas.getByRole("button", { name: "Format" })).toHaveTextContent("Modern");
+    await expect(canvas.getByRole("button", { name: "Folder" })).toHaveTextContent("Top level");
+    // The caption beside the label, not the option inside the dropdown — both say the words, and
     // only one of them is a statement about this deck.
     const caption = within(canvas.getByText("Folder").closest("div") as HTMLElement);
     await expect(caption.getByText("Top level")).toBeVisible();
@@ -282,7 +283,7 @@ export const NewDeck: Story = {
  *
  * The fixture is a Modern deck. Setting the game to Arena drops every format Arena cannot play
  * — Modern among them — and Modern is still on the list, folded back in by `pickerFormats`'
- * `keep`. That is the whole of "setting a game never re-formats a deck", drawn: the select still
+ * `keep`. That is the whole of "setting a game never re-formats a deck", drawn: the trigger still
  * shows its own value, so the reader's next unrelated change writes the format they can see.
  *
  * Setting it back to Any restores the full list, which is what makes this a *filter* rather than
@@ -292,34 +293,37 @@ export const GameNarrowsTheFormats: Story = {
   play: async ({ args, canvasElement }) => {
     const canvas = within(canvasElement);
 
-    const game = await canvas.findByLabelText("Game");
-    await expect(game).toHaveValue("any");
-    const format = canvas.getByLabelText("Format");
-    const optionCount = () => within(format).getAllByRole("option").length;
+    await canvas.findByLabelText("Name");
+    const game = canvas.getByRole("button", { name: "Game" });
+    await expect(game).toHaveTextContent("Any");
+
+    await openDropdown(userEvent.setup(), "Format");
     // **Wait for the seeded table before measuring anything.** `format_specs` is a query, and
     // until it lands `pickerFormats` answers the deck's own format alone — `keep` folds it in
-    // whether or not the specs arrived, so the select is a one-row list that *looks* like a
-    // narrowed one. A `wide` captured there is 1, and "fewer than 1" is unreachable.
+    // whether or not the specs arrived, so the panel is a one-row list that *looks* like a
+    // narrowed one. A `wide` captured there is 1, and "fewer than 1" is unreachable. The panel
+    // stays open and re-renders as the query resolves, so this waits rather than re-opening.
     await waitFor(async () => {
-      await expect(within(format).getByRole("option", { name: "Commander" })).toBeInTheDocument();
+      await expect(canvas.getByRole("option", { name: "Commander" })).toBeInTheDocument();
     });
-    const wide = optionCount();
+    const wide = canvas.getAllByRole("option").length;
 
-    await userEvent.selectOptions(game, "arena");
-
+    // Picking the game clicks its own trigger, which is an outside click for the Format panel
+    // still open above it — the same thing any reader's next move would do, and it closes the
+    // panel exactly as a click elsewhere in the app would.
+    await pickOption(userEvent.setup(), "Game", "Arena");
     await expect(args.onChange).toHaveBeenLastCalledWith({ gameKey: "arena" });
-    await waitFor(async () => {
-      await expect(optionCount()).toBeLessThan(wide);
-    });
-    // The deck's own format, kept — and still what the select is showing.
-    await expect(within(format).getByRole("option", { name: "Modern" })).toBeInTheDocument();
-    await expect(format).toHaveValue("modern");
 
-    await userEvent.selectOptions(game, "any");
+    await openDropdown(userEvent.setup(), "Format");
+    await expect(canvas.getAllByRole("option").length).toBeLessThan(wide);
+    // The deck's own format, kept — and still what the trigger is showing.
+    await expect(canvas.getByRole("option", { name: "Modern" })).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: "Format" })).toHaveTextContent("Modern");
 
-    await waitFor(async () => {
-      await expect(optionCount()).toBe(wide);
-    });
+    await pickOption(userEvent.setup(), "Game", "Any");
+
+    await openDropdown(userEvent.setup(), "Format");
+    await expect(canvas.getAllByRole("option")).toHaveLength(wide);
   },
 };
 
@@ -361,7 +365,7 @@ export const EveryChangeAndEveryCommit: Story = {
 /**
  * A folder list that could not be read.
  *
- * The select is no use without it, so it says what happened and stops offering the move — a
+ * The dropdown is no use without it, so it says what happened and stops offering the move — a
  * control that offered folders it could not name would file the deck somewhere the reader did
  * not choose.
  */
@@ -373,6 +377,6 @@ export const FoldersUnread: Story = {
     await expect(
       await canvas.findByText("Could not read the folders — Database is busy."),
     ).toBeVisible();
-    await expect(canvas.getByLabelText("Folder")).toBeDisabled();
+    await expect(canvas.getByRole("button", { name: "Folder" })).toBeDisabled();
   },
 };

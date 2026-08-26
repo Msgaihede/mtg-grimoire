@@ -1,11 +1,13 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { UserEvent } from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { MANA_VALUES } from "@/components/FilterChips";
 import { TOOLTIP_OPEN_MS, TOOLTIP_PANEL_ID, TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import type { FacetResponse, SearchSortKey } from "@/lib/ipc";
 import type { TagChip } from "@/features/tags/tagFilters";
 import type { SortSpec } from "@/lib/sort";
+import { openDropdown, pickOption } from "@/test-dropdown";
 import type { TagToken } from "./tagQuery";
 import { FilterBar } from "./FilterBar";
 import { ANY_CARD, FORMATS } from "./useCardSearch";
@@ -131,6 +133,92 @@ vi.mock("./SetCombobox", () => ({
   SetCombobox: () => <div data-testid="set-combobox" />,
 }));
 
+/**
+ * The direction button's tooltip binding — kept **first in this file**, deliberately, rather
+ * than beside the rest of "its sort picker" below. That used to cost nothing; since the sort and
+ * format pickers became `<Dropdown>`, it costs a false red.
+ *
+ * **jsdom's `:focus-visible` modality is one flag on the shared `window`, not scoped to a
+ * render.** A real click anywhere earlier in this file's run — and every `pickOption`/
+ * `openDropdown` call below is one, now that a picker is a `<button>` a reader presses rather
+ * than a `<select>` a reader silently reassigns — leaves it on "pointer" for every render after
+ * it, including one that has not been born yet. A `userEvent.tab()` normally restores "keyboard"
+ * for the element it lands on; empirically it does not here once a prior test has both clicked a
+ * `<Dropdown>` row *and* let the shell's own `dismiss()` hand focus back to the trigger
+ * programmatically (`Dropdown.tsx`'s close path) — a `fireEvent.keyDown` warm-up before the
+ * `.focus()`/`user.tab()` pair does not recover it either, tried and reverted. That shape is the
+ * jsdom cross-test artifact `tooltip.test.tsx`'s "opens on focus with no delay" already names for
+ * the same reason ("a synthetic `fireEvent.keyDown` + `.focus()` version lived here briefly and
+ * was flaky"); this file just did not have a `<Dropdown>` click early enough to meet it before
+ * 2026-08-25.
+ *
+ * So this describe runs before the first one that clicks anything, which is `describe("FilterBar",
+ * ...)` below — its "offers the printings no format allows as a row of the format select" is the
+ * first `pickOption` in the file. **Nothing about the assertions changed; only where they sit.**
+ */
+describe("FilterBar, its sort direction tooltip binding", () => {
+  /**
+   * The wrapper's whole reason to exist, and the one state nothing else covers: this suite has
+   * no `TooltipProvider` above it anywhere else, and `FilterBar.stories.tsx`'s `SortedDescending`
+   * — the only other wrapper coverage in the app — hovers only the *enabled* button. A real
+   * `disabled` attribute fires no pointer events at all, so `FilterBar.tsx` binds the tooltip to
+   * the `<span>` around the button rather than to the button itself; a browser then delivers the
+   * hover to that span, which is what this fires on. **This is the test that fails if the
+   * wrapper is ever removed and the binding moves onto the button directly** — nothing would be
+   * listening on the span any more, and firing on the disabled button itself proves nothing (a
+   * real browser never delivers a hover there, and jsdom does not hit-test to tell the two cases
+   * apart).
+   */
+  it("still opens the direction tooltip by hover while the button is disabled", async () => {
+    render(
+      <TooltipProvider>
+        <FilterBar search={search()} />
+      </TooltipProvider>,
+    );
+    const button = dirButton();
+    expect(button).toBeDisabled();
+
+    fireEvent.pointerEnter(button.parentElement as HTMLElement);
+    await waitFor(() => expect(document.getElementById(TOOLTIP_PANEL_ID)).not.toBeNull(), {
+      timeout: TOOLTIP_OPEN_MS + 1000,
+    });
+    expect(document.getElementById(TOOLTIP_PANEL_ID)).toHaveTextContent(
+      "Sort direction — Best match has no direction",
+    );
+  });
+
+  /**
+   * Important 3's fix, evidenced live rather than through the shared component's own unit
+   * tests: `useTooltip.ts`'s `onFocus` used to hand the wrapping `<span>` above to
+   * `TooltipProvider.focus()`, which tests `:focus-visible` on whatever anchor it is given — and
+   * a `<span>` with no `tabIndex` is never itself the focused element, so Tab landing on this
+   * *enabled* button opened nothing at all. `e.target`, the button React reports as actually
+   * focused, is what fixes it — proven here with a real `userEvent.tab()` from the control just
+   * before it in the row, the same path a keyboard reader takes.
+   */
+  it("opens the direction tooltip on Tab once an order is picked", async () => {
+    const user = userEvent.setup();
+    render(
+      <TooltipProvider>
+        <FilterBar
+          search={search({ sortSelection: "name", sort: [{ key: "name", dir: "asc" }] })}
+        />
+      </TooltipProvider>,
+    );
+    const button = dirButton();
+    expect(button).not.toBeDisabled();
+
+    screen.getByRole("button", { name: "Sort results" }).focus();
+    await user.tab();
+    expect(button).toHaveFocus();
+
+    await waitFor(() => expect(document.getElementById(TOOLTIP_PANEL_ID)).not.toBeNull());
+    expect(document.getElementById(TOOLTIP_PANEL_ID)).toHaveTextContent(
+      "Sort direction: ascending — press for descending",
+    );
+  });
+});
+
 describe("FilterBar", () => {
   /**
    * The direction is explicit: real symbols, not letters in circles. The glyph comes from
@@ -230,34 +318,71 @@ describe("FilterBar", () => {
    */
   it("offers the printings no format allows as a row of the format select", async () => {
     const setFormat = vi.fn();
+    const user = userEvent.setup();
     render(<FilterBar search={search({ setFormat })} />);
 
     await openTray();
 
-    const select = screen.getByLabelText("Format") as HTMLSelectElement;
-    expect(select).toHaveValue("");
-    expect(select.selectedOptions[0]).toHaveTextContent("Any format");
+    expect(screen.getByRole("button", { name: "Format" })).toHaveTextContent("Any format");
     expect(screen.queryByRole("button", { name: /unplayable/i })).toBeNull();
 
-    await userEvent.selectOptions(select, ANY_CARD);
+    await pickOption(user, "Format", "Any card");
 
     expect(setFormat).toHaveBeenCalledWith(ANY_CARD);
   });
 
   /**
-   * A controlled `<select>` never has its `value` assigned by React — `react-dom` walks the
-   * options setting `selected`, and on no match it silently picks the first row that is not
-   * disabled. Both halves are asserted because they fail differently, and `getByRole` would
-   * catch neither: a present-but-unselected option passes it.
+   * The trigger's own text is the whole of what the reader sees — a `<Dropdown>` given a value
+   * that matches nothing falls back to its own placeholder dash rather than to a stale label
+   * (`DEFAULT_PLACEHOLDER`, `Dropdown.tsx`), so reading the drawn text is what tells "Any card is
+   * correctly picked" apart from "the value did not match and this is the dash instead".
    */
   it("shows Any card as picked when it is", async () => {
     render(<FilterBar search={search({ format: ANY_CARD })} />);
 
     await openTray();
 
-    const select = screen.getByLabelText("Format") as HTMLSelectElement;
-    expect(select).toHaveValue(ANY_CARD);
-    expect(select.selectedOptions[0]).toHaveTextContent("Any card");
+    expect(screen.getByRole("button", { name: "Format" })).toHaveTextContent("Any card");
+  });
+
+  /**
+   * Gold means "this is not where the control opens" — a wider claim than "a filter is on",
+   * since `Any card` is a *widening* and lights the same way. `Any format` is the default and the
+   * only value that reads as untouched.
+   *
+   * `classList.contains`, never `className.includes`: the trigger's own quiet state carries a
+   * `hover:` variant of `text-text`, and a substring match would pass on that without the control
+   * ever being gold.
+   */
+  it("draws the format picker gold once it names anything but Any format", async () => {
+    const { rerender } = render(<FilterBar search={search()} />);
+    await openTray();
+
+    const untouched = screen.getByRole("button", { name: "Format" });
+    expect(untouched.classList.contains("border-accent")).toBe(false);
+    expect(untouched.classList.contains("text-accent")).toBe(false);
+
+    rerender(<FilterBar search={search({ format: "modern" })} />);
+    const named = screen.getByRole("button", { name: "Format" });
+    expect(named.classList.contains("border-accent")).toBe(true);
+    expect(named.classList.contains("text-accent")).toBe(true);
+
+    // `Any card` is the widening row rather than the default, and it lights the same way.
+    rerender(<FilterBar search={search({ format: ANY_CARD })} />);
+    const widened = screen.getByRole("button", { name: "Format" });
+    expect(widened.classList.contains("border-accent")).toBe(true);
+  });
+
+  /** The format trigger's half of the check above the sort picker's — see that test's comment
+   *  for why `getByRole`'s resolved name alone cannot prove `labelledBy` is wired. */
+  it("wires the format trigger's name through aria-labelledby, not only a label jsdom would resolve anyway", async () => {
+    render(<FilterBar search={search()} />);
+    await openTray();
+
+    const trigger = screen.getByRole("button", { name: "Format" });
+    const labelId = trigger.getAttribute("aria-labelledby");
+    expect(labelId).toBeTruthy();
+    expect(document.getElementById(labelId!)).toHaveTextContent("Format");
   });
 
   it("counts what Reset all would clear, and clears it", async () => {
@@ -458,6 +583,7 @@ describe("FilterBar, greyed by its facets", () => {
    * would grey if a raw response ever reached this row.
    */
   it("leaves every control live while the index is still building", async () => {
+    const user = userEvent.setup();
     render(<FilterBar search={search()} />);
 
     await openTray();
@@ -465,7 +591,9 @@ describe("FilterBar, greyed by its facets", () => {
     for (const name of [/^Mana value 7\b/, /^Cards with X\b/, /^White\b/, /^Owned\b/]) {
       expect(screen.getByRole("button", { name })).not.toHaveAttribute("aria-disabled");
     }
-    expect(screen.getByRole("option", { name: "Modern" })).not.toBeDisabled();
+
+    await openDropdown(user, "Format");
+    expect(screen.getByRole("option", { name: "Modern" })).not.toHaveAttribute("aria-disabled");
   });
 
   /**
@@ -512,21 +640,30 @@ describe("FilterBar, greyed by its facets", () => {
     );
   });
 
-  /** Native `<option disabled>` — the one place a real `disabled` is right, because a listbox
-   *  option is not a tab stop to lose. */
+  /** `aria-disabled`, not the native attribute — a dropdown row is never in the tab order to lose
+   *  either way, but it is a `<li>` rather than a form tag, so `toBeDisabled()` would pass here
+   *  whichever way the row actually reads: it checks only the native `disabled` attribute on a
+   *  form-associated element, and a `role="option"` `<li>` never carries one. */
   it("greys a format nothing in this search is legal in", async () => {
+    const user = userEvent.setup();
     render(
       <FilterBar search={search({ facets: facets({ formats: { modern: 0, legacy: 4 } }) })} />,
     );
 
     await openTray();
+    await openDropdown(user, "Format");
 
-    expect(screen.getByRole("option", { name: "Modern" })).toBeDisabled();
-    expect(screen.getByRole("option", { name: "Legacy" })).not.toBeDisabled();
+    expect(screen.getByRole("option", { name: "Modern" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    expect(screen.getByRole("option", { name: "Legacy" })).not.toHaveAttribute("aria-disabled");
     // Never, either of them: they are how you get back to no format at all, and `Any card` is
     // the only row that can *widen* a search that has greyed itself into nothing.
-    expect(screen.getByRole("option", { name: "Any format" })).not.toBeDisabled();
-    expect(screen.getByRole("option", { name: "Any card" })).not.toBeDisabled();
+    expect(screen.getByRole("option", { name: "Any format" })).not.toHaveAttribute(
+      "aria-disabled",
+    );
+    expect(screen.getByRole("option", { name: "Any card" })).not.toHaveAttribute("aria-disabled");
   });
 
   /**
@@ -579,31 +716,35 @@ describe("FilterBar, greyed by its facets", () => {
 });
 
 describe("FilterBar, its format options in order", () => {
-  /** Every `<option>` the select draws, in document order. The **sequence** is the behaviour
-   *  under test, so each of these asserts the whole list: two formats swapped past each other
-   *  pass any assertion about one row's presence, and did.
+  /** Every row the format picker draws, in document order — opened first, since the shell only
+   *  renders its rows while the panel is up. The **sequence** is the behaviour under test, so
+   *  each of these asserts the whole list: two formats swapped past each other pass any
+   *  assertion about one row's presence, and did.
    *
-   *  Scoped to the format select rather than the document. This row has carried a second
-   *  `<select>` since the sort picker landed beside it, and a bare `screen.getAllByRole` would
-   *  hand every case below eight sort orders it has never heard of. */
-  const formatOrder = () =>
-    within(screen.getByLabelText("Format"))
+   *  Scoped to the format listbox rather than the document. Nothing else is open in these cases,
+   *  but a bare `screen.getAllByRole("option")` would still mix it with a sort or a set listbox
+   *  the moment one of those opened first. */
+  async function formatOrder(user: UserEvent): Promise<(string | null)[]> {
+    await openDropdown(user, "Format");
+    return within(screen.getByRole("listbox"))
       .getAllByRole("option")
       .map((o) => o.textContent);
+  }
 
   /**
    * A reader hunting for "Modern" hunts under M. `FORMATS` is authored in the order the formats
-   * rank, which is knowledge a `<select>` never shows, so with nothing greyed the dropdown has
-   * to read as one plain alphabet — and with no facets in hand `optionDisabled` answers false
-   * for every key, which is the path that has to fall out of the grouping rather than be a
-   * special case somebody has to remember.
+   * rank, which is knowledge a dropdown never shows, so with nothing greyed the list has to read
+   * as one plain alphabet — and with no facets in hand `optionDisabled` answers false for every
+   * key, which is the path that has to fall out of the grouping rather than be a special case
+   * somebody has to remember.
    */
   it("reads alphabetically while the index is still building", async () => {
+    const user = userEvent.setup();
     render(<FilterBar search={search()} />);
 
     await openTray();
 
-    expect(formatOrder()).toEqual([
+    expect(await formatOrder(user)).toEqual([
       "Any card",
       "Any format",
       "Commander",
@@ -624,12 +765,13 @@ describe("FilterBar, its format options in order", () => {
    * and the alphabet agreeing with it here is not what puts it in that order.
    */
   it("opens on Any format with Any card above it", async () => {
+    const user = userEvent.setup();
     render(<FilterBar search={search()} />);
 
     await openTray();
 
-    expect(formatOrder().slice(0, 2)).toEqual(["Any card", "Any format"]);
-    expect(screen.getByLabelText("Format")).toHaveValue("");
+    expect(screen.getByRole("button", { name: "Format" })).toHaveTextContent("Any format");
+    expect((await formatOrder(user)).slice(0, 2)).toEqual(["Any card", "Any format"]);
   });
 
   /**
@@ -647,12 +789,17 @@ describe("FilterBar, its format options in order", () => {
    * a build that drew it somewhere further down.
    */
   it("leaves Any card out where the surface does not narrow the corpus", async () => {
+    const user = userEvent.setup();
     render(<FilterBar search={search({ anyCard: undefined })} />);
 
     await openTray();
 
-    expect(formatOrder()[0]).toBe("Any format");
-    expect(formatOrder()).not.toContain("Any card");
+    // `formatOrder` opens the panel, which is the only place the rows exist now: a `Dropdown`
+    // draws nothing until its trigger is pressed, so the absence below is asserted against an
+    // open listbox rather than against a closed control that has no rows either way.
+    const order = await formatOrder(user);
+    expect(order[0]).toBe("Any format");
+    expect(order).not.toContain("Any card");
     expect(screen.queryByRole("option", { name: "Any card" })).not.toBeInTheDocument();
   });
 
@@ -663,6 +810,7 @@ describe("FilterBar, its format options in order", () => {
    * has no business sitting between two formats that would return cards.
    */
   it("floats the pickable formats above the greyed ones, each half alphabetical", async () => {
+    const user = userEvent.setup();
     render(
       <FilterBar
         search={search({
@@ -683,7 +831,7 @@ describe("FilterBar, its format options in order", () => {
 
     await openTray();
 
-    expect(formatOrder()).toEqual([
+    expect(await formatOrder(user)).toEqual([
       "Any card",
       "Any format",
       "Commander",
@@ -696,8 +844,11 @@ describe("FilterBar, its format options in order", () => {
     ]);
     // The split is the greying itself and not a second reading of the counts that could drift
     // from it — one `optionDisabled` answer decides both the half and the attribute.
-    expect(screen.getByRole("option", { name: "Vintage" })).not.toBeDisabled();
-    expect(screen.getByRole("option", { name: "Legacy" })).toBeDisabled();
+    expect(screen.getByRole("option", { name: "Vintage" })).not.toHaveAttribute("aria-disabled");
+    expect(screen.getByRole("option", { name: "Legacy" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
   });
 
   /**
@@ -707,6 +858,7 @@ describe("FilterBar, its format options in order", () => {
    * Sinking it would file that row below every row they cannot use.
    */
   it("keeps the selected format above the greyed ones even at zero", async () => {
+    const user = userEvent.setup();
     render(
       <FilterBar
         search={search({
@@ -728,7 +880,7 @@ describe("FilterBar, its format options in order", () => {
 
     await openTray();
 
-    expect(formatOrder()).toEqual([
+    expect(await formatOrder(user)).toEqual([
       "Any card",
       "Any format",
       "Standard",
@@ -739,7 +891,7 @@ describe("FilterBar, its format options in order", () => {
       "Pauper",
       "Pioneer",
     ]);
-    expect(screen.getByRole("option", { name: "Vintage" })).not.toBeDisabled();
+    expect(screen.getByRole("option", { name: "Vintage" })).not.toHaveAttribute("aria-disabled");
   });
 
   /**
@@ -749,6 +901,7 @@ describe("FilterBar, its format options in order", () => {
    * are how a reader who has filtered themselves into nothing gets out.
    */
   it("pins both non-format rows first even when nothing at all is legal", async () => {
+    const user = userEvent.setup();
     render(
       <FilterBar
         search={search({
@@ -759,7 +912,7 @@ describe("FilterBar, its format options in order", () => {
 
     await openTray();
 
-    expect(formatOrder()).toEqual([
+    expect(await formatOrder(user)).toEqual([
       "Any card",
       "Any format",
       "Commander",
@@ -770,9 +923,14 @@ describe("FilterBar, its format options in order", () => {
       "Standard",
       "Vintage",
     ]);
-    expect(screen.getByRole("option", { name: "Any format" })).not.toBeDisabled();
-    expect(screen.getByRole("option", { name: "Any card" })).not.toBeDisabled();
-    expect(screen.getByRole("option", { name: "Commander" })).toBeDisabled();
+    expect(screen.getByRole("option", { name: "Any format" })).not.toHaveAttribute(
+      "aria-disabled",
+    );
+    expect(screen.getByRole("option", { name: "Any card" })).not.toHaveAttribute("aria-disabled");
+    expect(screen.getByRole("option", { name: "Commander" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
   });
 
   /** The deck editor's docked panel opens on the format of the deck being edited, and the hook
@@ -781,33 +939,36 @@ describe("FilterBar, its format options in order", () => {
     search({ formats: [...FORMATS, { value: "historic", label: "Historic" }], ...over });
 
   /**
-   * The whole reason the list is the search's own. A `<select>` whose `value` matches no
-   * `<option>` does not draw blank — React selects the first row that is not disabled, which is
-   * the pinned `Any format`, while the filter it names goes on narrowing the results
-   * underneath. Both halves are asserted because they fail differently: `value` reads back
-   * `""` from a controlled select given a key none of its options carry, and the option's own
-   * text is the whole of what the reader can see. Neither is `getByRole` — a
-   * present-but-unselected option would pass that and be exactly the bug this prevents.
+   * The whole reason the list is the search's own. A `<Dropdown>` whose `value` matches no
+   * option does not silently keep drawing whatever was last picked — it falls back to its own
+   * placeholder dash (`DEFAULT_PLACEHOLDER`, `Dropdown.tsx`), which would read as "no format at
+   * all" while the filter it names goes on narrowing the results underneath. Both halves are
+   * asserted because they fail differently: the trigger's own text is the whole of what the
+   * reader sees, and a present-but-unpicked option in the listbox would still satisfy a bare
+   * `getByRole` presence check — which is exactly the bug this guards against.
    */
   it("draws a format the shared list does not carry, and shows it as picked", async () => {
+    const user = userEvent.setup();
     render(<FilterBar search={seeded({ format: "historic" })} />);
 
     await openTray();
+    await openDropdown(user, "Format");
 
-    const select = screen.getByLabelText("Format") as HTMLSelectElement;
-    expect(select).toHaveValue("historic");
-    expect(select.selectedOptions[0]).toHaveTextContent("Historic");
-    expect(screen.getByRole("option", { name: "Historic" })).not.toBeDisabled();
+    expect(screen.getByRole("button", { name: "Format" })).toHaveTextContent("Historic");
+    expect(screen.getByRole("option", { name: "Historic" })).not.toHaveAttribute(
+      "aria-disabled",
+    );
   });
 
   /** It is a format like every other once it arrives, so it files under H rather than riding
    *  the top as the newcomer — a reader hunting for it hunts where the alphabet says. */
   it("sorts the seeded format into the alphabet rather than pinning it", async () => {
+    const user = userEvent.setup();
     render(<FilterBar search={seeded({ format: "historic" })} />);
 
     await openTray();
 
-    expect(formatOrder()).toEqual([
+    expect(await formatOrder(user)).toEqual([
       "Any card",
       "Any format",
       "Commander",
@@ -829,6 +990,7 @@ describe("FilterBar, its format options in order", () => {
    * alphabet hands them.
    */
   it("keeps both pinned rows first when a seeded format would collate above them", async () => {
+    const user = userEvent.setup();
     render(
       <FilterBar
         search={search({
@@ -840,7 +1002,7 @@ describe("FilterBar, its format options in order", () => {
 
     await openTray();
 
-    expect(formatOrder()).toEqual([
+    expect(await formatOrder(user)).toEqual([
       "Any card",
       "Any format",
       "Alchemy",
@@ -852,12 +1014,13 @@ describe("FilterBar, its format options in order", () => {
       "Standard",
       "Vintage",
     ]);
-    expect(screen.getByLabelText("Format")).toHaveValue("alchemy");
+    expect(screen.getByRole("button", { name: "Format" })).toHaveTextContent("Alchemy");
   });
 
   /** The seeded row greys by the rule every other row greys by — one `optionDisabled` answer,
    *  and no arm of it that only the seven written-down keys reach. */
   it("greys the seeded format when this search has nothing legal in it", async () => {
+    const user = userEvent.setup();
     render(
       <FilterBar
         search={seeded({ facets: facets({ formats: { ...facets().formats, historic: 0 } }) })}
@@ -866,10 +1029,7 @@ describe("FilterBar, its format options in order", () => {
 
     await openTray();
 
-    expect(screen.getByRole("option", { name: "Historic" })).toBeDisabled();
-    expect(screen.getByRole("option", { name: "Modern" })).not.toBeDisabled();
-    // And it sinks below the pickable half rather than holding its slot under H.
-    expect(formatOrder()).toEqual([
+    expect(await formatOrder(user)).toEqual([
       "Any card",
       "Any format",
       "Commander",
@@ -881,6 +1041,12 @@ describe("FilterBar, its format options in order", () => {
       "Vintage",
       "Historic",
     ]);
+    // And it sinks below the pickable half rather than holding its slot under H.
+    expect(screen.getByRole("option", { name: "Historic" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    expect(screen.getByRole("option", { name: "Modern" })).not.toHaveAttribute("aria-disabled");
   });
 });
 
@@ -888,16 +1054,20 @@ describe("FilterBar, its format options in order", () => {
  * The sort picker and its direction button — the pair that gives the **grid** an order to be in.
  *
  * Everything here is asserted against the stub's four sort members rather than against a real
- * `useCardSearch`, so what these cases pin is the contract between the two: which key the select
+ * `useCardSearch`, so what these cases pin is the contract between the two: which key the picker
  * sends, which term the arrow reads, and that neither invents a sort of its own.
  */
 describe("FilterBar, its sort picker", () => {
-  /** Every `<option>` the sort select draws, in document order. Scoped, because the format
-   *  select beside it draws nine more and a bare `screen.getAllByRole` mixes the two lists. */
-  const sortOrder = () =>
-    within(screen.getByLabelText("Sort results"))
+  /** Every row the sort picker draws, in document order — opened first, since the shell only
+   *  renders its rows while the panel is up. Scoped to its own listbox, because the format
+   *  dropdown beside it draws nine rows of its own and a bare `screen.getAllByRole` would mix
+   *  the two lists the moment both were open. */
+  async function sortOrder(user: UserEvent): Promise<(string | null)[]> {
+    await openDropdown(user, "Sort results");
+    return within(screen.getByRole("listbox"))
       .getAllByRole("option")
       .map((o) => o.textContent);
+  }
 
   /**
    * **`Sort results`, and this is the case that stops it being shortened back to `Sort`.**
@@ -905,9 +1075,10 @@ describe("FilterBar, its sort picker", () => {
    * The collection's twin is a bare `Sort` and this one may not copy it, because this row is
    * drawn on two surfaces and one of them already has a `Sort`: the deck editor's toolbar sorts
    * the deck, this sorts the search results, and with the docked panel open both lists are on
-   * screen at once. Two comboboxes with one name is a control that cannot be addressed
+   * screen at once. Two controls with one name is a control that cannot be addressed
    * unambiguously — by a screen reader walking the form, by voice control, or by a
-   * `getByLabelText` that starts throwing "found multiple" the day a test opens that panel.
+   * `getByRole("button", { name: "Sort" })` that starts throwing "found multiple" the day a test
+   * opens that panel.
    *
    * The absence of the bare name is asserted beside the presence of the long one, because that
    * is the half that fails when somebody shortens it: `Sort results` would still be *found* by a
@@ -916,8 +1087,33 @@ describe("FilterBar, its sort picker", () => {
   it("names the picker for the list it sorts, not for the act of sorting", () => {
     render(<FilterBar search={search()} layoutToggle={false} />);
 
-    expect(screen.getByRole("combobox", { name: "Sort results" })).toBeInTheDocument();
-    expect(screen.queryByLabelText("Sort")).toBeNull();
+    expect(screen.getByRole("button", { name: "Sort results" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Sort" })).toBeNull();
+  });
+
+  /**
+   * **`aria-labelledby`, checked directly — not merely that `getByRole` resolves a name.**
+   *
+   * `<button>` is an HTML "labelable" element (`isLabelableElement` in `dom-accessibility-api`'s
+   * own source lists `"button"` beside `"select"`), so a `<label for>` reaches its accessible
+   * name on its own, with **no** `aria-labelledby` wired at all — in jsdom and in a real browser
+   * alike; this is not a jsdom quirk. So `getByRole("button", { name: "Sort results" })` keeps
+   * finding the trigger whether or not `labelledBy` is actually passed — proven by deleting the
+   * prop from `FilterBar.tsx` and re-running this file: all 66 cases stayed green. That is why the
+   * naming rule this row exists to satisfy (`Dropdown.tsx`'s `SharedProps.labelledBy` doc) is not
+   * "does a label reach the button" — it already does — but "does the name come from a connection
+   * this markup states outright, rather than one a later refactor could quietly break by moving
+   * the label or letting the `for`/`id` pair drift apart". Reading the attribute directly is what
+   * a dropped `labelledBy` can still fail here, whatever the implicit label association goes on
+   * doing for the *other* cases in this file.
+   */
+  it("wires the sort trigger's name through aria-labelledby, not only a label jsdom would resolve anyway", () => {
+    render(<FilterBar search={search()} />);
+
+    const trigger = screen.getByRole("button", { name: "Sort results" });
+    const labelId = trigger.getAttribute("aria-labelledby");
+    expect(labelId).toBeTruthy();
+    expect(document.getElementById(labelId!)).toHaveTextContent("Sort results");
   });
 
   /**
@@ -930,17 +1126,17 @@ describe("FilterBar, its sort picker", () => {
    * opening wall took it for the name of alphabetical order. `Name`, two rows below, is the one
    * that really is alphabetical.
    *
-   * **`toHaveValue`, never the text of the selected option.** A controlled `<select>` whose
-   * `value` matches no `<option>` does not draw blank: `react-dom` walks the options setting
-   * `selected` and on no match picks the first row that is not disabled, which here is this very
-   * row — so a picker that had lost its selection entirely would read exactly like one that is
-   * correctly untouched.
+   * **The trigger's own text, not merely a checked value.** A `<Dropdown>` whose `value` matches
+   * no option falls back to its own placeholder dash rather than to this row's label — so if the
+   * picker ever lost its selection entirely, the trigger would read `—` rather than `Best match`.
+   * Checking the drawn text is what tells "correctly untouched" apart from "silently reset".
    */
-  it("opens on Best match, pinned above the orders", () => {
+  it("opens on Best match, pinned above the orders", async () => {
+    const user = userEvent.setup();
     render(<FilterBar search={search()} />);
 
-    expect(screen.getByLabelText("Sort results")).toHaveValue("");
-    expect(sortOrder()[0]).toBe("Best match");
+    expect(screen.getByRole("button", { name: "Sort results" })).toHaveTextContent("Best match");
+    expect((await sortOrder(user))[0]).toBe("Best match");
   });
 
   /**
@@ -951,13 +1147,14 @@ describe("FilterBar, its sort picker", () => {
    * guards against is the old string coming back *anywhere* — a merge restoring the option, a
    * story fixture, a second picker copied off this one.
    */
-  it("names the alphabetical order Name and never calls anything Default", () => {
+  it("names the alphabetical order Name and never calls anything Default", async () => {
+    const user = userEvent.setup();
     render(<FilterBar search={search()} />);
 
-    const rows = sortOrder();
+    const rows = await sortOrder(user);
     expect(rows).toContain("Name");
     expect(rows).toContain("Best match");
-    expect(rows.some((r) => /default/i.test(r))).toBe(false);
+    expect(rows.some((r) => /default/i.test(r ?? ""))).toBe(false);
   });
 
   /**
@@ -970,10 +1167,11 @@ describe("FilterBar, its sort picker", () => {
    * assertion about one row's presence. `Mana value` and `Released` are the two orders no header
    * can reach, and they are in here as ordinary rows, pinned nowhere.
    */
-  it("offers the orders alphabetically, under the pinned Best match", () => {
+  it("offers the orders alphabetically, under the pinned Best match", async () => {
+    const user = userEvent.setup();
     render(<FilterBar search={search()} />);
 
-    expect(sortOrder()).toEqual([
+    expect(await sortOrder(user)).toEqual([
       "Best match",
       "Mana value",
       "Name",
@@ -993,19 +1191,19 @@ describe("FilterBar, its sort picker", () => {
    */
   it("sends the key a picked order names", async () => {
     const setSortKey = vi.fn();
+    const user = userEvent.setup();
     render(<FilterBar search={search({ setSortKey })} />);
 
-    await userEvent.selectOptions(screen.getByLabelText("Sort results"), "manaValue");
+    await pickOption(user, "Sort results", "Mana value");
 
     expect(setSortKey).toHaveBeenCalledWith("manaValue");
   });
 
   /** …and back out again, which on the grid is the **only** way out of a sort: the third press
-   *  that clears one is a press on a table header the grid does not draw. Selected by element
-   *  rather than by value, because `""` as a value string is not a match Testing Library can
-   *  resolve unambiguously. */
+   *  that clears one is a press on a table header the grid does not draw. */
   it("sends the empty key when the reader picks Best match back", async () => {
     const setSortKey = vi.fn();
+    const user = userEvent.setup();
     render(
       <FilterBar
         search={search({
@@ -1016,9 +1214,7 @@ describe("FilterBar, its sort picker", () => {
       />,
     );
 
-    const select = screen.getByLabelText("Sort results");
-    const back = within(select).getByRole("option", { name: "Best match" });
-    await userEvent.selectOptions(select, back);
+    await pickOption(user, "Sort results", "Best match");
 
     expect(setSortKey).toHaveBeenCalledWith("");
   });
@@ -1039,67 +1235,6 @@ describe("FilterBar, its sort picker", () => {
     const button = dirButton();
     expect(button).toBeDisabled();
     expect(button).toHaveAccessibleName("Sort direction — Best match has no direction");
-  });
-
-  /**
-   * The wrapper's whole reason to exist, and the one state nothing else covers: this suite has
-   * no `TooltipProvider` above it anywhere else, and `FilterBar.stories.tsx`'s `SortedDescending`
-   * — the only other wrapper coverage in the app — hovers only the *enabled* button. A real
-   * `disabled` attribute fires no pointer events at all, so `FilterBar.tsx` binds the tooltip to
-   * the `<span>` around the button rather than to the button itself; a browser then delivers the
-   * hover to that span, which is what this fires on. **This is the test that fails if the
-   * wrapper is ever removed and the binding moves onto the button directly** — nothing would be
-   * listening on the span any more, and firing on the disabled button itself proves nothing (a
-   * real browser never delivers a hover there, and jsdom does not hit-test to tell the two cases
-   * apart).
-   */
-  it("still opens the direction tooltip by hover while the button is disabled", async () => {
-    render(
-      <TooltipProvider>
-        <FilterBar search={search()} />
-      </TooltipProvider>,
-    );
-    const button = dirButton();
-    expect(button).toBeDisabled();
-
-    fireEvent.pointerEnter(button.parentElement as HTMLElement);
-    await waitFor(() => expect(document.getElementById(TOOLTIP_PANEL_ID)).not.toBeNull(), {
-      timeout: TOOLTIP_OPEN_MS + 1000,
-    });
-    expect(document.getElementById(TOOLTIP_PANEL_ID)).toHaveTextContent(
-      "Sort direction — Best match has no direction",
-    );
-  });
-
-  /**
-   * Important 3's fix, evidenced live rather than through the shared component's own unit
-   * tests: `useTooltip.ts`'s `onFocus` used to hand the wrapping `<span>` above to
-   * `TooltipProvider.focus()`, which tests `:focus-visible` on whatever anchor it is given — and
-   * a `<span>` with no `tabIndex` is never itself the focused element, so Tab landing on this
-   * *enabled* button opened nothing at all. `e.target`, the button React reports as actually
-   * focused, is what fixes it — proven here with a real `userEvent.tab()` from the control just
-   * before it in the row, the same path a keyboard reader takes.
-   */
-  it("opens the direction tooltip on Tab once an order is picked", async () => {
-    const user = userEvent.setup();
-    render(
-      <TooltipProvider>
-        <FilterBar
-          search={search({ sortSelection: "name", sort: [{ key: "name", dir: "asc" }] })}
-        />
-      </TooltipProvider>,
-    );
-    const button = dirButton();
-    expect(button).not.toBeDisabled();
-
-    screen.getByLabelText("Sort results").focus();
-    await user.tab();
-    expect(button).toHaveFocus();
-
-    await waitFor(() => expect(document.getElementById(TOOLTIP_PANEL_ID)).not.toBeNull());
-    expect(document.getElementById(TOOLTIP_PANEL_ID)).toHaveTextContent(
-      "Sort direction: ascending — press for descending",
-    );
   });
 
   /** The name says the state **and** what pressing does, because an arrow is the whole of what
@@ -1173,11 +1308,11 @@ describe("FilterBar, its sort picker", () => {
       />,
     );
 
-    expect(screen.getByLabelText("Sort results")).toHaveValue("rarity");
+    expect(screen.getByRole("button", { name: "Sort results" })).toHaveTextContent("Rarity");
   });
 
   /** A Shift-built second key belongs to the table and is none of this row's business: the
-   *  select shows the **first** term and the arrow shows that term's direction. */
+   *  trigger shows the **first** term and the arrow shows that term's direction. */
   it("shows the first term of a multi-key sort and ignores the rest", () => {
     render(
       <FilterBar
@@ -1191,7 +1326,7 @@ describe("FilterBar, its sort picker", () => {
       />,
     );
 
-    expect(screen.getByLabelText("Sort results")).toHaveValue("rarity");
+    expect(screen.getByRole("button", { name: "Sort results" })).toHaveTextContent("Rarity");
     expect(dirButton()).toHaveAccessibleName("Sort direction: descending — press for ascending");
   });
 
@@ -1251,7 +1386,7 @@ describe("FilterBar, its sort picker", () => {
     render(<FilterBar search={search()} layoutToggle={false} />);
 
     expect(screen.queryByRole("group", { name: "Result layout" })).toBeNull();
-    expect(screen.getByLabelText("Sort results")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Sort results" })).toBeInTheDocument();
     expect(dirButton()).toBeInTheDocument();
   });
 
@@ -1271,10 +1406,10 @@ describe("FilterBar, its sort picker", () => {
       />,
     );
 
-    const select = screen.getByLabelText("Sort results");
-    expect(select.classList.contains("text-accent")).toBe(false);
-    expect(select.classList.contains("border-accent")).toBe(false);
-    expect(select.classList.contains("text-dim")).toBe(true);
+    const trigger = screen.getByRole("button", { name: "Sort results" });
+    expect(trigger.classList.contains("text-accent")).toBe(false);
+    expect(trigger.classList.contains("border-accent")).toBe(false);
+    expect(trigger.classList.contains("text-dim")).toBe(true);
     expect(dirButton().classList.contains("text-accent")).toBe(false);
     expect(dirButton().classList.contains("border-accent")).toBe(false);
   });
@@ -1293,14 +1428,14 @@ describe("FilterBar, its tray", () => {
     () => screen.getByPlaceholderText("Search cards…"),
     () => screen.getByRole("button", { name: "White" }),
     () => screen.getByRole("button", { name: "Mana value 3" }),
-    () => screen.getByLabelText("Sort results"),
+    () => screen.getByRole("button", { name: "Sort results" }),
   ];
 
   it("keeps four controls on the bar and folds the rest away", async () => {
     render(<FilterBar search={search()} />);
 
     for (const found of ON_THE_BAR) expect(found()).toBeInTheDocument();
-    expect(screen.queryByLabelText("Format")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Format" })).toBeNull();
     expect(screen.queryByTestId("set-combobox")).toBeNull();
     expect(screen.queryByRole("button", { name: /^Owned\b/ })).toBeNull();
     expect(screen.queryByRole("button", { name: /^Rare cards\b/ })).toBeNull();
@@ -1310,7 +1445,7 @@ describe("FilterBar, its tray", () => {
     const toggle = await openTray();
 
     for (const found of ON_THE_BAR) expect(found()).toBeInTheDocument();
-    expect(screen.getByLabelText("Format")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Format" })).toBeInTheDocument();
     expect(screen.getByTestId("set-combobox")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Owned\b/ })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /^Rare cards\b/ })).toBeInTheDocument();
@@ -1351,7 +1486,7 @@ describe("FilterBar, its tray", () => {
     );
 
     await userEvent.click(screen.getByRole("button", { name: /^Hide filters/ }));
-    expect(screen.queryByLabelText("Format")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Format" })).toBeNull();
   });
 });
 
@@ -1613,5 +1748,141 @@ describe("FilterBar, its owned pair", () => {
     const missing = screen.getByRole("button", { name: "Missing — 40 printings" });
     expect(owned).not.toHaveAttribute("aria-disabled");
     expect(missing).not.toHaveAttribute("aria-disabled");
+  });
+});
+
+/**
+ * **Flatten rides this row, and it rides the half of it that is not about filtering.**
+ *
+ * The switch used to sit down beside the breadcrumb and the folder cards, on the argument that
+ * where a reader is standing is navigation rather than a narrowing. That argument is intact and it
+ * is not what decides the placement: the bar has a hairline across it, and everything past that
+ * hairline — the sort, the grid-or-table pair — is a statement about how the results are *drawn*
+ * rather than about which ones there are. Flatten is exactly that kind of statement, one level up:
+ * how much of the *tree* is drawn. Both hooks already keep it outside their filter state and out
+ * of `resetAll`, which is the same property the controls past the hairline have — so the cases
+ * below are the two halves of that claim: it is next to the pair, and Reset all cannot reach it.
+ *
+ * The prop is `FilterBar`'s own rather than a member of `FilterSurface`, because only two of the
+ * surfaces that draw this row have any filing at all. Which is why the first case is an absence.
+ */
+describe("FilterBar, its Flatten switch", () => {
+  /**
+   * **The absence is the assertion**, and it is the case that keeps this control off the surfaces
+   * with no cabinet: the card search, the Tags page and the deck editor's docked panel are lists
+   * of Scryfall's printings, where there is no filing to ignore and a Flatten chip would be a
+   * switch that does nothing. The layout pair is asserted beside it, because a row that had failed
+   * to render at all would satisfy the absence just as well.
+   */
+  it("draws no Flatten switch where nothing passed one", () => {
+    render(<FilterBar search={search()} />);
+
+    expect(screen.queryByRole("button", { name: "Flatten" })).toBeNull();
+    expect(screen.getByRole("group", { name: "Result layout" })).toBeInTheDocument();
+  });
+
+  /**
+   * One press either way — there is no third state to walk — so the whole of the control is the
+   * state it reports and the call it makes. `toHaveBeenCalledTimes(1)` rather than a bare
+   * `toHaveBeenCalled`, because a chip that fires its handler twice per press is a switch that
+   * ends a press exactly where it started and would satisfy the looser matcher.
+   */
+  it("reports whether the filing is being ignored, and toggles it on a press", async () => {
+    const onToggle = vi.fn();
+    render(<FilterBar search={search()} flatten={{ pressed: false, onToggle }} />);
+
+    const chip = screen.getByRole("button", { name: "Flatten" });
+    expect(chip).toHaveAttribute("aria-pressed", "false");
+
+    await userEvent.click(chip);
+
+    expect(onToggle).toHaveBeenCalledTimes(1);
+  });
+
+  /** The other half of the state, drawn: a chip whose `pressed` was hard-wired to `false` would
+   *  pass the case above and lie on every flattened list. */
+  it("draws the switch on when the filing is being ignored", () => {
+    render(<FilterBar search={search()} flatten={{ pressed: true, onToggle: vi.fn() }} />);
+
+    expect(screen.getByRole("button", { name: "Flatten" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  /**
+   * **Reset all does not reach it, which is the whole argument for where it sits.**
+   *
+   * Both hooks keep `flatten` outside their filter state and their `resetAll` deliberately leaves
+   * it alone — clearing a search must not also drop the reader back into a filing they had stepped
+   * out of. This is that rule checked at the control rather than at the hook: the press reaches
+   * `resetAll` and nothing else.
+   *
+   * `activeCount: 3` and not the default 0, or the case is vacuous: Reset all is drawn at zero and
+   * greyed, and its handler returns early on an empty count — so a bar with nothing filtered would
+   * pass this while wired to call every setter on the page.
+   */
+  it("keeps Flatten out of Reset all", async () => {
+    const onToggle = vi.fn();
+    const resetAll = vi.fn();
+    render(
+      <FilterBar
+        search={search({ activeCount: 3, colors: ["W"], resetAll })}
+        flatten={{ pressed: true, onToggle }}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: /^Reset all/ }));
+
+    expect(resetAll).toHaveBeenCalledTimes(1);
+    expect(onToggle).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Flatten" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  /**
+   * **The badge counts filters, and this is not one.** The number on Reset all and the number on
+   * the Filters button are the same number and both come from the surface's own
+   * `activeFilterCount` — so a switch that is on has to leave both where they were and state
+   * nothing under the rule either. `Reset all — 1 filter active` over a search that narrows
+   * nothing is the row telling a reader something untrue about their own list, and the chip under
+   * the rule would offer to remove a filing.
+   */
+  it("does not count Flatten as a filter", () => {
+    render(<FilterBar search={search()} flatten={{ pressed: true, onToggle: vi.fn() }} />);
+
+    expect(screen.getByRole("button", { name: /^Reset all/ })).toHaveAccessibleName(
+      "Reset all — 0 filters active",
+    );
+    expect(screen.getByRole("button", { name: /^Show filters/ })).toHaveAccessibleName(
+      "Show filters — 0 active",
+    );
+    expect(chipLabels()).toEqual([]);
+  });
+
+  /**
+   * **One wrapper for the switch and the pair, and this is the case the move was for.**
+   *
+   * The row is `flex-wrap`, so two controls that are merely adjacent in the markup are two items
+   * the wrap is free to break between — and a Flatten chip on the line above the pair it was put
+   * beside is precisely the arrangement this replaced. The DOM relationship is what says they
+   * cannot: one parent, and the chip is the group's own previous sibling, so nothing has been
+   * ordered between them either.
+   *
+   * **The relationship rather than the classes.** A class assertion here would be checking the
+   * spelling of a wrapper instead of the fact that there is one — and jsdom applies no container
+   * query and loads no stylesheet, so it could not tell a wrapper that holds at 206px from one
+   * that does not. What a test can see is the tree, and the tree is what the wrapping rests on.
+   */
+  it("keeps the switch and the layout pair in one wrapper", () => {
+    render(<FilterBar search={search()} flatten={{ pressed: false, onToggle: vi.fn() }} />);
+
+    const chip = screen.getByRole("button", { name: "Flatten" });
+    const layout = screen.getByRole("group", { name: "Result layout" });
+
+    expect(chip.parentElement).toBe(layout.parentElement);
+    expect(layout.previousElementSibling).toBe(chip);
   });
 });

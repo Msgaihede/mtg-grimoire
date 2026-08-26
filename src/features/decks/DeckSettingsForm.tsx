@@ -1,4 +1,6 @@
 import type { JSX } from "react";
+import { Dropdown } from "@/components/Dropdown/Dropdown";
+import type { DropdownOption } from "@/components/Dropdown/types";
 import { FOCUS } from "@/lib/focus";
 import type { DeckCategory, DeckFolder, DeckGame } from "@/lib/ipc";
 import { compareLabels } from "@/lib/options";
@@ -243,6 +245,27 @@ function Fields({
   formats: readonly { key: string; name: string }[];
   id: string;
 }) {
+  const gameOptions: readonly DropdownOption[] = GAME_OPTIONS.map((g) => ({
+    value: g.key,
+    label: g.name,
+  }));
+  // The key, because a value with no list beside it is all this form has been
+  // given — {@link DeckSettingsValue} carries no display name. A host that can do
+  // better hands over a one-row list instead of an empty one, which is what both
+  // of them do: the settings dialog folds the deck's own format in through
+  // `pickerFormats`' `keep`, and the create dialog falls back to Casual.
+  //
+  // **Belt and braces since the shell replaced the `<select>`.** A controlled native
+  // select whose value matched no option used to show its first row while still
+  // reporting the old one; `Dropdown` cannot make that mistake — an unmatched value
+  // draws its own em-dash placeholder instead. What is load-bearing now is showing
+  // the raw key rather than that placeholder: a host that has handed over no display
+  // name at all still reads better as "modern" than as "—".
+  const formatOptions: readonly DropdownOption[] =
+    formats.length === 0
+      ? [{ value: value.formatKey, label: value.formatKey }]
+      : formats.map((f) => ({ value: f.key, label: f.name }));
+
   return (
     <>
       <div className="flex flex-wrap gap-3">
@@ -284,67 +307,48 @@ function Fields({
         </div>
         {/* Before the format and not after it, because it *narrows* the format list: a reader
             reading left to right meets the question whose answer changes the next control
-            first. Narrower than the format select — four short words against "Tiny Leaders:
-            Reborn" — and the row wraps, so on a squeezed dialog the two selects fold together
+            first. Narrower than the format dropdown — four short words against "Tiny Leaders:
+            Reborn" — and the row wraps, so on a squeezed dialog the two dropdowns fold together
             under the name rather than the name being crushed between them. */}
         <div className="w-32">
-          <label htmlFor={`${id}-game`} className={cn(CAPTION, "mb-1.5")}>
+          <label id={`${id}-game-label`} htmlFor={`${id}-game`} className={cn(CAPTION, "mb-1.5")}>
             Game
           </label>
-          <select
+          <Dropdown
             id={`${id}-game`}
+            labelledBy={`${id}-game-label`}
             value={value.gameKey}
             // The cast is `GameSelect`'s, for its reason: every option is written out of
             // `GAME_OPTIONS`, so no other string can reach this handler.
-            onChange={(e) => onChange({ gameKey: e.target.value as DeckGame })}
-            className={cn(
-              "h-9 w-full rounded-md border border-border bg-surface px-2 text-sm",
-              FOCUS,
-            )}
-          >
-            {GAME_OPTIONS.map((g) => (
-              <option key={g.key} value={g.key}>
-                {g.name}
-              </option>
-            ))}
-          </select>
+            onChange={(gameKey) => onChange({ gameKey: gameKey as DeckGame })}
+            options={gameOptions}
+            fill
+          />
         </div>
         <div className="w-44">
-          <label htmlFor={`${id}-format`} className={cn(CAPTION, "mb-1.5")}>
+          <label
+            id={`${id}-format-label`}
+            htmlFor={`${id}-format`}
+            className={cn(CAPTION, "mb-1.5")}
+          >
             Format
           </label>
-          <select
+          <Dropdown
             id={`${id}-format`}
+            labelledBy={`${id}-format-label`}
             value={value.formatKey}
-            onChange={(e) => onChange({ formatKey: e.target.value })}
+            onChange={(formatKey) => onChange({ formatKey })}
+            options={formatOptions}
             // The seeded table is read once per session and is normally in hand before this
-            // renders; on the one launch where it is not, the select still has to say
+            // renders; on the one launch where it is not, the trigger still has to say
             // something, and what it says is the format the deck already has. A real
             // `disabled` is right here for the reason `FormatSelect` gives: there is no reader
-            // input making it grey, and a select with one option is not a choice to keep in
+            // input making it grey, and a dropdown with one option is not a choice to keep in
             // the tab order.
             disabled={formats.length === 0}
-            className={cn(
-              "h-9 w-full rounded-md border border-border bg-surface px-2 text-sm",
-              "disabled:opacity-60",
-              FOCUS,
-            )}
-          >
-            {formats.length === 0 ? (
-              // The key, because a value with no list beside it is all this form has been
-              // given — {@link DeckSettingsValue} carries no display name. A host that can do
-              // better hands over a one-row list instead of an empty one, which is what both
-              // of them do: the settings dialog folds the deck's own format in through
-              // `pickerFormats`' `keep`, and the create dialog falls back to Casual.
-              <option value={value.formatKey}>{value.formatKey}</option>
-            ) : (
-              formats.map((f) => (
-                <option key={f.key} value={f.key}>
-                  {f.name}
-                </option>
-              ))
-            )}
-          </select>
+            searchable
+            fill
+          />
         </div>
       </div>
 
@@ -398,7 +402,7 @@ function Fields({
  * an inactive one is in that list like any other: `isActive` decides what a pile *counts*
  * toward, never whether cards may be put in it.
  *
- * A `<select>` speaks strings and a category is addressed by number, so the id makes the round
+ * A dropdown speaks strings and a category is addressed by number, so the id makes the round
  * trip through `String`/`Number` here rather than anywhere the write can see it: every value in
  * this list was written out of a `DeckCategory.id` or out of the constant, so the parse cannot
  * meet anything else.
@@ -416,10 +420,27 @@ function DefaultCategoryRow({
 }) {
   const picked = categories.find((c) => c.id === categoryId);
 
+  // Pinned above the piles, and the one row here that is not one. **Deliberately not
+  // alphabetical** below it, and one of the exceptions `src/lib/options.ts` names: the
+  // categories arrive in `sort_order, id` — the order the reader dragged them into in the
+  // Categories dialog, and the order every deck view draws its columns in. Sorting them
+  // here would make this dropdown disagree with the deck it is about.
+  const options: readonly DropdownOption[] = [
+    { value: String(AUTO_CATEGORY), label: AUTO_CATEGORY_LABEL },
+    ...categories.map((category) => ({
+      value: String(category.id),
+      label: category.isActive ? category.name : `${category.name} (off)`,
+    })),
+  ];
+
   return (
     <div className="flex items-center gap-3">
       <div className="min-w-0 flex-1">
-        <label htmlFor={`${id}-default-category`} className="block text-sm">
+        <label
+          id={`${id}-default-category-label`}
+          htmlFor={`${id}-default-category`}
+          className="block text-sm"
+        >
           Add cards to
         </label>
         {/* What the answer *means*, in the reader's terms — the same job the folder row's
@@ -436,28 +457,18 @@ function DefaultCategoryRow({
               : `Every add lands in ${picked.name}, which is switched off and counts toward nothing.`}
         </p>
       </div>
-      <select
-        id={`${id}-default-category`}
-        value={String(categoryId)}
-        onChange={(e) => onPick(Number(e.target.value))}
-        className={cn(
-          "h-8 w-44 shrink-0 rounded-md border border-border bg-surface px-2 text-xs",
-          FOCUS,
-        )}
-      >
-        {/* Pinned above the piles, and the one row here that is not one. **Deliberately not
-            alphabetical** below it, and one of the exceptions `src/lib/options.ts` names: the
-            categories arrive in `sort_order, id` — the order the reader dragged them into in the
-            Categories dialog, and the order every deck view draws its columns in. Sorting them
-            here would make this select disagree with the deck it is about. */}
-        <option value={String(AUTO_CATEGORY)}>{AUTO_CATEGORY_LABEL}</option>
-        {categories.map((category) => (
-          <option key={category.id} value={String(category.id)}>
-            {category.name}
-            {category.isActive ? "" : " (off)"}
-          </option>
-        ))}
-      </select>
+      <div className="w-44 shrink-0">
+        <Dropdown
+          id={`${id}-default-category`}
+          labelledBy={`${id}-default-category-label`}
+          value={String(categoryId)}
+          onChange={(v) => onPick(Number(v))}
+          options={options}
+          searchable
+          size="sm"
+          fill
+        />
+      </div>
     </div>
   );
 }
@@ -520,7 +531,7 @@ function FolderRow({
 }: {
   folderId: number | null;
   paths: readonly { id: number; path: string }[];
-  /** The folder list could not be read. The select is no use without it, so it says so. */
+  /** The folder list could not be read. The dropdown is no use without it, so it says so. */
   unread: string | null;
   loading: boolean;
   onMove: (folderId: number | null) => void;
@@ -529,10 +540,22 @@ function FolderRow({
 }) {
   const here = paths.find((f) => f.id === folderId);
 
+  // Pinned above the folders, and the one row here that is not a folder: the top level
+  // is where a deck goes when it is in none of them. `""` is that row's value, and it is a
+  // real answer rather than a placeholder: filing a deck back at the root is
+  // `deckSetFolder(id, null)` — the one thing `DeckPatch` cannot express, because
+  // `coalesce(?n, folder_id)` reads a bound NULL as "leave it". At create there is no such
+  // trap: `deck_create`'s INSERT takes `None` and means it. Everything under it is
+  // `folderPaths`' alphabetical order, by the whole rendered path.
+  const options: readonly DropdownOption[] = [
+    { value: "", label: "Top level" },
+    ...paths.map((f) => ({ value: String(f.id), label: f.path })),
+  ];
+
   return (
     <div className="flex items-center gap-3">
       <div className="min-w-0 flex-1">
-        <label htmlFor={`${id}-folder`} className="block text-sm">
+        <label id={`${id}-folder-label`} htmlFor={`${id}-folder`} className="block text-sm">
           Folder
         </label>
         <p className="mt-0.5 truncate text-[0.6875rem] text-dim">
@@ -543,31 +566,19 @@ function FolderRow({
               : (here?.path ?? "In a folder this list does not carry")}
         </p>
       </div>
-      <select
-        id={`${id}-folder`}
-        // `""` is the top level, and it is a real answer rather than a placeholder: filing a
-        // deck back at the root is `deckSetFolder(id, null)` — the one thing `DeckPatch` cannot
-        // express, because `coalesce(?n, folder_id)` reads a bound NULL as "leave it". At
-        // create there is no such trap: `deck_create`'s INSERT takes `None` and means it.
-        value={folderId === null ? "" : String(folderId)}
-        onChange={(e) => onMove(e.target.value === "" ? null : Number(e.target.value))}
-        disabled={unread !== null || loading || pending}
-        className={cn(
-          "h-8 w-44 shrink-0 rounded-md border border-border bg-surface px-2 text-xs",
-          "disabled:opacity-60",
-          FOCUS,
-        )}
-      >
-        {/* Pinned above the folders, and the one row here that is not a folder: the top level
-            is where a deck goes when it is in none of them. Everything under it is
-            `folderPaths`' alphabetical order, by the whole rendered path. */}
-        <option value="">Top level</option>
-        {paths.map((f) => (
-          <option key={f.id} value={f.id}>
-            {f.path}
-          </option>
-        ))}
-      </select>
+      <div className="w-44 shrink-0">
+        <Dropdown
+          id={`${id}-folder`}
+          labelledBy={`${id}-folder-label`}
+          value={folderId === null ? "" : String(folderId)}
+          onChange={(v) => onMove(v === "" ? null : Number(v))}
+          options={options}
+          disabled={unread !== null || loading || pending}
+          searchable
+          size="sm"
+          fill
+        />
+      </div>
     </div>
   );
 }

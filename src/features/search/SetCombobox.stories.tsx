@@ -76,9 +76,10 @@ const meta = {
   // would move nothing at all.
   render: (args) => <Picker key={args.initial?.join(",") ?? "none"} {...args} />,
   decorators: [
-    // The listbox is 288px wide, `absolute`, and pinned `right-0` to the trigger. Room below for
-    // it, and room to its left for the pin to be visible as a decision rather than as an
-    // accident of where the trigger happened to be.
+    // The panel is 288px wide and placed from a measurement of the trigger against the window,
+    // with `align="end"` as this control's default guess at which edge to pin. Room below for it,
+    // and room to its left for the pin to be visible as a decision rather than as an accident of
+    // where the trigger happened to be.
     (Story) => (
       <div className="flex h-96 w-[32rem] justify-end p-2">
         <Story />
@@ -89,17 +90,20 @@ const meta = {
     docs: {
       description: {
         component:
-          "A searchable, multi-select set picker — hand-rolled, and deliberately **not** a " +
-          "portalled popover. The shipped CSP is `style-src 'self'`, and every Radix overlay " +
-          "primitive in reach pulls in `react-remove-scroll`, which injects a runtime `<style>` " +
-          "the moment it opens: that passes `tauri dev` and breaks in a packaged build. This is " +
-          "a plain absolutely-positioned listbox in the trigger's own stacking context, so " +
-          "nothing is injected and nothing is locked, and the ARIA wiring is the whole of what " +
-          "the dependency would have provided.\n\n" +
+          "A searchable, multi-select set picker, built on `<MultiDropdown>` — the one shell " +
+          "every native `<select>` in this app was replaced with. The shell owns the disclosure " +
+          "button, the panel and where it lands, the search box, the rows, the keyboard walk " +
+          "and all three dismissals; what is left here is the part that is about *sets*.\n\n" +
+          "That shell is hand-rolled, and deliberately **not** a portalled popover: the shipped " +
+          "CSP is `style-src 'self'`, and every Radix overlay primitive in reach pulls in " +
+          "`react-remove-scroll`, which injects a runtime `<style>` the moment it opens — that " +
+          "passes `tauri dev` and breaks in a packaged build. Nothing is injected and nothing " +
+          "is locked, and the ARIA wiring is the whole of what the dependency would have " +
+          "provided.\n\n" +
           "It is opened by a *disclosure button*, and the combobox is the text field that " +
           "reveals — which is where the caret goes and what `aria-activedescendant` is read " +
           "from. The keyboard never leaves that field: arrows move a highlight, they do not " +
-          "move focus.\n\n" +
+          "move focus, and a row this search has nothing in is skipped rather than landed on.\n\n" +
           "The rows are ordered by **picked, then whether this search has printings for the " +
           "set, then the code rank a typed query produces, then the set's name** — the shared " +
           "`sortOptions` (`src/lib/options.ts`), given three grouping levels. `list_sets` " +
@@ -128,9 +132,12 @@ const meta = {
           "resolves in a microtask and its `list_sets` handler cannot throw, so neither is " +
           "observable. Closing any of them means a corpus regeneration or a fault the fake " +
           "backend does not have, and both are worth more than a hand-written set list here. " +
-          "The first two are not unpinned facts, only unstoried ones: `SetCombobox.test.tsx:158` " +
-          "covers the footer, `:177` the paging control and `:276` the ceiling, each against a " +
-          "set list built for it.",
+          "The first two are not unpinned facts, only unstoried ones: `SetCombobox.test.tsx` " +
+          "covers the footer (*says so when it is showing only part of the matches*), the " +
+          "paging control (*reveals the next page on request*) and the ceiling (*stops adding " +
+          "sets at the limit the backend enforces*), each against a set list built for it. " +
+          "Named rather than numbered, because a line number in prose routes to neither CI job " +
+          "and rots on the next edit.",
       },
     },
   },
@@ -143,8 +150,9 @@ type Story = StoryObj<typeof meta>;
  * Shut, with nothing picked: a grey disclosure button reading "Any set".
  *
  * The button's *content* is its value, so its accessible name has to come from somewhere else —
- * the `sr-only` "Set" beside it — or assistive tech announces the value twice and never says
- * what field it belongs to. That is the assertion below, and it is one nothing on screen shows.
+ * the `label="Set"` this control hands the shell, which the trigger wears as an `aria-label` —
+ * or assistive tech announces the value twice and never says what field it belongs to. That is
+ * the assertion below, and it is one nothing on screen shows.
  */
 export const Closed: Story = {
   play: async ({ canvasElement }) => {
@@ -191,7 +199,8 @@ export const Selected: Story = {
  * Open, and what the whole list is: **36 sets**, not the 38 the fixture corpus prints cards in.
  *
  * A set with no paper printing can never match a search, so offering it would be offering an
- * empty result (`SetCombobox.tsx:182`). The two missing here are the two the corpus knows only
+ * empty result — the `cardCount > 0` filter in `matches`. The two missing here are the two the
+ * corpus knows only
  * as digital printings — Vintage Masters and Final Fantasy — and the assertion names them,
  * because "33" alone would pass just as happily if the filter had dropped the wrong two. Final
  * Fantasy: Through the Ages is the control: same words at the front of its name, a paper
@@ -275,11 +284,12 @@ export const PickedFirst: Story = {
  * Unfinity, Unhinged, Unlimited Edition is both the rank order and plain A-Z. What would
  * separate them is a name-matching set that sorts *before* a code-matching one, and the 36
  * offered here do not contain such a pair. The ordering asserted below is therefore the
- * *result*, not a proof of its cause. `SetCombobox.test.tsx:315` is where the rule is pinned
- * against a set list the alphabet alone would fail — `lea` first, with Arena League 1999 behind
- * it. `:469` pins the middle rank, exact code over a longer code that starts with it, and that
- * pair is a real one (`pls` is Planeshift, `plst` is The List) whose two names happen to agree
- * with A-Z; it is the rank that is being separated there, not the alphabet.
+ * *result*, not a proof of its cause. `SetCombobox.test.tsx`'s *puts an exact code match first,
+ * then the rest alphabetically* is where the rule is pinned against a set list the alphabet
+ * alone would fail — `lea` first, with Arena League 1999 behind it. *Puts an exact code match
+ * ahead of a longer code that starts with it* pins the middle rank, and that pair is a real one
+ * (`pls` is Planeshift, `plst` is The List) whose two names happen to agree with A-Z; it is the
+ * rank that is being separated there, not the alphabet.
  */
 export const Filtered: Story = {
   play: async ({ canvasElement }) => {

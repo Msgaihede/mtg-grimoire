@@ -13,6 +13,7 @@ pub mod deck_undo;
 pub mod errors;
 pub mod export;
 pub mod filters;
+pub mod flatten;
 pub mod images;
 pub mod import;
 pub mod index;
@@ -412,6 +413,8 @@ pub fn run() {
             nav::set_nav_collapsed,
             listview::list_view,
             listview::set_list_view,
+            flatten::flatten_state,
+            flatten::set_flatten_state,
             marketplace_feed::marketplace_feed_refresh,
             marketplace_feed::marketplace_feed_status,
             tags::oracle::oracle_tags_refresh,
