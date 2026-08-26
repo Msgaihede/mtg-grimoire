@@ -400,6 +400,18 @@ beforeEach(() => {
     collectionView: "table",
     selectedCardId: null,
     importDefaults: { condition: "NM", finish: null },
+    // **Flatten lives in the store now, so it survives a `cleanup()` and leaks into the next
+    // test unless something puts it back.** It did: the blocks below press the chip, and every
+    // describe after them inherited whichever way the last press had left it — which is how the
+    // `New folder` tile's own cases came to pass over a cabinet nothing had asked to be drawn.
+    //
+    // Restated as the store's *own* default rather than as this file's convenience, because that
+    // is what the page opens on for a reader: since v25 every card in a deck sits in that deck's
+    // group and the root means "filed nowhere", so an unflattened first launch draws
+    // `Cards 0 · Unique 0` over a full binder (275 of 275 entries filed in deck groups on the
+    // maintainer's own database). Each block below whose subject **is** the cabinet says
+    // `collectionFlattened: false` for itself, because no wall is drawn while this is on.
+    collectionFlattened: true,
   });
 });
 
@@ -1743,6 +1755,14 @@ describe("the walk it publishes for the printings modal", () => {
  */
 describe("the collection's folders", () => {
   /**
+   * **The cabinet, said out loud.** Every case below is about a wall, a breadcrumb, a drop target
+   * or a level — none of which is drawn while the list is flattened, which is what the page now
+   * opens on. So the block asks for the cabinet rather than inheriting it, and the two cases here
+   * that are *about* Flatten press the chip from this side, where the press is a real flip.
+   */
+  beforeEach(() => useAppStore.setState({ collectionFlattened: false }));
+
+  /**
    * A collection nobody has filed draws **no breadcrumb** — a lone inert "Collection" under a
    * ribbon that already says Collection is a subheading repeating its own heading, and there is
    * nowhere for it to lead.
@@ -2223,6 +2243,47 @@ describe("Flatten", () => {
   const flattenChip = () => screen.getByRole("button", { name: "Flatten" });
 
   /**
+   * **Off, so that every press below is a real flip.** The chip is a toggle over one store field,
+   * and a case that clicked it from an unknown starting position would assert about whichever way
+   * it happened to land — which, before the switch moved into the store, is exactly what the
+   * blocks after this one were doing with the state these presses left behind. The one case that
+   * is about the *opening* state says so for itself, immediately below.
+   */
+  beforeEach(() => useAppStore.setState({ collectionFlattened: false }));
+
+  /**
+   * **The collection opens flattened, and that is the decision this whole switch was moved for.**
+   *
+   * Since schema v25 every card in a deck lives in that deck's group folder, and this cabinet's
+   * root was narrowed to mean "filed nowhere" — measured on the maintainer's own database, 275 of
+   * 275 entries are filed in deck groups and none is unfiled, so an unflattened first launch draws
+   * `Cards 0 · Unique 0 · $0.00` over a binder holding 327 copies. Flattened is the honest opening
+   * state, and the wishlist deliberately keeps the other one because it has no such problem.
+   *
+   * The initial state is read rather than assumed: this file's own `beforeEach` overrides the
+   * field, so a test that only set it and asserted the page would be pinning its own setup. Both
+   * halves are here — what the store says, and what the page draws when it says it — because the
+   * two could drift apart in either direction and only the pair is the claim.
+   */
+  it("opens flattened, because a root that means “filed nowhere” is empty for a reader with decks", async () => {
+    expect(useAppStore.getInitialState().collectionFlattened).toBe(true);
+    useAppStore.setState({ collectionFlattened: true });
+    // Nothing of the reader's own, and every copy in a deck's group: the shape the flip is about.
+    collectionFolderList.mockResolvedValue([DECK_GROUP, REMOVED]);
+    wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+
+    expect(flattenChip()).toHaveAttribute("aria-pressed", "true");
+    // Neither field reaches the wire, which is what "every copy, wherever it is filed" is: an
+    // opening read carrying `rootOnly` would be the empty page this default exists to prevent.
+    expect(lastQuery().rootOnly).toBeUndefined();
+    expect(lastQuery().folderId).toBeUndefined();
+    // And no cabinet, the pinned strip included — the filing is off screen, not merely widened.
+    expect(screen.queryByRole("list", { name: "Folders" })).toBeNull();
+    expect(screen.queryByRole("list", { name: "Deck folders" })).toBeNull();
+  });
+
+  /**
    * **It rides the filter bar, past the hairline, beside the grid-and-table pair** — the end of
    * that row where every control is about how the list is *drawn* rather than which rows are in
    * it, and where nothing is counted by the filter badge or cleared by Reset all.
@@ -2457,6 +2518,14 @@ describe("Flatten", () => {
  * decoration.**
  */
 describe("the New folder tile", () => {
+  /**
+   * **The tile is a card of the wall, so the wall has to be drawn.** Every case here passed for
+   * one run without this line, on the state the block above them happened to leave behind — which
+   * is the whole hazard of a switch that lives in a module singleton: the assertions were right,
+   * and nothing in the file said which page they were about.
+   */
+  beforeEach(() => useAppStore.setState({ collectionFlattened: false }));
+
   /** First, so a reader scanning a wall of drawers for the one that is not there yet finds it
    *  before the twelve that are. */
   it("is the first item of the Folders list", async () => {
@@ -2558,6 +2627,13 @@ describe("Escape walks out of a folder", () => {
     fireEvent.keyDown(on, { key: "Escape", code: "Escape" });
 
   const filterBox = () => screen.getByRole("searchbox", { name: "Search your collection" });
+
+  /**
+   * **A level to leave, which is what the whole rung is about.** Flattened there is none — the
+   * `Flatten` block above pins that the press falls through in that state — so this block asks for
+   * the cabinet rather than taking whichever way the last press in the file left the switch.
+   */
+  beforeEach(() => useAppStore.setState({ collectionFlattened: false }));
 
   /** One level, not all the way out: the parent is the trail's second-to-last segment, which is
    *  the breadcrumb's own last pressable one. */

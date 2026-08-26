@@ -17,10 +17,20 @@ import { WishlistPage } from "./WishlistPage";
  * **`"grid"`, not `"card"`.** The store's type is `SearchView = "table" | "grid"`, shared with
  * the other two lists; "card mode" is what the filter bar's toggle *calls* it — `LayoutToggle`'s
  * two buttons are named "Card view" and "Table view".
+ *
+ * **`flatten` is the second store field, and it is seeded here even though this page's default did
+ * not move.** It used to be `useState` inside `useWishlist`; it is `wishlistFlattened` now, so it
+ * outlives a story the way the layout does — and `CollectionPage.stories.tsx`'s copy of this note
+ * carries the reason the two pages disagree about the default (that cabinet's root was narrowed to
+ * "filed nowhere" and this one's was not). Written out rather than left implicit, so a story about
+ * the cabinet cannot be quietly emptied by a default moving one file away. There is no setter to
+ * call — the store publishes a **toggle** — so the seed is a plain `setState`, which deliberately
+ * does not bump `flattenPulse` and so writes nothing back through `useFlattenPersistence`.
  */
-function Page({ view }: { view: SearchView }) {
+function Page({ view, flatten }: { view: SearchView; flatten: boolean }) {
   useState(() => {
     useAppStore.getState().setWishlistView(view);
+    useAppStore.setState({ wishlistFlattened: flatten });
   });
   return <WishlistPage />;
 }
@@ -29,10 +39,11 @@ const meta = {
   title: "Wishlist/Page",
   component: Page,
   tags: ["autodocs"],
-  args: { view: "grid" },
-  // Keyed, so changing the layout in Controls remounts and the initializer above runs again
+  // The app's own opening state for both: the wall, and the cabinet rather than the flat list.
+  args: { view: "grid", flatten: false },
+  // Keyed on both, so changing either in Controls remounts and the initializer above runs again
   // rather than writing to a store the mounted page is already subscribed to.
-  render: (args) => <Page key={args.view} {...args} />,
+  render: (args) => <Page key={`${args.view}:${String(args.flatten)}`} {...args} />,
   decorators: [
     // The page is `h-full`, so it needs a parent with a height or the virtualiser is handed a
     // 0px window. 1032px is the content column at a **1280-wide** window: 1280 less the
@@ -196,6 +207,8 @@ export const Table: Story = {
  * dash means “provisional container” on every screen in this app and a button is not one.
  */
 export const Folders: Story = {
+  // The cabinet is the subject, and no wall is drawn at all while the list is flattened.
+  args: { flatten: false },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
@@ -247,6 +260,9 @@ export const Folders: Story = {
  * trail and nowhere for it to lead.
  */
 export const EmptyCabinet: Story = {
+  // {@link Folders}' reason: flattened there is no wall, so the trap door this story guards
+  // would be invisible rather than closed.
+  args: { flatten: false },
   parameters: { fake: { seed: "empty" } },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
@@ -281,7 +297,9 @@ export const EmptyCabinet: Story = {
  * three the folder cards were standing in front of.
  */
 export const Flattened: Story = {
-  args: { view: "table" },
+  // Off to begin with, so the press below is a real flip rather than whatever the store was
+  // holding. It is also this page's default — said out loud because the collection's is not.
+  args: { view: "table", flatten: false },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await canvas.findByText("Counterspell");

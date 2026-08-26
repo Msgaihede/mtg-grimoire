@@ -332,6 +332,14 @@ beforeEach(() => {
     wishlistView: "table",
     selectedCardId: null,
     importDefaults: { condition: "NM", finish: null },
+    // **Flatten is a store field now, and a store field outlives `cleanup()`.** The wishlist's
+    // default did not move — this cabinet's root is still every unfiled wish and there is no
+    // v25 conversion behind it, so `store.ts` opens it on the tree exactly as it always did —
+    // but the *press* now leaks. It did: the two cases below that flatten the list left the
+    // switch on, and every folder case after them ran over a page with no folder cards in it.
+    // Written out rather than left to the default, so the leak cannot come back through a
+    // default that moves the way the collection's just did.
+    wishlistFlattened: false,
   });
 });
 
@@ -1579,6 +1587,39 @@ describe("the folders", () => {
     await userEvent.click(screen.getByRole("button", { name: /^Ordered folder/ }));
 
     await waitFor(() => expect(wishes()).toHaveTextContent("1"));
+  });
+
+  /**
+   * **This cabinet opens on its tree, and it is now the only one of the two that does.**
+   *
+   * The collection's default flipped to flattened when its root was narrowed to "filed nowhere":
+   * since schema v25 every card in a deck sits in that deck's group, so an unflattened first
+   * launch there draws an empty binder (275 of 275 entries filed in deck groups, measured on the
+   * maintainer's own database). Nothing files a wish behind the reader's back — there are no deck
+   * groups here and no v25 conversion — so this root is still every wish the reader has not filed,
+   * and the tree is what they should meet.
+   *
+   * Pinned because the two switches are one feature and a change to one is a two-line edit away
+   * from being a change to both: a default flipped here would put the whole wishlist on one
+   * captioned list and take the cabinet off the opening screen, with nothing else going red.
+   * `getInitialState`, because this file's `beforeEach` writes the field and a test that only
+   * asserted the page would be pinning its own setup — `the wall`'s "is what the wishlist opens
+   * on" reads `wishlistView` the same way, for the same reason.
+   */
+  it("opens on the tree rather than flattened, which is where it parts company with the collection", async () => {
+    expect(useAppStore.getInitialState().wishlistFlattened).toBe(false);
+    useAppStore.setState({ wishlistFlattened: false });
+    wrap(<WishlistPage />);
+    await screen.findByText("Lightning Bolt");
+
+    expect(screen.getByRole("button", { name: "Flatten" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    // The field is absent rather than `false`: `flatten` is "widen past the level", so the read
+    // that goes out at the root is the root's own read.
+    expect(lastQuery().flatten).toBeUndefined();
+    expect(screen.getByRole("button", { name: /^Ordered folder/ })).toBeInTheDocument();
   });
 
   /**

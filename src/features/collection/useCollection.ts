@@ -14,6 +14,7 @@ import { FINISHES, type Finish } from "@/lib/finish";
 import { ipc, type CollectionQuery, type CollectionSortKey } from "@/lib/ipc";
 import { sortOptions } from "@/lib/options";
 import { applySort, type SortDir, type SortSpec } from "@/lib/sort";
+import { useAppStore } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
 
 /**
@@ -200,10 +201,24 @@ export function useCollection() {
    * reason `sort` is outside.
    */
   const [folderId, setFolderId] = useState<number | null>(null);
-  // `true` ignores `folderId` and answers every copy wherever it is filed. Also navigation
-  // rather than a filter, for the same reason `folderId` is — Flatten is "how much of the
-  // cabinet am I looking at", not "which copies qualify".
-  const [flatten, setFlatten] = useState(false);
+  /**
+   * `true` ignores `folderId` and answers every copy wherever it is filed. Also navigation
+   * rather than a filter, for the same reason `folderId` is — Flatten is "how much of the
+   * cabinet am I looking at", not "which copies qualify".
+   *
+   * **The one piece of this hook's state that is not `useState`**, and the difference is the
+   * reader's: where they are *standing* is this session's, but whether they read their cabinet
+   * flat is how they read it at all, so it is held in the app store and persisted behind it —
+   * `collectionFlattened`, which starts `true`. `folderId` deliberately did not follow: a folder
+   * restored at launch would open the app somewhere the reader did not navigate to.
+   *
+   * **Two selectors, never one object literal.** A selector returning a fresh `{ flatten, toggle }`
+   * is a new reference on every store write, so this hook — and the whole collection view under
+   * it — would re-render on a card zoom or a view switch. `FilterBar`'s `ViewToggle` reads its
+   * eight fields the same way and for the same reason.
+   */
+  const flatten = useAppStore((s) => s.collectionFlattened);
+  const toggleFlatten = useAppStore((s) => s.toggleCollectionFlattened);
   const [debouncedText, setDebouncedText] = useState("");
 
   useEffect(() => {
@@ -444,10 +459,15 @@ export function useCollection() {
      * drill-down, and every row captioned with where it is filed instead. Also navigation, for
      * the reason `folderId` is: it says how much of the cabinet is on screen, not which copies
      * qualify.
+     *
+     * The store's `collectionFlattened`, read straight through: the page and the filter bar are
+     * unchanged, so this pair is still the whole of what a caller sees.
      */
     flatten,
-    /** Off shows the current folder; on shows the whole collection. */
-    toggleFlatten: () => setFlatten((current) => !current),
+    /** Off shows the current folder; on shows the whole collection. The store's own action —
+     *  **toggle-only on purpose**, because a `set(value)` invites a caller to compute the next
+     *  state from a `flatten` it captured a render ago. */
+    toggleFlatten,
     /** The columns this list is ordered by, first one deciding. Empty is name order. */
     sort,
     /** One press on a column header. `additive` is Shift being held. */
@@ -552,7 +572,13 @@ export function useCollection() {
      *  stays: it is how the reader reads, not what they are looking at. `folderId` and `flatten`
      *  stay for the same reason — where they are standing, and whether they are ignoring the
      *  filing, are navigation rather than something they narrowed, so a Reset all must not march
-     *  them back out of the drawer they opened or drop them out of Flatten. */
+     *  them back out of the drawer they opened or drop them out of Flatten.
+     *
+     *  **`flatten` now lives in the app store (`collectionFlattened`) and is persisted, which
+     *  makes that exclusion sharper rather than looser**: this function is a list of `set*` calls
+     *  over local state, and the one thing it must never grow is a reach into the store. A
+     *  Reset all that cleared it would not merely re-file the wall — it would write the reader's
+     *  saved preference away, and it would still be gone the next time they launched the app. */
     resetAll: () => {
       setText("");
       setFormat("");

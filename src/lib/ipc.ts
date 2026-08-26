@@ -31,19 +31,21 @@
  * `PassReport`                                   — `src-tauri/src/mirror/run.rs`
  * `TagTerms`                                     — `src-tauri/src/filters.rs`
  *
- * **Six settings carry no struct at all.** Each is one `app_meta` row: two answered as a bare
+ * **Seven settings carry no struct at all.** Each is one `app_meta` row: two answered as a bare
  * string — `getMarketplace`/`setMarketplace` (`src-tauri/src/marketplace.rs`) and
- * `printingGroupBy`/`setPrintingGroupBy` (`src-tauri/src/card.rs`) — two as a bare map,
- * `cardZoom`/`setCardZoom` (`src-tauri/src/zoom.rs`) and `listView`/`setListView`
- * (`src-tauri/src/listview.rs`), and two as a
+ * `printingGroupBy`/`setPrintingGroupBy` (`src-tauri/src/card.rs`) — three as a bare map,
+ * `cardZoom`/`setCardZoom` (`src-tauri/src/zoom.rs`), `listView`/`setListView`
+ * (`src-tauri/src/listview.rs`) and `flattenState`/`setFlattenState`
+ * (`src-tauri/src/flatten.rs`), and two as a
  * bare `boolean`: `navCollapsed`/`setNavCollapsed` (`src-tauri/src/nav.rs`) and
- * `deckSearchOpen`/`setDeckSearchOpen` (`src-tauri/src/deck.rs`). All six are
+ * `deckSearchOpen`/`setDeckSearchOpen` (`src-tauri/src/deck.rs`). All seven are
  * the shape a stored preference has to have: the read falls back on its default for a row that
  * is missing *or* holds a value this build does not recognise, and only the *write* refuses.
  *
- * Four of them are therefore typed loosely here rather than as their unions: the narrowing
+ * Five of them are therefore typed loosely here rather than as their unions: the narrowing
  * belongs to the module that owns the vocabulary (`@/lib/marketplace`,
- * `@/features/card/printings`, `@/lib/cardZoom`, `@/lib/store`), and a row a newer build wrote
+ * `@/features/card/printings`, `@/lib/cardZoom`, `@/lib/store` for both of its two rows), and a
+ * row a newer build wrote
  * must reach this side as what it is. **The two booleans are the ones with no narrowing to do**, and that is
  * the same argument arriving at nothing rather than an exception to it: a boolean has no
  * vocabulary for a later build to have widened, so there is no third state a row could come back
@@ -53,10 +55,19 @@
  * side to decide. Both store `"1"`/`"0"` and read anything else as that default, so a hand-edit
  * or a spelling a future build invents is already collapsed before it reaches the wire.
  *
- * The zoom row and the list-layout row are the two of the six whose *shape* is a map, and the
- * difference is worth a sentence: neither has a single default to fall back on, because there are
- * seven walls and four lists and each one has been touched or not. So the backend answers only
+ * The zoom row, the list-layout row and the flatten row are the three of the seven whose *shape*
+ * is a map, and the
+ * difference is worth a sentence: none has a single default to fall back on, because there are
+ * seven walls, four lists and two cabinets and each one has been touched or not. So the backend
+ * answers only
  * what it has, and a section it says nothing about keeps the default the store was built with.
+ * **The flatten row is the one where the keys are a vocabulary and the values are not** — which
+ * is the two arguments above meeting in one row rather than a third kind of setting: *which*
+ * pages file cards is `@/lib/store`'s to say, while a `bool` has no junk state for a later build
+ * to have widened. So `isFlattenSection` narrows the key, and the only thing `hydrateFlatten`
+ * asks of the value is that it really is a boolean — which is a check on the *wire*, not on a
+ * vocabulary: this file's `boolean` is a claim about what the far end sends, and a row that has
+ * been hand-edited is exactly where a claim stops being true.
  *
  * **Every price field on this page is singular, and the marketplace is how it was chosen.**
  * A query carries `marketplace`; what it answers with carries one `price` / `unitPrice` /
@@ -4676,6 +4687,41 @@ export const ipc = {
    */
   setListView: (section: string, view: string) =>
     invoke<void>("set_list_view", { section, view }),
+  /**
+   * Whether each page with a cabinet was last left ignoring its filing, as section name →
+   * flattened.
+   *
+   * The **seventh** `app_meta` setting and the third whose shape is a map — see this file's
+   * header, and {@link listView} beside it, whose contract this copies whole. **A section is
+   * absent rather than defaulted**: which pages file cards is this side's (`@/lib/store`), and
+   * the two defaults differ (`collectionFlattened` opens `true`, `wishlistFlattened` `false`), so
+   * a missing entry means the reader has never touched that switch and the backend does not
+   * invent an answer it does not own. **Infallible by signature** — a whole unreadable row
+   * answers `{}`, which is a complete, drawable app.
+   *
+   * `Record<string, boolean>` and not `Record<FlattenSection, boolean>`, for {@link listView}'s
+   * reason on the key half only: the keys are whatever some build of this app wrote, so
+   * `isFlattenSection` narrows them in `@/lib/store`. The **values** have no vocabulary to
+   * narrow, which is why the type says `boolean` — and `hydrateFlatten` still checks it, because
+   * that word is a promise about the far end rather than a fact about the row.
+   */
+  flattenState: () => invoke<Record<string, boolean>>("flatten_state"),
+  /**
+   * Remember one page's switch, leaving the other entry in the row alone.
+   *
+   * Two arguments where most of its neighbours take one, and Tauri matches by name. Rejects a
+   * blank section and nothing else: a `bool` off the IPC boundary has no junk state for a
+   * validation to catch, so unlike {@link setListView} there is no word to refuse — the
+   * asymmetry {@link setNavCollapsed} spells out, on a row whose *keys* still belong to this
+   * side.
+   *
+   * Answers `collection::BUSY` under a running sync, like every other write, and the caller
+   * deliberately does not put the switch back when it does — {@link setNavCollapsed}'s trade, for
+   * its reason: a refusal costs the reader nothing they can see this session and only the next
+   * launch's starting state for that page.
+   */
+  setFlattenState: (section: string, flattened: boolean) =>
+    invoke<void>("set_flatten_state", { section, flattened }),
   /**
    * Whether the deck editor's card search column was last left open.
    *
