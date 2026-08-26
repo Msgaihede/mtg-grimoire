@@ -513,6 +513,69 @@ describe("SetCombobox", () => {
   });
 
   /**
+   * **Enter, on the reopen after a pick, toggles the set the cursor is sitting on.** It did not,
+   * and the bug is the reason the opening row is derived during render rather than computed in
+   * the handler that opens the panel.
+   *
+   * The reopen is the one moment the pinned snapshot changes, and the row the panel opens on is
+   * computed from the list that snapshot orders — so the two had to happen in the right order,
+   * and they did not. `onOpen` fires in the same batch as the open, but the row was worked out in
+   * the *handler*, against the render before it: Zendikar was found at row 2 of the un-pinned
+   * order, re-pinning then floated it to row 0 and pushed Adventures and Innistrad down a place,
+   * and the cursor came to rest on row 2 — **Innistrad**, which is what Enter toggled. The page
+   * depth had the same shape: reopening after paging to 150 rows computed a row against 150 and
+   * clamped it against 99.
+   *
+   * It self-corrects on the *second* reopen, because by then the snapshot and the order agree —
+   * which is exactly why driving the shipped window would never have found it.
+   */
+  it("opens on the set it floats to the top, so Enter toggles that one", async () => {
+    listSets.mockResolvedValue([
+      {
+        code: "afr",
+        name: "Adventures in the Forgotten Realms",
+        setType: "expansion",
+        releasedAt: "2021-07-23",
+        cardCount: 281,
+      },
+      {
+        code: "mid",
+        name: "Innistrad: Midnight Hunt",
+        setType: "expansion",
+        releasedAt: "2021-09-24",
+        cardCount: 277,
+      },
+      {
+        code: "znr",
+        name: "Zendikar Rising",
+        setType: "expansion",
+        releasedAt: "2020-09-25",
+        cardCount: 280,
+      },
+    ]);
+    const onToggle = vi.fn();
+    const { rerender } = wrap(<SetCombobox selected={[]} onToggle={onToggle} />);
+
+    // Zendikar sorts last of the three and is picked from there, so the snapshot the *next*
+    // opening takes moves it two rows.
+    await userEvent.click(screen.getByRole("button", { name: "Set" }));
+    await userEvent.click(await screen.findByRole("option", { name: /Zendikar/ }));
+    rerender(<SetCombobox selected={["znr"]} onToggle={onToggle} />);
+    onToggle.mockClear();
+
+    await userEvent.keyboard("{Escape}");
+    await userEvent.click(screen.getByRole("button", { name: "Set" }));
+
+    const box = screen.getByRole("combobox", { name: /search sets/i });
+    const onRow = () => document.getElementById(box.getAttribute("aria-activedescendant") ?? "");
+    expect(onRow()).toHaveTextContent("Zendikar Rising");
+
+    await userEvent.keyboard("{Enter}");
+    expect(onToggle).toHaveBeenCalledWith("znr");
+    expect(onToggle).not.toHaveBeenCalledWith("mid");
+  });
+
+  /**
    * **Greyed rows sink; the pickable ones above them stay alphabetical.** A row this search
    * has nothing in is still worth offering — it says the search has nothing there, which is
    * an answer — but it is not worth a place near the top of a paged list, and it is the last
@@ -659,10 +722,15 @@ describe("SetCombobox", () => {
     await userEvent.keyboard("{ArrowDown}");
     expect(onRow()).toHaveTextContent("Kamigawa");
 
-    // So Enter lands on the row it opened on, and never on the one it refused to walk to.
+    // So Enter lands on the row it opened on, and never on the one it refused to walk to. The
+    // second assertion is the leg the old test made head-on — Enter on a greyed row does
+    // nothing — kept here rather than dropped: the keyboard can no longer *reach* a greyed row
+    // to press one (greyed rows sink, so they are always in the tail the walk stops before), so
+    // this is the only shape the claim can still take.
     await userEvent.keyboard("{Enter}");
     expect(onToggle).toHaveBeenCalledTimes(1);
     expect(onToggle).toHaveBeenCalledWith("neo");
+    expect(onToggle).not.toHaveBeenCalledWith("lea");
   });
 
   /** A picked set is never greyed however its count reads — unpicking it is the way out. And
@@ -763,6 +831,74 @@ describe("SetCombobox", () => {
 
       await userEvent.click(screen.getByRole("button", { name: "Set" }));
       expect((await screen.findByRole("listbox")).parentElement).toHaveClass("w-72");
+    });
+
+    /**
+     * **Which edge `align` pins, measured — with the measurements stubbed, which is the only
+     * honest way to ask jsdom a layout question.**
+     *
+     * `usePopupPlacement` reads exactly four things: the trigger's rect, the frame's rect, the
+     * panel's `offsetWidth`/`offsetHeight`, and `document.documentElement`'s `clientWidth`/
+     * `clientHeight`. jsdom answers `0` to all of them, which is why this file used to assert a
+     * Tailwind class instead and why the class assertion had to go when the class did — a
+     * `origin-top-*` computed from four zeroes looks like a check on placement and is a check on
+     * nothing. Stubbing them is not a layout engine and does not pretend to be: it is real
+     * arithmetic over numbers a real window would have supplied, and it is enough to prove that
+     * `align` reaches `placeDropdown` at all — which nothing in jsdom covered, from this caller
+     * or from `<Dropdown>`.
+     *
+     * The frame's rect is deliberately left at jsdom's zeros: it is the origin the panel's
+     * coordinates are relative to, so leaving it at the viewport's own origin is what makes the
+     * asserted numbers viewport coordinates. Whether the panel then lands where a reader can see
+     * it is a question only the shipped window answers.
+     */
+    it("pins the panel to the edge the caller asked for", async () => {
+      listSets.mockReset();
+      // A trigger 100px wide at x=400 in a 1280px window, under a 288px panel: pinning its left
+      // edge puts the panel at 400, pinning its right edge at 500 − 288 = 212. Both fit, so
+      // neither is flipped by the gutter and the two answers are the caller's choice alone.
+      const size = { width: 288, height: 200 };
+      const viewport = { width: 1280, height: 800 };
+      const props = [
+        { configurable: true, get: () => size.width },
+        { configurable: true, get: () => size.height },
+      ] as const;
+      const original = [
+        Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetWidth"),
+        Object.getOwnPropertyDescriptor(HTMLElement.prototype, "offsetHeight"),
+      ];
+      Object.defineProperty(HTMLElement.prototype, "offsetWidth", props[0]);
+      Object.defineProperty(HTMLElement.prototype, "offsetHeight", props[1]);
+      Object.defineProperty(document.documentElement, "clientWidth", {
+        configurable: true,
+        value: viewport.width,
+      });
+      Object.defineProperty(document.documentElement, "clientHeight", {
+        configurable: true,
+        value: viewport.height,
+      });
+
+      const left = async (align: "start" | "end") => {
+        const view = wrap(
+          <SetCombobox selected={[]} onToggle={vi.fn()} options={cardSets} align={align} />,
+        );
+        const trigger = screen.getByRole("button", { name: "Set" });
+        trigger.getBoundingClientRect = () =>
+          ({ left: 400, top: 100, right: 500, bottom: 130, width: 100, height: 30 }) as DOMRect;
+        await userEvent.click(trigger);
+        const panel = (await screen.findByRole("listbox")).parentElement as HTMLElement;
+        const px = panel.style.left;
+        view.unmount();
+        return px;
+      };
+
+      try {
+        expect(await left("start")).toBe("400px");
+        expect(await left("end")).toBe("212px");
+      } finally {
+        if (original[0]) Object.defineProperty(HTMLElement.prototype, "offsetWidth", original[0]);
+        if (original[1]) Object.defineProperty(HTMLElement.prototype, "offsetHeight", original[1]);
+      }
     });
 
     /**

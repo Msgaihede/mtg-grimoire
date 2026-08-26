@@ -1172,7 +1172,7 @@ function FilterTray<SortKey extends string>({
  * `<label>`; a plain `<span>` where the cell holds two buttons or a composite, because a `<label>`
  * pointing at a group is a label the browser wires to whichever control it finds first. Those
  * cells' controls carry their own names — `ToggleChip` and `RarityChip` build an `aria-label`
- * apiece, `SetCombobox` an `aria-labelledby` — so nothing is unnamed either way.
+ * apiece, `SetCombobox` an `aria-label` — so nothing is unnamed either way.
  */
 function TrayField({
   label,

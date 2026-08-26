@@ -87,10 +87,13 @@ export type SharedProps = {
    * shell's own `open` would take that snapshot one commit after the first render of the list it
    * is meant to order, which is the whole reason this hook exists rather than nothing.
    *
-   * **Not a place to change what `options` will be.** The opening row is computed from the list
-   * drawn on the render *before* this runs — see `openingList` below — so a caller that
-   * synchronously re-cut its own list here would open the panel on a row of a list it is about
-   * to discard. Reset a page depth, take a snapshot; do not clear a controlled `query`.
+   * **Re-cutting or re-ordering the list from here is safe**, and that is not a small claim: it
+   * is what {@link cursorIndex} buys. The opening row is computed on the render *after* this
+   * runs, from the list actually drawn, so a snapshot that re-orders (`SetCombobox`'s pinning) or
+   * a page depth that re-cuts (its `shown`) is exactly what the panel opens onto. An earlier
+   * version of this doc blessed "take a snapshot" while forbidding a re-cut, on the theory that
+   * only the length mattered — and a snapshot that *re-orders* was how Enter came to toggle the
+   * wrong set on a reopen. There is no such caveat now.
    */
   onOpen?: () => void;
 };
@@ -179,6 +182,53 @@ function multiOpeningIndex(drawn: readonly DropdownOption[], selected: readonly 
   return drawn[0]?.disabled ? firstEnabledIndex(drawn) : 0;
 }
 
+/** `activeIndex` while a panel is opening and nothing has moved the cursor yet. Not a row. */
+const OPENING = -1;
+
+/**
+ * Where the cursor is, **derived from the list that is on screen on this very render** rather
+ * than from whatever the list looked like when a handler last ran.
+ *
+ * That distinction is the whole of this function. `openAt` stores {@link OPENING} instead of an
+ * index, so the opening row is computed *here* — after the caller's `onOpen` has landed. A row
+ * computed in the click handler is computed against the previous render's list, and
+ * `SetCombobox`'s `onOpen` re-takes the snapshot its whole order is built on: the ticked set was
+ * found at row *k* of the stale order, re-pinning floated it to row 0 and pushed everything above
+ * it down, and the cursor came to rest on the set that *was* at *k − 1* — where **Enter toggled
+ * the wrong set**. It self-corrected on the second reopen, which is exactly why driving the
+ * window would never have found it. The same shape reached the page depth: reopening after
+ * paging to 150 rows computed a row against 150 and then clamped it against 99.
+ *
+ * The other two branches are about a stored row that the list has moved out from under:
+ *
+ * - **Past the end** — the query narrowed, or the keyboard asked for more and got none. Falls to
+ *   the last row that can be pressed, not merely the last row: a cursor parked on a greyed row
+ *   is a dead Enter.
+ * - **A reveal that landed on a row that cannot be pressed.** `revealing` says this stored index
+ *   is the one the reach-end branches wrote, and only then does the cursor walk forward off a
+ *   greyed row. It must **not** be a standing rule: a row that greys under the cursor because
+ *   facet counts arrived has to stay put and let Enter refuse it, or the highlight moves under
+ *   the reader's hands on every search.
+ */
+function cursorIndex(
+  drawn: readonly DropdownOption[],
+  stored: number,
+  revealing: boolean,
+  opening: (list: readonly DropdownOption[]) => number,
+): number {
+  if (drawn.length === 0) return -1;
+  if (stored === OPENING) return opening(drawn);
+  if (stored >= drawn.length) return lastEnabledIndex(drawn);
+  if (revealing && drawn[stored].disabled) {
+    const forward = nextEnabledIndex(drawn, stored, 1);
+    // Nothing pressable was revealed — in the set picker that is the routine case, since greyed
+    // rows sink and a greyed page boundary means the whole tail is greyed. The last enabled row
+    // is then the one the cursor was already on, so this is "stay where you are".
+    return forward === stored ? lastEnabledIndex(drawn) : forward;
+  }
+  return stored;
+}
+
 /**
  * Props private to {@link DropdownShell} — exactly the handful of places `<Dropdown>` and
  * `<MultiDropdown>` differ, so the shell itself needs no other `multi` branch anywhere.
@@ -193,11 +243,11 @@ type ShellProps = SharedProps & {
   triggerContent: ReactNode;
   /** Whether one option's value counts as picked — `aria-selected` and the row's tick. */
   isPicked: (value: string) => boolean;
-  /** The row a fresh opening lands on, given the list that will actually be on screen once the
-   *  panel finishes opening — `openingList` below, never `drawn` directly (see its own comment
-   *  for why that distinction is load-bearing). Both `<Dropdown>`'s `openingIndex` and
-   *  `<MultiDropdown>`'s {@link multiOpeningIndex} read the argument honestly. */
-  computeOpeningIndex: (openingList: readonly DropdownOption[]) => number;
+  /** The row a fresh opening lands on. Called from {@link cursorIndex} **during render**, with
+   *  the list actually drawn — so there is no "the list is about to change" case to get wrong,
+   *  and no argument here that is not simply what is on screen. Both `<Dropdown>`'s
+   *  `openingIndex` and `<MultiDropdown>`'s {@link multiOpeningIndex} read it honestly. */
+  computeOpeningIndex: (drawn: readonly DropdownOption[]) => number;
   /** Enter, or a pointer press, on an enabled row. `<Dropdown>` passes `onChange`;
    *  `<MultiDropdown>` passes `onToggle`. Whether the panel then closes is the shell's own
    *  call, from `multi` alone — see `activate` below. */
@@ -249,7 +299,11 @@ function DropdownShell(props: ShellProps) {
   } = props;
 
   const [open, setOpen] = useState(false);
+  /** A row, or {@link OPENING}. Never read directly — see `index` below. */
   const [activeIndex, setActiveIndex] = useState(0);
+  /** Whether `activeIndex` is the row a reach-end asked for rather than one the reader walked
+   *  to. Read by {@link cursorIndex}, and cleared by every ordinary move. */
+  const [revealing, setRevealing] = useState(false);
   // Uncontrolled search state — read only when the caller has not supplied `query`. See
   // `controlled` below for the reason a controlled caller's typing never lands here.
   const [localQuery, setLocalQuery] = useState("");
@@ -306,25 +360,10 @@ function DropdownShell(props: ShellProps) {
       ? options.filter((o) => o.label.toLowerCase().includes(q.trim().toLowerCase()))
       : options;
 
-  // The list an **opening** index has to be computed against — not always `drawn`, because
-  // `openAt` below clears the uncontrolled query in the *same batch* as the index it is handed.
-  // An index computed against the current, possibly query-narrowed `drawn` would describe a row
-  // in a list that is about to be replaced: open on row 1 of a two-row narrowed list, and the
-  // very same commit resets the query, so the next paint shows row 1 of the *full* list — a
-  // different row entirely, silently. `openAt` only resets the query `if (!controlled)`, so
-  // that is exactly the condition here: uncontrolled opens onto the full `options` (what the
-  // reset leaves drawn), controlled opens onto `drawn` (which nothing here is about to change —
-  // a controlled caller filters before handing `options` down, so `drawn === options` for it
-  // regardless, but this is written as the actual rule rather than as that coincidence, because
-  // it is `openAt`'s reset condition that decides it, not an algebraic identity today's code
-  // happens to hold).
-  const openingList = controlled ? drawn : options;
-
-  // A stored index can outrun a shrunk list — searching narrows `drawn` while the panel stays
-  // open — and a stale index would point `aria-activedescendant` at a row that is no longer
-  // drawn, and make ArrowDown fire `onReachEnd` forever instead of moving. Read this, never
-  // `activeIndex` itself, everywhere below.
-  const index = Math.min(activeIndex, Math.max(0, drawn.length - 1));
+  // The row the cursor is on, resolved against the list on this render. Read this, never
+  // `activeIndex` itself, everywhere below — every case a stored index can get wrong is settled
+  // in one place, and that place is documented on {@link cursorIndex}.
+  const index = cursorIndex(drawn, activeIndex, revealing, computeOpeningIndex);
 
   useEffect(() => {
     // The search box takes the caret when there is one — see the doc comment above this
@@ -358,20 +397,44 @@ function DropdownShell(props: ShellProps) {
     };
   }, []);
 
+  // Every cursor move a reader makes goes through this, so a plain walk always cancels a pending
+  // reveal — see {@link cursorIndex}, which is the only reader of that flag.
+  const moveTo = (i: number) => {
+    setActiveIndex(i);
+    setRevealing(false);
+  };
+
+  // Both keyboard "give me more" gestures land here, and they land in the same place. The row
+  // asked for is `drawn.length` — one past the end of what is on screen — so if the caller
+  // reveals a page it is the **first new row**, and if it reveals nothing it is out of range and
+  // {@link cursorIndex} falls back to the last row that can be pressed, which is where the cursor
+  // already was. Guessing `index + 1` here instead was wrong twice over: it could not tell those
+  // two cases apart, and it could land on a greyed row, which is what `revealing` now licenses
+  // the resolver to walk off.
+  const reachEnd = () => {
+    setActiveIndex(drawn.length);
+    setRevealing(true);
+  };
+
   // A fresh opening starts with a blank search, so a reader who typed a filter, closed without
   // picking, and reopened is not shown a pre-filtered panel. Reset here rather than on close —
-  // in the same batch as the active-index reset, matching `SetCombobox`'s `startOpening()` —
-  // because the panel is still fading out on close and clearing the box there would be a visible
-  // flicker in something the reader is watching leave. Never for a **controlled** caller: it owns
-  // `query` and this must not reach it, so the guard skips `onQueryChange` entirely rather than
-  // calling it with `""`.
+  // in the same batch as the cursor reset, matching `SetCombobox`'s `startOpening()` — because
+  // the panel is still fading out on close and clearing the box there would be a visible flicker
+  // in something the reader is watching leave. Never for a **controlled** caller: it owns `query`
+  // and this must not reach it, so the guard skips `onQueryChange` entirely rather than calling
+  // it with `""`.
   //
-  // `onOpen` goes off here rather than from an effect on `open`, which is the whole of what it
-  // is for: a caller's per-opening state then lands in the same batch as the open itself. Its
-  // one other entry point is the `searchable` character-key branch below, which cannot use this
-  // function — see the comment there.
-  const openAt = (i: number) => {
-    setActiveIndex(i);
+  // **The cursor is stored as {@link OPENING} rather than as a row**, so the row is computed on
+  // the render that follows — after `onOpen` and after whatever the caller changed in it. That is
+  // what lets `onOpen` fire here at all: a caller's per-opening state lands in the same batch as
+  // the open, and nothing had to be right about the list *before* it. `i` is passed only by the
+  // type-ahead below, which already knows the row it means; it is `-1` there when nothing
+  // matched, which is `OPENING` and exactly what should happen.
+  //
+  // `openAt`'s one other entry point is the `searchable` character-key branch below, which cannot
+  // use this function — see the comment there.
+  const openAt = (i: number = OPENING) => {
+    moveTo(i);
     if (!controlled) setLocalQuery("");
     setOpen(true);
     onOpen?.();
@@ -381,6 +444,11 @@ function DropdownShell(props: ShellProps) {
   // this closes behind it, exactly as `commit` always did; `<MultiDropdown>`'s is `onToggle` and
   // `multi` is what keeps the panel open — see "stays open across several picks".
   const activate = (v: string) => {
+    // Freezes the cursor where it was drawn. It matters only for `<MultiDropdown>`, which stays
+    // open: without it a pick made while {@link OPENING} is still stored would re-run
+    // `computeOpeningIndex` against a `selected` the pick has just changed, and the highlight
+    // would chase the mouse from row to row. A single-select closes behind the pick.
+    moveTo(index);
     onActivate(v);
     if (!multi) dismiss();
   };
@@ -389,7 +457,7 @@ function DropdownShell(props: ShellProps) {
   // paged into the old one means anything in it. One handler for both branches: a controlled
   // caller is told what was typed, an uncontrolled one is trusted to remember it.
   const updateQuery = (next: string) => {
-    setActiveIndex(0);
+    moveTo(0);
     if (controlled) onQueryChange?.(next);
     else setLocalQuery(next);
   };
@@ -432,30 +500,32 @@ function DropdownShell(props: ShellProps) {
           // step onto the first row that arrives: the arrow key the reader is already holding
           // meant "more of this list", not "reveal some and stay where I am".
           onReachEnd?.();
-          // Only from the very last row, and inert whenever nothing is revealed — `index` is
-          // then `drawn.length - 1`, so the clamp above walks `index + 1` straight back to it on
-          // the next render. From a last *enabled* row with disabled ones after it there is
-          // nothing to step onto, which is why this asks about the list's end and not the walk's.
-          if (index === drawn.length - 1) setActiveIndex(index + 1);
-        } else setActiveIndex(next);
+          reachEnd();
+        } else moveTo(next);
         break;
       }
       case "ArrowUp": {
         e.preventDefault();
-        setActiveIndex(nextEnabledIndex(drawn, index, -1));
+        moveTo(nextEnabledIndex(drawn, index, -1));
         break;
       }
       case "Home": {
         e.preventDefault();
-        setActiveIndex(firstEnabledIndex(drawn));
+        moveTo(firstEnabledIndex(drawn));
         break;
       }
       case "End": {
         e.preventDefault();
         const last = lastEnabledIndex(drawn);
-        // Already there: the same "asking for more" gesture ArrowDown makes.
-        if (index === last) onReachEnd?.();
-        else setActiveIndex(last);
+        if (index === last) {
+          // Already there, so End means "the end of what I can see" and pressing it again asks
+          // for the rest — the same bargain ArrowDown strikes at the bottom row, and landing in
+          // the same place, because an asymmetry between the two is worse than either choice.
+          // It does not leap to 1 047 of 1 047: one press, one page, and the reader can watch it
+          // arrive.
+          onReachEnd?.();
+          reachEnd();
+        } else moveTo(last);
         break;
       }
       case "Enter": {
@@ -499,7 +569,7 @@ function DropdownShell(props: ShellProps) {
         if (searchable || e.key.length !== 1 || e.ctrlKey || e.metaKey || e.altKey) break;
         e.preventDefault();
         const match = typeAhead(e.key);
-        if (match !== -1) setActiveIndex(match);
+        if (match !== -1) moveTo(match);
         break;
       }
     }
@@ -528,14 +598,14 @@ function DropdownShell(props: ShellProps) {
         aria-labelledby={labelledBy}
         onClick={() => {
           if (open) setOpen(false);
-          else openAt(computeOpeningIndex(openingList));
+          else openAt();
         }}
         onKeyDown={(e) => {
           // The panel holds the caret while open, so this only ever runs on the closed
           // trigger — a keydown fired at a focused descendant never bubbles to a sibling.
           if (e.key === "ArrowDown") {
             e.preventDefault();
-            openAt(computeOpeningIndex(openingList));
+            openAt();
             return;
           }
           if (e.key.length !== 1 || e.ctrlKey || e.metaKey || e.altKey) return;
@@ -552,7 +622,7 @@ function DropdownShell(props: ShellProps) {
             return;
           }
           const match = typeAhead(e.key);
-          openAt(match !== -1 ? match : computeOpeningIndex(openingList));
+          openAt(match);
         }}
         className={cn(
           size === "sm"
@@ -562,6 +632,9 @@ function DropdownShell(props: ShellProps) {
           "disabled:active:scale-100",
           FOCUS,
           active ? "border-accent text-accent" : "border-border text-dim hover:text-text",
+          // `flex` rather than `inline-flex`, so the trigger is a block that takes its
+          // container's width; `justify-between` is what then holds the chevron against the far
+          // edge instead of letting it sit against the label.
           fill ? "flex w-full items-center justify-between" : "inline-flex items-center gap-1.5",
           className,
         )}
@@ -690,7 +763,7 @@ export function Dropdown(
       // Reads its argument honestly — `openingList` (see the shell's own comment) is always
       // `options` for a single-select regardless of search state, so this is exactly
       // `openingIndex(options, value)`, unchanged from before this file had a shell.
-      computeOpeningIndex={(openingList) => openingIndex(openingList, value)}
+      computeOpeningIndex={(drawn) => openingIndex(drawn, value)}
       onActivate={onChange}
     />
   );
@@ -721,7 +794,7 @@ export function MultiDropdown(
       multi
       triggerContent={triggerLabel}
       isPicked={(v) => selected.includes(v)}
-      computeOpeningIndex={(openingList) => multiOpeningIndex(openingList, selected)}
+      computeOpeningIndex={(drawn) => multiOpeningIndex(drawn, selected)}
       onActivate={onToggle}
     />
   );
@@ -762,6 +835,13 @@ function Row({
         "flex items-center gap-2 rounded-md px-2 py-1.5 text-sm",
         "transition-colors duration-150 motion-reduce:transition-none",
         option.disabled ? FILTER_UNAVAILABLE : "cursor-pointer",
+        // Gold for a picked row, and the base colour written out for the rest rather than left
+        // to inherit — a listbox is drawn over `bg-surface` and takes whatever the trigger's own
+        // `text-dim` handed it otherwise. This is half of the two-part mark the tick comment
+        // below argues for; the two shipped apart for one commit, and the comment stood over
+        // code that no longer did what it described.
+        picked && "text-accent",
+        !picked && "text-text",
         active && "bg-bg",
         size === "sm" && "text-xs",
       )}

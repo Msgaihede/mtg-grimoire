@@ -108,12 +108,23 @@ describe("Dropdown", () => {
     expect(screen.getByRole("listbox")).toBeInTheDocument();
 
     // Enter's own guard needs a row that is actually active *and* disabled to exercise it —
-    // opening never lands there and the arrow keys skip it, so nothing above reaches it. A
-    // live options change does: Task 4's facet counts can disable the very row the keyboard
-    // is already sitting on (Modern, picked and therefore active since it opened). The click
-    // above never moved the cursor off it.
+    // opening never lands there and the arrow keys skip it, so nothing above reaches it. A live
+    // options change does: Task 4's facet counts can disable the very row the keyboard is
+    // already sitting on.
+    //
+    // **It has to be a row the reader walked to, and that is not incidental.** A panel that has
+    // just opened stores no row at all — it stores an "opening" sentinel, and `cursorIndex`
+    // derives the row on every render from the list on screen — so a live change that disables
+    // the opening row simply re-routes the cursor to the next one it can press, and Enter never
+    // sees a disabled row. One arrow key is what turns the cursor into a stored number that a
+    // later options change can catch out.
+    await user.keyboard("{ArrowDown}"); // Modern -> Standard, skipping Pauper
+    expect(screen.getByRole("listbox")).toHaveAttribute(
+      "aria-activedescendant",
+      expect.stringContaining("option-3"),
+    );
     const facetsChanged = FORMATS.map((o) =>
-      o.value === "modern" ? { ...o, disabled: true } : o,
+      o.value === "standard" ? { ...o, disabled: true } : o,
     );
     rerender(
       <Dropdown label="Format" value="modern" onChange={onChange} options={facetsChanged} />,
@@ -416,6 +427,80 @@ describe("MultiDropdown", () => {
     );
   }
 
+  /** A caller that pages: `options` is a prefix of `all`, and `onReachEnd` lengthens it — the
+   *  shape `SetCombobox` has at 1 050 sets, in four rows. */
+  function Paged({ all, onToggle }: { all: DropdownOption[]; onToggle: (v: string) => void }) {
+    const [shown, setShown] = useState(2);
+    return (
+      <MultiDropdown
+        label="Format"
+        triggerLabel="Any format"
+        selected={[]}
+        onToggle={onToggle}
+        options={all.slice(0, shown)}
+        onReachEnd={() => setShown((n) => n + 2)}
+      />
+    );
+  }
+
+  /**
+   * **A revealed page is stepped onto at a row that can be pressed** — the landing is decided on
+   * the render that has the new rows, not guessed in the handler that asked for them.
+   *
+   * Guessing `index + 1` there could not know what would arrive: in the set picker greyed rows
+   * sink, so a page boundary inside the greyed tail is reachable, and the cursor came to rest on
+   * a row where Enter silently did nothing. That is the failure `openingIndex` and
+   * `multiOpeningIndex` both exist to prevent, arriving by another door.
+   */
+  it("steps a revealed page onto a row that can be pressed", async () => {
+    const user = userEvent.setup();
+    const onToggle = vi.fn();
+    render(
+      <Paged
+        onToggle={onToggle}
+        all={[
+          { value: "a", label: "Alpha" },
+          { value: "b", label: "Beta" },
+          { value: "c", label: "Gamma", disabled: true },
+          { value: "d", label: "Delta" },
+        ]}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Format" }));
+    await user.keyboard("{ArrowDown}"); // Alpha -> Beta, the last row drawn
+    await user.keyboard("{ArrowDown}"); // nowhere left: asks for the next page
+    expect(screen.getAllByRole("option")).toHaveLength(4);
+
+    await user.keyboard("{Enter}");
+    // Gamma is the row the page boundary landed on and it cannot be pressed, so the cursor
+    // carried on to Delta rather than parking on a dead Enter.
+    expect(onToggle).toHaveBeenCalledWith("d");
+  });
+
+  /** The other half of it: when a page arrives with nothing pressable in it — the set picker's
+   *  routine case, since greyed rows sink and everything past the boundary is greyed — the cursor
+   *  stays where it was rather than moving to a row that would refuse it. */
+  it("stays put when a revealed page has nothing that can be pressed", async () => {
+    const user = userEvent.setup();
+    const onToggle = vi.fn();
+    render(
+      <Paged
+        onToggle={onToggle}
+        all={[
+          { value: "a", label: "Alpha" },
+          { value: "b", label: "Beta" },
+          { value: "c", label: "Gamma", disabled: true },
+        ]}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Format" }));
+    await user.keyboard("{ArrowDown}{ArrowDown}");
+    expect(screen.getAllByRole("option")).toHaveLength(3);
+
+    await user.keyboard("{Enter}");
+    expect(onToggle).toHaveBeenCalledWith("b");
+  });
+
   it("says a count on the trigger, not a value", async () => {
     const user = userEvent.setup();
     render(<MultiHarness />);
@@ -424,6 +509,27 @@ describe("MultiDropdown", () => {
     await user.click(trigger);
     await user.click(screen.getByRole("option", { name: "Commander" }));
     expect(trigger).toHaveTextContent("2 formats");
+  });
+
+  /**
+   * **A picked row is gold, and an unpicked one is the body colour written out.**
+   *
+   * Two halves of one mark, and the tick's own comment in `Row` is the argument for both: gold
+   * text alone reads as "hovered" in a list the reader is moving through, so the tick is what
+   * makes it a selection. The inverse holds too — a tick with no colour change is a 14px glyph at
+   * the far end of the row doing all the work. The pair shipped apart for one commit, with that
+   * comment still standing over code that drew only the tick, which is what this pins.
+   *
+   * `text-text` is written out rather than left to inherit: a listbox is drawn over `bg-surface`
+   * inside a trigger whose own colour is `text-dim`.
+   */
+  it("draws a picked row gold and an unpicked one in the body colour", async () => {
+    const user = userEvent.setup();
+    render(<MultiHarness />);
+    await user.click(screen.getByRole("button", { name: "Format" }));
+    expect(screen.getByRole("option", { name: "Modern" })).toHaveClass("text-accent");
+    expect(screen.getByRole("option", { name: "Commander" })).toHaveClass("text-text");
+    expect(screen.getByRole("option", { name: "Commander" })).not.toHaveClass("text-accent");
   });
 
   it("stays open across several picks", async () => {
