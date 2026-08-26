@@ -1184,8 +1184,14 @@ describe("CollectionPage", () => {
     //
     // **Scoped past `data-card-marks`**, and that is the third expectation this change moved:
     // that attribute is `CardArt`'s own top-right chip, which carries the same felt, and the
-    // wall started passing a `finish` on 2026-08-26 — so a bare `bg-bg/85` sweep now counts the
-    // foil tile's sparkle alongside the two badges this line is about.
+    // wall started passing a `finish` on 2026-08-26 — so a bare `bg-bg/85` sweep would count
+    // that chip alongside the two badges this line is about.
+    //
+    // **This wording was itself the tell for a defect.** It read "the foil tile's sparkle",
+    // singular, over a fixture whose *both* tiles carried the chip: passing `"nonfoil"` straight
+    // through drew an empty one over the plain copy. It is singular and true now, because the
+    // slot maps nonfoil to `null` — see the chip case above, which is the assertion that pins it.
+    // This scope narrows past `CardArt`'s corner and nothing else; it never hid the badge.
     expect(
       container.querySelectorAll('[class*="bg-bg/85"]:not([data-card-marks])'),
     ).toHaveLength(2);
@@ -1210,8 +1216,9 @@ describe("CollectionPage", () => {
     //
     // **Scoped past `data-card-marks` on 2026-08-26**, for the reason the badge count above
     // gives: `CardArt`'s finish chip carries the same felt, `BOLT` is a foil, and this wall
-    // draws a finish now — so the unscoped query answered about the *sparkle* rather than about
-    // the badge corner, and read as the corner having grown content it had not.
+    // draws a finish now — so the unscoped query answered about that chip, which is first in
+    // document order, rather than about the badge corner, and read as the corner having grown
+    // content it had not.
     expect(
       container.querySelector('[class*="bg-bg/85"]:not([data-card-marks])'),
     ).toBeEmptyDOMElement();
@@ -1248,6 +1255,39 @@ describe("CollectionPage", () => {
     expect(await screen.findAllByAltText("Lightning Bolt")).toHaveLength(2);
     expect(screen.getByText("$9.00")).toBeInTheDocument();
     expect(screen.getByText("$1.00")).toBeInTheDocument();
+  });
+
+  /**
+   * **A plain copy draws no chip at all, and this wall is where the app first had to say so.**
+   *
+   * Passing a tile's finish straight through made this the first production caller to hand
+   * `CardGrid`'s `finish` slot the word `"nonfoil"`. `CardArt` gates its corner chip on
+   * `finish !== null` while `FinishMark` early-returns for a plain copy with no treatment — so
+   * the `bg-bg/85` felt got painted with nothing inside it: an empty rectangle over the art, on
+   * most tiles of most collections.
+   *
+   * The convention it broke is the codebase's own, and it is written down in two places already:
+   * `soleFinish` maps nonfoil to `null`, and `DeckFinish` excludes the word outright. Both exist
+   * so that "plain" never reaches a slot whose job is to draw a mark.
+   *
+   * **Asserted on `data-card-marks`**, which is that chip and is on exactly one element in the
+   * app. The two `bg-bg/85` sweeps above deliberately scope *past* it, so neither of them could
+   * ever have caught this — which is why it is a case of its own rather than a line in one.
+   */
+  it("draws a finish chip on a foil tile and none at all on a plain one", async () => {
+    useAppStore.setState({ collectionView: "grid" });
+    collectionList.mockResolvedValue(
+      page([
+        { ...BOLT, id: 7, finish: "nonfoil", unitPrice: 1 },
+        { ...BOLT, id: 8, finish: "foil", unitPrice: 9 },
+      ]),
+    );
+    const { container } = wrap(<CollectionPage />);
+    await screen.findAllByAltText("Lightning Bolt");
+
+    expect(container.querySelectorAll("[data-card-marks]")).toHaveLength(1);
+    expect(tileQuoting("$1.00").querySelector("[data-card-marks]")).toBeNull();
+    expect(tileQuoting("$9.00").querySelector("[data-card-marks]")).not.toBeNull();
   });
 
   /** Two folders' worth of one finish are one object and one tile — only the finish splits. */
@@ -2386,9 +2426,12 @@ describe("the collection's folders", () => {
     await held.cancel();
     stop();
 
-    // Entries 7 and 9 — the two foils, one of them already filed — and **not** entry 8. The
-    // card half still names the printing: a drop onto a deck is `deck_add_card(deckId, cardId,
-    // …)`, which takes no finish.
+    // Entries 7 and 9 — the two foils, one of them already filed — and **not** entry 8.
+    //
+    // The card half still names the printing alone, and that is a **known limitation** rather
+    // than the design: `deck_add_card` does take a `DeckFinish`, but `dragData`'s `{ kind:
+    // "card" }` payload has no finish slot to carry one, so a foil dropped onto a deck lands
+    // plain. It predates the split; the split is what made it fixable.
     expect(carried.map(readDragData)).toEqual([
       { kind: "card", cardId: "c1", name: "Lightning Bolt", typeLine: "Instant" },
     ]);

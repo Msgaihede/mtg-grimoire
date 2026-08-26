@@ -698,9 +698,15 @@ function moveItem(rows: readonly CardMenuTarget[], deps: CardMenuDeps): MenuItem
        * pointed at, so the press files it and there is nothing to ask — that is this row's whole
        * behaviour on the collection's table and it does not change.
        *
-       * Several is the wall's tile, or a picked set: the ids behind it are different finishes in
-       * different drawers, and filing all of them because the reader pointed at the card would
-       * move copies they never named. {@link CardMenuDeps.pickCopies} is the surface's dialog.
+       * Several is the wall's tile, or a picked set: the ids behind it are copies in different
+       * grades, languages and drawers, and filing all of them because the reader pointed at the
+       * art would move copies they never named. {@link CardMenuDeps.pickCopies} is the surface's
+       * dialog.
+       *
+       * (It read "different finishes in different drawers" until 2026-08-26. Only collection
+       * targets carry `entryIds`, and both of the app's collection walls now draw one tile per
+       * printing **and finish** — so the finish is the one thing the ids behind a tile can no
+       * longer disagree about. The rule is unchanged; the example was simply the wrong one.)
        *
        * **With no dialog wired it loops**, which is what a multi-picked set has done since #214.
        * Falling through to nothing would take a working row off a surface that never had the

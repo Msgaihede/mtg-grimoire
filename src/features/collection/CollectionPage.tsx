@@ -46,6 +46,7 @@ import {
 import { statusLine } from "@/lib/motion";
 import { formatPrice } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
+import { tileKeyOf } from "@/lib/tileKey";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { writeFailure } from "@/lib/writes";
@@ -189,19 +190,6 @@ function subtotalsOf(
   return out;
 }
 
-/**
- * A tile's identity on this wall: the printing **and** the finish, because they are two objects.
- *
- * **One function, called from both ends, because nothing in the type system relates them.** The
- * tile writes this out of its row and the wall writes it out of the pane's `selectedCardId` and
- * `paneFinish`; both are plain `string`, so a spelling changed at one end and missed at the other
- * is a wall where pressing a tile rings nothing at all — no error, and nothing red. The
- * `?? "nonfoil"` default is doing real work on the wall's side rather than guarding a missing
- * column: `paneFinish` is `null` whenever the pane was opened from a surface that names no finish.
- */
-const tileKeyOf = (cardId: string, finish: string | null): string =>
-  `${cardId}:${finish ?? "nonfoil"}`;
-
 /** One tile of the wall: a printing **in one finish**, and how many copies of it the collection
  *  holds. */
 interface CollectionTile extends GridCard {
@@ -249,7 +237,9 @@ interface CollectionTile extends GridCard {
    * **Not the finishes the printing exists in** — a collection row does not carry those — and
    * that difference is the point rather than a compromise. The tile sums entries, so it knows
    * exactly which finishes are behind the art in front of the reader — and since the finish
-   * joined the grain that is **always exactly one**, so the menu records it without asking. A
+   * joined the grain that is **at most one**: one wherever the row spells a finish `FINISHES`
+   * knows, so the menu records it without asking, and the empty list for a word this build
+   * cannot name, which falls to the menu's unknown-list rule as it always did. A
    * tile that said nothing here fell to the menu's unknown-list rule and silently recorded a
    * **nonfoil** copy for a reader who owns two foils and no nonfoil, which is the failure the
    * whole finish rule exists to prevent.
@@ -354,9 +344,11 @@ const captionFor =
  *
  * **The set handed in is now always a singleton, and that is what makes this function worth
  * keeping rather than what makes it redundant.** The finish joined the wall's grain, so a tile
- * merges one finish by construction and this can only ever answer a one-element list — which is
- * exactly the answer the menu needs: `buildCardMenu` records a single-finish list without asking,
- * so a reader who owns two foils and no nonfoil gets a **foil** entry. The old two-element answer
+ * merges one finish by construction and this can answer **at most one** — one where the word is
+ * one `FINISHES` knows, and the empty list otherwise, which is the case the last paragraph is
+ * about. One is exactly the answer the menu needs: `buildCardMenu` records a single-finish list
+ * without asking, so a reader who owns two foils and no nonfoil gets a **foil** entry. The old
+ * two-element answer
  * was the honest thing to say about a tile that merged two objects, and the fix was to stop
  * merging them. What survives here is the narrowing — `FINISHES` order over a `TEXT` column with
  * a CHECK — which a raw `JSON.stringify([row.finish])` would throw away, and with it the empty
@@ -751,9 +743,14 @@ export function CollectionPage() {
       // **The raw `row.finish`, never the narrowed one.** For the three finishes the CHECK
       // constraint permits the two are identical; a row spelling something this build cannot
       // name keys as its own word and gets a tile of its own, rather than being folded in with
-      // the plain copies it is not. Such a tile loses its ring — the wall's composite spells
-      // `nonfoil` for an unnameable finish — which is strictly better than today, where no tile
-      // of a printing is distinguishable from the other at all, and it affects 0 live rows.
+      // the plain copies it is not.
+      //
+      // What that costs such a tile is not merely its own ring. Pressing it calls
+      // `openCardAsFinish(id, null)` — the narrowed finish is `null` — so `paneFinish` is `null`,
+      // the composite spells `id:nonfoil`, and the ring lands on the **plain tile beside it**, or
+      // on nothing where the reader holds no plain copy. Still strictly better than before the
+      // split, where no tile of a printing was distinguishable from any other, and under the
+      // CHECK constraint it describes 0 rows. See {@link tileKeyOf}, which carries this in full.
       const key = tileKeyOf(row.cardId, row.finish);
       copies.set(key, (copies.get(key) ?? 0) + row.quantity);
       const held = finishes.get(key) ?? new Set<string>();
@@ -869,10 +866,19 @@ export function CollectionPage() {
 
   const tileDrag = useCallback(
     (tile: CollectionTile): Record<string, unknown> | null => {
-      // The tile's rows, by the tile's own key. The two `cardId`s below stay `tile.id`, and that
-      // is not an oversight either: a drop onto a **deck** is `deck_add_card(deckId, cardId, …)`,
-      // which names a printing and takes no finish, and the tile-half's `cardId` is what a folder
-      // card and a breadcrumb caption say the reader is filing. Only the *rows* are the finish's.
+      // The tile's rows, by the tile's own key. **The two `cardId`s below stay `tile.id`**, and
+      // the reason differs per half.
+      //
+      // The tile half's is what a folder card and a breadcrumb caption say the reader is filing
+      // ("Move 2 copies of Lightning Bolt"), and the rows it travels with are already narrowed —
+      // it is a label, not an address. It has no consumer that reads it as an address at all.
+      //
+      // **The card half's is a known limitation rather than a decision.** `deck_add_card` does
+      // take a finish (`DeckFinish`), but `dragData`'s `{ kind: "card" }` payload has **no finish
+      // slot** — only its `deckCard` sibling does — so a foil tile dropped onto a deck category
+      // lands as a plain card. That predates the split and this task does not widen `dnd.ts` to
+      // fix it; what the split changed is that the loss is now *avoidable*, because the tile
+      // finally knows which finish the reader pointed at.
       const copies = copiesByTile.get(tile.key) ?? [];
       if (copies.length === 0) return null;
       return {
@@ -2129,10 +2135,17 @@ export function CollectionPage() {
               // em dash rather than a reason to borrow another marketplace's number.
               money={(tile) => formatPrice(tile.unitPrice, marketplace.currency)}
               // The sheen over the art and the glyph in the chin, which is the *other* half of
-              // what tells a reader the two tiles of one printing apart. A nonfoil tile draws
-              // neither and that is right rather than a gap: `FinishMark` returns nothing for a
-              // plain copy with no treatment, and nonfoil is the finish a price is assumed to be.
-              finish={(tile) => tile.finish}
+              // what tells a reader the two tiles of one printing apart.
+              //
+              // **`nonfoil` is mapped to `null` here, and that is not a tidy-up.** `CardArt` gates
+              // its whole corner chip on `finish !== null` while `FinishMark` early-returns for a
+              // plain copy — so handing this slot the word paints the `bg-bg/85` felt with nothing
+              // inside it: an empty rectangle over the art, on most tiles of most collections.
+              // This wall was the app's first caller to have a `nonfoil` to pass at all, which is
+              // why the slot had never had to say so; the convention it would have broken is
+              // written down twice already, in `soleFinish` (which maps nonfoil to `null`) and in
+              // `DeckFinish` (which excludes the word outright).
+              finish={(tile) => (tile.finish === "nonfoil" ? null : tile.finish)}
               // **Only while flattened**, which is the one state where a tile cannot be read off
               // the level it is drawn on: with the filing ignored there is no breadcrumb saying
               // which drawer these are, so the caption has to say it per tile. Unset otherwise, so

@@ -1,6 +1,7 @@
 import type { GridCard } from "@/features/search/CardGrid";
 import { FINISHES, type Finish } from "@/lib/finish";
 import type { CollectionRow } from "@/lib/ipc";
+import { tileKeyOf } from "@/lib/tileKey";
 import type { CopySource } from "./useCollectionSearch";
 
 /**
@@ -156,30 +157,6 @@ export function pickCopy(
       a.row.id - b.row.id,
   );
   return ranked[0] ?? null;
-}
-
-/**
- * A tile's identity on this wall — `` `${cardId}:${finish}` `` — and the **one** place that string
- * is spelled.
- *
- * Two callers, and they are the two ends of the ring: {@link foldCopies} stamps it on every tile,
- * and `CollectionSearchTab` builds the same string out of the card the pane is showing and the
- * finish it was opened as, for `CardGrid`'s `selectedId`. Both are plain `string` and nothing in
- * the type system relates them, so a change to one spelling that missed the other would be a wall
- * where pressing a tile rings nothing at all — silently, with no type to catch it. That is the
- * defect this shape exists to prevent, and it is why the default below lives here rather than at
- * either call site.
- *
- * **`?? "nonfoil"` is what makes the two ends meet.** `paneFinish` is `Finish | null` and its
- * `null` means "no surface named a finish", which on a wall where every tile names one is the
- * plain copy. The collection page's own wall builds its composite with the same default, for the
- * same reason. One consequence, taken knowingly: a row spelling a finish this build cannot name
- * keys as itself (`bolt:galaxy`) and can never be rung, because the pane is told `Finish | null`
- * and has no way to carry that word back — which is the honest answer rather than a ring on the
- * plain copy beside it.
- */
-export function tileKeyOf(cardId: string, finish: string | null): string {
-  return `${cardId}:${finish ?? "nonfoil"}`;
 }
 
 /**

@@ -16,9 +16,10 @@ import { ipcError, type CollectionRow, type DeckCategory } from "@/lib/ipc";
 import { statusLine } from "@/lib/motion";
 import { formatPrice } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
+import { tileKeyOf } from "@/lib/tileKey";
 import { cn } from "@/lib/utils";
 import { AUTO_CATEGORY, autoCategoryFor } from "./autoCategory";
-import { foldCopies, tileKeyOf, type CopyTile } from "./collectionTiles";
+import { foldCopies, type CopyTile } from "./collectionTiles";
 import { CONFIRM_CANCEL, CONFIRM_DESTRUCTIVE, useConfirmFocus } from "./metaRows";
 import { useCollectionSearch } from "./useCollectionSearch";
 
