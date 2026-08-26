@@ -1410,6 +1410,40 @@ describe("the foil view", () => {
     );
   });
 
+  /**
+   * The same thing said by the other surface that knows: the collection's wall draws one tile per
+   * printing **and finish**, so a press on the foil one is about the foil and the pane opens
+   * showing it. It stays a *view* here — there is no deck row to write to — so the label is
+   * `View as`, and `openCardAsFinish` is the whole of how the fact travelled.
+   */
+  it("opens showing the finish a collection tile was opened as", async () => {
+    cardDetail.mockResolvedValue(card({ finishes: '["nonfoil","foil"]' }));
+    cardPrintings.mockResolvedValue(page(printings));
+    useAppStore.getState().openCardAsFinish("p1", "foil");
+
+    wrap("p1");
+
+    expect(await screen.findByRole("button", { name: "View as nonfoil" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  /** A nonfoil tile names its finish too, and the pane opens on the plain photograph — which is
+   *  what "no surface named one" already looked like, and deliberately so. */
+  it("opens plain for a nonfoil tile", async () => {
+    cardDetail.mockResolvedValue(card({ finishes: '["nonfoil","foil"]' }));
+    cardPrintings.mockResolvedValue(page(printings));
+    useAppStore.getState().openCardAsFinish("p1", "nonfoil");
+
+    wrap("p1");
+
+    expect(await screen.findByRole("button", { name: "View as foil" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+  });
+
   /** Browsing the printings list moves the pane onto a card the deck does not hold, so there is
    *  no row for a press to write to and the button goes back to being a view. */
   it("is a view again on a printing the deck does not hold", async () => {

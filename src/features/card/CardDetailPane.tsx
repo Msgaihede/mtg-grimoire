@@ -872,8 +872,13 @@ function artistOf(card: CardDetail, face: number, melded: MeldRelation | null): 
  * the plain one; what the toggle turns on is `FoilOverlay` — this app's own sheen and chip, laid
  * over the same art (`CardArt`, where every number in that gradient was chosen at the window).
  * So this is a **view**, offered because a reader choosing between forty printings wants to know
- * what the shiny one looks like, and it says nothing whatever about which finish they own: that
- * question is answered by a collection entry's own `finish` and by nothing on this screen.
+ * what the shiny one looks like.
+ *
+ * It says nothing about which finish the reader owns **unless a surface that knows named one**:
+ * a deck row plays a specific object and a collection tile *is* one, and both seed this view
+ * through the store's `paneFinish`. Opened from a search wall, from Tags or from a printings row
+ * there is no such fact, and it is what it has always been — a way to see what the shiny one
+ * looks like.
  *
  * A printing offers the view only when it exists in a plain finish *and* a shiny one, because
  * those are the two ends the toggle moves between. The two exclusions are deliberate and each
@@ -1007,10 +1012,20 @@ function Art({
    * which is the same reason the face reset in `Body` is a render-time write and not an effect.
    */
   //
-  // **Seeded from the deck row where there is one**, which is the one thing the key cannot do
-  // for us: browsing to another printing still throws this subtree away, and the new one opens
-  // showing the copy the deck actually plays rather than the plain photograph of it.
-  const [foilView, setFoilView] = useState(deckFinish?.finish != null);
+  // **Seeded from the surface that opened the card where there is one**, which is the one thing
+  // the key cannot do for us: browsing to another printing still throws this subtree away, and
+  // the new one opens showing the copy the reader actually has rather than the plain photograph
+  // of it.
+  //
+  // Read here rather than threaded down from the pane because the state it seeds is this
+  // component's, and `Printings` further down reads the store the same way.
+  const paneFinish = useAppStore((s) => s.paneFinish);
+  // Opened from a deck row that plays a foil, or from a collection tile that *is* one: both are
+  // the reader looking at their own copy, so the pane opens showing it. `nonfoil` seeds nothing,
+  // which is right — it is the finish a card is assumed to be.
+  const [foilView, setFoilView] = useState(
+    deckFinish?.finish != null || paneFinish === "foil" || paneFinish === "etched",
+  );
   const foilable = foilViewFinish(card.finishes);
   // What the overlay is asked for. `soleFinish` is the statement — this printing *is* foil — and
   // the toggle is the only thing that ever adds to it; the two cannot both answer, because
