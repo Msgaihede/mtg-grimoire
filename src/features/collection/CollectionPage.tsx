@@ -1311,15 +1311,23 @@ export function CollectionPage() {
             below are the doors into — so the drill-down and the trail back out stay down here with
             the cabinet they are about. `+ New folder` left this row in the other direction: it is
             the wall's first tile now (`NewFolderCard`), which is where a reader already looks for
-            drawers. So this row is the whole of what is left of the old one, and it is drawn only
-            where there is a trail to draw — an empty flex row is chrome with nothing in it. */}
-        {cabinet && hasFolders && (
+            drawers. So this row is the whole of what is left of the old one, and it is drawn
+            wherever there is a cabinet to speak of — an empty flex row is chrome with nothing in
+            it, but a *flattened* cabinet is not empty, it is being ignored, and the bar is what
+            says so. Hence `hasFolders` alone and no `cabinet` term. */}
+        {hasFolders && (
           <div className="min-w-0">
             <CollectionBreadcrumb
               // Root-most first and **without the root**, which the breadcrumb prepends itself:
               // `null` is a destination rather than a folder, and only that component knows what
               // it calls it.
               trail={trail}
+              // **Not gated on `cabinet`, and it is the one piece of the cabinet that is not.**
+              // The wall and the pinned strip go; this stays and says so, in the inert words the
+              // component draws for the state — which is `WishlistBreadcrumb`'s own behaviour
+              // under the same flag, and the reason the two pages read identically under one
+              // control. See that component for why the argument for hiding it did not hold.
+              flattened={flatten}
               onOpen={collection.openFolder}
               canDrop={canFile}
               onDropCard={fileCard}

@@ -2254,7 +2254,7 @@ describe("Flatten", () => {
    * The press and the read are deliberately two steps: clicking and asserting in one go answers
    * about the frame before React re-rendered.
    */
-  it("takes the breadcrumb, the folder wall and the pinned strip away", async () => {
+  it("takes the folder wall and the pinned strip away, and keeps the bar that says why", async () => {
     collectionFolderList.mockResolvedValue([BINDER, DECK_GROUP, REMOVED]);
     const user = userEvent.setup();
     wrap(<CollectionPage />);
@@ -2265,11 +2265,21 @@ describe("Flatten", () => {
     await user.click(flattenChip());
 
     await waitFor(() => expect(flattenChip()).toHaveAttribute("aria-pressed", "true"));
-    expect(screen.queryByRole("navigation", { name: "Collection folders" })).toBeNull();
     expect(screen.queryByRole("list", { name: "Folders" })).toBeNull();
     expect(screen.queryByRole("button", { name: "New folder" })).toBeNull();
     expect(screen.queryByRole("list", { name: "Deck folders" })).toBeNull();
     expect(screen.queryByRole("list", { name: "Removed cards" })).toBeNull();
+    // **The bar stays, and it is the only thing on screen explaining the three bands that just
+    // went.** `WishlistBreadcrumb` does exactly this under the same flag — see
+    // `CollectionBreadcrumb` for why the argument for hiding it here did not survive being
+    // checked against the page it claimed to distinguish.
+    const bar = screen.getByRole("navigation", { name: "Collection folders" });
+    expect(bar).toHaveTextContent(/Collection\s*·\s*all folders/);
+    // Inert words, not a trail: with every folder on screen there is no level to walk to, so the
+    // segments must not still be doors. (`\s*` because a CSS gap between inline boxes is not a
+    // space to the accname algorithm, and jsdom cannot referee that either way.)
+    expect(within(bar).queryByRole("button")).toBeNull();
+    expect(within(bar).queryByRole("listitem")).toBeNull();
     // And the rows are still there: Flatten widens the list, it does not empty the page.
     expect(screen.getByText("Lightning Bolt")).toBeInTheDocument();
   });

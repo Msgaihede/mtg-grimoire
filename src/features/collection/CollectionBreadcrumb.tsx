@@ -15,22 +15,28 @@
  * is" is not an operation. At the root the trail is empty and `Collection` is itself that last
  * segment — the same rule, not a special case.
  *
- * **No `flattened` prop, which is where this parts company with `WishlistBreadcrumb` — and the
- * reason is now the opposite of the one that used to be written here.** That reason was that the
+ * **`flattened` survives its own Flatten, and this bar is the one piece of the cabinet that
+ * does.** The note that stood here said there was no such prop, on the reasoning that the
  * collection had no flattened state to draw: `CollectionQuery.folderId` absent meant *every
- * folder*, so the root of this trail already was the whole binder and a prop could only ever
- * carry one value. **Both halves of that are false as of the Flatten switch.** The root is
- * `rootOnly` now — the copies filed nowhere, the wishlist's own reading — and the switch exists.
+ * folder*, so the root of this trail already was the whole binder. **Both halves of that are
+ * false as of the Flatten switch** — the root is `rootOnly` now, the copies filed nowhere, which
+ * is the wishlist's own reading, and the switch exists.
  *
- * What replaces it is a placement decision that lives one file up rather than in here.
- * `WishlistBreadcrumb` survives its own Flatten by drawing `Wishlist · all folders` in inert
- * words; `CollectionPage` takes this whole component off screen instead, together with the folder
- * wall and the pinned strip, because on this page Flatten means *no filing on screen at all* —
- * and a bar left saying `Collection · all folders` over a page with no folder cards and no deck
- * groups would be the last piece of a cabinet that is otherwise gone. So the prop would be a
- * switch this page never throws: not because there is one state, but because the other state is
- * drawn by not drawing this. `CollectionPage`'s `cabinet` is the gate, and it is one flag for all
- * three.
+ * It was briefly drawn the other way, with `CollectionPage` taking this component off screen
+ * along with the wall and the pinned strip, on the argument that a bar reading
+ * `Collection · all folders` over a page with no folder cards is the last piece of a cabinet that
+ * is otherwise gone. **That argument does not survive being checked against the page it claims to
+ * distinguish**: the wishlist hides its wall on exactly the same flag and keeps its line anyway,
+ * so the sentence separates nothing. What is actually true is the reverse — with the wall, the
+ * deck groups and `Recently removed` all put away, this line is the *only* thing on screen saying
+ * why, and a reader who pressed a chip up on the filter bar and watched three bands vanish is
+ * owed it. So the two pages behave identically under one control, which is the whole of what
+ * "the collection works like the wishlist" was asked to mean.
+ *
+ * Inert words rather than a trail: with every folder on screen at once there is no level to be
+ * on, so a segment would be a door into a place the reader is already standing. The `nav` and its
+ * accessible name are kept across both states, so a test or a screen reader looking for
+ * `Collection folders` finds the same landmark either way.
  *
  * One consequence of the new root reading is worth stating where it is read, because it removed a
  * wrinkle rather than adding one: dropping on `Collection` means **un-file to the root**, and the
@@ -51,18 +57,34 @@ const ROOT = "Collection";
 
 export function CollectionBreadcrumb({
   trail,
+  flattened,
   onOpen,
   canDrop,
   onDropCard,
 }: {
   /** Root-most first, ending with the folder being shown. Empty at the root. */
   trail: readonly CollectionFolder[];
+  /** Whether the filing is being ignored. On, the trail is replaced by the inert words for what
+   *  is on screen — see the note above about why this bar survives its own Flatten. */
+  flattened: boolean;
   onOpen: (folderId: number | null) => void;
   /** Asked per segment rather than once for the bar — a copy already filed at the root refuses
    *  the root and still accepts an ancestor, so only the page can answer, and only per place. */
   canDrop: (drag: CollectionDrag, folderId: number | null) => boolean;
   onDropCard: (drag: CollectionDrag, folderId: number | null) => void;
 }) {
+  // Not a trail, because there is no level to be on: every folder is on screen at once, so each
+  // segment would be a door to a place the reader is already standing. Drawn as words rather than
+  // dropped entirely — this is the one line that says *why* the wall and the pinned strip are
+  // gone, and `WishlistBreadcrumb` says it in the same shape one table over.
+  if (flattened) {
+    return (
+      <nav aria-label="Collection folders" className="text-sm text-dim">
+        <span>{`${ROOT} · all folders`}</span>
+      </nav>
+    );
+  }
+
   const segments: { folderId: number | null; name: string }[] = [
     { folderId: null, name: ROOT },
     ...trail.map((folder) => ({ folderId: folder.id, name: folder.name })),

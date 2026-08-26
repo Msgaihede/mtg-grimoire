@@ -159,10 +159,16 @@ export const Default: Story = {
  * hairline, beside the grid-and-table pair, where every control is about how the list is *drawn*
  * rather than which rows are in it.
  *
- * **What goes with the press is the whole cabinet** — the breadcrumb, the folder wall with its
- * `New folder` tile, and the pinned strip of deck groups and `Recently removed`. Nothing is lost
- * by that: those copies are in the list, and each one names its own drawer in the table's Folder
- * column (on the wall it is the tile's caption instead — see the wall's own `captionFor`).
+ * **What goes with the press is the cabinet's controls** — the folder wall with its `New folder`
+ * tile, and the pinned strip of deck groups and `Recently removed`. Nothing is lost by that:
+ * those copies are in the list, and each one names its own drawer in the table's Folder column
+ * (on the wall it is the tile's caption instead — see the wall's own `captionFor`).
+ *
+ * **The breadcrumb is the exception, and it survives as a sentence rather than a trail**:
+ * `Collection · all folders`, inert, because with every folder on screen there is no level to
+ * walk to. It stays because with the wall and the pinned strip gone it is the only thing saying
+ * *why* — and because `WishlistBreadcrumb` does exactly this under the same flag, which is what
+ * makes the two pages one control rather than two.
  */
 export const Flattened: Story = {
   args: { view: "table" },
@@ -181,12 +187,16 @@ export const Flattened: Story = {
     });
     // The card that was filed away, back — and the folder it is in, named on its own row.
     await expect(canvas.getByText("Black Lotus")).toBeInTheDocument();
-    // And the cabinet is gone: no trail to walk, no drawers to open, no doors into the levels
-    // this list is deliberately ignoring.
-    await expect(canvas.queryByRole("navigation", { name: "Collection folders" })).toBeNull();
+    // And the cabinet is put away: no drawers to open, no doors into the levels this list is
+    // deliberately ignoring.
     await expect(canvas.queryByRole("list", { name: "Folders" })).toBeNull();
     await expect(canvas.queryByRole("button", { name: "New folder" })).toBeNull();
     await expect(canvas.queryByRole("list", { name: "Deck folders" })).toBeNull();
+    // **The bar stays, in inert words.** It is the only thing left on screen saying why three
+    // bands just went, and `WishlistBreadcrumb` says the same sentence under the same flag.
+    const bar = canvas.getByRole("navigation", { name: "Collection folders" });
+    await expect(bar).toHaveTextContent(/Collection\s*·\s*all folders/);
+    await expect(within(bar).queryByRole("button")).toBeNull();
   },
 };
 
