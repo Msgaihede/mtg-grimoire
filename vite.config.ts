@@ -101,6 +101,7 @@ export default defineConfig({
         // only ever runs in a browser.
         "src/vite-env.d.ts",
         "src/main.tsx",
+        ".claude/**/*",
       ],
     },
   },
