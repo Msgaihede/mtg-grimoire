@@ -237,12 +237,23 @@ interface CollectionTile extends GridCard {
    * **Not the finishes the printing exists in** — a collection row does not carry those — and
    * that difference is the point rather than a compromise. The tile sums entries, so it knows
    * exactly which finishes are behind the art in front of the reader — and since the finish
-   * joined the grain that is **at most one**: one wherever the row spells a finish `FINISHES`
-   * knows, so the menu records it without asking, and the empty list for a word this build
-   * cannot name, which falls to the menu's unknown-list rule as it always did. A
-   * tile that said nothing here fell to the menu's unknown-list rule and silently recorded a
-   * **nonfoil** copy for a reader who owns two foils and no nonfoil, which is the failure the
-   * whole finish rule exists to prevent.
+   * joined the grain that is **at most one**, so the menu records it without asking.
+   *
+   * **The empty list is the case worth warning about, and exactly one thing produces it**: a row
+   * spelling a finish word `FINISHES` cannot name, which {@link ownedFinishes} drops rather than
+   * pass on to the backend. A tile left saying nothing here falls to the menu's unknown-list rule
+   * and silently records a **nonfoil** copy — the same shape of failure the whole finish rule
+   * exists to prevent, arrived at from the one direction the rule cannot close. It is 0 live rows,
+   * and it is written down because the `CHECK` on `collection_entries.finish` is the only thing
+   * holding it there.
+   *
+   * (That warning was illustrated with "a reader who owns two foils and no nonfoil" until
+   * 2026-08-26. The example was false and pre-dated the split: such a reader has always got
+   * `["foil"]` out of {@link ownedFinishes} and a foil entry recorded. The warning was right; the
+   * story attached to it was not.)
+   *
+   * The narrowing itself — `FINISHES` order, unrecognised words dropped — belongs to
+   * {@link ownedFinishes} and is argued there rather than twice.
    */
   finishes: string;
   /**
@@ -342,17 +353,18 @@ const captionFor =
  * keeps the row with its condition and its purchase story, and it is still a finish the reader
  * has recorded holding this printing in.
  *
- * **The set handed in is now always a singleton, and that is what makes this function worth
- * keeping rather than what makes it redundant.** The finish joined the wall's grain, so a tile
- * merges one finish by construction and this can answer **at most one** — one where the word is
- * one `FINISHES` knows, and the empty list otherwise, which is the case the last paragraph is
- * about. One is exactly the answer the menu needs: `buildCardMenu` records a single-finish list
- * without asking, so a reader who owns two foils and no nonfoil gets a **foil** entry. The old
- * two-element answer
- * was the honest thing to say about a tile that merged two objects, and the fix was to stop
- * merging them. What survives here is the narrowing — `FINISHES` order over a `TEXT` column with
- * a CHECK — which a raw `JSON.stringify([row.finish])` would throw away, and with it the empty
- * list that is the honest answer for a finish this build cannot name.
+ * **The set handed in is now at most a singleton, and that is what makes this function worth
+ * keeping rather than what makes it redundant.** The finish joined the wall's grain on
+ * 2026-08-26, so a tile merges one finish by construction and this answers one entry wherever the
+ * word is one `FINISHES` knows — and the empty list for the unrecognised one the paragraph above
+ * is about. One is exactly the answer the menu wants: `buildCardMenu` records a single-finish
+ * list without asking, so a reader who owns two foils and no nonfoil gets a **foil** entry.
+ *
+ * The old two-element answer was the honest thing to say about a tile that merged two objects,
+ * and the fix was to stop merging them. What survives here is the narrowing — `FINISHES` order,
+ * unrecognised words dropped — which a raw `JSON.stringify([row.finish])` would throw away.
+ * `CollectionTile.finishes` defers to this function for that rule rather than restating it, and
+ * carries the one thing that is the *field's* business: what an empty list costs at the menu.
  */
 function ownedFinishes(seen: ReadonlySet<string>): string {
   return JSON.stringify(FINISHES.filter((finish) => seen.has(finish)));

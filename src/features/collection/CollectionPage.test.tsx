@@ -1334,8 +1334,15 @@ describe("CollectionPage", () => {
 
   /**
    * A tile that merges exactly one finish records that finish without asking — which is a fix
-   * rather than a tidy-up. A reader owning two foils and no nonfoil used to fall to the menu's
-   * unknown-list rule and get a silent **nonfoil** entry.
+   * rather than a tidy-up. Before the split a tile holding a foil *and* a plain copy offered
+   * both and made the reader pick, and picking wrongly on a wall of forty is one keystroke; now
+   * the tile the reader pressed is already the answer.
+   *
+   * (This doc said "a reader owning two foils and no nonfoil used to fall to the menu's
+   * unknown-list rule and get a silent **nonfoil** entry" until 2026-08-26. That was false and
+   * came from the task brief, which had it from older repo prose: `ownedFinishes` has always
+   * answered `["foil"]` for that reader. The unknown-list rule is reached only by a finish word
+   * `FINISHES` cannot name — see `CollectionTile.finishes`, which carries the real warning.)
    *
    * Read through the menu's own write, which is what this file already uses to say what a tile
    * offered as its finish: `collection_add`'s `finish` argument is `CardMenuTarget.finishes`

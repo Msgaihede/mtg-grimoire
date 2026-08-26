@@ -68,7 +68,7 @@ type ChinPrinting =
  * ## Why this is a component
  *
  * Three surfaces drew a foot and each held its own numbers — 28px of 10px type on the deck's
- * stacks, 25px of 12px on the five walls `CardGrid` draws, 20px of 9px on the deck's grid — and
+ * stacks, 25px of 12px on the walls `CardGrid` draws, 20px of 9px on the deck's grid — and
  * only the first had the felt, the edges and the rise that make a foot read as part of the card
  * rather than as a caption under it. Three copies is how a shared look stops being shared. This is
  * the stack's, which is the one that was right, and `chinHeight` in `lib/cardZoom.ts` is its
@@ -111,7 +111,7 @@ export function CardChin(
      *  `null` is this codebase's word for "no price" (`formatPrice(value: number | null, …)`), so
      *  a caller holding one must not get an empty box for it. */
     money?: ReactNode;
-    /** After the money. Two callers: the deck's shortage (`owned/wanted`), and the five walls
+    /** After the money. Two callers: the deck's shortage (`owned/wanted`), and the walls
      *  `CardGrid` draws, whose tiles append an `sr-only` game-changer word here — the crown is
      *  drawn only inside `CardArt`'s `aria-hidden` overlay and this bar is the sibling of the
      *  button that can say so. */
@@ -123,12 +123,12 @@ export function CardChin(
      *   onto the card's own border so the two are one line rather than two. **No bottom edge**:
      *   the card's border is the bottom edge, and a `border-b` here sits 1px *above* it — a red
      *   card with a 2px foot and a 1px everything-else.
-     * * **`"art"`** — under a bare `CardArt` frame, which has no border at all (the five walls
+     * * **`"art"`** — under a bare `CardArt` frame, which has no border at all (every wall
      *   `CardGrid` draws, and the deck's grid). The chin supplies all three edges itself and
      *   rounds to the art's own `lg` corner.
      *
      * **Required, and deliberately not defaulted, because the wrong answer is silent.** Exactly
-     * one of the six surfaces this is drawn on is a bordered card, so any default serves the
+     * one of the surfaces this is drawn on is a bordered card, so any default serves the
      * minority — and a call site that simply forgot the prop would compile, pass its tests, and
      * ship a chin missing its bottom edge, which jsdom cannot see and a screenshot barely can. It
      * is a fact about the host that no caller can be ignorant of.
