@@ -187,14 +187,18 @@ export function SetCombobox({
    * Handed over as `onOpen`, and deliberately not an effect on the shell's `open`: the shell
    * calls this in the same batch as the state change that opens the panel, where an effect
    * would take the snapshot one commit after the first render of the list it is meant to order.
+   * Both of these re-cut the list the panel is about to draw — `shown` its length, `pinned` its
+   * order — and that is safe because the shell derives the row it opens on *after* this has run,
+   * from the list actually drawn. It has not always been: when the row was worked out in the
+   * handler that opened the panel, re-pinning here moved the set out from under it and Enter
+   * toggled its neighbour. See `cursorIndex` in `Dropdown.tsx`.
    *
-   * Note what is *not* here: the query, which survives an opening on purpose so reopening the
-   * picker shows the reader the list they left. That is also the one thing an `onOpen` may not
-   * touch — the shell computes its opening row from the list drawn on the render *before* this
-   * runs, so clearing the query here would open the panel on a row of a list it is about to
-   * discard. (`setShown` is reset by `onQueryChange` for the separate reason that a new query is
-   * a new list; `pinned` is not, because the sets already ticked are the same sets whatever has
-   * been typed.)
+   * Note what is *not* here: **the query, which survives an opening on purpose** — reopening the
+   * picker shows the reader the list they left rather than making them type it again. That is a
+   * decision about this control and not a hazard being avoided; there is nothing an `onOpen` may
+   * not touch any more. (`setShown` is reset by `onQueryChange` for the separate reason that a
+   * new query is a new list; `pinned` is not, because the sets already ticked are the same sets
+   * whatever has been typed.)
    */
   const startOpening = useCallback(() => {
     setShown(MAX_OPTIONS);

@@ -308,6 +308,48 @@ describe("Dropdown search", () => {
     expect(box).toHaveFocus();
   });
 
+  /**
+   * **A new query lands the cursor on the first row that can be *pressed*, not on row 0.**
+   *
+   * Row 0 of a narrowed list is an arbitrary row — a greyed set, a format the facets have
+   * emptied — and parking the cursor there makes the reader's first Enter do nothing at all,
+   * which is the silent failure `openingIndex` and `multiOpeningIndex` are both written to
+   * reroute away from. `updateQuery` stored a literal `0` until the opening sentinel existed to
+   * store instead; the row is derived on the next render now, which is also the only thing that
+   * could be right, since at the moment a key is typed the drawn list is still the one the
+   * *previous* query produced.
+   *
+   * "Test" narrows to a disabled row followed by a live one, so the two answers differ by a whole
+   * commit rather than by a highlight.
+   */
+  it("puts the cursor on the first pressable row of a new query, not row 0", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(
+      <Dropdown
+        label="Format"
+        value=""
+        onChange={onChange}
+        searchable
+        options={[
+          { value: "alpha", label: "Alpha Test", disabled: true },
+          { value: "beta", label: "Beta Test" },
+          { value: "gamma", label: "Gamma" },
+        ]}
+      />,
+    );
+    await user.click(screen.getByRole("button", { name: "Format" }));
+    await user.type(screen.getByRole("combobox"), "test");
+
+    expect(screen.getAllByRole("option")).toHaveLength(2);
+    expect(screen.getByRole("combobox")).toHaveAttribute(
+      "aria-activedescendant",
+      expect.stringContaining("option-1"),
+    );
+    await user.keyboard("{Enter}");
+    expect(onChange).toHaveBeenCalledWith("beta");
+  });
+
   it("arrows and commits within the query-narrowed list, not the full one", async () => {
     const user = userEvent.setup();
     const onChange = vi.fn();
@@ -520,8 +562,9 @@ describe("MultiDropdown", () => {
    * the far end of the row doing all the work. The pair shipped apart for one commit, with that
    * comment still standing over code that drew only the tick, which is what this pins.
    *
-   * `text-text` is written out rather than left to inherit: a listbox is drawn over `bg-surface`
-   * inside a trigger whose own colour is `text-dim`.
+   * `text-text` is written out rather than left to inherit: the panel is a *sibling* of the
+   * trigger and nothing between the two names a text colour, so a row would otherwise take
+   * whatever the page around the control happens to be using.
    */
   it("draws a picked row gold and an unpicked one in the body colour", async () => {
     const user = userEvent.setup();

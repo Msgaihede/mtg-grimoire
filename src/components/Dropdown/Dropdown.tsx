@@ -456,8 +456,16 @@ function DropdownShell(props: ShellProps) {
   // A new query is a new list; neither the old cursor position nor how far the reader had
   // paged into the old one means anything in it. One handler for both branches: a controlled
   // caller is told what was typed, an uncontrolled one is trusted to remember it.
+  //
+  // **{@link OPENING} and not a literal `0`**, for both of the reasons the opening itself uses
+  // it. Row 0 of the narrowed list can be a row that cannot be pressed — a greyed set, a
+  // format the facets have emptied — and parking the cursor there is the silent first-press
+  // failure `openingIndex` and `multiOpeningIndex` are written to reroute away from. And `drawn`
+  // here is still the list the *old* query produced, so a row picked out now would be a row of a
+  // list this very call is replacing; deriving it on the next render is the only thing that can
+  // be right.
   const updateQuery = (next: string) => {
-    moveTo(0);
+    moveTo(OPENING);
     if (controlled) onQueryChange?.(next);
     else setLocalQuery(next);
   };
@@ -836,10 +844,13 @@ function Row({
         "transition-colors duration-150 motion-reduce:transition-none",
         option.disabled ? FILTER_UNAVAILABLE : "cursor-pointer",
         // Gold for a picked row, and the base colour written out for the rest rather than left
-        // to inherit — a listbox is drawn over `bg-surface` and takes whatever the trigger's own
-        // `text-dim` handed it otherwise. This is half of the two-part mark the tick comment
-        // below argues for; the two shipped apart for one commit, and the comment stood over
-        // code that no longer did what it described.
+        // to inherit. Nothing on the way down to a row sets one — the panel is a *sibling* of
+        // the trigger, not a descendant, so the trigger's `text-dim` never reaches it, and
+        // neither the shell's root nor `PopupPanel` names a text colour — so a row inherits
+        // whatever the page around this control happens to be using. `text-text` makes the row's
+        // colour a decision instead. This is half of the two-part mark the tick comment below
+        // argues for; the two shipped apart for one commit, and the comment stood over code that
+        // no longer did what it described.
         picked && "text-accent",
         !picked && "text-text",
         active && "bg-bg",
