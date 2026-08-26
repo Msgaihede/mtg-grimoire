@@ -37,7 +37,7 @@
  * with nothing on screen explaining why." Readers asked for the opposite (issue #175), and the
  * argument had a hole in it: it was written when there was **one** number for the whole app, so
  * "the zoom" really was a momentary posture that a single card could set for every wall at once.
- * Split seven ways it is not that any more. A reader who sizes the deck editor so a 100-card pile
+ * Split per section it is not that any more. A reader who sizes the deck editor so a 100-card pile
  * fits the desk, or the Tags wall up so an illustration is legible, has configured *that wall* —
  * and the app forgetting it on every launch was the complaint.
  *

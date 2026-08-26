@@ -48,7 +48,7 @@ export const ZOOM_WRITE_DELAY_MS = 400;
  *
  * The pulse is the store's own word for *a gesture happened*, and a gesture is exactly what is
  * worth remembering. Watching the value instead would get two cases wrong in opposite directions.
- * It would write back everything {@link hydrateCardZoom} had just seeded — seven round trips at
+ * It would write back everything {@link hydrateCardZoom} had just seeded — a round trip per wall at
  * launch to tell the database what it had said a moment earlier — and it would *miss* the reader
  * holding the wheel at 200%, whose gestures `stepZoom` answers with 200% forever: the value never
  * moves, so a value-watcher would never restart the timer, and the write would land in the middle
