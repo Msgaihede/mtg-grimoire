@@ -257,9 +257,30 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   [wishlist-folders.md](wishlist-folders.md) for the rule and why the picture has to move with the
   price.
 
-  | Measurement | Figure |
-  | --- | --- |
-  | An unpinned wish's printing pick, per page | — pending, see Task 14 |
+  **Measured 2026-08-26**, against the 116 843-card corpus copied into a worktree, through
+  `node:sqlite` rather than the app — the statement is the subquery in isolation, warmed, over 200–300
+  repetitions, so these are the *pick's* cost and not a `wishlist_list` round trip. The comparison is
+  against the clause it replaced (`released_at DESC, id ASC`), which is what the index answers.
+
+  | Printings of the oracle card | Cheapest pick | Newest pick | Delta |
+  | --- | --- | --- | --- |
+  | 1 | 0.006 ms | 0.005 ms | +0.001 ms |
+  | 5 | 0.008 ms | 0.006 ms | +0.003 ms |
+  | 20 | 0.020 ms | 0.007 ms | +0.013 ms |
+  | 51 | 0.040 ms | 0.014 ms | +0.026 ms |
+  | 141 | 0.098 ms | 0.021 ms | +0.077 ms |
+  | 949 (the corpus's worst) | 5.108 ms | 0.067 ms | **+5.041 ms** |
+
+  **The distribution is what makes those figures readable, and it is the reason the worst case is not
+  the interesting one.** Across 38 626 oracle cards the mean is **3.02** printings, the **median is
+  2**, and the 95th percentile is **8** — so a typical unpinned wish pays under 0.01 ms more than it
+  did, and the 5 ms row is a **basic land** wished for by oracle card, where nine hundred printings
+  are one card's reprints. A page of unpinned wishes for basic lands is the shape to watch: at
+  `MAX_LIMIT` it is the only way this reaches a figure a reader could feel, and it is bounded by how
+  many wishes name no printing rather than by the size of the corpus.
+
+  Debug build, Windows. Nobody has run a Linux build of this repo, and the same measurement can
+  differ by ~8× between debug and release — so read these as the shape of the cost, not as a budget.
 
   **Three things bound it before anything is measured.** `coalesce` short-circuits, so the subquery
   runs **once per _unpinned_ wish** and never for a pinned one — 0 of 88 wishes in the dev database
