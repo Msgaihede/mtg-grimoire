@@ -1,5 +1,69 @@
 # Changelog
 
+## [0.17.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.16.0...v0.17.0) (2026-08-26)
+
+
+### Features
+
+* **card:** carry the finish a tile was opened as into the pane ([d43e6a4](https://github.com/Msgaihede/mtg-grimoire/commit/d43e6a44625fcb2c32df03afa76b5cce8652ddda))
+* **cards:** give the art an edge for the chin to continue ([235535f](https://github.com/Msgaihede/mtg-grimoire/commit/235535ff9f06f069b8fda297907aee9ae08e3beb))
+* **cards:** one card chin, for every surface that draws a card foot ([0c118d1](https://github.com/Msgaihede/mtg-grimoire/commit/0c118d1358b40402da56c6179ac8627ec8782ecf))
+* **cards:** promote the chin's height into cardZoom ([1ec76fa](https://github.com/Msgaihede/mtg-grimoire/commit/1ec76fa199b541265c0bd104460af157319a160d))
+* **collection,wishlist:** give the collection a Flatten, and move the folder controls where they belong ([30eb416](https://github.com/Msgaihede/mtg-grimoire/commit/30eb41671b6271979b00f612cb95210389c7a497))
+* **collection,wishlist:** give the collection a Flatten, and move the folder controls where they belong ([156cfc3](https://github.com/Msgaihede/mtg-grimoire/commit/156cfc3792224ea868aa75bed45c7935837224bf))
+* **collection,wishlist:** one filter row for every list of cards ([f4a7579](https://github.com/Msgaihede/mtg-grimoire/commit/f4a7579485de29a852a23cdd909fa45f6f0e2231))
+* **collection,wishlist:** one filter row for every list of cards ([2e04f3f](https://github.com/Msgaihede/mtg-grimoire/commit/2e04f3f8166476ec6e78c76d1780b80df854654e))
+* **collection,wishlist:** remember each page's Flatten switch across restarts ([44058d5](https://github.com/Msgaihede/mtg-grimoire/commit/44058d596d9b7c4861295da2aa7356dee3415586))
+* **collection:** drag a wall tile into a folder, and stop art stealing the drag ([6d550a4](https://github.com/Msgaihede/mtg-grimoire/commit/6d550a4067b7085d730a193401c98668bf820c7d))
+* **collection:** drag a wall tile into a folder, and stop art stealing the drag ([35fa06e](https://github.com/Msgaihede/mtg-grimoire/commit/35fa06e8e4a857820fb768b62044c59d94571baa))
+* **collection:** the wall splits by finish, and quotes each one's price ([0cc1827](https://github.com/Msgaihede/mtg-grimoire/commit/0cc18270bffefb25240cb1968b6cd08c22bd0c07))
+* **decks:** both deck views draw the shared chin ([9c2f340](https://github.com/Msgaihede/mtg-grimoire/commit/9c2f340e98bb65dbc68a076475a666a83de420b1))
+* **decks:** Compare beside the switch, and Theory | Actual ([bef4b18](https://github.com/Msgaihede/mtg-grimoire/commit/bef4b185a4cbd6cddecf9cc75b7573aebed66809))
+* **decks:** Compare beside the switch, and Theory | Actual ([2334685](https://github.com/Msgaihede/mtg-grimoire/commit/23346859b2b33550e3dabcebaddce67f6c829f83))
+* **decks:** one filter row for both search tabs, and a title bar for the panel ([8401377](https://github.com/Msgaihede/mtg-grimoire/commit/8401377dac987ed064c022eab9a3beb69546838b))
+* **decks:** one filter row for both search tabs, and a title bar for the panel ([c6d7b4a](https://github.com/Msgaihede/mtg-grimoire/commit/c6d7b4aea50b36691ec6c02ec5be1d386cdbfcd6))
+* **decks:** the docked collection tab splits by finish, and rings the tile ([bba3aa3](https://github.com/Msgaihede/mtg-grimoire/commit/bba3aa3f0ec9f6c51fe3ad05237a04abc57c99ae))
+* **decks:** the theory mark says how far the count is off ([5caf238](https://github.com/Msgaihede/mtg-grimoire/commit/5caf238ee34d1fddb822b4af7c61f7741ecda835))
+* **decks:** the theory mark says how far the count is off ([6299629](https://github.com/Msgaihede/mtg-grimoire/commit/629962942e6714dbd2871fd8e2b45ef2a21f62ad)), closes [#212](https://github.com/Msgaihede/mtg-grimoire/issues/212)
+* **decks:** zoom the gallery's tiles and folder cards ([bb9582a](https://github.com/Msgaihede/mtg-grimoire/commit/bb9582a0f8ecc7ce88554b88c1fc405eb20bf85c))
+* **dropdown:** an optional search box, controlled or not ([e1aa659](https://github.com/Msgaihede/mtg-grimoire/commit/e1aa6595160d8bfd27bce3118dbb0e0c2c3bacd7))
+* **dropdown:** measure a panel through a zero-size fixed frame ([24170eb](https://github.com/Msgaihede/mtg-grimoire/commit/24170eb3e217427b64727f8d367ae27a1838422f))
+* **dropdown:** multi-select, and the workbench ([b342417](https://github.com/Msgaihede/mtg-grimoire/commit/b342417d789b0de2304d9e07cfe7a22c560763cf))
+* **dropdown:** place a panel against the viewport ([5dba2a2](https://github.com/Msgaihede/mtg-grimoire/commit/5dba2a2b99b7c27813fa59b3a1520b4f624673f9))
+* **dropdown:** the shell, and a single-select over it ([0b47bdb](https://github.com/Msgaihede/mtg-grimoire/commit/0b47bdba5aa9324bec0428c811e515057a2e5d70))
+* **folders:** drag folders to reorder and nest them, in all three cabinets ([700874c](https://github.com/Msgaihede/mtg-grimoire/commit/700874c81076b9f46609bbc8fcee3a3e4f506db1))
+* **folders:** drag folders to reorder and nest them, in all three cabinets ([7be1cc6](https://github.com/Msgaihede/mtg-grimoire/commit/7be1cc6d7a4b515208a86cc4c630805775457418))
+* **search,tags,decks,card:** the catalogue walls quote a price ([95c8eb8](https://github.com/Msgaihede/mtg-grimoire/commit/95c8eb8658f70d21612f21832e8e352557844a72))
+* **search:** CardGrid draws the shared chin, and gains three seams ([b7c1200](https://github.com/Msgaihede/mtg-grimoire/commit/b7c120017488e420e3c678875e9b54ef48714c08))
+* **wishlist:** the chin quotes one copy, and the corner clears the card's name ([fa3608a](https://github.com/Msgaihede/mtg-grimoire/commit/fa3608ade63749a8d6034b8ae69ba8cbd635c964))
+
+
+### Bug Fixes
+
+* **build:** keep src/ out of the node project, which took main's CI red ([3d22402](https://github.com/Msgaihede/mtg-grimoire/commit/3d2240228d7939aa2a3034e2ad83c20f602dc510))
+* **card:** hand the cabinet picker the whole folder list, not the reader's half ([c654910](https://github.com/Msgaihede/mtg-grimoire/commit/c65491043b83c912f46e5576e4066977dcc194c3))
+* **cards:** make the chin ask the questions a caller can get silently wrong ([183676e](https://github.com/Msgaihede/mtg-grimoire/commit/183676e894d59bb6c800d4a1058977f5c38fefd8))
+* **collection:** keep the breadcrumb through Flatten, as the wishlist does ([539c0d4](https://github.com/Msgaihede/mtg-grimoire/commit/539c0d4b37893464cb82e0c79e6bf8b18a7d400c))
+* **collection:** stop the empty chip, and give the two folds one key function ([60f4685](https://github.com/Msgaihede/mtg-grimoire/commit/60f46853e674956bc6ad9cb567755182b2601ca3))
+* **decks,collection,wishlist:** one outline per card, and two missing dates ([fda7da7](https://github.com/Msgaihede/mtg-grimoire/commit/fda7da7f7955fdbeeacfe9c91e4d060fb664ae03))
+* **decks:** centre the collapsed rail's title with self-center, not text-center ([b441dda](https://github.com/Msgaihede/mtg-grimoire/commit/b441dda81dccb848d4fd6e5c21e5bb8eec8dfb7f))
+* **decks:** centre the collapsed rail's title with self-center, not text-center ([533a652](https://github.com/Msgaihede/mtg-grimoire/commit/533a6527575bda3bad8bb8d6690dc8fed766b639))
+* **decks:** draw the collapsed search rail as a column, not a boxed button ([f3c7188](https://github.com/Msgaihede/mtg-grimoire/commit/f3c718816d331ece8e81e2293c081c505af0ce58))
+* **decks:** draw the collapsed search rail as a column, not a boxed button ([50eca5e](https://github.com/Msgaihede/mtg-grimoire/commit/50eca5e04253bc29f3d7e3d60c58bc58aea110a0))
+* **decks:** the docked Collection tab says how old its prices are ([5f043aa](https://github.com/Msgaihede/mtg-grimoire/commit/5f043aa7cc197de956ad640383fa1a096eb7a12f))
+* **decks:** the docked Collection tab says how old its prices are ([7080e32](https://github.com/Msgaihede/mtg-grimoire/commit/7080e32acd5f6b0f68a22b6e5763c1af339b1b47))
+* **dropdown:** a new query lands the cursor on a row that can be pressed ([56cd267](https://github.com/Msgaihede/mtg-grimoire/commit/56cd2670e3b76a4077be1f2ce4ad429d26cc7d25))
+* **dropdown:** add mutation tests for clamping logic ([02ce7cf](https://github.com/Msgaihede/mtg-grimoire/commit/02ce7cf85129843d81368caf5fffe079ab8bd2c3))
+* **dropdown:** derive the cursor at render, so a reopen opens on the right row ([eeed0f9](https://github.com/Msgaihede/mtg-grimoire/commit/eeed0f93de4c59fb59d1c49e5974313e463291be))
+* **dropdown:** fill centering, a stale index, ARIA wiring, and the scroll ([99030ad](https://github.com/Msgaihede/mtg-grimoire/commit/99030ad030e4ab9c9d7fc5bd1c3d92b808068f5a))
+* **dropdown:** opening index against the list about to be drawn, and a disabled fallback row ([9c1e176](https://github.com/Msgaihede/mtg-grimoire/commit/9c1e1769585e042eea086eb3f42aa827e48e6979))
+* **dropdown:** search box name, a real narrowed-list test, and type-ahead coverage ([0e07c95](https://github.com/Msgaihede/mtg-grimoire/commit/0e07c9505f28ec9d2cb817327679c3b34ae871b7))
+* **search:** correct three prop docs, and let a wall place its own corner ([264cd5d](https://github.com/Msgaihede/mtg-grimoire/commit/264cd5d1e76be26e7ddefca44904af5352419aa3))
+* **search:** put the row's own hairline back on the Filters button ([f64dd12](https://github.com/Msgaihede/mtg-grimoire/commit/f64dd1211312fe4dbec99ff30a4f474fdd3a2668))
+* **search:** put the row's own hairline back on the Filters button ([92a7f48](https://github.com/Msgaihede/mtg-grimoire/commit/92a7f48a9050d2614b5dc33e6e4c624d8d00fcb3))
+* **search:** quiet the Filters button until it has something to say ([dc96695](https://github.com/Msgaihede/mtg-grimoire/commit/dc966951f14ec57affa65d1656dedec32acc90ff))
+* **wishlist:** price a wish at its own finish, and at the cheapest printing ([18b57a3](https://github.com/Msgaihede/mtg-grimoire/commit/18b57a377f6473a99cd843d63b06d43d80094bca))
+
 ## [0.16.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.15.0...v0.16.0) (2026-08-25)
 
 
