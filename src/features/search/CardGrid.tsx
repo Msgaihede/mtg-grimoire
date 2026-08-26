@@ -444,17 +444,23 @@ export function CardGrid<T extends GridCard>({
   /**
    * What a tile carries when it is dragged — and, by being absent, that it cannot be.
    *
-   * The wall draws the search results *and* the collection, and only the search passes one.
-   * **That is a product call and this note is where it is recorded**, not a fact about the
+   * The wall draws the search results *and* the collection, and only the search passes **this**
+   * one. **That is a product call and this note is where it is recorded**, not a fact about the
    * tiles: a collection tile is a *card* — `CollectionPage` sums the entries behind one
    * printing into a single tile, and breaking them apart is the table's job — so a
    * `{ kind: "card" }` payload would be as honest here as it is on the collection *rows* that
-   * carry one. What decided it is the enumeration this feature was built from: the drag
-   * sources outside the deck editor are the search's tiles, the collection's **table rows**,
-   * the pinned wishes and the pane's printings. The day the collection's wall should be one
-   * too, it passes this prop and nothing else changes — which is why this is a prop rather
-   * than a behaviour, one component drawing both walls, and a wall given none registers no
-   * drag at all.
+   * carry one.
+   *
+   * **The collection's wall is a drag source now, and it went in through {@link dragRecord}
+   * rather than through here** — which is the sentence this note used to predict ("the day the
+   * collection's wall should be one too, it passes this prop and nothing else changes") landing
+   * one seam to the left of where it was aimed. A tile's drag means *two* things at once: a card,
+   * for the deck categories and the sidebar's Decks entry that have always taken one; and the
+   * several `collection_entries` rows the wall summed into that piece of art, for a folder card.
+   * Two marks in one flat record is exactly what `dragRecord` exists to carry — the wishlist's
+   * tiles reached the same shape first — so the prediction was right about the wall and wrong
+   * about which of the two slots it would use. Both are still props rather than behaviours, one
+   * component draws both walls, and a wall given neither registers no drag at all.
    *
    * Hold it still (module scope, or a `useCallback`): React detaches and re-runs a callback
    * ref whose identity changed, so a fresh arrow on every render would tear the registration
