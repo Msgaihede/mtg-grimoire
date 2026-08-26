@@ -94,7 +94,8 @@ export const COUNT_TAG_BOX = cn(
 
 /**
  * The box for a mark cut with {@link COUNT_TAG_SLANT_MIRRORED} — the larger padding on the
- * **left**, and both of them small, because what it holds is a *glyph* rather than a digit.
+ * **left**, and **as wide as {@link COUNT_TAG_BOX} holding one digit**, so the two read as
+ * bookends in size as well as in shape.
  *
  * **Issue #158 moved the larger one to the left.** The theory tick in a stacked card's right-hand
  * corner wore {@link COUNT_TAG_BOX} unchanged, and a reader reported the glyph as left-aligned
@@ -109,6 +110,17 @@ export const COUNT_TAG_BOX = cn(
  * the 11px came out of padding alone: the height, the face and the slant are untouched, so the
  * mark is still {@link COUNT_TAG_BOX}'s shape reflected.
  *
+ * **Issue #212 put some of it back, and settled the width with a floor rather than with
+ * paddings.** 19px against the tag's ~25 was reported as too tight *and* as visibly the smaller
+ * of the two bookends, which is one complaint with two halves — and paddings alone can only ever
+ * answer the first, because the mark's content is a glyph on one card and a signed number
+ * (`+2`, `-8`) on the next, so any pair of paddings picked for the tick makes the number's box a
+ * different width again. So the padding is `8/3` and the **width** is stated outright:
+ * `min-w` is `1ch` — the mono face's own digit advance at whatever size this is drawn — plus
+ * `1.125rem`, which is exactly {@link COUNT_TAG_BOX}'s two paddings. That is the count tag's
+ * width holding a single digit, by construction rather than by a measured number that would rot
+ * the day the face changed.
+ *
  * ## Both issues are instances of one line of arithmetic, so here it is
  *
  * At the box's mid-height the slant has eaten `10px / 2` off the left edge, so the visible
@@ -116,11 +128,26 @@ export const COUNT_TAG_BOX = cn(
  * `pl + c / 2`. Substitute `W = pl + c + pr` and the content width `c` cancels: the two centres
  * coincide exactly when **`pl − pr = 5px`**, whatever either padding is and whatever is inside.
  * `12/6` satisfied it to within the half pixel that was measured (the numbers came off Tailwind's
- * scale); `6/1` satisfies it exactly.
+ * scale); `6/1` satisfied it exactly, and `8/3` does too.
  *
- * The right-hand padding gets to be a hairline because a stroked tick brings its own: lucide's
- * `Check` is drawn `4 → 20` in a 24 viewBox, so 2px of bearing per side at the 12px this is worn
- * at. A digit has no such room to give back, which is why {@link COUNT_TAG_BOX} keeps its `6/12`.
+ * **`justify-center` is what keeps that true once a `min-width` is involved**, and it is the one
+ * class here that is not obviously load-bearing. The derivation above substitutes
+ * `W = pl + c + pr`, which stops holding the moment the floor makes the box wider than its
+ * contents: the surplus lands entirely to the **right** of the content under a flex container's
+ * default `flex-start`. Centred, the content sits at `pl + (W − pl − pr) / 2` and the difference
+ * of the paddings is again the whole of it.
+ *
+ * **It is worth 0.8px on the tick at 1× and it is kept anyway**, measured over the built
+ * stylesheet on 2026-08-26 — the surplus the floor adds is small because `8/3` was chosen with
+ * the floor in mind. What it buys is that the arithmetic above stays a *derivation* rather than a
+ * coincidence of today's numbers: the surplus is `W − pl − c − pr`, it grows with the zoom, and
+ * anything that changes the content or either padding changes it again.
+ *
+ * The right-hand padding is still the small one because a stroked tick brings its own bearing:
+ * lucide's `Check` is drawn `4 → 20` in a 24 viewBox, so 2px per side at the 12px this is worn
+ * at. A digit has no such room to give back, which is why {@link COUNT_TAG_BOX} keeps its `6/12`
+ * — and why a two-character `-8` is what actually sets this box's width, at a hair over the floor
+ * rather than under it.
  *
  * A second constant rather than a `mirrored` flag on the first, because the pairing is the point:
  * a slant and the paddings that centre content inside it are **one shape** described in two
@@ -128,7 +155,9 @@ export const COUNT_TAG_BOX = cn(
  */
 export const COUNT_TAG_BOX_MIRRORED = cn(
   COUNT_TAG_FACE,
-  "pl-[calc(0.375rem*var(--mark-scale,1))] pr-[calc(0.0625rem*var(--mark-scale,1))]",
+  "justify-center",
+  "min-w-[calc(1ch+1.125rem*var(--mark-scale,1))]",
+  "pl-[calc(0.5rem*var(--mark-scale,1))] pr-[calc(0.1875rem*var(--mark-scale,1))]",
 );
 
 /**

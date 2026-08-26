@@ -1,7 +1,15 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { FILTER_CONTROL, FILTER_FOCUS, ManaValueChips, ResetAll, ToggleChip } from "./FilterChips";
+import {
+  FILTER_CONTROL,
+  FILTER_FOCUS,
+  filterChipState,
+  FiltersButton,
+  ManaValueChips,
+  ResetAll,
+  ToggleChip,
+} from "./FilterChips";
 
 describe("ToggleChip", () => {
   it("says what it is and whether it is on", async () => {
@@ -305,5 +313,70 @@ describe("ResetAll", () => {
     rerender(<ResetAll count={2} onReset={vi.fn()} />);
     expect(screen.getByRole("button")).toHaveAccessibleName("Reset all — 2 filters active");
     expect(screen.getByRole("button")).toHaveTextContent("2");
+  });
+});
+
+describe("FiltersButton", () => {
+  const button = () => screen.getByRole("button", { name: /filters/i });
+
+  /**
+   * **The border and the word are the count; the fill is the tray** — and the two are
+   * independent, which is the whole of what this control was changed to say (2026-08-26). It used
+   * to wear the gold border whether or not anything was on, so it was the one control on the row
+   * drawn in the on-treatment while off; a reader sweeping the row for what is switched on found
+   * it every time and had to read the badge to learn it was not.
+   *
+   * **The off pair is asserted against `filterChipState` rather than typed out**, because that is
+   * the claim: this control wears the row's own recipe, not a lookalike. Typing `border-border`
+   * here would keep passing if the component grew a hand-copied pair of its own and the recipe
+   * then moved.
+   *
+   * `toHaveClass` reads `classList`, so these are real tokens rather than a substring of the
+   * `className` string — a `hover:` variant would pass either way and is deliberately not
+   * asserted here (it is a state jsdom cannot enter).
+   */
+  it("takes its border and word from the count, and its fill from the tray", () => {
+    const off = filterChipState(false).split(" ");
+    const on = filterChipState(true).split(" ");
+
+    const { rerender } = render(
+      <FiltersButton open={false} count={0} onToggle={vi.fn()} controls="tray" />,
+    );
+
+    // Nothing on: the row's own off treatment — a hairline and a dim word, like every other
+    // bordered control here — and no fill.
+    expect(button()).toHaveClass(...off);
+    expect(button()).not.toHaveClass("border-accent", "text-accent", "bg-surface");
+
+    rerender(<FiltersButton open={false} count={2} onToggle={vi.fn()} controls="tray" />);
+    expect(button()).toHaveClass(...on);
+    expect(button()).not.toHaveClass("bg-surface");
+
+    // Open with nothing on: the tray's own grey, and still no gold — gold on this row means "a
+    // filter is on", which is the border's sentence rather than the fill's.
+    rerender(<FiltersButton open count={0} onToggle={vi.fn()} controls="tray" />);
+    expect(button()).toHaveClass("bg-surface", ...off);
+    expect(button()).not.toHaveClass("border-accent", "text-accent");
+
+    // **The word stays gold with the tray up**, which is the one thing opening must not undo:
+    // the count is still on, and a reader who opened the tray to change it has not changed it
+    // yet. Both readings are drawn at once, which is `filterChipState`'s rule too.
+    rerender(<FiltersButton open count={2} onToggle={vi.fn()} controls="tray" />);
+    expect(button()).toHaveClass("bg-surface", ...on);
+  });
+
+  /** The badge is drawn only when there is something to say — a `0` on every quiet row teaches
+   *  the eye to skip the control it is attached to. The digit is spelled into the name, because
+   *  left to the accname algorithm this announces as `"Filters2"`. */
+  it("draws no badge at zero, and spells the count into its name", () => {
+    const { rerender } = render(
+      <FiltersButton open={false} count={0} onToggle={vi.fn()} controls="tray" />,
+    );
+    expect(button()).toHaveAccessibleName("Show filters — 0 active");
+    expect(button()).not.toHaveTextContent("0");
+
+    rerender(<FiltersButton open count={2} onToggle={vi.fn()} controls="tray" />);
+    expect(button()).toHaveAccessibleName("Hide filters — 2 active");
+    expect(button()).toHaveTextContent("2");
   });
 });

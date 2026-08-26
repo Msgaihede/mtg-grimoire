@@ -170,6 +170,7 @@ import type {
   TagStatus,
   GlobalTag,
   TheoryDiffRow,
+  TheorySlot,
   TransferImportMode,
   UpdateAsset,
   UpdateStatus,
@@ -5140,24 +5141,36 @@ export function readHandlers(db: FakeDb) {
     },
 
     /**
-     * `deck_theory::theory_slots` — every card the plan asks for, as `group_key` strings.
+     * `deck_theory::theory_slots` — every card the plan asks for, as a `group_key` string and how
+     * many copies it wants.
      *
-     * The deck editor's theory tick. **Not the diff and not derivable from it**: a card the
+     * The deck editor's theory mark. **Not the diff and not derivable from it**: a card the
      * reader has fully acquired is absent from the shopping list and is still in the plan.
      *
      * Same two exclusions {@link theoryDiff} states — inactive categories out, the pile
-     * otherwise invisible — and duplicates left in, because the caller builds a set.
+     * otherwise invisible.
+     *
+     * **The rows fold here, exactly as the `GROUP BY` folds them in Rust** (issue #212). They did
+     * not have to while the caller built a set out of bare keys; with a quantity on the row, two
+     * entries spelling one key are a plan the frontend would read as half the size. The fake does
+     * the folding rather than leaning on `theoryMatchPlan`'s own defensive sum, or a story would
+     * be exercising that fallback instead of the shape the backend answers in.
      */
-    deck_theory_slots: (args: { deckId: number }): string[] => {
+    deck_theory_slots: (args: { deckId: number }): TheorySlot[] => {
       refuseIfMetaUnreadable(db, THEORY_UNREADABLE);
-      return db.deckCards
-        .filter(
-          (dc) =>
-            dc.deckId === args.deckId &&
-            dc.variant === "theory" &&
-            categoryById(db, dc.categoryId)?.isActive === true,
-        )
-        .map((dc) => `${dc.cardId}|${dc.finish ?? ""}`);
+      const wanted = new Map<string, number>();
+      for (const dc of db.deckCards) {
+        if (
+          dc.deckId !== args.deckId ||
+          dc.variant !== "theory" ||
+          categoryById(db, dc.categoryId)?.isActive !== true
+        ) {
+          continue;
+        }
+        const key = `${dc.cardId}|${dc.finish ?? ""}`;
+        wanted.set(key, (wanted.get(key) ?? 0) + dc.quantity);
+      }
+      return [...wanted].map(([key, quantity]) => ({ key, quantity }));
     },
 
     /** `deck_theory::theory_diff` — what the plan wants and the deck does not have. See

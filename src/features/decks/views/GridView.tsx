@@ -7,7 +7,7 @@
 import { useRef } from "react";
 import { CardArt } from "@/components/CardArt";
 import { RarityGem } from "@/components/RarityGem";
-import { cardScaleVars, scaled } from "@/lib/cardZoom";
+import { atLeast, cardScaleVars, scaled } from "@/lib/cardZoom";
 import { DROP_MARK_ROOM, DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { playedFinish } from "@/lib/finish";
 import { finishTreatments } from "@/lib/treatment";
@@ -39,7 +39,7 @@ import {
   useDeckCardDrag,
   type DeckCardActions,
 } from "../cardControl";
-import { matchesTheory } from "../theoryMatch";
+import { theoryMatchDelta } from "../theoryMatch";
 import { DropIndicator } from "../DropIndicator";
 import type { CardGroup } from "../grouping";
 import { ruleBreak } from "../violations";
@@ -67,26 +67,6 @@ const CAPTION_HEIGHT = 20;
 const CAPTION_TEXT = 9;
 const TILE_GAP = 10;
 
-/**
- * A base that **grows with the zoom and never shrinks below itself** — and, since the marks
- * themselves learnt to scale, the rule for exactly one thing on this wall: the gutter.
- *
- * It used to govern the foot and the type in it as well, on the argument that the card is a picture
- * and scales in both directions honestly while the things around it do not. That was true while
- * they did not: a 9px caption under a halved card would have become 4px, which is not type. It is
- * false now — the caption, the gem, the copy count and the stepper all follow `--mark-scale`
- * (`lib/cardZoom.ts`), so a floored budget is a 20px strip around 5px of type, which is the same
- * fault the other way up.
- *
- * The gutter keeps the floor because it is the one measurement here that is **between** cards
- * rather than **on** one: 10px is what stops a wall of cards reading as one sheet, and halving it
- * at 0.5× is precisely the zoom a reader chose in order to see more cards at once. Nothing is being
- * contained, so there is nothing for it to stay in step with.
- */
-function atLeast(base: number, zoom: number): number {
-  return Math.max(base, scaled(base, zoom));
-}
-
 export function GridView({
   groups,
   marketplace,
@@ -103,10 +83,10 @@ export function GridView({
    *  tile's own unit price. */
   marketplace: Marketplace;
   violations?: Map<string, ValidationIssue[]>;
-  /** Which rows the deck's plan also asks for — `theoryMatch.ts`'s set of slots, handed down
-   *  whole like `violations` beside it. `undefined` for a deck with no plan, and on the plan
-   *  itself. */
-  theoryMatches?: ReadonlySet<string>;
+  /** What the deck's plan says about each row — `theoryMatch.ts`'s map of slot → how far the
+   *  live list is from the planned count, handed down whole like `violations` beside it.
+   *  `undefined` for a deck with no plan, and on the plan itself. */
+  theoryMatches?: ReadonlyMap<string, number>;
   onSelect?: (card: DeckCard) => void;
   /** What may be done to a card here — see {@link DeckCardActions}. */
   actions?: DeckCardActions;
@@ -202,7 +182,7 @@ function GridGroup({
   marketplace: Marketplace;
   violations?: Map<string, ValidationIssue[]>;
   /** Handed through to the tiles — see {@link GridView}'s own props. */
-  theoryMatches?: ReadonlySet<string>;
+  theoryMatches?: ReadonlyMap<string, number>;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
   /** Handed through to the tiles — see {@link GridView}'s own props. */
@@ -258,7 +238,7 @@ function GridGroup({
               card={card}
               currency={marketplace.currency}
               ruleBreakText={ruleBreak(violations?.get(card.cardId))}
-              inTheory={matchesTheory(theoryMatches, card)}
+              theoryDelta={theoryMatchDelta(theoryMatches, card)}
               onSelect={onSelect}
               actions={actions}
               selected={deckCardMarked(card, selectedSlot, actions)}
@@ -300,7 +280,7 @@ function GridCard({
   card,
   currency,
   ruleBreakText,
-  inTheory,
+  theoryDelta,
   onSelect,
   actions,
   selected,
@@ -311,9 +291,10 @@ function GridCard({
   /** How the tile's foot writes the row's one unit price. */
   currency: Currency;
   ruleBreakText: string | null;
-  /** The deck's plan asks for this row too — resolved by the group, so a tile is handed a
-   *  boolean rather than a set to look itself up in. */
-  inTheory: boolean;
+  /** What the deck's plan says about this row — `theoryMatchDelta`, resolved by the group so a
+   *  tile is handed an answer rather than a map to look itself up in. `null` is a card the plan
+   *  does not ask for, `0` the card it asks for exactly. */
+  theoryDelta: number | null;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
   /** This is the card the pane is open on. */
@@ -375,7 +356,7 @@ function GridCard({
     >
       <button
         type="button"
-        aria-label={deckCardName(card, ruleBreakText, inTheory)}
+        aria-label={deckCardName(card, ruleBreakText, theoryDelta)}
         {...deckCardProps(card)}
         {...deckCardPress(card, onSelect, actions)}
         // Inset, for the stacked card's reason: the button holds a face that clips its own
@@ -471,7 +452,7 @@ function GridCard({
               spells it (`finish !== null || gameChanger`), because a chip is drawn for **either**
               fact and reading only the finish would put the tick under an empty corner on every
               non-foil game changer. */}
-          {inTheory && (
+          {theoryDelta !== null && (
             <span
               className={cn(
                 "absolute right-[calc(0.25rem*var(--mark-scale,1))]",
@@ -481,7 +462,7 @@ function GridCard({
               )}
             >
               {/* The tile's own quantity chip, not the stack's banner — see the component. */}
-              <TheoryMatchMark variant="chip" />
+              <TheoryMatchMark variant="chip" delta={theoryDelta} />
             </span>
           )}
 

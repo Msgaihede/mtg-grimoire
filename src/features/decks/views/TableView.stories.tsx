@@ -81,7 +81,7 @@ export const WithSelectedRow: Story = {
 export const ByType: Story = { args: { groups: deckGroups("type", "type") } };
 
 /**
- * The **Live** list of a deck that keeps a plan — the tick, and the one surface that says it in
+ * The **Live** list of a deck that keeps a plan — the mark, and the one surface that says it in
  * words as well.
  *
  * A row is not an `aria-label`-ed button, so a cell's text is really read: this view draws
@@ -98,7 +98,14 @@ export const TheoryMatches: Story = {
     // `aria-hidden` and bound `describes: false` (no `title` any more); `THEORY_MATCH_ATTR` is
     // its own handle, and the `sr-only` twin beside it is what makes the words in `getAllByText`
     // honest — this view is the one place `TheoryMatchBadge` gets one at all.
-    expect(canvas.getAllByText(THEORY_MATCH_LABEL)).toHaveLength(4);
     expect(canvasElement.querySelectorAll(`[${THEORY_MATCH_ATTR}]`)).toHaveLength(4);
+
+    // **Two of the four are counts rather than ticks** (issue #212), and the twin is where this
+    // view earns its keep: `+1` and `-2` are two characters that mean nothing spoken, so the
+    // sentence beside them has to carry the number too. Two rows match exactly and say the bare
+    // sentence; the other two say it with the difference on the end.
+    expect(canvas.getAllByText(THEORY_MATCH_LABEL)).toHaveLength(2);
+    expect(canvas.getByText(`${THEORY_MATCH_LABEL} · 2 fewer than planned`)).toBeInTheDocument();
+    expect(canvas.getByText(`${THEORY_MATCH_LABEL} · 1 more than planned`)).toBeInTheDocument();
   },
 };

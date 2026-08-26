@@ -162,6 +162,38 @@ export function QuantityTag({
 export const THEORY_MATCH_LABEL = "In the theory list";
 
 /**
+ * The same sentence with the count difference on the end of it, for a row the plan asks for a
+ * different number of.
+ *
+ * The mark itself is two characters (`+2`, `-8`) and a sign is not a word: "more than planned" and
+ * "fewer than planned" are what the glyph means, and they are the only part of it a reader who
+ * cannot see the mark gets. Said here rather than at the three call sites for
+ * {@link THEORY_MATCH_LABEL}'s reason — the chip's tooltip, the table's `sr-only` twin and
+ * `deckCardName`'s clause must not drift.
+ *
+ * `0` is {@link THEORY_MATCH_LABEL} unchanged, which is the tick's own case: adding
+ * "0 more than planned" to a card that matches would be the mark explaining itself where there is
+ * nothing to explain. `Math.abs` because the sign is already spelled in the words.
+ */
+export function theoryMatchLabel(delta: number): string {
+  if (delta === 0) return THEORY_MATCH_LABEL;
+  const word = delta > 0 ? "more" : "fewer";
+  return `${THEORY_MATCH_LABEL} · ${Math.abs(delta)} ${word} than planned`;
+}
+
+/**
+ * The difference as the two or three characters the mark draws — `+2`, `-8`.
+ *
+ * ASCII `+` and `-`, never `−` or `–`: this is set in the tag's `tabular-nums` mono face beside a
+ * quantity drawn in the same one, and the typographic minus is not in that face's fixed-advance
+ * run — so a `-8` and a `+2` in one deck would be different widths in a box whose whole job is to
+ * be the same width as the tag opposite it.
+ */
+export function theoryDeltaText(delta: number): string {
+  return delta > 0 ? `+${delta}` : `${delta}`;
+}
+
+/**
  * How the tick says which one it is, for anything that has to find it **after the fact**.
  *
  * The same problem `STACK_OPEN_ATTR` and `LANDED_ATTR` solve one file over: the mark used to be
@@ -197,12 +229,25 @@ export const THEORY_MATCH_ATTR = "data-theory-match";
  * already settle the other way round, that one fact may be drawn twice when the two surfaces have
  * different room.
  *
- * **Echoing the banner means reflecting it, and it is narrower than the thing it echoes** (issue
- * #182). Both are 22px tall and both are cut by the same 10px slant, but the tag is widest along
- * its **top** edge and so is this — a 180° rotation of the polygon puts the bite in the right
- * corner and the taper the wrong way up, which is what shipped and what was reported. The width
- * is where the two part company on purpose: a digit needs the room a stroked tick's own bearings
- * already give back, and this corner of a stacked card is laid over the printed **mana cost**.
+ * **Echoing the banner means reflecting it** (issue #182). Both are 22px tall and both are cut by
+ * the same 10px slant, but the tag is widest along its **top** edge and so is this — a 180°
+ * rotation of the polygon puts the bite in the right corner and the taper the wrong way up, which
+ * is what shipped and what was reported.
+ *
+ * **The width parted company with the tag's for one release and no longer does** (issue #212).
+ * #182 took this box's paddings down to `6/1`, which fixed the mana cost it was covering and left
+ * it visibly the smaller of the two bookends — the reader's report was both halves of that at
+ * once. It is `8/3` now over a `min-w` of one digit's worth of the count tag, so a tick and a
+ * one-digit quantity draw the same width by construction; {@link COUNT_TAG_BOX_MIRRORED} carries
+ * the arithmetic and why a floor rather than a third pair of paddings is what settles it.
+ *
+ * ## A card the plan asks for a *different number* of says the difference instead of the tick
+ *
+ * `+2` where the live list holds two more than planned, `-8` where it holds eight fewer, in the
+ * same box and the same azure — [issue #212](https://github.com/Msgaihede/mtg-grimoire/issues/212).
+ * The tick is what the **matching** card wears, so the two are never drawn together: see the
+ * comment on the content below, and `theoryMatch.ts` for what is subtracted from what and for the
+ * one rule about singleton decks that keeps this mark off every card of a Commander list.
  *
  * ## The four separations, and the one this mark has to work hardest for
  *
@@ -243,6 +288,7 @@ export const THEORY_MATCH_ATTR = "data-theory-match";
  */
 export function TheoryMatchMark({
   variant = "banner",
+  delta = 0,
   className,
 }: {
   /**
@@ -250,6 +296,15 @@ export function TheoryMatchMark({
    * `"chip"` is the Grid tile's smaller flat chip — see the "two drawings" note above.
    */
   variant?: "banner" | "chip";
+  /**
+   * How many copies the live list holds **over** (positive) or **short** (negative) of what the
+   * plan asks for — `theoryMatch.ts`'s `theoryMatchDelta`, which is `0` for the card that
+   * matches and answers `null` for a card the plan does not ask for at all (drawn as no mark).
+   *
+   * Defaults to `0`, so a caller that has not thought about counts gets the tick this component
+   * has always drawn.
+   */
+  delta?: number;
   className?: string;
 }) {
   const banner = variant === "banner";
@@ -258,10 +313,10 @@ export function TheoryMatchMark({
     <span
       aria-hidden="true"
       {...{ [THEORY_MATCH_ATTR]: "" }}
-      // Redundant with `deckCardName`'s own clause (`inTheory && THEORY_MATCH_LABEL`) — the
-      // words are already the whole of what a keyboard reader gets from the button this sits
-      // inside, so `describes: false` leaves `aria-describedby` unset.
-      {...tip(THEORY_MATCH_LABEL, { describes: false })}
+      // Redundant with `deckCardName`'s own clause (`theoryMatchLabel(delta)`) — the words are
+      // already the whole of what a keyboard reader gets from the button this sits inside, so
+      // `describes: false` leaves `aria-describedby` unset.
+      {...tip(theoryMatchLabel(delta), { describes: false })}
       // Mirrored — **reflected** across the vertical axis, not rotated 180°, which is the whole of
       // issue #182 — because this sits in the card's **right**-hand corner; see the constant. The
       // chip has no slant at all: it is echoing a square 9px chip, and a 10px bite out of a 14px
@@ -269,12 +324,12 @@ export function TheoryMatchMark({
       style={banner ? { clipPath: COUNT_TAG_SLANT_MIRRORED } : undefined}
       className={cn(
         banner
-          ? // **The mirrored box, and the pairing is not optional** (issues #158 and #182). The
-            // slant above and the paddings that centre content inside it are one shape: worn with
-            // `COUNT_TAG_BOX`'s paddings, this tick sat 5.5px left of its own banner's visible
-            // centre and was reported as left-aligned. The pair is `6/1` rather than `12/6` since
-            // #182 — the same `pl − pr = 5px` centring, 11px less of the card's printed mana cost
-            // covered, and the constant carries the arithmetic both issues are instances of.
+          ? // **The mirrored box, and the pairing is not optional** (issues #158, #182 and #212).
+            // The slant above and the paddings that centre content inside it are one shape: worn
+            // with `COUNT_TAG_BOX`'s paddings, this tick sat 5.5px left of its own banner's
+            // visible centre and was reported as left-aligned. The pair is `8/3` now — the same
+            // `pl − pr = 5px` centring, over a `min-w` that holds this to the quantity tag's own
+            // width — and the constant carries the arithmetic all three issues are instances of.
             COUNT_TAG_BOX_MIRRORED
           : // The Grid tile's copy count, verbatim but for the fill: `rounded-sm`, the mono face
             // and the same two scaled sizes. Written out rather than imported because that chip is
@@ -289,21 +344,35 @@ export function TheoryMatchMark({
         className,
       )}
     >
-      {/* 12px on the stack is the size {@link FinishMark} is drawn at, because the two are marks
-          on one card face and a tick larger than the foil sparkle would read as the more important
-          of the two. 9px on a tile, which is the cap height of the digit this chip is standing in
-          for. `strokeWidth` above lucide's 2 default at both sizes: a tick is three strokes and no
-          fill, so on art it needs the weight the crown gets from its body. */}
-      <Check
-        className={cn(
-          "block shrink-0",
-          banner
-            ? "size-[calc(0.75rem*var(--mark-scale,1))]"
-            : "size-[calc(0.5625rem*var(--mark-scale,1))]",
-        )}
-        strokeWidth={3}
-        aria-hidden="true"
-      />
+      {/* **The number replaces the tick rather than joining it** (issue #212). A tick beside a
+          `-8` would be a mark saying "this is the card you planned" next to one saying "and you
+          have eight too few" — two clauses of one sentence in a 25px box, at the end of a strip
+          whose other mark is already a number. The tick is what the *matching* card wears, and
+          the difference is what a card that does not match wears instead.
+
+          It needs no size of its own: the box's `font-mono tabular-nums` face is
+          {@link COUNT_TAG_FACE}'s, so the digits are drawn at exactly the size and advance the
+          quantity tag opposite draws its own in — which is the whole reason `min-w` upstream can
+          be stated in `ch`. */}
+      {delta === 0 ? (
+        // 12px on the stack is the size {@link FinishMark} is drawn at, because the two are marks
+        // on one card face and a tick larger than the foil sparkle would read as the more
+        // important of the two. 9px on a tile, which is the cap height of the digit this chip is
+        // standing in for. `strokeWidth` above lucide's 2 default at both sizes: a tick is three
+        // strokes and no fill, so on art it needs the weight the crown gets from its body.
+        <Check
+          className={cn(
+            "block shrink-0",
+            banner
+              ? "size-[calc(0.75rem*var(--mark-scale,1))]"
+              : "size-[calc(0.5625rem*var(--mark-scale,1))]",
+          )}
+          strokeWidth={3}
+          aria-hidden="true"
+        />
+      ) : (
+        theoryDeltaText(delta)
+      )}
     </span>
   );
 }
@@ -324,20 +393,50 @@ export function TheoryMatchMark({
  * stands on its own, which is what {@link DeckFinishMark} beside it already does.
  *
  * No `--mark-scale` anywhere in it: neither surface is a card face, so neither zooms.
+ *
+ * ## The difference is drawn here too, and it is the one place that took an argument
+ *
+ * Issue #212 is written about the card face, where the mark is a badge beside a quantity badge.
+ * These two views draw a **quantity column** instead, so the shortfall is arguably already
+ * answerable by reading a number the reader would have to hold the plan in their head to compare
+ * against — which is exactly the work the mark exists to save. So `+2` and `-8` are drawn here as
+ * well, in the same azure, and the rule stays one rule across all four views: a tick is the card
+ * that matches, a signed number is the card that does not.
+ *
+ * It keeps no box of its own for it, for this component's founding reason — a hairline box with
+ * content inside reads as a control — so the number is bare type in `text-pie-u`, in the mono
+ * `tabular-nums` face every count in these two views is set in.
  */
-export function TheoryMatchBadge({ className }: { className?: string }) {
+export function TheoryMatchBadge({
+  delta = 0,
+  className,
+}: {
+  /** See {@link TheoryMatchMark.delta} — `0` is the card that matches, and the tick. */
+  delta?: number;
+  className?: string;
+}) {
   const tip = useTooltip();
   return (
     <span
       aria-hidden="true"
       {...{ [THEORY_MATCH_ATTR]: "" }}
       // Redundant with `deckCardName`'s own clause, exactly as `TheoryMatchMark`'s is.
-      {...tip(THEORY_MATCH_LABEL, { describes: false })}
+      {...tip(theoryMatchLabel(delta), { describes: false })}
       // 12px, matching `DeckFinishMark`'s glyph on the same line rather than `GC`'s 9px type —
-      // a stroked tick needs the height that two letters in a box do not.
-      className={cn("flex shrink-0 items-center text-pie-u", className)}
+      // a stroked tick needs the height that two letters in a box do not. The number takes the
+      // 9px `GC` is set at instead, because two characters of type beside a card's name is what
+      // that badge already is and a 12px one would out-shout the name it sits next to.
+      className={cn(
+        "flex shrink-0 items-center text-pie-u",
+        delta !== 0 && "font-mono text-[0.5625rem] leading-3 tabular-nums",
+        className,
+      )}
     >
-      <Check className="block size-3" strokeWidth={3} aria-hidden="true" />
+      {delta === 0 ? (
+        <Check className="block size-3" strokeWidth={3} aria-hidden="true" />
+      ) : (
+        theoryDeltaText(delta)
+      )}
     </span>
   );
 }

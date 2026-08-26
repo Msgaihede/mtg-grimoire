@@ -1,5 +1,4 @@
 import {
-  Fragment,
   useCallback,
   useEffect,
   useLayoutEffect,
@@ -101,7 +100,7 @@ import { QuickCategoryDialog, QuickZones } from "./QuickZones";
 import { asSortBy, DEFAULT_SORT_BY, SORT_OPTIONS, type SortBy } from "./sorting";
 import { TagsDialog } from "./TagsDialog";
 import { TheoryDiffDialog } from "./TheoryDiffDialog";
-import { theoryMatchSet } from "./theoryMatch";
+import { theoryMatchPlan } from "./theoryMatch";
 import { useDeck } from "./useDeck";
 import { useDeckMeta } from "./useDeckMeta";
 import { useFormatSpecs } from "./useFormatSpecs";
@@ -2276,7 +2275,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * remove tray already get. There is no `remove` mutation in this app because zero is the
    * removal — see `useDeck.setQuantity`.
    *
-   * **It is not free of consequences, and that changed with schema v25**: on the Live list this
+   * **It is not free of consequences, and that changed with schema v25**: on the Actual list this
    * takes the copies the deck's group was holding and files them into `Recently removed`. The
    * reader still owns them, which is why the row still needs no confirmation — but the sentence
    * saying where they went is {@link CUT_CARDS_NOTE}, standing at the foot of the deck rather
@@ -2649,7 +2648,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    *
    * **`live` only, and `undefined` everywhere else.** On the Theory tab every row *is* the plan,
    * so a mark on all of them is noise. `undefined` rather than an empty set is the distinction
-   * {@link theoryMatchSet} exists to keep: no plan is not the same statement as a plan that
+   * {@link theoryMatchPlan} exists to keep: no plan is not the same statement as a plan that
    * wants none of this.
    *
    * **`enabled` is what stops the fetch and emphatically not what stops the mark** — this note
@@ -2669,6 +2668,14 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    *
    * Under `["decks"]` like every other read here, so a theory edit made in this session
    * invalidates it with everything else.
+   *
+   * **`deck.cards` is the second half of it since issue #212**, and it is the *live* list — which
+   * on this branch it always is, because the derivation is fenced on `variant === "live"` and
+   * `useDeck` is keyed on the variant. The plan says how many copies it wants; what the reader
+   * has sleeved up is already in hand, so the difference costs no second read. It is the whole
+   * list rather than the filtered `shown`: a card the toolbar's text box has hidden is still a
+   * card in the deck, and counting only what is on screen would make the mark change as somebody
+   * typed.
    */
   const planned = useQuery({
     queryKey: ["decks", "theorySlots", deckId],
@@ -2676,8 +2683,8 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     enabled: theoryEnabled && variant === "live",
   });
   const theoryMatches = useMemo(
-    () => (variant === "live" ? theoryMatchSet(planned.data) : undefined),
-    [planned.data, variant],
+    () => (variant === "live" ? theoryMatchPlan(planned.data, deck.cards) : undefined),
+    [planned.data, variant, deck.cards],
   );
 
   /**
@@ -3283,18 +3290,18 @@ export function DeckEditor({ deckId }: { deckId: number }) {
              * The deck's name, and it is the row's one flexible child.
              *
              * **The wrapper that used to hold it is gone** (2026-08-24). It grouped the field
-             * with the Live/Theory switch and the Compare button, which was right while those
-             * three were the row's left-hand half; the switch is part of the actions block now
-             * and Compare is a glyph inside it, so the group had one child left. The field is
-             * therefore the flex item this row's layout was always about.
+             * with the Theory/Actual switch and the Compare button, which was right while those
+             * three were the row's left-hand half; both of them are in the actions block now, so
+             * the group had one child left. The field is therefore the flex item this row's
+             * layout was always about.
              *
              * **`flex-wrap` and a floor on the field, because this row overflowed in the shipped
              * window and no test could see it.** Measured over CDP with Theory on: the field was
              * the only shrinkable child between two `shrink-0` siblings, so it collapsed to its
              * intrinsic minimum — **18px at 1100, 1200 and 1280** — while the switch and the
              * control beside it spilled 180px / 80px out of this box and over the actions. At
-             * 1200 the last pixels of that control (then a "N cards differ" readout, now the
-             * Compare button) hit-tested to the *format select*: a reader aiming at the
+             * 1200 the last pixels of that control (a "N cards differ" readout then, the
+             * Compare button since) hit-tested to the *format select*: a reader aiming at the
              * difference re-formatted their deck.
              *
              * So the narrowest things yield first. The field keeps its own floor
@@ -3324,64 +3331,49 @@ export function DeckEditor({ deckId }: { deckId: number }) {
             <div className="ml-auto flex shrink-0 flex-nowrap items-center gap-2">
               {/* Only for a deck that keeps a plan. A two-way switch over a deck with one list
                   is a control whose other half is empty by construction — the way to get one is
-                  Deck settings, where the toggle that creates it lives. */}
+                  Deck settings, where the toggle that creates it lives. The same condition covers
+                  `Compare` beside it, which weighs exactly the two lists this switch chooses
+                  between and is meaningless to a deck that has one. */}
               {theoryEnabled && (
-                <div
-                  role="group"
-                  aria-label="Deck list"
-                  className="flex shrink-0 overflow-hidden rounded-md border border-border"
-                >
-                  {/* The words are written out rather than `capitalize`d off the value, for
-                      WCAG 2.5.3's reason read the other way: `text-transform` changes what is
-                      drawn and not what the control is *called*, so a `capitalize` switch is
-                      one a reader sees as "Live" and voice control has to be asked for as
-                      "live". */}
-                  {/* **Live first, Theory second** — the design's order, and the reader's call
-                      (2026-08-24). It reverses "Theory first", which had argued that the plan is
-                      the list a deck is built in and so the one the eye should land on first.
-                      **That argument was never about this order and does not fall with it**: what
-                      it was really about is where the caret lands when the switch is *turned on*,
-                      and that is `lastVariant`'s doing — the write moves the deck into theory and
-                      leaves the deck there, so the reader arrives on the tab their cards are now
-                      under whichever end of the group it is drawn at. Nothing about which tab is
-                      pressed, remembered or restored is decided here; this is the order the two
-                      words are painted in, and left to right it now reads reality → plan, with
-                      the comparison between them. */}
-                  {(
-                    [
-                      { id: "live", label: "Live" },
-                      { id: "theory", label: "Theory" },
-                    ] as const
-                  ).map(({ id, label }, at) => (
-                    <Fragment key={id}>
-                      {/* **Compare sits between the two lists it compares**, which is where the
-                          2026-08-24 design puts it and is the whole of why it stopped being a
-                          worded button: a verb between two nouns needs no word of its own, and
-                          the row it used to sit on had no width to spare. The scales are
-                          lucide's `Scale` — the picture of two things weighed against each
-                          other. */}
-                      {at === 1 && (
-                        <button
-                          type="button"
-                          onClick={(e) => {
-                            const trigger = e.currentTarget;
-                            openLayer({ kind: "theoryDiff" }, () => trigger.focus());
-                          }}
-                          aria-expanded={layer?.kind === "theoryDiff"}
-                          aria-haspopup="dialog"
-                          aria-label="Compare"
-                          {...tip("Compare", { describes: false })}
-                          className={cn(
-                            "grid size-9 shrink-0 place-items-center border-x border-border",
-                            "text-dim transition-colors duration-150 hover:text-accent",
-                            "motion-reduce:transition-none",
-                            FOCUS,
-                          )}
-                        >
-                          <Scale className="size-4" aria-hidden="true" />
-                        </button>
-                      )}
+                <>
+                  <div
+                    role="group"
+                    aria-label="Deck list"
+                    className="flex shrink-0 overflow-hidden rounded-md border border-border"
+                  >
+                    {/* The words are written out rather than `capitalize`d off the value, for
+                        WCAG 2.5.3's reason read the other way: `text-transform` changes what is
+                        drawn and not what the control is *called*, so a `capitalize` switch is
+                        one a reader sees as "Actual" and voice control has to be asked for as
+                        "actual". Which is doubly true now that the word is not the value: the
+                        variant is still `live` in the database, in the IPC and in every URL this
+                        app keeps — `Actual` is the *name*, and renaming a stored value to match a
+                        label would be a migration bought with nothing. */}
+                    {/* **Theory first, Actual second** (2026-08-26, the reader's call), which
+                        reverses the order argued here on 2026-08-24 and restores the one before
+                        it: the plan is the list a deck is *built* in, so it is the one the eye
+                        should land on first, and the live list is what the plan has become so far.
+                        **Nothing about which tab is pressed, remembered or restored is decided
+                        here** — that is `lastVariant`'s doing, and it survived the last flip of
+                        this order untouched for the reason it survives this one: the write that
+                        turns the switch on moves the deck into theory and leaves it there, so the
+                        reader arrives on the tab their cards are now under whichever end of the
+                        group it is painted at. This is the order the two words are painted in,
+                        and no more than that.
+
+                        **No hairline between them, unlike {@link TRANSFER}'s pair.** One of these
+                        two is always pressed — a deck is showing one of its lists or the other —
+                        so the filled half's own edge is the divider, and a border drawn on top of
+                        it would be a second line saying the same thing. The pair needed one while
+                        `Compare` sat between them and carried it; it does not now. */}
+                    {(
+                      [
+                        { id: "theory", label: "Theory" },
+                        { id: "live", label: "Actual" },
+                      ] as const
+                    ).map(({ id, label }) => (
                       <button
+                        key={id}
                         type="button"
                         onClick={() => pickVariant(id)}
                         aria-pressed={variant === id}
@@ -3401,9 +3393,52 @@ export function DeckEditor({ deckId }: { deckId: number }) {
                       >
                         {label}
                       </button>
-                    </Fragment>
-                  ))}
-                </div>
+                    ))}
+                  </div>
+
+                  {/**
+                   * **Beside the switch, not inside it** (2026-08-26, the reader's call).
+                   *
+                   * It was a third segment between the two words from 2026-08-24 — a verb between
+                   * two nouns, on a row that had no width for a third label — and what that shape
+                   * got wrong is that `Compare` is not one of the deck's two lists. The group is a
+                   * two-way switch named `Deck list`, and a press inside it that answers a
+                   * different question is a press a reader has to learn is not a third list. Out
+                   * here it is what it is: an action about both lists, standing next to them.
+                   *
+                   * **The row's own `gap-2` is the whole of the spacing decision** — it is a
+                   * sibling of the switch and of {@link TRANSFER}'s pair in the same flex line, so
+                   * it sits at the same distance from its neighbours as everything else on the
+                   * row, and nothing here says otherwise.
+                   *
+                   * The word is back with it, because a button outside the group has no adjacent
+                   * nouns to lean on. It gives way at {@link TIGHT_HEADER_PX} exactly as
+                   * {@link ACTIONS}' words do — the word goes, never the control — and the tooltip
+                   * is bound exactly when the word is not there to be read. The scales are
+                   * lucide's `Scale`: two things weighed against each other.
+                   */}
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      const trigger = e.currentTarget;
+                      openLayer({ kind: "theoryDiff" }, () => trigger.focus());
+                    }}
+                    aria-expanded={layer?.kind === "theoryDiff"}
+                    aria-haspopup="dialog"
+                    aria-label="Compare"
+                    {...(tightHeader ? tip("Compare", { describes: false }) : {})}
+                    className={cn(
+                      CONTROL,
+                      FILTER_FOCUS,
+                      "inline-flex shrink-0 items-center justify-center whitespace-nowrap",
+                      tightHeader ? "w-9 px-0" : "gap-1.5",
+                      "hover:text-text",
+                    )}
+                  >
+                    <Scale className="size-4 shrink-0" aria-hidden="true" />
+                    {!tightHeader && "Compare"}
+                  </button>
+                </>
               )}
 
               {/* The joined pair — see {@link TRANSFER}, which is where both names are argued
@@ -3954,7 +3989,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
       )}
 
       {/* The strip under the deck: how old these prices are (spec §5, said once here rather
-          than as a tooltip on every one of sixty cards), where a card cut from the Live list
+          than as a tooltip on every one of sixty cards), where a card cut from the Actual list
           goes (said once for the same reason — the three ways to cut one would otherwise carry
           three spellings of it, and a stepper held down would narrate it per press) and, while
           a card is in the air, the way out of the deck drawn over it.

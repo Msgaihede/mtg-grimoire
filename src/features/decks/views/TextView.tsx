@@ -40,7 +40,7 @@ import {
 } from "../cardControl";
 import { DropIndicator } from "../DropIndicator";
 import type { CardGroup } from "../grouping";
-import { matchesTheory } from "../theoryMatch";
+import { theoryMatchDelta } from "../theoryMatch";
 import { ruleBreak } from "../violations";
 import type { ValidationIssue } from "../validation/types";
 import { packColumns, RAIL_ATTR, splitRail } from "./columns";
@@ -89,9 +89,10 @@ export function TextView({
    *  no price — a decklist line is a quantity, a name and its marks. */
   marketplace: Marketplace;
   violations?: Map<string, ValidationIssue[]>;
-  /** Which rows the deck's plan also asks for — `theoryMatch.ts`'s set of slots, handed down
-   *  whole like `violations` beside it. `undefined` for a deck with no plan. */
-  theoryMatches?: ReadonlySet<string>;
+  /** What the deck's plan says about each row — `theoryMatch.ts`'s map of slot → how far the
+   *  live list is from the planned count, handed down whole like `violations` beside it.
+   *  `undefined` for a deck with no plan. */
+  theoryMatches?: ReadonlyMap<string, number>;
   onSelect?: (card: DeckCard) => void;
   /** What may be done to a card here — see {@link DeckCardActions}. */
   actions?: DeckCardActions;
@@ -281,9 +282,10 @@ function TextGroup({
   group: CardGroup;
   marketplace: Marketplace;
   violations?: Map<string, ValidationIssue[]>;
-  /** Which rows the deck's plan also asks for — `theoryMatch.ts`'s set of slots, handed down
-   *  whole like `violations` beside it. `undefined` for a deck with no plan. */
-  theoryMatches?: ReadonlySet<string>;
+  /** What the deck's plan says about each row — `theoryMatch.ts`'s map of slot → how far the
+   *  live list is from the planned count, handed down whole like `violations` beside it.
+   *  `undefined` for a deck with no plan. */
+  theoryMatches?: ReadonlyMap<string, number>;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
   /** Handed through to the lines — see {@link TextView}'s own props. */
@@ -324,7 +326,7 @@ function TextGroup({
               key={card.id}
               card={card}
               ruleBreakText={ruleBreak(violations?.get(card.cardId))}
-              inTheory={matchesTheory(theoryMatches, card)}
+              theoryDelta={theoryMatchDelta(theoryMatches, card)}
               onSelect={onSelect}
               actions={actions}
               selected={deckCardMarked(card, selectedSlot, actions)}
@@ -350,7 +352,7 @@ function TextGroup({
 function TextRow({
   card,
   ruleBreakText,
-  inTheory,
+  theoryDelta,
   onSelect,
   actions,
   selected,
@@ -360,9 +362,10 @@ function TextRow({
   ruleBreakText: string | null;
   onSelect?: (card: DeckCard) => void;
   actions?: DeckCardActions;
-  /** The deck's plan asks for this row too — resolved by the group, so a line is handed a
-   *  boolean rather than a set to look itself up in. */
-  inTheory: boolean;
+  /** What the deck's plan says about this row — `theoryMatchDelta`, resolved by the group so a
+   *  line is handed an answer rather than a map to look itself up in. `null` is a card the plan
+   *  does not ask for, `0` the card it asks for exactly. */
+  theoryDelta: number | null;
   /** This is the card the pane is open on. */
   selected: boolean;
   /** The nonce this line's last add was given, or `undefined`. The mark's `key`, so a second
@@ -400,7 +403,7 @@ function TextRow({
         type="button"
         // The stripe is the only mark this row has room for, so the name is where the words
         // are — `deckCardName` is the one definition, shared with the stack and the grid.
-        aria-label={deckCardName(card, ruleBreakText, inTheory)}
+        aria-label={deckCardName(card, ruleBreakText, theoryDelta)}
         // `describes: false` — `deckCardName` already folds the rule-break sentence into the
         // accessible name above, so a default binding would describe it twice.
         {...tip(ruleBreakText ?? undefined, { describes: false })}
@@ -433,7 +436,7 @@ function TextRow({
         {/* Decoration, like the two beside it — this line is a button with an explicit
             `aria-label`, so the word is `deckCardName`'s. `TableView` is the one view that says
             it in text, because a cell is not swallowed by a label. */}
-        {inTheory && <TheoryMatchBadge />}
+        {theoryDelta !== null && <TheoryMatchBadge delta={theoryDelta} />}
         {card.tagName !== null && <TagDot name={card.tagName} color={card.tagColor} />}
         <ManaText source={card.manaCost} className="shrink-0 text-[0.625rem]" />
       </button>

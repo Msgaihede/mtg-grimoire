@@ -1371,7 +1371,7 @@ describe("CardStack marks", () => {
           // The wire format `deck_theory_slots` answers with — `${cardId}|${finish ?? ""}`, which
           // is `deck_theory.rs`'s `group_key`. Spelled out rather than built with `theorySlot`, so
           // this notices the grain changing under it instead of agreeing with it by construction.
-          theoryMatches={new Set([`${planned.cardId}|`])}
+          theoryMatches={new Map([[`${planned.cardId}|`, 0]])}
         />
       </TooltipProvider>,
     );
@@ -1398,11 +1398,21 @@ describe("CardStack marks", () => {
     //
     // The paddings are `COUNT_TAG_BOX_MIRRORED`'s: the larger one on the **left**, because the
     // mirrored slant takes its bite out of that edge and the pair is what centres the glyph in
-    // the visible trapezium rather than in the box. `6/1` rather than #158's `12/6` since #182 —
-    // the constant carries the `pl − pr = 5px` arithmetic that makes both pairs centre, and the
-    // 11px this one gives back is 11px of the card's printed mana cost left showing.
-    expect(ticks[0].className).toContain("pl-[calc(0.375rem*var(--mark-scale,1))]");
-    expect(ticks[0].className).toContain("pr-[calc(0.0625rem*var(--mark-scale,1))]");
+    // the visible trapezium rather than in the box. `8/3` since #212 — the constant carries the
+    // `pl − pr = 5px` arithmetic that makes every such pair centre, and #182's `6/1` satisfied it
+    // too; what changed is that a tick with no padding to speak of read as the smaller of the
+    // strip's two bookends.
+    expect(ticks[0].className).toContain("pl-[calc(0.5rem*var(--mark-scale,1))]");
+    expect(ticks[0].className).toContain("pr-[calc(0.1875rem*var(--mark-scale,1))]");
+
+    // **The width is stated rather than left to the paddings** (issue #212): one digit's advance
+    // in this face plus `COUNT_TAG_BOX`'s own two paddings, which is exactly the quantity tag
+    // opposite holding a single digit. Paddings could not settle it, because this box holds a
+    // glyph on one card and `+2` on the next. `justify-center` is what keeps the centring true
+    // once a floor makes the box wider than its contents — without it the surplus lands entirely
+    // on the right and the mark sits off its own centre, which is #158 by another route.
+    expect(ticks[0].className).toContain("min-w-[calc(1ch+1.125rem*var(--mark-scale,1))]");
+    expect(ticks[0].className).toContain("justify-center");
 
     // **The cut is a _reflection_ of `COUNT_TAG_SLANT` and not a rotation of it** (issue #182).
     // Both move the bite off the card's right edge, which is why the wrong one shipped; only the
@@ -1439,8 +1449,60 @@ describe("CardStack marks", () => {
     );
   });
 
+  /**
+   * **A card the plan asks for a different number of says the difference instead**
+   * ([issue #212](https://github.com/Msgaihede/mtg-grimoire/issues/212)).
+   *
+   * The two halves that could each fail alone: the number is drawn *in place of* the tick — a
+   * tick and a `-2` in one 25px box would be two clauses of one sentence — and the sentence a
+   * reader who cannot see it gets carries the count too, in the button's own name and in the
+   * mark's hover, both out of `theoryMatchLabel`. A surplus and a shortfall in one stack, because
+   * the sign is the half a `Math.abs` or a flipped subtraction gets wrong silently.
+   */
+  it("draws the count difference in place of the tick, with the sign both ways", async () => {
+    const short = card({ name: "Mana Crypt", quantity: 2 });
+    const over = card({ name: "Sol Ring", quantity: 4 });
+    render(
+      <TooltipProvider>
+        <CardStack
+          cards={[short, over]}
+          label="Ramp"
+          currency="usd"
+          theoryMatches={
+            new Map([
+              // Four planned against two sleeved up, and one planned against four.
+              [`${short.cardId}|`, -2],
+              [`${over.cardId}|`, 3],
+            ])
+          }
+        />
+      </TooltipProvider>,
+    );
+
+    const marks = document.querySelectorAll(`[${THEORY_MATCH_ATTR}]`);
+    expect(marks).toHaveLength(2);
+    // ASCII `+` and `-`, which is what keeps the two the same width in a `tabular-nums` face —
+    // a typographic minus is outside that fixed-advance run.
+    expect(marks[0]).toHaveTextContent("-2");
+    expect(marks[1]).toHaveTextContent("+3");
+    // The tick is gone rather than sitting beside the number: `lucide` draws it as an `<svg>`,
+    // so this is the assertion that would fail if the two were rendered together.
+    expect(marks[0].querySelector("svg")).toBeNull();
+
+    expect(await openTooltip(marks[0])).toHaveTextContent(
+      "In the theory list · 2 fewer than planned",
+    );
+
+    expect(screen.getByRole("button", { name: /^Mana Crypt/ })).toHaveAccessibleName(
+      expect.stringContaining("in the theory list · 2 fewer than planned"),
+    );
+    expect(screen.getByRole("button", { name: /^Sol Ring/ })).toHaveAccessibleName(
+      expect.stringContaining("in the theory list · 3 more than planned"),
+    );
+  });
+
   /** A deck with no plan draws no ticks at all — `undefined` is "there is no question here",
-   *  which is the distinction `theoryMatchSet` exists to keep. */
+   *  which is the distinction `theoryMatchPlan` exists to keep. */
   it("draws no tick when the deck keeps no plan", () => {
     withIssue();
 
