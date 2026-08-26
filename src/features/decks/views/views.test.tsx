@@ -2302,8 +2302,15 @@ describe("GridView tiles", () => {
 
   const wall = () => screen.getByRole("list", { name: "Ramp" });
   const tile = () => within(wall()).getAllByRole("listitem")[0];
-  /** The tile's foot — the rarity gem and the price, which is the last thing in the button. */
-  const foot = () => tile().querySelector("button")?.lastElementChild as HTMLElement;
+  /**
+   * The tile's chin, found by what only it says — the printing, which is a fact about the object
+   * rather than a mark over the art. `CardStack.test.tsx` addresses the stack's foot the same way.
+   *
+   * **It used to be `button.lastElementChild`, and that spelling had to go with the structure**:
+   * the chin is a sibling of the button now, not its last child, so a helper reaching through the
+   * button would find the card's face and report its classes as the foot's.
+   */
+  const foot = () => within(tile()).getByText("LEA · 161").parentElement as HTMLElement;
   /** The controls' wrapper, which is what carries their offset off the foot. */
   const controls = () => tile().lastElementChild as HTMLElement;
 
@@ -2362,13 +2369,22 @@ describe("GridView tiles", () => {
    * size going down, and the controls sit **on** the foot at either end — which is the derivation
    * worth pinning, because the bar's offset was a fixed utility for as long as the foot was a fixed
    * height, and the two would have parted company at exactly the zoom nobody looks at.
+   *
+   * **The numbers are `CHIN_HEIGHT`'s since this view's foot became `components/CardChin`** — 28
+   * at 1×, so 56 and 14 at the two ends — where they were a 20px strip this file held on its own.
+   * The **type** is no longer a number here at all: the chin sizes it off `--mark-scale`, in a
+   * class rather than an inline style, so the assertion that used to read a `fontSize` reads its
+   * *absence* plus the expression that replaced it. jsdom resolves no `calc()`, so that pins the
+   * derivation and not the pixels — which is the same carve-out the `--mark-scale` case above
+   * states, and the reason Task 14's live pass exists.
    */
   it("moves the foot with the tiles both ways, and floors only the gutter", () => {
     draw(2);
     expect(wall().style.gap).toBe("20px");
-    expect(foot().style.height).toBe("40px");
-    expect(foot().style.fontSize).toBe("18px");
-    expect(controls().style.bottom).toBe("40px");
+    expect(foot().style.height).toBe("56px");
+    expect(foot().style.fontSize).toBe("");
+    expect(foot().className).toContain("text-[calc(0.625rem*var(--mark-scale,1))]");
+    expect(controls().style.bottom).toBe("56px");
     cleanup();
 
     // Half size: the card halves and **the foot halves with it**, because everything standing in
@@ -2382,9 +2398,8 @@ describe("GridView tiles", () => {
     draw(0.5);
     expect(tile().style.width).toBe("75px");
     expect(wall().style.gap).toBe("10px");
-    expect(foot().style.height).toBe("10px");
-    expect(foot().style.fontSize).toBe("5px");
-    expect(controls().style.bottom).toBe("10px");
+    expect(foot().style.height).toBe("14px");
+    expect(controls().style.bottom).toBe("14px");
   });
 
   /**
@@ -2426,6 +2441,69 @@ describe("GridView tiles", () => {
     const count = within(tile()).getByText("3");
     expect(chip!.contains(count)).toBe(false);
     expect(count.closest("[data-card-marks]")).toBeNull();
+  });
+
+  /**
+   * The grid's foot said a rarity and a price and left out which printing the card is — the one
+   * fact a reader comparing two copies of the same card needs. It is the same chin the stacks
+   * draw now, so a deck read in one view and then the other says the same things.
+   */
+  it("names the printing in the tile's chin", () => {
+    render(
+      <GridView
+        groups={buildGroups(
+          [card({ name: "Sol Ring", setCode: "c21", collectorNumber: "179" })],
+          [RAMP],
+          "category",
+          "alphabetical",
+        )}
+        marketplace={TCG}
+      />,
+    );
+
+    expect(screen.getByText(/C21 · 179/)).toBeInTheDocument();
+  });
+
+  /**
+   * **The chin is a sibling of the tile's button, never a child of it**, which is the rule
+   * `components/CardChin` states and the one `CardStack` has always followed. Everything in the
+   * foot is a *fact* — the printing, the finish, what one copy costs — and a button's
+   * `aria-label` replaces its content outright, so inside it none of them had a reader at all.
+   * This view moved three more facts into that foot when it took the shared chin, which is what
+   * made the old placement a regression rather than something merely inherited.
+   *
+   * Asserted through **containment** rather than through a class, because containment is the
+   * behaviour: the words are in the tile and outside the control. It is also what would silently
+   * regress if somebody tidied the chin back inside the button — nothing about the pixels would
+   * move.
+   */
+  it("keeps the printing and the price outside the tile's button", () => {
+    render(
+      <GridView
+        groups={buildGroups(
+          [card({ name: "Sol Ring", setCode: "c21", collectorNumber: "179", unitPrice: 1.99 })],
+          [RAMP],
+          "category",
+          "alphabetical",
+        )}
+        marketplace={TCG}
+      />,
+    );
+
+    const button = tile().querySelector("button")!;
+    const printing = within(tile()).getByText(/C21 · 179/);
+    const price = within(tile()).getByText("$1.99");
+
+    expect(button.contains(printing)).toBe(false);
+    expect(button.contains(price)).toBe(false);
+    // Still inside the tile, which is the card's whole body — so a press on the foot is a press
+    // on this card rather than on the desk behind it, and the right-click menu still answers.
+    expect(tile().contains(printing)).toBe(true);
+    expect(tile().contains(price)).toBe(true);
+    // And the button's own name never carried either of them, which is the whole reason they
+    // cannot live inside it.
+    expect(button.getAttribute("aria-label")).not.toContain("C21");
+    expect(button.getAttribute("aria-label")).not.toContain("1.99");
   });
 });
 
