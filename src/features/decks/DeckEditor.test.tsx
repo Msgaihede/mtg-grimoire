@@ -3341,6 +3341,37 @@ describe("DeckEditor", () => {
   });
 
   /**
+   * **The count reaches the mark from the two reads the editor already makes**
+   * ([issue #212](https://github.com/Msgaihede/mtg-grimoire/issues/212)).
+   *
+   * `theoryMatchDelta`'s arithmetic is unit-tested and `CardStack` is tested against a map handed
+   * to it directly; neither says the editor *joins* the plan's quantities to the live list's. This
+   * is that wiring — `deckTheorySlots`' `quantity` against `deck.cards`' own — and it is the half
+   * that can be fully correct and reach nothing.
+   *
+   * `withPlan` sleeves up four Bolts and this plan asks for two, so the mark says `+2` rather than
+   * the tick: the live list is two copies **over** the plan, which is a cut the reader has not
+   * made yet.
+   */
+  it("says how far the live count is from the plan on the card itself", async () => {
+    withPlan();
+    deckTheorySlots.mockResolvedValue([{ key: theorySlot(bolt()), quantity: 2 }]);
+
+    await open();
+
+    await waitFor(() =>
+      expect(document.querySelectorAll(`[${THEORY_MATCH_ATTR}]`).length).toBeGreaterThan(0),
+    );
+    for (const mark of document.querySelectorAll(`[${THEORY_MATCH_ATTR}]`)) {
+      expect(mark).toHaveTextContent("+2");
+    }
+    // …and in words, on the one thing a keyboard reader gets from the card.
+    expect(screen.getByRole("button", { name: /^Lightning Bolt/ })).toHaveAccessibleName(
+      expect.stringContaining("in the theory list · 2 more than planned"),
+    );
+  });
+
+  /**
    * **A deck that no longer keeps a plan opens on Live, whatever it remembers.**
    *
    * Switching the theory list off does not rewrite `lastVariant`, so `"theory"` on a deck with
