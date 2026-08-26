@@ -975,6 +975,118 @@ deeper, never back out), `DROP_RING` on every eligible folder the moment a row l
 `DROP_OVER` on the one under the pointer, and `DROP_MARK_ROOM` on the wall's scroller so a card
 flush against the content edge does not lose the outer 2 px of its ring for the whole drag.
 
+## The wall's grain is the printing **and** the finish
+
+2026-08-26, out of
+[2026-08-26-card-chin-and-exact-prices-design.md](../superpowers/specs/2026-08-26-card-chin-and-exact-prices-design.md).
+The storage grain has had eleven terms since v24 and did not move; what moved is what a **tile**
+is. A foil and a played nonfoil of one printing are two objects at two prices sharing only a set
+and a number, so they are two tiles — and every other grain term still merges. Condition, language
+and **folder** are all one object seen from more than one place, and the table beside the wall is
+where a reader gets those apart.
+
+**There are two folds of the collection into tiles, not one, and both split.** The collection page
+folds rows in `CollectionPage`'s `tiles` memo; the deck editor's docked Collection tab folds the
+same rows in `collectionTiles.ts`'s `foldCopies`. They were written apart and keyed the same way, so
+splitting one alone would have made two drawings of one collection disagree about what a tile *is*.
+Both key on `` `${cardId}:${finish}` `` now, and each file has its own `tileKeyOf` so that its
+wall's tile key and its wall's ring composite come from one function rather than from two spellings
+of one string with nothing enforcing the agreement.
+
+**The key uses the raw `row.finish`, never the narrowed one.** `collection_entries.finish` is TEXT
+with a CHECK rather than an enum the frontend knows, so a row spelling a word this build cannot name
+keys as its own word and gets a tile of its own instead of being folded in with the plain copies it
+is not. Such a tile cannot be rung — the wall's composite spells `nonfoil` for an unnameable finish
+— which is strictly better than every tile of a printing being indistinguishable, and it affects
+**0 live rows**. The value handed to `CollectionTile.finish` and to `openCardAsFinish` *is* narrowed
+against `FINISHES`, so an unknown word marks the art with nothing rather than with a sheen no
+stylesheet has.
+
+**What it changes for the card menu — and it is not the bug the design doc claimed.**
+`CollectionTile.finishes`, the JSON list `CardMenuTarget.finishes` takes, now holds **at most one
+entry**: one where the stored word is a finish this build knows, the empty list where it is not.
+`buildCardMenu` records a single-finish list without asking, so an add from a foil tile files a
+**foil**. Before the split the same helper answered a *two*-element list for a printing held in both
+finishes and the menu opened a submenu — which was the honest thing to say about a tile that merged
+two objects, not a wrong answer. **The design doc's claim that a reader owning two foils and no
+nonfoil "currently gets a silent nonfoil entry" does not hold against the code it was written
+about**: `ownedFinishes` answered `["foil"]` for that reader and the menu recorded foil. The one
+path that does land on a silent `nonfoil` is `finishChoices`' empty-list fallback, and it is reached
+only by a finish word this build cannot name — **0 live rows**, before the split and after it. What
+the split actually removes is the *question*, and the reach described two paragraphs down.
+
+**`foldCopies` lost a question rather than answering one.** `CopyTile.finish` used to be
+`finishes.size === 1 ? [...finishes][0] : null`, because a tile holding a foil and a nonfoil could
+not honestly be marked as either. Splitting the key removes the case: every tile is one finish, so
+the field is never `null` for a group that has entries. `pickCopy` is unchanged and now ranks within
+one finish, so a foil tile's add can no longer reach for a nonfoil copy.
+
+**`copiesByCard` became `copiesByTile`, and that rename is the second half of the fix.** The map of
+"which rows are behind this picture" was keyed by the *card*, which was correct for exactly as long
+as a tile was all of a printing's finishes. The moment the finish joined the grain, a foil tile's
+`Move to` reached the plain copies while the badge in the corner of that same tile counted one —
+a control acting on cardboard the reader is not pointing at, with the tile itself saying otherwise.
+**No test went red either way.** It is keyed by `tileKeyOf` now, and `entryIdsOf` takes `tile.key`
+rather than `tile.id`.
+
+**What is still a list rather than a single id is the point of that map.** One finish of one
+printing is still several rows — they differ in grade, in language and in folder — so a drag still
+hands a folder every one of them and the reader still answers which. The split narrowed *which* rows
+sit behind a picture; it did not turn the several into one. The two `cardId`s in the drag payload
+stay `tile.id` deliberately: a drop onto a **deck** is `deck_add_card(deckId, cardId, …)`, which
+names a printing and takes no finish, and the tile half's `cardId` is what a folder card and a
+breadcrumb caption say the reader is filing. Only the *rows* are the finish's.
+
+**`CardGrid` gained `GridCard.key` for this and nothing else changed on the other walls.** It
+defaults to `id`, so six of the seven walls pass none and are untouched. `id` stays what fetches the
+art, what a press opens and what `onSelect` is about; `key` is what the ring compares, what
+`data-grid-index` walks and what the picked set remembers.
+
+**The pane's side of that composite is the store's `paneFinish`.** Two openers set it —
+`openCardAsFinish`, the collection wall's, and `openCardFromDeckSearch`, *widened* to carry the
+docked Collection tab's finish rather than the app gaining a fifth opener — and `setSelectedCardId`
+clears it in its existing `set`, so a press from a surface that names no finish cannot leave a stale
+seed behind. `viewPrinting` deliberately touches neither it nor the deck context: browsing printings
+inside the pane keeps the reader's foil view. `CardDetailPane` then seeds that view from
+`paneFinish === "foil" || paneFinish === "etched"` — narrower than "a finish was named", so a foil
+tile opens showing the sheen and a nonfoil one opens plain.
+
+**The card walk is deliberately not split.** `listWalkStops` de-duplicates by `cardId`, so a
+printing held in two finishes publishes one stop. That is correct: the walk drives the printings
+modal's chevrons, which step through *printings*, and a modal that visited the same printing twice
+in a row would be stepping through something the reader cannot see a difference in. It is built from
+`tiles` rather than from `rows` so the orphan fallback name survives, and the de-duplication lands
+on the same list either way.
+
+**And the tile now quotes a price** — `CollectionTile.unitPrice`, taken off the group's **first
+row** rather than reduced across it, because every row behind a tile now names the same printing
+*and* the same finish and so carries the same figure. It is the entry's own per-finish price
+(`sorting::price_expr` over `ENTRY_FINISH`) and never `cards.price_usd`, which is a
+`usd → usd_foil → usd_etched` fallback chain and would quote a plain copy at its foil's rate.
+
+### What it costs, measured on the dev database 2026-08-26
+
+Against `src-tauri/target/debug/data/mtg.db` — 275 collection entries over 272 printings, out of
+116 843 live `cards` rows:
+
+| Question | Answer |
+| --- | --- |
+| Collection printings held in more than one finish | **0 of 272** |
+| Printings sold in more than one finish | **57 576 of 116 843** (49.3 %) |
+| The whole corpus as finish-rows | **174 661** (+49.5 %) |
+
+**The first row is the honest thing to say about this change: on this database it splits nothing
+today.** It is a rule about what a tile *means*, taken before a reader's first foil makes it
+visible. Everything it removes — a `Move to` reaching copies the tile is not about, a submenu asking
+which of two objects drawn as one, a badge counting copies the picture does not stand for — needs a
+printing held in two finishes before any of it can be seen, and there is not one yet.
+
+**The last two rows are why the split stopped at the owned surfaces.** Search, Tags and the
+printings modal still draw one tile per printing: a browse answers "what cardboard exists", and
+half the corpus would appear twice for a scan half again as large. Owned surfaces answer "what do I
+have", where the finish is the difference between two objects the reader can hold. The wishlist and
+the decks already split by finish before any of this.
+
 ## The wall drags too, and a tile is not a row
 
 Until 2026-08-26 only the collection's **table** was a drag source. The wall registered nothing,
@@ -995,14 +1107,20 @@ its discriminated answer — the union rather than the tile alone, because a fol
 one row is a different sentence from its answer about nine copies filed in five places.
 
 **A folder takes a tile when _any_ copy behind it could move, never only when all of them could.**
-A printing held in two finishes with one already in this drawer is the ordinary case, and a folder
-that refused the whole tile for it would strand the copy that genuinely has somewhere to go.
+A printing filed in two drawers with one of them this one is the ordinary case, and a folder that
+refused the whole tile for it would strand the copy that genuinely has somewhere to go. (The
+example here was "held in two finishes" until 2026-08-26, when the finish joined the wall's grain
+and that case became two tiles. The rule is unchanged — condition, language and folder still put
+several rows behind one picture.)
 
 **More than one row behind the art is a question, not a guess.** One copy files on the drop, which
 is the common case and where a dialog would be a press for a choice with one answer. Two or more
 opens `PickCopies` — every copy as _finish · condition · language · folder · count_, all ticked,
-with the ones that cannot move greyed and carrying their reason in their own accessible name. A
-copy in a deck's group is refused by `set_entry_folder` (`ENTRY_IN_A_DECK`) and says so; a copy
+with the ones that cannot move greyed and carrying their reason in their own accessible name.
+Since 2026-08-26 the copies behind one tile can no longer differ in **finish**, so that first term
+is the same word down the whole list — which narrows the question without answering it, and is a
+redundancy rather than a wrong answer.
+A copy in a deck's group is refused by `set_entry_folder` (`ENTRY_IN_A_DECK`) and says so; a copy
 already in the destination says that instead. The confirm button counts **copies, not rows**,
 because a reader is filing cardboard. It is a centred modal rather than an anchored panel for the
 reason `src/CLAUDE.md` gives for a consulted surface — and because it is the only shape both doors
@@ -1259,6 +1377,9 @@ React never sees** — go through
 | `src/lib/folderTree.ts` | `buildFolderTree` and friends, shared with the deck gallery and the wishlist, **unchanged** |
 | `src/features/collection/collectionDrag.ts` | Both payloads under their own keys, the row and the tile that offer them, the targets that take either |
 | `src/features/collection/PickCopies.tsx` | The question a drop asks when the art stands for more than one row |
+| `src/features/collection/CollectionPage.tsx` | `tileKeyOf`, the `tiles` memo, `copiesByTile`, `entryIdsOf` — the wall's own printing-and-finish grain |
+| `src/features/decks/collectionTiles.ts` | `foldCopies` and its own `tileKeyOf` — the *other* fold of the same rows, split the same way |
+| `src/features/search/CardGrid.tsx` | `GridCard.key` and `tileKey` — a tile's identity where it differs from its card's |
 | `src/features/collection/CollectionFolderCard.tsx` | The tile, `folderFace`, and its stories beside it |
 | `src/features/collection/PinnedFolders.tsx` | The app's own folders — pinned, flat and locked — `DECK_KIND`, `REMOVED_KIND`, and neither one a drop target |
 | `src/features/card/cardMenu.tsx` | `buildCollectionTargetItems` — `Add to → Collection`, and `Move to → folder` |

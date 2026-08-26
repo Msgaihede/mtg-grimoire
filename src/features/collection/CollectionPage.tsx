@@ -33,7 +33,7 @@ import { CONDITION_LABEL, CONDITIONS } from "@/lib/conditions";
 import { DROP_MARK_ROOM } from "@/lib/dropMarks";
 import type { FolderDrag, FolderEdge } from "@/lib/folderDrag";
 import { reorderedLevel } from "@/lib/folderOrder";
-import { FINISHES, FINISH_LABEL, isFinish } from "@/lib/finish";
+import { FINISHES, FINISH_LABEL, isFinish, type Finish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
 import { buildFolderTree, folderDescendants, type FolderNode } from "@/lib/folderTree";
 import {
@@ -44,7 +44,9 @@ import {
   type CollectionRow,
 } from "@/lib/ipc";
 import { statusLine } from "@/lib/motion";
+import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
+import { tileKeyOf } from "@/lib/tileKey";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { writeFailure } from "@/lib/writes";
@@ -188,9 +190,40 @@ function subtotalsOf(
   return out;
 }
 
-/** One tile of the wall: a card, and how many copies of it the collection holds. */
+/** One tile of the wall: a printing **in one finish**, and how many copies of it the collection
+ *  holds. */
 interface CollectionTile extends GridCard {
+  /**
+   * This tile's identity — `` `${cardId}:${finish}` ``, which is **not** the card's id.
+   *
+   * A foil and a played nonfoil of one printing are two tiles carrying one `id`, so the wall's
+   * ring, its arrow walk and its picked set all key on this instead. See `CardGrid`'s
+   * `GridCard.key`.
+   */
+  key: string;
+  /** How many copies of this printing **in this finish** the collection holds, across every
+   *  grade, language and folder — what `OwnedBadge` draws over the art. */
   copies: number;
+  /**
+   * The finish to mark the art with — the tile's own, since the finish is part of what makes two
+   * tiles two.
+   *
+   * **`null` is a word this build cannot name and nothing else.** `collection_entries.finish` is
+   * TEXT with a CHECK rather than an enum this side knows, so a row can arrive spelling something
+   * `FINISHES` has never heard of; that marks the art with nothing rather than with a sheen no
+   * stylesheet has. It is no longer "the copies behind this tile disagree" — grouping on the
+   * finish is what removed that question, and every tile is one finish now.
+   */
+  finish: Finish | null;
+  /**
+   * What one copy of this printing, in **this** finish, costs at the marketplace the query named.
+   *
+   * Taken off the group's first row rather than reduced across them: every row in a group now
+   * names the same printing *and* the same finish, so they all carry the same figure and picking
+   * the first is not a choice between two answers. `null` is unpriced there, and it is never
+   * filled in from another marketplace or another finish.
+   */
+  unitPrice: number | null;
   /** Carried for the right-click menu alone — nothing on the wall draws it. A menu add is
    *  filed by what the card *does*, exactly as a drag of the same card is. */
   typeLine: string | null;
@@ -203,22 +236,41 @@ interface CollectionTile extends GridCard {
    *
    * **Not the finishes the printing exists in** — a collection row does not carry those — and
    * that difference is the point rather than a compromise. The tile sums entries, so it knows
-   * exactly which finishes are behind the art in front of the reader: one, and the menu records
-   * that one without asking; two, and it asks. A tile that said nothing here fell to the menu's
-   * unknown-list rule and silently recorded a **nonfoil** copy for a reader who owns two foils
-   * and no nonfoil, which is the failure the whole finish rule exists to prevent.
+   * exactly which finishes are behind the art in front of the reader — and since the finish
+   * joined the grain that is **at most one**, so the menu records it without asking.
+   *
+   * **The empty list is the case worth warning about, and exactly one thing produces it**: a row
+   * spelling a finish word `FINISHES` cannot name, which {@link ownedFinishes} drops rather than
+   * pass on to the backend. A tile left saying nothing here falls to the menu's unknown-list rule
+   * and silently records a **nonfoil** copy — the same shape of failure the whole finish rule
+   * exists to prevent, arrived at from the one direction the rule cannot close. It is 0 live rows,
+   * and it is written down because the `CHECK` on `collection_entries.finish` is the only thing
+   * holding it there.
+   *
+   * (That warning was illustrated with "a reader who owns two foils and no nonfoil" until
+   * 2026-08-26. The example was false and pre-dated the split: such a reader has always got
+   * `["foil"]` out of {@link ownedFinishes} and a foil entry recorded. The warning was right; the
+   * story attached to it was not.)
+   *
+   * The narrowing itself — `FINISHES` order, unrecognised words dropped — belongs to
+   * {@link ownedFinishes} and is argued there rather than twice.
    */
   finishes: string;
   /**
    * Which folders the copies behind this tile are filed in — every distinct one, `null` for the
    * root, in the order the rows arrived.
    *
-   * **A list rather than a folder, because a tile is a printing and a filing is a row.** The wall
-   * merges every entry for one piece of art (a foil and a played nonfoil are one picture), and
-   * since v24 the folder is part of what makes two rows two rows — so while the list is flattened
-   * one tile can perfectly well stand for copies in a binder, in a deck's group and at the root at
-   * once. Naming the first of them would be the app picking which copy the reader meant, which is
-   * exactly what {@link tileTarget} refuses to do about `entryId` one function down.
+   * **A list rather than a folder, because a tile is a printing-and-a-finish and a filing is a
+   * row.** The wall merges every entry for one object, and since v24 the folder is part of what
+   * makes two rows two rows — so while the list is flattened one tile can perfectly well stand
+   * for copies in a binder, in a deck's group and at the root at once. Naming the first of them
+   * would be the app picking which copy the reader meant, which is exactly what {@link tileTarget}
+   * refuses to do about `entryId` one function down.
+   *
+   * **The finish splits a tile and the folder deliberately does not**, which is the one asymmetry
+   * worth stating here: a foil and a played nonfoil are two objects at two prices, where the same
+   * copies in two drawers are one object seen from two places, and the table below the wall is
+   * where a reader gets those apart.
    *
    * Ids and not names, so this stays pure over `rows` and the tile can be built without the folder
    * census: {@link filedIn} is where the words are chosen, at render, from the page's own map.
@@ -300,6 +352,19 @@ const captionFor =
  * Every entry counts, including one emptied to zero: the wall draws a tile for it, the table
  * keeps the row with its condition and its purchase story, and it is still a finish the reader
  * has recorded holding this printing in.
+ *
+ * **The set handed in is now at most a singleton, and that is what makes this function worth
+ * keeping rather than what makes it redundant.** The finish joined the wall's grain on
+ * 2026-08-26, so a tile merges one finish by construction and this answers one entry wherever the
+ * word is one `FINISHES` knows — and the empty list for the unrecognised one the paragraph above
+ * is about. One is exactly the answer the menu wants: `buildCardMenu` records a single-finish
+ * list without asking, so a reader who owns two foils and no nonfoil gets a **foil** entry.
+ *
+ * The old two-element answer was the honest thing to say about a tile that merged two objects,
+ * and the fix was to stop merging them. What survives here is the narrowing — `FINISHES` order,
+ * unrecognised words dropped — which a raw `JSON.stringify([row.finish])` would throw away.
+ * `CollectionTile.finishes` defers to this function for that rule rather than restating it, and
+ * carries the one thing that is the *field's* business: what an empty list costs at the menu.
  */
 function ownedFinishes(seen: ReadonlySet<string>): string {
   return JSON.stringify(FINISHES.filter((finish) => seen.has(finish)));
@@ -332,8 +397,8 @@ function ownedFinishes(seen: ReadonlySet<string>): string {
  * and there is nothing else to address it by. A right-click on a *tile* or on a search result is
  * about a card the reader may not own at all, so {@link tileTarget} deliberately leaves it out
  * rather than inventing one from the entries behind the art — a tile merges every entry for that
- * printing, across finishes and across folders, and picking one of them to move would be the app
- * choosing which copy the reader meant.
+ * printing **in that finish**, across grades, languages and folders, and picking one of them to
+ * move would be the app choosing which copy the reader meant.
  */
 function rowTarget(row: CollectionRow): CardMenuTarget {
   return {
@@ -355,12 +420,12 @@ function rowTarget(row: CollectionRow): CardMenuTarget {
 /**
  * The card a right-click on a **tile** is about.
  *
- * Where {@link rowTarget} *names* a finish, this one offers a **list**, and the two are the same
- * rule seen from either end: a row is one entry and therefore is one finish, while a tile is a
- * card the reader may hold in two — a foil and a played nonfoil are one piece of art on this
- * wall. So the tile hands over the finishes its own entries are in ({@link ownedFinishes}), and
- * the menu does what it does on the search wall through the very same component: one finish is
- * no question, two is a submenu.
+ * Where {@link rowTarget} *names* a finish, this one offers a **list** — and since the finish
+ * joined the wall's grain that list holds exactly one entry, so the two are now the same rule
+ * arriving at the same answer by different roads: a row is one entry and therefore one finish,
+ * and a tile merges only the entries that agree about their finish. So the tile hands over the
+ * finishes its own entries are in ({@link ownedFinishes}) and the menu records that one without
+ * asking, through the very same component the search wall uses.
  *
  * The list is the reader's *holdings* rather than the printing's catalogue, which is the only
  * honest list a collection row can produce and is also the better one here — an add from this
@@ -441,8 +506,23 @@ export function CollectionPage() {
   const collection = useCollection();
   const { query, summary, rows, total, marketplace, folderId, flatten } = collection;
   const view = useAppStore((s) => s.collectionView);
-  const selectCard = useAppStore((s) => s.setSelectedCardId);
   const selectedCardId = useAppStore((s) => s.selectedCardId);
+  /**
+   * The wall's own opener, and the finish it last opened the pane as.
+   *
+   * **Not `setSelectedCardId`**, which is every other surface's and clears `paneFinish` in the
+   * same write: a tile here is a printing *and* a finish, so a press has something to say that
+   * the plain opener structurally cannot carry. The pane seeds its foil view from it — there is
+   * no foil photograph to fetch, so what it turns on is `FoilOverlay` over the same picture.
+   *
+   * **This page holds no other opener, and that is a deletion rather than an omission.**
+   * `setSelectedCardId` was read here for the wall's `onSelect` and for nothing else — the table
+   * beside it opens no card, its rows offering a stepper, a removal and a menu — so leaving the
+   * plain opener in scope would be a second way to open a card from this page that nothing
+   * presses and that would silently drop the finish if anything ever did.
+   */
+  const openCardAsFinish = useAppStore((s) => s.openCardAsFinish);
+  const paneFinish = useAppStore((s) => s.paneFinish);
   const queryClient = useQueryClient();
   const folders = useCollectionFolders();
 
@@ -648,34 +728,60 @@ export function CollectionPage() {
   }, [query]);
 
   /**
-   * The wall is a wall of *cards*, where the table is a list of entries: a foil and a played
-   * nonfoil of one printing are two rows to maintain and one piece of art to look at, so the
-   * tile carries the copies of both.
+   * The wall is a wall of *objects*, where the table is a list of entries: a printing held in
+   * one finish across three grades, two languages and two drawers is one piece of art to look
+   * at, so the tile carries the copies of all of them.
+   *
+   * **The finish is part of the key and condition, language and folder are not**, which is the
+   * whole of this wall's grain. A foil and a played nonfoil are two objects at two prices sharing
+   * only a set and a number — two pictures, and no single honest figure to draw under one of
+   * them — where the same finish in two drawers is one object seen from two places, and the
+   * table beside the wall is where a reader gets those apart. `foldCopies` in
+   * `features/decks/collectionTiles.ts` folds the app's *other* collection wall on the same pair,
+   * deliberately: two drawings of one collection that disagreed about what a tile **is** would be
+   * exactly the drift the grain exists to remove.
    */
   const tiles = useMemo(() => {
     const copies = new Map<string, number>();
     // The same walk, answering the tile's second question: *which finishes* those copies are in.
-    // A second pass would be a second definition of "the entries behind this printing".
+    // A second pass would be a second definition of "the entries behind this object" — and the
+    // answer is now always a one-element set, which is what {@link ownedFinishes} is for.
     const finishes = new Map<string, Set<string>>();
     // And its third, which only a flattened wall draws: *where* those copies are filed. A `Set`
     // because a printing held four times in one drawer is one folder, and insertion-ordered
     // because a tile in exactly one folder must name the folder its rows named.
     const filed = new Map<string, Set<number | null>>();
     for (const row of rows) {
-      copies.set(row.cardId, (copies.get(row.cardId) ?? 0) + row.quantity);
-      const held = finishes.get(row.cardId) ?? new Set<string>();
+      // **The raw `row.finish`, never the narrowed one.** For the three finishes the CHECK
+      // constraint permits the two are identical; a row spelling something this build cannot
+      // name keys as its own word and gets a tile of its own, rather than being folded in with
+      // the plain copies it is not.
+      //
+      // What that costs such a tile is not merely its own ring. Pressing it calls
+      // `openCardAsFinish(id, null)` — the narrowed finish is `null` — so `paneFinish` is `null`,
+      // the composite spells `id:nonfoil`, and the ring lands on the **plain tile beside it**, or
+      // on nothing where the reader holds no plain copy. Still strictly better than before the
+      // split, where no tile of a printing was distinguishable from any other, and under the
+      // CHECK constraint it describes 0 rows. See {@link tileKeyOf}, which carries this in full.
+      const key = tileKeyOf(row.cardId, row.finish);
+      copies.set(key, (copies.get(key) ?? 0) + row.quantity);
+      const held = finishes.get(key) ?? new Set<string>();
       held.add(row.finish);
-      finishes.set(row.cardId, held);
-      const drawers = filed.get(row.cardId) ?? new Set<number | null>();
+      finishes.set(key, held);
+      const drawers = filed.get(key) ?? new Set<number | null>();
       drawers.add(row.folderId);
-      filed.set(row.cardId, drawers);
+      filed.set(key, drawers);
     }
     const seen = new Set<string>();
     const out: CollectionTile[] = [];
     for (const row of rows) {
-      if (seen.has(row.cardId)) continue;
-      seen.add(row.cardId);
+      const key = tileKeyOf(row.cardId, row.finish);
+      if (seen.has(key)) continue;
+      seen.add(key);
       out.push({
+        key,
+        // **The printing, which is what a press opens** — `CardGrid` keeps the two apart, and
+        // this is the half `onSelect`, the art fetch and the caret note are all about.
         id: row.cardId,
         // A printing `cards` has forgotten still has the set and number the entry recorded,
         // and on a wall of art that is the whole of what identifies it.
@@ -683,11 +789,22 @@ export function CollectionPage() {
         setCode: row.setCode,
         collectorNumber: row.collectorNumber,
         rarity: row.rarity,
-        copies: copies.get(row.cardId) ?? 0,
+        copies: copies.get(key) ?? 0,
+        // Narrowed against `FINISHES` rather than cast, for the reason the key above is *not*
+        // narrowed: `finish` is TEXT with a CHECK rather than an enum this side knows, so a word
+        // this build cannot name marks the art with nothing instead of with a sheen no stylesheet
+        // has — and `openCardAsFinish` is handed the same narrowed value rather than the column.
+        finish: isFinish(row.finish) ? row.finish : null,
+        // Off the row rather than reduced across the group: every row behind this tile names the
+        // same printing *and* the same finish, so they all carry the same figure and taking the
+        // first is not a choice between two answers. Already per copy, per finish, at the
+        // marketplace the query named — never the derived `price_usd`, which is a fallback chain
+        // and would price a plain copy at foil rates.
+        unitPrice: row.unitPrice,
         typeLine: row.typeLine,
         oracleId: row.oracleId,
-        finishes: ownedFinishes(finishes.get(row.cardId) ?? new Set()),
-        folders: [...(filed.get(row.cardId) ?? new Set<number | null>())],
+        finishes: ownedFinishes(finishes.get(key) ?? new Set()),
+        folders: [...(filed.get(key) ?? new Set<number | null>())],
       });
     }
     return out;
@@ -703,17 +820,35 @@ export function CollectionPage() {
    * with the several ({@link fileCard}), rather than the wall inventing a single id it does not
    * have.
    *
+   * **Keyed by the tile — {@link tileKeyOf}, the very function {@link tiles} and the wall's ring
+   * composite are built from — and this map was keyed by the *card* until 2026-08-26.** That was
+   * correct for exactly as long as a tile was all of a printing's finishes: a menu or a drag
+   * acting on every row of the printing was acting on everything the picture stood for. The
+   * moment the finish joined the wall's grain it stopped being correct, and in the quietest
+   * possible way: a foil tile's `Move to` reached the plain copies, while the badge in the corner
+   * of that same tile counted one. A control acting on cardboard the reader is not pointing at,
+   * with the tile itself saying otherwise, is precisely the silent wrongness the split exists to
+   * remove — and *no test went red either way*, which is why it was worth fixing at once rather
+   * than filing.
+   *
+   * **What is still a *list* rather than a single id is the point of the map.** One finish of one
+   * printing is still several rows — they differ in grade, in language and, the term that makes
+   * this a question at all, in **folder** — so a drag still hands a folder every one of them and
+   * the reader still answers which ({@link fileCard}). The split narrowed *which* rows are behind
+   * a picture; it did not turn the several into one.
+   *
    * **Built from the loaded, filtered rows, which is exactly what the tile claims.** The tile's
-   * copy count is summed from these same rows, so "what moves" and "what the picture says it is"
-   * are one list by construction. A later page of the same printing is not in it — and must not
-   * be: the reader is filing what is on screen.
+   * copy count is summed from these same rows under the same key, so "what moves" and "what the
+   * picture says it is" are one list by construction. A later page of the same printing is not in
+   * it — and must not be: the reader is filing what is on screen.
    */
-  const copiesByCard = useMemo(() => {
+  const copiesByTile = useMemo(() => {
     const out = new Map<string, CollectionCopy[]>();
     for (const row of rows) {
-      const held = out.get(row.cardId) ?? [];
+      const key = tileKeyOf(row.cardId, row.finish);
+      const held = out.get(key) ?? [];
       held.push({ entryId: row.id, folderId: row.folderId });
-      out.set(row.cardId, held);
+      out.set(key, held);
     }
     return out;
   }, [rows]);
@@ -730,19 +865,33 @@ export function CollectionPage() {
    * rows, and answered rather than asserted, because `CardGrid` reads this once at attach and
    * again at `dragstart` and a `null` there is honestly "this cannot be picked up".
    *
-   * Its identity moves only with {@link copiesByCard}, i.e. when the rows change — never on a
+   * Its identity moves only with {@link copiesByTile}, i.e. when the rows change — never on a
    * bare re-render, which is what `CardGrid`'s own note asks for: a fresh arrow every render
    * tears the registration down and rebuilds it on every scrolled row.
    */
-  /** The rows behind one tile, as the ids a menu target carries. */
+  /** The rows behind one tile, as the ids a menu target carries. **`tile.key`, not `tile.id`** —
+   *  a `Move to` from a foil tile must reach that tile's rows and no others. */
   const entryIdsOf = useCallback(
-    (tile: CollectionTile) => (copiesByCard.get(tile.id) ?? []).map((copy) => copy.entryId),
-    [copiesByCard],
+    (tile: CollectionTile) => (copiesByTile.get(tile.key) ?? []).map((copy) => copy.entryId),
+    [copiesByTile],
   );
 
   const tileDrag = useCallback(
     (tile: CollectionTile): Record<string, unknown> | null => {
-      const copies = copiesByCard.get(tile.id) ?? [];
+      // The tile's rows, by the tile's own key. **The two `cardId`s below stay `tile.id`**, and
+      // the reason differs per half.
+      //
+      // The tile half's is what a folder card and a breadcrumb caption say the reader is filing
+      // ("Move 2 copies of Lightning Bolt"), and the rows it travels with are already narrowed —
+      // it is a label, not an address. It has no consumer that reads it as an address at all.
+      //
+      // **The card half's is a known limitation rather than a decision.** `deck_add_card` does
+      // take a finish (`DeckFinish`), but `dragData`'s `{ kind: "card" }` payload has **no finish
+      // slot** — only its `deckCard` sibling does — so a foil tile dropped onto a deck category
+      // lands as a plain card. That predates the split and this task does not widen `dnd.ts` to
+      // fix it; what the split changed is that the loss is now *avoidable*, because the tile
+      // finally knows which finish the reader pointed at.
+      const copies = copiesByTile.get(tile.key) ?? [];
       if (copies.length === 0) return null;
       return {
         ...dragData({
@@ -754,7 +903,7 @@ export function CollectionPage() {
         ...collectionTileDragData({ cardId: tile.id, name: tile.name, copies }),
       };
     },
-    [copiesByCard],
+    [copiesByTile],
   );
 
   /**
@@ -773,10 +922,11 @@ export function CollectionPage() {
    *
    * **Built from {@link tiles} rather than from `rows`, and that is the honest source of the
    * two.** A walk's stops are printings — the modal answers a foil entry and a played nonfoil of
-   * one printing with the same wall and the same ring — which is exactly the merge the wall has
-   * already done, name fallback for an orphaned entry included. Feeding it `rows` would rely on
-   * `listWalkStops`' own de-duplication to arrive back at this list, which is two definitions of
-   * one thing and only one of them carries the fallback name.
+   * one printing with the same wall and the same ring — so `listWalkStops` de-duplicates by card
+   * id, which is what keeps the walk one stop per printing now that the wall draws two tiles for
+   * one. Feeding it `rows` would land on the same list by the same de-duplication while losing
+   * the fallback name an orphaned entry gets here, which is two definitions of one thing with
+   * only one of them complete.
    *
    * The table is walked by the same list, and that is right rather than a compromise: the two
    * layouts are one collection in one order, and a press that meant something different
@@ -1230,10 +1380,14 @@ export function CollectionPage() {
    * The same three clauses asked of whichever shape is in the air.
    *
    * **A tile is taken when *any* copy behind it could move, never only when all of them could.**
-   * A printing a reader holds in two finishes, one of them already in this drawer, is the
+   * A printing a reader holds twice in one finish, one copy already in this drawer, is the
    * ordinary case — and a folder that refused the whole tile for it would strand the copy that
    * genuinely has somewhere to go. Which of them actually moves is {@link fileCard}'s question,
    * and where more than one row is behind the art the reader answers it rather than the page.
+   *
+   * (The example was "in two finishes" until 2026-08-26, when the finish joined the wall's grain
+   * and stopped being a way one tile's rows can differ. The rule is unchanged — grade, language
+   * and folder still split rows without splitting a tile.)
    */
   const canFile = useCallback(
     (drop: CollectionDrop, to: number | null) =>
@@ -1249,8 +1403,10 @@ export function CollectionPage() {
    * there is to say. A wall tile files straight away too **when it stands for a single row**,
    * which is the common case and the one where a dialog would be a press for a choice with one
    * answer. More than one row behind the art is the case the app cannot decide: the copies differ
-   * in finish, condition, language and folder, the reader can see none of that on a piece of
-   * card art, and choosing for them is the one answer that is always wrong for somebody.
+   * in condition, language and folder, the reader can see none of that on a piece of card art,
+   * and choosing for them is the one answer that is always wrong for somebody. (They can no
+   * longer differ in **finish** — that is what makes them two pieces of art since 2026-08-26 —
+   * which narrows this question without answering it.)
    */
   const fileCard = useCallback(
     (drop: CollectionDrop, to: number | null) => {
@@ -1955,13 +2111,28 @@ export function CollectionPage() {
               dragRecord={tileDrag}
               // Ctrl and Shift build a set of tiles (issue #214).
               selectionScope="collection"
-              selectedId={selectedCardId}
-              onSelect={selectCard}
-              // The same arrow-key walk the search wall takes, on the same terms: `selectedId`
-              // and `onSelect` here are both the store field the card pane reads, so a press
-              // moves the pane rather than only an outline. The two walls that are a *page* pass
-              // this and the two that are a panel do not — `CardGrid`'s `arrowNav` is where that
-              // split is argued.
+              // **The ring follows the *tile*, so `selectedId` is a composite.** Two tiles here
+              // carry one card id, and the pane's `selectedCardId` alone would ring both of a
+              // printing the reader opened one of. Built through {@link tileKeyOf} rather than
+              // spelled out, because the tile's own key is built by the same function and two
+              // spellings that drifted would be a wall where nothing rings at all.
+              selectedId={
+                selectedCardId === null ? null : tileKeyOf(selectedCardId, paneFinish)
+              }
+              // The finish travels with the press, so the pane opens showing the object the
+              // reader pointed at rather than the plain one. The tile is the second argument
+              // because a tile here is a printing *and* a finish — see `CardGrid`'s `onSelect`,
+              // which the other six walls ignore.
+              onSelect={(cardId, tile) => openCardAsFinish(cardId, tile.finish)}
+              // The same arrow-key walk the search wall takes, on the same terms: both slots
+              // above reach the store the card pane reads, so a press moves the pane rather than
+              // only an outline. The two walls that are a *page* pass this and the two that are
+              // a panel do not — `CardGrid`'s `arrowNav` is where that split is argued.
+              //
+              // **What the caret note is filed under is still the card**, not the tile key:
+              // `CardGrid` hands `keepCaretForCard` the printing because `CardDetailPane` reads
+              // the note back by the card it was opened on, so a note filed under `c1:foil`
+              // would break this wall's walk after exactly one step.
               arrowNav
               onNeedNextPage={onNeedNextPage}
               // The same mark search draws, and only the mark: the corner and the felt
@@ -1970,6 +2141,23 @@ export function CollectionPage() {
               // what is wanted. A tile at zero copies draws nothing, which is the badge's
               // own guard and the reason this view no longer has a badge of its own.
               badge={(tile) => <OwnedBadge owned={tile.copies} />}
+              // What one copy of this printing **in this finish** costs. Already on the row and
+              // priced at that entry's exact finish by `collection.rs`; the wall simply never
+              // drew it. `formatPrice` and never a bare `Intl.NumberFormat`, and a `null` is the
+              // em dash rather than a reason to borrow another marketplace's number.
+              money={(tile) => formatPrice(tile.unitPrice, marketplace.currency)}
+              // The sheen over the art and the glyph in the chin, which is the *other* half of
+              // what tells a reader the two tiles of one printing apart.
+              //
+              // **`nonfoil` is mapped to `null` here, and that is not a tidy-up.** `CardArt` gates
+              // its whole corner chip on `finish !== null` while `FinishMark` early-returns for a
+              // plain copy — so handing this slot the word paints the `bg-bg/85` felt with nothing
+              // inside it: an empty rectangle over the art, on most tiles of most collections.
+              // This wall was the app's first caller to have a `nonfoil` to pass at all, which is
+              // why the slot had never had to say so; the convention it would have broken is
+              // written down twice already, in `soleFinish` (which maps nonfoil to `null`) and in
+              // `DeckFinish` (which excludes the word outright).
+              finish={(tile) => (tile.finish === "nonfoil" ? null : tile.finish)}
               // **Only while flattened**, which is the one state where a tile cannot be read off
               // the level it is drawn on: with the filing ignored there is no breadcrumb saying
               // which drawer these are, so the caption has to say it per tile. Unset otherwise, so
@@ -2007,6 +2195,27 @@ export function CollectionPage() {
               </p>
             </>
           ))}
+
+        {/* **Spec §5: a price is never shown without saying how old it is** — and, with five
+            marketplaces in the picker, whose it is. `pricesAsOf` answers both, and names which of
+            the two clocks this marketplace runs on: the card-data sync for the blob-backed pair,
+            the last price-feed refresh for the two this app downloads itself.
+
+            **The rule reaches this wall as of 2026-08-26**, when the tiles' chins started quoting
+            what one copy costs; before that the grid drew no money at all and had nothing to date.
+
+            **Said once, under the wall, rather than on every tile** — the argument the search
+            page, the Tags page, the printings modal and the deck's docked panel all make, and the
+            reason the chin's money slot is a plain string rather than a tooltip binding: forty
+            tiles would be one sentence said forty times.
+
+            **Grid only.** The table states it in the Value column's own header (`CollectionTable`'s
+            `columnsFor`), so drawing it here as well would say it twice in one view. Drawn rather
+            than hung on a `title`, for the reason the card pane and `TheoryDiffDialog` decided the
+            same way: a hover is not a reader. */}
+        {!empty && view === "grid" && (
+          <p className="shrink-0 text-[0.7rem] text-dim">{pricesAsOf(marketplace)}</p>
+        )}
       </div>
 
       {/* The question a drop or a `Move to` asks when the art stands for more than one row.

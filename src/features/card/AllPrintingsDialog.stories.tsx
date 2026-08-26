@@ -531,14 +531,21 @@ export const NamedFoils: Story = {
 
     // **The two named rows, in the words a reader is told.** The chip over the art is
     // `aria-hidden` — it sits inside the tile's button, where any text of its own would join the
-    // button's name — so `CardGrid` states the same words in the caption beside it, and these are
-    // that statement. Two of them are the two facts one card carries, joined the way the app
-    // joins card facts everywhere else.
-    await expect(await modal.findByText(", Halo Foil")).toBeInTheDocument();
-    await expect(modal.getByText(", Double Rainbow Foil · Serialized")).toBeInTheDocument();
+    // button's name — so the words are stated by a *sibling* of that button, and these are that
+    // statement. Two of them are the two facts one card carries, joined the way the app joins
+    // card facts everywhere else.
+    //
+    // **The sibling is `CardChin`'s own `FinishMark` now, not an `sr-only` span**, so these are
+    // read off the accessibility tree by role and name rather than as text. `byRole` is what
+    // makes that work: it skips the `aria-hidden` chip over the art, so each of these matches the
+    // one mark in the foot and not the decoration above it.
+    await expect(await modal.findByRole("img", { name: "Halo Foil" })).toBeInTheDocument();
+    await expect(
+      modal.getByRole("img", { name: "Double Rainbow Foil · Serialized" }),
+    ).toBeInTheDocument();
     // And the third row says nothing, which is the half that keeps the mark meaning something:
     // `nph 9` is sold in both finishes and is neither.
-    await expect(modal.queryByText(", Foil")).toBeNull();
+    await expect(modal.queryByRole("img", { name: "Foil" })).toBeNull();
 
     // The eighth chip, counting the two — an ordinary offer rather than a greyed one, unlike
     // `Etched` beside it, which no printing of this card has.

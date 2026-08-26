@@ -6,8 +6,8 @@
  */
 import { useRef } from "react";
 import { CardArt } from "@/components/CardArt";
-import { RarityGem } from "@/components/RarityGem";
-import { atLeast, cardScaleVars, scaled } from "@/lib/cardZoom";
+import { CardChin } from "@/components/CardChin";
+import { atLeast, cardScaleVars, chinHeight, scaled } from "@/lib/cardZoom";
 import { DROP_MARK_ROOM, DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { playedFinish } from "@/lib/finish";
 import { finishTreatments } from "@/lib/treatment";
@@ -47,24 +47,25 @@ import type { ValidationIssue } from "../validation/types";
 import { GroupHeader } from "./GroupHeader";
 
 /**
- * A tile at 1×, and the two strips of chrome around it — the wall's whole geometry, and every
- * one of these was a Tailwind literal before the reader could zoom.
+ * A tile at 1× and the gutter around it — what is left of the wall's geometry, and both of these
+ * were a Tailwind literal before the reader could zoom.
  *
- * `TILE_WIDTH` is the size this wall has always drawn, `CAPTION_HEIGHT` its foot (`h-5`),
- * `CAPTION_TEXT` the type in it (`text-[0.5625rem]`, which is 9px against a 16px root) and
- * `TILE_GAP` the gutter between tiles (`gap-2.5`). They are constants here rather than classes
- * there because **a computed Tailwind class emits no CSS rule at all** — the scanner reads
- * source text, so a width class built by interpolation produces nothing and the tile silently
- * loses its width. Anything that moves with the zoom is an inline style.
+ * `TILE_WIDTH` is the size this wall has always drawn and `TILE_GAP` the gutter between tiles
+ * (`gap-2.5`). **The tile's foot is neither of them any more**: it is `chinHeight(zoom)` out of
+ * `lib/cardZoom.ts`, drawn by `components/CardChin` — one bar, one height and one type size
+ * across every surface in the app that draws a card, where this view used to hold a pair of
+ * numbers of its own and had drifted from both of its siblings.
  *
- * (The three classes still named above are ones the app uses elsewhere. The tile's own width
- * literal is deliberately *not* spelled anywhere in this file, comments included: this file is
- * under Tailwind's `@source`, so writing it would go on emitting a rule for a utility nothing
- * uses.)
+ * They are constants here rather than classes there because **a computed Tailwind class emits no
+ * CSS rule at all** — the scanner reads source text, so a width class built by interpolation
+ * produces nothing and the tile silently loses its width. Anything that moves with the zoom is
+ * an inline style.
+ *
+ * (The one class still named above is one the app uses elsewhere. The tile's own width literal
+ * is deliberately *not* spelled anywhere in this file, comments included: this file is under
+ * Tailwind's `@source`, so writing it would go on emitting a rule for a utility nothing uses.)
  */
 const TILE_WIDTH = 150;
-const CAPTION_HEIGHT = 20;
-const CAPTION_TEXT = 9;
 const TILE_GAP = 10;
 
 export function GridView({
@@ -303,16 +304,13 @@ function GridCard({
    *  `key`, so adding the same card twice replays the fade. */
   landedKey: number | undefined;
   /** How large the reader is drawing cards. The tile's width is the only thing it decides
-   *  outright — the picture follows by aspect ratio, and the foot follows by
-   *  {@link atLeast}. */
+   *  outright — the picture follows by aspect ratio, and the foot follows by `chinHeight`. */
   zoom: number;
 }) {
   const dragRef = useDeckCardDrag(card, actions?.drop !== undefined, actions?.groupDrag);
-  // The foot and its type, which move with the tile in both directions now — see {@link atLeast},
-  // which no longer governs either of them. Computed once here because three things read the
-  // height: the strip itself, the type inside it, and the controls that sit directly above it.
-  const captionHeight = scaled(CAPTION_HEIGHT, zoom);
-  const captionText = scaled(CAPTION_TEXT, zoom);
+  // The card's foot, the same object the stacks draw — see `components/CardChin.tsx`. The
+  // controls bar below is positioned off this number, which is why it is still a local.
+  const footHeight = chinHeight(zoom);
 
   return (
     <li
@@ -331,9 +329,9 @@ function GridCard({
       // them rather than taking a prop, because each of those marks is also drawn in the table and
       // text views, where nothing zooms. See `MARK_SCALE_VAR` in `lib/cardZoom.ts`.
       style={{ width: scaled(TILE_WIDTH, zoom), ...cardScaleVars(zoom) }}
-      // The tile is the card's whole body, so a press on the control bar over its foot — a
-      // positioned sibling of the button rather than part of it — does not read as a click on
-      // the desk. See `cardControl`'s `CARD_BODY_ATTR`.
+      // The tile is the card's whole body, so a press on the chin under the card or on the
+      // control bar over it — both siblings of the button rather than part of it — does not read
+      // as a click on the desk. See `cardControl`'s `CARD_BODY_ATTR`.
       {...deckCardBodyProps()}
       {...deckCardSelectedProps(selected)}
       className={cn(
@@ -489,24 +487,73 @@ function GridCard({
               spelled as the radius this face is drawn with. */}
           {landedKey !== undefined && <LandedMark key={landedKey} className="rounded-lg" />}
         </span>
-
-        {/* The foot, and the one part of a tile that is not the card: a rarity gem and this
-            printing's price. It is the search wall's caption line in every respect but what it
-            says — flush with the card's own left edge rather than padded in from a slab that is
-            no longer there. Both of its numbers are inline styles rather than `h-5` and a
-            `text-[…]` literal, because both move with the zoom — a 300px card over a 20px strip
-            of 9px type is a card that has outgrown its label, and the strip has to be tall
-            enough to hold whatever type it is given or the gem clips. */}
-        <span
-          style={{ height: captionHeight, fontSize: captionText }}
-          className="flex items-center gap-[calc(0.375rem*var(--mark-scale,1))] font-mono text-dim"
-        >
-          <RarityGem rarity={card.rarity} />
-          <span className="ml-auto shrink-0 tabular-nums text-text">
-            {formatPrice(card.unitPrice, currency)}
-          </span>
-        </span>
       </button>
+
+      {/* **The card's foot, and a sibling of the button rather than a child of it.**
+
+          It said a rarity and a price in 9px type on a 20px strip with no felt and no edges, and
+          left out which printing the card *is* — the one fact a reader comparing two copies of
+          one card needs. It is `components/CardChin` now, the same object `CardStack` draws, so a
+          deck read in one view and then the other says the same things in the same order.
+
+          **Outside the button for the reason that component states, and this view is why it is
+          worth restating**: everything in the chin is a *fact* rather than a mark, and a button's
+          `aria-label` replaces its content outright — so inside it the printing and the price had
+          no reader at all. That was survivable while the foot held a gem and a price; the move to
+          the shared chin put the set, the number and the finish in there too, which would have
+          been three more facts drawn where nothing announces them. `deckCardName` carries none of
+          the five.
+
+          **The consequence is that the foot no longer opens the card**, which is exactly what the
+          stacked card already does — the two views agree afterwards, where before this one had a
+          ~28px strip of the tile that opened the pane and the other did not.
+
+          It is still inside the tile, which is the card's whole body: the `<li>` carries
+          `deckCardBodyProps()` and `deckCardMenuProps`, so a press on the gem or the price is
+          still a press on *this card* rather than on the desk behind it, and a right-click there
+          still asks about this card. And the controls bar below is positioned against that same
+          `<li>` at `bottom: footHeight`, so it goes on landing on the chin's top edge — the tile's
+          height is the face plus the chin either way, and which element the chin is nested in
+          moves neither box. */}
+      <CardChin
+        zoom={zoom}
+        rarity={card.rarity}
+        setCode={card.setCode}
+        collectorNumber={card.collectorNumber}
+        // The code is what fits; the set's name is one hover away, exactly as on the stacked card
+        // — `PF26` is not a word anybody knows, and the hint being on one of two drawings of one
+        // deck is the drift this task exists to remove. `null` for an orphan, whose `setName`
+        // `cards` no longer has: then the code stands on its own rather than being annotated with
+        // a guess.
+        printingTitle={card.setName === null ? null : `${card.setName} · #${card.collectorNumber}`}
+        finish={playedFinish(card.finish, card.finishes)}
+        treatments={finishTreatments(card.promoTypes, playedFinish(card.finish, card.finishes))}
+        money={formatPrice(card.unitPrice, currency)}
+        // **`"art"`, not the stack's.** This tile's face is `CardArt`, whose own edge stops where
+        // this bar begins rather than enclosing it — so the chin supplies all three of its own and
+        // the two are one outline. Under the stack's bordered card it must not, or the foot is 2px
+        // and everything else is 1px.
+        seam="art"
+        // **No `tone`, and that is the whole of this tile's rule-break answer being the ring.**
+        //
+        // `CardChin`'s `tone` exists so the chin's edge can match the *card's* edge, and the stack
+        // is where that is load-bearing: its card really is bordered in destructive, so a chin
+        // left at the neutral edge would put 28px of the wrong colour back through the left and
+        // right edges of that outline — the one thing the outline exists to prevent, stated at the
+        // prop and again at `CardStack`'s foot.
+        //
+        // Here the argument runs the other way. `CardArt` grew an edge of its own on 2026-08-26 so
+        // the picture and this bar would read as one outlined object, and that edge is **neutral**
+        // — a rule break on this surface is the `ring-2 ring-destructive` on the face above, which
+        // is drawn outside the border box and leaves the border alone. Reddening only the chin
+        // therefore ran the card's outline grey down the art and red across its foot, so the card
+        // stopped reading as one object at exactly the join the border was added to close.
+        //
+        // The fix is this absence rather than a red edge on `CardArt`: the ring already says it,
+        // an outline saying it as well is one fact drawn twice, and `CardArt`'s two callers
+        // disagree about how a rule break is marked — so the colour is not that component's
+        // decision to take.
+      />
 
       {/* Over the art, as in the stack. Absolute, so the tile is exactly as wide and as tall as
           its card whatever it holds — which is what let the `Move…` select be removed on
@@ -519,7 +566,7 @@ function GridCard({
           height — a computed number, and `DeckCardControls` takes a class string and no style. An
           offset utility was that number while the foot was always 20px. */}
       <span
-        style={{ bottom: captionHeight }}
+        style={{ bottom: footHeight }}
         className="absolute inset-x-0 px-[calc(0.25rem*var(--mark-scale,1))]"
       >
         <DeckCardControls card={card} actions={actions} className={REVEALED_ON_CARD} />

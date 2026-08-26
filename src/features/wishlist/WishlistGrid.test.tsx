@@ -136,6 +136,16 @@ function list(rows: WishRow[], over: { flattened?: boolean } = {}) {
 }
 
 /**
+ * A tile's chin, reached from the printing line the wall writes into it.
+ *
+ * `CardChin` is the only element in a tile carrying a vertical border, which is what makes this a
+ * stable way in — every other route is a count of `parentElement` hops through two components'
+ * markup, and it moves the first time either of them gains a wrapper.
+ */
+const chinOf = (printing: string): HTMLElement =>
+  screen.getByText(printing).closest("span.border-x") as HTMLElement;
+
+/**
  * What one drag actually put in the library's store.
  *
  * The payload never travels in the platform's `DataTransfer` — it lives in the adapter's own
@@ -351,5 +361,120 @@ describe("the list's own editor", () => {
   it("leaves the printing itself as text", () => {
     const { container } = list([BOLT]);
     expect(within(container).getByText("LEA · 161 · Foil").tagName).toBe("SPAN");
+  });
+});
+
+/**
+ * **A wish tile carries two money facts, and they answer different questions.**
+ *
+ * The chin quotes **one copy** of the printing and finish this wish is for — the same statement
+ * every other wall's chin makes, which is what lets a reader carry one vocabulary between the
+ * collection, the decks and this list. "Still to buy" is `unit × copies still missing`: it is what
+ * the page header sums and what the table's Cost column shows, so it keeps the corner it already
+ * has beside the review flag rather than being folded into the bar.
+ *
+ * Spec §5 — a price is never shown without saying how old it is — is answered once above this
+ * wall by `pricesAsOf`, which is why the chin's figure is bare rather than forty tooltips.
+ */
+describe("what a wish tile says about money", () => {
+  it("quotes one copy in the chin, and what is still to buy in the corner", () => {
+    wall([{ ...BOLT, unitPrice: 12.32, quantity: 4, ownedQuantity: 2 }]);
+
+    expect(within(chinOf("LEA · 161")).getByText("$12.32")).toBeInTheDocument();
+    // Two copies still to find, at that unit price — the header's own arithmetic, and the one
+    // figure that must not move into the bar.
+    expect(screen.getByText("$24.64")).toBeInTheDocument();
+  });
+
+  /**
+   * A wish the marketplace does not quote draws an em dash rather than another marketplace's rate
+   * wearing this one's currency sign.
+   */
+  it("draws an em dash in the chin for a wish this marketplace cannot price", () => {
+    wall([{ ...BOLT, unitPrice: null }]);
+
+    expect(within(chinOf("LEA · 161")).getByText("—")).toBeInTheDocument();
+  });
+
+  /**
+   * The corner sat 4px in, which on the search wall is deliberately the card's printed nameplate
+   * — and on a wishlist tile is the card's own **name**. It drops below the printed title bar.
+   *
+   * `classList.contains` rather than a substring of `className`, and here that is not a
+   * formality: the offset it must no longer carry is a **prefix** of the one it now does, so
+   * `includes` would pass on a tile that had not moved at all.
+   */
+  it("keeps the corner clear of the card's printed name", () => {
+    wall([{ ...BOLT, needsReview: "Check the printing." }]);
+
+    const corner = screen.getByText("Needs review").closest("span[class*='absolute']")!;
+    expect(corner.classList.contains("top-[calc(0.25rem*var(--mark-scale,1))]")).toBe(false);
+    expect(corner.classList.contains("top-[calc(2rem*var(--mark-scale,1))]")).toBe(true);
+  });
+});
+
+/**
+ * **The wall says the printing; the table says the printing and the finish — and both are right.**
+ *
+ * They are one fact in two surroundings. The table has no art, no chin and no glyph, so the word
+ * is the only statement of the finish there. The wall's caption is the chin's printing line, one
+ * gutter from `FinishMark`, whose accessible name is that same word — so the word and the glyph
+ * were "Foil" twice on the surface with the least room in the app to say anything twice.
+ *
+ * Each claim below is asserted on the wall **and** the table side by side, which is this file's
+ * own rule: "the answer must not differ between two drawings of one list" is what makes a
+ * deliberate difference worth pinning rather than assuming.
+ */
+describe("the printing line", () => {
+  it("drops the finish word from the wall, where the glyph says it, and keeps it in the table", () => {
+    const { unmount } = wall([BOLT]);
+    const chin = chinOf("LEA · 161");
+    expect(screen.queryByText("LEA · 161 · Foil")).toBeNull();
+    // Said once, and by the mark: the glyph's own `aria-label` is the word that was dropped.
+    expect(within(chin).getByRole("img", { name: "Foil" })).toBeInTheDocument();
+    unmount();
+
+    list([BOLT]);
+    expect(screen.getByText("LEA · 161 · Foil")).toBeInTheDocument();
+  });
+
+  /**
+   * **The exception, and the one that makes this a rule about the glyph rather than about the
+   * word.** `FinishMark` draws nothing for nonfoil — it is the finish a price is assumed to be —
+   * so a blanket drop would leave a wish *for the nonfoil* looking identical to a wish with no
+   * preference at all. Those are two different wishes, which is the whole of what
+   * `WISH_PREFERRED_FINISH` in `wishlist.rs` exists to keep apart.
+   */
+  it("keeps the word on a nonfoil wish, which draws no glyph to say it", () => {
+    const { unmount } = wall([{ ...BOLT, preferredFinish: "nonfoil" }]);
+    const chin = chinOf("LEA · 161 · Nonfoil");
+    expect(within(chin).queryByRole("img", { name: "Nonfoil" })).toBeNull();
+    unmount();
+
+    list([{ ...BOLT, preferredFinish: "nonfoil" }]);
+    expect(screen.getByText("LEA · 161 · Nonfoil")).toBeInTheDocument();
+  });
+
+  /** No preference is not nonfoil, and says neither. */
+  it("says nothing about the finish on a wish that names none", () => {
+    wall([{ ...BOLT, preferredFinish: null }]);
+
+    expect(chinOf("LEA · 161")).toBeInTheDocument();
+    expect(screen.queryByText(/· (Foil|Nonfoil|Etched)$/)).toBeNull();
+  });
+
+  /**
+   * The one thing this caption exists to protect, and the thing a blanket rewrite would have
+   * taken: an unpinned wish is *drawn* as a printing it is not for, so its caption may not name
+   * that cardboard — with or without a finish appended.
+   */
+  it("still says Any printing on an unpinned wish, foil or not", () => {
+    wall([
+      { ...ANY, preferredFinish: "foil" },
+      { ...ANY, id: 9, name: "Time Walk", artCardId: "c-walk", preferredFinish: null },
+    ]);
+
+    expect(screen.getAllByText("Any printing")).toHaveLength(2);
+    expect(screen.queryByText("Any printing · Foil")).toBeNull();
   });
 });

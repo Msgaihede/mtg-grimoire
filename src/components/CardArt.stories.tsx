@@ -48,6 +48,14 @@ const meta = {
           "deck stack's `GameChangerBanner` glyph without its ribbon, and the same fact the " +
           "other three deck views abbreviate as `GameChangerBadge`'s gold `GC` — one gold, " +
           "three amounts of room.\n\n" +
+          "**The frame draws its own edge, and it is the edge `CardChin` continues.** Every " +
+          "surface that draws this frame draws a chin under it, and the chin joins whichever " +
+          "outline its host has — under the deck's stacks that host is a bordered card, so the " +
+          "two have always read as one object, while under a frame with no edge the picture " +
+          "stopped and a bordered bar started. A reader reported that as a rough cut-off. It is " +
+          "the chin's own colour and costs the wall no height: an aspect ratio on a `border-box` " +
+          "element is a ratio of the *border* box, so the 5:7 outer box is the box it was and " +
+          "only the picture inside loses a hairline each side.\n\n" +
           "**Art is synthetic here** unless the Live toolbar switch is on, so a checkout with " +
           "no network renders these exactly as one with it.",
       },
@@ -214,6 +222,10 @@ export const NoCard: Story = {
  *
  * Gold says "focus" as an outline and "state" as a ring everywhere else in the app, and the
  * ring hugs the art rather than standing off it so a wall keeps its rhythm.
+ *
+ * It sits **beside** the frame's own edge rather than instead of it: a ring here is a spread-only
+ * outset `box-shadow`, which paints outside the border box, so the gold lands against that edge
+ * and the frame keeps both marks.
  */
 export const Selected: Story = {
   args: { cardId: printing("lea", "161").id, name: "Lightning Bolt", selected: true },

@@ -247,7 +247,9 @@ describe("CardGrid", () => {
     // card, and the quick-add, whose name is the card plus what it does to it.
     await userEvent.click(screen.getByRole("button", { name: "Lightning Bolt" }));
 
-    expect(onSelect).toHaveBeenCalledWith("aaa");
+    // The printing first, and the row it was drawn from beside it — a tile is not always a
+    // printing, so the surface has to be able to tell which of two tiles of one card was pressed.
+    expect(onSelect).toHaveBeenCalledWith("aaa", expect.objectContaining({ id: "aaa" }));
   });
 
   /**
@@ -443,7 +445,9 @@ describe("CardGrid", () => {
     await userEvent.click(bottomLeft);
     await userEvent.click(topLeft);
 
-    expect(onSelect.mock.calls).toEqual([["aaa"], ["aaa"]]);
+    // The ids off the calls: the row now travels beside the id, and what this test is about is
+    // which parts of a tile open the card rather than what the press carries.
+    expect(onSelect.mock.calls.map(([id]) => id)).toEqual(["aaa", "aaa"]);
   });
 
   /**
@@ -482,11 +486,99 @@ describe("CardGrid", () => {
   });
 
   /**
-   * And the fact stated in words, because the chip that draws it is decoration: the caption is
-   * a *sibling* of the button, so a sentence here reaches a screen reader without renaming
-   * forty tiles. The same treatment the finish word gets, one line above it.
+   * **The finish, stated where a reader can hear it.**
+   *
+   * The chip over the art is inside the tile's button and the whole overlay around it is
+   * `aria-hidden`, so it says nothing at all — the tile has to state the finish in a *sibling* of
+   * that button or it goes unsaid. That sibling is `CardChin`'s own `FinishMark`, whose
+   * `aria-label` is the word; the tile used to append an `sr-only` `, Foil` beside it, and that
+   * span was dropped when the chin gained the mark, because the two said the same thing.
+   *
+   * **This test is here because dropping the span moved the only wall-level coverage of it into
+   * another feature's suite.** Removing `finish`/`treatments` from this file's `CardChin` call
+   * left `CardGrid.test.tsx` entirely green while every wall in the app stopped saying what
+   * finish a card is — mutation-checked, 2026-08-26. `byRole` rather than `byLabelText` is what
+   * makes the count honest: it skips the `aria-hidden` chip, so `1` means the chin's mark alone.
    */
-  it("states the crown in the caption, where the art's chip cannot", () => {
+  it("states the finish where the art's chip cannot, and only once", () => {
+    render(
+      <CardGrid
+        rows={[card("aaa", "Lightning Bolt")]}
+        onSelect={vi.fn()}
+        onNeedNextPage={vi.fn()}
+        listKey="k"
+        zoomSection="search"
+        finish={() => "foil"}
+      />,
+    );
+
+    const spoken = screen.getAllByRole("img", { name: "Foil" });
+    expect(spoken).toHaveLength(1);
+    // Beside the set and number, not inside the button that names the card — or a wall of foils
+    // is forty buttons called "… Foil".
+    const art = screen.getByRole("button", { name: "Lightning Bolt" });
+    expect(art).not.toContainElement(spoken[0]);
+    expect(art).toHaveAccessibleName("Lightning Bolt");
+  });
+
+  /** A wall told nothing marks nothing — the collection's, until it has an answer worth drawing. */
+  it("says nothing about the finish when the caller passes no answer", () => {
+    render(
+      <CardGrid
+        rows={[card("aaa", "Lightning Bolt")]}
+        onSelect={vi.fn()}
+        onNeedNextPage={vi.fn()}
+        listKey="k"
+        zoomSection="search"
+      />,
+    );
+
+    expect(screen.queryByRole("img", { name: "Foil" })).toBeNull();
+  });
+
+  /**
+   * **And the treatment half of the same seam**, which is its own test because it is its own
+   * prop: `treatments` reaches the chin separately from `finish`, so a wall that stopped passing
+   * it would go on naming every Surge Foil "Foil" while the test above stayed green —
+   * mutation-checked, 2026-08-26.
+   *
+   * A named treatment **replaces** the finish's word rather than joining it, which is
+   * `FinishMark`'s rule and the reason issue #160 exists: a Surge Foil is not "a foil". So the
+   * negative half is the assertion that carries the meaning.
+   *
+   * The treatment is a literal rather than `finishTreatments`' output. The wall's contract is that
+   * it forwards whatever its callback answers; which `promo_types` member earns which label is
+   * `lib/treatment.ts`'s table and is tested there.
+   */
+  it("names a treatment in the chin, in place of the finish's own word", () => {
+    render(
+      <CardGrid
+        rows={[card("aaa", "Lightning Bolt")]}
+        onSelect={vi.fn()}
+        onNeedNextPage={vi.fn()}
+        listKey="k"
+        zoomSection="search"
+        finish={() => "foil"}
+        treatment={() => [{ id: "surgefoil", label: "Surge Foil", foil: true }]}
+      />,
+    );
+
+    expect(screen.getAllByRole("img", { name: "Surge Foil" })).toHaveLength(1);
+    expect(screen.queryByRole("img", { name: "Foil" })).toBeNull();
+  });
+
+  /**
+   * And the crown stated in words, because the chip that draws it is decoration: the chin is
+   * a *sibling* of the button, so a sentence here reaches a screen reader without renaming
+   * forty tiles.
+   *
+   * **The crown keeps its `sr-only` span where the finish lost one**, and the asymmetry is the
+   * point: the chin draws a `FinishMark` that speaks for the finish, and has no slot at all for
+   * the crown. Turning the art's chip off to spare the finish its duplicate would take the crown
+   * with it — `FoilOverlay`'s `mark` governs both glyphs — so this span is still the only thing
+   * that says it.
+   */
+  it("states the crown in the chin, where the art's chip cannot", () => {
     render(
       <CardGrid
         rows={[{ ...card("aaa", "Rhystic Study"), gameChanger: true }]}
@@ -500,7 +592,7 @@ describe("CardGrid", () => {
 
     const stated = screen.getByText(`, ${GAME_CHANGER_LABEL}`);
     expect(stated).toHaveClass("sr-only");
-    // In the caption beside the set and number, not inside the button that names the card.
+    // In the chin beside the set and number, not inside the button that names the card.
     expect(screen.getByRole("button", { name: "Rhystic Study" })).not.toContainElement(stated);
   });
 
@@ -532,6 +624,47 @@ describe("CardGrid", () => {
    * unconditionally) *is* a truthy element that renders nothing — React cannot be asked which
    * before it runs, so `empty:hidden` on the backing is what answers for the second case.
    */
+  /**
+   * **Two walls, two right answers about the same corner** — `topLeftPlacement`.
+   *
+   * The search's mark is a printings count, which annotates the card it is printed over, so 4px
+   * puts it on the printed nameplate deliberately (`SearchPage` measured that plate at roughly
+   * 8–22px on a 238px face). The wishlist's is a review flag the reader identifies the tile
+   * *by name* beside, so the same 4px hides the one thing the row is about — reported by the
+   * reader in those words. Hence a prop rather than a number.
+   *
+   * **`classList.contains`, never a substring.** `top-[calc(0.25rem*var(--mark-scale,1))]` is a
+   * prefix of nothing here, but `top-[calc(2rem…)]`'s own string would match inside a hypothetical
+   * `top-[calc(2rem+…)]`, and a `className.includes` check on an arbitrary-value class is the
+   * shape that passes for the wrong reason. jsdom resolves no `calc()` and lays nothing out, so
+   * the class is the whole of what a test here can see; where the chip actually lands is a
+   * browser's answer.
+   */
+  it("puts the top-left corner where the wall asked for it", () => {
+    const corner = () => document.querySelector('[class*="bg-bg/85"]')!;
+    const props = {
+      rows: [card("aaa", "Lightning Bolt")],
+      onSelect: vi.fn(),
+      onNeedNextPage: vi.fn(),
+      listKey: "k",
+      zoomSection: "search" as const,
+      topLeft: () => <span>3 printings</span>,
+    };
+
+    // The default, and every wall's behaviour before the prop existed: on the nameplate.
+    const { rerender } = render(<CardGrid {...props} />);
+    expect(corner().classList.contains("top-[calc(0.25rem*var(--mark-scale,1))]")).toBe(true);
+    expect(corner().classList.contains("top-[calc(2rem*var(--mark-scale,1))]")).toBe(false);
+
+    rerender(<CardGrid {...props} topLeftPlacement="clear" />);
+    expect(corner().classList.contains("top-[calc(2rem*var(--mark-scale,1))]")).toBe(true);
+    expect(corner().classList.contains("top-[calc(0.25rem*var(--mark-scale,1))]")).toBe(false);
+
+    // The left inset is the corner's own and does not move with the placement — it is there so the
+    // box clears the art's `rounded-lg`, which is true at both offsets.
+    expect(corner().classList.contains("left-[calc(0.25rem*var(--mark-scale,1))]")).toBe(true);
+  });
+
   it("draws no corner for a mark with nothing to say", () => {
     const { container, rerender } = render(
       <CardGrid
@@ -1063,7 +1196,7 @@ describe("CardGrid", () => {
     expect(tile().style.getPropertyValue("--mark-scale")).toBe("1");
   });
 
-  it("moves the caption with the tiles in both directions", () => {
+  it("moves the chin with the tiles in both directions", () => {
     render(
       <CardGrid
         rows={[card("aaa", "Lightning Bolt")]}
@@ -1075,20 +1208,23 @@ describe("CardGrid", () => {
     );
     const row = () => screen.getByRole("button", { name: "Lightning Bolt" }).closest(".absolute");
 
-    // A 170px card is 238px of art, under a 25px strip — the quick-add trigger at `CONTROL_SHRINK`
-    // (24 × 0.85, ceiled to 21) plus the tile's own 4px gap.
-    expect(row()).toHaveStyle({ height: "263px" });
+    // A 170px card is 238px of art under a 28px chin, less the 4px the chin rides **up** over the
+    // face's clipped corners: 262. There is no gap in this budget any more — the chin is attached
+    // to the card rather than spaced under it, and the control it used to be a budget for is over
+    // the art now and costs the wall no height at all.
+    expect(row()).toHaveStyle({ height: "262px" });
 
-    // Twice the card is twice the strip: 476 of art and 50 of caption.
+    // Twice the card is twice the chin: 476 of art and 56 of chin, less the same 4. The rise does
+    // **not** scale — it is derived from a Tailwind corner radius, which is 7px at every stop.
     act(() => setZoom("search", 2));
-    expect(row()).toHaveStyle({ height: "526px" });
+    expect(row()).toHaveStyle({ height: "528px" });
 
-    // **And half the card is half the strip**, which is the reversal: 119 of art and 13 of
-    // caption. It used to hold at 28 here, because the button and the type in that strip were
-    // fixed sizes and a halved budget would have been shorter than its own contents. Both scale
-    // now, so the floor would be 28px of strip around 6px of type on an 85px card.
+    // **And half the card is half the chin**, which is the reversal: 119 of art and 14 of chin,
+    // less 4. It used to hold at 28 here, because the button and the type in that strip were fixed
+    // sizes and a halved budget would have been shorter than its own contents. Everything in the
+    // chin reads `--mark-scale` now, so the floor would be 28px of felt under an 85px card.
     act(() => setZoom("search", 0.5));
-    expect(row()).toHaveStyle({ height: "132px" });
+    expect(row()).toHaveStyle({ height: "129px" });
   });
 
   /**
@@ -1242,7 +1378,7 @@ describe("the arrow-key walk", () => {
     art("Lightning Bolt").focus();
     await userEvent.keyboard("{ArrowRight}");
 
-    expect(onSelect).toHaveBeenLastCalledWith("bbb");
+    expect(onSelect).toHaveBeenLastCalledWith("bbb", expect.objectContaining({ id: "bbb" }));
     // The art button, not the tile's wrapper: the wrapper is `tabIndex={-1}` so a menu can hand
     // the caret back to it, and it wears no focus ring — a reader arrowing across a wall with
     // nothing visibly focused would be worse served than by no arrow keys at all.
@@ -1250,7 +1386,7 @@ describe("the arrow-key walk", () => {
 
     await userEvent.keyboard("{ArrowLeft}");
 
-    expect(onSelect).toHaveBeenLastCalledWith("aaa");
+    expect(onSelect).toHaveBeenLastCalledWith("aaa", expect.objectContaining({ id: "aaa" }));
     expect(document.activeElement).toBe(art("Lightning Bolt"));
   });
 
@@ -1300,10 +1436,10 @@ describe("the arrow-key walk", () => {
 
     art("Lightning Bolt").focus();
     await userEvent.keyboard("{ArrowDown}");
-    expect(onSelect).toHaveBeenLastCalledWith("bbb");
+    expect(onSelect).toHaveBeenLastCalledWith("bbb", expect.objectContaining({ id: "bbb" }));
 
     await userEvent.keyboard("{ArrowUp}");
-    expect(onSelect).toHaveBeenLastCalledWith("aaa");
+    expect(onSelect).toHaveBeenLastCalledWith("aaa", expect.objectContaining({ id: "aaa" }));
     expect(document.activeElement).toBe(art("Lightning Bolt"));
   });
 
@@ -1418,7 +1554,7 @@ describe("the arrow-key walk", () => {
     tile?.focus();
     await userEvent.keyboard("{ArrowRight}");
 
-    expect(onSelect).toHaveBeenLastCalledWith("bbb");
+    expect(onSelect).toHaveBeenLastCalledWith("bbb", expect.objectContaining({ id: "bbb" }));
   });
 
   /**
@@ -1581,7 +1717,7 @@ describe("CardGrid multi-select", () => {
 
     await pressWith("Ponder", "Control");
 
-    expect(onSelect).toHaveBeenCalledWith("ccc");
+    expect(onSelect).toHaveBeenCalledWith("ccc", expect.objectContaining({ id: "ccc" }));
     expect(useAppStore.getState().cardSelection).toBeNull();
   });
 
@@ -1648,5 +1784,149 @@ describe("CardGrid multi-select", () => {
 
     expect(seen["aaa"]).toEqual(["aaa", "ccc"]);
     expect(seen["ddd"]).toEqual([]);
+  });
+});
+
+/**
+ * **The chin, the money slot, the tile key and the action strip.**
+ *
+ * The caption under a tile became `components/CardChin` — the deck stack's foot, which was the
+ * one of the three that was right — and with it came a slot for a price and a slot for a tile's
+ * identity where that differs from its card's. The four tests here are the seams four later
+ * surfaces are written against, which is why each of them is about a *prop* rather than about a
+ * pixel: jsdom resolves no `calc()` and lays nothing out, so the chin's own geometry is
+ * `CardChin.test.tsx`'s and a browser's.
+ */
+describe("the chin and the tile key", () => {
+  /**
+   * Everything about these walls that is not the subject of a test — the arrow-walk block's
+   * `base` without its `arrowNav`, because none of these presses is a walk.
+   */
+  const base = {
+    onNeedNextPage: vi.fn(),
+    listKey: "k",
+    zoomSection: "search" as const,
+  };
+
+  /**
+   * The class the wall's gold ring is drawn with — `CardArt`'s `selected` recipe, which is the
+   * spelling the multi-select block above already asserts against.
+   *
+   * It is on the **art** and not on the tile's root, so a ringed tile is one whose art carries
+   * it. That is worth stating because the ring's *decision* is now about the tile and the mark it
+   * produces is still on the card inside it.
+   */
+  const SELECTED_MARKER = "ring-accent";
+
+  const tiles = () => [...document.querySelectorAll("[data-grid-index]")];
+  const ringed = (tile: Element) => tile.querySelector(`.${SELECTED_MARKER}`) !== null;
+
+  /**
+   * The chin's money slot, which is what makes "a price on every card where one exists" true on
+   * a wall rather than only in its table.
+   */
+  it("draws the money the wall gives it", () => {
+    render(
+      <CardGrid
+        rows={[card("aaa", "Lightning Bolt")]}
+        onSelect={vi.fn()}
+        money={() => "$12.32"}
+        {...base}
+      />,
+    );
+
+    expect(screen.getByText("$12.32")).toBeInTheDocument();
+  });
+
+  /**
+   * **Two tiles can be one card**, which is what the collection's foil/nonfoil split needs: the
+   * ring, the arrow walk and the picked set all key on the *tile*, while the press still opens
+   * the *printing*. Without this, clicking either tile rings both.
+   */
+  it("rings the tile that was pressed, not every tile of that printing", () => {
+    render(
+      <CardGrid
+        rows={[
+          { ...card("bolt", "Lightning Bolt"), key: "bolt:nonfoil" },
+          { ...card("bolt", "Lightning Bolt"), key: "bolt:foil" },
+        ]}
+        onSelect={vi.fn()}
+        selectedId="bolt:foil"
+        {...base}
+      />,
+    );
+
+    const rung = tiles();
+    expect(rung).toHaveLength(2);
+    expect(ringed(rung[0])).toBe(false);
+    expect(ringed(rung[1])).toBe(true);
+  });
+
+  /** A wall whose cards carry no `key` is untouched — six of the seven walls pass none. */
+  it("falls back to the card id when a wall gives no key", () => {
+    render(
+      <CardGrid
+        rows={[card("bolt", "Lightning Bolt")]}
+        onSelect={vi.fn()}
+        selectedId="bolt"
+        {...base}
+      />,
+    );
+
+    expect(ringed(tiles()[0])).toBe(true);
+  });
+
+  /** The press still opens the **printing**, and the row is handed over beside it — the collection
+   *  draws one tile per printing *and finish*, and the pane has to be told which of the two. */
+  it("opens the printing and says which tile it was", async () => {
+    const onSelect = vi.fn();
+    render(
+      <CardGrid
+        rows={[{ ...card("bolt", "Lightning Bolt"), key: "bolt:foil" }]}
+        onSelect={onSelect}
+        {...base}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: "Lightning Bolt" }));
+
+    expect(onSelect).toHaveBeenCalledWith("bolt", expect.objectContaining({ key: "bolt:foil" }));
+  });
+
+  /**
+   * The action leaves the caption for a strip over the art — there is no room for a 20px button
+   * beside a price at 170px, and over the art is where the deckbuilder already puts its stepper.
+   * **It stays in the tab order at all times**: "visible on hover" is not a state a keyboard has.
+   */
+  it("keeps the tile's action reachable without a pointer", () => {
+    render(
+      <CardGrid
+        rows={[card("aaa", "Lightning Bolt")]}
+        onSelect={vi.fn()}
+        action={() => (
+          <button type="button">Add</button>
+        )}
+        {...base}
+      />,
+    );
+
+    const add = screen.getByRole("button", { name: "Add" });
+    expect(add).toBeInTheDocument();
+    expect(add).not.toHaveAttribute("tabindex", "-1");
+
+    // Over the art rather than in the chin: the strip is a sibling of the art button, inside the
+    // tile's own `relative` box, and it takes the wall no height at all.
+    const art = screen.getByRole("button", { name: "Lightning Bolt" });
+    const strip = add.parentElement!;
+    expect(strip.parentElement).toBe(art.parentElement);
+    expect(strip.classList.contains("absolute")).toBe(true);
+
+    // **And it does not swallow the press that opens the card.** The strip is the tile's full
+    // width — the popup anchors off it — so it lies across the bottom of the picture, and an
+    // `opacity-0` element is still a hit target. `FoilOverlay`'s arrangement: nothing for the
+    // strip, everything for what it holds. jsdom does no hit testing, so the classes are what
+    // can be checked here.
+    expect(strip.classList.contains("pointer-events-none")).toBe(true);
+    expect(strip.classList.contains("[&>*]:pointer-events-auto")).toBe(true);
   });
 });

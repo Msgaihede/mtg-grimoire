@@ -76,9 +76,9 @@ const tileDrag = (card: StoryCard): DragPayload => ({
  * Bolt" — and not by index either, since a virtualised wall's window depends on the viewport.
  * `SET · number` is the one string on a tile that is unique to the piece of cardboard.
  *
- * The caption's inner `<span>` walks up to the tile's own `<div>`: the tile is
- * `div > (div.relative > button + corner) + caption span > span`, so the nearest `div`
- * ancestor of that inner span is the root.
+ * The chin's inner `<span>` walks up to the tile's own `<div>`: the tile is
+ * `div > (div.relative > button + corner + action strip) + CardChin span > span`, so the
+ * nearest `div` ancestor of that inner span is the root.
  */
 function tileFor(canvasElement: HTMLElement, caption: string): HTMLElement {
   const tile = within(canvasElement).getByText(caption).closest("div");
@@ -148,8 +148,8 @@ const meta = {
           "`gameChanger`, `action`, `tileRef` and `dragPayload` — and each is a question the " +
           "caller answers about a card rather than a field on the row, because the search's " +
           "rows and the collection's know different things. The two the stories below lean on " +
-          "are `badge`, a mark over the art's bottom-left corner, and `action`, one control at " +
-          "the end of the caption; the corner, its felt backing and the `empty:hidden` guard " +
+          "are `badge`, a mark over the art's bottom-left corner, and `action`, one control in " +
+          "a strip over the art's foot; the corner, its felt backing and the `empty:hidden` guard " +
           "belong to the wall, so two views cannot drift into two shades.\n\n" +
           "**`arrowNav` is the one behaviour that is opt-in rather than answered per card.** It " +
           "makes the arrow keys walk the wall and move the *selection* with them, which two of " +
@@ -296,12 +296,18 @@ export const WithBadges: Story = {
  * of text to hang it on — reads as a sticker on a wall of art; at 12px in gold it reads as part
  * of the card.
  *
- * **The picture is decoration and the caption is the statement.** The chip lives inside the
+ * **The picture is decoration and the chin is the statement.** The chip lives inside the
  * tile's button and the whole overlay around it is `aria-hidden`, because any text of its own
  * would join the button's accessible name and make a wall of game changers forty buttons called
  * "… Game changer" — the same trap the owned badge avoids by being a *sibling* of the button.
- * So the tile appends an `sr-only` `, Game changer` to its caption, which is where the finish
- * word already goes.
+ * So the tile appends an `sr-only` `, Game changer` to its chin.
+ *
+ * **The finish word is not there beside it, and the asymmetry is the point.** The chin draws a
+ * `FinishMark` of its own whose `aria-label` is the finish's word, so a span saying it again made
+ * a foil card announce "Foil" twice. The crown has no such twin — `GameChangerMark` is drawn only
+ * inside the `aria-hidden` overlay and the chin has no slot for it — so this span is the only
+ * thing that says it, and turning the chip off to fix the duplication would take the crown with
+ * it (`FoilOverlay`'s `mark` governs both glyphs).
  *
  * Two rows, both drawn: the wall is virtualised and jsdom lays nothing out, so a play can only
  * reach the first few tiles of a list (`.storybook/CLAUDE.md`'s rule — assert a named row, never
@@ -384,11 +390,13 @@ export const ArrowKeys: Story = {
     await expect(first).toHaveFocus();
 
     await userEvent.keyboard("{ArrowRight}");
-    await expect(args.onSelect).toHaveBeenLastCalledWith(ALL[1].id);
+    // The printing first, and the row beside it: a tile is not always a printing, so the wall
+    // hands the surface both halves of the press.
+    await expect(args.onSelect).toHaveBeenLastCalledWith(ALL[1].id, ALL[1]);
     await expect(caretOn(1)).toHaveFocus();
 
     await userEvent.keyboard("{ArrowLeft}");
-    await expect(args.onSelect).toHaveBeenLastCalledWith(ALL[0].id);
+    await expect(args.onSelect).toHaveBeenLastCalledWith(ALL[0].id, ALL[0]);
     await expect(caretOn(0)).toHaveFocus();
   },
 };

@@ -482,6 +482,15 @@ beforeEach(() => {
   useAppStore.setState({
     collectionView: "table",
     selectedCardId: null,
+    // **Reset beside `selectedCardId`, because the two are one answer.** The wall's ring is a
+    // composite of the open card and the finish the pane was opened as, so a `paneFinish` left
+    // behind by the case before would ring the wrong tile of the next case's printing.
+    paneFinish: null,
+    // **And the picked set, which a plain click on a tile writes.** `useCardSelection` keeps one
+    // app-wide selection scoped by a string, so a case that presses a tile leaves `collection`
+    // holding that tile's key — and the next case's wall rings it, because `CardGrid` draws one
+    // gold ring for the pane's card *and* for every picked tile.
+    cardSelection: null,
     importDefaults: { condition: "NM", finish: null },
     // **Flatten lives in the store now, so it survives a `cleanup()` and leaks into the next
     // test unless something puts it back.** It did: the blocks below press the chip, and every
@@ -1147,9 +1156,18 @@ describe("CollectionPage", () => {
     expect(lastQuery().marketplace).toBe("cardmarket");
   });
 
-  /** The wall is a wall of *cards*: two entries for one printing (a foil and a nonfoil) are
-   *  one tile carrying what the reader owns of it. */
-  it("shows the collection as art, badged with how many are owned", async () => {
+  /**
+   * The wall is a wall of *objects*: a foil and a played nonfoil of one printing are two pieces
+   * of art, and each badge counts **that finish's** copies.
+   *
+   * **Two expectations moved with the grain on 2026-08-26 and the fixture did not.** This read
+   * "two entries for one printing are one tile carrying what the reader owns of it" and asserted
+   * one piece of art badged `3`; the finish is part of the wall's key now, so the same two rows
+   * draw two pieces of art badged `2` and `1`. That is the change rather than a regression — the
+   * tile is what a price is quoted under, and there is no honest single figure for two objects
+   * that cost different money.
+   */
+  it("shows the collection as art, badged with how many of that finish are owned", async () => {
     useAppStore.setState({ collectionView: "grid" });
     collectionList.mockResolvedValue(
       page([BOLT, { ...BOLT, id: 8, finish: "nonfoil", condition: "LP", quantity: 1 }]),
@@ -1157,12 +1175,26 @@ describe("CollectionPage", () => {
     const { container } = wrap(<CollectionPage />);
 
     const art = await screen.findAllByAltText("Lightning Bolt");
-    expect(art).toHaveLength(1);
-    expect(screen.getByText("3 in your collection")).toBeInTheDocument();
-    // One backing, not two. The wall owns the corner and the table felt behind a mark, and
-    // the mark it is handed is plain — a pill inside a pill painted the felt over itself and
+    expect(art).toHaveLength(2);
+    expect(screen.getByText("2 in your collection")).toBeInTheDocument();
+    expect(screen.getByText("1 in your collection")).toBeInTheDocument();
+    // One backing per tile, not two. The wall owns the corner and the table felt behind a mark,
+    // and the mark it is handed is plain — a pill inside a pill painted the felt over itself and
     // doubled the horizontal padding on a 170px tile.
-    expect(container.querySelectorAll('[class*="bg-bg/85"]')).toHaveLength(1);
+    //
+    // **Scoped past `data-card-marks`**, and that is the third expectation this change moved:
+    // that attribute is `CardArt`'s own top-right chip, which carries the same felt, and the
+    // wall started passing a `finish` on 2026-08-26 — so a bare `bg-bg/85` sweep would count
+    // that chip alongside the two badges this line is about.
+    //
+    // **This wording was itself the tell for a defect.** It read "the foil tile's sparkle",
+    // singular, over a fixture whose *both* tiles carried the chip: passing `"nonfoil"` straight
+    // through drew an empty one over the plain copy. It is singular and true now, because the
+    // slot maps nonfoil to `null` — see the chip case above, which is the assertion that pins it.
+    // This scope narrows past `CardArt`'s corner and nothing else; it never hid the badge.
+    expect(
+      container.querySelectorAll('[class*="bg-bg/85"]:not([data-card-marks])'),
+    ).toHaveLength(2);
   });
 
   /**
@@ -1181,7 +1213,227 @@ describe("CollectionPage", () => {
     expect(screen.queryByText(/in your collection/)).not.toBeInTheDocument();
     // And no corner either: the backing collapses on a mark that rendered nothing, so a wall
     // of unowned tiles is not a wall of empty chips. (`CardGrid`'s own test pins the rule.)
-    expect(container.querySelector('[class*="bg-bg/85"]')).toBeEmptyDOMElement();
+    //
+    // **Scoped past `data-card-marks` on 2026-08-26**, for the reason the badge count above
+    // gives: `CardArt`'s finish chip carries the same felt, `BOLT` is a foil, and this wall
+    // draws a finish now — so the unscoped query answered about that chip, which is first in
+    // document order, rather than about the badge corner, and read as the corner having grown
+    // content it had not.
+    expect(
+      container.querySelector('[class*="bg-bg/85"]:not([data-card-marks])'),
+    ).toBeEmptyDOMElement();
+  });
+
+  /* ---------------------------------------------------------------------------------------- *
+   * The wall's grain: a printing **and a finish**, with that finish's own price under it
+   * ---------------------------------------------------------------------------------------- */
+
+  /**
+   * The tile a given price is drawn on — the wall's own outer box, which is what
+   * {@link cardSources} matches and what carries the art, the badge and the chin between them.
+   *
+   * By the money rather than by the name, because the two tiles of one printing carry the same
+   * name and the price is the whole of what tells them apart on screen.
+   */
+  const tileQuoting = (money: string): HTMLElement =>
+    screen.getByText(money).closest('[draggable="true"]') as HTMLElement;
+
+  /**
+   * A foil and a played nonfoil are two objects at two prices sharing only a set and a number.
+   * The wall merged them into one piece of art and had no honest price to put under it.
+   */
+  it("draws a foil and a nonfoil of one printing as two priced tiles", async () => {
+    useAppStore.setState({ collectionView: "grid" });
+    collectionList.mockResolvedValue(
+      page([
+        { ...BOLT, id: 7, finish: "foil", quantity: 1, unitPrice: 9 },
+        { ...BOLT, id: 8, finish: "nonfoil", quantity: 2, unitPrice: 1 },
+      ]),
+    );
+    wrap(<CollectionPage />);
+
+    expect(await screen.findAllByAltText("Lightning Bolt")).toHaveLength(2);
+    expect(screen.getByText("$9.00")).toBeInTheDocument();
+    expect(screen.getByText("$1.00")).toBeInTheDocument();
+  });
+
+  /**
+   * **A plain copy draws no chip at all, and this wall is where the app first had to say so.**
+   *
+   * Passing a tile's finish straight through made this the first production caller to hand
+   * `CardGrid`'s `finish` slot the word `"nonfoil"`. `CardArt` gates its corner chip on
+   * `finish !== null` while `FinishMark` early-returns for a plain copy with no treatment — so
+   * the `bg-bg/85` felt got painted with nothing inside it: an empty rectangle over the art, on
+   * most tiles of most collections.
+   *
+   * The convention it broke is the codebase's own, and it is written down in two places already:
+   * `soleFinish` maps nonfoil to `null`, and `DeckFinish` excludes the word outright. Both exist
+   * so that "plain" never reaches a slot whose job is to draw a mark.
+   *
+   * **Asserted on `data-card-marks`**, which is that chip and is on exactly one element in the
+   * app. The two `bg-bg/85` sweeps above deliberately scope *past* it, so neither of them could
+   * ever have caught this — which is why it is a case of its own rather than a line in one.
+   */
+  it("draws a finish chip on a foil tile and none at all on a plain one", async () => {
+    useAppStore.setState({ collectionView: "grid" });
+    collectionList.mockResolvedValue(
+      page([
+        { ...BOLT, id: 7, finish: "nonfoil", unitPrice: 1 },
+        { ...BOLT, id: 8, finish: "foil", unitPrice: 9 },
+      ]),
+    );
+    const { container } = wrap(<CollectionPage />);
+    await screen.findAllByAltText("Lightning Bolt");
+
+    expect(container.querySelectorAll("[data-card-marks]")).toHaveLength(1);
+    expect(tileQuoting("$1.00").querySelector("[data-card-marks]")).toBeNull();
+    expect(tileQuoting("$9.00").querySelector("[data-card-marks]")).not.toBeNull();
+  });
+
+  /** Two folders' worth of one finish are one object and one tile — only the finish splits. */
+  it("keeps one finish filed in two folders as one tile", async () => {
+    useAppStore.setState({ collectionView: "grid" });
+    collectionList.mockResolvedValue(
+      page([
+        { ...BOLT, id: 7, finish: "nonfoil", folderId: null, quantity: 1, unitPrice: 1 },
+        {
+          ...BOLT,
+          id: 8,
+          finish: "nonfoil",
+          folderId: 3,
+          folderName: "Trade binder",
+          quantity: 3,
+          unitPrice: 1,
+        },
+      ]),
+    );
+    wrap(<CollectionPage />);
+
+    expect(await screen.findAllByAltText("Lightning Bolt")).toHaveLength(1);
+    expect(screen.getAllByText("$1.00")).toHaveLength(1);
+    // And the badge counts both drawers' copies, because both are copies of this one object.
+    expect(screen.getByText("4 in your collection")).toBeInTheDocument();
+  });
+
+  /**
+   * "Clicking on a foil should display that printing, but in the foil version." The pane seeds
+   * its foil view from this — there is no foil photograph to fetch, so what it turns on is
+   * `FoilOverlay` over the same picture.
+   */
+  it("opens the pane as the finish the tile was pressed on", async () => {
+    useAppStore.setState({ collectionView: "grid" });
+    const user = userEvent.setup();
+    collectionList.mockResolvedValue(page([{ ...BOLT, finish: "foil" }]));
+    wrap(<CollectionPage />);
+
+    await user.click(await screen.findByRole("button", { name: "Lightning Bolt" }));
+
+    expect(useAppStore.getState().selectedCardId).toBe("c1");
+    expect(useAppStore.getState().paneFinish).toBe("foil");
+  });
+
+  /**
+   * A tile that merges exactly one finish records that finish without asking — which is a fix
+   * rather than a tidy-up. Before the split a tile holding a foil *and* a plain copy offered
+   * both and made the reader pick, and picking wrongly on a wall of forty is one keystroke; now
+   * the tile the reader pressed is already the answer.
+   *
+   * (This doc said "a reader owning two foils and no nonfoil used to fall to the menu's
+   * unknown-list rule and get a silent **nonfoil** entry" until 2026-08-26. That was false and
+   * came from the task brief, which had it from older repo prose: `ownedFinishes` has always
+   * answered `["foil"]` for that reader. The unknown-list rule is reached only by a finish word
+   * `FINISHES` cannot name — see `CollectionTile.finishes`, which carries the real warning.)
+   *
+   * Read through the menu's own write, which is what this file already uses to say what a tile
+   * offered as its finish: `collection_add`'s `finish` argument is `CardMenuTarget.finishes`
+   * resolved to one answer, and a `Collection` row with no submenu is that resolution happening
+   * without a question.
+   */
+  it("names the tile's own finish to the card menu, and no longer asks which", async () => {
+    useAppStore.setState({ collectionView: "grid" });
+    collectionList.mockResolvedValue(
+      page([BOLT, { ...BOLT, id: 8, finish: "nonfoil", condition: "LP", quantity: 1 }]),
+    );
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    // The nonfoil tile is the second: the fold keeps the order the rows arrived in, and the
+    // fixture is deliberately foil-first.
+    const tiles = await screen.findAllByRole("button", { name: "Lightning Bolt" });
+    expect(tiles).toHaveLength(2);
+    rightClick(tiles[1]);
+    await screen.findByRole("menu");
+
+    await user.click(screen.getByRole("menuitem", { name: /Add to/ }));
+    const collection = await screen.findByRole("menuitem", { name: "Collection" });
+    expect(collection).not.toHaveAttribute("aria-haspopup", "menu");
+    await user.click(collection);
+
+    await waitFor(() =>
+      expect(collectionAdd).toHaveBeenCalledWith({
+        cardId: "c1",
+        finish: "nonfoil",
+        condition: "NM",
+        quantity: 1,
+        folderId: null,
+      }),
+    );
+  });
+
+  /**
+   * **The ring is about a tile, and two tiles now share one card id.** The pane's
+   * `selectedCardId` alone would ring the foil and the nonfoil together for a reader who opened
+   * one of them, so the wall compares a composite of the card and the finish the pane was
+   * opened as.
+   */
+  it("rings only the tile of the finish the pane was opened as", async () => {
+    useAppStore.setState({ collectionView: "grid", selectedCardId: "c1", paneFinish: "foil" });
+    collectionList.mockResolvedValue(
+      page([
+        { ...BOLT, id: 7, finish: "foil", quantity: 1, unitPrice: 9 },
+        { ...BOLT, id: 8, finish: "nonfoil", quantity: 2, unitPrice: 1 },
+      ]),
+    );
+    const { container } = wrap(<CollectionPage />);
+    await screen.findAllByAltText("Lightning Bolt");
+
+    expect(container.querySelectorAll('[class*="ring-accent"]')).toHaveLength(1);
+    expect(tileQuoting("$9.00").querySelector('[class*="ring-accent"]')).not.toBeNull();
+    expect(tileQuoting("$1.00").querySelector('[class*="ring-accent"]')).toBeNull();
+  });
+
+  /**
+   * **Spec §5: a price is never shown without saying how old it is.** This wall drew no money at
+   * all until the chin landed on 2026-08-26, so the rule reaches it now where before it reached
+   * only the table's Value column header — and it arrived here with no sentence anywhere, which
+   * is what driving the shipped window found.
+   *
+   * Once, under the wall — not on forty tooltips, which is one statement made forty times and is
+   * the reason the chin's money slot is a plain string.
+   *
+   * **Through `pricesAsOf` rather than the sentence typed out here**: spelling it would pin a copy
+   * of the wording rather than the function, so a reworded sentence would go red in a place with
+   * nothing to say about it while a wall drawing a *stale* sentence stayed green.
+   *
+   * The table is asserted to draw none of it, which is what proves this is the grid's line rather
+   * than something the page draws in both views over a column header that already says it. The
+   * header's own `Value (USD)` figure carries the same sentence and is **not** counted either way:
+   * it is a `useTooltip()` binding, so it is an attribute and a panel that has not been opened,
+   * never text on screen.
+   */
+  it("says how old the wall's prices are, once, under the grid", async () => {
+    useAppStore.setState({ collectionView: "grid" });
+    collectionList.mockResolvedValue(page([{ ...BOLT, unitPrice: 9 }]));
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+
+    await screen.findByAltText("Lightning Bolt");
+    expect(screen.getAllByText(pricesAsOf(MARKETPLACES.tcgplayer))).toHaveLength(1);
+
+    await user.click(screen.getByRole("button", { name: "Table view" }));
+
+    // The table says it in the Value column's header instead — as a tooltip and an accessible
+    // name, not as text — so the grid's line goes with the grid.
+    expect(screen.queryByText(pricesAsOf(MARKETPLACES.tcgplayer))).toBeNull();
   });
 
   /**
@@ -1705,42 +1957,45 @@ describe("the card menu", () => {
   });
 
   /**
-   * The other arm, and the one that says the tile is a *card*: two entries for one printing are
-   * one piece of art, so the wall has two finishes behind it and has to ask which one the reader
-   * means. The same component asks the same question on the search wall for the same reason —
-   * one wall behaving two ways would be the bug.
+   * The other arm of the same pair, pressed on the **foil** tile of a printing the reader also
+   * holds plain. The one above presses the nonfoil tile of exactly this fixture, and together
+   * they are what says the two tiles do not share an answer.
    *
-   * Offered in `FINISHES` order rather than in the order the entries arrived, which is why the
-   * fixtures below are deliberately foil-first.
+   * **This test asserted the opposite until 2026-08-26 and is rewritten rather than deleted.**
+   * It read "the wall has two finishes behind it and has to ask which one the reader means", and
+   * pinned a `Collection` row with `aria-haspopup="menu"` offering `Nonfoil · Foil` in `FINISHES`
+   * order. The finish is part of the wall's key now, so a tile can never merge two of them and
+   * there is no question left to ask — the submenu the reader had to answer correctly is gone,
+   * and with it the way to answer it wrongly. The `FINISHES` ordering it also pinned is not lost:
+   * it belongs to `cardMenu`'s own suite and to the search wall, whose targets can still carry a
+   * multi-finish list.
+   *
+   * The fixture stays deliberately foil-first, which is now what makes the *first* tile the foil.
    */
-  it("asks which, when the reader owns the printing in two finishes", async () => {
+  it("records the foil tile's own finish, on a printing also held plain", async () => {
     useAppStore.setState({ collectionView: "grid" });
     collectionList.mockResolvedValue(
       page([BOLT, { ...BOLT, id: 8, finish: "nonfoil", condition: "LP", quantity: 1 }]),
     );
     const user = userEvent.setup();
     wrap(<CollectionPage />);
-    rightClick(await screen.findByRole("button", { name: "Lightning Bolt" }));
+    const tiles = await screen.findAllByRole("button", { name: "Lightning Bolt" });
+    rightClick(tiles[0]);
     await screen.findByRole("menu");
 
     await user.click(screen.getByRole("menuitem", { name: /Add to/ }));
     const collection = await screen.findByRole("menuitem", { name: "Collection" });
-    expect(collection).toHaveAttribute("aria-haspopup", "menu");
+    expect(collection).not.toHaveAttribute("aria-haspopup", "menu");
 
     await user.click(collection);
-    const offered = (await screen.findAllByRole("menuitem")).filter((item) =>
-      ["Nonfoil", "Foil", "Etched"].includes(item.textContent ?? ""),
-    );
-    expect(offered.map((item) => item.textContent)).toEqual(["Nonfoil", "Foil"]);
-
-    await user.click(screen.getByRole("menuitem", { name: "Nonfoil" }));
     await waitFor(() =>
       expect(collectionAdd).toHaveBeenCalledWith({
         cardId: "c1",
-        finish: "nonfoil",
+        finish: "foil",
         condition: "NM",
         quantity: 1,
-        // The root of the cabinet, as above: the finish was the question, the folder was not.
+        // The root of the cabinet, as above: the finish is the tile's, the folder was never
+        // the question.
         folderId: null,
       }),
     );
@@ -2176,6 +2431,89 @@ describe("the collection's folders", () => {
         ],
       },
     ]);
+  });
+
+  /**
+   * **A drag from a foil tile carries the foil rows and nothing else** — the fix to the one thing
+   * the finish split left behind (2026-08-26).
+   *
+   * `copiesByTile` was keyed by the *card* until then, which was correct for exactly as long as a
+   * tile was all of a printing's finishes. After the split it meant a foil tile picking up the
+   * plain copies while the badge in its own corner counted only the foils: a gesture acting on
+   * cardboard the reader is not pointing at, with the picture saying otherwise. **No test went red
+   * either way**, because every drag fixture on this wall was single-finish — which is why this
+   * one is deliberately three rows in two finishes, with the odd nonfoil in the *middle* so a
+   * fold that took a prefix rather than a filter would still fail.
+   */
+  it("picks up only the rows behind the finish the tile is of", async () => {
+    useAppStore.setState({ collectionView: "grid" });
+    collectionList.mockResolvedValue(
+      page([
+        BOLT,
+        { ...BOLT, id: 8, finish: "nonfoil" },
+        { ...BOLT, id: 9, folderId: 3, folderName: "Trade binder" },
+      ]),
+    );
+    const { container } = wrap(<CollectionPage />);
+    await screen.findAllByAltText("Lightning Bolt");
+
+    const tiles = cardSources(container);
+    expect(tiles).toHaveLength(2);
+
+    const carried: Record<string, unknown>[] = [];
+    const stop = monitorForElements({ onDragStart: ({ source }) => carried.push(source.data) });
+    const held = await startDrag(tiles[0], {
+      pressOn: screen.getAllByRole("button", { name: "Lightning Bolt" })[0],
+    });
+    await held.cancel();
+    stop();
+
+    // Entries 7 and 9 — the two foils, one of them already filed — and **not** entry 8.
+    //
+    // The card half still names the printing alone, and that is a **known limitation** rather
+    // than the design: `deck_add_card` does take a `DeckFinish`, but `dragData`'s `{ kind:
+    // "card" }` payload has no finish slot to carry one, so a foil dropped onto a deck lands
+    // plain. It predates the split; the split is what made it fixable.
+    expect(carried.map(readDragData)).toEqual([
+      { kind: "card", cardId: "c1", name: "Lightning Bolt", typeLine: "Instant" },
+    ]);
+    expect(carried.map(readCollectionTileDrag)).toEqual([
+      {
+        cardId: "c1",
+        name: "Lightning Bolt",
+        copies: [
+          { entryId: 7, folderId: null },
+          { entryId: 9, folderId: 3 },
+        ],
+      },
+    ]);
+  });
+
+  /**
+   * The same fix seen through the menu, which is `copiesByTile`'s **other** consumer
+   * (`entryIdsOf` → `tileTarget`'s `entryIds`) and the one that writes without a dialog.
+   *
+   * **`Move to`, singular, is half the assertion.** `moveItem` counts *entries*: keyed by the
+   * card this foil tile would have carried two of them, so the row would have read `Move 2 cards
+   * to` and the press would have opened the copy picker instead of filing anything — which is
+   * why the dialog is asserted absent as well as the write asserted present.
+   */
+  it("files only the pressed tile's own finish from the card menu", async () => {
+    useAppStore.setState({ collectionView: "grid" });
+    collectionFolderList.mockResolvedValue([BINDER]);
+    collectionList.mockResolvedValue(page([BOLT, { ...BOLT, id: 8, finish: "nonfoil" }]));
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    const tiles = await screen.findAllByRole("button", { name: "Lightning Bolt" });
+    rightClick(tiles[0]);
+    await screen.findByRole("menu");
+
+    await user.click(screen.getByRole("menuitem", { name: /^Move to/ }));
+    await user.click(await screen.findByRole("menuitem", { name: "Trade binder" }));
+
+    await waitFor(() => expect(collectionSetFolder).toHaveBeenCalledWith(7, 3));
+    expect(collectionSetFolder).not.toHaveBeenCalledWith(8, 3);
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
   /**
@@ -2663,6 +3001,12 @@ describe("Flatten", () => {
    * **A tile stands for a printing and a filing is a row**, so a card the reader keeps in two
    * places has no single drawer to name — and naming the first of them would be the caption
    * claiming the other copies are somewhere they are not. It counts instead.
+   *
+   * **The fixture's second row became a foil on 2026-08-26 and the expectation did not move.**
+   * It was a nonfoil, which since the finish joined the wall's key is a *second tile* filed in
+   * one drawer each — so the case stopped being about a tile in two folders at all. Keeping the
+   * finish and moving the folder is what preserves the subject: the folder is the one grain term
+   * this caption is about, and it is deliberately not one of the wall's.
    */
   it("counts the drawers when one printing is filed in more than one", async () => {
     useAppStore.setState({ collectionView: "grid" });
@@ -2670,7 +3014,7 @@ describe("Flatten", () => {
     collectionList.mockResolvedValue(
       page([
         { ...BOLT, folderId: 3, folderName: "Trade binder" },
-        { ...BOLT, id: 8, finish: "nonfoil", folderId: 9, folderName: "Foils" },
+        { ...BOLT, id: 8, folderId: 9, folderName: "Foils" },
       ]),
     );
     const user = userEvent.setup();

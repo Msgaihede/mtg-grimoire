@@ -281,6 +281,56 @@ describe("which side of the desk the pane was opened from", () => {
 });
 
 /**
+ * The finish the pane was opened **as** — the third fact about an open card, and the same design
+ * as the two above it read once more: one opener writes it, and every other opener clears it in
+ * its own `set`.
+ */
+describe("the finish a card was opened as", () => {
+  /**
+   * The collection's tiles are one per printing **and finish**, so opening one has to say which.
+   * The pane draws the sheen from it — there is no foil photograph to fetch, so what a foil tile
+   * opens is the same picture under `FoilOverlay`.
+   */
+  it("carries the finish a collection tile was opened as", () => {
+    useAppStore.getState().openCardAsFinish("bolt-lea", "foil");
+    expect(useAppStore.getState().selectedCardId).toBe("bolt-lea");
+    expect(useAppStore.getState().paneFinish).toBe("foil");
+  });
+
+  /**
+   * Every other opener clears it in its own `set`, which is this store's whole design: "the pane
+   * came from one surface" is a fact about one write rather than an agreement between six call
+   * sites that all remembered.
+   */
+  it("forgets the finish when the card is opened from anywhere else", () => {
+    useAppStore.getState().openCardAsFinish("bolt-lea", "foil");
+    useAppStore.getState().setSelectedCardId("bolt-2ed");
+    expect(useAppStore.getState().paneFinish).toBeNull();
+
+    useAppStore.getState().openCardAsFinish("bolt-lea", "foil");
+    useAppStore.getState().openCardFromDeckSearch("bolt-2ed");
+    expect(useAppStore.getState().paneFinish).toBeNull();
+  });
+
+  /**
+   * `viewPrinting` leaves it alone: the reader is browsing printings **inside** the pane and the
+   * foil view is theirs to keep. `foilViewFinish` already answers `null` for a printing with no
+   * shiny finish, so a seed carried onto a nonfoil-only printing cannot draw a chip.
+   */
+  it("keeps the finish while browsing printings inside the pane", () => {
+    useAppStore.getState().openCardAsFinish("bolt-lea", "foil");
+    useAppStore.getState().viewPrinting("bolt-2ed");
+    expect(useAppStore.getState().paneFinish).toBe("foil");
+  });
+
+  /** A nonfoil tile names its finish too — that is not the same as no surface having named one. */
+  it("tells a nonfoil tile apart from no tile at all", () => {
+    useAppStore.getState().openCardAsFinish("bolt-lea", "nonfoil");
+    expect(useAppStore.getState().paneFinish).toBe("nonfoil");
+  });
+});
+
+/**
  * The channel between a card's menu and the printings modal.
  *
  * **One field, written by one action that touches nothing else** — which is the whole of what

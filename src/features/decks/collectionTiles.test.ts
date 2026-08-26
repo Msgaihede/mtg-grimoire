@@ -135,12 +135,17 @@ describe("tileName", () => {
 
 describe("foldCopies", () => {
   /**
-   * One tile per printing, with the copies of every row behind it summed — the fold itself.
+   * One tile per printing **and finish**, with the copies of every row behind it summed — the
+   * fold itself.
    *
-   * Three rows of one card, in three places and two finishes, is one piece of art. The badge over
-   * it counts all of them, because they are all copies the reader owns.
+   * Three rows of one card here, in three places: a loose nonfoil, a nonfoil in a drawer and a
+   * foil another deck is holding. The two nonfoils are one piece of art whatever drawer they are
+   * in; the foil is a different object at a different price, so it is a tile of its own.
+   *
+   * **This case asserted one tile until 2026-08-26**, when the finish joined the key — see
+   * "draws a foil and a nonfoil of one printing as two tiles" for the reasoning.
    */
-  it("folds the rows of one printing into a single tile", () => {
+  it("folds the rows of one printing in one finish into a single tile", () => {
     const rows = [
       row({ id: 1, quantity: 3 }),
       row({ id: 2, quantity: 1, folderId: 12, folderName: "Trade binder" }),
@@ -149,16 +154,21 @@ describe("foldCopies", () => {
 
     const tiles = foldCopies(rows, sourceFrom({ 3: other("Mono-Red Aggro") }));
 
-    expect(tiles).toHaveLength(1);
+    expect(tiles).toHaveLength(2);
     expect(tiles[0].id).toBe("bolt");
-    expect(tiles[0].copies).toBe(5);
+    expect(tiles[0].copies).toBe(4);
     expect(tiles[0].add?.id).toBe(1);
     expect(tiles[0].from).toEqual(DESK);
+    // The foil stands alone, and its own press names the deck the copy would come out of.
+    expect(tiles[1].copies).toBe(1);
+    expect(tiles[1].add?.id).toBe(3);
+    expect(tiles[1].from).toEqual(other("Mono-Red Aggro"));
   });
 
   /** Two printings are two tiles, and the backend's order is kept — so the sort the reader picked
-   *  in the filter row survives the fold. */
-  it("keeps one tile per printing, in the order the rows arrived", () => {
+   *  in the filter row survives the fold. The fixture is all one finish, which is what keeps this
+   *  case about the **order** alone now that the finish is part of the key. */
+  it("keeps the tiles in the order the rows arrived", () => {
     const rows = [
       row({ id: 1, cardId: "sol", name: "Sol Ring" }),
       row({ id: 2, cardId: "bolt" }),
@@ -168,21 +178,11 @@ describe("foldCopies", () => {
     expect(foldCopies(rows, sourceFrom({})).map((t) => t.id)).toEqual(["sol", "bolt"]);
   });
 
-  /**
-   * **The finish is marked only when the copies agree**, because the mark is a claim about the
-   * cardboard in the picture: a reader holding one foil and one nonfoil owns neither "a foil" nor
-   * "a nonfoil", and the honest wall for that is an unmarked one.
-   */
-  it("marks a finish only when every copy is in it", () => {
-    const one = foldCopies([row({ finish: "foil" })], sourceFrom({}));
-    expect(one[0].finish).toBe("foil");
-
-    const mixed = foldCopies(
-      [row({ id: 1, finish: "foil" }), row({ id: 2, finish: "nonfoil" })],
-      sourceFrom({}),
-    );
-    expect(mixed[0].finish).toBeNull();
-  });
+  /* **"marks a finish only when every copy is in it" stood here** and is deleted rather than
+     repaired. It asserted that a tile holding a foil and a nonfoil marked neither, which was the
+     honest answer while such a tile existed; the finish is part of the key now, so it does not.
+     What is left of it — a tile marks the finish its rows are in — is asserted by "draws a foil
+     and a nonfoil of one printing as two tiles" below, on both of the tiles that case produces. */
 
   /** A word this build cannot name marks nothing rather than marking the art with a sheen no
    *  stylesheet has — `finish` is TEXT with a CHECK, not an enum this side knows. */
@@ -220,5 +220,103 @@ describe("foldCopies", () => {
     });
     // It is still addable — the entry exists, it is simply not describable.
     expect(tiles[0].add).toBe(bare);
+  });
+
+  /**
+   * **A foil and a played nonfoil of one printing are two objects**: two prices, two pictures,
+   * sharing only a set and a number. The wall drew them as one tile and had to ask whether the
+   * entries agreed about their finish; splitting the key removes the question.
+   *
+   * The two tiles carry one `id` — the printing is what a press opens — and are told apart by
+   * `key`, which is what the ring, the arrow walk and the picked set are about.
+   */
+  it("draws a foil and a nonfoil of one printing as two tiles", () => {
+    const tiles = foldCopies(
+      [
+        row({ id: 1, cardId: "bolt", finish: "foil", quantity: 1, unitPrice: 9 }),
+        row({ id: 2, cardId: "bolt", finish: "nonfoil", quantity: 2, unitPrice: 1 }),
+      ],
+      sourceFrom({}),
+    );
+
+    expect(tiles).toHaveLength(2);
+    expect(tiles.map((t) => t.finish)).toEqual(["foil", "nonfoil"]);
+    expect(tiles.map((t) => t.unitPrice)).toEqual([9, 1]);
+    expect(tiles.map((t) => t.copies)).toEqual([1, 2]);
+    expect(tiles.map((t) => t.key)).toEqual(["bolt:foil", "bolt:nonfoil"]);
+    expect(tiles.map((t) => t.id)).toEqual(["bolt", "bolt"]);
+  });
+
+  /**
+   * Condition, folder and language do **not** split it. Those are one object at one price, and
+   * the table below is where a reader gets them apart — so a printing filed in two places is
+   * still one piece of art with both folders' copies counted behind it.
+   */
+  it("keeps two folders' worth of one finish as one tile", () => {
+    const tiles = foldCopies(
+      [
+        row({ id: 1, cardId: "bolt", finish: "nonfoil", folderId: null, quantity: 1 }),
+        row({
+          id: 2,
+          cardId: "bolt",
+          finish: "nonfoil",
+          folderId: 7,
+          folderName: "Trade binder",
+          quantity: 3,
+        }),
+      ],
+      sourceFrom({}),
+    );
+
+    expect(tiles).toHaveLength(1);
+    expect(tiles[0].copies).toBe(4);
+  });
+
+  /**
+   * Every tile is one finish, so the art can always be marked — **and the mark is true of every
+   * copy the tile counts**, which is the claim it actually makes.
+   *
+   * This is the case the deleted "marks a finish only when every copy is in it" used to guard from
+   * the other side, restated in the new grain: three rows and two tiles, each tile summing only
+   * its own finish. Under a fold keyed on the card alone it is one tile marked `nonfoil` — its
+   * first row's — counting all six copies, which is the mark claiming cardboard that is not there.
+   *
+   * **It is written over a tile with more than one row behind it on purpose.** "Two finishes are
+   * two tiles" is asserted above, and one row per tile makes containment true by arithmetic; this
+   * is the one case where a tile could hold a copy its own mark denies.
+   */
+  it("marks each tile with the finish of every copy behind it", () => {
+    const tiles = foldCopies(
+      [
+        row({ id: 1, finish: "nonfoil", quantity: 2 }),
+        row({ id: 2, finish: "foil", quantity: 1 }),
+        row({ id: 3, finish: "nonfoil", quantity: 3, folderId: 12, folderName: "Trade binder" }),
+      ],
+      sourceFrom({}),
+    );
+
+    expect(tiles.map((t) => [t.finish, t.copies])).toEqual([
+      ["nonfoil", 5],
+      ["foil", 1],
+    ]);
+  });
+
+  /**
+   * {@link pickCopy} now ranks **within one finish**, which is strictly more correct: a foil
+   * tile's "add" can no longer reach for a nonfoil copy the reader did not point at.
+   *
+   * The nonfoil is the **older** entry here, which is the third of `pickCopy`'s keys — so under
+   * the old fold, where both copies stood behind one tile, that tile's press would have handed
+   * over the nonfoil row. That is what makes this a case rather than a restatement.
+   */
+  it("never offers a nonfoil copy to add from a foil tile", () => {
+    const tiles = foldCopies(
+      [row({ id: 2, finish: "foil" }), row({ id: 1, finish: "nonfoil" })],
+      sourceFrom({}),
+    );
+
+    const foil = tiles.find((t) => t.finish === "foil")!;
+    expect(foil.add?.finish).toBe("foil");
+    expect(foil.add?.id).toBe(2);
   });
 });

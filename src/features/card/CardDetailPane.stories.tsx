@@ -653,8 +653,11 @@ export const MeldedCard: Story = {
  * There is no foil photograph to fetch. Scryfall publishes one image per printing and it is the
  * plain one, so what this turns on is `FoilOverlay` — the app's own sheen and chip, laid over
  * the same art, the same marking the collection wall and the deck rows wear. It is therefore a
- * **view** and says nothing about which finish anyone owns: that question belongs to a
- * collection entry's own `finish`, and is answered nowhere on this screen.
+ * **view**, and it says nothing about which finish anyone owns **unless a surface that knows
+ * named one**: a deck row plays a specific object and a collection tile *is* one, and both seed
+ * it through the store's `paneFinish`. Opened from a search wall, from Tags or from a printings
+ * row there is no such fact, and it is what it has always been — a way to see what the shiny one
+ * looks like.
  *
  * A printing is offered the view only when it exists in a plain finish **and** a shiny one,
  * because those are the two ends the control moves between. A **foil-only** printing already

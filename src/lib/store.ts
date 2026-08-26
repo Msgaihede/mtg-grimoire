@@ -7,6 +7,7 @@ import {
   type ZoomSection,
 } from "./cardZoom";
 import type { Condition } from "./conditions";
+import type { Finish } from "./finish";
 import { applySelect, EMPTY_SELECTION, type Selection, type SelectModifiers } from "./multiSelect";
 import { defaultFields } from "@/features/transfer/fields";
 import type { TransferFieldId, TransferSurface } from "@/features/transfer/fields";
@@ -517,8 +518,44 @@ interface AppState {
    * it" is structural rather than a rule six call sites have to remember. The two openers
    * exclude each other — this clears the deck context and that one clears this — so the pane can
    * never be told it came from both sides at once.
+   *
+   * **The finish is optional and travels with the press** (2026-08-26). The panel's Collection tab
+   * draws one tile per printing *and* finish — a foil and a played nonfoil are two objects at two
+   * prices sharing only a set and a number — so a press there is about one of them and the pane
+   * has to be told which, exactly as {@link openCardAsFinish} tells it for the collection page's
+   * own wall. **Widened rather than joined by a fifth opener**, so {@link paneFinish} keeps the
+   * invariant every field here has: every opener writes it in its own `set`, and "the pane came
+   * from this surface, as this finish" stays a fact about one write rather than an agreement
+   * between call sites. Omitted, it means what it has always meant — no surface named a finish —
+   * which is the `All cards` tab.
+   *
+   * **It can no longer be handed to `CardGrid`'s `onSelect` as a bare reference, and the compiler
+   * says so.** That slot calls `(cardId, card)`, so a bare reference would land a whole card
+   * object in `finish`; both tabs pass an arrow that names what they mean instead.
    */
-  openCardFromDeckSearch: (cardId: string) => void;
+  openCardFromDeckSearch: (cardId: string, finish?: Finish | null) => void;
+  /**
+   * The finish the pane was opened **as**, or `null` when no surface named one.
+   *
+   * The collection's wall draws one tile per printing *and finish* — a foil and a played nonfoil
+   * are two objects at two prices that share only a set and a number — so a press there is about
+   * one of them and the pane has to be told which. It seeds the foil view: there is no foil
+   * photograph to fetch, and what the view turns on is `FoilOverlay`, this app's own sheen.
+   *
+   * **`Finish | null`, not `DeckFinish`.** A tile can name `nonfoil`, and `null` has to go on
+   * meaning "no surface named a finish" — `DeckFinish` folds those two together, which is right
+   * for a deck row (where null means the reader has not said) and wrong here.
+   */
+  paneFinish: Finish | null;
+  /**
+   * Open a card **as one of its finishes** — the collection wall's opener, and the only write
+   * that sets {@link paneFinish}.
+   *
+   * One action rather than a setter beside `setSelectedCardId`, which is {@link openCardFromDeck}'s
+   * design read a third time: every other opener clears this in the same `set`, so "the finish
+   * came from a tile that names one" is structural rather than a rule six call sites remember.
+   */
+  openCardAsFinish: (cardId: string, finish: Finish | null) => void;
   /**
    * Show another printing of the card the pane is already on — navigation *inside* the pane,
    * from a click on a printings row.
@@ -527,7 +564,9 @@ interface AppState {
    * "opened from somewhere that is not a deck row" and clears the context;
    * `openCardFromDeck` means "opened as a deck row" and sets it. This means neither — the
    * reader is browsing printings of whatever is open, so the context (and with it the pane's
-   * "Use this printing" offers) must survive the click.
+   * "Use this printing" offers) must survive the click. The finish the pane was opened as
+   * survives it for the same reason — the foil view is the reader's, and a seed carried onto a
+   * printing with no shiny finish draws nothing, because `foilViewFinish` answers `null` there.
    */
   viewPrinting: (cardId: string) => void;
   /**
@@ -788,6 +827,7 @@ export const useAppStore = create<AppState>((set) => ({
       cardSelection: null,
       paneDeckContext: null,
       paneFromDeckSearch: false,
+      paneFinish: null,
       openDeckId: null,
       returnToDeckId: null,
     }),
@@ -941,8 +981,12 @@ export const useAppStore = create<AppState>((set) => ({
   // of them opens something that is *not* the deck row the context named. Clearing it here is
   // what makes that true by construction instead of by six call sites remembering to say so;
   // the one surface that does mean it says so through `openCardFromDeck`.
+  //
+  // **And which finish the last card was opened as**, for the identical reason one field along:
+  // a search tile, a wishlist row and the pane's own close each open something no surface has
+  // named a finish for, and `openCardAsFinish` is the one that does.
   setSelectedCardId: (selectedCardId) =>
-    set({ selectedCardId, paneDeckContext: null, paneFromDeckSearch: false }),
+    set({ selectedCardId, paneDeckContext: null, paneFromDeckSearch: false, paneFinish: null }),
   cardSelection: null,
   // A press in a scope the held set does not name starts a new set rather than adding to one the
   // reader made on another surface — see the field's doc for why that is the whole scoping rule.
@@ -960,11 +1004,17 @@ export const useAppStore = create<AppState>((set) => ({
       // The two openers exclude each other in one `set` apiece, which is what makes "the pane
       // came from one side" a fact about one write rather than an agreement between two.
       paneFromDeckSearch: false,
+      // The row carries its own finish and the pane reads it off the context, so a tile's answer
+      // left standing here would be a second opinion about one card from a surface behind it.
+      paneFinish: null,
     }),
   paneFromDeckSearch: false,
-  openCardFromDeckSearch: (selectedCardId) =>
-    set({ selectedCardId, paneDeckContext: null, paneFromDeckSearch: true }),
-  // Deliberately not touching `paneDeckContext` — see the interface doc.
+  openCardFromDeckSearch: (selectedCardId, paneFinish = null) =>
+    set({ selectedCardId, paneDeckContext: null, paneFromDeckSearch: true, paneFinish }),
+  paneFinish: null,
+  openCardAsFinish: (selectedCardId, paneFinish) =>
+    set({ selectedCardId, paneFinish, paneDeckContext: null, paneFromDeckSearch: false }),
+  // Deliberately not touching `paneDeckContext` or `paneFinish` — see the interface doc.
   viewPrinting: (selectedCardId) => set({ selectedCardId }),
   // Decks opens on the gallery: a deck is something the reader picks, and reopening the last
   // one would be a decision made for them by the previous session.

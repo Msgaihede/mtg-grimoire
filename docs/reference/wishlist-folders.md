@@ -251,6 +251,102 @@ gets back *out*: without them a drag could only ever push wishes deeper. Both wr
 and the panel stays complete on its own, because a drag-only affordance is half a feature and it is
 the half a keyboard cannot use.
 
+## What a wish costs, and which printing it is drawn as
+
+Two changes, both 2026-08-26, both in `src-tauri/src/wishlist.rs`, and the second one dragged
+`wishlist_folders.rs` with it. The design is
+[2026-08-26-card-chin-and-exact-prices-design.md](../superpowers/specs/2026-08-26-card-chin-and-exact-prices-design.md).
+
+**What was measured first**, against the dev database at `src-tauri/target/debug/data/mtg.db` on
+2026-08-26 — 116 843 live `cards` rows and 88 wishes, with `marketplace_prices` empty because no
+price feed had ever been refreshed, so every figure here is TCGplayer's (the default, and this
+database's setting):
+
+| Question | Answer |
+| --- | --- |
+| Wishes with no price | **1 of 88** |
+| Which one | **Wakka, Devoted Guardian** (FIC #477): `finishes: ["foil"]`, `usd: null`, `usd_foil: 31.18` |
+| Wishes naming a finish | **0 of 88** — every one is `preferred_finish IS NULL` |
+| Any-printing wishes | **0 of 88** — every one is pinned |
+| Printings priced only in foil or etched | **12 849 of 116 843** (11.0 %) |
+
+The first row is the whole of the first change: **the price for Wakka existed all along and the
+query asked for the wrong finish.** A wishlist drawing an em dash beside a search wall quoting that
+same printing at $31.18 is not missing data.
+
+### A wish that names no finish is priced at the chain, not at nonfoil
+
+`WISH_FINISH` was `coalesce(w.preferred_finish, 'nonfoil')`, and the `coalesce` was the bug: "no
+preference" is a wish for the *card*, not a wish for a plain copy, and 12 849 printings have no
+nonfoil price at any marketplace to give it. It is `WISH_PREFERRED_FINISH` now — the bare column,
+handed over **unwrapped**, so the expression below can tell "the reader has not said" from "the
+reader said nonfoil", which on a foil-only printing are two different answers.
+
+**The rule it is handed to is not a new one.** `sorting::row_price_expr(market, finish_col)` is two
+arms told apart by whether the row has said:
+
+- **NULL** — `printing_price_by_finish_expr`'s `nonfoil → foil → etched` chain, quoted rather than
+  respelled, so each marketplace's own holes travel with it.
+- **named** — `price_expr` at that finish and **no fallback of any kind**. The reader has said which
+  object is in the sleeve; an em dash means "this marketplace does not quote this printing in this
+  finish", never "look somewhere else".
+
+That is the shape the **deck** adopted at schema v18 and the wishlist never did. Rather than a
+third copy of it, `deck_card_price_expr` was generalized off its `dc.` alias — it is
+`row_price_expr(market, "dc.finish")` now, the wishlist passes `w.preferred_finish`, and one
+function serves both. Cardmarket's missing `eur_etched` survives into both arms for free, because
+that hole lives in `price_expr` rather than in either wrapper: an etched row is unpriced in euros
+and priced at every marketplace that does quote it.
+
+**No sort template moved.** `WISHLIST_PRICE_SORTS` already orders by the `unit_price` *output
+alias*, so the money sorts follow the cell by construction.
+
+### An any-printing wish is drawn as, and priced at, the cheapest printing
+
+The join that picks the printing a wish is *about* used to order by `released_at DESC, id ASC` —
+the newest — and orders by the price first now:
+
+```sql
+LEFT JOIN cards c
+  ON c.id = coalesce(w.card_id,
+      (SELECT c.id FROM cards c
+        WHERE c.oracle_id = w.oracle_id
+        ORDER BY ({price}) ASC NULLS LAST, c.released_at DESC, c.id ASC
+        LIMIT 1))
+```
+
+`{price}` is the very expression from the section above, **built once and used twice** — to choose
+the printing and to price whichever printing that turns out to be. One expression rather than two,
+so the picture and the figure under it can never come from two different rules.
+
+**The picture moves with the price, and that is the feature rather than a side effect.**
+`art_card_id` comes off this same join, so the tile's art, its rarity gem and its chin's set and
+number all move together. What does *not* move is the caption: it still reads `Any printing`,
+because `printingOf` is unchanged and the wish is for the **card** — a caption reading `DSK · 123`
+under that art would say the reader had asked for that piece of cardboard. `elsewhere` does not
+move either; it counts wishes by `oracle_id` and never touches this join at all.
+
+**`ASC NULLS LAST` with the old clause as the tiebreak is what makes it safe for the wishes it
+cannot answer.** An oracle card no marketplace quotes keeps the newest printing it has always had,
+so a wish never loses its art or its set code to a hole in a pricelist — and the change is a
+straight no-op for the unpriced.
+
+**The inner alias is `c` and it shadows the outer one deliberately.** `sorting::price_expr`
+hard-codes `c` for the printing being priced, which is what keeps the join key and the price from
+being spelled apart across six call sites, so the candidate printing inside the subquery has to
+wear that name. The `w.` references stay correlated to the outer wish, which is the whole reason
+this is a subquery rather than a join.
+
+**`coalesce` short-circuits, so the subquery runs only for an *unpinned* wish** — at most `MAX_LIMIT`
+rows a page, and 0 of 88 wishes in this database. The cost is bounded by how many wishes name no
+printing, not by the size of the corpus. The measured figure belongs in
+[data-and-sync.md](data-and-sync.md) beside the other search-performance numbers and has not been
+taken yet; it has to come off the shipped window.
+
+**`folder_summary` had to take the same join, and that is not tidiness.** A folder tile that
+totalled the *newest* printing over a list quoting the *cheapest* would be a subtotal that does not
+add up to the rows under it, with nothing on screen saying which of the two figures to believe.
+
 ## `folder_summary` answers direct counts, and no row at all for an empty folder
 
 `wishlist_folder_summary(marketplace)` returns `{ folderId, wishes, missing, cost, unpriced }` per
@@ -273,9 +369,11 @@ and draws `0 wishes`, which is correct rather than an error state — an empty d
 next wish goes.
 
 Every figure is `wishlist.rs`'s own arithmetic rather than a second spelling of it: `missing` is
-`max(0, quantity - OWNED_SQL)`, the unit price is `sorting::price_expr` over `WISH_FINISH`, and both
-are exactly what `list_wishes` puts in its own columns — so a folder's subtotal and the page
-header's total are one piece of arithmetic and cannot disagree. Both expressions are evaluated once
+`max(0, quantity - OWNED_SQL)`, the unit price is `sorting::row_price_expr` over
+`WISH_PREFERRED_FINISH`, and the `LEFT JOIN` that picks the printing is `list_wishes`' join
+verbatim in shape — all three exactly what `list_wishes` puts in its own columns, so a folder's
+subtotal and the page header's total are one piece of arithmetic and cannot disagree. Both
+expressions are evaluated once
 per row in an inner `SELECT` and aggregated by name in the outer one, because `OWNED_SQL` is a
 correlated subquery and the price can be another: spelling either three times in the aggregate list
 would run it three times per row for one answer.
@@ -354,7 +452,8 @@ dx 0.0 / dy 0.0 from its trigger on keyboard activation, which is what `menuClic
 | --- | --- |
 | `src-tauri/src/schema.rs` | The v23 step, `WISHLIST_GRAIN`, and the whole-schema `ON DELETE` inventory |
 | `src-tauri/src/wishlist_folders.rs` | The five folder commands, `set_wish_folder`, `folder_summary` |
-| `src-tauri/src/wishlist.rs` | `set_wish_printing`, `elsewhere`, `OWNED_SQL`, `WISH_FINISH` |
+| `src-tauri/src/wishlist.rs` | `set_wish_printing`, `elsewhere`, `OWNED_SQL`, `WISH_PREFERRED_FINISH`, the cheapest-printing join |
+| `src-tauri/src/sorting.rs` | `row_price_expr`'s two arms, and `deck_card_price_expr` as one caller of it |
 | `src/lib/folderTree.ts` | `buildFolderTree` and friends, shared with the deck gallery |
 | `src/features/wishlist/wishDrag.ts` | The payload, the tile that offers it, the target that takes it |
 | `src/features/wishlist/WishFolderCard.tsx` | The tile, and its stories beside it |

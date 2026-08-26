@@ -15,6 +15,8 @@ import type {
   TagProgressEvent,
   TagStatus,
 } from "@/lib/ipc";
+import { MARKETPLACES } from "@/lib/marketplace";
+import { pricesAsOf } from "@/lib/prices";
 import { startDrag } from "@/test-drag";
 
 const searchCards = vi.hoisted(() => vi.fn());
@@ -799,6 +801,45 @@ describe("the results wall", () => {
     expect(within(tile).getByText(`, ${GAME_CHANGER_LABEL}`)).toHaveClass("sr-only");
   });
 
+  /**
+   * **The chin's money slot, from the same helper the table beside it uses.**
+   *
+   * `priceRange` — the spread across the printings a row stands for — so this wall and the Tags
+   * table are two drawings of one search that cannot quote different money.
+   *
+   * Uncollapsed (which is this page's default and the thing it is built on), nearly every row is
+   * one printing and both ends carry the same figure, which `priceRange` collapses to a single
+   * price. So the fixture widens them: on an equal-ended row a chin built from `card.priceLow`
+   * alone is indistinguishable from a correct one, and this is the only shape that tells them
+   * apart. The reader can press All printings back off, at which point every row here is a
+   * genuine span.
+   */
+  it("quotes the spread across the printings a tile stands for", async () => {
+    searchCards.mockResolvedValue(page([{ ...BOLT, priceLow: 0.45, priceHigh: 88 }]));
+    wrap(<TagsPage />);
+    const art = await screen.findByRole("button", { name: "Lightning Bolt" });
+
+    const tile = art.parentElement?.parentElement as HTMLElement;
+    expect(within(tile).getByText("$0.45–$88.00")).toBeInTheDocument();
+  });
+
+  /**
+   * **Spec §5: a price is never shown without saying how old it is** — said once under the wall,
+   * now that its chins quote money.
+   *
+   * Through `pricesAsOf` rather than the sentence typed out here: spelling it would pin a copy of
+   * the wording rather than the function, so a reworded sentence would fail here while a wall
+   * drawing a stale one passed. The count is what makes it a claim about *this* wall — the table
+   * says the same thing in its Price column header, so a line drawn in both views would show up
+   * as two.
+   */
+  it("says how old the wall's prices are, once, under the grid", async () => {
+    wrap(<TagsPage />);
+    await screen.findByRole("button", { name: "Lightning Bolt" });
+
+    expect(screen.getAllByText(pricesAsOf(MARKETPLACES.tcgplayer))).toHaveLength(1);
+  });
+
   /** The sheen the art cannot show: a printing that exists in one finish, and not the assumed
    *  one. `soleFinish`'s job, wired through the wall's `finish` callback. */
   it("marks a foil-only printing", async () => {
@@ -807,10 +848,16 @@ describe("the results wall", () => {
     const art = await screen.findByRole("button", { name: "Lightning Bolt" });
 
     const tile = art.parentElement?.parentElement as HTMLElement;
-    // `hidden: true`, because the chip is inside the `aria-hidden` overlay — and the caption's
-    // `sr-only` word beside it is what a screen reader actually hears.
-    expect(within(tile).getByRole("img", { name: "Foil", hidden: true })).toBeInTheDocument();
-    expect(within(tile).getByText(", Foil")).toHaveClass("sr-only");
+    // **The glyph twice, the word once**, and the two halves are asserted apart because they are
+    // reached differently. The chip over the picture is inside the `aria-hidden` overlay, so it
+    // takes `hidden: true` and is scoped to the art button it lives in — it is decoration.
+    expect(within(art).getByRole("img", { name: "Foil", hidden: true })).toBeInTheDocument();
+    // And `CardChin`'s own `FinishMark` in the foot, which is a sibling of that button and is
+    // therefore **in** the accessibility tree — no `hidden`, and exactly one of it. This is what
+    // a screen reader hears, and it is why the tile no longer appends an `sr-only` `, Foil` of
+    // its own: the mark's `aria-label` is that same word, so the span said it a second time.
+    expect(within(tile).getAllByRole("img", { name: "Foil" })).toHaveLength(1);
+    expect(within(tile).queryByText(", Foil")).toBeNull();
   });
 
   it("adds a copy to the collection from a tile, without opening the card", async () => {

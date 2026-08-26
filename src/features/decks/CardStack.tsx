@@ -1,12 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { motion, useReducedMotion, type Transition } from "motion/react";
+import { CardChin } from "@/components/CardChin";
 import { CardImage } from "@/components/CardImage";
 import { FoilOverlay } from "@/components/CardArt";
-import { FinishMark } from "@/components/FinishMark";
 import { ManaText } from "@/components/ManaText";
-import { RarityGem } from "@/components/RarityGem";
 import { useTooltip } from "@/components/tooltip/useTooltip";
-import { cardScaleVars, DEFAULT_ZOOM, scaled } from "@/lib/cardZoom";
+import {
+  cardScaleVars,
+  CHIN_HEIGHT,
+  CHIN_RISE,
+  chinHeight,
+  DEFAULT_ZOOM,
+  scaled,
+} from "@/lib/cardZoom";
 import { playedFinish } from "@/lib/finish";
 import { finishTreatments } from "@/lib/treatment";
 import { FOCUS, FOCUS_INSET } from "@/lib/focus";
@@ -130,8 +136,13 @@ export const STACK_CARD_BORDER = 1;
 /** The image's own height at {@link STACK_CARD_WIDTH}, which is the card face and nothing else. */
 export const STACK_IMAGE_HEIGHT = Math.round(STACK_CARD_WIDTH * CARD_ASPECT);
 /**
- * The data line's own height at 100% zoom — the card's foot, standing under the face rather than
- * over it.
+ * The chin's height at 100% zoom — **`lib/cardZoom.ts`'s `CHIN_HEIGHT`, kept under this name**
+ * because every sum below and every geometry assertion in this file's tests is written in terms
+ * of it.
+ *
+ * It moved out because three surfaces drew a foot and each held its own number. It is still 28,
+ * it is still what {@link STACK_CARD_HEIGHT} is built from, and there is now one place to change
+ * it.
  *
  * **A proportion of the card since the type in it learnt to scale**, where it used to be a floor
  * under the zoom. The old reasoning was {@link stackAdvance}'s and was correct for as long as it
@@ -141,20 +152,17 @@ export const STACK_IMAGE_HEIGHT = Math.round(STACK_CARD_WIDTH * CARD_ASPECT);
  * together and a floored bar would be 28px of empty felt under a 105px card. See
  * {@link stackDataHeight}.
  */
-export const STACK_DATA_HEIGHT = 28;
+export const STACK_DATA_HEIGHT = CHIN_HEIGHT;
 /**
- * How far the data line rides **up** over the face's bottom corners.
+ * How far the chin rides **up** over the face's bottom corners — `lib/cardZoom.ts`'s `CHIN_RISE`.
+ * Does not zoom; see there.
  *
  * It is what joins the two boxes into one card: the face clips its own 7px corners, and a bar
  * butted flush under them would show two hairlines of background through the gap. Four pixels
  * is the radius less its own border, so the bar's square top corners are covered by the face
  * exactly where the face is still solid.
- *
- * **It does not zoom**, because the radius it is derived from does not: the corner is a Tailwind
- * `rounded-*` class, 7px at every zoom, so the overlap that hides the seam is the same 4px at
- * every zoom too.
  */
-export const STACK_DATA_RISE = 4;
+export const STACK_DATA_RISE = CHIN_RISE;
 export const STACK_CARD_HEIGHT =
   STACK_IMAGE_HEIGHT + 2 * STACK_CARD_BORDER + (STACK_DATA_HEIGHT - STACK_DATA_RISE);
 /** How far one card advances the stack at 100% zoom — its printed title bar and a sliver of art.
@@ -203,7 +211,7 @@ export function stackImageHeight(zoom: number): number {
  * floor's own failure mode has swapped ends: 28px of empty felt under a 105px card.
  */
 export function stackDataHeight(zoom: number): number {
-  return scaled(STACK_DATA_HEIGHT, zoom);
+  return chinHeight(zoom);
 }
 
 /**
@@ -1133,65 +1141,52 @@ function StackedCard({
           `FOCUS_INSET` traces and what the reader thinks they are pressing; and everything here
           is a fact rather than a mark, so unlike the overlays above it this text is genuinely
           announced instead of being swallowed by the button's `aria-label`. The price and the
-          printing had no reader at all while they were inside it. */}
-      <span
-        style={{ height: stackDataHeight(zoom), marginTop: -STACK_DATA_RISE }}
-        className={cn(
-          "relative -mx-px box-border flex items-center rounded-b-[7px] border-x",
-          // The gutter, the right padding and the type are all sizes on a card at 100% zoom, and
-          // move with `stackDataHeight` above — the bar's height and its contents are one
-          // proportion now, which is what let that function drop its floor.
-          "gap-[calc(0.375rem*var(--mark-scale,1))] pr-[calc(0.375rem*var(--mark-scale,1))]",
-          "bg-surface font-mono text-[calc(0.625rem*var(--mark-scale,1))] text-dim",
-          ruleBreakText !== null ? "border-destructive" : "border-border",
-        )}
-      >
-        <RarityGem rarity={card.rarity} className="ml-[calc(0.375rem*var(--mark-scale,1))]" />
-        {/* The code is what fits; the set's name is one hover away, because `PF26` is not a
-            word anybody knows. `setName` comes from `cards` and is `null` for an orphan — then
-            the code stands on its own rather than being annotated with a guess.
+          printing had no reader at all while they were inside it.
 
-            No `whenClipped`: the span shows the set *code*, the tip says the set *name* — a
-            different string — so gating the panel on the code's own clip would gate it on
-            something the tip is not about (`CardDetailPane.tsx`'s printings row states the
-            rule this reverses). */}
-        <span
-          {...tip(
-            card.setName === null ? null : `${card.setName} · #${card.collectorNumber}`,
-          )}
-          className="min-w-0 flex-1 truncate"
-        >
-          {card.setCode.toUpperCase()} · {card.collectorNumber}
-        </span>
-        {/* `Sparkles` for foil, `Gem` for etched, `Aperture` for a copy with a name of its own
-            — never one glyph with a modifier, because etched is a third thing and not a kind of
-            foil. A printing sold in both finishes is `null` here and draws nothing: the mark
-            states what the object *is*, and 61 % of the corpus has a foil version. A **trait**
-            outlives that rule, because serialized cardboard is serialized either way. */}
-        {(finish !== null || treatments.length > 0) && (
-          <FinishMark finish={finish ?? "nonfoil"} treatments={treatments} />
-        )}
-        <span className="shrink-0 tabular-nums text-text">
-          {formatPrice(card.unitPrice, currency)}
-        </span>
-        {/* Drawn only where it says something: a fully covered card prints nothing at all,
-            because sixty ticks are sixty things to read past on the way to the three that
-            matter. `aria-hidden` even out here, because the button beside it already says the
-            shortage in words and a screen reader should not hear "1 slash 2" as well. */}
-        {short && (
-          <span
-            aria-hidden="true"
-            // Redundant with `deckCardName`'s own "you own N of M" clause — the button beside
-            // this figure already says the shortage in words.
-            {...tip(`You own ${card.ownedQuantity} of the ${card.quantity} this deck wants`, {
-              describes: false,
-            })}
-            className="shrink-0 tabular-nums text-destructive"
-          >
-            {card.ownedQuantity}/{card.quantity}
-          </span>
-        )}
-      </span>
+          **The markup itself lives in `components/CardChin.tsx` now** — this foot *is* the chin,
+          and it is the one the other five surfaces were rewired onto. */}
+      <CardChin
+        zoom={zoom}
+        rarity={card.rarity}
+        setCode={card.setCode}
+        collectorNumber={card.collectorNumber}
+        // The code is what fits; the set's name is one hover away. `setName` comes from `cards`
+        // and is `null` for an orphan — then the code stands on its own rather than being
+        // annotated with a guess.
+        printingTitle={card.setName === null ? null : `${card.setName} · #${card.collectorNumber}`}
+        finish={finish}
+        treatments={treatments}
+        money={formatPrice(card.unitPrice, currency)}
+        // The card's own edge, and the two must move together — see `CardChin`'s `tone`.
+        tone={ruleBreakText !== null ? "destructive" : "default"}
+        // This surface's, and the reason the prop has no default: the card is `rounded-lg border`
+        // with the face inset at `rounded-[7px]`, so the chin draws sides only and rides onto the
+        // card's own border rather than supplying a bottom edge of its own.
+        seam="card"
+        // **The shortage, and it is drawn only where it says something**: a fully covered card
+        // prints nothing at all, because sixty ticks are sixty things to read past on the way to
+        // the three that matter. That is the whole reason this is a conditional rather than a
+        // figure that is always there in one of two colours, and it is the deck's own fact — the
+        // one slot no other surface's chin fills.
+        //
+        // `aria-hidden` even out here, outside the button: the button beside it already says the
+        // shortage in words, and a screen reader should not hear "1 slash 2" as well.
+        extra={
+          short ? (
+            <span
+              aria-hidden="true"
+              // Redundant with `deckCardName`'s own "you own N of M" clause — the button beside
+              // this figure already says the shortage in words.
+              {...tip(`You own ${card.ownedQuantity} of the ${card.quantity} this deck wants`, {
+                describes: false,
+              })}
+              className="shrink-0 tabular-nums text-destructive"
+            >
+              {card.ownedQuantity}/{card.quantity}
+            </span>
+          ) : undefined
+        }
+      />
 
       {/* **Over the card, never in it.** An absolutely positioned column takes no height, so a
           card is still {@link STACK_CARD_HEIGHT} and `stackHeight` is still a function of the

@@ -1290,12 +1290,16 @@ describe("grouping the printings list", () => {
 });
 
 /**
- * **What this printing looks like shiny** — a view, and nothing more.
+ * **What this printing looks like shiny.**
  *
  * There is no foil photograph to fetch: Scryfall publishes one image per printing and it is the
  * plain one, so what the toggle turns on is this app's own overlay. It is offered because a
- * reader choosing between forty printings wants to see it, and it says nothing whatever about
- * which finish they own — that question belongs to a collection entry's own `finish`.
+ * reader choosing between forty printings wants to see it.
+ *
+ * It says nothing about which finish the reader owns **unless a surface that knows named one** —
+ * a deck row plays a specific object and a collection tile *is* one, and both seed it through the
+ * store's `paneFinish`, which the seeding tests below drive. Opened from a search wall, from Tags
+ * or from a printings row there is no such fact, and it is the view it has always been.
  */
 describe("the foil view", () => {
   it("offers a printing sold in both finishes as the shiny one, and says which it is showing", async () => {
@@ -1407,6 +1411,40 @@ describe("the foil view", () => {
     expect(await screen.findByRole("button", { name: "Set as regular" })).toHaveAttribute(
       "aria-pressed",
       "true",
+    );
+  });
+
+  /**
+   * The same thing said by the other surface that knows: the collection's wall draws one tile per
+   * printing **and finish**, so a press on the foil one is about the foil and the pane opens
+   * showing it. It stays a *view* here — there is no deck row to write to — so the label is
+   * `View as`, and `openCardAsFinish` is the whole of how the fact travelled.
+   */
+  it("opens showing the finish a collection tile was opened as", async () => {
+    cardDetail.mockResolvedValue(card({ finishes: '["nonfoil","foil"]' }));
+    cardPrintings.mockResolvedValue(page(printings));
+    useAppStore.getState().openCardAsFinish("p1", "foil");
+
+    wrap("p1");
+
+    expect(await screen.findByRole("button", { name: "View as nonfoil" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  /** A nonfoil tile names its finish too, and the pane opens on the plain photograph — which is
+   *  what "no surface named one" already looked like, and deliberately so. */
+  it("opens plain for a nonfoil tile", async () => {
+    cardDetail.mockResolvedValue(card({ finishes: '["nonfoil","foil"]' }));
+    cardPrintings.mockResolvedValue(page(printings));
+    useAppStore.getState().openCardAsFinish("p1", "nonfoil");
+
+    wrap("p1");
+
+    expect(await screen.findByRole("button", { name: "View as foil" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
     );
   });
 

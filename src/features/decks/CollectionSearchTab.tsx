@@ -14,7 +14,9 @@ import { FINISH_LABEL, type Finish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
 import { ipcError, type CollectionRow, type DeckCategory } from "@/lib/ipc";
 import { statusLine } from "@/lib/motion";
+import { formatPrice } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
+import { tileKeyOf } from "@/lib/tileKey";
 import { cn } from "@/lib/utils";
 import { AUTO_CATEGORY, autoCategoryFor } from "./autoCategory";
 import { foldCopies, type CopyTile } from "./collectionTiles";
@@ -39,8 +41,9 @@ const TILE_BASE = 150;
  *   same list is a control that reads as broken.
  * - **No `printings`** — that switch asks whether to fold a card's printings together, and these
  *   *are* the reader's printings. Folding them would hide which piece of cardboard is being moved.
- *   (The wall folds by *finish* through {@link foldCopies}, which is a different question and one
- *   the reader cannot get wrong: a tile's press picks the copy.)
+ *   ({@link foldCopies} folds a printing's *conditions and folders* together, which is a different
+ *   question and one the reader cannot get wrong: a tile's press picks the copy. The **finish** is
+ *   not folded — a foil and a played nonfoil are two objects at two prices, and two tiles.)
  * - **`decks` in their place**, which is the one cell no other surface has and the whole of what
  *   this tab is for. See `FilterBar`'s own note on it.
  *
@@ -186,10 +189,16 @@ export function landingCategory(
  *
  * So the wall is `CardGrid` — the same component, the same zoom section, the same tile — and the
  * grain question is answered where it can be answered without a picture: {@link foldCopies} folds
- * the copies of a printing into one tile and **{@link pickCopy} chooses which of them a press
- * moves**, desk before deck, real card before proxy, oldest entry first. What the reader loses is
- * picking between two copies they hold; what they keep is the guarantee that mattered, which is
- * that a copy another deck is holding is never taken silently.
+ * the copies of a printing **in one finish** into one tile and **{@link pickCopy} chooses which of
+ * them a press moves**, desk before deck, real card before proxy, oldest entry first. What the
+ * reader loses is picking between two copies they hold; what they keep is the guarantee that
+ * mattered, which is that a copy another deck is holding is never taken silently.
+ *
+ * **The finish is not folded away, since 2026-08-26**: a foil and a played nonfoil of one printing
+ * are two objects at two prices sharing only a set and a number, so they are two tiles — and the
+ * chin under each can then quote its own money. The collection page's wall splits on the same
+ * pair; two drawings of one collection that disagreed about what a tile *is* would be exactly the
+ * drift the shared `CardGrid` exists to remove.
  *
  * ## Why it draws `FilterBar` (2026-08-25)
  *
@@ -237,7 +246,7 @@ export function CollectionSearchTab({
 }) {
   const tip = useTooltip();
   const search = useCollectionSearch({ deckId, defaultFormat });
-  const { query, rows, move, sourceOf } = search;
+  const { query, rows, move, sourceOf, marketplace } = search;
 
   /**
    * Read here rather than handed down: the root's own `selectedCardId` is for the caret effect,
@@ -245,11 +254,23 @@ export function CollectionSearchTab({
    */
   const selectedCardId = useAppStore((s) => s.selectedCardId);
   /**
+   * The finish the pane was opened as — the other half of which **tile** is the open one.
+   *
+   * A tile here is a printing *and* a finish, so the card id alone names two of them and the ring
+   * would be on both. Read beside `selectedCardId` and joined with it by {@link tileKeyOf}.
+   */
+  const paneFinish = useAppStore((s) => s.paneFinish);
+  /**
    * **`openCardFromDeckSearch`, not `setSelectedCardId`** — the one write in the app that says a
    * card was opened from *this* column, so the editor draws the card pane over the **deck**
    * attached to this column's left edge rather than over the search itself (issue #183). The
    * card-search tab beside this one has always done it; a wall that covered its own results when
    * you pressed a tile would be the same failure on the other tab.
+   *
+   * **It carries the finish since 2026-08-26**, which is why it is that opener widened rather than
+   * `openCardAsFinish` borrowed: the second sets `paneFromDeckSearch: false` and would draw the
+   * pane over this very column. The two facts are written in one `set`, so the pane can never be
+   * told it came from here as one finish and from somewhere else as another.
    */
   const selectCard = useAppStore((s) => s.openCardFromDeckSearch);
 
@@ -421,9 +442,24 @@ export function CollectionSearchTab({
           // tabs puts the other tab's set down, which is right — the rows are different rows.
           selectionScope="deck-collection"
           baseTileWidth={TILE_BASE}
-          selectedId={selectedCardId}
-          onSelect={selectCard}
+          // **A tile's key, not a card id** — `CardGrid` compares this against `card.key ?? card.id`
+          // and every tile here carries a key, so the pane's card id alone would match nothing and
+          // ring nothing at all, silently. Composed through the same {@link tileKeyOf} the fold
+          // stamps, so the two strings cannot drift apart.
+          selectedId={selectedCardId === null ? null : tileKeyOf(selectedCardId, paneFinish)}
+          // The finish travels with the press, so the pane opens showing the object the reader
+          // pointed at rather than the plain one — and so the ring above lands on the tile they
+          // pressed rather than on its sibling. The tile is `CardGrid`'s second argument because a
+          // tile here is a printing *and* a finish; the wall itself knows nothing about finishes.
+          onSelect={(cardId, tile) => selectCard(cardId, tile.finish)}
           finish={tileFinish}
+          // What one copy of this printing **in this finish** costs — the tile's own figure, so a
+          // foil tile and the nonfoil beside it quote different money, which is the whole reason
+          // they are two tiles. `CollectionRow.unitPrice` is already per copy, per finish, at the
+          // marketplace this hook's query named, so nothing here recomputes or converts it, and a
+          // printing the marketplace does not quote draws an em dash rather than borrowing
+          // another one's number.
+          money={(tile) => formatPrice(tile.unitPrice, marketplace.currency)}
           // The copies behind the art, in the corner the collection page's own wall marks them in.
           // No `wishlisted`: this wall shows what is owned and has no opinion about what is wanted.
           badge={(tile) => <OwnedBadge owned={tile.copies} />}

@@ -42,7 +42,7 @@ use crate::collection::EntryChange;
 use crate::deck_meta::{FOLDER_CYCLE, FOLDER_GONE};
 use crate::sorting::Marketplace;
 use crate::sync::{lock_db_read, with_write, AppState};
-use crate::wishlist::WISH_FINISH;
+use crate::wishlist::WISH_PREFERRED_FINISH;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use std::sync::Arc;
@@ -562,14 +562,19 @@ fn refile_wish(tx: &Connection, id: i64, folder_id: Option<i64>) -> Result<Entry
 /// **Every figure is [`crate::wishlist`]'s own arithmetic rather than a second spelling of it.**
 /// `missing` is `max(0, quantity - owned)` over [`crate::wishlist::OWNED_SQL`] — which is why
 /// that constant is `pub(crate)`, and why the wishlist table is aliased `w` here: the alias is
-/// part of its contract. The unit price is [`crate::sorting::price_expr`] over
-/// [`crate::wishlist::WISH_FINISH`], the same expression `list_wishes` puts in its `unit_price`
-/// column. A folder's subtotal and the page header's total have to be one piece of arithmetic;
-/// two implementations of one figure disagree the first time either changes.
+/// part of its contract. The unit price is [`crate::sorting::row_price_expr`] over
+/// [`crate::wishlist::WISH_PREFERRED_FINISH`], the same expression `list_wishes` puts in its
+/// `unit_price` column. A folder's subtotal and the page header's total have to be one piece of
+/// arithmetic; two implementations of one figure disagree the first time either changes.
 ///
 /// The join is `list_wishes`' join, verbatim in shape: the card a wish is *about* is its pinned
-/// printing, or any printing of its oracle card, and it is a `LEFT JOIN` because a wish outlives
-/// the printing it was made from.
+/// printing, or the **cheapest** printing of its oracle card at the marketplace being summed, and
+/// it is a `LEFT JOIN` because a wish outlives the printing it was made from.
+///
+/// **The join has to agree as exactly as the price does**, and for the same reason. An
+/// any-printing wish is drawn, quoted and summed as one printing; a tile that totalled the newest
+/// printing over rows quoting the cheapest would be a subtotal that does not add up to the list
+/// under it, and nothing on screen would say which of the two figures to believe.
 ///
 /// **`WHERE folder_id IS NOT NULL`**: the root is not a folder and has no tile to draw. What is
 /// at the root is what the unfiltered list already shows.
@@ -601,12 +606,14 @@ pub fn folder_summary(
                    FROM wishlist_entries w
                    LEFT JOIN cards c
                      ON c.id = coalesce(w.card_id,
-                            (SELECT id FROM cards WHERE oracle_id = w.oracle_id
-                              ORDER BY released_at DESC, id ASC LIMIT 1))
+                            (SELECT c.id FROM cards c
+                              WHERE c.oracle_id = w.oracle_id
+                              ORDER BY ({price}) ASC NULLS LAST, c.released_at DESC, c.id ASC
+                              LIMIT 1))
                   WHERE w.folder_id IS NOT NULL)
           GROUP BY folder_id
           ORDER BY folder_id",
-        price = crate::sorting::price_expr(marketplace, WISH_FINISH)
+        price = crate::sorting::row_price_expr(marketplace, WISH_PREFERRED_FINISH)
     );
     let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
     let rows = stmt
@@ -1286,6 +1293,32 @@ mod tests {
         assert_eq!(
             row.unpriced, 1,
             "the ghost, and neither of the two wishes the binder already covers"
+        );
+    }
+
+    /// A folder's subtotal prices an **any-printing** wish at the cheapest printing, which is
+    /// the printing the list above it draws and quotes.
+    ///
+    /// The two are one join and one price expression on purpose. Before the wishlist took the
+    /// cheapest printing both sides said "the newest" and agreed by accident; a change to one
+    /// of them alone is exactly how a tile comes to disagree with the rows it is a total of.
+    /// The fixture is built so the old rule and the new one differ: `released_at` is NULL on
+    /// both printings, so the old clause fell to its `id ASC` tiebreak and took `bolt-a-dear`.
+    #[test]
+    fn folder_summary_prices_an_any_printing_wish_at_the_cheapest_printing() {
+        let conn = conn();
+        priced_card(&conn, "bolt-a-dear", "o1", "40.00");
+        priced_card(&conn, "bolt-b-cheap", "o1", "2.00");
+        let ordered = create_folder(&conn, None, "Ordered").unwrap();
+        wish(&conn, "o1", 3, Some(ordered.id));
+
+        let rows = folder_summary(&conn, ANY_MARKET).unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].missing, 3);
+        assert_eq!(
+            rows[0].cost, 6.00,
+            "3 × the $2 printing, not 3 × the $40 one the old join reached first"
         );
     }
 

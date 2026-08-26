@@ -1409,6 +1409,27 @@ export function WishlistPage() {
               {...filing}
             />
           ))}
+
+        {/* **Spec §5: a price is never shown without saying how old it is** — and, with five
+            marketplaces in the picker, whose it is. `pricesAsOf` answers both, and names which of
+            the two clocks this marketplace runs on: the card-data sync for the blob-backed pair,
+            the last price-feed refresh for the two this app downloads itself.
+
+            **The rule reaches this wall as of 2026-08-26**, when the tiles' chins started quoting
+            what one copy costs. `WishlistGrid` already binds the same sentence as a tooltip on the
+            corner mark, and that is **not** this line and does not stand in for it: that one is
+            attached to the cost still to buy — `unit × copies missing` — and is drawn on no wish
+            the reader has finished, while the chin's figure is on every tile.
+
+            **Said once, under the wall, rather than on every tile** — the argument the search
+            page, the Tags page, the printings modal and the deck's docked panel all make, and the
+            reason the chin's money slot is a plain string rather than a tooltip binding.
+
+            **Grid only.** The table states it in the Cost column's own header (`WishlistTable`'s
+            `columnsFor`), so drawing it here as well would say it twice in one view. */}
+        {!empty && view === "grid" && (
+          <p className="shrink-0 text-[0.7rem] text-dim">{pricesAsOf(marketplace)}</p>
+        )}
       </div>
 
       {/* Mounted unconditionally — `CollectionPage`'s reason: `Dialog` renders nothing while
