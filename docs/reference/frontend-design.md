@@ -3066,8 +3066,9 @@ empty felt under a 105px card once the type inside it has learnt to shrink.
 **`seam` is required, has no default, and that is the point.** It says whose outline the chin
 joins, and the two hosts own their outline differently: `"card"` sits under a bordered card and
 takes `border-x` only, ridden `-mx-px` onto the card's own border so the two are one line;
-`"art"` sits under a bare `CardArt` frame, which has no border at all, and supplies all three edges
-itself. **A `border-b` on the `"card"` seam is the defect the prop exists to prevent** — the card's
+`"art"` sits under a `CardArt` frame, whose own edge stops where the bar begins rather than
+enclosing it, and supplies all three edges itself — flush rather than ridden onto, since both boxes
+are the tile's full width and are already collinear. **A `border-b` on the `"card"` seam is the defect the prop exists to prevent** — the card's
 border already *is* the bottom edge, so a second one sits 1px above it and draws a card with a 2px
 foot and a 1px everything-else. A defaulted prop would have served whichever host is in the
 minority, and a call site that simply forgot it would compile, pass, and ship that foot: jsdom
@@ -3077,6 +3078,30 @@ pins the deck grid's own bottom edge, all through **`classList.contains("border-
 so the obvious spelling passes on both seams and asserts nothing. That is this repo's recurring
 vacuous-assertion shape, and it is what makes the difference between a pinned prop and a pinned
 nothing.
+
+**`CardArt` gained an edge of its own on 2026-08-26, and it costs the wall no height** (headless
+Chromium over the shipped `dist/` stylesheet, a 238px tile, the app's dark theme). The `"art"` seam
+had the chin drawing all three of its edges under a frame that drew none, so on every wall in the
+app the picture simply *stopped* and a bordered bar *started* — reported by a reader as a cut-off
+that looks rough, and visibly worse than the deck stack's card, which has been one bordered object
+all along. The frame is `border border-border` now, the chin's own colour, so the outline runs from
+the top of the picture through the bar's rounded foot.
+
+The measurement that mattered is the box: Tailwind's preflight makes every element `border-box`, and
+an aspect ratio on a `border-box` element is a ratio of the **border** box — so the frame's outer
+box is **238 × 333** with the edge and **238 × 333** without it, and the tile 354 either way.
+`CardGrid`'s row pitch is `Math.round(tileWidth * 7 / 5) + chinHeight(zoom) - CHIN_RISE`, which is
+`333 + 25 - 4` at 1× — unchanged, so the virtualiser needed nothing. What moves is the picture
+inside: `clientWidth`/`clientHeight` go 238 × 333 → **236 × 331**, one hairline each side, which is
+exactly what the stack's card has always done to its own face. **Both rings survive it**, because a
+ring here is a spread-only outset `box-shadow` (`ring-2 ring-accent` measures
+`oklch(0.75 0.12 85) 0 0 0 2px`) and an outset shadow paints outside the border box: the gold hugs
+the new edge rather than replacing it, and the deck grid's `ring-2 ring-destructive` — which sits on
+the wrapper one level out — is unchanged in both colour and geometry. The one artifact is at the
+seam itself and is about a pixel: the frame's `rounded-lg` corner curves inward over the 4px the
+chin rides up, so the outline pinches ~1px before the bar's straight edge resumes. `CHIN_RISE` was
+derived from the stack's 7px face radius, where the same excursion is 0.68px; at the art's 10px it
+is 2px, of which the bar covers all but the top hairline.
 
 **`tone` is the other half of the same join.** The bar is `relative` and later in the document than
 the face, so its border paints *over* the card's along its whole height. A rule-breaking deck card

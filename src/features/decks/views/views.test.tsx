@@ -2478,8 +2478,9 @@ describe("GridView tiles", () => {
   /**
    * **The chin supplies its own bottom edge here, and that is the whole job of the `seam` prop.**
    *
-   * This tile's face is `CardArt`, which has no border at all — a rule break on it is a `ring-2`
-   * rather than an edge — so the chin draws all three of its own. The stacked card is the exact
+   * This tile's face is `CardArt`, whose own edge stops where the chin begins rather than
+   * enclosing it — a rule break on it is a `ring-2` rather than an edge — so the chin draws all
+   * three of its own and the two read as one outline. The stacked card is the exact
    * opposite, and the mirror of this assertion already lives there (`CardStack.test.tsx`, "carries
    * the rule break's edge through the data line as well", which pins `border-x` and no bottom
    * edge): under a bordered card the chin must **not** draw one, or the card's own border and the

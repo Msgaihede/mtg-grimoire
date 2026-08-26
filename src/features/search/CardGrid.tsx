@@ -1501,8 +1501,8 @@ function Tile<T extends GridCard>({
         finish={tileFinish}
         treatments={tileTreatments}
         money={money?.(card)}
-        // **`"art"`.** `CardArt` has no border of its own, so the chin supplies all three of its
-        // edges. See the prop.
+        // **`"art"`.** `CardArt` draws its own edge and stops where this bar begins, so the chin
+        // supplies all three of its own and the two read as one outline. See the prop.
         seam="art"
         // **The crown only, and the finish is deliberately not here beside it.**
         //

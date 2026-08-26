@@ -529,10 +529,11 @@ function GridCard({
         finish={playedFinish(card.finish, card.finishes)}
         treatments={finishTreatments(card.promoTypes, playedFinish(card.finish, card.finishes))}
         money={formatPrice(card.unitPrice, currency)}
-        // **`"art"`, not the stack's.** This tile's face is `CardArt`, which has no border of its
-        // own — the rule break is a `ring-2` on the face rather than an edge — so the chin
-        // supplies all three of its own edges. Under the stack's bordered card it must not, or the
-        // foot is 2px and everything else is 1px.
+        // **`"art"`, not the stack's.** This tile's face is `CardArt`, whose own edge stops where
+        // this bar begins rather than enclosing it — so the chin supplies all three of its own and
+        // the two are one outline. Under the stack's bordered card it must not, or the foot is 2px
+        // and everything else is 1px. The rule break is still a `ring-2` on the face rather than
+        // an edge, which is why the face's own edge stays neutral while `tone` reddens this bar.
         seam="art"
         tone={ruleBreakText !== null ? "destructive" : "default"}
       />

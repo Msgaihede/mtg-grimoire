@@ -123,9 +123,14 @@ export function CardChin(
      *   onto the card's own border so the two are one line rather than two. **No bottom edge**:
      *   the card's border is the bottom edge, and a `border-b` here sits 1px *above* it — a red
      *   card with a 2px foot and a 1px everything-else.
-     * * **`"art"`** — under a bare `CardArt` frame, which has no border at all (every wall
-     *   `CardGrid` draws, and the deck's grid). The chin supplies all three edges itself and
-     *   rounds to the art's own `lg` corner.
+     * * **`"art"`** — under a `CardArt` frame (every wall `CardGrid` draws, and the deck's grid),
+     *   which draws its own edge in this same colour and stops where this bar begins. The chin
+     *   supplies all three of its own edges and rounds to the art's own `lg` corner, so the two
+     *   read as one outline down the card and round its foot. The art's edge is **flush** rather
+     *   than ridden onto: both boxes are the tile's full width, so the side edges are already
+     *   collinear and the offset the stack needs would put this bar a pixel wide of the picture.
+     *   It was a bare frame until 2026-08-26, and a reader reported the join as a rough cut-off:
+     *   the picture simply stopped and a bordered bar started.
      *
      * **Required, and deliberately not defaulted, because the wrong answer is silent.** Exactly
      * one of the surfaces this is drawn on is a bordered card, so any default serves the

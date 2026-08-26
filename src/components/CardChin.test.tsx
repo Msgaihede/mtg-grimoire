@@ -140,7 +140,8 @@ describe("CardChin", () => {
     expect(cardChin.classList.contains("rounded-b-[7px]")).toBe(true);
     expect(cardChin.classList.contains("rounded-b-lg")).toBe(false);
 
-    // The art frame has no border to ride onto, so the chin must sit exactly as wide as it.
+    // The art frame's edge is already collinear with this one — both boxes are the tile's full
+    // width — so there is nothing to ride onto and the chin must sit exactly as wide as it.
     expect(artChin.classList.contains("-mx-px")).toBe(false);
     expect(artChin.classList.contains("rounded-b-lg")).toBe(true);
     expect(artChin.classList.contains("rounded-b-[7px]")).toBe(false);

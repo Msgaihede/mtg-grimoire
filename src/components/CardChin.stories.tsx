@@ -77,8 +77,9 @@ const meta = {
           "the two hosts own their outline differently: under a bordered card the bar draws the " +
           "two side edges only and rides a pixel outward onto the card's own border, because " +
           "the card's border **is** the bottom edge — a bottom edge here would sit 1px above " +
-          "it, giving a red card a 2px foot and a 1px everything-else. Under a bare `CardArt` " +
-          "frame, which has no border at all, the chin supplies all three itself.\n\n" +
+          "it, giving a red card a 2px foot and a 1px everything-else. Under a `CardArt` frame " +
+          "the chin supplies all three itself, flush with the edge that frame draws in this " +
+          "same colour — the two are one outline down the card and round its foot.\n\n" +
           "**Nothing in it takes a size.** The height is `chinHeight(zoom)`; the gem, the glyph " +
           "and the type read `--mark-scale`, the card's own inherited factor, so the same " +
           "component is drawn on a card that zooms and (through that variable's fallback) " +
@@ -131,14 +132,19 @@ export const DeckStack: Story = {
 };
 
 /**
- * The five walls `CardGrid` draws, and the deck's grid view: `CardArt` has no border at all, so
- * the chin supplies all three edges itself and rounds to the art's own corner.
+ * The five walls `CardGrid` draws, and the deck's grid view: the chin supplies all three edges
+ * itself and rounds to the art's own corner, flush with the edge `CardArt` draws in the same
+ * colour — so the outline runs from the top of the picture to the foot of the bar without a break.
+ *
+ * The stand-in below carries that edge for the same reason it carries the aspect ratio and the
+ * corner: this story is about the *join*, and a frame that drew no edge would show a seam the app
+ * does not have.
  */
 export const WallTile: Story = {
   args: { seam: "art" },
   render: (args) => (
     <>
-      <div className="aspect-[5/7] rounded-lg bg-surface" />
+      <div className="aspect-[5/7] rounded-lg border border-border bg-surface" />
       <CardChin {...args} />
     </>
   ),

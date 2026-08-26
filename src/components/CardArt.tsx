@@ -162,7 +162,28 @@ export function CardArt({
   return (
     <span
       className={cn(
-        "relative block w-full overflow-hidden rounded-lg bg-surface",
+        // **The edge the chin continues, and the reason this frame has one at all.**
+        //
+        // `CardChin` joins whichever outline its host draws. Under the deck's stacks that host
+        // is a bordered card and the two have always read as one object; under this frame there
+        // was nothing to join, so the picture simply *stopped* and a bordered bar *started* —
+        // reported as a cut-off that looks rough. The colour is the chin's own, so the line runs
+        // unbroken from the top of the card to the chin's rounded foot.
+        //
+        // It costs the picture 2px and the frame nothing: Tailwind's preflight makes every box
+        // `border-box`, and an aspect ratio on a `border-box` element is a ratio of the *border*
+        // box — so the 5:7 outer box a wall lays out against is the same box it was, which is
+        // what `CardGrid`'s row pitch is computed from. Measured in a browser, not reasoned
+        // about; the figures are in the frontend-design doc.
+        //
+        // **Neutral, always** — this frame takes no `tone`, where the chin does. A rule break is
+        // drawn on the deck's grid as a `ring-2` on the wrapper one level out, and a ring is a
+        // spread-only outset shadow that paints *outside* the border box: the red stands proud of
+        // this line rather than contesting it, and `selected`'s gold below does the same. So the
+        // sides of a rule-breaking grid card change colour where the chin takes over, under a red
+        // ring that is already saying it. Colouring this edge too would need the caller to know
+        // about a rule, which is the one thing this frame is deliberately ignorant of.
+        "relative block w-full overflow-hidden rounded-lg border border-border bg-surface",
         selected && "ring-2 ring-accent",
         className,
       )}

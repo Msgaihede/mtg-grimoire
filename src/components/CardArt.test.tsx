@@ -200,4 +200,47 @@ describe("CardArt", () => {
     render(<CardArt cardId="bolt" name="Lightning Bolt" face={1} variant="art" />);
     expect(screen.getByRole("img")).toHaveAttribute("src", expect.stringContaining("/art/bolt/1"));
   });
+
+  /**
+   * **The edge `CardChin` continues.**
+   *
+   * Every surface that draws this frame now draws a chin under it, and the chin joins whichever
+   * outline its host has: under the deck's stacks that host is a bordered card and the two read
+   * as one object, while under a frame with no edge of its own the picture simply *stopped* and a
+   * bordered bar *started*. A reader reported that as a rough cut-off. Removing the edge here is
+   * therefore removing half of a join, and the half that is left still looks deliberate — which
+   * is exactly the kind of regression a wall of tiles hides.
+   *
+   * **`classList.contains`, never `className.toContain`.** `"border-border"` contains the
+   * substring `border`, so the obvious spelling is satisfied by the colour alone and would pass
+   * on a frame that draws no edge at all; and `"border-border"` contains `border-b` too, which is
+   * the shape this repo has been bitten by more than once.
+   *
+   * A class string rather than a painted pixel, because jsdom has no Tailwind and no layout — the
+   * seam itself is a live-window question and was settled there.
+   */
+  it("draws its own edge, in the colour the chin under it uses", () => {
+    const { container } = render(<CardArt cardId="bolt" name="Lightning Bolt" />);
+    const frame = container.firstElementChild;
+
+    expect(frame?.classList.contains("border")).toBe(true);
+    expect(frame?.classList.contains("border-border")).toBe(true);
+  });
+
+  /**
+   * **The edge and the ring are two marks on one element, and both still read.**
+   *
+   * A ring is a box shadow with spread — painted *outside* the border box — so the gold sits
+   * against the new edge rather than replacing it, and the frame keeps both. Worth pinning
+   * because the tidy-looking fix for "two lines round one card" is to drop one of them, and the
+   * one that would go is the edge that has no state behind it.
+   */
+  it("keeps the picked ring beside that edge rather than instead of it", () => {
+    const { container } = render(<CardArt cardId="bolt" name="Lightning Bolt" selected />);
+    const frame = container.firstElementChild;
+
+    expect(frame?.classList.contains("ring-2")).toBe(true);
+    expect(frame?.classList.contains("ring-accent")).toBe(true);
+    expect(frame?.classList.contains("border-border")).toBe(true);
+  });
 });
