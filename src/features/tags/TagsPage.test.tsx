@@ -807,10 +807,16 @@ describe("the results wall", () => {
     const art = await screen.findByRole("button", { name: "Lightning Bolt" });
 
     const tile = art.parentElement?.parentElement as HTMLElement;
-    // `hidden: true`, because the chip is inside the `aria-hidden` overlay — and the caption's
-    // `sr-only` word beside it is what a screen reader actually hears.
-    expect(within(tile).getByRole("img", { name: "Foil", hidden: true })).toBeInTheDocument();
-    expect(within(tile).getByText(", Foil")).toHaveClass("sr-only");
+    // **The glyph twice, the word once**, and the two halves are asserted apart because they are
+    // reached differently. The chip over the picture is inside the `aria-hidden` overlay, so it
+    // takes `hidden: true` and is scoped to the art button it lives in — it is decoration.
+    expect(within(art).getByRole("img", { name: "Foil", hidden: true })).toBeInTheDocument();
+    // And `CardChin`'s own `FinishMark` in the foot, which is a sibling of that button and is
+    // therefore **in** the accessibility tree — no `hidden`, and exactly one of it. This is what
+    // a screen reader hears, and it is why the tile no longer appends an `sr-only` `, Foil` of
+    // its own: the mark's `aria-label` is that same word, so the span said it a second time.
+    expect(within(tile).getAllByRole("img", { name: "Foil" })).toHaveLength(1);
+    expect(within(tile).queryByText(", Foil")).toBeNull();
   });
 
   it("adds a copy to the collection from a tile, without opening the card", async () => {

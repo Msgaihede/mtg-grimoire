@@ -10,8 +10,9 @@ import {
 } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { CardArt } from "@/components/CardArt";
+import { CardChin } from "@/components/CardChin";
 import { GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
-import { RarityGem } from "@/components/RarityGem";
+import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import {
   cardDraggable,
   composedDraggable,
@@ -19,10 +20,10 @@ import {
   withDragGroup,
   type DragPayload,
 } from "@/features/decks/dnd";
-import { cardScaleVars, CONTROL_SHRINK, scaled, type ZoomSection } from "@/lib/cardZoom";
+import { cardScaleVars, CHIN_RISE, chinHeight, scaled, type ZoomSection } from "@/lib/cardZoom";
 import { keepCaretForCard } from "@/lib/caretWalk";
-import { FINISH_LABEL, type Finish } from "@/lib/finish";
-import { type Treatment, treatmentTitle } from "@/lib/treatment";
+import type { Finish } from "@/lib/finish";
+import type { Treatment } from "@/lib/treatment";
 import { FOCUS } from "@/lib/focus";
 import { LAYER } from "@/lib/layers";
 import { useAppStore } from "@/lib/store";
@@ -55,11 +56,25 @@ export interface GridCard {
    * than one that does not. Every other caller has an id for every row and never meets it.
    */
   id: string;
+  /**
+   * This tile's identity, where it differs from the card's. Defaults to {@link id}.
+   */
+  key?: string;
   name: string;
   setCode: string;
   collectorNumber: string;
   rarity: string | null;
 }
+
+/**
+ * A tile's identity, which is **not always its card's**.
+ *
+ * The collection draws one tile per printing *and finish* — a foil and a played nonfoil are two
+ * objects at two prices sharing only a set and a number — so two tiles there carry one `id`. The
+ * ring, the arrow walk's caret and the picked set are about the *tile*; `onSelect` and the art are
+ * about the *printing*. Six of the seven walls pass no `key` at all and are untouched.
+ */
+const tileKey = <T extends GridCard>(card: T): string => card.key ?? card.id;
 
 /**
  * How wide a tile is at 100%, in px — **the width itself, not a floor** (changed 2026-08-14).
@@ -90,30 +105,6 @@ const TILE_BASE_WIDTH = 170;
 /** Gap between tiles, matching the `gap-3` used elsewhere. */
 const GAP = 12;
 
-/** The quick-add trigger's own square at 100% zoom, before `CONTROL_SHRINK` takes its bite. */
-const CAPTION_CONTROL = 24;
-
-/** The tile's `gap-1` between the art and the strip under it, counted into the budget below. */
-const CAPTION_GAP = 4;
-
-/**
- * The caption line under each tile, plus its gap.
- *
- * Set by the quick-add button in it rather than by the text beside it: the virtualiser positions
- * rows from this number, and a caption taller than it is a wall whose rows overlap by the
- * difference. **Derived rather than written down**, because the button it is a budget for is no
- * longer 24px — `AddToCollectionButton` is drawn at `CONTROL_SHRINK` on a card — and the two
- * drifting apart is exactly the overlap this constant exists to prevent. Ceiling, not round, for
- * the same reason: 20.4px of button in 20px of strip is a wall that overlaps by 0.4px a row.
- *
- * **It is a measurement of what is in the strip, and the strip now scales in both directions.**
- * It used to floor — `max(base, scaled(base))` — because nothing *inside* it scaled, so a halved
- * budget was a caption taller than the row it was positioned for. Everything in it scales now (the
- * type, the gem, the button), so the floor would be a 28px strip around 6px of type at 0.5×. See
- * where it is scaled.
- */
-const CAPTION_HEIGHT = Math.ceil(CAPTION_CONTROL * CONTROL_SHRINK) + CAPTION_GAP;
-
 /**
  * A tile's **absolute** position in `rows`, published on its own root element.
  *
@@ -124,8 +115,8 @@ const CAPTION_HEIGHT = Math.ceil(CAPTION_CONTROL * CONTROL_SHRINK) + CAPTION_GAP
  * something the browser is already holding.
  *
  * It goes on the tile's root rather than on the art button inside it because a press can land on
- * any of a tile's four parts — the art, either corner mark, the quick-add in the caption — and
- * only the root contains all of them. The element that eventually takes the caret is a different
+ * any of a tile's parts — the art, either corner mark, the action strip over the art, the chin
+ * under it — and only the root contains all of them. The element that eventually takes the caret is a different
  * one; see {@link CARET_SELECTOR}.
  *
  * **Absolute, not (row, column).** Selecting a card opens the 384px detail pane, `columnsFor`
@@ -153,10 +144,10 @@ const TILE_SELECTOR = "[data-grid-index]";
  * arrowing across the wall with nothing visibly focused would be worse than no arrow keys at
  * all.
  *
- * The art button is a tile's first `<button>` in document order: the two corner marks between it
- * and the caption are `<span>`s, and the caller's own control (the search's quick-add) comes
- * after it in the caption. `?? tile` is the fallback for a wall drawn without art at all, which
- * no caller builds today.
+ * The art button is a tile's first `<button>` in document order, and that survived the caller's
+ * control moving out of the chin: the two corner marks are `<span>`s, and the action strip is the
+ * **last** child of the same box the art button opens — so it is still after it. `?? tile` is the
+ * fallback for a wall drawn without art at all, which no caller builds today.
  */
 const CARET_SELECTOR = "button";
 
@@ -261,6 +252,7 @@ export function CardGrid<T extends GridCard>({
   gameChanger,
   action,
   caption,
+  money,
   cardMenu,
   cardMenuKey,
   tileRef,
@@ -271,7 +263,14 @@ export function CardGrid<T extends GridCard>({
   baseTileWidth = TILE_BASE_WIDTH,
 }: {
   rows: T[];
-  onSelect: (cardId: string) => void;
+  /**
+   * Open the card a tile is about.
+   *
+   * **The row is passed beside the id**, because a tile is not always a printing: the collection
+   * draws one per printing *and finish*, and the pane has to be told which of the two the reader
+   * pressed. The id stays first because that is what every other wall opens with.
+   */
+  onSelect: (id: string, card: T) => void;
   onNeedNextPage: () => void;
   /** Identity of the current list — a search, or a filtered collection — so a new one
    *  starts at the top. */
@@ -297,8 +296,8 @@ export function CardGrid<T extends GridCard>({
   label?: string;
   /**
    * A mark over the art's bottom-left corner — how many copies are owned, and whether a
-   * wish covers the card. Over the art rather than in the caption because it is a fact about
-   * the *card*, and the caption line is already a set, a number and a control at 12px.
+   * wish covers the card. Over the art rather than in the chin because it is a fact about
+   * the *card*, and the chin is already a gem, a printing, a finish and a price at 10px.
    *
    * Nothing to say draws nothing at all, corner and backing included — whether the callback
    * returns `null` or hands over a badge that guards itself and renders nothing. On a search
@@ -365,25 +364,35 @@ export function CardGrid<T extends GridCard>({
    * per render tears every tile's drag registration down and rebuilds it on every scrolled row.
    */
   gameChanger?: (card: T) => boolean;
-  /** The one control a tile carries, at the end of its caption. The search's quick-add. */
+  /**
+   * The one control a tile carries — **in a strip over the bottom of the art**, since 2026-08-26.
+   * The search's quick-add.
+   *
+   * It used to sit at the end of the caption, and there is no room for it there any more: the chin
+   * is a gem, a printing line, a finish mark and a price at 170px. Over the art it costs the wall
+   * no height at all (the strip is absolutely positioned, so `tileHeight` is unchanged by its
+   * existence) and it is where the deck editor already puts a card's stepper.
+   */
   action?: (card: T) => ReactNode;
   /**
-   * What the caption says about the printing, replacing the `SET · number` it says by default.
+   * What the chin says about the printing, replacing the `SET · number` it says by default.
    *
    * **The wishlist's wall is why this exists, and it is a correctness slot rather than a
    * styling one.** A wish for *any* printing is drawn as one of them — the newest printing of
-   * its oracle card, which is the only way it can have art at all — and a caption reading
+   * its oracle card, which is the only way it can have art at all — and a chin reading
    * "DSK · 123" under that picture would say the reader had asked for that piece of cardboard.
    * They asked for the card. So the wishlist answers "Any printing" there and the tile stops
    * claiming what the row does not say, which is the same distinction its table draws in its
    * Printing column (`features/wishlist/wish.ts`).
    *
-   * The slot is the *text* and not the line: the rarity gem before it and the caller's control
-   * after it are the caption's, as are the `sr-only` finish and game-changer words appended to
-   * whatever this returns — those describe the marks over the art, which are drawn from the
-   * same tile whatever its caption says.
+   * The slot is the *text* and not the line: the rarity gem before it and {@link money} after it
+   * are the chin's, as are the `sr-only` finish and game-changer words appended to whatever this
+   * returns — those describe the marks over the art, which are drawn from the same tile whatever
+   * this slot says.
    */
   caption?: (card: T) => ReactNode;
+  /** What this wall's chin says one copy costs. */
+  money?: (card: T) => ReactNode;
   /**
    * What a tile offers on a right-click — **a ready-made `onContextMenu` handler**, not a list
    * of rows.
@@ -397,7 +406,7 @@ export function CardGrid<T extends GridCard>({
    * right-click lands.
    *
    * It lands on the **tile**, which is the whole card: the art, its two corner marks and the
-   * caption under it. A field inside a tile keeps the browser's own menu — the primitive tests
+   * chin under it. A field inside a tile keeps the browser's own menu — the primitive tests
    * for one before it builds anything — so the quick-add's popup is unaffected.
    *
    * Absent means a tile has no menu of its own, and the reader gets the app's plain
@@ -650,13 +659,11 @@ export function CardGrid<T extends GridCard>({
   const tileWidth = tileWidthFor(width, tileSize);
   const gutter = sideGutterFor(width, tileSize);
 
-  // The caption moves with the tiles in **both** directions, and the asymmetry that used to be
-  // here was arithmetic rather than taste: nothing inside the caption scaled, so it was a 24px
-  // button beside 12px text at every zoom, and a strip budgeted at 14px for a 0.5× wall would have
-  // been a caption taller than the row the virtualiser positioned for it. Everything in the strip
-  // scales now — the type, the gem, the quick-add — so the budget scales with its contents and the
-  // floor would be the opposite fault: a 28px strip around 6px of type on a 85px card.
-  const captionHeight = scaled(CAPTION_HEIGHT, cardZoom);
+  // The chin is **attached** to the card rather than spaced under it, so there is no gap in this
+  // budget any more — the tile is the art plus the chin less the rise, which is exactly what
+  // `chinHeight` and `CHIN_RISE` say. It used to be a budget for the quick-add button in the
+  // caption; that control is over the art now and costs the wall no height at all.
+  const captionHeight = chinHeight(cardZoom) - CHIN_RISE;
   const tileHeight = Math.round(tileWidth * (7 / 5)) + captionHeight;
 
   const virtualizer = useVirtualizer({
@@ -675,7 +682,7 @@ export function CardGrid<T extends GridCard>({
   // **A zoom arrives through this same door and needs nothing of its own**: it moves the floor,
   // the floor moves the tile, and `tileHeight` is what a row's pitch is made of. Keyed on the
   // height rather than on the zoom deliberately — a zoom step that changed neither the column
-  // count nor the caption left the pitch alone, and there is nothing to remeasure.
+  // count nor the chin left the pitch alone, and there is nothing to remeasure.
   useEffect(() => {
     virtualizer.measure();
   }, [tileHeight, virtualizer]);
@@ -706,21 +713,36 @@ export function CardGrid<T extends GridCard>({
    * `useCardSelection` prunes against it on every render and because a fresh array would make its
    * callbacks new every time — and one of those callbacks ends up in a drag registration.
    */
-  const selectionOrder = useMemo(() => rows.map((card) => card.id), [rows]);
+  const selectionOrder = useMemo(() => rows.map((card) => tileKey(card)), [rows]);
   const picked = useCardSelection(selectionScope ?? NO_SELECTION, selectionOrder);
 
   const select = useCallback(
-    (cardId: string, event?: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }) => {
+    (card: T, event?: { ctrlKey?: boolean; metaKey?: boolean; shiftKey?: boolean }) => {
+      // **The two halves of a press, and they are not the same string.** The set, the caret note
+      // and the ring are about the *tile* — the collection draws a foil and a nonfoil of one
+      // printing as two of them — while what opens is the *printing*. See {@link tileKey}.
+      const key = tileKey(card);
+      const cardId = card.id;
       // A tile with no printing selects nothing — see {@link GridCard.id}. The walk still steps
       // onto it, because a tile the arrows refuse to enter is a hole in the wall; what it does
       // not do is empty the pane on the way past, which is what `onSelect("")` would ask for.
+      //
+      // **The guard is on the card id and not on the key**, because a tile with a key of its own
+      // still has nothing to open when the printing behind it has gone.
       if (!cardId) return;
       // A chord means the reader is building a set, not opening a card: the pane holds still and
       // nothing below this line runs. `pick` has already collapsed the set to this one tile when
       // it answers `false`, which is what keeps the ring and the pane agreeing.
-      if (selectionScope !== undefined && event && picked.pick(cardId, event)) return;
+      if (selectionScope !== undefined && event && picked.pick(key, event)) return;
+      // **The note is stamped with the *card*, and it is the one thing here that is not the tile.**
+      // Its only reader is `CardDetailPane`'s mount effect, which asks `consumeCaretNote(cardId)`
+      // with the card it is opening — so a note filed under `bolt:foil` is a note the pane asking
+      // about `bolt` discards, and it then takes the caret anyway. That is the exact failure this
+      // note exists to prevent, arriving on the one wall that will have keys *and* `arrowNav`: the
+      // collection's. The note is about "is the caret already where this selection belongs", the
+      // pane is keyed on the printing, so the printing is what it is stamped with.
       if (arrowNav) keepCaretForCard(cardId);
-      onSelect(cardId);
+      onSelect(cardId, card);
     },
     [arrowNav, onSelect, picked, selectionScope],
   );
@@ -751,10 +773,13 @@ export function CardGrid<T extends GridCard>({
       draggableWall
         ? (card: T) => {
             const { picked: held, rows: drawn, ...seams } = dragRef.current;
-            if (!held.dragsAll(card.id)) return [];
+            if (!held.dragsAll(tileKey(card))) return [];
             const wanted = new Set(held.keys);
             return drawn.flatMap((row) => {
-              if (row.id === card.id || !wanted.has(row.id)) return [];
+              // The *tile*, on both sides: a wall whose foil and nonfoil of one printing are two
+              // tiles must be able to drag one of them without the other coming along, and `id`
+              // cannot tell them apart. See {@link tileKey}.
+              if (tileKey(row) === tileKey(card) || !wanted.has(tileKey(row))) return [];
               // Whichever seam this wall uses. On a `dragRecord` wall the payload is read back
               // out of the composed record through the same fence a drop target reads it
               // through, so a tile carrying only a non-card mark — an any-printing wish —
@@ -781,15 +806,15 @@ export function CardGrid<T extends GridCard>({
    * says so.
    */
   const pickedRows = useMemo(
-    () => (picked.count > 1 ? rows.filter((card) => picked.selected(card.id)) : []),
+    () => (picked.count > 1 ? rows.filter((card) => picked.selected(tileKey(card))) : []),
     [rows, picked],
   );
   const tileMenu = useCallback(
-    (card: T) => cardMenu?.(card, picked.selected(card.id) ? pickedRows : []),
+    (card: T) => cardMenu?.(card, picked.selected(tileKey(card)) ? pickedRows : []),
     [cardMenu, picked, pickedRows],
   );
   const tileMenuKey = useCallback(
-    (card: T) => cardMenuKey?.(card, picked.selected(card.id) ? pickedRows : []),
+    (card: T) => cardMenuKey?.(card, picked.selected(tileKey(card)) ? pickedRows : []),
     [cardMenuKey, picked, pickedRows],
   );
 
@@ -858,7 +883,7 @@ export function CardGrid<T extends GridCard>({
     caret.focus({ preventScroll: true });
     // **The tile is what is scrolled, and the button inside it is what takes the caret.** They
     // are not the same box and scrolling the wrong one is measurable: the button is the art
-    // alone, so bringing *it* into view leaves the caption strip under it hanging past the
+    // alone, so bringing *it* into view leaves the chin under it hanging past the
     // scrollport, and the scroll margin that makes room for the focus ring is on the tile and
     // does not reach a descendant. Measured 2026-08-18 in the shipped window arrowing down a
     // 117k-card browse: the tile's foot sat **2px** past the scroller's padding box every step,
@@ -873,8 +898,8 @@ export function CardGrid<T extends GridCard>({
    * **One handler on the scroller rather than one per tile**, which is the same economy every
    * other callback on this component is written for — an unfiltered browse is ~117 k rows, and a
    * fresh closure per tile is what `dragPayload` and `gameChanger` each carry a paragraph asking
-   * callers not to do. Keydown bubbles, so a press on the art button, on a corner mark or on the
-   * caption all arrive here with a `target` inside the tile it happened in.
+   * callers not to do. Keydown bubbles, so a press on the art button, on a corner mark, on the
+   * action strip or on the chin all arrive here with a `target` inside the tile it happened in.
    *
    * The bail-outs, in the order they are cheapest:
    *
@@ -889,7 +914,7 @@ export function CardGrid<T extends GridCard>({
    * - **The caret is in a field.** See {@link FIELD_SELECTOR}.
    * - **The caret is on the wall but not on a tile.** Nothing to move from.
    * - **The caret is inside a tile but not on it** — the quick-add's popup, drawn in the tile's
-   *   own caption. See the check itself for the two positions that do count.
+   *   own action strip. See the check itself for the two positions that do count.
    *
    * `columns` is read at press time and is therefore the count the reader was *looking at*, which
    * is the only honest answer: the pane the press is about to open re-flows the wall underneath
@@ -904,8 +929,8 @@ export function CardGrid<T extends GridCard>({
     const from = target.closest<HTMLElement>(TILE_SELECTOR);
     if (!from) return;
     // **Inside a tile is not enough: the caret has to be on the tile.** The quick-add's popup is
-    // `role="dialog"` drawn *in the tile's caption* — `SearchPage` passes it `static` so a 256px
-    // panel on a 170px tile opens from the tile's own left edge — so a reader stepping through
+    // `role="dialog"` drawn *in the tile's action strip* — `SearchPage` passes it `static` so a
+    // 256px panel on a 170px tile opens from the tile's own left edge — so a reader stepping through
     // its finish chips and condition rows is holding a caret that `closest` reports as being on
     // a card. Walking the wall out from under them would be taking a key the control they opened
     // is using, and the field test above cannot see it because those chips are buttons.
@@ -928,7 +953,7 @@ export function CardGrid<T extends GridCard>({
     // Shift+click does, and a plain arrow collapses it onto the tile the walk landed on — which
     // is what keeps the ring and the pane agreeing all the way along the walk. On a wall with no
     // `selectionScope` the chords reach nothing and the press is the walk it always was.
-    select(rows[next].id, e);
+    select(rows[next], e);
     // Scroll first, focus later. The tile may not be drawn yet — see `pendingIndex` — and the
     // virtualiser is the only thing that can put it on screen, since it owns this scroller's
     // offset outright.
@@ -997,7 +1022,12 @@ export function CardGrid<T extends GridCard>({
                 // which is issue #214's answer rather than an economy: gold already means
                 // *picked* on this wall, and a reader who has Ctrl-clicked four tiles has picked
                 // four. The pane shows the last one they opened, as a pane always has.
-                selected={card.id === selectedId || picked.selected(card.id)}
+                //
+                // **Both halves key on the tile**, which is what stops a wall that draws a foil
+                // and a nonfoil of one printing from ringing both when the reader pressed one —
+                // see {@link tileKey}. `selectedId` is therefore a tile's identity on a wall that
+                // has any, and a card id on the six that do not.
+                selected={tileKey(card) === selectedId || picked.selected(tileKey(card))}
                 dragRest={dragRest}
                 badge={badge}
                 topLeft={topLeft}
@@ -1006,6 +1036,7 @@ export function CardGrid<T extends GridCard>({
                 gameChanger={gameChanger}
                 action={action}
                 caption={caption}
+                money={money}
                 cardMenu={tileMenu}
                 cardMenuKey={tileMenuKey}
                 tileRef={tileRef}
@@ -1023,8 +1054,9 @@ export function CardGrid<T extends GridCard>({
 /**
  * One card, as art.
  *
- * The chrome is a caption and a focus ring. The rarity is a 6px gem — the only colour in
- * the tile that is not the card's own, and a filled badge there would out-shout what it
+ * The chrome is a `CardChin` and a focus ring, plus whatever the caller hangs in the two corners
+ * and in the action strip over the picture's foot. The rarity is the chin's 6px gem — the only
+ * colour in the tile that is not the card's own, and a filled badge there would out-shout what it
  * annotates.
  */
 function Tile<T extends GridCard>({
@@ -1041,6 +1073,7 @@ function Tile<T extends GridCard>({
   gameChanger,
   action,
   caption,
+  money,
   cardMenu,
   cardMenuKey,
   tileRef,
@@ -1069,7 +1102,13 @@ function Tile<T extends GridCard>({
    * `MARK_SCALE_VAR` in `lib/cardZoom.ts`.
    */
   zoom: number;
-  onSelect: (id: string, event: ReactMouseEvent) => void;
+  /**
+   * The press, with the **whole row** rather than an id.
+   *
+   * The wall's `select` needs both halves of a tile — the printing it opens and the tile it rings,
+   * picks and files a caret note under — and only the row carries both. See {@link tileKey}.
+   */
+  onSelect: (card: T, event: ReactMouseEvent) => void;
   selected: boolean;
   badge?: (card: T) => ReactNode;
   topLeft?: (card: T) => ReactNode;
@@ -1078,6 +1117,7 @@ function Tile<T extends GridCard>({
   gameChanger?: (card: T) => boolean;
   action?: (card: T) => ReactNode;
   caption?: (card: T) => ReactNode;
+  money?: (card: T) => ReactNode;
   cardMenu?: (card: T) => ((e: ReactMouseEvent) => void) | undefined;
   cardMenuKey?: (card: T) => ((e: ReactKeyboardEvent) => void) | undefined;
   tileRef?: (card: T, element: HTMLElement | null) => void | (() => void);
@@ -1094,17 +1134,29 @@ function Tile<T extends GridCard>({
   const corner = topLeft?.(card);
   const tileFinish = finish?.(card) ?? null;
   const tileTreatments = treatment?.(card) ?? [];
-  // The treatment's words where there are any, the finish's otherwise — the same swap the
-  // chip makes, so the `sr-only` statement below and the picture above cannot disagree.
-  const finishWord =
-    treatmentTitle(tileTreatments) ?? (tileFinish ? FINISH_LABEL[tileFinish] : null);
   const crowned = gameChanger?.(card) ?? false;
+  /**
+   * What the chin says about the printing — **branched here rather than passed as four loose
+   * props**, because `CardChin`'s own prop is a union with exactly two arms and that is the point
+   * of it: either the caller wrote the line, or the chin builds `SET · number` from the two halves
+   * of it. `printing={caption ? caption(card) : undefined}` would not type-check, and `undefined`
+   * is not how you decline an arm.
+   *
+   * **`printingTitle: null` on the caller's arm, deliberately.** That arm requires it, for the
+   * reason `CardChin` gives at the prop: a caller whose line reads "Any printing" must not get a
+   * hover naming the cardboard it happens to be drawn as. No wall of this component has a set
+   * *name* on its rows to give, so the default arm passes none either and the line stands on its
+   * own — which is exactly what the caption did before this.
+   */
+  const printingLine = caption
+    ? { printing: caption(card), printingTitle: null }
+    : { setCode: card.setCode, collectorNumber: card.collectorNumber };
   /**
    * Opening the card, or nothing at all — see {@link GridCard.id} for the row that has no
    * printing to open. One binding for all three places a press opens the card (the art and
    * both corner marks), so a wall cannot end up half-live.
    */
-  const open = card.id ? (event: ReactMouseEvent) => onSelect(card.id, event) : undefined;
+  const open = card.id ? (event: ReactMouseEvent) => onSelect(card, event) : undefined;
 
   // Held still, because React detaches and re-runs a callback ref whose identity changed —
   // so an inline arrow here would tear the caller's registration down and build it again on
@@ -1172,19 +1224,19 @@ function Tile<T extends GridCard>({
   );
 
   return (
-    // A wrapper rather than one big button: the caption now carries a control of its own,
-    // and a button inside a button is invalid HTML that React warns about and browsers
-    // render as they please. The art is the button; the quick-add is its neighbour.
+    // A wrapper rather than one big button: the tile carries a control of its own, and a button
+    // inside a button is invalid HTML that React warns about and browsers render as they please.
+    // The art is the button; the quick-add is its neighbour in the strip over the picture's foot.
     <div
       ref={attach}
       // The tile's place in the list, for the arrow-key walk — on the root because a press can
-      // land on any of a tile's four parts (the art, either corner, the caption's control) and
+      // land on any of a tile's parts (the art, either corner, the action strip, the chin) and
       // only this box contains all of them. Written out rather than built from
       // `GRID_INDEX_ATTR`, which is the spelling the reading end uses; the two are one file
       // apart on purpose, since a JSX attribute assembled from a constant is a name neither the
       // browser's devtools nor a reader can grep for.
       data-grid-index={gridIndex}
-      // The whole tile, rather than the art button inside it: a right-click on the caption, on
+      // The whole tile, rather than the art button inside it: a right-click on the chin, on
       // the printing count or on the owned badge is a right-click on the card. The handler is
       // the caller's and is already built — see {@link CardGrid}'s `cardMenu` — so a wall that
       // was given none attaches nothing at all.
@@ -1212,7 +1264,7 @@ function Tile<T extends GridCard>({
       tabIndex={-1}
       // The width, and the two variables everything drawn on this card sizes itself against. They
       // go here rather than on the row because this is the box that *is* a card — a mark inherits
-      // them wherever the caller puts it, corners and caption alike, and nothing outside a tile
+      // them wherever the caller puts it, corners and chin alike, and nothing outside a tile
       // ever sees them.
       style={{ width, ...cardScaleVars(zoom) }}
       // **`scroll-m-1.5` is room for the focus ring, and it is the arrow walk that needs it.**
@@ -1232,9 +1284,13 @@ function Tile<T extends GridCard>({
       // owns this scroller's offset and the tile's final transform lands in the same commit the
       // scroll is computed in, so the correction is a fraction of the ring's room rather than
       // something needing a frame of its own.
-      className="group flex shrink-0 scroll-m-1.5 flex-col gap-[calc(0.25rem*var(--mark-scale,1))]"
+      // **No gap between the art and the chin.** The chin is *attached* to the card — it rides
+      // `CHIN_RISE` up over the face's clipped corners so the two are one piece of cardboard — and
+      // a gap here would separate exactly what that rise exists to fuse. It used to be `gap-1`,
+      // budgeted into the row's height as `CAPTION_GAP`; both are gone together.
+      className="group flex shrink-0 scroll-m-1.5 flex-col"
       // A Shift-click is a range (issue #214), and Shift in a browser also drags a text selection
-      // across everything between the two presses — on a wall of forty tiles, every caption from
+      // across everything between the two presses — on a wall of forty tiles, every chin from
       // the anchor to the pointer painted blue for the length of the gesture. On the tile's root
       // rather than on the art button, because the press can land on any of its four parts.
       onMouseDown={suppressRangeSelection}
@@ -1259,7 +1315,7 @@ function Tile<T extends GridCard>({
         >
           {/* The frame, the picture, its retry and the no-art fallback all live in
               `CardArt` — five surfaces draw a card and this is the one definition of what
-              that looks like. The button, the focus ring and the caption stay here, because
+              that looks like. The button, the focus ring and the chin stay here, because
               they are what makes this frame a *tile* rather than a picture. */}
           <CardArt
             // `null`, not `""`: a row with no printing fetches nothing and gets the no-art
@@ -1294,7 +1350,7 @@ function Tile<T extends GridCard>({
           // bubbles to the same element it bubbled to when it landed on the art. The corner is
           // not marked `data-no-drag`, so it is a grab handle like the rest of the tile.
           //
-          // No keyboard handler, and none is owed: the corner duplicates a fact the caption
+          // No keyboard handler, and none is owed: the corner duplicates a fact the chin
           // already states in words and opens the card the tile's own button opens. A second
           // tab stop per tile would be forty extra presses across a wall to reach nothing new.
           // (The eslint config carries no `jsx-a11y` plugin, so nothing flags the handler
@@ -1347,49 +1403,77 @@ function Tile<T extends GridCard>({
             {corner}
           </span>
         )}
+        {action && (
+          // **Over the art, not in the chin** — there is no room for a 20px control beside a
+          // price at 170px, and this is where the deck editor already puts a card's stepper. It
+          // is absolutely positioned, so it costs the wall no height and `tileHeight` is
+          // unchanged by its existence.
+          //
+          // `relative` here rather than on the chin, because it is what the 256px popup hangs
+          // off: a popup on a 170px tile has to open from the tile's *left* edge, or the first
+          // column's opens left of the scroller — and left overflow, unlike right, cannot be
+          // scrolled back into view. Both callers pass their control `static` for exactly that,
+          // and this box is the same width the caption was.
+          //
+          // Revealed on hover **and on focus-within**, and never removed from the tab order:
+          // "visible on hover" is not a state a keyboard has.
+          //
+          // **`pointer-events-none` on the strip, `auto` on what it holds** — `FoilOverlay`'s
+          // arrangement, and here it is what keeps the card openable. The strip is the tile's full
+          // width for the anchoring reason above, it lies *over* the art, and an `opacity-0`
+          // element is still a hit target — so without this the bottom ~28px of every card on
+          // five walls would swallow the press that opens it, and the reader would find a band
+          // across the foot of the picture that simply does not respond. jsdom has no layout
+          // engine and therefore no hit testing, so nothing in the suite can go red for the
+          // behaviour; the two classes are pinned instead.
+          <span
+            className={cn(
+              "pointer-events-none absolute inset-x-0 bottom-0 flex justify-end",
+              "[&>*]:pointer-events-auto",
+              "px-[calc(0.25rem*var(--mark-scale,1))] py-[calc(0.25rem*var(--mark-scale,1))]",
+              REVEAL_ON_HOVER,
+            )}
+          >
+            {action(card)}
+          </span>
+        )}
       </div>
 
-      {/* The gem carries no word here — a tile has room for a set and a number and nothing
-          else. `RarityGem` keeps the rarity in the accessible name anyway, which is what
-          the tile's own `title` attribute used to be standing in for badly. */}
-      {/* `relative` is what the popup below hangs from: 256px of controls anchored to a
-          170px tile has to open from the tile's *left* edge, or the first column's popup
-          starts left of the scroller — and left overflow, unlike right, cannot be scrolled
-          back into view. */}
-      {/* The type and the gutter in it are sizes at 100% zoom: the strip's own height already
-          followed the card (`captionHeight`), and 12px type inside a doubled one read as a label
-          the card had outgrown — which is the whole of what the strip was budgeted to hold. The
-          leading is named beside the size deliberately, because an arbitrary `text-[…]` sets the
-          font size and nothing else. */}
-      <span
-        className={cn(
-          "relative flex items-center font-mono text-dim",
-          "gap-[calc(0.375rem*var(--mark-scale,1))]",
-          "text-[calc(0.75rem*var(--mark-scale,1))] leading-[calc(1rem*var(--mark-scale,1))]",
-        )}
-      >
-        <RarityGem rarity={card.rarity} />
-        <span className="min-w-0 flex-1 truncate">
-          {/* The printing, in the caller's words where it has any of its own — see
-              {@link CardGrid}'s `caption`, which exists because a wish for *any* printing is
-              drawn as one and must not be captioned as one. */}
-          {caption ? caption(card) : `${card.setCode.toUpperCase()} · ${card.collectorNumber}`}
-          {/* The finish in words, because the art's chip is `aria-hidden` — it sits inside
-              the tile's button, where any text of its own would join the button's accessible
-              name and make a wall of foils forty buttons called "… Foil". Stated here
-              instead, in the caption, which is a sibling of that button. */}
-          {finishWord && <span className="sr-only">, {finishWord}</span>}
-          {/* And the crown, for the same reason and in the same place: it shares the chip
-              that the whole `aria-hidden` overlay covers, so the picture is decoration and
-              this line is the statement. */}
-          {crowned && <span className="sr-only">, {GAME_CHANGER_LABEL}</span>}
-        </span>
-        {/* Whatever the caller hangs here — the search's quick-add, anchored to this
-            caption. The tile does not build it, because what a control needs to be honest
-            (which finishes this printing exists in, which oracle card it is of) is on the
-            search's row and on no other. */}
-        {action?.(card)}
-      </span>
+      {/* The card's foot — `components/CardChin`, which is the deck stack's, and the one
+          definition of what a foot looks like on any surface in this app. The rarity gem, the
+          printing, the finish and the price, in the data face and one step dimmer. */}
+      <CardChin
+        zoom={zoom}
+        rarity={card.rarity}
+        {...printingLine}
+        finish={tileFinish}
+        treatments={tileTreatments}
+        money={money?.(card)}
+        // **`"art"`.** `CardArt` has no border of its own, so the chin supplies all three of its
+        // edges. See the prop.
+        seam="art"
+        // **The crown only, and the finish is deliberately not here beside it.**
+        //
+        // This slot used to carry both, because the art's chip is `aria-hidden` — it sits inside
+        // the tile's button, where any text of its own would join the button's accessible name and
+        // make a wall of foils forty buttons called "… Foil" — so the tile stated the words itself
+        // in a sibling of that button. The chin's own `FinishMark` **is** that sibling now, and it
+        // states them through its `aria-label`: an `sr-only` word beside it made a foil card say
+        // "Foil" twice.
+        //
+        // **The two conditions are identical, so nothing was lost by dropping it.** The word was
+        // drawn when `treatmentTitle(treatments)` or `finish` said something; `CardChin` draws the
+        // mark on exactly `finish !== null || treatments.length > 0`; and `FinishMark`'s label is
+        // the same `named ?? FINISH_LABEL[finish]` the word was built from. A Serialized *nonfoil*
+        // — a plain finish carrying a name — still draws and still speaks, which is the one row
+        // where the two conditions could have come apart.
+        //
+        // The crown has no such twin. `GameChangerMark` is drawn only inside the `aria-hidden`
+        // overlay and the chin has no slot for it, so this span is still the only thing that says
+        // it. Turning the art's chip off would take the crown with it — `FoilOverlay`'s `mark`
+        // governs both — which is why the *glyph* is drawn twice on this wall and the *word* once.
+        extra={crowned && <span className="sr-only">, {GAME_CHANGER_LABEL}</span>}
+      />
     </div>
   );
 }
