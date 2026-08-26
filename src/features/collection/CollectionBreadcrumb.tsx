@@ -15,18 +15,28 @@
  * is" is not an operation. At the root the trail is empty and `Collection` is itself that last
  * segment — the same rule, not a special case.
  *
- * **No `flattened` prop, which is where this parts company with `WishlistBreadcrumb`.** The
- * wishlist has a Flatten switch because `WishlistQuery` reads an absent `folderId` as *the root
- * wishlist* — the wishes filed nowhere — so it needs a second field to say "every folder". The
- * collection's is the other way round: `CollectionQuery.folderId` absent means **every folder**
- * (`collection.rs`, and spec §8.4), which is the view this page has always opened on. So the
- * root of this trail already *is* the flattened list, there is no third state to draw, and a prop
- * with one possible value would be a switch nothing can throw.
+ * **No `flattened` prop, which is where this parts company with `WishlistBreadcrumb` — and the
+ * reason is now the opposite of the one that used to be written here.** That reason was that the
+ * collection had no flattened state to draw: `CollectionQuery.folderId` absent meant *every
+ * folder*, so the root of this trail already was the whole binder and a prop could only ever
+ * carry one value. **Both halves of that are false as of the Flatten switch.** The root is
+ * `rootOnly` now — the copies filed nowhere, the wishlist's own reading — and the switch exists.
  *
- * That difference has one consequence worth stating where it is read: dropping on `Collection`
- * still means **un-file to the root**, which is a narrower thing than the level the segment
- * navigates to. The two readings are the same word doing what it does everywhere else in this app
- * — `null` is the root, a real destination, and the root of a cabinet is also the whole of it.
+ * What replaces it is a placement decision that lives one file up rather than in here.
+ * `WishlistBreadcrumb` survives its own Flatten by drawing `Wishlist · all folders` in inert
+ * words; `CollectionPage` takes this whole component off screen instead, together with the folder
+ * wall and the pinned strip, because on this page Flatten means *no filing on screen at all* —
+ * and a bar left saying `Collection · all folders` over a page with no folder cards and no deck
+ * groups would be the last piece of a cabinet that is otherwise gone. So the prop would be a
+ * switch this page never throws: not because there is one state, but because the other state is
+ * drawn by not drawing this. `CollectionPage`'s `cabinet` is the gate, and it is one flag for all
+ * three.
+ *
+ * One consequence of the new root reading is worth stating where it is read, because it removed a
+ * wrinkle rather than adding one: dropping on `Collection` means **un-file to the root**, and the
+ * segment now *navigates* to exactly those copies. The two used to be different sizes — a drop
+ * narrowed to the unfiled rows while the press widened to every folder — and they are the same
+ * place again.
  */
 import { useRef } from "react";
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";

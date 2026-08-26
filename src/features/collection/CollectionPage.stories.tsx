@@ -92,6 +92,13 @@ const meta = {
           "It stays because `collection_update` can still produce one — an edit form sends eight " +
           "fields at once and must not delete its own subject — and it is what the Folder " +
           "column's removal control exists for.\n\n" +
+          "**The page opens on the copies filed _nowhere_, which is five of those twelve.** The " +
+          "root asks `rootOnly` since the Flatten switch landed, where an absent `folderId` used " +
+          "to mean every folder — so four rows in the reader's binders and three in two deck " +
+          "groups are one press away rather than on screen. That press is {@link Flattened}, " +
+          "and the seed is what makes the difference visible: `collection_summary` still reads " +
+          "`totalCards: 20` over `entries: 12` when it is asked *nothing*, which is what the " +
+          "export dialog's \"ignoring the filters and folders\" offer reaches.\n\n" +
           "**One state has no story: a page-load failure.** The `busy` fault is honoured by " +
           "write handlers only — deliberately, because reads go through a second, read-only " +
           "connection — so no seed or fault makes `collection_list` throw, and the " +
@@ -112,29 +119,79 @@ type Story = StoryObj<typeof meta>;
  * under the table, rather than forty times beside forty rows — removal is offered on a row at
  * zero and nowhere else (`CollectionTable.tsx:200`), and that is the one thing about this table
  * a reader cannot see.
+ *
+ * **The list is the root, and the root is the copies filed nowhere.** Five of the seed's twelve
+ * entries: the other seven are in the reader's two binders or in one of two deck groups, and this
+ * story asserts one of each is *absent* — Black Lotus sits in `Trade binder` and is the cleanest
+ * proof that filing is now doing something. That reverses what this story pinned before the
+ * Flatten switch, and the reversal is the requested behaviour rather than a regression:
+ * {@link Flattened} is the one press that puts the whole binder back.
  */
 export const Default: Story = {
   args: { view: "table" },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     // The first row in `collection::COLLECTION_DEFAULT_ORDER` — name, then set code, then the
-    // collector number cast to an integer. Named rather than counted: jsdom's viewport is not
-    // the app's, so how many rows the virtualiser draws here is an artefact of
-    // `src/stories.test.tsx`'s layout stub.
-    await expect(await canvas.findByText("Black Lotus")).toBeInTheDocument();
+    // collector number cast to an integer — over the five rows the root holds. Named rather than
+    // counted: jsdom's viewport is not the app's, so how many rows the virtualiser draws here is
+    // an artefact of `src/stories.test.tsx`'s layout stub.
+    await expect(await canvas.findByText("Tarmogoyf")).toBeInTheDocument();
+    // Filed in `Trade binder`, and therefore not at the root. The one assertion in this file
+    // that would go green again if `rootOnly` stopped being sent.
+    await expect(canvas.queryByText("Black Lotus")).toBeNull();
     // What assistive tech is told the list is: every matching row plus the header
     // (`VirtualTable.tsx:181`), not the two dozen rows a virtualised table keeps in the DOM.
-    // 12 entries, so 13.
+    // Five unfiled entries, so 6.
     await expect(canvas.getByRole("table", { name: "Your collection" })).toHaveAttribute(
       "aria-rowcount",
-      "13",
+      "6",
     );
     await expect(canvas.getByText("To remove an entry, set its copies to zero.")).toBeVisible();
   },
 };
 
 /**
- * The same twelve entries as a wall of art — and **not a drag source**.
+ * The same collection with the filing ignored — **every copy at once, wherever it is filed.**
+ *
+ * This is the other half of the root's new meaning, and the reason the switch exists at all: the
+ * root holds the five entries nobody filed, and Flatten is the one press that puts all twelve back
+ * on screen, including the three sitting in two decks' groups. It rides the filter bar past the
+ * hairline, beside the grid-and-table pair, where every control is about how the list is *drawn*
+ * rather than which rows are in it.
+ *
+ * **What goes with the press is the whole cabinet** — the breadcrumb, the folder wall with its
+ * `New folder` tile, and the pinned strip of deck groups and `Recently removed`. Nothing is lost
+ * by that: those copies are in the list, and each one names its own drawer in the table's Folder
+ * column (on the wall it is the tile's caption instead — see the wall's own `captionFor`).
+ */
+export const Flattened: Story = {
+  args: { view: "table" },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(await canvas.findByText("Urza's Saga")).toBeInTheDocument();
+
+    await userEvent.click(canvas.getByRole("button", { name: "Flatten" }));
+
+    // The whole seed, and the count is what says so: 12 entries plus the header.
+    await waitFor(async () => {
+      await expect(canvas.getByRole("table", { name: "Your collection" })).toHaveAttribute(
+        "aria-rowcount",
+        "13",
+      );
+    });
+    // The card that was filed away, back — and the folder it is in, named on its own row.
+    await expect(canvas.getByText("Black Lotus")).toBeInTheDocument();
+    // And the cabinet is gone: no trail to walk, no drawers to open, no doors into the levels
+    // this list is deliberately ignoring.
+    await expect(canvas.queryByRole("navigation", { name: "Collection folders" })).toBeNull();
+    await expect(canvas.queryByRole("list", { name: "Folders" })).toBeNull();
+    await expect(canvas.queryByRole("button", { name: "New folder" })).toBeNull();
+    await expect(canvas.queryByRole("list", { name: "Deck folders" })).toBeNull();
+  },
+};
+
+/**
+ * The root's five entries as a wall of art — and **not a drag source**.
  *
  * Spec §1's card surfaces are the search wall, the collection *table*'s rows, pinned wishes and
  * the card pane's printings. This wall is not among them: `CollectionPage.tsx:291-304` hands
@@ -151,7 +208,10 @@ export const CardMode: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(await canvas.findByRole("group", { name: "Your collection" })).toBeInTheDocument();
-    await expect(await canvas.findByRole("button", { name: "Black Lotus" })).toBeInTheDocument();
+    // A card the root actually holds. Black Lotus stood here until the root started meaning
+    // "filed nowhere" — the seed's only copy of one is in `Trade binder`, which {@link Flattened}
+    // is the press that reaches.
+    await expect(await canvas.findByRole("button", { name: "Urza's Saga" })).toBeInTheDocument();
     // Nothing on this page can be picked up. Over the whole canvas rather than one tile: the
     // claim is that the wall registered no draggable at all, and a single tile could pass while
     // the rest did not. The card art is `draggable={false}` and so is not matched here.
@@ -178,6 +238,44 @@ export const Empty: Story = {
         "Nothing here yet. Add cards from search, or import a collection file.",
       ),
     ).toBeInTheDocument();
+  },
+};
+
+/**
+ * **A cabinet nobody has opened yet — and the one tile that opens it.**
+ *
+ * The wall is drawn over zero folders on purpose, which is what changed when `+ New folder` left
+ * the row beside the breadcrumb and became the wall's first tile. Gated on the folder count — the
+ * gate that was free while the control sat outside — it would be a trap door: no folder card,
+ * therefore no wall, therefore no way to make a first folder, and the cabinet could never be
+ * opened by anyone who did not already have one.
+ *
+ * No breadcrumb, though, and that half is unchanged: a lone inert `Collection` under a ribbon that
+ * already says Collection is a subheading repeating its own heading, and there is nowhere for it
+ * to lead.
+ *
+ * The tile is solid-bordered where every folder card is dashed — a dash means *container, not a
+ * thing you own*, and this is a button. `NewFolderCard` carries that argument in full.
+ */
+export const EmptyCabinet: Story = {
+  args: { view: "table" },
+  parameters: { fake: { seed: "empty" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const wall = await canvas.findByRole("list", { name: "Folders" });
+
+    // Exactly one tile, and it is the one that makes the first folder.
+    await expect(within(wall).getAllByRole("listitem")).toHaveLength(1);
+    await expect(canvas.queryByRole("navigation", { name: "Collection folders" })).toBeNull();
+
+    await userEvent.click(within(wall).getByRole("button", { name: "New folder" }));
+
+    // The naming field, and the sentence that says where the folder will land — which is the
+    // whole of what a reader who cannot see which level the strip is drawn over is owed.
+    await expect(
+      await canvas.findByRole("textbox", { name: "New folder name" }),
+    ).toBeInTheDocument();
+    await expect(canvas.getByText("in Collection")).toBeInTheDocument();
   },
 };
 
@@ -211,8 +309,10 @@ export const NeedsReview: Story = {
     await expect(banner).toHaveTextContent(
       "Needs review:1 entry names a printing that changed or left the card database.",
     );
-    // Twelve unflagged rows are still on screen with it — a flag lists, it does not filter.
-    await expect(canvas.getByText("Black Lotus")).toBeInTheDocument();
+    // The root's unflagged rows are still on screen with it — a flag lists, it does not filter.
+    // `Urza's Saga` rather than the `Black Lotus` that stood here: the root is the copies filed
+    // nowhere now, and the seed's Lotus is in `Trade binder`.
+    await expect(canvas.getByText("Urza's Saga")).toBeInTheDocument();
 
     await userEvent.click(within(banner).getByRole("button", { name: "Show them" }));
 
@@ -223,7 +323,7 @@ export const NeedsReview: Story = {
     });
     // The banner is gone, because the list is now the answer to the question it was asking.
     await expect(banner).toBeEmptyDOMElement();
-    await expect(canvas.queryByText("Black Lotus")).toBeNull();
+    await expect(canvas.queryByText("Urza's Saga")).toBeNull();
   },
 };
 
@@ -309,11 +409,19 @@ export const Busy: Story = {
  * for a few hours in this PR, because `setQuantity`'s handler ignored `change.removed` while
  * `settle()` deliberately skips re-reading the list. jsdom unit tests could not catch it: they
  * mocked `{ quantity: 0, removed: false }`, a response the backend can no longer produce.
+ *
+ * **It presses Flatten first, and that is a fact about the seed rather than about the stepper.**
+ * The row with the acquisition story is filed in `Binder`, so the root — which is now the copies
+ * filed nowhere — does not hold it. Flatten is one press and keeps the story pointed at the row
+ * whose provenance is the whole argument above; the alternative was to pick a different row and
+ * lose it.
  */
 export const ZeroDeletesTheRow: Story = {
   args: { view: "table" },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
+    await userEvent.click(await canvas.findByRole("button", { name: "Flatten" }));
+
     const label = "Quantity of Lightning Bolt (Nonfoil, HP)";
     const box = await canvas.findByRole("spinbutton", { name: label });
     await expect(box).toHaveValue(1);

@@ -3154,13 +3154,28 @@ function collectionScope(db: FakeDb, q: CollectionQuery): FakeEntry[] {
     if (!inList(e.condition, q.conditions, CONDITIONS)) return false;
     if (q.needsReview === true && e.needsReview === null) return false;
     if (q.needsReview === false && e.needsReview !== null) return false;
+    // **Three states over two fields, and the fake must fall for none of the traps.**
+    //
     // **Absent and `null` are one state here, and that is not {@link wishlistScope}'s rule.**
     // `CollectionQuery.folderId` is `Option<i64>` on the wire, where a JSON `null` deserializes
-    // to the same `None` an absent field does — so "every folder" is the only thing either can
-    // mean, and the fake must not be able to answer "the root and nothing else" when the app
-    // cannot be asked it. The wishlist needs a second field (`flatten`) for exactly this reason
-    // and the collection has not needed the third state yet.
-    if ((q.folderId ?? null) !== null && e.folderId !== q.folderId) return false;
+    // to the same `None` an absent field does — so neither can mean "the root", and an absent
+    // one is **every folder**: what this query has always answered, and what the mirror, the
+    // export sweep, the deck panel and the importer's preview all still ask by saying nothing.
+    //
+    // `rootOnly` is the third state, and it is `WishlistQuery.flatten` read from the other end:
+    // there the root is the default and a flag widens it, here every folder is the default and
+    // the flag narrows. Same three states, opposite polarity — because this field was added to
+    // a query whose old callers had to keep their answer.
+    //
+    // **`folderId` outranks `rootOnly` rather than intersecting with it**, which is the arm a
+    // test has to hold: a stale flag riding beside a folder id would otherwise answer the empty
+    // intersection and read as an emptied drawer.
+    const named = q.folderId ?? null;
+    if (named !== null) {
+      if (e.folderId !== named) return false;
+    } else if (q.rootOnly === true && e.folderId !== null) {
+      return false;
+    }
     // `"unallocated"` drops the copies a **deck** is holding and nothing else: the root, a
     // folder the reader made and `Recently removed` are all cards on their desk. Since schema
     // v25 every deck has a group and `collection_to_deck` files copies into it, so this is a

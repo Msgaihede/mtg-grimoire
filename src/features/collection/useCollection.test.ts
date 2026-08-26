@@ -305,4 +305,133 @@ describe("useCollection", () => {
     await waitFor(() => expect(lastQuery().sort).toEqual([{ key: "price", dir: "desc" }]));
     expect(collectionSummary).toHaveBeenCalledTimes(1);
   });
+
+  /**
+   * The three states the collection's root gained when Flatten landed, read off the wire.
+   *
+   * This is the assertion that keeps `useCollection.ts`'s comments honest, and it is worth
+   * making at the payload rather than at the state: the meaning of an absent `folderId` did
+   * **not** change — it is still "every folder" on the other end, because the mirror, the
+   * export sweep, the deck panel and the importer's preview all ask their question by saying
+   * nothing. What changed is that this view now says the narrow thing explicitly.
+   */
+  it("sends rootOnly at the root, folderId inside a folder, and neither when flattened", async () => {
+    const { result } = renderHook(() => useCollection(), { wrapper });
+    await waitFor(() => expect(collectionList).toHaveBeenCalled());
+
+    // The view opens at the root, which narrows now — `rootOnly` is what says which of the two
+    // things an absent `folderId` could mean is the one meant.
+    expect(lastQuery().folderId).toBeUndefined();
+    expect(lastQuery().rootOnly).toBe(true);
+
+    act(() => result.current.openFolder(3));
+
+    await waitFor(() => expect(lastQuery().folderId).toBe(3));
+    // `folderId` outranks the flag on the other end, so a flag riding along beside it would be
+    // a payload saying something the backend then ignores.
+    expect(lastQuery().rootOnly).toBeUndefined();
+
+    act(() => result.current.openFolder(null));
+    act(() => result.current.toggleFlatten());
+
+    // Neither field: absent + absent is "every folder", which is exactly what Flatten asks for
+    // and the one state this query has always been able to answer.
+    await waitFor(() => expect(lastQuery().rootOnly).toBeUndefined());
+    expect(lastQuery().folderId).toBeUndefined();
+  });
+
+  /** Flatten while standing in a folder drops the id rather than intersecting with it — the
+   *  half `useCollection.ts` writes down at `filters.folderId`, and the one a reader would
+   *  see as a Flatten that showed one drawer. */
+  it("stops sending folderId the moment the list is flattened", async () => {
+    const { result } = renderHook(() => useCollection(), { wrapper });
+    await waitFor(() => expect(collectionList).toHaveBeenCalled());
+
+    act(() => result.current.openFolder(3));
+    await waitFor(() => expect(lastQuery().folderId).toBe(3));
+
+    act(() => result.current.toggleFlatten());
+
+    await waitFor(() => expect(lastQuery().folderId).toBeUndefined());
+    expect(lastQuery().rootOnly).toBeUndefined();
+    // The reader has not left the folder — Flatten is a lens over where they are standing, so
+    // turning it back off puts them back in it rather than at the root.
+    expect(result.current.folderId).toBe(3);
+
+    act(() => result.current.toggleFlatten());
+
+    await waitFor(() => expect(lastQuery().folderId).toBe(3));
+  });
+
+  /**
+   * Flatten is navigation, not a filter — the same fence `folderId` and `sort` already sit
+   * behind. `useCollection.ts` states it at the `useState`, at `activeCount` and at `resetAll`;
+   * this is what keeps all three honest.
+   *
+   * A real filter is on throughout, so a bug that folded navigation into the count could not
+   * hide behind "both read zero".
+   */
+  it("neither counts flatten as a filter nor lets resetAll clear it", () => {
+    const { result } = renderHook(() => useCollection(), { wrapper });
+    expect(result.current.flatten).toBe(false);
+    expect(result.current.activeCount).toBe(0);
+
+    act(() => {
+      result.current.setText("bolt");
+      result.current.openFolder(3);
+      result.current.toggleFlatten();
+    });
+
+    expect(result.current.flatten).toBe(true);
+    expect(result.current.activeCount).toBe(1);
+
+    act(() => result.current.resetAll());
+
+    expect(result.current.activeCount).toBe(0);
+    expect(result.current.text).toBe("");
+    // The two parts `resetAll` must not touch: a cleared search that also marched the reader
+    // back to the root, or out of Flatten, would be navigating on their behalf.
+    expect(result.current.flatten).toBe(true);
+    expect(result.current.folderId).toBe(3);
+  });
+
+  /** `toggleFlatten` is a flip and nothing else — `useWishlist`'s shape, so the two folder
+   *  surfaces present one control to the page that draws it. */
+  it("toggles flatten off again", () => {
+    const { result } = renderHook(() => useCollection(), { wrapper });
+
+    act(() => result.current.toggleFlatten());
+    expect(result.current.flatten).toBe(true);
+
+    act(() => result.current.toggleFlatten());
+    expect(result.current.flatten).toBe(false);
+  });
+
+  /**
+   * Three levels are three lists, and the key is what keeps them apart. Against local SQLite a
+   * collision answers instantly out of the wrong cache with nothing on screen to notice, which
+   * is why this is asserted on the key rather than on what came back.
+   */
+  it("keys the root, one folder and the flattened cabinet apart", () => {
+    const { result } = renderHook(() => useCollection(), { wrapper });
+    const root = result.current.queryKeyString;
+
+    act(() => result.current.openFolder(3));
+    const folder = result.current.queryKeyString;
+
+    act(() => result.current.openFolder(null));
+    expect(result.current.queryKeyString).toBe(root);
+
+    act(() => result.current.toggleFlatten());
+    const flat = result.current.queryKeyString;
+
+    expect(new Set([root, folder, flat]).size).toBe(3);
+
+    // …and flattened is **one** list however the reader got there. Neither field reaches the
+    // wire under Flatten, so "flattened in the Binder" and "flattened at the root" are the same
+    // request, and two keys for it would be two cache entries for one answer.
+    act(() => result.current.openFolder(3));
+
+    expect(result.current.queryKeyString).toBe(flat);
+  });
 });

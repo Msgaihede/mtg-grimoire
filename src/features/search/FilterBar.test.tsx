@@ -1615,3 +1615,139 @@ describe("FilterBar, its owned pair", () => {
     expect(missing).not.toHaveAttribute("aria-disabled");
   });
 });
+
+/**
+ * **Flatten rides this row, and it rides the half of it that is not about filtering.**
+ *
+ * The switch used to sit down beside the breadcrumb and the folder cards, on the argument that
+ * where a reader is standing is navigation rather than a narrowing. That argument is intact and it
+ * is not what decides the placement: the bar has a hairline across it, and everything past that
+ * hairline — the sort, the grid-or-table pair — is a statement about how the results are *drawn*
+ * rather than about which ones there are. Flatten is exactly that kind of statement, one level up:
+ * how much of the *tree* is drawn. Both hooks already keep it outside their filter state and out
+ * of `resetAll`, which is the same property the controls past the hairline have — so the cases
+ * below are the two halves of that claim: it is next to the pair, and Reset all cannot reach it.
+ *
+ * The prop is `FilterBar`'s own rather than a member of `FilterSurface`, because only two of the
+ * surfaces that draw this row have any filing at all. Which is why the first case is an absence.
+ */
+describe("FilterBar, its Flatten switch", () => {
+  /**
+   * **The absence is the assertion**, and it is the case that keeps this control off the surfaces
+   * with no cabinet: the card search, the Tags page and the deck editor's docked panel are lists
+   * of Scryfall's printings, where there is no filing to ignore and a Flatten chip would be a
+   * switch that does nothing. The layout pair is asserted beside it, because a row that had failed
+   * to render at all would satisfy the absence just as well.
+   */
+  it("draws no Flatten switch where nothing passed one", () => {
+    render(<FilterBar search={search()} />);
+
+    expect(screen.queryByRole("button", { name: "Flatten" })).toBeNull();
+    expect(screen.getByRole("group", { name: "Result layout" })).toBeInTheDocument();
+  });
+
+  /**
+   * One press either way — there is no third state to walk — so the whole of the control is the
+   * state it reports and the call it makes. `toHaveBeenCalledTimes(1)` rather than a bare
+   * `toHaveBeenCalled`, because a chip that fires its handler twice per press is a switch that
+   * ends a press exactly where it started and would satisfy the looser matcher.
+   */
+  it("reports whether the filing is being ignored, and toggles it on a press", async () => {
+    const onToggle = vi.fn();
+    render(<FilterBar search={search()} flatten={{ pressed: false, onToggle }} />);
+
+    const chip = screen.getByRole("button", { name: "Flatten" });
+    expect(chip).toHaveAttribute("aria-pressed", "false");
+
+    await userEvent.click(chip);
+
+    expect(onToggle).toHaveBeenCalledTimes(1);
+  });
+
+  /** The other half of the state, drawn: a chip whose `pressed` was hard-wired to `false` would
+   *  pass the case above and lie on every flattened list. */
+  it("draws the switch on when the filing is being ignored", () => {
+    render(<FilterBar search={search()} flatten={{ pressed: true, onToggle: vi.fn() }} />);
+
+    expect(screen.getByRole("button", { name: "Flatten" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  /**
+   * **Reset all does not reach it, which is the whole argument for where it sits.**
+   *
+   * Both hooks keep `flatten` outside their filter state and their `resetAll` deliberately leaves
+   * it alone — clearing a search must not also drop the reader back into a filing they had stepped
+   * out of. This is that rule checked at the control rather than at the hook: the press reaches
+   * `resetAll` and nothing else.
+   *
+   * `activeCount: 3` and not the default 0, or the case is vacuous: Reset all is drawn at zero and
+   * greyed, and its handler returns early on an empty count — so a bar with nothing filtered would
+   * pass this while wired to call every setter on the page.
+   */
+  it("keeps Flatten out of Reset all", async () => {
+    const onToggle = vi.fn();
+    const resetAll = vi.fn();
+    render(
+      <FilterBar
+        search={search({ activeCount: 3, colors: ["W"], resetAll })}
+        flatten={{ pressed: true, onToggle }}
+      />,
+    );
+
+    await userEvent.click(screen.getByRole("button", { name: /^Reset all/ }));
+
+    expect(resetAll).toHaveBeenCalledTimes(1);
+    expect(onToggle).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Flatten" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
+  /**
+   * **The badge counts filters, and this is not one.** The number on Reset all and the number on
+   * the Filters button are the same number and both come from the surface's own
+   * `activeFilterCount` — so a switch that is on has to leave both where they were and state
+   * nothing under the rule either. `Reset all — 1 filter active` over a search that narrows
+   * nothing is the row telling a reader something untrue about their own list, and the chip under
+   * the rule would offer to remove a filing.
+   */
+  it("does not count Flatten as a filter", () => {
+    render(<FilterBar search={search()} flatten={{ pressed: true, onToggle: vi.fn() }} />);
+
+    expect(screen.getByRole("button", { name: /^Reset all/ })).toHaveAccessibleName(
+      "Reset all — 0 filters active",
+    );
+    expect(screen.getByRole("button", { name: /^Show filters/ })).toHaveAccessibleName(
+      "Show filters — 0 active",
+    );
+    expect(chipLabels()).toEqual([]);
+  });
+
+  /**
+   * **One wrapper for the switch and the pair, and this is the case the move was for.**
+   *
+   * The row is `flex-wrap`, so two controls that are merely adjacent in the markup are two items
+   * the wrap is free to break between — and a Flatten chip on the line above the pair it was put
+   * beside is precisely the arrangement this replaced. The DOM relationship is what says they
+   * cannot: one parent, and the chip is the group's own previous sibling, so nothing has been
+   * ordered between them either.
+   *
+   * **The relationship rather than the classes.** A class assertion here would be checking the
+   * spelling of a wrapper instead of the fact that there is one — and jsdom applies no container
+   * query and loads no stylesheet, so it could not tell a wrapper that holds at 206px from one
+   * that does not. What a test can see is the tree, and the tree is what the wrapping rests on.
+   */
+  it("keeps the switch and the layout pair in one wrapper", () => {
+    render(<FilterBar search={search()} flatten={{ pressed: false, onToggle: vi.fn() }} />);
+
+    const chip = screen.getByRole("button", { name: "Flatten" });
+    const layout = screen.getByRole("group", { name: "Result layout" });
+
+    expect(chip.parentElement).toBe(layout.parentElement);
+    expect(layout.previousElementSibling).toBe(chip);
+  });
+});

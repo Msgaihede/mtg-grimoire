@@ -3333,7 +3333,7 @@ describe("the collection's folders", () => {
     expect(db.collectionEntries.map((e) => e.folderId)).toEqual([1, null]);
   });
 
-  it("reads every folder by default and one folder when asked", () => {
+  it("reads every folder by default, one folder when asked, and the root only when told", () => {
     const db = filed({
       collectionEntries: [
         entry({ id: 1, cardId: BOLT.id, folderId: null }),
@@ -3350,11 +3350,28 @@ describe("the collection's folders", () => {
         .sort((a, b) => a - b);
     // **Absent and `null` are one state here, and it is "every folder"** — the opposite of
     // `wishlist_list`, whose absent `folderId` is the root. `Option<i64>` cannot tell a JSON
-    // `null` from an omission, so the collection has two states where the wishlist has three.
+    // `null` from an omission, which is why the root is a second field here rather than a value
+    // of this one: the mirror, the export sweep, the deck panel and the importer's preview all
+    // ask by saying nothing, and had to keep the answer they already had.
     expect(list({})).toEqual([1, 2, 3]);
     expect(list({ folderId: null })).toEqual([1, 2, 3]);
+    expect(list({ rootOnly: false })).toEqual([1, 2, 3]);
     // Direct only: `Binder` does not answer for what is inside `Trade binder`.
     expect(list({ folderId: 1 })).toEqual([2]);
+    // The third state — `folder_id IS NULL`, the copies nobody has filed and only those. This
+    // is `WishlistQuery.flatten` read from the other end: there the flag widens the root to
+    // everything, here it narrows everything to the root.
+    expect(list({ rootOnly: true })).toEqual([1]);
+    expect(list({ folderId: null, rootOnly: true })).toEqual([1]);
+    // **A folder id wins rather than intersecting to nothing.** A stale flag beside an id would
+    // otherwise answer the empty intersection, which on screen reads as an emptied drawer.
+    expect(list({ folderId: 1, rootOnly: true })).toEqual([2]);
+    // The header is taken over the same rows — `collection_summary` reads `collectionScope` and
+    // nothing else, so a root-only list may not be summarised over the whole cabinet.
+    expect(
+      readHandlers(db).collection_summary({ query: { limit: 0, offset: 0, rootOnly: true } })
+        .entries,
+    ).toBe(1);
     // And the row carries its folder's name for the table's own column — a display string, so
     // the root reads `null` rather than a word.
     const rows = readHandlers(db).collection_list({ query: { limit: 10, offset: 0 } }).items;

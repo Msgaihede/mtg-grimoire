@@ -922,14 +922,39 @@ export interface CollectionQuery extends CardFilters {
   needsReview?: boolean;
   /**
    * Which folder the list is being read at. Absent — and `null`, which deserializes to the same
-   * `Option::None` — is **every folder**, which is what the collection has always answered.
+   * `Option::None` — asks nothing about filing; {@link rootOnly} is what narrows to the root.
    *
-   * **That is not {@link WishlistQuery.folderId}'s meaning and the difference is deliberate**:
-   * there `null` is the root list and {@link WishlistQuery.flatten} is the third state, because
-   * the wishlist page navigates *into* a folder. Nothing here needs "the root and nothing else"
-   * yet, so the field carries two states rather than inventing a sentinel for a third.
+   * Three states between the two fields, and this one wins wherever it names a folder:
+   * - `folderId: n` — that folder's **direct** members. Never what is filed in the folders
+   *   inside it, which is `collection_folders::folder_summary`'s rule. A `rootOnly` riding
+   *   along beside it is ignored rather than intersected, so a stale flag cannot empty the
+   *   drawer the reader opened.
+   * - `folderId` absent, `rootOnly: true` — `folder_id IS NULL`, the rows filed nowhere and
+   *   only those.
+   * - `folderId` absent, `rootOnly` absent or `false` — **every folder there is**, which is
+   *   what this query has always answered and what every caller written before folders existed
+   *   still asks by saying nothing: the plain-text mirror, the export sweep's "everything" arm,
+   *   the deck builder's collection panel and the importer's preview.
+   *
+   * **The same three states {@link WishlistQuery.flatten} carries, with the polarity reversed**,
+   * and the reversal is history rather than taste: there `null` is the root and `flatten` widens,
+   * because that query navigated into a folder from the start. Here the widest answer is what an
+   * absent field has always meant, so it is the *narrowing* that needed a second field — an
+   * unasked question keeps today's answer, and a caller nobody updated cannot silently lose rows.
    */
   folderId?: number | null;
+  /**
+   * `true` narrows an absent {@link folderId} to the root — the rows nobody has filed — where
+   * absent otherwise means every folder. Default `false`; ignored entirely when `folderId`
+   * names a folder.
+   *
+   * It exists for {@link WishlistQuery.flatten}'s reason read from the other end. A nullable
+   * `folderId` cannot carry three states on its own, and the value that would have to mean
+   * "the root and nothing else" is already spent: `null` and an omission are one
+   * `Option::None` on the wire. So the third state is a field rather than a sentinel — and it
+   * is the *narrow* one here because the wide one is what every existing caller already gets.
+   */
+  rootOnly?: boolean;
   /**
    * Whether copies a deck has taken off the desk are part of the answer.
    *

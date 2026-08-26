@@ -185,21 +185,25 @@ export function useCollection() {
   // to. Not a filter, so `resetAll` leaves it alone.
   const [sort, setSort] = useState<SortSpec<CollectionSortKey>>([]);
   /**
-   * Which folder the reader is standing in — `null` is the whole collection.
+   * Which folder the reader is standing in — `null` is the **root of the cabinet**, the copies
+   * filed nowhere, exactly as it is on the wishlist.
    *
-   * **`null` is every folder here, where on the wishlist it is the wishes filed nowhere**, and
-   * the difference is the backend's rather than this hook's: `CollectionQuery.folder_id` is
-   * `None = every folder` (spec §8.4), chosen so that every existing caller — the export sweep,
-   * the deck panel, the importer's preview — keeps asking the question it always asked. So this
-   * view still opens on the reader's whole binder, and the root of the cabinet *is* the flat
-   * list. That is also why there is no Flatten chip beside the folder cards: the wishlist needs
-   * one because its own `null` narrows, and this one has nothing left for a second field to say.
+   * **`null` used to be every folder on this view, and Flatten is what took that job over.** The
+   * wire did not move with it: `CollectionQuery.folder_id` is still `None = every folder` (spec
+   * §8.4), chosen so that every caller written before folders existed — the plain-text mirror,
+   * the export sweep, the deck panel, the importer's preview — keeps asking the question it
+   * always asked. This view says the narrower thing with `rootOnly`, a field only it sends, so
+   * the third state arrived without touching anybody else's answer.
    *
    * Deliberately outside `CollectionFilterState`: it is navigation, not something the reader
    * narrowed, so `activeFilterCount` never sees it and `resetAll` leaves it alone — the same
    * reason `sort` is outside.
    */
   const [folderId, setFolderId] = useState<number | null>(null);
+  // `true` ignores `folderId` and answers every copy wherever it is filed. Also navigation
+  // rather than a filter, for the same reason `folderId` is — Flatten is "how much of the
+  // cabinet am I looking at", not "which copies qualify".
+  const [flatten, setFlatten] = useState(false);
   const [debouncedText, setDebouncedText] = useState("");
 
   useEffect(() => {
@@ -252,17 +256,27 @@ export function useCollection() {
     // the list and the header both carry, so it belongs on the shared object and in the key
     // both queries are built from.
     marketplace: marketplace.id,
-    // Sent only when the reader is actually inside a folder — an absent `folder_id` is "every
-    // folder" on the other end, which is exactly what the root of this cabinet means. Dropped
-    // rather than spelled as `null` for the rule `text` already follows: a value the backend
-    // would infer anyway is not put on the wire.
+    // Sent only when the reader is actually inside a folder, and **not at all while the list is
+    // flattened**: `folderId` outranks `rootOnly` on the other end, so an id riding along under
+    // Flatten would narrow the one thing Flatten exists to widen. Dropped rather than spelled as
+    // `null` for the rule `text` already follows — a value the backend would infer anyway is not
+    // put on the wire.
+    folderId: flatten ? undefined : (folderId ?? undefined),
+    // The root narrows now, and this is the field that says so: `folder_id IS NULL`, the copies
+    // filed nowhere. Sent only where it is true, by the same rule — `false` is the backend's
+    // default and a payload carrying it would be lying about intent.
     //
-    // It rides on `filters` rather than beside it because `useExportScope`'s sweep reads this
-    // object: standing in a folder and pressing Export exports that drawer, and `everythingFilters`
-    // strips this field along with the rest to widen the sweep back out. On this surface that
-    // strip is sufficient — unlike the wishlist's, where an absent `folderId` narrows to the root
-    // and "everything" has to be said a second way.
-    folderId: folderId ?? undefined,
+    // Both fields ride on `filters` rather than beside it because `useExportScope`'s sweep reads
+    // this object: standing in a folder and pressing Export exports that drawer, and
+    // `everythingFilters` strips the lot to widen the sweep back out. **That strip is still
+    // sufficient here, and unlike the wishlist's it always will be — but the reason has changed
+    // even though the conclusion has not.** It used to be sufficient because there was only one
+    // field to strip; it is sufficient now because stripping *both* lands on absent + absent,
+    // which is "every folder", which is exactly what "everything" means. The wishlist has to say
+    // `flatten: true` a second way because its own strip lands on the root; this surface's strip
+    // lands on the widest answer there is, so the widest answer stays the one you get by asking
+    // nothing.
+    rootOnly: !flatten && folderId === null ? true : undefined,
   };
 
   /**
@@ -301,14 +315,21 @@ export function useCollection() {
     // sets, so a key that spelled both `""` would serve the complement from the other's cache.
     needsReview === undefined ? "" : needsReview ? "review" : "clear",
     marketplace.id,
-    // Two folders are two lists, and the whole binder is a third: each keeps its own cached
-    // pages and its own scroll position (`queryKeyString` below is what resets it), rather than
-    // one list quietly showing another drawer's page while the new one is still in flight.
+    // Two folders are two lists, the root is a third and the flattened cabinet is a fourth: each
+    // keeps its own cached pages and its own scroll position (`queryKeyString` below is what
+    // resets it), rather than one list quietly showing another drawer's page while the new one
+    // is still in flight.
+    //
+    // One segment with three shapes, and the two words cannot collide with a folder id because
+    // `String(n)` is digits. **Flatten is read before the folder is**, which is the half worth
+    // writing down: flattened, neither `folderId` nor `rootOnly` reaches the wire, so "flattened
+    // while standing in the Binder" and "flattened at the root" are the *same request* and must
+    // not become two cache entries for one answer.
     //
     // In `filterKey` rather than beside the sort, because it is a statement about *which rows* —
     // so the header's aggregates are re-run for the level on screen, which is the whole point of
     // a header that describes what is under it.
-    folderId === null ? "all" : String(folderId),
+    flatten ? "flat" : folderId === null ? "root" : String(folderId),
   ];
 
   // `["collection", …]` on both, so the one `invalidateQueries({ queryKey: ["collection"] })`
@@ -408,15 +429,25 @@ export function useCollection() {
      *  offering the flagged rows, not cycling the chip the reader has not touched. */
     setNeedsReview,
     /**
-     * Which folder the reader is standing in. `null` is the whole collection — every folder,
-     * which is the view this page opens on and the only thing an absent `folder_id` can mean on
-     * the wire.
+     * Which folder the reader is standing in. `null` is the root of the cabinet — a real
+     * destination, the drawer every unfiled copy lands in, and not "no folder chosen".
+     * Navigation, not a filter: excluded from {@link CollectionFilterState} on purpose, so it is
+     * invisible to {@link activeFilterCount} and untouched by `resetAll` below.
      */
     folderId,
-    /** Open a folder, or `null` for the whole collection. This hook only tracks where the reader
-     *  now is; it does not create, rename, move or delete a folder — those live on the page,
-     *  beside the folder cards. */
+    /** Open a folder, or `null` for the root. This hook only tracks where the reader now is; it
+     *  does not create, rename, move or delete a folder — those live on the page, beside the
+     *  folder cards. */
     openFolder: setFolderId,
+    /**
+     * `true` ignores `folderId` and shows every copy regardless of filing — no folder cards, no
+     * drill-down, and every row captioned with where it is filed instead. Also navigation, for
+     * the reason `folderId` is: it says how much of the cabinet is on screen, not which copies
+     * qualify.
+     */
+    flatten,
+    /** Off shows the current folder; on shows the whole collection. */
+    toggleFlatten: () => setFlatten((current) => !current),
     /** The columns this list is ordered by, first one deciding. Empty is name order. */
     sort,
     /** One press on a column header. `additive` is Shift being held. */
@@ -518,9 +549,10 @@ export function useCollection() {
       needsReview,
     }),
     /** Clear every filter at once, including the search box. The sort is not a filter and
-     *  stays: it is how the reader reads, not what they are looking at. `folderId` stays for the
-     *  same reason — it is *where* they are, and a Reset all that marched them back out of the
-     *  drawer they had opened would be navigating on their behalf. */
+     *  stays: it is how the reader reads, not what they are looking at. `folderId` and `flatten`
+     *  stay for the same reason — where they are standing, and whether they are ignoring the
+     *  filing, are navigation rather than something they narrowed, so a Reset all must not march
+     *  them back out of the drawer they opened or drop them out of Flatten. */
     resetAll: () => {
       setText("");
       setFormat("");
