@@ -2832,3 +2832,59 @@ gold is what tells a reader something is pressable. A mark is a picture rather t
 makes no offer, so it makes no false one. Extending the rule to the app's own logo would say the app may
 never draw its logo in its own colour, which is a conclusion about branding drawn from a rule
 about affordance.
+
+## The dropdown's panel, and the containing block that only a browser could refute
+
+**2026-08-26, `npm run build-storybook` (a debug static bundle) served on a throwaway port and
+driven in headless Edge 151 at 1280×800 — `documentElement.clientWidth` 1256 px and `clientHeight`
+708 px, identical to `innerWidth`/`innerHeight`, so no scrollbar separates the two in this
+document.** Every figure below is a reading from that window.
+
+**This pass exists because the suite cannot reach any of it.** jsdom implements no layout — every
+rectangle it measures is `0` — so `usePopupPlacement` is executed by the whole `Dropdown` suite
+without a single one of its numbers being *tested*. `place.test.ts` covers the arithmetic; whether
+that arithmetic is fed the right rectangles, and whether its result lands where a reader can see
+it, is a question only a browser answers. `src/components/Dropdown/PlacementProbe.stories.tsx` is
+the three containers the placement has to survive, and it carries no `play` — a play would be a
+second jsdom reading of the same zeros.
+
+- **Inside an `overflow-y-auto` scroller the panel escapes its container, which is the whole
+  point.** Scroller `top 16 bottom 176` (160 px tall); trigger `left 29 top 78 bottom 114`; panel
+  `left 29 top 118 bottom 392` — **216 px past the scroller's own bottom**, and still 316 px clear
+  of the viewport floor. A native `<select>`'s list escaped this; an absolutely-positioned panel
+  would have been cut off at 176. `panel.left − trigger.left` = **0 px**, gap below the trigger =
+  **4 px**.
+- **Inside a settled `Dialog`'s box the frame correction does real, non-zero work, and this is the
+  reading the whole approach stood on.** The probe's box carries `scale: 1` — what motion leaves on
+  a `Dialog` panel at rest, and **not** `none` — so it is a containing block for a `fixed`
+  descendant. The zero-size `fixed` frame the shell renders at `left: 0; top: 0` measured its own
+  rect at **`left 113 top 113`** instead of the viewport origin: proof the containing block is
+  real, in the one place a browser can give it. The panel's inline offsets came back **`left: 24px`,
+  `top: 64px`** against a trigger at viewport `left 137 top 137 bottom 173`, so `113 + 24 = 137`
+  and `113 + 64 = 177` — `panel.left − trigger.left` = **0 px**, gap = **4 px**. **Uncorrected the
+  panel would have sat at viewport `left 250`, 113 px to the right of the control that opened it** —
+  a styling bug to look at, and a coordinate bug in fact. The other two stories read `frameOrigin`
+  `left 0 top 0`, which is the control this reading needed: the correction is a no-op exactly where
+  no ancestor transforms, and 113 px where one does.
+- **At the bottom of the viewport it flips, and it flips from the right corner.** Trigger
+  `top 660 bottom 696` against a 708 px viewport; panel `top 382 bottom 656` — **above** the
+  trigger, `trigger.top − panel.bottom` = **4 px**, both edges inside the viewport. The class came
+  back `origin-bottom-left` rather than `origin-top-left`, so the panel grows from the corner it is
+  pinned by — this app's standing rule for an anchored popup, confirmed in the DOM and not only in
+  the arithmetic.
+
+**Two mechanics worth keeping, because each is a way to misread this surface.** The panel measured
+`offsetWidth` **143** against a rect width of **143.234375** — sub-pixel layout rounding, *not* the
+entry tween, and the pass proved the difference by re-reading each rect 200 ms apart until two
+agreed and `getComputedStyle(panel).transform` had settled at `none`. A rect taken on the mount
+frame instead is 4% short in both axes, which is why sizes come from `offsetWidth`/`offsetHeight`
+and positions from `getBoundingClientRect()`. And the panel's `min-width` came back **126 px** in
+all three — the trigger's own `offsetWidth` — so a picker never opens narrower than the control
+that produced it.
+
+**What this pass did not measure, stated rather than implied.** No story here forces the
+**horizontal** flip: all three came back `origin-*-left` with `flipX` false, because a 143 px panel
+at `left 29`, `137` and `12` cannot run past the far gutter of a 1256 px viewport. The
+`align: "end"` path and the `VIEWPORT_GUTTER` clamp are therefore still arithmetic-only — covered
+in `place.test.ts`, unproven in a browser. The first consumer that pins a wide panel to the right
+end of a filter row should take its own reading.
