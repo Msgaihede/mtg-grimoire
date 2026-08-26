@@ -246,19 +246,28 @@ export const ByManaValue: Story = { args: { groups: deckGroups("manaValue", "man
 /**
  * The **Live** list of a deck that keeps a plan.
  *
- * A decklist line is a quantity, a name and its marks, so the tick joins the finish glyph and the
+ * A decklist line is a quantity, a name and its marks, so the mark joins the finish glyph and the
  * `GC` badge at the end of the line rather than taking a corner it has not got. Decoration here:
  * the line is a button with an explicit `aria-label`, so the word is `deckCardName`'s — which is
  * why the assertion below reads the button's name rather than looking for text.
+ *
+ * **Two of the four are counts rather than ticks** (issue #212), drawn at the `GC` badge's own 9px
+ * rather than the tick's 12: two characters of type beside a card's name is what that badge
+ * already is, and a 12px one would out-shout the name it sits next to.
  */
 export const TheoryMatches: Story = {
   args: { theoryMatches: deckTheoryMatches() },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    // Four ticked cards. The mark is `aria-hidden` and carries no `title` any more — it is
-    // bound `describes: false`, so `THEORY_MATCH_ATTR` is CardMarks.tsx's own handle for
-    // finding it after the fact. The words below are read off the button instead.
-    expect(canvasElement.querySelectorAll(`[${THEORY_MATCH_ATTR}]`)).toHaveLength(4);
+    // Four marked cards, and **two of the four are numbers rather than ticks** (issue #212): the
+    // fixture asks for twice the Island the deck holds and half the Boros Charm, so this is the
+    // one place both of the mark's drawings are seen side by side. The mark is `aria-hidden` and
+    // carries no `title` — it is bound `describes: false`, so `THEORY_MATCH_ATTR` is
+    // `CardMarks.tsx`'s own handle for finding it after the fact, and a tick's element has no
+    // text at all (it is an `<svg>`). The words are read off the button instead.
+    const marks = [...canvasElement.querySelectorAll(`[${THEORY_MATCH_ATTR}]`)];
+    expect(marks).toHaveLength(4);
+    expect(marks.map((mark) => mark.textContent).sort()).toEqual(["", "", "+1", "-2"]);
 
     // The card that is both in the plan and breaking a rule, in one sentence.
     const both = canvas.getByRole("button", { name: new RegExp(`^${BROKEN}`) });

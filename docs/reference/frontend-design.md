@@ -1712,7 +1712,7 @@ clientWidth` at 1024, 1280 and 1920, and the deck view's own scroller matched it
     deck editor's docked panel at its `MIN_PANEL_WIDTH_PX` floor of **206** — a self-explaining
     label would be paid for in that column at every width.
 
-## The theory tick, and the four things a photograph settled
+## The theory mark, and the four things a photograph settled
 
 Added 2026-08-20 with `TheoryMatchMark` — the mark a deck card wears on the **Live** list when the
 deck's plan asks for it too. The rule and the data are in
@@ -1841,6 +1841,60 @@ session so the two states are one pass:
   React set — see [live-ui-verification.md](live-ui-verification.md). The `clipPath` read `none`
   after the back-out, which looks exactly like the component having stopped setting it; switching
   the variant tabs and back forced the re-render that proved otherwise.
+
+### And the seventh: the mark learned to count (issue #212)
+
+Same corner, same reader, and both halves of one report: the tick wanted **more padding**, and the
+blue banner wanted to be **as wide as the quantity area at the other end of the strip**. The second
+is what #182 had spent — `6/1` gave back 11px of mana cost and left the mark at **19px** against
+the tag's **24.61**, visibly the smaller of two things drawn as bookends. And a third ask that is
+not geometry at all: where the two lists disagree about *how many* of a card, say the difference —
+`+2`, `-8` — instead of a tick that only says the card is planned.
+
+The three are one change, because the third is what makes the second unanswerable by paddings.
+The box holds a 12px glyph on one card and two characters of 12px mono on the next, so any pair of
+paddings tuned to the tick leaves the number's box a different width again. **So the width is
+stated rather than tuned**: `min-w-[calc(1ch + 1.125rem*var(--mark-scale,1))]` — one digit's
+advance in this very face, plus `COUNT_TAG_BOX`'s own two paddings — which *is* the count tag's
+width holding a single digit, by construction rather than by a number that would rot the day the
+mono face changed. The paddings then only have to satisfy #182's `pl − pr = 5px`, and `8/3` does.
+
+**Measured 2026-08-26 over the built stylesheet** — `dist/assets/index-CCWFHD9i.css` linked from a
+`file://` page holding the **real** markup (dumped out of a throwaway vitest render of `CardStack`,
+so this is the mark *in the card* rather than its class strings pasted onto a div — the mistake
+that made #158 invisible to the 2026-08-20 pass), driven by headless Edge, at `--mark-scale` 1.
+Before and after in one pass, backing the change out through `element.style`:
+
+| | before (`6/1`, no floor) | after (`8/3`, floor, `justify-center`) |
+| --- | --- | --- |
+| the quantity tag, one digit | **24.61px** | **24.61px** — untouched |
+| the tick's box | **19px** | **24.59px** |
+| `-2`'s box | **20.20px** | **24.59px** |
+| `-12`'s box (against a `12` tag's **31.20**) | 26.80px | **30.80px** |
+| the tick's ink, either side of the visible trapezium | **1px** | **3.80px** |
+| `-2`'s ink, either side | 1px | **3.19 / 3.20px** |
+| ink off the trapezium's mid-height centre | 0 | **0** (−0.01 on the counts) |
+
+- **0.02px is the whole of what separates the two bookends now** — 24.59 against 24.61 — and the
+  gap is `1ch` being the advance of `0` while the box's own floor is computed to 24.5977. Both
+  marks are still flush to the card's right and left edges respectively, which is #158's other
+  half, unchanged.
+- **`justify-center` is worth 0.8px here and is kept anyway.** With the floor and without it, the
+  tick sat **−0.8px** off the trapezium's centre — the surplus a `min-width` adds lands entirely to
+  the right of the content under a flex container's default `flex-start`. It is small because
+  `8/3` was picked with the floor in mind; what the class buys is that #182's arithmetic stays a
+  *derivation* (the surplus grows with the zoom and moves with either padding) rather than a
+  coincidence of today's numbers.
+- **The count is drawn in place of the tick, never beside it.** A tick and a `-8` in one 25px box
+  are two clauses of one sentence at the end of a strip whose other mark is already a number. The
+  tick is the card that matches; a number is the card that does not.
+- **ASCII `+` and `-`, never `−`.** The box is `tabular-nums` mono and the typographic minus is
+  outside that fixed-advance run, so `-8` and `+2` would be different widths in the one box whose
+  job is to be the same width as the tag opposite it.
+- **What is unmeasured**: this pass is the built stylesheet and not the shipped WebView2 window,
+  and it was run at `--mark-scale` 1 only. The two ends of the zoom ladder were re-driven for #182
+  and nothing here changes how any of these terms scale — `1ch` follows the font size, which is
+  already scaled — but that is an argument rather than a reading.
 
 ## The two marks a deck card carries: picked, and just landed
 

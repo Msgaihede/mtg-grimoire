@@ -101,7 +101,7 @@ import { QuickCategoryDialog, QuickZones } from "./QuickZones";
 import { asSortBy, DEFAULT_SORT_BY, SORT_OPTIONS, type SortBy } from "./sorting";
 import { TagsDialog } from "./TagsDialog";
 import { TheoryDiffDialog } from "./TheoryDiffDialog";
-import { theoryMatchSet } from "./theoryMatch";
+import { theoryMatchPlan } from "./theoryMatch";
 import { useDeck } from "./useDeck";
 import { useDeckMeta } from "./useDeckMeta";
 import { useFormatSpecs } from "./useFormatSpecs";
@@ -2649,7 +2649,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    *
    * **`live` only, and `undefined` everywhere else.** On the Theory tab every row *is* the plan,
    * so a mark on all of them is noise. `undefined` rather than an empty set is the distinction
-   * {@link theoryMatchSet} exists to keep: no plan is not the same statement as a plan that
+   * {@link theoryMatchPlan} exists to keep: no plan is not the same statement as a plan that
    * wants none of this.
    *
    * **`enabled` is what stops the fetch and emphatically not what stops the mark** — this note
@@ -2669,6 +2669,14 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    *
    * Under `["decks"]` like every other read here, so a theory edit made in this session
    * invalidates it with everything else.
+   *
+   * **`deck.cards` is the second half of it since issue #212**, and it is the *live* list — which
+   * on this branch it always is, because the derivation is fenced on `variant === "live"` and
+   * `useDeck` is keyed on the variant. The plan says how many copies it wants; what the reader
+   * has sleeved up is already in hand, so the difference costs no second read. It is the whole
+   * list rather than the filtered `shown`: a card the toolbar's text box has hidden is still a
+   * card in the deck, and counting only what is on screen would make the mark change as somebody
+   * typed.
    */
   const planned = useQuery({
     queryKey: ["decks", "theorySlots", deckId],
@@ -2676,8 +2684,8 @@ export function DeckEditor({ deckId }: { deckId: number }) {
     enabled: theoryEnabled && variant === "live",
   });
   const theoryMatches = useMemo(
-    () => (variant === "live" ? theoryMatchSet(planned.data) : undefined),
-    [planned.data, variant],
+    () => (variant === "live" ? theoryMatchPlan(planned.data, deck.cards) : undefined),
+    [planned.data, variant, deck.cards],
   );
 
   /**

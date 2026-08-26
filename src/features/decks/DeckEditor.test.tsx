@@ -3311,7 +3311,7 @@ describe("DeckEditor", () => {
    * every row** (issue #159).
    *
    * On the plan every row *is* the plan, so a tick on all of them is a mark that says nothing —
-   * which is why `theoryMatchSet` keeps `undefined` apart from the empty set and why the slots
+   * which is why `theoryMatchPlan` keeps `undefined` apart from the empty map and why the slots
    * query is not enabled on this tab. **Not being enabled turned out not to be enough.**
    * `useQuery` serves whatever sits in the cache under its key whether or not it may fetch, and
    * that key is the *deck*'s rather than the tab's — so a reader who had Live on screen first,
@@ -3325,7 +3325,7 @@ describe("DeckEditor", () => {
    */
   it("takes the theory tick off every row when the reader switches to the plan", async () => {
     withPlan();
-    deckTheorySlots.mockResolvedValue([theorySlot(bolt())]);
+    deckTheorySlots.mockResolvedValue([{ key: theorySlot(bolt()), quantity: 1 }]);
 
     await open();
 

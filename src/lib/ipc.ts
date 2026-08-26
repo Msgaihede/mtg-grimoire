@@ -1732,6 +1732,22 @@ export interface MoveOutcome {
 }
 
 /**
+ * One card the plan asks for — {@link ipc.deckTheorySlots}' row, and the whole input to the deck
+ * editor's theory tick.
+ *
+ * The hand-written mirror of `deck_theory::TheorySlot`. Two fields and no third: every column
+ * that is *not* here (the name, the set, the price, the pile) is one the mark would have to be
+ * told to ignore.
+ */
+export interface TheorySlot {
+  /** `deck_theory.rs`'s own `group_key` — `` `${cardId}|${finish ?? ""}` ``.
+   *  `features/decks/theoryMatch.ts` spells the same string for a **live** row and looks it up. */
+  key: string;
+  /** How many copies the plan asks for, summed across every active pile it filed them in. */
+  quantity: number;
+}
+
+/**
  * One card the **theory** list wants more of than the live list has — a line of the plan's
  * shopping list.
  *
@@ -1753,6 +1769,22 @@ export interface MoveOutcome {
  *
  * **So neither `cardId` nor `finish` is unique on its own**: a list is keyed by the pair.
  */
+/**
+ * One card the plan asks for — {@link ipc.deckTheorySlots}' row, and the whole input to the deck
+ * editor's theory tick.
+ *
+ * The Rust mirror of `deck_theory::TheorySlot`. Two fields and no third: every column that is
+ * *not* here (the name, the set, the price, the pile) is one the mark would have to be told to
+ * ignore.
+ */
+export interface TheorySlot {
+  /** `deck_theory.rs`'s own `group_key` — `` `${cardId}|${finish ?? ""}` ``.
+   *  `features/decks/theoryMatch.ts` spells the same string for a **live** row and looks it up. */
+  key: string;
+  /** How many copies the plan asks for, summed across every active pile it filed them in. */
+  quantity: number;
+}
+
 export interface TheoryDiffRow {
   /** The printing **the theory row names**, which is the printing the reader would be buying.
    *  When the same card is filed in two theory categories this is the first row's category.
@@ -4146,9 +4178,9 @@ export const ipc = {
   deckTheoryDiff: (deckId: number, marketplace: MarketplaceId) =>
     invoke<TheoryDiffRow[]>("deck_theory_diff", { deckId, marketplace }),
   /**
-   * Every card the plan asks for, as `deck_theory.rs`'s own `group_key` strings —
-   * `` `${cardId}|${finish ?? ""}` ``, one per theory row, in no particular order and with
-   * duplicates left in for the caller's set to fold.
+   * Every card the plan asks for, as a {@link TheorySlot} each — `deck_theory.rs`'s own
+   * `group_key` string and how many copies the plan wants, in no particular order and **one row
+   * per planned card** (the piles are summed in the SQL).
    *
    * The deck editor's theory tick, and **the one question about the pair that
    * {@link ipc.deckTheoryDiff} cannot answer**: a card the reader has fully acquired is absent
@@ -4157,12 +4189,12 @@ export const ipc = {
    *
    * **Not a `deckGet` of the other variant**, deliberately: that read prices every row and rolls
    * up allocations, and `DeckEditor.test.tsx` pins that nothing may call it for the list the
-   * reader is not looking at. This is two columns of one indexed scan and no marketplace.
+   * reader is not looking at. This is three columns of one indexed scan and no marketplace.
    *
    * Inactive categories are excluded, which is `deck_theory_diff`'s rule and the same reasoning:
    * a card parked in the theory Maybeboard is not something the reader has decided to play.
    */
-  deckTheorySlots: (deckId: number) => invoke<string[]>("deck_theory_slots", { deckId }),
+  deckTheorySlots: (deckId: number) => invoke<TheorySlot[]>("deck_theory_slots", { deckId }),
   /**
    * Copy the live list into the theory one. Answers how many **rows** were written.
    *
