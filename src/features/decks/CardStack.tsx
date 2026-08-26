@@ -1016,7 +1016,6 @@ function StackedCard({
               // Decoration: the button already says the card's name, and an `alt` repeating it
               // would have a screen reader read every card twice.
               alt=""
-              draggable={false}
               // Lazy, because a deck's groups are plain scrollers rather than virtualised
               // walls — a hundred-card category really is a hundred mounted cards, and the
               // browser's gate is the only thing bounding what they ask for.

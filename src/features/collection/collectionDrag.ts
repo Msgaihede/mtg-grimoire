@@ -34,6 +34,25 @@ import { composedDraggable, dragData, type DragPayload } from "@/features/decks/
  * decline. An **orphaned** entry, whose printing has left `cards`, still has its `card_id`; what
  * it lacks is a name, and a name is allowed to be empty.
  *
+ * **A collection *tile* is a third payload and takes a third key, by the same argument one rung
+ * further out.** The wall sums every entry for one printing into one tile — across finishes,
+ * conditions, languages *and folders* — so a tile has no `entryId` at all, which is exactly why
+ * `CardGrid.tsx`'s `dragPayload` note and `CollectionPage.tsx` recorded that the wall registered
+ * no drag: {@link CollectionDrag} requires one. Widening that interface's `entryId` into a list is
+ * the change that looks smaller and is not. A table row really does carry one entry — the table is
+ * where a reader breaks a printing apart, and one row is the whole of what its drop writes — so
+ * the widening would make every target, every test and every `canDrop` in this feature reason
+ * about a list to say a thing about a single row. So a tile answers under its **own** key,
+ * `collectionTileSource`, spelled once as {@link COLLECTION_TILE_MARK}, and a reader that has
+ * never heard of tiles goes on answering `null` for one rather than reading half of it — which is
+ * the same property that lets `dnd.ts` stay blind to both.
+ *
+ * {@link readCollectionDrop} is what a target that takes either one asks, and {@link CollectionDrop}
+ * is its discriminated answer. The union rather than the tile shape alone: a folder's answer about
+ * one row is a different sentence from its answer about nine copies filed in five places, and
+ * `kind` is what makes a `canDrop` say which it is looking at instead of inferring it from a
+ * length.
+ *
  * Every payload is read field by field rather than cast, `dnd.ts`'s boundary rule and its reason:
  * this is the app's edge with the drag library's own store, which every draggable in the window
  * writes into untyped, and "it type-checked" means nothing at that edge.
@@ -47,6 +66,17 @@ import { composedDraggable, dragData, type DragPayload } from "@/features/decks/
  */
 const COLLECTION_MARK = "mtg-grimoire/collection-file-drag";
 const MARK_KEY = "collectionSource";
+
+/**
+ * The mark that says a payload carries a whole collection **tile**, and its key.
+ *
+ * **A third key rather than a second `kind` inside the first payload**, which is the module
+ * comment's argument said in one line: the two shapes have different *fields*, and a key of its
+ * own is what keeps {@link readCollectionDrag} answering `null` — rather than reading an entry out
+ * of something that has none — for a payload it was never written for.
+ */
+const COLLECTION_TILE_MARK = "mtg-grimoire/collection-tile-drag";
+const TILE_MARK_KEY = "collectionTileSource";
 
 /** What a collection drag carries: the entry, its name for whatever says what moved, and where
  *  it is filed right now. */
@@ -79,6 +109,95 @@ export function readCollectionDrag(data: Record<string, unknown>): CollectionDra
   if (folderId !== null && (typeof folderId !== "number" || !Number.isSafeInteger(folderId)))
     return null;
   return { entryId, name, folderId };
+}
+
+/** One copy behind a wall tile: the row it is, and the folder it sits in right now. */
+export interface CollectionCopy {
+  entryId: number;
+  /** `null` is the root. Read at dragstart, so a copy refiled since the tile mounted is honest. */
+  folderId: number | null;
+}
+
+/** What a collection *tile* carries: the printing, and every entry the wall summed into it. */
+export interface CollectionTileDrag {
+  cardId: string;
+  name: string;
+  /** Never empty — a tile exists because rows exist. At least one is the reader's fence. */
+  copies: readonly CollectionCopy[];
+}
+
+/** What a collection tile hands the adapter under its own key. Flat like
+ *  {@link collectionDragData} and merged with `dnd.ts`'s the same way (see
+ *  {@link collectionTileDraggable}), so a deck column reads the card and a folder reads the
+ *  shelf without either unwrapping the other's. */
+export function collectionTileDragData(drag: CollectionTileDrag): Record<string, unknown> {
+  return { [TILE_MARK_KEY]: COLLECTION_TILE_MARK, ...drag };
+}
+
+/**
+ * The tile payload a folder or a breadcrumb segment may act on, or `null` for everything else —
+ * including a well-formed *entry* payload, which is a different drag under a different key.
+ *
+ * Field by field like {@link readCollectionDrag}, and **every copy as well as the tile**: the
+ * array comes out of the same untyped store the mark does, and an array is precisely the shape
+ * that arrives looking right while carrying anything.
+ *
+ * **A malformed copy is fatal here, where `dnd.ts`'s `readDragGroup` drops one and carries on.**
+ * That function reads a multi-*select*, where four readable cards out of five is still the gesture
+ * the reader made. This reads one printing's copies, and they are the whole of what the refile
+ * writes: a tile that quietly lost one would move eight rows of nine and leave the ninth where it
+ * was, with nothing on screen saying which. A refused drop is a failure the reader can see.
+ */
+export function readCollectionTileDrag(data: Record<string, unknown>): CollectionTileDrag | null {
+  if (data[TILE_MARK_KEY] !== COLLECTION_TILE_MARK) return null;
+  const { cardId, name, copies } = data;
+  // Empty is refused for `dnd.ts`'s `isId` reason, stated there: an empty `card_id` addresses
+  // every row and no row. A collection tile is a printing by construction, so there is no honest
+  // caller this costs.
+  if (typeof cardId !== "string" || cardId.length === 0) return null;
+  if (typeof name !== "string") return null;
+  // Empty is refused because a tile with no copies behind it cannot exist — the wall draws one
+  // *because* rows grouped into it — so an empty array is a producer bug, and a drop that wrote
+  // nothing at all would look exactly like a drop that worked.
+  if (!Array.isArray(copies) || copies.length === 0) return null;
+  const read: CollectionCopy[] = [];
+  for (const copy of copies) {
+    if (typeof copy !== "object" || copy === null) return null;
+    const { entryId, folderId } = copy as Record<string, unknown>;
+    if (typeof entryId !== "number" || !Number.isSafeInteger(entryId) || entryId <= 0) return null;
+    if (folderId !== null && (typeof folderId !== "number" || !Number.isSafeInteger(folderId)))
+      return null;
+    read.push({ entryId, folderId });
+  }
+  return { cardId, name, copies: read };
+}
+
+/**
+ * What a collection drop target is holding: one row, or a whole tile's worth of them.
+ *
+ * The union rather than the tile shape alone — see the module comment: one row and one printing's
+ * shelf are two different sentences, and `kind` is what makes a target's policy say which it is
+ * answering about rather than infer it from `copies.length`.
+ */
+export type CollectionDrop =
+  | { kind: "entry"; entry: CollectionDrag }
+  | { kind: "tile"; tile: CollectionTileDrag };
+
+/**
+ * Either shape, or `null` for anything that is neither — the one reader every collection drop
+ * target asks, so "what can be dropped on a folder" is answered in one place rather than per
+ * target.
+ *
+ * The two marks are disjoint by construction — a row writes one key and a tile the other — so the
+ * order below is a convention rather than a tie-break. Stated anyway, because a payload carrying
+ * both would be a bug upstream and the entry is the narrower fact to act on: it moves one row,
+ * where a tile moves every copy behind a printing.
+ */
+export function readCollectionDrop(data: Record<string, unknown>): CollectionDrop | null {
+  const entry = readCollectionDrag(data);
+  if (entry !== null) return { kind: "entry", entry };
+  const tile = readCollectionTileDrag(data);
+  return tile === null ? null : { kind: "tile", tile };
 }
 
 /**
@@ -114,8 +233,46 @@ export function collectionDraggable({
 }
 
 /**
- * Where a collection entry can be let go, and whether it is armed to be — one hook answering
+ * A collection **tile** that can be picked up — as a card and as a printing's whole shelf at once.
+ *
+ * {@link collectionDraggable}'s shape with the other payload in it, and it is that shape for the
+ * same two reasons. The capture-phase `mousedown` guard is `composedDraggable`'s and matters here
+ * as much as on a row: a wall tile carries a quantity stepper too, and Chromium starts a drag from
+ * the nearest draggable *ancestor* of whatever was pressed. And both halves are callbacks read at
+ * `dragstart`, so a copy refiled since the tile mounted travels as it is now — which on a tile is
+ * not a nicety: `folderId` is per *copy*, and it is what lets a folder refuse the ones already in
+ * it while still taking the rest.
+ *
+ * The card half is never absent here either, and for a stronger reason than on a row: the wall
+ * groups **by printing**, so a tile with no `cardId` is not a tile.
+ */
+export function collectionTileDraggable({
+  element,
+  tile,
+  card,
+}: {
+  element: HTMLElement;
+  /** Read at `dragstart`, so a tile whose copies were refiled since it was drawn carries where
+   *  they are now. */
+  tile: () => CollectionTileDrag;
+  /** The card half of the payload, read at `dragstart` too — what keeps a wall tile droppable on
+   *  a deck category and the sidebar's Decks entry, exactly as a table row already is. */
+  card: () => DragPayload;
+}): () => void {
+  return composedDraggable({
+    element,
+    data: () => ({ ...dragData(card()), ...collectionTileDragData(tile()) }),
+  });
+}
+
+/**
+ * Where a collection drop can be let go, and whether it is armed to be — one hook answering
  * both, gated by one `canDrop`.
+ *
+ * **Either payload, read through {@link readCollectionDrop}**, and the hook has no opinion about
+ * which: a row and a tile arm the same rings and run the same handler, and what differs between
+ * them — the folder a single row is already in, against the folders nine copies are spread over —
+ * is policy the page supplies. This file's job is to say which drags are this feature's at all.
  *
  * **Not two hooks the way `deckDrag.ts` splits `useDeckDropTarget` from `useDeckDragging`**, and
  * `wishDrag.ts` states the reason in full: every folder-shaped target answers the same yes/no
@@ -137,8 +294,8 @@ export function useCollectionDropTarget({
   onDrop,
 }: {
   ref: RefObject<HTMLElement | null>;
-  canDrop: (drag: CollectionDrag) => boolean;
-  onDrop: (drag: CollectionDrag) => void;
+  canDrop: (drop: CollectionDrop) => boolean;
+  onDrop: (drop: CollectionDrop) => void;
 }): { armed: boolean; over: boolean } {
   const [armed, setArmed] = useState(false);
   const [over, setOver] = useState(false);
@@ -151,8 +308,8 @@ export function useCollectionDropTarget({
     () =>
       monitorForElements({
         canMonitor: ({ source }) => {
-          const drag = readCollectionDrag(source.data);
-          return drag !== null && latest.current.canDrop(drag);
+          const drop = readCollectionDrop(source.data);
+          return drop !== null && latest.current.canDrop(drop);
         },
         onDragStart: () => setArmed(true),
         // Fires for a cancelled drag as well as a completed one — the platform ends both the
@@ -168,15 +325,15 @@ export function useCollectionDropTarget({
     return dropTargetForElements({
       element,
       canDrop: ({ source }) => {
-        const drag = readCollectionDrag(source.data);
-        return drag !== null && latest.current.canDrop(drag);
+        const drop = readCollectionDrop(source.data);
+        return drop !== null && latest.current.canDrop(drop);
       },
       onDragEnter: () => setOver(true),
       onDragLeave: () => setOver(false),
       onDrop: ({ source }) => {
         setOver(false);
-        const drag = readCollectionDrag(source.data);
-        if (drag !== null && latest.current.canDrop(drag)) latest.current.onDrop(drag);
+        const drop = readCollectionDrop(source.data);
+        if (drop !== null && latest.current.canDrop(drop)) latest.current.onDrop(drop);
       },
     });
   }, [ref]);
