@@ -38,6 +38,7 @@ import { useAppStore, type ViewId } from "@/lib/store";
 import { usePrefetchDeckSearchOpen } from "@/features/decks/useDeckSearchOpen";
 import { useCardZoomPersistence } from "@/lib/useCardZoomPersistence";
 import { useListViewPersistence } from "@/lib/useListViewPersistence";
+import { useFlattenPersistence } from "@/lib/useFlattenPersistence";
 import { useDelayedFlag } from "@/lib/useDelayedFlag";
 import { useMarketplace, useMarketplaceProgress } from "@/lib/useMarketplace";
 import { useNavCollapsed } from "@/lib/useNavCollapsed";
@@ -175,6 +176,11 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   // the reader is on. It renders nothing — the layouts go into the zustand store, where each page
   // already reads its own.
   useListViewPersistence();
+  // And the same arrangement a third time for the two cabinets' Flatten switch — one subscription
+  // writing one row, from the component that is mounted whichever page the reader is on. It
+  // renders nothing: the two booleans go into the zustand store, where the collection and the
+  // wishlist each read their own.
+  useFlattenPersistence();
   // The deck editor's search column, read here rather than where it is drawn — and that is a
   // measurement rather than a preference for tidiness. Asked by the panel, the read queues behind
   // `deck_get` on the read connection and lands ~700ms after the column has already been drawn

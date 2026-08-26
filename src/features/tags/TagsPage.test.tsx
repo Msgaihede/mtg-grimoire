@@ -71,6 +71,10 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     // `App` for its sidebar drags. `{}` leaves every list on its own default.
     listView: vi.fn().mockResolvedValue({}),
     setListView: vi.fn().mockResolvedValue(undefined),
+    // `useFlattenPersistence`' launch read, beside the other two. `{}` leaves both switches on
+    // their own defaults; the Tags page has no filing to ignore and never reads either.
+    flattenState: vi.fn().mockResolvedValue({}),
+    setFlattenState: vi.fn().mockResolvedValue(undefined),
     setCardZoom: vi.fn().mockResolvedValue(undefined),
     // And the rail's own width, read once on the way up. `false` is a database nobody has
     // collapsed the sidebar in, which is the shell every test here means to render.

@@ -339,6 +339,14 @@ beforeEach(() => {
     wishlistView: "table",
     selectedCardId: null,
     importDefaults: { condition: "NM", finish: null },
+    // **Flatten is a store field now, and a store field outlives `cleanup()`.** The wishlist's
+    // default did not move — this cabinet's root is still every unfiled wish and there is no
+    // v25 conversion behind it, so `store.ts` opens it on the tree exactly as it always did —
+    // but the *press* now leaks. It did: the two cases below that flatten the list left the
+    // switch on, and every folder case after them ran over a page with no folder cards in it.
+    // Written out rather than left to the default, so the leak cannot come back through a
+    // default that moves the way the collection's just did.
+    wishlistFlattened: false,
   });
 });
 
@@ -1604,9 +1612,47 @@ describe("the folders", () => {
   });
 
   /**
+   * **This cabinet opens on its tree, and it is now the only one of the two that does.**
+   *
+   * The collection's default flipped to flattened when its root was narrowed to "filed nowhere":
+   * since schema v25 every card in a deck sits in that deck's group, so an unflattened first
+   * launch there draws an empty binder (275 of 275 entries filed in deck groups, measured on the
+   * maintainer's own database). Nothing files a wish behind the reader's back — there are no deck
+   * groups here and no v25 conversion — so this root is still every wish the reader has not filed,
+   * and the tree is what they should meet.
+   *
+   * Pinned because the two switches are one feature and a change to one is a two-line edit away
+   * from being a change to both: a default flipped here would put the whole wishlist on one
+   * captioned list and take the cabinet off the opening screen, with nothing else going red.
+   * `getInitialState`, because this file's `beforeEach` writes the field and a test that only
+   * asserted the page would be pinning its own setup — `the wall`'s "is what the wishlist opens
+   * on" reads `wishlistView` the same way, for the same reason.
+   */
+  it("opens on the tree rather than flattened, which is where it parts company with the collection", async () => {
+    expect(useAppStore.getInitialState().wishlistFlattened).toBe(false);
+    useAppStore.setState({ wishlistFlattened: false });
+    wrap(<WishlistPage />);
+    await screen.findByText("Lightning Bolt");
+
+    expect(screen.getByRole("button", { name: "Flatten" })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    // The field is absent rather than `false`: `flatten` is "widen past the level", so the read
+    // that goes out at the root is the root's own read.
+    expect(lastQuery().flatten).toBeUndefined();
+    expect(screen.getByRole("button", { name: /^Ordered folder/ })).toBeInTheDocument();
+  });
+
+  /**
    * Flatten is not a filter: it says how much of the tree is on screen. With the filing ignored
-   * there is no level to be standing in, so the cards, the drill-down and `+ New folder` all go
-   * — the last because there is no current folder to create one inside.
+   * there is no level to be standing in, so the whole wall goes — the folder cards, the
+   * drill-down **and** the `New folder` tile, which is now inside it and therefore covered by the
+   * same gate rather than by a condition of its own. The control that promises "here" goes with
+   * the level it was promising about.
+   *
+   * The press is made on the **filter bar's** chip, which is where Flatten lives since it moved
+   * past that row's second hairline. Nothing about what the press does changed.
    */
   it("shows every wish while flattened, and puts the cabinet away", async () => {
     wrap(<WishlistPage />);
@@ -1618,9 +1664,136 @@ describe("the folders", () => {
     expect(await screen.findByText("Rhystic Study")).toBeInTheDocument();
     expect(wishes()).toHaveTextContent("3");
     expect(screen.queryByRole("button", { name: /^Ordered folder/ })).not.toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "+ New folder" })).not.toBeInTheDocument();
+    // The list itself, not only the cards in it: the tile that makes a folder is an `<li>` of
+    // this `<ul>`, so a wall that survived a flatten would still offer it.
+    expect(screen.queryByRole("list", { name: "Folders" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "New folder" })).not.toBeInTheDocument();
     // Each wish captioned with where it is filed — without it, flattened is just the old list.
     expect(screen.getAllByText("Filed in").length).toBeGreaterThan(0);
+  });
+
+  /**
+   * **Flatten rides the filter bar now, past its second hairline with the layout pair — and the
+   * breadcrumb deliberately did not follow it.**
+   *
+   * The fence this page has always kept is "not among the *filters*", because `resetAll` leaves
+   * `flatten` and `folderId` alone and a filter Reset all cannot undo is a control that lies. The
+   * far side of that hairline is where `FilterBar` already keeps the sort and the grid-or-table
+   * pair, none of which is counted or cleared either — so Flatten satisfies the fence there,
+   * where the breadcrumb, which is a *place* rather than a way of drawing, does not.
+   *
+   * **Asserted as a containment fact rather than as a class string**, which is the only form of
+   * this that cannot go quietly green: a class assertion passes over a chip rendered anywhere at
+   * all, and jsdom applies no container query, so nothing about where the two *paint* is
+   * observable here. What is observable is that one box holds Flatten and both layout buttons and
+   * does not hold the trail.
+   */
+  it("draws Flatten with the layout pair on the filter bar, not with the breadcrumb", async () => {
+    wrap(<WishlistPage />);
+    await screen.findByText("Lightning Bolt");
+
+    const flatten = screen.getByRole("button", { name: "Flatten" });
+    const cardView = screen.getByRole("button", { name: "Card view" });
+    const tableView = screen.getByRole("button", { name: "Table view" });
+
+    // The nearest box that holds Flatten and the pair — walked rather than named, so the test
+    // says "these are grouped" and not "this markup is shaped like that".
+    let group = flatten.parentElement;
+    while (group !== null && !group.contains(cardView)) group = group.parentElement;
+    expect(group).not.toBeNull();
+    expect(group).toContainElement(tableView);
+
+    // And the half that would go green on its own: the trail is *outside* that box. Flatten
+    // beside the breadcrumb, as it was drawn until this moved, puts the two in one wrapper and
+    // this is the line that catches it.
+    expect(group).not.toContainElement(
+      screen.getByRole("navigation", { name: "Wishlist folders" }),
+    );
+  });
+
+  /**
+   * **The tile that makes a folder is the wall's first card**, which is the whole of what moving
+   * it down from the controls row was for: a reader looking for a drawer is already looking at
+   * the wall, so the drawer that is not there yet belongs in the same place.
+   *
+   * Asserted by *position in the list* rather than by "is somewhere on screen": a tile appended
+   * after twelve drawers is a control a reader scrolls a `max-h-44` band to find, and the whole
+   * claim of the move is that they do not have to.
+   */
+  it("puts New folder first in the wall of folder cards", async () => {
+    wrap(<WishlistPage />);
+    // **The wall is on screen before the folder list answers**, which is new: it is gated on
+    // `!flatten` rather than on having folders, so the tile is drawn over a `<ul>` the drawers
+    // have not arrived in yet. Waiting on the *list* would therefore read the wall one card long
+    // and pass this test by measuring the wrong moment.
+    await screen.findByRole("button", { name: /^Ordered folder/ });
+
+    const wall = screen.getByRole("list", { name: "Folders" });
+    const cards = within(wall).getAllByRole("listitem");
+
+    expect(within(cards[0]).getByRole("button", { name: "New folder" })).toBeInTheDocument();
+    // The two seeded root folders behind it, in the order the tree drew them.
+    expect(within(cards[1]).getByRole("button", { name: /^Ordered folder/ })).toBeInTheDocument();
+    expect(within(cards[2]).getByRole("button", { name: /^Someday folder/ })).toBeInTheDocument();
+  });
+
+  /**
+   * **The trap door, and the reason the wall has a gate of its own.**
+   *
+   * The wall used to be drawn on `filed` — "this level holds drawers" — which was free while
+   * `+ New folder` sat in a row beside the breadcrumb. With the tile *inside* the wall that gate
+   * becomes a wishlist nobody has filed having no folder card, therefore no wall, therefore no
+   * way to make a first folder: a cabinet that could only ever be opened by somebody who already
+   * had one. `cabinet` is `!flatten` for exactly this, and `filed` is left saying what it always
+   * said, because {@link statusOf} still asks it.
+   *
+   * The press at the end is the half that makes this a regression test rather than a note about
+   * markup: a wall drawn with a tile that reaches nothing would pass every line above it.
+   */
+  it("draws the wall over an empty cabinet, holding only the New folder tile", async () => {
+    wishlistFolderList.mockResolvedValue([]);
+    wishlistFolderSummary.mockResolvedValue([]);
+    wrap(<WishlistPage />);
+    await screen.findByText("Lightning Bolt");
+
+    const wall = await screen.findByRole("list", { name: "Folders" });
+    expect(within(wall).getAllByRole("listitem")).toHaveLength(1);
+    expect(within(wall).getByRole("button", { name: "New folder" })).toBeInTheDocument();
+    // No trail to draw and nothing for it to lead to — which is precisely the state that used to
+    // take the button away with it.
+    expect(screen.queryByRole("navigation", { name: "Wishlist folders" })).not.toBeInTheDocument();
+
+    await userEvent.click(within(wall).getByRole("button", { name: "New folder" }));
+
+    expect(await screen.findByLabelText("New folder name")).toBeInTheDocument();
+    // At the top of the cabinet, so the folder lands at the root rather than inside anything.
+    expect(screen.getByText("in Wishlist")).toBeInTheDocument();
+  });
+
+  /**
+   * **The tile hands the caret back**, which is the whole reason `NewFolderCard` passes its own
+   * button up rather than a `MouseEvent`: `open(next, opener)` latches the element and `dismiss`
+   * focuses it before the panel unmounts, because an element that unmounts with the caret on it
+   * drops focus to `<body>` and the next Tab restarts from the top of the app.
+   *
+   * **Driven by a click, never by `el.focus()`.** A past session found that starting a keyboard
+   * flow from a programmatically focused element tests a caret a reader cannot produce — and the
+   * caret this asserts about is one a *pointer* creates, so the pointer is what has to make it.
+   */
+  it("gives the caret back to the New folder tile when its panel is cancelled", async () => {
+    wrap(<WishlistPage />);
+    const wall = await screen.findByRole("list", { name: "Folders" });
+
+    await userEvent.click(within(wall).getByRole("button", { name: "New folder" }));
+    // The field takes the caret as it mounts, which is what makes the return trip meaningful.
+    expect(await screen.findByLabelText("New folder name")).toHaveFocus();
+
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() =>
+      expect(screen.queryByLabelText("New folder name")).not.toBeInTheDocument(),
+    );
+    expect(screen.getByRole("button", { name: "New folder" })).toHaveFocus();
   });
 
   /**
@@ -1736,15 +1909,20 @@ describe("the folders", () => {
   });
 
   /**
-   * `+ New folder` promises "here", which is the whole reason it is hidden while flattened — so
-   * the parent it sends is the folder the reader is standing in and never the root by default.
+   * `New folder` promises "here", which is the whole reason it goes away with the wall while the
+   * list is flattened — so the parent it sends is the folder the reader is standing in and never
+   * the root by default. The tile is drawn **among the drawers of that level**, which is what
+   * makes the promise legible: it stands beside the folders it would be a sibling of.
+   *
+   * `"New folder"` and no longer `"+ New folder"` — the plus was a control's decoration and the
+   * tile draws a `FolderPlus` glyph instead, so the accessible name is the words alone.
    */
   it("creates a folder inside the one the reader is standing in", async () => {
     wrap(<WishlistPage />);
     await userEvent.click(await screen.findByRole("button", { name: /^Ordered folder/ }));
     await screen.findByText("Rhystic Study");
 
-    await userEvent.click(screen.getByRole("button", { name: "+ New folder" }));
+    await userEvent.click(screen.getByRole("button", { name: "New folder" }));
     await userEvent.type(await screen.findByLabelText("New folder name"), "Paid for");
     await userEvent.click(screen.getByRole("button", { name: "Create folder" }));
 
