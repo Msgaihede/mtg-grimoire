@@ -226,8 +226,9 @@ pub(crate) fn finish_literals() -> [String; 3] {
 /// is quoted nonfoil, and one that exists only in foil is quoted at its foil rate instead of
 /// reading as unpriced.
 ///
-/// **This is the deck's figure for a row that names no finish**, which since schema v18 is one
-/// of the two arms of [`deck_card_price_expr`] rather than the whole answer. `deck_cards.finish`
+/// **This is the figure for a row that names no finish**, which since schema v18 is one
+/// of the two arms of [`row_price_expr`] rather than the whole answer — for a wish as well as
+/// for a deck row, since the wishlist adopted it. `deck_cards.finish`
 /// is NULL on every row that predates that version and on every row a reader has not spoken
 /// about, and this chain is what such a row has always been priced at.
 ///
@@ -256,32 +257,49 @@ pub fn printing_price_by_finish_expr(market: Marketplace) -> String {
     format!("coalesce({links})")
 }
 
-/// What one copy of a **deck row** costs at `market` — the deck's figure since schema v18.
+/// What one copy of a row that **may or may not name a finish** costs at `market`.
 ///
-/// Two arms, told apart by whether the row names a finish:
+/// Two arms, told apart by whether the row has said:
 ///
-/// * **NULL** — the row has not said, which is every row that predates v18 and every row a
-///   reader has not spoken about. That is [`printing_price_by_finish_expr`]'s chain,
+/// * **NULL** — the row has not said, so it is [`printing_price_by_finish_expr`]'s chain,
 ///   `nonfoil → foil → etched`, **quoted rather than respelled**, so each marketplace's own
-///   holes travel with it and a foil-only printing is quoted at its foil rate instead of
+///   holes travel with it. A foil-only printing is quoted at its foil rate instead of
 ///   reading as unpriced.
-/// * **`'foil'` / `'etched'`** — [`price_expr`] at that finish and no other. **No fallback of
-///   any kind**, which is this crate's rule wherever a finish is named: a foil row quoted at
-///   the nonfoil rate is a price nobody quoted, and the reader has said which object is in the
-///   sleeve. The em dash a null answer draws means "this marketplace does not quote this
-///   printing in this finish", never "look somewhere else".
+/// * **named** — [`price_expr`] at that finish and no other. **No fallback of any kind**,
+///   which is this crate's rule wherever a finish is named: the reader has said which object
+///   is in the sleeve, a row quoted at another finish's rate is a price nobody quoted, and the
+///   em dash a null answer draws means "this marketplace does not quote this printing in this
+///   finish".
 ///
-/// Cardmarket's `eur_etched` hole survives into both arms for free, because it lives in
+/// `finish_col` is the caller's column — `dc.finish` for a deck row, `w.preferred_finish` for a
+/// wish. **The printing is always the alias `c`**, which is [`price_expr`]'s rule and not this
+/// function's to relax.
+///
+/// **It was `deck_card_price_expr` and the deck was the only caller for one release.** The
+/// wishlist coalesced its null to `'nonfoil'` instead, which is the same bug v18 fixed for decks
+/// arriving one table over: 12 849 of 116 843 printings are priced only in foil or etched.
+/// Generalizing is what stops it being fixed twice and spelled twice.
+///
+/// Cardmarket's missing `eur_etched` survives into both arms for free, because that hole lives in
 /// [`price_expr`] rather than here: an etched row is unpriced in euros and priced at every
 /// marketplace that does quote it.
+pub fn row_price_expr(market: Marketplace, finish_col: &str) -> String {
+    format!(
+        "CASE WHEN {finish_col} IS NULL THEN {chain} ELSE {named} END",
+        chain = printing_price_by_finish_expr(market),
+        named = price_expr(market, finish_col),
+    )
+}
+
+/// What one copy of a **deck row** costs at `market` — [`row_price_expr`] over `deck_cards`, and
+/// the deck's figure since schema v18.
+///
+/// The NULL arm is every row that predates that version and every row a reader has not spoken
+/// about, which is the majority of them.
 ///
 /// `dc` is the caller's alias for `deck_cards`, which is [`crate::deck`]'s throughout.
 pub fn deck_card_price_expr(market: Marketplace) -> String {
-    format!(
-        "CASE WHEN dc.finish IS NULL THEN {chain} ELSE {named} END",
-        chain = printing_price_by_finish_expr(market),
-        named = price_expr(market, "dc.finish"),
-    )
+    row_price_expr(market, "dc.finish")
 }
 
 /// What a **printing** costs at `market`, with no finish to price it at.

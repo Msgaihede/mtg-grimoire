@@ -127,7 +127,7 @@ pub struct WishRow {
     /// `Uncategorised` while the same card carried from the search wall filed under `Creature`.
     ///
     /// `None` exactly when the `LEFT JOIN` found nothing — which is **not** the same as an
-    /// any-printing wish, because that join coalesces to the newest printing of the wish's
+    /// any-printing wish, because that join coalesces to the cheapest printing of the wish's
     /// oracle card. So a wish for the card is described as well as a wish for the cardboard,
     /// and only a genuine orphan (no pinned printing, no oracle match) answers `None`. Same
     /// `None` as `rarity` and `mana_cost` beside it, for the same reason.
@@ -137,9 +137,15 @@ pub struct WishRow {
     /// It is not `card_id` and must never be read as one. `card_id` is what the wish is *for*
     /// and is `None` for an any-printing wish; this is what there is a picture of, which the
     /// join answers for both kinds: a pinned wish resolves to its own printing, an unpinned one
-    /// to the newest printing of its oracle card. So the wall can draw every wish while the
-    /// caption goes on saying "Any printing" for the ones that are for the card rather than for
-    /// the cardboard — spec §6's distinction, which a picture must not quietly settle.
+    /// to the **cheapest** printing of its oracle card at the marketplace the query named — the
+    /// printing a reader acting on the wish would actually buy, which is why the picture and
+    /// [`Self::unit_price`] come off one join rather than two rules. So the wall can draw every
+    /// wish while the caption goes on saying "Any printing" for the ones that are for the card
+    /// rather than for the cardboard — spec §6's distinction, which a picture must not quietly
+    /// settle.
+    ///
+    /// **An oracle card no marketplace quotes keeps the newest printing**, which the ordering's
+    /// tiebreak is there for: a hole in a pricelist must not cost a wish its art.
     ///
     /// `None` exactly where `type_line`, `rarity` and `mana_cost` beside it are: a genuine
     /// orphan, no pinned printing in `cards` and no oracle match. That tile draws the no-art
@@ -148,13 +154,14 @@ pub struct WishRow {
     pub quantity: i64,
     pub preferred_finish: Option<String>,
     /// The cheapest way to satisfy this wish, per copy, at the marketplace the query named:
-    /// the preferred finish's price if one is named, else the nonfoil price of the printing
-    /// (or of any printing of the oracle card, for an unpinned wish).
+    /// the preferred finish's price if one is named, else the printing's own
+    /// `nonfoil → foil → etched` chain — over the **cheapest** printing of the oracle card, for
+    /// an unpinned wish, which is the same printing [`Self::art_card_id`] draws.
     ///
     /// Carries whatever hole that marketplace has. On Cardmarket a wish for the *etched*
     /// printing is unpriced rather than quoted at the nonfoil rate — **`eur_etched` does not
     /// exist** — while Mana Pool, which publishes an etched column, answers with a number.
-    /// [`crate::sorting::price_expr`]'s rule over [`WISH_FINISH`].
+    /// [`crate::sorting::row_price_expr`]'s rule over [`WISH_PREFERRED_FINISH`].
     pub unit_price: Option<f64>,
     /// How many copies the collection already has against this wish.
     pub owned_quantity: i64,
@@ -165,7 +172,7 @@ pub struct WishRow {
     /// filter reads, and the only reader it has. [`crate::collection::CollectionRow::legalities`]
     /// carries the argument for the blob over `legal_mask`, and the same `None`-is-an-orphan
     /// rule as [`Self::type_line`] above: the `LEFT JOIN` coalesces an any-printing wish to the
-    /// newest printing of its oracle card, so only a genuine orphan answers `None`.
+    /// cheapest printing of its oracle card, so only a genuine orphan answers `None`.
     pub legalities: Option<String>,
     /// Where the wish is filed. `None` is the root, and it is on every row rather than
     /// implied by the query because the **Flatten** view asks for every wish at once and
@@ -306,12 +313,21 @@ const WISHLIST_PRICE_SORTS: &[crate::sorting::PricedSort] = &[
 /// What the page calls its price column, and therefore what its money sorts order by.
 const UNIT_PRICE_ALIAS: &str = "unit_price";
 
-/// The finish a wish is priced at: the one it names, or nonfoil for a wish with no preference
-/// — which is what "the cheapest way to satisfy this" means when the wish does not say.
+/// The wish's own finish column, for [`crate::sorting::row_price_expr`] to branch on.
+///
+/// **It was `coalesce(w.preferred_finish, 'nonfoil')` and that coalesce was the bug.** "No
+/// preference" is not nonfoil — it is a wish for the *card*, which is exactly what a deck row
+/// with a null finish is, and 12 849 of 116 843 printings have no nonfoil price at any
+/// marketplace. Reading the null as nonfoil left FIC #477 (sold only in foil, `usd_foil` 31.18)
+/// drawing an em dash on the wishlist beside a search wall quoting it.
+///
+/// The column is handed over **unwrapped** now, so `row_price_expr` can tell "the reader has not
+/// said" from "the reader said nonfoil" — which are two different wishes and, on a printing sold
+/// only in foil, two different answers.
 ///
 /// [`crate::collection::ENTRY_FINISH`]'s counterpart, over the wish's own column rather than
 /// over an entry's.
-pub const WISH_FINISH: &str = "coalesce(w.preferred_finish, 'nonfoil')";
+pub const WISH_PREFERRED_FINISH: &str = "w.preferred_finish";
 
 pub fn add_wish(conn: &Connection, input: &WishInput) -> Result<EntryChange, String> {
     if let Some(f) = input.preferred_finish.as_deref() {
@@ -777,12 +793,38 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
         q.limit.min(MAX_LIMIT)
     };
     let mut p = crate::filters::Predicates::default();
-    // The card a wish is *about*: its pinned printing, or any printing of its oracle card.
-    // A LEFT JOIN, because a wish outlives the printing it was made from.
-    let from = "wishlist_entries w LEFT JOIN cards c
-                    ON c.id = coalesce(w.card_id,
-                        (SELECT id FROM cards WHERE oracle_id = w.oracle_id
-                          ORDER BY released_at DESC, id ASC LIMIT 1))";
+    // What one copy of this wish costs, built once and used twice: to *choose* the printing an
+    // any-printing wish is drawn as, and to price whichever printing that turns out to be. One
+    // expression rather than two, so the picture and the figure under it can never come from two
+    // different rules.
+    let price = crate::sorting::row_price_expr(q.marketplace, WISH_PREFERRED_FINISH);
+    // The card a wish is *about*: its pinned printing, or the **cheapest** printing of its oracle
+    // card at the marketplace this query named. A LEFT JOIN, because a wish outlives the printing
+    // it was made from.
+    //
+    // **`ORDER BY … ASC NULLS LAST` with the old clause as the tiebreak**, which is what makes
+    // this safe for the wishes it cannot answer: an oracle card no marketplace quotes keeps the
+    // newest printing it has always had, so a wish never loses its art or its set code to a hole
+    // in a pricelist.
+    //
+    // **The inner alias is `c` and it shadows the outer one deliberately.**
+    // `crate::sorting::price_expr` hard-codes `c` for the printing being priced — that is what
+    // keeps the join key and the price from being spelled apart across six call sites — so the
+    // candidate printing inside this subquery has to wear that name. The `w.` references stay
+    // correlated to the outer wish, which is the whole reason this is a subquery rather than a
+    // join.
+    //
+    // **`coalesce` short-circuits, so this runs only for an unpinned wish.** A page is at most
+    // `MAX_LIMIT` rows and this database has 0 unpinned wishes of 88; the cost is bounded by how
+    // many wishes name no printing, not by the size of the corpus.
+    let from = format!(
+        "wishlist_entries w LEFT JOIN cards c
+             ON c.id = coalesce(w.card_id,
+                 (SELECT c.id FROM cards c
+                   WHERE c.oracle_id = w.oracle_id
+                   ORDER BY ({price}) ASC NULLS LAST, c.released_at DESC, c.id ASC
+                   LIMIT 1))"
+    );
     let cards = crate::filters::CardFilters {
         text: None,
         paper_only: Some(false),
@@ -884,8 +926,7 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
                   WHERE o.id <> w.id AND o.oracle_id IS NOT NULL
                     AND o.oracle_id = w.oracle_id) AS elsewhere,
                 w.folder_id
-         FROM {from} WHERE {where_sql} ORDER BY {order} LIMIT ? OFFSET ?",
-        price = crate::sorting::price_expr(q.marketplace, WISH_FINISH)
+         FROM {from} WHERE {where_sql} ORDER BY {order} LIMIT ? OFFSET ?"
     );
     params.push(Box::new(limit));
     params.push(Box::new(q.offset));
@@ -1012,6 +1053,7 @@ pub async fn wishlist_list(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sorting::Marketplace;
 
     /// One sort term, in the shape the UI sends.
     fn term(key: &str, dir: &str) -> crate::sorting::SortTerm {
@@ -1046,6 +1088,97 @@ mod tests {
         )
         .unwrap();
         conn
+    }
+
+    /// An empty database at the current schema — no cards, no wishes.
+    ///
+    /// [`seeded`]'s two bolts share one oracle card and one price blob, which is exactly what
+    /// the price fixtures below must not have: each of them seeds the printings its own
+    /// question is about.
+    fn empty() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        crate::schema::migrate(&conn).unwrap();
+        conn
+    }
+
+    /// One printing, with its own `finishes` list and its own price blob.
+    ///
+    /// Its oracle id is its own id, so a card seeded this way is the only printing of itself —
+    /// which is what the tests about *which finish* is priced want, and the opposite of what
+    /// [`seed_printing`] is for.
+    fn seed_card_with_prices(conn: &Connection, id: &str, finishes: &str, prices: &str) {
+        conn.execute(
+            "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
+                finishes,prices,raw)
+             VALUES (?1,?1,?1,'tst','1','en','normal',?2,?3,'{}')",
+            rusqlite::params![id, finishes, prices],
+        )
+        .unwrap();
+    }
+
+    /// One printing **of a shared oracle card**, with its own release date and price blob.
+    ///
+    /// [`seed_card_with_prices`]'s opposite number: that one makes a card that is the only
+    /// printing of itself, this one makes several printings the join has to choose between.
+    fn seed_printing(
+        conn: &Connection,
+        id: &str,
+        oracle_id: &str,
+        released_at: &str,
+        prices: &str,
+    ) {
+        conn.execute(
+            "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
+                released_at,prices,raw)
+             VALUES (?1,?2,?2,'tst',?1,'en','normal',?3,?4,'{}')",
+            rusqlite::params![id, oracle_id, released_at, prices],
+        )
+        .unwrap();
+    }
+
+    /// A wish for the oracle card and no printing — the "any printing" half of the table's
+    /// nullable `card_id`, which is the half the join below has to answer for.
+    fn add_any_printing_wish(conn: &Connection, oracle_id: &str, finish: Option<&str>) -> i64 {
+        add_wish(
+            conn,
+            &WishInput {
+                oracle_id: Some(oracle_id.to_owned()),
+                preferred_finish: finish.map(str::to_owned),
+                quantity: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .id
+    }
+
+    /// A wish pinned to one printing, at an optional finish.
+    ///
+    /// [`add_wish`] is the real command and takes a whole [`WishInput`]; this is that call with
+    /// everything these tests do not ask about defaulted away. It is not *named* `add_wish`
+    /// because that name is the command's and shadowing it here would rewrite two dozen
+    /// neighbouring tests.
+    fn add_pinned_wish(conn: &Connection, card_id: &str, finish: Option<&str>) -> i64 {
+        add_wish(
+            conn,
+            &WishInput {
+                card_id: Some(card_id.to_owned()),
+                preferred_finish: finish.map(str::to_owned),
+                quantity: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap()
+        .id
+    }
+
+    /// The page's default query at one marketplace. The price tests are about the money and
+    /// about nothing else the query can say.
+    fn query_at(marketplace: Marketplace) -> WishlistQuery {
+        WishlistQuery {
+            marketplace,
+            ..Default::default()
+        }
     }
 
     /// A wishlist folder, written straight into the table: the commands that make one are
@@ -1193,9 +1326,13 @@ mod tests {
 
         let rows = list_wishes(&conn, &WishlistQuery::default()).unwrap();
         let any_row = rows.items.iter().find(|r| r.id == any.id).unwrap();
-        // Pinned to nothing, and still drawable: the join reaches the newest printing of the
-        // oracle card, which is `bolt-2ed` here — both seeds have a NULL `released_at`, so the
-        // order falls to its tiebreak, `id ASC`.
+        // Pinned to nothing, and still drawable: the join reaches a printing of the oracle
+        // card, which is `bolt-2ed` here. **The expectation is unchanged by the move to the
+        // cheapest printing** — `seeded` gives both bolts the same blob, so the price term is a
+        // tie, `released_at` is NULL on both, and the order falls all the way to its last
+        // tiebreak, `id ASC`. Which printing is *cheapest* is
+        // `an_any_printing_wish_takes_the_cheapest_printing`'s question, over a fixture whose
+        // printings disagree about money.
         assert_eq!(any_row.card_id, None);
         assert_eq!(any_row.art_card_id.as_deref(), Some("bolt-2ed"));
 
@@ -1215,6 +1352,145 @@ mod tests {
         assert_eq!(orphan.name, "Lightning Bolt", "the wish still names itself");
     }
 
+    /// An **any-printing** wish is for the card, so it is drawn as — and priced at — the cheapest
+    /// printing the marketplace quotes, not the newest one released.
+    ///
+    /// The printing travels with the price on purpose: `art_card_id` comes off this same join, so
+    /// the picture, the rarity gem and the chin's set and number all name the printing the figure
+    /// beside them is about. A tile drawn as one printing and priced at another would be the one
+    /// kind of wrong a reader cannot check.
+    #[test]
+    fn an_any_printing_wish_takes_the_cheapest_printing() {
+        let conn = empty();
+        // Same oracle card, three printings. The newest is the dearest, which is what makes this
+        // test able to fail: under the old `released_at DESC` it is the one that was chosen.
+        seed_printing(
+            &conn,
+            "bolt-new",
+            "oracle-bolt",
+            "2025-01-01",
+            r#"{"usd": "40.00"}"#,
+        );
+        seed_printing(
+            &conn,
+            "bolt-mid",
+            "oracle-bolt",
+            "2015-01-01",
+            r#"{"usd": "2.00"}"#,
+        );
+        seed_printing(
+            &conn,
+            "bolt-old",
+            "oracle-bolt",
+            "1993-01-01",
+            r#"{"usd": "9.00"}"#,
+        );
+        add_any_printing_wish(&conn, "oracle-bolt", None);
+
+        let page = list_wishes(&conn, &query_at(Marketplace::Tcgplayer)).unwrap();
+
+        assert_eq!(
+            page.items[0].unit_price,
+            Some(2.00),
+            "the cheapest, not the newest"
+        );
+        assert_eq!(
+            page.items[0].art_card_id.as_deref(),
+            Some("bolt-mid"),
+            "and the tile is drawn as that same printing"
+        );
+    }
+
+    /// An oracle card **no marketplace quotes** keeps the newest printing.
+    ///
+    /// A wish still needs art and still needs a set code, so ordering unpriced rows last with the
+    /// old clause as the tiebreak makes this change a no-op for exactly the wishes it could
+    /// otherwise have left blank.
+    #[test]
+    fn an_unpriced_oracle_card_keeps_the_newest_printing() {
+        let conn = empty();
+        seed_printing(
+            &conn,
+            "obscure-new",
+            "oracle-obscure",
+            "2025-01-01",
+            r#"{}"#,
+        );
+        seed_printing(
+            &conn,
+            "obscure-old",
+            "oracle-obscure",
+            "1999-01-01",
+            r#"{}"#,
+        );
+        add_any_printing_wish(&conn, "oracle-obscure", None);
+
+        let page = list_wishes(&conn, &query_at(Marketplace::Tcgplayer)).unwrap();
+
+        assert_eq!(page.items[0].unit_price, None);
+        assert_eq!(page.items[0].art_card_id.as_deref(), Some("obscure-new"));
+    }
+
+    /// **An unquoted printing never outranks a quoted one** — which is what `NULLS LAST` says,
+    /// and it is the one term of that ORDER BY SQLite's default disagrees with: ascending, a NULL
+    /// sorts *first*. Without it, every oracle card holding one printing the marketplace has
+    /// never listed would be drawn as that printing and priced at nothing.
+    ///
+    /// `an_unpriced_oracle_card_keeps_the_newest_printing` above cannot say this and it is worth
+    /// saying why: both of its printings are unquoted, so NULLs-first and NULLs-last pick the
+    /// same row and the clause is unfalsifiable there. Dropping `NULLS LAST` leaves that test
+    /// green — measured on 2026-08-26 — and this one red. A fixture has to *mix* the two, which
+    /// is the state the corpus is in: a marketplace quotes some printings and not others.
+    #[test]
+    fn an_unquoted_printing_never_outranks_a_quoted_one() {
+        let conn = empty();
+        seed_printing(&conn, "mix-new", "oracle-mix", "2025-01-01", r#"{}"#);
+        seed_printing(
+            &conn,
+            "mix-old",
+            "oracle-mix",
+            "2015-01-01",
+            r#"{"usd": "5.00"}"#,
+        );
+        add_any_printing_wish(&conn, "oracle-mix", None);
+
+        let page = list_wishes(&conn, &query_at(Marketplace::Tcgplayer)).unwrap();
+
+        assert_eq!(page.items[0].unit_price, Some(5.00));
+        assert_eq!(
+            page.items[0].art_card_id.as_deref(),
+            Some("mix-old"),
+            "the printing the marketplace quotes, not the newer one it does not"
+        );
+    }
+
+    /// A **pinned** wish is untouched: `coalesce` short-circuits, so the subquery never runs for
+    /// one, and the printing the reader chose is the printing they keep however cheap another is.
+    #[test]
+    fn a_pinned_wish_keeps_its_own_printing_however_dear() {
+        let conn = empty();
+        seed_printing(
+            &conn,
+            "bolt-new",
+            "oracle-bolt",
+            "2025-01-01",
+            r#"{"usd": "40.00"}"#,
+        );
+        seed_printing(
+            &conn,
+            "bolt-mid",
+            "oracle-bolt",
+            "2015-01-01",
+            r#"{"usd": "2.00"}"#,
+        );
+        add_pinned_wish(&conn, "bolt-new", None);
+
+        let page = list_wishes(&conn, &query_at(Marketplace::Tcgplayer)).unwrap();
+
+        assert_eq!(page.items[0].art_card_id.as_deref(), Some("bolt-new"));
+        assert_eq!(page.items[0].unit_price, Some(40.00));
+    }
+
     /// **A wish row carries the joined printing's `legalities`, at the index the appended
     /// column put it at.**
     ///
@@ -1225,8 +1501,8 @@ mod tests {
     /// appended one, after `c.type_line` and `c.id`.
     ///
     /// **An any-printing wish carries one too**, which is the half worth pinning: the join
-    /// coalesces to the newest printing of the oracle card, exactly as it does for `type_line`
-    /// and `art_card_id`, so only a genuine orphan answers `None` — and an Arena export of the
+    /// coalesces to a printing of the oracle card, exactly as it does for `type_line` and
+    /// `art_card_id`, so only a genuine orphan answers `None` — and an Arena export of the
     /// wishlist would otherwise leave out every unpinned wish on it.
     #[test]
     fn a_wish_row_carries_the_joined_printings_legalities() {
@@ -2134,6 +2410,67 @@ mod tests {
             price_of(Some("etched")),
             None,
             "no etched price is not the nonfoil price"
+        );
+    }
+
+    /// A wish that names **no** finish is a wish for the card, so it is priced at the printing's
+    /// own chain — `nonfoil → foil → etched` — exactly as a deck row with a null finish is.
+    ///
+    /// This is the Wakka case, which is where the bug was reported from: FIC #477 is sold only in
+    /// foil, so `coalesce(preferred_finish, 'nonfoil')` asked for a `$.usd` that does not exist
+    /// and drew an em dash beside a search wall quoting the same printing at $31.18. 12 849 of
+    /// 116 843 printings are priced only in foil or etched, so this is 11 % of anything a reader
+    /// can wish for.
+    #[test]
+    fn a_wish_with_no_preferred_finish_falls_through_to_the_foil_price() {
+        let conn = empty();
+        seed_card_with_prices(
+            &conn,
+            "wakka-fic",
+            r#"["foil"]"#,
+            r#"{"usd": null, "usd_foil": "31.18"}"#,
+        );
+        add_pinned_wish(&conn, "wakka-fic", None);
+
+        let page = list_wishes(&conn, &query_at(Marketplace::Tcgplayer)).unwrap();
+
+        assert_eq!(
+            page.items[0].unit_price,
+            Some(31.18),
+            "a foil-only printing is quoted at its foil rate, not left unpriced"
+        );
+    }
+
+    /// A wish that **does** name a finish is priced at that finish and at no other. No fallback of
+    /// any kind: the reader has said which object they want, and an em dash means "this
+    /// marketplace does not quote this printing in this finish", never "look somewhere else".
+    #[test]
+    fn a_named_finish_never_falls_back_to_another_ones_price() {
+        let conn = empty();
+        seed_card_with_prices(
+            &conn,
+            "bolt-both",
+            r#"["nonfoil","foil"]"#,
+            r#"{"usd": "1.00", "usd_foil": "9.00"}"#,
+        );
+        add_pinned_wish(&conn, "bolt-both", Some("foil"));
+        add_pinned_wish(&conn, "bolt-both", Some("etched"));
+
+        let page = list_wishes(&conn, &query_at(Marketplace::Tcgplayer)).unwrap();
+        let priced: Vec<Option<f64>> = page.items.iter().map(|r| r.unit_price).collect();
+
+        assert!(
+            priced.contains(&Some(9.00)),
+            "the foil wish is quoted at the foil rate"
+        );
+        assert!(
+            priced.contains(&None),
+            "the etched wish is unpriced — this printing is not sold etched, and quoting the \
+             nonfoil rate for it would be a price nobody quoted"
+        );
+        assert!(
+            !priced.contains(&Some(1.00)),
+            "and neither wish is ever quoted at the nonfoil rate"
         );
     }
 
