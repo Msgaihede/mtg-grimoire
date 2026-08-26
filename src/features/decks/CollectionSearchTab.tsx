@@ -202,7 +202,7 @@ export function landingCategory(
  *
  * What was wrong was the *fence*, not the conclusion. The row this drew instead was built out of
  * `@/components/FilterChips` the sanctioned way — which is still the right module boundary, and is
- * still how `CollectionFilterBar` is built — but it was the same arrangement of the same controls
+ * still how `PrintingsFilterBar` is built — but it was the same arrangement of the same controls
  * as the tab next to it, written twice, and a reader switching tabs met two different filter rows.
  * `FilterBar`'s prop is a structural `FilterSurface` now, which both hooks satisfy, so the two tabs
  * are one control over two backends. {@link COLLECTION_TRAY} is where this tab says which of its

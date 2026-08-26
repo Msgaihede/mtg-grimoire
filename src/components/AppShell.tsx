@@ -37,6 +37,7 @@ import { DURATION, statusLine as statusLineMotion } from "@/lib/motion";
 import { useAppStore, type ViewId } from "@/lib/store";
 import { usePrefetchDeckSearchOpen } from "@/features/decks/useDeckSearchOpen";
 import { useCardZoomPersistence } from "@/lib/useCardZoomPersistence";
+import { useListViewPersistence } from "@/lib/useListViewPersistence";
 import { useDelayedFlag } from "@/lib/useDelayedFlag";
 import { useMarketplace, useMarketplaceProgress } from "@/lib/useMarketplace";
 import { useNavCollapsed } from "@/lib/useNavCollapsed";
@@ -169,6 +170,11 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   // the component that is always mounted, so a size is written whichever view the reader zoomed.
   // It renders nothing: the sizes go into the zustand store, where every wall already reads them.
   useCardZoomPersistence();
+  // The same arrangement for the four lists' grid-or-table choice, and here for the same reason
+  // twice over: one subscription writing one row, and a component that is mounted whichever page
+  // the reader is on. It renders nothing — the layouts go into the zustand store, where each page
+  // already reads its own.
+  useListViewPersistence();
   // The deck editor's search column, read here rather than where it is drawn — and that is a
   // measurement rather than a preference for tidiness. Asked by the panel, the read queues behind
   // `deck_get` on the read connection and lands ~700ms after the column has already been drawn

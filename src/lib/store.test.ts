@@ -545,26 +545,90 @@ describe("the list the reader is standing in, in its drawn order", () => {
 });
 
 /**
- * Two layouts, two settings. The search is for looking at cards and opens on the art; the
- * collection is usually for counting them and opens on the table. A reader who switches one
- * to compare prices has said nothing about the other, and one shared toggle would make that
- * choice for them in a view they were not looking at.
+ * Four layouts, four settings. Every one of them opens on the art — this is a card app — and a
+ * reader who switches one to compare prices has said nothing about the other three, which one
+ * shared toggle would decide for them in a view they were not looking at.
  */
-describe("the two result layouts", () => {
-  it("opens the search on art and the collection on the table", () => {
+describe("the four result layouts", () => {
+  it("opens every list on art", () => {
     expect(useAppStore.getState().searchView).toBe("grid");
-    expect(useAppStore.getState().collectionView).toBe("table");
+    expect(useAppStore.getState().tagsView).toBe("grid");
+    // The one that used to open on the table, and the reversal is `store.ts`' own note: the
+    // choice is remembered now, so a default is only what a list looks like before anybody
+    // has said.
+    expect(useAppStore.getState().collectionView).toBe("grid");
+    expect(useAppStore.getState().wishlistView).toBe("grid");
   });
 
   it("keeps them apart", () => {
-    useAppStore.getState().setCollectionView("grid");
+    useAppStore.getState().setCollectionView("table");
 
-    expect(useAppStore.getState().collectionView).toBe("grid");
+    expect(useAppStore.getState().collectionView).toBe("table");
     expect(useAppStore.getState().searchView).toBe("grid");
 
     useAppStore.getState().setSearchView("table");
 
+    expect(useAppStore.getState().collectionView).toBe("table");
+    expect(useAppStore.getState().wishlistView).toBe("grid");
+  });
+
+  /** The pulse is what `useListViewPersistence` writes off, and it counts *presses* rather than
+   *  values — so a press that lands a list on the layout it was already showing still moves it.
+   *  A value-watcher would miss exactly that, which is the case this pins. */
+  it("counts a press even when the layout does not move", () => {
+    const before = useAppStore.getState().listViewPulse;
+    useAppStore.getState().setSearchView("grid");
+
+    expect(useAppStore.getState().searchView).toBe("grid");
+    expect(useAppStore.getState().listViewPulse).toBe(before + 1);
+    expect(useAppStore.getState().listViewSection).toBe("search");
+  });
+});
+
+/**
+ * The `list_view` row arriving at launch. It is the reader's memory rather than an authority, so
+ * everything it cannot say is a list left on the default this file built it with.
+ */
+describe("hydrating the stored layouts", () => {
+  it("seeds only the lists the row names", () => {
+    useAppStore.getState().hydrateListViews({ collection: "table" });
+
+    expect(useAppStore.getState().collectionView).toBe("table");
+    expect(useAppStore.getState().searchView).toBe("grid");
+    expect(useAppStore.getState().wishlistView).toBe("grid");
+    expect(useAppStore.getState().tagsView).toBe("grid");
+  });
+
+  /**
+   * A list this build does not draw, and a word that is not a layout. Both are what a newer build
+   * or a hand-edit leaves behind, and both have to cost the reader nothing beyond that entry —
+   * a thrown narrowing here would be a store that cannot be seeded at all.
+   */
+  it("ignores a section it does not know and a word that is not a layout", () => {
+    useAppStore.getState().hydrateListViews({
+      binders: "table",
+      collection: "cards",
+      wishlist: "table",
+    });
+
     expect(useAppStore.getState().collectionView).toBe("grid");
+    expect(useAppStore.getState().wishlistView).toBe("table");
+  });
+
+  /**
+   * **The race the guard exists for.** The read is a round trip, so a reader who presses the
+   * toggle inside it would otherwise watch last session's layout overwrite their own a moment
+   * later — a list visibly snapping back under their hand with nothing on screen explaining it.
+   */
+  it("leaves a layout the reader has already pressed alone", () => {
+    useAppStore.getState().setCollectionView("grid");
+
+    useAppStore.getState().hydrateListViews({ collection: "table", search: "table" });
+
+    expect(useAppStore.getState().collectionView).toBe("grid");
+    // Whole-store rather than per-section, which is what the pulse can answer: inside a
+    // sub-second window the reader has by definition reached only one list.
+    expect(useAppStore.getState().searchView).toBe("grid");
   });
 });
 

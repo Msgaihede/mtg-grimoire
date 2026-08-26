@@ -1,8 +1,17 @@
 import { useEffect, useMemo, useState } from "react";
 import { keepPreviousData, useInfiniteQuery } from "@tanstack/react-query";
 import { nextOffset } from "@/features/collection/useCollection";
-import { cycleTriState, DEBOUNCE_MS } from "@/features/search/useCardSearch";
+import {
+  colorParam,
+  cycleTriState,
+  DEBOUNCE_MS,
+  FORMATS,
+  toggleColor,
+  toggleIn,
+  type ColorKey,
+} from "@/features/search/useCardSearch";
 import { ipc, type WishlistQuery, type WishlistSortKey } from "@/lib/ipc";
+import { sortOptions } from "@/lib/options";
 import { applySort, type SortDir, type SortSpec } from "@/lib/sort";
 import { useMarketplace } from "@/lib/useMarketplace";
 
@@ -55,6 +64,12 @@ const WISHLIST_FIRST_DIR: Record<WishlistSortKey, SortDir> = {
 /** Everything {@link activeFilterCount} counts — every filter the wishlist view offers. */
 export interface WishlistFilterState {
   text: string;
+  format: string;
+  colors: readonly string[];
+  sets: readonly string[];
+  manaValues: readonly number[];
+  manaX: boolean;
+  rarities: readonly string[];
   /** `false` is a filter too — "the wishes nothing covers" — so this is compared against
    *  `undefined` rather than tested for truthiness. */
   fulfilled: boolean | undefined;
@@ -66,16 +81,30 @@ export interface WishlistFilterState {
 /**
  * How many *kinds* of filter are on — the number on the Reset all badge.
  *
- * Three, where the search offers six and the collection eight. That is the point of this
- * view: a wishlist is a shopping list rather than an inventory, it is read by name, and a
- * colour chip row over forty rows is chrome that will never be pressed. The backend takes
- * every card filter the other two send (`WishlistQuery extends CardFilters`), so this is a
- * decision about the screen and not a limit of the plumbing.
+ * Eight, where it was three until 2026-08-26 and the argument for three was about the *screen*
+ * rather than the plumbing: a shopping list is read by name, so a row of colour chips over forty
+ * rows was chrome that would never be pressed. What overturned it is that the chips are no longer
+ * a row — the three card views draw one `FilterBar` now, where everything but the box, the
+ * colours and the order lives behind a disclosure. A filter nobody presses costs a shut tray
+ * nothing, and a wishlist that answered fewer of its own backend's fields than the collection
+ * beside it was the odd page out rather than a smaller control.
+ *
+ * `WishlistQuery extends CardFilters`, so every one of these was already a field the backend read
+ * and this hook simply never sent. Kinds and not values, as both siblings count them.
  */
 export function activeFilterCount(f: WishlistFilterState): number {
-  return [f.text.trim().length > 0, f.fulfilled !== undefined, f.needsReview !== undefined].filter(
-    Boolean,
-  ).length;
+  return [
+    f.text.trim().length > 0,
+    f.format.length > 0,
+    f.colors.length > 0,
+    f.sets.length > 0,
+    // One term with the numerals, as both siblings count it: the X chip is the last chip of that
+    // same group and is OR'd with them, so "3 and X" is one thing to clear.
+    f.manaValues.length > 0 || f.manaX,
+    f.rarities.length > 0,
+    f.fulfilled !== undefined,
+    f.needsReview !== undefined,
+  ].filter(Boolean).length;
 }
 
 /**
@@ -91,6 +120,18 @@ export function useWishlist() {
   // it decides what a Cost cell contains and not merely how it is written.
   const { marketplace } = useMarketplace();
   const [text, setText] = useState("");
+  // The card filters, drawn since 2026-08-26 and **on the wire the whole time before that**:
+  // `WishlistQuery` has extended `CardFilters` since it was written, so every one of these was a
+  // field the backend already read and this hook simply never sent. See {@link activeFilterCount}
+  // for what changed on screen.
+  const [format, setFormat] = useState("");
+  const [colors, setColors] = useState<readonly ColorKey[]>([]);
+  const [sets, setSets] = useState<readonly string[]>([]);
+  const [manaValues, setManaValues] = useState<readonly number[]>([]);
+  // Additive rather than exclusive, exactly as both siblings are: `cmc` counts `{X}` as zero, so
+  // a `{X}{B}{B}{B}` on the list answers the `3` chip and this one both.
+  const [manaX, setManaX] = useState(false);
+  const [rarities, setRarities] = useState<readonly string[]>([]);
   const [fulfilled, setFulfilled] = useState<boolean | undefined>(undefined);
   const [needsReview, setNeedsReview] = useState<boolean | undefined>(undefined);
   // Empty is name order — the view's own default, which is what a cleared sort falls back
@@ -112,10 +153,31 @@ export function useWishlist() {
     return () => clearTimeout(timer);
   }, [text]);
 
+  // Every multi-select is canonicalised before it reaches the key: picking two sets in either
+  // order is the same list of rows and must not cost a second round trip.
+  const colorsParam = colorParam(colors);
+  const setsParam = sets.length > 0 ? [...sets].sort() : undefined;
+  const manaParam = manaValues.length > 0 ? [...manaValues].sort((a, b) => a - b) : undefined;
+  const raritiesParam = rarities.length > 0 ? [...rarities].sort() : undefined;
+
   const filters: Omit<WishlistQuery, "limit" | "offset" | "sort"> = {
     // A blank string is dropped rather than sent: the backend reads it as unset anyway, and
     // sending it would make the payload lie about intent.
     text: debouncedText || undefined,
+    // The same rule for all five. **`playableOnly` is deliberately never sent beside `format`** —
+    // the card search pairs the two (`formatParams`), and that pairing must not travel here: a
+    // wish for an art card is a card the reader wants, and a corpus filter would answer their own
+    // shopping list with a shorter one. It is also why this surface does not set
+    // `FilterSurface.anyCard`: with nothing narrowing the corpus there is nothing for a widening
+    // row to put back.
+    format: format || undefined,
+    colors: colorsParam,
+    sets: setsParam,
+    manaValues: manaParam,
+    // Absent rather than `false`, which is what the backend defaults to. `true` widens — it adds
+    // the `{X}` rows to whatever the numerals matched.
+    manaX: manaX || undefined,
+    rarities: raritiesParam,
     // Sent only when it is set. `false` — "what is still missing" — is the list's usual
     // question and is meaningful on the wire; `undefined` is not sent at all.
     fulfilled,
@@ -149,6 +211,17 @@ export function useWishlist() {
     "wishlist",
     "list",
     debouncedText,
+    // Every segment is a **string**, and the normalised one where there is a normal form: a key
+    // holding an array compares by structure, so `["W","U"]` and `["U","W"]` would be two entries
+    // for one answer. The four params above have already put each in order.
+    format,
+    colorsParam ?? "",
+    setsParam?.join(",") ?? "",
+    manaParam?.join(",") ?? "",
+    // Its own segment, and load-bearing: X is a second axis over the same chips, so a key built
+    // from the numerals alone would serve "3, and also X" out of the pages cached for plain "3".
+    manaX ? "x" : "",
+    raritiesParam?.join(",") ?? "",
     fulfilled === undefined ? "" : fulfilled ? "fulfilled" : "missing",
     needsReview === undefined ? "" : needsReview ? "review" : "clear",
     sort.map((t) => `${t.key}:${t.dir}`).join(","),
@@ -183,6 +256,36 @@ export function useWishlist() {
   return {
     text,
     setText,
+    format,
+    setFormat,
+    /**
+     * The rows the format picker offers — the shared {@link FORMATS} and nothing added to it,
+     * `useCollection`'s note verbatim: nothing opens this page pointed at a format, so the picker
+     * can never be sitting on a key the list does not hold, and `formatsWithDefault`'s whole job
+     * is that seeding. **And no `anyCard`** — see the `format` field on `filters` above.
+     */
+    formats: FORMATS,
+    colors,
+    /** `toggleColor` rather than a plain `toggleIn`, so **C excludes the five and the five exclude
+     *  C** — colourless is not a sixth colour, and the search's rule is the one to keep. */
+    toggleColor: (key: ColorKey) => setColors((picked) => toggleColor(picked, key)),
+    sets,
+    toggleSet: (code: string) => setSets((picked) => toggleIn(picked, code)),
+    manaValues,
+    toggleManaValue: (value: number) => setManaValues((picked) => toggleIn(picked, value)),
+    /** Also match the wishes whose printed cost contains `{X}` — **additive, never exclusive**,
+     *  OR'd with the numeral chips as they are OR'd with each other. */
+    manaX,
+    toggleManaX: () => setManaX((on) => !on),
+    rarities,
+    toggleRarity: (rarity: string) => setRarities((picked) => toggleIn(picked, rarity)),
+    /**
+     * **No facets**, `useCollectionSearch`'s answer and for its reason: `facets.ts` reads
+     * `undefined` as "we do not know", which leaves every chip live and nothing greyed. That is
+     * the honest state — `wishlist_list` has no facet command behind it the way `search_cards`
+     * does, and counting would be a second query per keystroke for numbers beside a list of tens.
+     */
+    facets: undefined,
     /**
      * `true` shows only the wishes the collection already covers, `false` only those it does
      * not, `undefined` asks nothing. Counted in **copies** and finish-aware: a foil wish is
@@ -191,6 +294,10 @@ export function useWishlist() {
     fulfilled,
     /** Off → still missing → fulfilled → off. A shopping list asks what is left first. */
     toggleFulfilled: () => setFulfilled((current) => cycleTriState(current, false)),
+    /** The same field, set outright. `FilterBar` walks the cycle itself for the chip in its tray
+     *  and needs this one to *clear* the kind in a single press — `FilterSurface.needsReview`
+     *  carries the argument for both surfaces. */
+    setFulfilled,
     /**
      * `true` shows only the wishes a Scryfall migration or a vanished printing flagged,
      * `false` only those it did not, `undefined` asks nothing.
@@ -199,6 +306,8 @@ export function useWishlist() {
     /** Off → flagged → not flagged → off. The flagged ones first: that is the only reason
      *  anybody presses this, and the complement is where you go once they are dealt with. */
     toggleNeedsReview: () => setNeedsReview((current) => cycleTriState(current, true)),
+    /** The same field, set outright — see {@link setFulfilled} beside it. */
+    setNeedsReview,
     /** The columns this list is ordered by, first one deciding. Empty is name order. */
     sort,
     /** One press on a column header. `additive` is Shift being held. */
@@ -209,8 +318,32 @@ export function useWishlist() {
           firstDir: WISHLIST_FIRST_DIR[key as WishlistSortKey] ?? "asc",
         }),
       ),
-    /** The filter bar's select: one term, replacing whatever was there. */
-    setSortKey: (key: WishlistSortKey) => setSort([{ key, dir: WISHLIST_FIRST_DIR[key] }]),
+    /**
+     * The filter bar's select: one term, replacing whatever was there.
+     *
+     * **It takes the `""` its own `Custom…` row carries**, which is a fact about the type rather
+     * than about a press: that row is `disabled`, so nothing on screen can send it. The row exists
+     * because the select's value has to be one its options carry ({@link sortRows}), and a
+     * setter that refused the value the control can *hold* would be a signature that could not be
+     * bound to it. It is written out rather than cast away — the empty spec is this list's name
+     * order, so the unreachable arm has a right answer and says it.
+     */
+    setSortKey: (key: WishlistSortKey | "") =>
+      setSort(key === "" ? [] : [{ key, dir: WISHLIST_FIRST_DIR[key] }]),
+    /** Which way the list runs — **never `undefined`**, `useCollection`'s note and for its reason:
+     *  an empty spec is this list's name order rather than a ranking, so it has a direction and
+     *  the arrow that turns it is live rather than greyed. */
+    sortDir: sort.length === 0 ? WISHLIST_FIRST_DIR.name : sort[0].dir,
+    /** Turn the first term over. An empty spec is written out rather than left alone, so the press
+     *  materialises the order the list was already in, reversed — see `useCollection`'s twin. */
+    flipSortDir: () =>
+      setSort((spec) =>
+        spec.length === 0
+          ? [{ key: "name", dir: WISHLIST_FIRST_DIR.name === "asc" ? "desc" : "asc" }]
+          : spec.map((term, at) =>
+              at === 0 ? { key: term.key, dir: term.dir === "asc" ? "desc" : "asc" } : term,
+            ),
+      ),
     /**
      * What the select shows — the sort's *first* term when the select offers it, and `""`,
      * drawn as `Custom…`, when the sort starts from a column it has no option for. See
@@ -221,7 +354,28 @@ export function useWishlist() {
       : WISHLIST_SORTS.some((s) => s.value === sort[0].key)
         ? sort[0].key
         : "") as WishlistSortKey | "",
-    activeCount: activeFilterCount({ text, fulfilled, needsReview }),
+    /**
+     * The rows that select draws, including the `Custom…` the sort can only be *put* into — see
+     * `useCollection.sortRows`, which is this rule and its whole argument. The Owned and Cost
+     * headers are the two keys this select has no option for.
+     */
+    sortRows: [
+      ...(sort.length > 0 && !WISHLIST_SORTS.some((s) => s.value === sort[0].key)
+        ? ([{ value: "", label: "Custom…", disabled: true }] as const)
+        : []),
+      ...sortOptions(WISHLIST_SORTS, (s) => s.label),
+    ] as readonly { value: WishlistSortKey | ""; label: string; disabled?: boolean }[],
+    activeCount: activeFilterCount({
+      text,
+      format,
+      colors,
+      sets,
+      manaValues,
+      manaX,
+      rarities,
+      fulfilled,
+      needsReview,
+    }),
     /** Clear every filter at once. The sort is not a filter and stays: it is how the reader
      *  reads, not what they are looking at. `folderId` and `flatten` stay for the same
      *  reason: where the reader is standing, and whether they are ignoring the filing, are
@@ -229,6 +383,12 @@ export function useWishlist() {
      *  march them back to the root or drop them out of Flatten. */
     resetAll: () => {
       setText("");
+      setFormat("");
+      setColors([]);
+      setSets([]);
+      setManaValues([]);
+      setManaX(false);
+      setRarities([]);
       setFulfilled(undefined);
       setNeedsReview(undefined);
     },

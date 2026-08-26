@@ -376,7 +376,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   different one. Grep the *calls* rather than the `K_*` constants: `maintenance.rs` names two of
   those and both are `sync_meta` keys. What is worth knowing without grepping is the split: most
   of these rows are a reader's *choice* (`marketplace`, `printing_group_by`, `nav_collapsed`,
-  `card_zoom`, `deck_search_open`), one is a *memory* of what they last did
+  `card_zoom`, `list_view`, `deck_search_open`), one is a *memory* of what they last did
   (`last_deck_format`), and the rest are the app's own bookkeeping (the update check's three,
   `scryfall_penalty_until`). **None of them belongs in `sync_meta`** — a row in that one the sync
   did not write makes every later timing claim a fiction.

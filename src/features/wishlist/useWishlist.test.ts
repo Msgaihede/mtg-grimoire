@@ -13,7 +13,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
   ipc: { wishlistList, getMarketplace },
 }));
 
-import { activeFilterCount, useWishlist } from "./useWishlist";
+import { activeFilterCount, useWishlist, type WishlistFilterState } from "./useWishlist";
 
 function wrapper({ children }: { children: ReactNode }) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -171,16 +171,68 @@ describe("listKey", () => {
   });
 });
 
-// `activeFilterCount` itself is unchanged by Task 9 — it never took `folderId` or `flatten`
-// as arguments in the first place, which is the point above. This is the one direct check on
-// the exported function, since nothing else in the tree called it before this file existed.
+// `activeFilterCount` still takes neither `folderId` nor `flatten` — they are navigation rather
+// than filters, which is the point above and is what survived the row growing. This is the one
+// direct check on the exported function, since nothing else in the tree calls it.
+const NONE = {
+  text: "",
+  format: "",
+  colors: [],
+  sets: [],
+  manaValues: [],
+  manaX: false,
+  rarities: [],
+  fulfilled: undefined,
+  needsReview: undefined,
+} satisfies WishlistFilterState;
+
 describe("activeFilterCount", () => {
-  it("counts only text, fulfilled and needsReview", () => {
-    expect(activeFilterCount({ text: "", fulfilled: undefined, needsReview: undefined })).toBe(0);
-    expect(activeFilterCount({ text: "bolt", fulfilled: undefined, needsReview: undefined })).toBe(
-      1,
-    );
-    expect(activeFilterCount({ text: "", fulfilled: false, needsReview: undefined })).toBe(1);
-    expect(activeFilterCount({ text: "", fulfilled: undefined, needsReview: true })).toBe(1);
+  it("is zero when nothing is filtered", () => {
+    expect(activeFilterCount(NONE)).toBe(0);
+  });
+
+  /** Kinds, not values — the badge tells the reader how much is about to change, and "two
+   *  rarities" is one thing that is on. */
+  it("counts each kind of filter once", () => {
+    expect(activeFilterCount({ ...NONE, text: "bolt" })).toBe(1);
+    expect(activeFilterCount({ ...NONE, format: "modern" })).toBe(1);
+    expect(activeFilterCount({ ...NONE, colors: ["R", "U"] })).toBe(1);
+    expect(activeFilterCount({ ...NONE, sets: ["lea"] })).toBe(1);
+    expect(activeFilterCount({ ...NONE, rarities: ["rare", "mythic"] })).toBe(1);
+    // `false` — "the wishes nothing covers" — is a filter too, and is the list's usual question.
+    // Compared against `undefined`, never tested for truthiness.
+    expect(activeFilterCount({ ...NONE, fulfilled: false })).toBe(1);
+    expect(activeFilterCount({ ...NONE, needsReview: true })).toBe(1);
+  });
+
+  /** Whitespace is not a search. */
+  it("ignores a blank search box", () => {
+    expect(activeFilterCount({ ...NONE, text: "   " })).toBe(0);
+  });
+
+  /** X is the last chip of the mana-value group and is OR'd with the numerals, so it is that same
+   *  kind — but an X-only filter still has to be seen, or Reset all would hide over a list that
+   *  is filtered. */
+  it("counts the X chip with the mana values it sits among", () => {
+    expect(activeFilterCount({ ...NONE, manaX: true })).toBe(1);
+    expect(activeFilterCount({ ...NONE, manaValues: [1], manaX: true })).toBe(1);
+  });
+
+  /** Eight, where it was three until the three card views started drawing one `FilterBar`.
+   *  Reset all has to reach every one of them, so the count has to see every one of them. */
+  it("sees all eight kinds the wishlist offers", () => {
+    expect(
+      activeFilterCount({
+        text: "bolt",
+        format: "modern",
+        colors: ["R"],
+        sets: ["lea"],
+        manaValues: [1],
+        manaX: true,
+        rarities: ["rare"],
+        fulfilled: false,
+        needsReview: true,
+      }),
+    ).toBe(8);
   });
 });

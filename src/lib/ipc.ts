@@ -31,19 +31,20 @@
  * `PassReport`                                   — `src-tauri/src/mirror/run.rs`
  * `TagTerms`                                     — `src-tauri/src/filters.rs`
  *
- * **Five settings carry no struct at all.** Each is one `app_meta` row: two answered as a bare
+ * **Six settings carry no struct at all.** Each is one `app_meta` row: two answered as a bare
  * string — `getMarketplace`/`setMarketplace` (`src-tauri/src/marketplace.rs`) and
- * `printingGroupBy`/`setPrintingGroupBy` (`src-tauri/src/card.rs`) — one, `cardZoom`/
- * `setCardZoom` (`src-tauri/src/zoom.rs`), as a bare `Record<string, number>`, and two as a
+ * `printingGroupBy`/`setPrintingGroupBy` (`src-tauri/src/card.rs`) — two as a bare map,
+ * `cardZoom`/`setCardZoom` (`src-tauri/src/zoom.rs`) and `listView`/`setListView`
+ * (`src-tauri/src/listview.rs`), and two as a
  * bare `boolean`: `navCollapsed`/`setNavCollapsed` (`src-tauri/src/nav.rs`) and
- * `deckSearchOpen`/`setDeckSearchOpen` (`src-tauri/src/deck.rs`). All five are
+ * `deckSearchOpen`/`setDeckSearchOpen` (`src-tauri/src/deck.rs`). All six are
  * the shape a stored preference has to have: the read falls back on its default for a row that
  * is missing *or* holds a value this build does not recognise, and only the *write* refuses.
  *
- * Three of them are therefore typed loosely here rather than as their unions: the narrowing
+ * Four of them are therefore typed loosely here rather than as their unions: the narrowing
  * belongs to the module that owns the vocabulary (`@/lib/marketplace`,
- * `@/features/card/printings`, `@/lib/cardZoom`), and a row a newer build wrote must reach this
- * side as what it is. **The two booleans are the ones with no narrowing to do**, and that is
+ * `@/features/card/printings`, `@/lib/cardZoom`, `@/lib/store`), and a row a newer build wrote
+ * must reach this side as what it is. **The two booleans are the ones with no narrowing to do**, and that is
  * the same argument arriving at nothing rather than an exception to it: a boolean has no
  * vocabulary for a later build to have widened, so there is no third state a row could come back
  * in. Each far end folds a missing row, a junk row and an unreadable one alike into its own
@@ -52,10 +53,10 @@
  * side to decide. Both store `"1"`/`"0"` and read anything else as that default, so a hand-edit
  * or a spelling a future build invents is already collapsed before it reaches the wire.
  *
- * The zoom row is the one of the five whose *shape* is a map, and the difference is worth a
- * sentence: it has no single default to fall back on, because there are seven walls and each one
- * has been zoomed or not. So the backend answers only what it has, and a section it says nothing
- * about keeps the default the store was built with.
+ * The zoom row and the list-layout row are the two of the six whose *shape* is a map, and the
+ * difference is worth a sentence: neither has a single default to fall back on, because there are
+ * seven walls and four lists and each one has been touched or not. So the backend answers only
+ * what it has, and a section it says nothing about keeps the default the store was built with.
  *
  * **Every price field on this page is singular, and the marketplace is how it was chosen.**
  * A query carries `marketplace`; what it answers with carries one `price` / `unitPrice` /
@@ -4590,6 +4591,34 @@ export const ipc = {
    * setting is worth less than the reader's hand: `@/lib/useNavCollapsed` has the argument.
    */
   setNavCollapsed: (collapsed: boolean) => invoke<void>("set_nav_collapsed", { collapsed }),
+  /**
+   * How each list of cards was last left drawn, as section name → `"grid"` or `"table"`.
+   *
+   * The **sixth** `app_meta` setting and the second whose shape is a map — see this file's
+   * header, and {@link cardZoom} beside it, whose contract this copies whole. **A section is
+   * absent rather than defaulted**: which layout a page opens on is this side's (`@/lib/store`),
+   * so a missing entry means the reader has never switched that list, and the backend does not
+   * invent a preference it does not own. A whole unreadable row answers `{}`.
+   *
+   * Raw `Record<string, string>` rather than `Record<ListSection, SearchView>`, for
+   * {@link cardZoom}'s reason: the keys *and* the values are whatever some build of this app
+   * wrote, so `isListSection` and `isSearchView` narrow both in `@/lib/store`.
+   */
+  listView: () => invoke<Record<string, string>>("list_view"),
+  /**
+   * Remember one list's layout, leaving the other entries in the row alone.
+   *
+   * Two arguments where its neighbours take one, and Tauri matches by name. Rejects a blank
+   * section and a word that is neither `"grid"` nor `"table"`, so `app_meta` cannot collect
+   * entries every later read would discard — but *which* sections exist is not checked at the far
+   * end, deliberately: the backend owns the two words and this side owns the list of lists.
+   *
+   * Answers `collection::BUSY` under a running sync, like every other write, and the caller
+   * deliberately does not undo the layout when it does — {@link setNavCollapsed}'s trade, for its
+   * reason.
+   */
+  setListView: (section: string, view: string) =>
+    invoke<void>("set_list_view", { section, view }),
   /**
    * Whether the deck editor's card search column was last left open.
    *

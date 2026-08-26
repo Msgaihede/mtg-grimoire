@@ -529,6 +529,26 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
     failures — a read that never answers, a write refused with `BUSY` under a first-run sync — are
     swallowed: the first leaves every wall at `DEFAULT_ZOOM`, which is a complete app, and the
     second costs only the next launch's starting size.
+- **A list's grid-or-table choice is remembered too, and it is `card_zoom`'s mechanism with one
+  deliberate difference** (2026-08-26). One `app_meta` row, `list_view`, holding a JSON object of
+  section → `"grid"`/`"table"` (`src-tauri/src/listview.rs`); `src/lib/useListViewPersistence.ts`
+  is the whole of the frontend and `AppShell` is its only mount. It copies the object row, the
+  preserve-what-you-do-not-understand write, the per-entry fallback, the `hydrate…` seed with its
+  `pulse !== 0` guard, and the swallow-every-failure rule. Three things differ, and each is the same
+  argument reaching a different answer:
+
+  - **The bound is a vocabulary rather than a range.** Rust knows the two words `grid` and `table`
+    and refuses anything else at the write end — `card::store_group_by`'s shape — while it goes on
+    knowing nothing about *which lists exist*, because that is `LIST_SECTIONS` in `store.ts`. So an
+    unknown layout is dropped on the way out and an unknown section is not: the asymmetry is what
+    `isListSection` on the frontend exists for.
+  - **There is no debounce.** A zoom is a stream — a pinch arrives dozens of times a second — and a
+    layout is one deliberate press on one of two buttons. The write goes on the press, and the row
+    is touched exactly as often as the reader touches the control.
+  - **The default it protects moved.** The collection opened on the *table* until this landed, on
+    the argument that a collection is read for what is in it. All four lists open on art now,
+    because a default that survives one press is a much weaker claim than one re-made on every
+    launch — a reader who wants the table presses once, ever.
 - **The zoom rescales tile _geometry_; it is never a `transform: scale()`.** A transform was the
   obvious cheap answer and is wrong three times over: it resamples art that is already a downscale
   of a 672px `display` image, it leaves the virtualiser measuring pre-transform boxes so the scrollbar
