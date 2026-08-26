@@ -247,6 +247,7 @@ export function CardGrid<T extends GridCard>({
   label = "Search results",
   badge,
   topLeft,
+  topLeftPlacement = "nameplate",
   finish,
   treatment,
   gameChanger,
@@ -290,7 +291,20 @@ export function CardGrid<T extends GridCard>({
    * it is has not thought about it, and the compiler is the cheapest place for that to surface.
    */
   zoomSection: ZoomSection;
-  /** The card the detail pane is showing, so the wall can say which one that is. */
+  /**
+   * Which tile wears the ring — the card the detail pane is showing, so the wall can say which
+   * one that is.
+   *
+   * **It is compared against {@link tileKey}, not against `card.id`**, and on a wall that passes
+   * `key` those are different strings. `tileKey` is `card.key ?? card.id`, so the six walls whose
+   * rows carry no `key` go on passing a printing id and are untouched — but a wall that splits one
+   * printing into several tiles (the collection draws one per printing *and finish*) must pass the
+   * **key of the tile it means**, not the id of the card behind it. A card id there matches no
+   * tile's key and rings nothing at all, silently: there is no type to catch it, because both are
+   * `string`.
+   *
+   * The same is true of the picked set, which is keyed the same way — see {@link selectionScope}.
+   */
   selectedId?: string | null;
   /** What the wall is, for anyone who cannot see that it is a wall of cards. */
   label?: string;
@@ -321,6 +335,33 @@ export function CardGrid<T extends GridCard>({
    * with nothing to say draws nothing.
    */
   topLeft?: (card: T) => ReactNode;
+  /**
+   * Where the {@link topLeft} corner sits, because two walls want two different answers and both
+   * are right.
+   *
+   * * **`"nameplate"`** — the default, and every wall's behaviour until 2026-08-26. Insets it 4px,
+   *   clear of the art's rounded corner and onto the card's printed name, which is where the
+   *   search's `N printings` count belongs: it annotates the card it is printed over, and the
+   *   nameplate is the quietest strip on a photograph to put words on.
+   * * **`"clear"`** — drops it below the printed title bar instead, for a mark that must not cover
+   *   the card's own name. The wishlist's review flag and cost are the live case: a reader
+   *   identifies a wishlist tile *by* the name, so a chip over it hides the one thing the row is
+   *   about. Reported by the reader in those words.
+   *
+   * **The offset is on the corner's wrapper rather than on the mark inside it**, and that is not
+   * an implementation detail — the wrapper carries the felt (`bg-bg/85`) and the padding, so a
+   * margin on the mark grows the chip *downward from the same origin* and makes the occlusion
+   * worse rather than better.
+   *
+   * **`2rem`, from this repo's own measurement of the frame.** `SearchPage`'s `topLeft` records a
+   * printed nameplate at **roughly 8–22px** on a 238px card face (a 170px tile at 100 % zoom),
+   * which is why 4px — a chip occupying 4–18px — lands on it deliberately. 32px therefore clears
+   * that nameplate's bottom edge by 10px, most of a nameplate's own height, which is the margin
+   * the word *roughly* in that measurement is owed and which also absorbs the layouts whose frame
+   * is not the standard one (a full-art land, a saga, an adventure). It scales like everything
+   * else drawn on a card: 64px on a doubled card is the same place on a doubled nameplate.
+   */
+  topLeftPlacement?: "nameplate" | "clear";
   /**
    * The finish a tile's card **is** — a holo sheen and a corner chip, drawn by `CardArt`.
    *
@@ -385,10 +426,10 @@ export function CardGrid<T extends GridCard>({
    * claiming what the row does not say, which is the same distinction its table draws in its
    * Printing column (`features/wishlist/wish.ts`).
    *
-   * The slot is the *text* and not the line: the rarity gem before it and {@link money} after it
-   * are the chin's, as are the `sr-only` finish and game-changer words appended to whatever this
-   * returns — those describe the marks over the art, which are drawn from the same tile whatever
-   * this slot says.
+   * The slot is the *text* and not the line: the rarity gem before it, the finish mark and
+   * {@link money} after it are the chin's, and so is the `sr-only` game-changer word at the end of
+   * the row — that one describes a mark over the art, which is drawn from the same tile whatever
+   * this slot says. Nothing is appended to what this returns; the chin's other slots sit beside it.
    */
   caption?: (card: T) => ReactNode;
   /** What this wall's chin says one copy costs. */
@@ -551,8 +592,10 @@ export function CardGrid<T extends GridCard>({
    * that is what makes clicking a tile in the deck editor's docked panel put the deck's own
    * selection down, since a pick in a new scope replaces the whole set.
    *
-   * The keys are printing ids, which is what `onSelect` already takes, so a caller passes a name
-   * and nothing else.
+   * The keys are **tile** keys — {@link tileKey}, i.e. `card.key ?? card.id` — so on the six walls
+   * whose rows carry no `key` they are printing ids and a caller passes a name and nothing else.
+   * A wall that splits one printing into several tiles picks each of them separately, which is the
+   * point of that fallback rather than an exception to it.
    */
   selectionScope?: string;
   /**
@@ -1031,6 +1074,7 @@ export function CardGrid<T extends GridCard>({
                 dragRest={dragRest}
                 badge={badge}
                 topLeft={topLeft}
+                topLeftPlacement={topLeftPlacement}
                 finish={finish}
                 treatment={treatment}
                 gameChanger={gameChanger}
@@ -1068,6 +1112,7 @@ function Tile<T extends GridCard>({
   selected,
   badge,
   topLeft,
+  topLeftPlacement = "nameplate",
   finish,
   treatment,
   gameChanger,
@@ -1112,6 +1157,7 @@ function Tile<T extends GridCard>({
   selected: boolean;
   badge?: (card: T) => ReactNode;
   topLeft?: (card: T) => ReactNode;
+  topLeftPlacement?: "nameplate" | "clear";
   finish?: (card: T) => Finish | null;
   treatment?: (card: T) => readonly Treatment[];
   gameChanger?: (card: T) => boolean;
@@ -1381,21 +1427,27 @@ function Tile<T extends GridCard>({
           // box — see `topLeft` for why each corner has exactly one owner, why this one stopped
           // being the exception, and the badge's comment for why both take their own clicks.
           //
-          // It is inset by 4px rather than going flush, and that is the one thing here that is
-          // not the badge's arrangement copied: the corner is a *sibling* of the button, so the
-          // art's `rounded-lg` does not clip it, and a box at 0,0 would hang off the picture's
-          // rounded corner. 4px is as high on the card as this mark can sit — see where the
-          // search passes it for what that costs against the printed name.
+          // It is inset from the left by 4px rather than going flush, and that is the one thing
+          // here that is not the badge's arrangement copied: the corner is a *sibling* of the
+          // button, so the art's `rounded-lg` does not clip it, and a box at 0,0 would hang off
+          // the picture's rounded corner. **How far down it sits is the caller's** — see
+          // {@link CardGrid}'s `topLeftPlacement`, which exists because the two walls that draw a
+          // mark here want two different answers and both are right.
           <span
             onClick={open}
             // The badge's box, scaled the same way — and here the scaling pays a debt the search
-            // page's own comment recorded: this corner is 4px in so that it clears the art's
-            // rounded edge and lands on the printed nameplate, and *because it did not scale*, by
+            // page's own comment recorded: this corner was 4px in so that it cleared the art's
+            // rounded edge and landed on the printed nameplate, and *because it did not scale*, by
             // 2× it had climbed out of the nameplate into the border strip above it. 4px of a
-            // doubled card is 8px, which is the same place on the picture.
+            // doubled card is 8px, which is the same place on the picture. Both offsets below
+            // scale for that reason, and both are written out in full rather than built — a
+            // Tailwind class assembled from a variable emits no rule at all.
             className={cn(
               "pointer-events-auto absolute bg-bg/85 empty:hidden",
-              "top-[calc(0.25rem*var(--mark-scale,1))] left-[calc(0.25rem*var(--mark-scale,1))]",
+              "left-[calc(0.25rem*var(--mark-scale,1))]",
+              topLeftPlacement === "clear"
+                ? "top-[calc(2rem*var(--mark-scale,1))]"
+                : "top-[calc(0.25rem*var(--mark-scale,1))]",
               "rounded-[calc(0.25rem*var(--mark-scale,1))]",
               "px-[calc(0.375rem*var(--mark-scale,1))] py-[calc(0.125rem*var(--mark-scale,1))]",
             )}
@@ -1461,12 +1513,23 @@ function Tile<T extends GridCard>({
         // states them through its `aria-label`: an `sr-only` word beside it made a foil card say
         // "Foil" twice.
         //
-        // **The two conditions are identical, so nothing was lost by dropping it.** The word was
-        // drawn when `treatmentTitle(treatments)` or `finish` said something; `CardChin` draws the
-        // mark on exactly `finish !== null || treatments.length > 0`; and `FinishMark`'s label is
-        // the same `named ?? FINISH_LABEL[finish]` the word was built from. A Serialized *nonfoil*
-        // — a plain finish carrying a name — still draws and still speaks, which is the one row
-        // where the two conditions could have come apart.
+        // **The two conditions match on every row but one, and the exception is deliberate.** The
+        // word was drawn when `treatmentTitle(treatments)` or `finish` said something; `CardChin`
+        // draws the mark on `finish !== null || treatments.length > 0`; and `FinishMark`'s label is
+        // the same `named ?? FINISH_LABEL[finish]` the word was built from. So `foil`, `etched` and
+        // every named copy — a Serialized *nonfoil* included, whose non-empty `treatments` draw the
+        // glyph over a plain finish — say exactly what they said before.
+        //
+        // **The exception is a plain `nonfoil` with no treatments**, where the span used to say
+        // `, Nonfoil` and `FinishMark` returns `null`. That is not a hole this file should patch:
+        // *nonfoil goes unmarked* is the app's rule rather than the mark's convenience — it is the
+        // finish a price is assumed to be, and 61 % of the corpus has a foil version, so a mark on
+        // every plain card is chrome (`CardChin`'s `finish` prop carries the measurement). Restoring
+        // the word here would say `Nonfoil` on the majority of every wall while the picture beside
+        // it says nothing, which is the louder half of the trade rather than the quieter. And on
+        // the one wall where a *stored* `nonfoil` is a fact the reader chose rather than a default
+        // — the collection's, which draws a tile per printing **and finish** — the caption already
+        // prints the finish in words, so nothing there goes unsaid.
         //
         // The crown has no such twin. `GameChangerMark` is drawn only inside the `aria-hidden`
         // overlay and the chin has no slot for it, so this span is still the only thing that says

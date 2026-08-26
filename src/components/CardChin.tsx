@@ -111,7 +111,10 @@ export function CardChin(
      *  `null` is this codebase's word for "no price" (`formatPrice(value: number | null, …)`), so
      *  a caller holding one must not get an empty box for it. */
     money?: ReactNode;
-    /** After the money. Only the deck passes one — the `owned/wanted` shortage. */
+    /** After the money. Two callers: the deck's shortage (`owned/wanted`), and the five walls
+     *  `CardGrid` draws, whose tiles append an `sr-only` game-changer word here — the crown is
+     *  drawn only inside `CardArt`'s `aria-hidden` overlay and this bar is the sibling of the
+     *  button that can say so. */
     extra?: ReactNode;
     /**
      * Whose outline the chin joins, and it is not decoration.

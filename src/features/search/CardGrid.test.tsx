@@ -537,6 +537,37 @@ describe("CardGrid", () => {
   });
 
   /**
+   * **And the treatment half of the same seam**, which is its own test because it is its own
+   * prop: `treatments` reaches the chin separately from `finish`, so a wall that stopped passing
+   * it would go on naming every Surge Foil "Foil" while the test above stayed green —
+   * mutation-checked, 2026-08-26.
+   *
+   * A named treatment **replaces** the finish's word rather than joining it, which is
+   * `FinishMark`'s rule and the reason issue #160 exists: a Surge Foil is not "a foil". So the
+   * negative half is the assertion that carries the meaning.
+   *
+   * The treatment is a literal rather than `finishTreatments`' output. The wall's contract is that
+   * it forwards whatever its callback answers; which `promo_types` member earns which label is
+   * `lib/treatment.ts`'s table and is tested there.
+   */
+  it("names a treatment in the chin, in place of the finish's own word", () => {
+    render(
+      <CardGrid
+        rows={[card("aaa", "Lightning Bolt")]}
+        onSelect={vi.fn()}
+        onNeedNextPage={vi.fn()}
+        listKey="k"
+        zoomSection="search"
+        finish={() => "foil"}
+        treatment={() => [{ id: "surgefoil", label: "Surge Foil", foil: true }]}
+      />,
+    );
+
+    expect(screen.getAllByRole("img", { name: "Surge Foil" })).toHaveLength(1);
+    expect(screen.queryByRole("img", { name: "Foil" })).toBeNull();
+  });
+
+  /**
    * And the crown stated in words, because the chip that draws it is decoration: the chin is
    * a *sibling* of the button, so a sentence here reaches a screen reader without renaming
    * forty tiles.
@@ -593,6 +624,47 @@ describe("CardGrid", () => {
    * unconditionally) *is* a truthy element that renders nothing — React cannot be asked which
    * before it runs, so `empty:hidden` on the backing is what answers for the second case.
    */
+  /**
+   * **Two walls, two right answers about the same corner** — `topLeftPlacement`.
+   *
+   * The search's mark is a printings count, which annotates the card it is printed over, so 4px
+   * puts it on the printed nameplate deliberately (`SearchPage` measured that plate at roughly
+   * 8–22px on a 238px face). The wishlist's is a review flag the reader identifies the tile
+   * *by name* beside, so the same 4px hides the one thing the row is about — reported by the
+   * reader in those words. Hence a prop rather than a number.
+   *
+   * **`classList.contains`, never a substring.** `top-[calc(0.25rem*var(--mark-scale,1))]` is a
+   * prefix of nothing here, but `top-[calc(2rem…)]`'s own string would match inside a hypothetical
+   * `top-[calc(2rem+…)]`, and a `className.includes` check on an arbitrary-value class is the
+   * shape that passes for the wrong reason. jsdom resolves no `calc()` and lays nothing out, so
+   * the class is the whole of what a test here can see; where the chip actually lands is a
+   * browser's answer.
+   */
+  it("puts the top-left corner where the wall asked for it", () => {
+    const corner = () => document.querySelector('[class*="bg-bg/85"]')!;
+    const props = {
+      rows: [card("aaa", "Lightning Bolt")],
+      onSelect: vi.fn(),
+      onNeedNextPage: vi.fn(),
+      listKey: "k",
+      zoomSection: "search" as const,
+      topLeft: () => <span>3 printings</span>,
+    };
+
+    // The default, and every wall's behaviour before the prop existed: on the nameplate.
+    const { rerender } = render(<CardGrid {...props} />);
+    expect(corner().classList.contains("top-[calc(0.25rem*var(--mark-scale,1))]")).toBe(true);
+    expect(corner().classList.contains("top-[calc(2rem*var(--mark-scale,1))]")).toBe(false);
+
+    rerender(<CardGrid {...props} topLeftPlacement="clear" />);
+    expect(corner().classList.contains("top-[calc(2rem*var(--mark-scale,1))]")).toBe(true);
+    expect(corner().classList.contains("top-[calc(0.25rem*var(--mark-scale,1))]")).toBe(false);
+
+    // The left inset is the corner's own and does not move with the placement — it is there so the
+    // box clears the art's `rounded-lg`, which is true at both offsets.
+    expect(corner().classList.contains("left-[calc(0.25rem*var(--mark-scale,1))]")).toBe(true);
+  });
+
   it("draws no corner for a mark with nothing to say", () => {
     const { container, rerender } = render(
       <CardGrid
