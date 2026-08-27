@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { StrictMode, useEffect } from "react";
 import { act, renderHook } from "@testing-library/react";
 import { dragData, readDragData } from "@/features/decks/dnd";
 import { startPointerDrag } from "@/test-drag";
@@ -533,5 +534,70 @@ describe("useFolderDropTarget", () => {
     await held.leave();
     expect(target.state).toEqual({ armed: true, edge: null });
     await held.cancel();
+  });
+});
+
+/**
+ * **The registry leak `React.StrictMode` causes, and the reason it needs a test of its own.**
+ *
+ * dnd-kit's `Entity` constructor ends with `queueMicrotask(this.register)` while `destroy()`
+ * unregisters synchronously — so an entity built and destroyed in the same tick unregisters
+ * *first* and is registered afterwards by the microtask, with nothing holding a reference to
+ * undo it. StrictMode does exactly that on every mount in development: run the effect, clean it
+ * up, run it again. The orphan is the one from the **first** run, whose listeners are gone, and
+ * collision detection is perfectly happy to pick it as the operation's target — at which point
+ * the live hook compares it against its own droppable, sees a different object, and returns.
+ * The row rings, the mark comes up, and the drop silently writes nothing.
+ *
+ * Found in the running window and not by any of the tests above, because neither `render` nor
+ * `renderHook` wraps anything in StrictMode by default: every test mounts each effect once, so
+ * every registration is the live one. These two ask for it explicitly, and they are the only
+ * things in the suite that would go red if `register: false` were dropped from either call site.
+ */
+describe("registering with the manager", () => {
+  /**
+   * **The count has to be taken a tick late, and that is the whole trap.** The orphan is
+   * registered by a *microtask* queued in a constructor, so immediately after the render both of
+   * these read 1 whether the leak is there or not — a pair of assertions that would pass against
+   * the very bug they exist for. Measured: 1 straight after `renderHook`, 2 after a macrotask.
+   */
+  const settled = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  const mine = (element: Element, kind: "draggables" | "droppables") =>
+    [...dndManager.registry[kind]].filter((entity) => entity.element === element);
+
+  it("leaves one drop target per element, through StrictMode's double mount", async () => {
+    const element = boxed(document.createElement("div"), TARGET_TOP);
+    document.body.append(element);
+    undo.push(() => element.remove());
+    const ref = { current: element as HTMLElement | null };
+
+    renderHook(
+      () =>
+        useFolderDropTarget({
+          ref,
+          scope: "deck",
+          axis: "vertical",
+          canDrop: () => true,
+          onDrop: () => {},
+        }),
+      { wrapper: StrictMode },
+    );
+
+    await settled();
+    expect(mine(element, "droppables")).toHaveLength(1);
+  });
+
+  it("leaves one drag source per element, through StrictMode's double mount", async () => {
+    const element = boxed(document.createElement("div"), 0);
+    document.body.append(element);
+    undo.push(() => element.remove());
+
+    renderHook(() => useEffect(() => folderDraggable({ element, folder: () => FOLDER }), []), {
+      wrapper: StrictMode,
+    });
+
+    await settled();
+    expect(mine(element, "draggables")).toHaveLength(1);
   });
 });
