@@ -1,4 +1,5 @@
 import { act, fireEvent } from "@testing-library/react";
+import { dndManager } from "@/lib/dndManager";
 import { afterEach } from "vitest";
 
 /**
@@ -37,6 +38,15 @@ import { afterEach } from "vitest";
  */
 afterEach(() => {
   fireEvent(window, new MouseEvent("dragend", { bubbles: true }));
+  // The same care for the other library, which keeps the same kind of global: dnd-kit's manager
+  // has one drag operation, and a test that walks away mid-gesture leaves the next one unable to
+  // start (`handlePointerDown` returns early unless the operation is idle). Escape at the body is
+  // where its `PointerSensor` listens for a cancel, and it is inert when nothing is in flight.
+  if (!dndManager.dragOperation.status.idle) {
+    document.body.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+    );
+  }
 });
 
 /**
@@ -185,47 +195,67 @@ export async function dragOnto(source: Element, target: Element): Promise<void> 
 }
 
 /**
- * A pointer-driven drag, for `@dnd-kit/react`.
+ * A pointer-driven drag, for `@dnd-kit/dom`.
  *
  * **Why this exists beside the HTML5 helpers above.** Those work because pragmatic-dnd
  * hit-tests with `event.target` and `Element.closest`. dnd-kit is pointer-based and hit-tests
- * by **coordinate** — and jsdom measures every rectangle as zero, so a test that needs a
- * pointer to be *over* something has to give both elements a real `getBoundingClientRect`.
- * This helper reads the rects it is given; supplying them is the caller's job, and a test that
- * forgets will see a drag that lands nowhere.
+ * by **coordinate** — and jsdom measures every rectangle as zero, so a test that needs a pointer
+ * to be *over* something has to give the elements it cares about a real
+ * `getBoundingClientRect`. These helpers read the rects they are given; supplying them is the
+ * caller's job, and a test that forgets will see a drag that lands nowhere.
  *
- * **Giving the two elements rects is necessary and not sufficient**, which is the part that
- * costs a session. `getVisibleBoundingRectangle` clamps an element against every ancestor whose
- * `isOverflowVisible` is false, and that predicate reads
- * `overflow === "visible" && overflowX === "visible" && overflowY === "visible"` while jsdom's
- * computed `overflow` on `<body>` is the **empty string** — so `<body>` counts as a clipping
- * ancestor, its own rect is `0×0`, and a target measured at `y 200–240` comes back with zero
- * area. A zero-area element is invisible, an invisible droppable never gets a shape, and a
- * droppable with no shape can never be collided with: registration is correct, `accepts()`
- * answers true, and `operation.target` is `null` on every frame. Every ancestor between a target
- * and the document therefore needs a rect too. The full reading, including the four jsdom
- * globals dnd-kit needs and the `collisionObserver.forceUpdate()` a drop needs, is in
- * `docs/reference/frontend-design.md`.
+ * **Giving the two elements rects is necessary and not sufficient.** dnd-kit clamps an element's
+ * visible rectangle against every ancestor whose overflow is not `visible`, and jsdom's computed
+ * `overflow` on `<body>` is the empty string — so the document itself used to erase every
+ * measurement. `test-setup.ts` gives `<body>` the viewport for that reason; **a scrolling box
+ * between a target and the body still needs a rect of its own**, or the target inside it has zero
+ * area, never gets a shape, and can never be collided with. That failure is silent: registration
+ * is correct, the droppable accepts the payload, and the operation's target is `null` on every
+ * frame.
  *
- * **The gesture ends with the destination repeated.** `dragOperation.position.current` lags one
- * `pointermove` behind, because the sensor batches its moves through its own scheduler — so a
- * drag that stops the instant it arrives has never been over the target as far as dnd-kit is
- * concerned. Measured 2026-08-27: with a single move to the destination the pointer's last
- * reported position was the *previous* step's, and the drop landed nowhere.
+ * The whole reading — the four jsdom globals, the ancestor clamp, and the collision pass no shim
+ * can schedule — is in `docs/reference/frontend-design.md`.
  */
-export async function pointerDrag(
-  from: HTMLElement,
-  to: HTMLElement,
-  opts: { steps?: number } = {},
-): Promise<void> {
-  const steps = Math.max(2, opts.steps ?? 8);
-  const a = from.getBoundingClientRect();
-  const b = to.getBoundingClientRect();
-  const start = { x: a.left + a.width / 2, y: a.top + a.height / 2 };
-  const end = { x: b.left + b.width / 2, y: b.top + b.height / 2 };
 
-  const fire = (type: string, at: { x: number; y: number }, target: EventTarget) => {
-    const e = new PointerEvent(type, {
+/** A pointer drag in flight: what a test can do while it is holding the folder. */
+export interface PointerHeld {
+  /** Whether the gesture actually became a drag. `false` after a press the sensor refused —
+   *  which is what a press on a `data-no-drag` control is meant to be. */
+  readonly started: boolean;
+  /** Move the pointer to a point in the viewport. */
+  moveTo(x: number, y: number): Promise<void>;
+  /**
+   * Move the pointer over an element, at a fraction along each of its axes — `0.5, 0.5` is the
+   * centre, `{ y: 0.1 }` is the top tenth of it.
+   *
+   * A fraction rather than a pixel because that is what the thing under test is a function of:
+   * `folderEdge` splits a box into quarters whatever its size, so a test says *which zone* and
+   * stays readable when the box changes.
+   */
+  over(element: Element, at?: { x?: number; y?: number }): Promise<void>;
+  /** Carry the folder off every target without letting go. */
+  leave(): Promise<void>;
+  /** Let go where the pointer is. */
+  drop(): Promise<void>;
+  /** Escape — the same key a reader presses, delivered where the sensor listens for it. */
+  cancel(): Promise<void>;
+}
+
+/** Somewhere no target is. Far enough out that the dragged element's own translated box cannot
+ *  intersect anything either, which is the second half of dnd-kit's default collision test. */
+const NOWHERE = { x: 10_000, y: 10_000 };
+
+function centre(element: Element, at: { x?: number; y?: number } = {}) {
+  const box = element.getBoundingClientRect();
+  return {
+    x: box.left + box.width * (at.x ?? 0.5),
+    y: box.top + box.height * (at.y ?? 0.5),
+  };
+}
+
+function fire(type: string, at: { x: number; y: number }, target: EventTarget): void {
+  target.dispatchEvent(
+    new PointerEvent(type, {
       bubbles: true,
       cancelable: true,
       composed: true,
@@ -236,29 +266,127 @@ export async function pointerDrag(
       isPrimary: true,
       button: 0,
       buttons: type === "pointerup" ? 0 : 1,
-    });
-    target.dispatchEvent(e);
-  };
+    }),
+  );
+}
 
-  await act(async () => {
-    fire("pointerdown", start, from);
-    for (let i = 1; i <= steps; i++) {
-      const t = i / steps;
-      fire(
-        "pointermove",
-        { x: start.x + (end.x - start.x) * t, y: start.y + (end.y - start.y) * t },
-        document,
-      );
-      // A frame between moves: dnd-kit schedules its collision work, and a burst of moves in
-      // one tick is not the gesture a person makes.
+/**
+ * Let the manager see where the pointer is.
+ *
+ * **The collision pass jsdom cannot schedule.** dnd-kit recomputes collisions from a reactive
+ * effect its `Feedback` plugin drives as it moves the drag preview — and `Feedback` is exactly
+ * the WAAPI machinery jsdom does not have, so the effect never re-runs. Measured 2026-08-27: the
+ * droppable has a correct shape and `shape.containsPoint(position.current)` is true at the
+ * release point, while `operation.target` stays `null` on every frame and `collision` fires only
+ * twice — at the start of the drag and at the end. Without this a pointer drag proves the gesture
+ * and never the drop.
+ */
+async function settle(): Promise<void> {
+  await frame();
+  dndManager.collisionObserver.forceUpdate();
+  await frame();
+}
+
+/**
+ * Press a folder and hold it.
+ *
+ * **The press and the drag can land on two different elements**, which is the case that bites:
+ * pressing a control inside a draggable row is a press on the control, and `NOT_A_DRAG` is what
+ * says so. `pressOn` is where the press landed; `from` is what would be dragged.
+ *
+ * **dnd-kit registers on a microtask, not in its constructor.** `Entity`'s constructor ends with
+ * `queueMicrotask(this.register)`, so a test that mounts a source and presses it in the same tick
+ * presses an element the manager has never heard of — and the gesture then reads as a draggable
+ * that does not drag. In the running window an effect registers a folder long before anybody
+ * grabs it; only a test can be this fast. The frame below is what closes that gap.
+ *
+ * The gesture crosses dnd-kit's 5px distance constraint on the first move, which is why no test
+ * here has to run a timer: the *other* default constraint is a 200ms delay, and either one alone
+ * activates the drag.
+ */
+export async function startPointerDrag(
+  from: HTMLElement,
+  { pressOn = from }: { pressOn?: Element } = {},
+): Promise<PointerHeld> {
+  await frame();
+  const start = centre(from);
+  let at = start;
+
+  fire("pointerdown", start, pressOn);
+  // Two moves before anything is asserted: the first crosses the activation threshold, and
+  // `dragOperation.position.current` lags one move behind because the sensor batches through its
+  // own scheduler — so a gesture read after a single move is read one move early.
+  await move(start.x, start.y + 8);
+  await move(start.x, start.y + 16);
+
+  async function move(x: number, y: number): Promise<void> {
+    at = { x, y };
+    // **Twice, and the repeat is the point.** `dragOperation.position.current` lags one
+    // `pointermove` behind, because `handlePointerMove` only records the coordinates and hands
+    // the actual move to the sensor's own scheduler. Measured 2026-08-27: with a single dispatch
+    // per move, a second landing within one folder reports the *first* landing — a test asserting
+    // that the mark follows the pointer then reads as a mark that is right once per folder, which
+    // is the exact bug it exists to catch.
+    for (let i = 0; i < 2; i++) {
+      await act(async () => {
+        fire("pointermove", at, document);
+      });
       await frame();
     }
-    // The settle. See the paragraph above — one repeat is what the sensor's one-move lag costs,
-    // and the second is what makes the reading stable rather than exactly on the edge.
-    fire("pointermove", end, document);
-    await frame();
-    fire("pointermove", end, document);
-    await frame();
-    fire("pointerup", end, document);
-  });
+    await settle();
+  }
+
+  const held: PointerHeld = {
+    get started() {
+      return dndManager.dragOperation.status.initialized;
+    },
+    moveTo: move,
+    over: (element, where) => {
+      const point = centre(element, where);
+      return move(point.x, point.y);
+    },
+    leave: () => move(NOWHERE.x, NOWHERE.y),
+    drop: async () => {
+      await act(async () => {
+        fire("pointerup", at, document);
+      });
+      await frame();
+    },
+    cancel: async () => {
+      await act(async () => {
+        document.body.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+        );
+      });
+      await frame();
+    },
+  };
+  return held;
+}
+
+/**
+ * The whole gesture, for a test that is about where a folder landed rather than about what
+ * happened on the way — `dragOnto`'s counterpart on the pointer side.
+ *
+ * The intermediate points are the point: a library watching for a distance threshold or a
+ * direction has to see a real gesture rather than a teleport.
+ */
+export async function pointerDrag(
+  from: HTMLElement,
+  to: HTMLElement,
+  opts: { steps?: number } = {},
+): Promise<void> {
+  const steps = Math.max(2, opts.steps ?? 8);
+  const start = centre(from);
+  const end = centre(to);
+
+  const held = await startPointerDrag(from);
+  for (let i = 1; i <= steps; i++) {
+    const t = i / steps;
+    await held.moveTo(start.x + (end.x - start.x) * t, start.y + (end.y - start.y) * t);
+  }
+  // The settle. `dragOperation.position.current` lags one move behind, so a drag that stops the
+  // instant it arrives has never been over the target as far as dnd-kit is concerned.
+  await held.moveTo(end.x, end.y);
+  await held.drop();
 }

@@ -3284,3 +3284,45 @@ Two smaller measurements from the same pass, both of which change how a helper h
   for a mouse press that is not on a declared handle, and no constraint at all for a press
   *inside* a handle. Synthetic `pointermove`s cross the 5px distance with no waiting, which is why
   the gesture activates in a test that runs no timers.
+
+### The shipped CSP blocks a plugin dnd-kit cannot be told not to load
+
+Found 2026-08-27, reading the library rather than the app. **`@dnd-kit/dom` positions its drag
+preview from a runtime-injected `<style>` element, and this app's shipped `style-src 'self'`
+blocks exactly that** — the failure mode `motion.md` already documents for
+`AnimatePresence mode="popLayout"` and `animateView()`, arriving from a second direction.
+
+The mechanism, precisely. `StyleInjector` is in the manager's plugin list, and it is a
+**`CorePlugin`** — `DragDropManager`'s constructor prepends `[ScrollListener, Scroller,
+StyleInjector, …]` ahead of whatever a caller passes, and `PluginRegistry`'s setter explicitly
+`continue`s past anything whose prototype is a `CorePlugin` rather than unregistering it. So it
+cannot be removed through the `plugins` customizable. Its `injectStyleElement` does
+`root.createElement("style")`, sets `textContent`, and prepends the element to `<head>` — an
+inline stylesheet, which `style-src 'self'` refuses and which `style-src-attr 'unsafe-inline'`
+does **not** cover, because that directive governs `style=` attributes and nothing else.
+
+Three plugins register rules through it, and they are not equally cosmetic:
+
+- **`Feedback`** — the drag preview. Its rules are what give the overlay
+  `position: fixed`, `pointer-events: none`, `z-index: calc(infinity)` and, critically, its
+  `top`/`left`/`width` read from `--dnd-kit-*` custom properties. The plugin sets those custom
+  properties inline (allowed by `style-src-attr`); the **rules that read them** are what is
+  blocked. Without the rules the preview is a clone in normal flow that does not follow the
+  pointer. That is a broken drag, not a plain drag.
+- **`Cursor`** — `* { cursor: grabbing !important; }`. Cosmetic.
+- **`PreventSelection`** — `* { user-select: none !important; }`. A drag that selects text as it
+  travels.
+
+**Every environment this repo can test in is on the permissive side of the difference.**
+`tauri.conf.json`'s `devCsp` is `style-src 'self' 'unsafe-inline'`, Storybook and Vite serve no
+CSP at all, and jsdom enforces none — so `tauri dev`, the workbench and the whole suite are green
+on this, and only the packaged exe breaks. **A live CDP pass under `tauri dev` cannot see it
+either**, which is worth stating plainly because that is the pass this app reaches for when a
+suite cannot answer: the only witness is a `tauri build` portable copy.
+
+`StyleInjector` takes a `nonce` option, which is the documented escape and needs a CSP nonce this
+app does not have — Tauri's `csp` is a static string in `tauri.conf.json`, and a nonce has to be
+per-response. The three ways out are therefore: widen the shipped `style-src` (a real regression,
+and the reason the two CSPs differ at all), thread a nonce (a Tauri-side change), or accept a drag
+preview that does not work in the shipped build. **None of them is a decision this plan was
+scoped to make**, and 3b and 3c both depend on which one is taken.

@@ -2,7 +2,6 @@ import { useEffect, useRef } from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { monitorForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import { FOLDER_DROP_LINE_ATTR } from "@/components/FolderDropLine";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { useContextMenu } from "@/components/menu/useContextMenu";
@@ -15,7 +14,8 @@ import {
 } from "@/lib/folderDrag";
 import type { FolderNode } from "@/lib/folderTree";
 import type { WishlistFolder } from "@/lib/ipc";
-import { startDrag } from "@/test-drag";
+import { startDrag, startPointerDrag } from "@/test-drag";
+import { dndManager } from "@/lib/dndManager";
 import { WishFolderCard } from "./WishFolderCard";
 import { WishlistBreadcrumb } from "./WishlistBreadcrumb";
 import { wishDraggable, type WishDrag } from "./wishDrag";
@@ -97,24 +97,28 @@ function FolderSource({ drag = OTHER_FOLDER }: { drag?: FolderDrag }) {
   useEffect(() => {
     const element = ref.current;
     if (!element) return;
+    element.getBoundingClientRect = () => SOURCE_BOX;
     return folderDraggable({ element, folder: () => drag });
   }, [drag]);
   return <div ref={ref}>the folder</div>;
 }
 
 /**
- * Three boxes, each placed so that the one coordinate `test-drag` sends — `clientX` 8 — falls in
- * a different zone of a card laid out **horizontally**.
+ * Two boxes and three landings, because dnd-kit hit-tests by **coordinate** and jsdom measures
+ * every rectangle as zero.
  *
- * jsdom has no layout engine, so every real `getBoundingClientRect` here is four zeroes and
- * `folderEdge` answers `inside` for all of them: an edge-dependent test has to state the box
- * itself rather than hope for one. Moving the box under a stationary pointer is the same relative
- * move as moving the pointer over a still box, and it is the only one a jsdom drag can make —
- * `folderDrag.test.ts`'s arrangement, read along the other axis.
+ * An edge-dependent test therefore has to state the box itself rather than hope for one — and
+ * with a pointer-based library it states the box *once* and then moves the pointer over it, which
+ * is the gesture a reader makes. The card is read along the **horizontal** axis, since the wall
+ * lays its drawers out as a grid; `EDGE_ZONE` is a quarter, so a tenth in from either end is
+ * unambiguously beside it and the middle is unambiguously inside.
+ * `CollectionFolderCard.test.tsx`'s arrangement, for its reason.
  */
-const AT_START = new DOMRect(0, 0, 100, 100);
-const AT_MIDDLE = new DOMRect(-50, -50, 100, 100);
-const AT_END = new DOMRect(-85, -85, 100, 100);
+const SOURCE_BOX = new DOMRect(0, 0, 240, 120);
+const CARD_BOX = new DOMRect(400, 0, 240, 120);
+const BEFORE = { x: 0.1 };
+const INSIDE = { x: 0.5 };
+const AFTER = { x: 0.9 };
 
 /** A folder card wired to the real `useContextMenu`, for the one test that is about *which*
  *  handle the trigger is on rather than about the card handing a press somewhere. */
@@ -237,9 +241,10 @@ describe("WishFolderCard", () => {
   const line = () =>
     card().querySelector(`[${FOLDER_DROP_LINE_ATTR}]`)?.getAttribute(FOLDER_DROP_LINE_ATTR) ?? null;
 
-  /** Slide the card under the stationary pointer — see the three boxes above. */
-  const stand = (at: DOMRect) => {
-    slot().getBoundingClientRect = () => at;
+  /** Give the folder drop target the box it is measured against — see {@link CARD_BOX}. Every
+   *  folder drag below aims at a fraction along it. */
+  const stand = () => {
+    slot().getBoundingClientRect = () => CARD_BOX;
   };
 
   it("names the folder and says what is in it", () => {
@@ -435,11 +440,12 @@ describe("WishFolderCard", () => {
   it("is a drawer a reader can pick up, carrying where it currently sits", async () => {
     mount({ on: node(SOMEDAY) });
     const carried: (FolderDrag | null)[] = [];
-    const stop = monitorForElements({
-      onDragStart: ({ source }) => carried.push(readFolderDrag(source.data, "wishlist")),
+    const stop = dndManager.monitor.addEventListener("dragstart", ({ operation }) => {
+      if (operation.source) carried.push(readFolderDrag(operation.source.data, "wishlist"));
     });
 
-    const held = await startDrag(card("Someday"));
+    card("Someday").getBoundingClientRect = () => CARD_BOX;
+    const held = await startPointerDrag(card("Someday"));
     expect(held.started).toBe(true);
     await held.cancel();
     stop();
@@ -456,15 +462,17 @@ describe("WishFolderCard", () => {
    */
   it("does not start a drag from a press on its manage trigger", async () => {
     mount();
-    const refused = await startDrag(card(), {
+    card().getBoundingClientRect = () => CARD_BOX;
+    const refused = await startPointerDrag(card(), {
       pressOn: screen.getByRole("button", { name: "Manage Expensive" }),
     });
     expect(refused.started).toBe(false);
     await refused.cancel();
 
     // And the folder's face still is a grab handle — the guard is about a control's press, not
-    // about the card.
-    const again = await startDrag(card(), { pressOn: face() });
+    // about the card. dnd-kit's own default would have refused this one too, because it is a
+    // button; `NOT_A_DRAG` is what says a control marks itself.
+    const again = await startPointerDrag(card(), { pressOn: face() });
     expect(again.started).toBe(true);
     await again.cancel();
   });
@@ -473,12 +481,12 @@ describe("WishFolderCard", () => {
    *  only one thing is ever in the air, so the two claims are one mark rather than two. */
   it("rings for a folder it can take, and washes over the middle it would nest in", async () => {
     mount({ withFolder: true });
-    stand(AT_MIDDLE);
-    const held = await startDrag(screen.getByText("the folder"));
+    stand();
+    const held = await startPointerDrag(screen.getByText("the folder"));
     expect(marked(card(), DROP_RING)).toBe(true);
     expect(marked(face(), DROP_OVER)).toBe(false);
 
-    await held.over(face());
+    await held.over(slot(), INSIDE);
     expect(marked(face(), DROP_OVER)).toBe(true);
     // No line with the wash: `inside` is a folder taking the drag rather than a position between
     // two of them, so one meaning wears one mark.
@@ -495,15 +503,14 @@ describe("WishFolderCard", () => {
    */
   it("draws a line at the end a folder would land beside, and no wash with it", async () => {
     mount({ withFolder: true });
-    stand(AT_START);
-    const held = await startDrag(screen.getByText("the folder"));
+    stand();
+    const held = await startPointerDrag(screen.getByText("the folder"));
 
-    await held.over(face());
+    await held.over(slot(), BEFORE);
     expect(line()).toBe("before");
     expect(marked(face(), DROP_OVER)).toBe(false);
 
-    stand(AT_END);
-    await held.over(face());
+    await held.over(slot(), AFTER);
     expect(line()).toBe("after");
 
     await held.cancel();
@@ -518,11 +525,11 @@ describe("WishFolderCard", () => {
    */
   it("draws nothing at all over a landing the page refuses, and refuses the drop too", async () => {
     mount({ withFolder: true, canDropFolder: (_drag, edge) => edge !== "inside" });
-    stand(AT_MIDDLE);
-    const held = await startDrag(screen.getByText("the folder"));
+    stand();
+    const held = await startPointerDrag(screen.getByText("the folder"));
     expect(marked(card(), DROP_RING)).toBe(true);
 
-    await held.over(face());
+    await held.over(slot(), INSIDE);
     expect(marked(face(), DROP_OVER)).toBe(false);
     expect(line()).toBeNull();
 
@@ -532,19 +539,20 @@ describe("WishFolderCard", () => {
 
   it("draws no ring at all for a folder the page refuses outright", async () => {
     mount({ withFolder: true, canDropFolder: () => false });
-    const held = await startDrag(screen.getByText("the folder"));
+    stand();
+    const held = await startPointerDrag(screen.getByText("the folder"));
     expect(marked(card(), DROP_RING)).toBe(false);
 
-    await held.over(face());
+    await held.over(slot(), INSIDE);
     await held.drop();
     expect(onDropFolder).not.toHaveBeenCalled();
   });
 
   it("hands the page the folder and where it landed", async () => {
     mount({ withFolder: true });
-    stand(AT_END);
-    const held = await startDrag(screen.getByText("the folder"));
-    await held.over(face());
+    stand();
+    const held = await startPointerDrag(screen.getByText("the folder"));
+    await held.over(slot(), AFTER);
     await held.drop();
     expect(onDropFolder).toHaveBeenCalledWith(OTHER_FOLDER, "after");
   });
@@ -560,10 +568,11 @@ describe("WishFolderCard", () => {
       withFolder: true,
       folderDrag: { folderId: 9, name: "Standard", parentId: null, scope: "deck" },
     });
-    const held = await startDrag(screen.getByText("the folder"));
+    stand();
+    const held = await startPointerDrag(screen.getByText("the folder"));
     expect(marked(card(), DROP_RING)).toBe(false);
 
-    await held.over(face());
+    await held.over(slot(), INSIDE);
     await held.drop();
     expect(onDropFolder).not.toHaveBeenCalled();
   });
@@ -575,8 +584,11 @@ describe("WishFolderCard", () => {
    */
   it("keeps the wish drag and the folder drag apart, in both directions", async () => {
     mount({ withSource: true, withFolder: true });
-    stand(AT_MIDDLE);
+    stand();
 
+    // The wish is still an HTML5 drag and the folder is a pointer one — which is the whole of
+    // what "the two drags stay two" now means, and a stronger separation than the two marks
+    // were: the libraries do not share a registry, an event or a coordinate space.
     const wish = await startDrag(screen.getByText("the wish"));
     await wish.over(face());
     await wish.drop();
@@ -584,8 +596,8 @@ describe("WishFolderCard", () => {
     expect(onDropFolder).not.toHaveBeenCalled();
 
     onDropWish.mockReset();
-    const drawer = await startDrag(screen.getByText("the folder"));
-    await drawer.over(face());
+    const drawer = await startPointerDrag(screen.getByText("the folder"));
+    await drawer.over(slot(), INSIDE);
     await drawer.drop();
     expect(onDropFolder).toHaveBeenCalledWith(OTHER_FOLDER, "inside");
     expect(onDropWish).not.toHaveBeenCalled();
