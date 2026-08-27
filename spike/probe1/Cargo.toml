@@ -1,0 +1,34 @@
+# Probe 1 of the wasm-core spike. THROWAWAY — nothing here is meant to ship.
+#
+# **The premise of the brief's spike question 1 turned out to be out of date.** It asked
+# whether `rusqlite 0.40` can reach the browser and proposed evaluating `sqlite-wasm-rs`
+# as a hand-wired `libsqlite3-sys` shim. No wiring is needed: rusqlite 0.40 declares
+# `sqlite-wasm-rs` as its own FFI backend for `cfg(all(target_family = "wasm",
+# target_os = "unknown"))`, behind the `ffi-sqlite-wasm-rs` feature, which is **in its
+# default set**. The app is already on 0.40.
+#
+# So the only thing to get right is NOT to pass `default-features = false` (which is what
+# switches that backend off, and is how this probe failed on its first build), and not to
+# ask for `bundled` on wasm — bundled is libsqlite3-sys compiling sqlite3.c with the host
+# compiler, which is right on Windows and impossible in a browser.
+#
+# `hooks` because `src-tauri` depends on it: the plain-text mirror's `update_hook` is what
+# sees every write. Desktop-only feature, but if the hook were unavailable on wasm the
+# shape of `db.rs` would change for every target, so it is asserted here rather than later.
+[package]
+name = "probe1"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+rusqlite = { version = "0.40", features = ["hooks"] }
+wasm-bindgen = "0.2.127"
+js-sys = "0.3"
+console_error_panic_hook = "0.1"
+
+# Standalone: the repo has no root workspace, and this must not join src-tauri's.
+[workspace]
