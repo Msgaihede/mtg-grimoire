@@ -1,5 +1,6 @@
 import { BackupPanel } from "@/features/settings/BackupPanel";
 import { CachePanel } from "@/features/settings/CachePanel";
+import { CombosPanel } from "@/features/settings/CombosPanel";
 import { DangerZonePanel } from "@/features/settings/DangerZonePanel";
 import { ErrorLogPanel } from "@/features/settings/ErrorLogPanel";
 import { HiddenTagsPanel } from "@/features/settings/HiddenTagsPanel";
@@ -19,9 +20,9 @@ import { useReleaseHistory } from "@/lib/useReleaseHistory";
  * for the part that is genuinely still missing, rather than hiding panels that exist.
  *
  * **Ordered by what a press costs**, which is the one rule about this page's shape: updates,
- * prices and errors first, since none of them throws anything away; then the cache, which
- * throws away bytes the app fetches again; then the three clears that cannot be taken back,
- * alone at the bottom in their own region. See `DangerZonePanel` for why that distance is
+ * prices, combos and errors first, since none of them throws anything away; then the cache,
+ * which throws away bytes the app fetches again; then the three clears that cannot be taken
+ * back, alone at the bottom in their own region. See `DangerZonePanel` for why that distance is
  * load-bearing rather than tidy.
  *
  * `useLocalCache` and `useDangerZone` are hooked up here for the error log's reason — nothing
@@ -45,6 +46,12 @@ import { useReleaseHistory } from "@/lib/useReleaseHistory";
  * `staleTime: Infinity`, so every caller is reading the same cached answer rather than opening
  * a second channel to the backend. There is nothing to race, and threading it down from
  * `App.tsx` would buy nothing but a prop.
+ *
+ * `BackupPanel` and `CombosPanel` take no props at all and reach the backend themselves, which
+ * is the same argument from one step further along: the mirror has no second reader in the
+ * window, and the combo status has one — the deck editor's bracket advisory — that is reading
+ * the very same cache entry. Either way `SettingsPage` would be holding a hook only to hand its
+ * answer straight back down.
  */
 export function SettingsPage({ update }: { update: Update }) {
   const log = useErrorLog();
@@ -59,6 +66,14 @@ export function SettingsPage({ update }: { update: Update }) {
       <UpdatePanel update={update} history={history} />
 
       <MarketplacePanel marketplace={marketplace} />
+
+      {/* **Directly under Prices, because it is the same kind of thing.** Both are optional bulk
+          feeds from a third party that the app works entirely without: a marketplace with no
+          feed quotes em dashes, and a database with no combos estimates a bracket from three
+          signals instead of four. Nothing here throws anything away either, so it stays in the
+          page's first group. It reaches the backend itself — see `CombosPanel`, and
+          `BackupPanel` for the rule it follows. */}
+      <CombosPanel />
 
       {/* Above the error log rather than below it, because this is the page's only *undo*: the
           rail tells a reader who has just hidden a tag that Settings is where it comes back, and

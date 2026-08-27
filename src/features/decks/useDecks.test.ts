@@ -51,6 +51,7 @@ const BURN: DeckRow = {
   lastSortBy: "alphabetical",
   separateXGroup: false,
   defaultCategoryId: 0,
+  bracket: 0,
 };
 
 let client: QueryClient;

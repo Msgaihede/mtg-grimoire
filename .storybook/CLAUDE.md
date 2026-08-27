@@ -28,18 +28,19 @@ deliberately**: no screenshots are stored.
   three different things on three DTOs. A fake that stored DTOs would make all three agree, and
   teach a reader a model the app does not have.
 - **Seeds and faults are state, not response stubs**: `parameters: { fake: { seed, fault } }`.
-  Four seeds (`empty`/`starter`/`needsReview`/`large`), **eighteen** faults
+  **Six** seeds (`empty`/`starter`/`needsReview`/`large`/`bracketMismatch`/`combosMissing`),
+  **nineteen** faults
   (`busy`/`syncing`/`syncError`/`imageFailures`/`gone`/`indexCold`/`deckMeta`/`updateAvailable`/
   `updateError`/`errorLog`/`feedFetchError`/`oracleTagsMissing`/`oracleTagsFetchError`/
   `artTagsMissing`/`artTagsFetchError`/`imageUrisMissing`/`exportWriteError`/
-  `mirrorRootUnwritable`); saying
+  `mirrorRootUnwritable`/`combosFetchError`); saying
   nothing gets `starter` with no fault. A
   fault is set on the _world_, so a story shows what the **app** does with a refusal rather than
   what one mocked call returns. **`syncing` is `busy`'s neighbour and reaches exactly one
   command**: `cache_clear` refuses outright while a card update is in flight, because
   `data/tmp/` is where the corpus download puts 77 MB the ingest then reads back — and it is
   checked *before* the write connection is asked for, which is why it is not `busy`.
-  **Four of the eighteen are not failures at all** — `indexCold` is
+  **Four of the nineteen are not failures at all** — `indexCold` is
   the search index mid-build; `oracleTagsMissing` is the Oracle tag taxonomy having never
   been ingested, which is every install's first launch and the state the type-line fallback
   exists for; `artTagsMissing` is the same thing one dataset over, where the honest floor is a
@@ -61,6 +62,17 @@ deliberately**: no screenshots are stored.
   **Re-count this list when you add one** — it said "four" for three faults' worth of drift, and
   then "eight" while `errorLog` had been in the union for a whole feature, because a prose-only
   edit routes to neither CI job and nothing goes red.
+- **The combo feed is a *seed* where the two taxonomies are a fault, and the asymmetry is the
+  feature's.** `oracleTagsMissing`/`artTagsMissing` are worlds a taxonomy has gone missing from;
+  a never-fetched combo table is the world **every install stays in** until somebody presses
+  Refresh, because `combos::refresh_if_due` will not pull that file uninvited. So `combosMissing`
+  is a seed, `combosFetchError` is the fault beside `feedFetchError` and the two tag ones, and
+  `bracketMismatch` is `starter` plus a fifth deck the reader has told `Bracket 2` whose cards
+  force the estimate's floor to 4. `starter` seeds the combo catalogue itself, exactly as it
+  seeds the price feeds and both taxonomies — **seven combos, two of them live-verified against
+  Commander Spellbook on 2026-08-27 and five constructed**, because the 52-printing corpus can
+  make only two real ones and neither reaches the `R`/`P`/`C`/`E` letters the advisory has to
+  draw. `COMBO_FIXTURES` in `db.ts` says which is which, per row.
 - **`starter` seeds both tag taxonomies too**, derived from the corpus the same way. Oracle: **32
   oracle cards, covering 42 of the 52 printings** (measured by `db.test.ts`, which fails rather
   than letting this line rot), closed over their ancestors as `oracle_tag_cards` stores them, so

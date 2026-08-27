@@ -6,9 +6,11 @@ vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 vi.mock("@tauri-apps/api/event", () => ({ listen }));
 
 import {
+  AUTO_BRACKET,
   ipc,
   ipcError,
   type ArtTagProgressEvent,
+  type ComboProgress,
   type FeedProgressEvent,
   type OracleTagProgressEvent,
   type SyncProgressEvent,
@@ -453,6 +455,45 @@ describe("ipc argument names match the Rust command signatures", () => {
     invoke.mockResolvedValue({ id: 5 });
     await ipc.deckDuplicate(4);
     expect(invoke).toHaveBeenCalledWith("deck_duplicate", { id: 4 });
+  });
+
+  /**
+   * The bracket rides the **ordinary patch**, and `AUTO_BRACKET` is the trap in it.
+   *
+   * `deck_update` is `coalesce(?n, column)` on every field, so an absent key means "leave it" —
+   * which makes `0` the *only* way to say "back to Auto" and makes it a value rather than an
+   * absence. A wrapper that dropped a falsy field, or a caller that sent `undefined` for Auto,
+   * would turn the picker's first row into the one entry that does nothing, and **nothing would
+   * go red**: the patch is accepted, the command answers a row, and the deck simply keeps the
+   * bracket it had.
+   *
+   * It is also pinned as travelling with the rename and the format rather than through
+   * `deck_set_view_state`, because that is the split `DeckRow.bracket` documents: an answer about
+   * the deck, not one of the three `last*` fields that say how it was last looked at.
+   */
+  it("sends a deck's bracket through the ordinary patch, `0` and all", async () => {
+    invoke.mockResolvedValue({ id: 7, bracket: 3 });
+
+    const row = await ipc.deckUpdate(7, { bracket: 3 });
+    expect(invoke).toHaveBeenCalledWith("deck_update", { id: 7, patch: { bracket: 3 } });
+    // Read back rather than assumed: `bracket` is on the row as well as in the patch, because a
+    // setting the app can write and never see is a setting nothing can draw.
+    expect(row.bracket).toBe(3);
+
+    invoke.mockResolvedValue({ id: 7, bracket: AUTO_BRACKET });
+    const auto = await ipc.deckUpdate(7, { bracket: AUTO_BRACKET });
+    expect(invoke).toHaveBeenCalledWith("deck_update", { id: 7, patch: { bracket: 0 } });
+    expect(auto.bracket).toBe(0);
+    // The sentinel Rust spells `deck::AUTO_BRACKET`. Pinned to the literal, because the two sides
+    // are one vocabulary and a constant that drifted would be a silent "leave it".
+    expect(AUTO_BRACKET).toBe(0);
+
+    invoke.mockResolvedValue({ id: 7, bracket: 4 });
+    await ipc.deckUpdate(7, { name: "Ezuri", formatKey: "commander", bracket: 4 });
+    expect(invoke).toHaveBeenCalledWith("deck_update", {
+      id: 7,
+      patch: { name: "Ezuri", formatKey: "commander", bracket: 4 },
+    });
   });
 
   /**
@@ -1084,6 +1125,119 @@ describe("ipc argument names match the Rust command signatures", () => {
     // Read back rather than assumed: `tag_id` and `muted_at` are camelCase on the wire, and a
     // mirror that spelled either the column's way would be `undefined` with no type error.
     expect(muted).toEqual([{ namespace: "art", tagId: "b8f1", slug: "dog", mutedAt: 1 }]);
+  });
+
+  /**
+   * The combo feed's three commands, and **the id name is the trap** — the one this file exists
+   * for.
+   *
+   * `combos_for_cards` declares `card_ids: Vec<String>`, which Tauri fills from `cardIds`, exactly
+   * as `oracle_tags_for_printings` does. A wrapper sending `card_ids`, or `cards`, or `ids` is a
+   * deserialization error with no type error anywhere on this side — and the *silent* half is
+   * worse than the loud one: a combo read that never lands leaves the bracket advisory saying the
+   * deck has no combos, which is indistinguishable from a deck that really has none.
+   *
+   * `combos_status` takes **no arguments** (`prewarm_collection`'s trap: an argument object is a
+   * deserialization error rather than something the compiler could have caught), and
+   * `combos_refresh` spells its one argument `force`, as `sync_run` and both tag refreshes do.
+   *
+   * The figures below are fixtures and not measurements — the one measured number in this test is
+   * the feed's compressed size in the progress case that follows.
+   */
+  it("sends the combo commands under the names they declare, and the ids under `cardIds`", async () => {
+    const status = {
+      combos: 1_200,
+      cards: 2_800,
+      stamp: "2026-08-27T03:12:44Z",
+      fetchedAt: 1_800_000_000,
+      checkedAt: 1_800_003_600,
+      stale: false,
+    };
+    invoke.mockResolvedValue(status);
+
+    const read = await ipc.combosStatus();
+
+    expect(invoke).toHaveBeenCalledWith("combos_status");
+    // Read back rather than assumed: every field is camelCase on the wire, and one spelled
+    // `fetched_at` here is `undefined` with no type error anywhere — which reads as "never
+    // ingested" and would put the Settings panel's honest copy on an up-to-date table.
+    expect(read).toEqual(status);
+    // The two stamps are apart by design — a 304 moves `checkedAt` and not `fetchedAt` — and
+    // nothing here may collapse them.
+    expect(read.checkedAt).not.toBe(read.fetchedAt);
+
+    // A database that has never ingested the feed: `null` rather than `0`, because "never
+    // fetched" and "fetched nothing" are two states and only the first is the supported one the
+    // bracket estimate drops a signal for.
+    invoke.mockResolvedValue({
+      combos: 0,
+      cards: 0,
+      stamp: null,
+      fetchedAt: null,
+      checkedAt: null,
+      stale: true,
+    });
+    const cold = await ipc.combosStatus();
+    expect(cold.fetchedAt).toBeNull();
+    expect(cold.combos).toBe(0);
+
+    invoke.mockResolvedValue(status);
+    await ipc.combosRefresh(true);
+    expect(invoke).toHaveBeenCalledWith("combos_refresh", { force: true });
+    // `false` must travel as a key: Tauri fills parameters by name and an absent one is a
+    // refusal, not a default.
+    await ipc.combosRefresh(false);
+    expect(invoke).toHaveBeenCalledWith("combos_refresh", { force: false });
+
+    const combo = {
+      id: "1957-4050-7918--204",
+      bracketTag: "R",
+      cards: ["Thassa's Oracle", "Demonic Consultation"],
+      templateCount: 0,
+      produces: "Win the game",
+      popularity: 9_001,
+    };
+    invoke.mockResolvedValue([combo]);
+
+    const found = await ipc.combosForCards(["p1", "p2"]);
+
+    expect(invoke).toHaveBeenCalledWith("combos_for_cards", { cardIds: ["p1", "p2"] });
+    // `bracketTag` and `templateCount` are the two the estimator reads: the letter is the floor
+    // and `0` is what makes the combo count toward it at all. A mirror that dropped either would
+    // leave the advisory drawing combos that raise nothing.
+    expect(found).toEqual([combo]);
+
+    // An empty request is a real call and not something the wrapper may short-circuit — a deck
+    // with no countable piles asks, and Rust answers `[]`.
+    invoke.mockResolvedValue([]);
+    await ipc.combosForCards([]);
+    expect(invoke).toHaveBeenCalledWith("combos_for_cards", { cardIds: [] });
+  });
+
+  /**
+   * The combo feed's own progress channel, which is the mistake the compiler cannot see.
+   *
+   * `combos:progress` sits beside `marketplace:progress`, `oracle-tags:progress` and
+   * `art-tags:progress`, and every one of those payloads is `{ phase, done, total }` — so a
+   * listener wired to the wrong channel is a progress line that never moves and never errors.
+   */
+  it("listens for combo progress on its own channel", async () => {
+    let emit: ((evt: { payload: ComboProgress }) => void) | undefined;
+    listen.mockImplementation(
+      (_name: string, handler: (evt: { payload: ComboProgress }) => void) => {
+        emit = handler;
+        return Promise.resolve(vi.fn());
+      },
+    );
+    const heard: ComboProgress[] = [];
+
+    await ipc.onCombosProgress((e) => heard.push(e));
+    // 27 542 314 is the feed's measured compressed size (2026-08-27), so `total` is bytes in this
+    // phase and variants in `ingesting` — two counts on one pair of fields.
+    emit?.({ payload: { phase: "downloading", done: 1_048_576, total: 27_542_314 } });
+
+    expect(listen).toHaveBeenCalledWith("combos:progress", expect.any(Function));
+    expect(heard).toEqual([{ phase: "downloading", done: 1_048_576, total: 27_542_314 }]);
   });
 
   /**

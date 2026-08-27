@@ -4,6 +4,7 @@ pub mod collection;
 pub mod collection_alloc;
 pub mod collection_folders;
 pub mod collection_source;
+pub mod combos;
 pub mod db;
 pub mod deck;
 pub mod deck_audit;
@@ -417,6 +418,9 @@ pub fn run() {
             flatten::set_flatten_state,
             marketplace_feed::marketplace_feed_refresh,
             marketplace_feed::marketplace_feed_status,
+            combos::combos_status,
+            combos::combos_refresh,
+            combos::combos_for_cards,
             tags::oracle::oracle_tags_refresh,
             tags::oracle::oracle_tags_status,
             tags::oracle::oracle_tags_for_cards,
@@ -555,6 +559,19 @@ pub fn run() {
             let art_app = app.handle().clone();
             tauri::async_runtime::spawn(async move {
                 tags::art::refresh_if_due(&art_state, &art_app).await;
+            });
+
+            // Commander Spellbook's combo database, on a sixth task — and, unlike the two
+            // above it, **only if this database has ever fetched it**. That is
+            // `refresh_if_due`'s own rule and it belongs there rather than here: the tag files
+            // are what a deck add is categorised by, so a first run goes and gets them, while
+            // combos are the fourth bracket signal and a database without them simply reads
+            // three. Nothing downloads until a reader presses Refresh in Settings. Silent and
+            // best-effort, like every one of its siblings.
+            let combo_state = state.clone();
+            let combo_app = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                combos::refresh_if_due(&combo_state, &combo_app).await;
             });
 
             // The daily update check, in its own task rather than chained onto the sync:

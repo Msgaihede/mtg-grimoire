@@ -27,6 +27,8 @@
  *                                                  dataset by `tags/oracle.rs`/`tags/art.rs`
  * `TagHit`/`TagRef`                              — `src-tauri/src/tags/query.rs`
  * `MutedTag`                                     — `src-tauri/src/tags/muted.rs`
+ * `ComboBracketTag`/`DeckCombo`/`ComboStatus`/
+ * `ComboProgress`                                — `src-tauri/src/combos.rs`
  * `MirrorStatus`                                 — `src-tauri/src/mirror/settings.rs`
  * `PassReport`                                   — `src-tauri/src/mirror/run.rs`
  * `TagTerms`                                     — `src-tauri/src/filters.rs`
@@ -2203,6 +2205,20 @@ export interface DeckPatch {
    * since no foreign key says so.
    */
   defaultCategoryId?: number;
+  /**
+   * Which bracket the reader says this deck is — `1`–`5`, or {@link AUTO_BRACKET} (`0`) to hand
+   * the question back to the estimate. See {@link DeckRow.bracket}.
+   *
+   * **`0` is a value here, not an absence**, exactly as `defaultCategoryId`'s is one field up:
+   * absent means "leave it" (`coalesce(?n, column)`, this struct's rule), so sending `0` is the
+   * only way to say "back to Auto" — and, like that field, this one needs no
+   * {@link ipc.deckSetFolder}-shaped escape command, because its cleared state is a number.
+   *
+   * Rust refuses anything outside `0..=5` **by name** rather than clamping it. A `6` is a
+   * caller's bug or a hand-written IPC call, and quietly storing `5` for it would put a bracket
+   * on the deck header that nobody chose.
+   */
+  bracket?: number;
 }
 
 /**
@@ -2239,6 +2255,37 @@ export type Game = "paper" | "arena" | "mtgo";
  * Any". `decks.default_category_id`'s sentinel argument, one column over.
  */
 export type DeckGame = Game | "any";
+
+/**
+ * The stored answer meaning **the estimate stands** — {@link DeckRow.bracket} on a deck whose
+ * reader has not answered the bracket question themselves, and the one entry in a bracket picker
+ * that is not a bracket.
+ *
+ * `0`, because the Commander Format Panel numbers its brackets `1`–`5` and a sixth number can
+ * never collide with one of them. That is `AUTO_CATEGORY`'s argument
+ * (`features/decks/autoCategory.ts`) made against a different table — there the sentinel is safe
+ * because `deck_categories.id` is an `INTEGER PRIMARY KEY` and rowids start at 1 — and it lands
+ * the same way: **a sentinel of `0` can never be mistaken for a real value**, so the column can
+ * carry "nobody has said" as a number rather than as an absence.
+ *
+ * **It is a value, not an absence**, and that is the whole reason `decks.bracket` is
+ * `INTEGER NOT NULL DEFAULT 0` (schema v26) rather than nullable. {@link DeckPatch} is written
+ * with `coalesce(?n, column)`, so a bound NULL reads as *unchanged* — a nullable column would
+ * have made "put it back to Auto" unreachable through the patch without a double-`Option` across
+ * the whole struct. `decks.default_category_id` and `decks.game_key` are the same decision on
+ * either side of it; `decks.folder_id` is the column that did **not** make it, and
+ * {@link ipc.deckSetFolder} is what that costs — a whole command whose only job is to reach a
+ * state the patch cannot spell.
+ *
+ * Rust spells the same number `deck::AUTO_BRACKET`, and the two are one vocabulary on purpose: a
+ * sentinel that meant "unset" on one side of the IPC and "auto" on the other is exactly the
+ * mismatch that once filed every quick add on a fresh deck into the seeded Commander pile.
+ *
+ * **It is not the estimate and never becomes one.** The estimate is drawn on this side from the
+ * deck's own cards (`features/decks/validation/bracket.ts`) and is stored nowhere; this column
+ * says only whether the reader has overruled it.
+ */
+export const AUTO_BRACKET = 0;
 
 /** One deck as the gallery shows it. */
 export interface DeckRow {
@@ -2381,6 +2428,32 @@ export interface DeckRow {
    * transaction, and a duplicate is remapped onto its own copy of the pile.
    */
   defaultCategoryId: number;
+  /**
+   * Which bracket the reader has told this deck it is — `decks.bracket INTEGER NOT NULL
+   * DEFAULT 0`, schema v26, and {@link AUTO_BRACKET} (`0`) on every deck that has never been
+   * asked, which is the state every deck is born in.
+   *
+   * **A Commander bracket is a self-declaration**, so this column is the reader's own answer and
+   * not a measurement. The estimate is a separate thing that lives entirely on this side —
+   * `features/decks/validation/bracket.ts` reads the deck's cards and is stored in no column —
+   * and what the two are for *together* is the mismatch: an estimate is a **floor**, since every
+   * bracket restriction is "not allowed below bracket N", so a set bracket **under** that floor
+   * is the one thing worth saying out loud on a deck header.
+   *
+   * Read on the row as well as written through {@link DeckPatch}, for {@link theoryEnabled}'s and
+   * {@link defaultCategoryId}'s reason — a setting the app can write and never see is a setting
+   * nothing can draw. The bracket control on the deck header **is** this number, and without it a
+   * reader who set one would find the header still showing the estimate.
+   *
+   * It is not one of the three `last*` fields above, and the split is {@link separateXGroup}'s:
+   * those are how the reader was *looking* at this deck a moment ago, written by
+   * {@link ipc.deckSetViewState}, which moves no `updatedAt`; this is an answer **about the
+   * deck** and rides the ordinary {@link ipc.deckUpdate} with the rename and the format. That is
+   * also why {@link ipc.deckDuplicate} carries it across — a copy of a bracket-3 deck is a
+   * bracket-3 deck, where a copy of a deck someone last read on the Theory tab is not a deck
+   * anybody has read at all.
+   */
+  bracket: number;
 }
 
 /**
@@ -3482,6 +3555,161 @@ export interface MutedTag {
   slug: string;
   /** Unix **seconds**. */
   mutedAt: number;
+}
+
+/**
+ * Which bracket a two-card infinite combo belongs to, as **Commander Spellbook's own editors
+ * classified it** — `BracketTagEnum` in their schema, carried through the ingest unchanged and
+ * stored in `combos.bracket_tag`.
+ *
+ * Seven letters, with Spellbook's own wording for each and the bracket floor it implies here:
+ *
+ * * `E` — **Exhibition**, "for any deck". Raises nothing.
+ * * `C` — **Core**, "for unoptimized decks in bracket 2+". Floor 2.
+ * * `O` — **Oddball**, "probably 2 or 3, but hard to classify". Floor 2.
+ * * `P` — **Powerful**, "for strong decks in bracket 3+". Floor 3.
+ * * `S` — **Spicy**, "probably 3 or 4, but hard to classify". Floor 3.
+ * * `R` — **Ruthless**, "for competitive decks at brackets 4+". Floor 4.
+ * * `B` — **Banned**, "not legal in Commander". Raises nothing, because it is a *legality*
+ *   finding and the validation engine already reports it from the banned list.
+ *
+ * **That letter is why this app never has to decide what "an intentional early-game two-card
+ * infinite combo" is.** Wizards' bracket table restricts combos in exactly those words, which no
+ * card list answers and no oracle-text grep can be written for — it is a fact about an
+ * *interaction* rather than about a card. Spellbook's editors have already made the judgement
+ * per combo; the ingest carries their letter through and the estimator turns it into a floor.
+ *
+ * A closed union, like {@link ErrorSource}: an eighth letter arriving from Rust is a type error
+ * here rather than a combo that silently raises nothing.
+ */
+export type ComboBracketTag = "R" | "S" | "P" | "O" | "C" | "E" | "B";
+
+/**
+ * One combo a deck contains — every named card of it is in the deck, and this is what the
+ * bracket advisory lists.
+ *
+ * "Contains" is the whole of what the match query answers, and it is deliberately narrow: the
+ * cards are all there, in the piles TypeScript chose to count (see {@link ipc.combosForCards}).
+ * Nothing here checks that they can be *cast* together, that the colours line up, or that a piece
+ * the feed marks `must_be_commander` really is this deck's commander — that column is stored by
+ * the ingest and surfaced on no field of this shape, so nothing reads it.
+ */
+export interface DeckCombo {
+  /** Commander Spellbook's variant id, e.g. `"1957-4050-7918--204"`. Stable, and the key the
+   *  ingest stores rows under. */
+  id: string;
+  /** Which bracket this combo is for — {@link ComboBracketTag}, and the whole of what it
+   *  contributes to the estimate. */
+  bracketTag: ComboBracketTag;
+  /**
+   * The combo's card names, in the order the feed listed them — display only. The deck holds
+   * every one of them, matched by **oracle** id rather than by this string, so a name here is
+   * what to print beside the combo and never what to look a card up by.
+   */
+  cards: string[];
+  /**
+   * How many *templates* the combo also asks for — Spellbook's `requires[]`, which are
+   * descriptions ("a creature with flying") rather than cards and resolve to no card id at all.
+   *
+   * **`0` is a combo the deck definitely has.** Above zero is one whose named cards are all
+   * present and whose remaining requirement this app cannot check, so it is shown as *possible*
+   * and kept out of the bracket arithmetic entirely — a combo that might not be there may not
+   * raise a floor, and hiding it would be worse still, since the reader can look at their own
+   * deck and answer the question this app cannot.
+   */
+  templateCount: number;
+  /** What the combo does — Spellbook's feature names, one per line (`"Infinite lifegain"`).
+   *  Joined at the ingest rather than sent as an array, because nothing here does anything to
+   *  them but print them. */
+  produces: string;
+  /** How many decks Spellbook has seen it in, or `null` where the feed gives no figure. A
+   *  sort key and a rough "how well known is this", nothing more. */
+  popularity: number | null;
+}
+
+/**
+ * The combo table's own freshness — `combo_meta`, plus the shape of a database that has never
+ * fetched the file.
+ *
+ * The **fourth** optional bulk feed, after the two price feeds and the two tagger datasets, and
+ * optional in exactly their way: nothing downloads until a reader asks, a failed fetch leaves the
+ * previous rows standing, and the app works without it. It is not Scryfall — Commander
+ * Spellbook's `variants.json.gz`, 27.5 MB compressed, measured 2026-08-27 — so it takes no share
+ * of the Scryfall rate-limit budget and has no place in the 429 penalty state.
+ */
+export interface ComboStatus {
+  /** Rows in `combos` — combos kept, which is the published, Commander-legal subset. `0` before
+   *  the first ingest. */
+  combos: number;
+  /**
+   * **Distinct cards** across every kept combo — `count(DISTINCT oracle_id)` over `combo_cards`,
+   * not that table's row count.
+   *
+   * A card that appears in three combos is one card here, which is what makes the figure
+   * legible beside {@link ComboStatus.combos}: "105 478 combos, naming 7 310 cards between
+   * them" is a sentence about the corpus, where a slot count would just be a bigger number with
+   * no meaning of its own. Counted from the table rather than read off `combo_meta`, because a
+   * watermark can outlive the rows it describes.
+   */
+  cards: number;
+  /** The feed's own `timestamp`, as it published it (`"2026-08-27T03:12:44Z"`). `null` before the
+   *  first ingest. The file rotates continuously, so this is the honest as-of line — not
+   *  {@link ComboStatus.fetchedAt}, which is when *this app* asked. */
+  stamp: string | null;
+  /**
+   * Unix **seconds** when the rows last changed, and **`null` on a database that has never
+   * ingested the file**.
+   *
+   * That distinction is the whole reason this is nullable rather than `0`: never ingested is a
+   * **supported state**, not a failure. It is what every install is on its first launch and what
+   * a machine that cannot reach Spellbook stays in, and what it costs is one signal — the bracket
+   * estimate then reads three (Game Changers, mass land denial, extra turns) instead of four.
+   * Nothing about it may empty a deck's advisory or fail a check.
+   *
+   * It is the pair {@link TagStatus} already draws, for its reason: a 304 moves
+   * {@link ComboStatus.checkedAt} and not this, so collapsing the two would make an up-to-date
+   * table read as due on every launch and cost a request per start.
+   */
+  fetchedAt: number | null;
+  /** Unix **seconds** when the feed was last *asked*, whatever the answer. Moves on a 304;
+   *  `fetchedAt` does not. `null` before the first check. */
+  checkedAt: number | null;
+  /**
+   * Older than the backend's weekly refresh interval, **or never fetched at all**.
+   *
+   * Computed there and read rather than re-derived, {@link MarketplaceFeedStatus.stale}'s rule:
+   * one definition of how long the table stays believable, and a second copy of the arithmetic on
+   * this side would be a second place for it to drift.
+   */
+  stale: boolean;
+}
+
+/** The five phases a combo refresh emits — {@link TagPhase}'s list, because the shape of the job
+ *  is the same one: ask, download, ingest, and two ways to stop. */
+export type ComboPhase = "checking" | "downloading" | "ingesting" | "done" | "error";
+
+/**
+ * Payload of the `combos:progress` event.
+ *
+ * A channel of its own rather than a phase bolted onto something else, following
+ * `marketplace:progress` and the two tag channels for their reason: {@link SyncPhase} is a closed
+ * union with a *total* label map behind it, and a dataset with its own schedule has no business
+ * widening it.
+ *
+ * **Not a complete account of a refresh**, like every other progress event here: Tauri drops
+ * events emitted before the webview registered its listener, so a refresh that began before this
+ * window mounted a listener is invisible on this channel. {@link ipc.combosStatus} is the
+ * reliable half of the pair.
+ *
+ * `done`/`total` are read **against the phase and never across it** — bytes while downloading,
+ * variants while ingesting — so a bar that carried one scale from `downloading` into `ingesting`
+ * would jump. Two counts of two different things, on one pair of fields, exactly as
+ * {@link FeedProgressEvent} and {@link TagProgressEvent} already carry.
+ */
+export interface ComboProgress {
+  phase: ComboPhase;
+  done: number;
+  total: number;
 }
 
 /**
@@ -4983,6 +5211,68 @@ export const ipc = {
   /** Everything the reader has hidden, for the Settings list that gives it back — by taxonomy,
    *  then by the stored slug, because this list exists to be searched by eye. */
   tagsMuted: () => invoke<MutedTag[]>("tags_muted"),
+  /**
+   * The combo table's freshness. Reads one small table, makes no network call, and **is safe
+   * before the first refresh has ever run** — a database with no `combo_meta` row answers zero
+   * counts and `null` stamps with `stale: true` rather than rejecting, so no caller needs a
+   * guard.
+   *
+   * Read it before drawing "this deck has no combos": a never-ingested table and a deck with
+   * nothing in it are the same empty {@link ipc.combosForCards} answer, and only this call tells
+   * them apart. See {@link ComboStatus.fetchedAt}.
+   */
+  combosStatus: () => invoke<ComboStatus>("combos_status"),
+  /**
+   * Fetch Commander Spellbook's combo feed if it is due, and answer the table's state
+   * afterwards. `force` skips the weekly throttle, **not** the ETag check — a forced refresh of
+   * an unchanged file still costs one request and no ingest, exactly as
+   * {@link ipc.oracleTagsRefresh} does one dataset over.
+   *
+   * 27.5 MB compressed and 640 MB of JSON behind it (measured 2026-08-27), streamed rather than
+   * held, so it reports through the same `Activity` mechanism every other long job uses.
+   *
+   * **It does not answer `collection::BUSY` under a running sync**, and the asymmetry with the
+   * writes above it is deliberate rather than an oversight: a refresh opens on the *read*
+   * connection and only its ingest takes the write one, one 2 000-combo batch at a time,
+   * standing aside between them. So a sync delays this rather than refusing it — which is what
+   * a 640 MB download wants, since a refusal would throw the whole fetch away over a lock it
+   * would have got a second later.
+   *
+   * **A failed fetch leaves the previous rows standing** and writes the reason to `error_log` —
+   * the rule every feed here follows. A rejection is never a reason to stop drawing a bracket:
+   * the estimate reads the three signals it has and says so.
+   */
+  combosRefresh: (force: boolean) => invoke<ComboStatus>("combos_refresh", { force }),
+  /**
+   * Which combos a set of cards fully contains — the deck bracket advisory's one read.
+   *
+   * **It takes card ids rather than a deck id, and that is the Rust/TS boundary drawn where this
+   * repo draws it.** Which of a deck's piles count toward a combo is a *domain* question — active
+   * categories only, the sideboard and the companion beside the deck rather than in it, `live`
+   * against `theory` — and those rules already live in TypeScript, in `features/decks`. So this
+   * side decides which cards are in play and Rust answers a fact about them: it resolves the ids
+   * to oracle ids and returns the combos whose every named card is present. Rust supplies facts;
+   * TypeScript draws the conclusion, and a `combos_for_deck` would have moved the pile rules into
+   * SQL where a second copy of them would drift.
+   *
+   * Matching is by **oracle** id, so any printing of a combo piece counts and duplicate ids cost
+   * nothing. Combos with {@link DeckCombo.templateCount} above zero come back too — they are the
+   * *possible* ones, and separating them is the caller's job, not a filter to apply here.
+   *
+   * Safe on a database that has never ingested the feed: the answer is `[]`, which is also what
+   * a deck with no combos in it answers. {@link ipc.combosStatus} is what tells those apart.
+   */
+  combosForCards: (cardIds: string[]) => invoke<DeckCombo[]>("combos_for_cards", { cardIds }),
+  /**
+   * The combo feed being fetched, phase by phase — a channel of its own beside `sync:progress`,
+   * `marketplace:progress`, `update:progress` and the two tag channels.
+   *
+   * **Subscribe once**, like every other listener here: each call is another `listen`
+   * registration for the life of the app. Tauri drops events emitted before the webview
+   * registered a listener, so {@link ipc.combosStatus} is the reliable half of the pair.
+   */
+  onCombosProgress: (cb: (e: ComboProgress) => void): Promise<UnlistenFn> =>
+    listen<ComboProgress>("combos:progress", (evt) => cb(evt.payload)),
   /**
    * The Scryfall CDN URL for one printing at one size, or `null`.
    *

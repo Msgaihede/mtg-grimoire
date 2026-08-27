@@ -74,8 +74,11 @@ const meta = {
     docs: {
       description: {
         component:
-          "Settings, which is six real sections and an honest note about the rest.\n\n" +
-          "**Ordered by what a press costs.** Updates, prices and errors first, since none "  +
+          // Deliberately no count of the sections: this line said six while the page drew
+          // seven, and a prose-only edit routes to neither CI job — so nothing went red. The
+          // headings are a fact about the tree, which `Default`'s play reads off the tree.
+          "Settings: the sections that are real, and an honest note about the rest.\n\n" +
+          "**Ordered by what a press costs.** Updates, prices, combos and errors first, since none "  +
           "of them throws anything away; then the local cache, which throws away bytes the "  +
           "app fetches again; then the three clears that cannot be taken back, alone at the "  +
           "foot in a region of their own. "  +
@@ -90,12 +93,17 @@ const meta = {
           "`Chrome/AppShell`'s `Settings` and `UpdateAvailable` are the same page driven by a " +
           "**seeded world** instead, through the real hook — which is where the ribbon button " +
           "and this panel are shown agreeing with each other.\n\n" +
-          "The other two panels are the opposite and are hooked up *here*. The error log is, " +
-          "because nothing else in the window reads it; the marketplace is, because half the " +
-          "window does — every price surface asks `useMarketplace()` for its currency, and one " +
-          "TanStack Query entry with `staleTime: Infinity` means they are all reading the same " +
-          "cached answer rather than opening a second channel. So both reach the fake, and " +
-          "`SwitchingMarketplace` below is a real write to the fake's `app_meta` row.\n\n" +
+          "The other panels are the opposite and reach the fake. Two are hooked up *here*: the " +
+          "error log, because nothing else in the window reads it, and the marketplace, because " +
+          "half the window does — every price surface asks `useMarketplace()` for its currency, " +
+          "and one TanStack Query entry with `staleTime: Infinity` means they are all reading " +
+          "the same cached answer rather than opening a second channel. So both reach the fake, " +
+          "and `SwitchingMarketplace` below is a real write to the fake's `app_meta` row.\n\n" +
+          "**Backup and Combos take no props at all** and hold their own hooks, which is the " +
+          "same argument from one step further along: threading either down would buy a prop " +
+          "and nothing else. Combos sits directly under Prices because it is the same kind of " +
+          "thing — an optional bulk feed from a third party that the app works entirely " +
+          "without. See `Settings/CombosPanel` for the four states it draws.\n\n" +
           "The blurb this view used to be is now a section of it. What is genuinely still " +
           "missing — the data folder, sync behaviour, import and export — says so under its " +
           "own dim heading rather than standing in for a panel that exists.",
@@ -126,6 +134,9 @@ export const Default: Story = {
     // what makes them regions a screen reader can jump between rather than three `div`s.
     await expect(canvas.getByRole("heading", { name: "Updates", level: 2 })).toBeInTheDocument();
     await expect(canvas.getByRole("heading", { name: "Prices", level: 2 })).toBeInTheDocument();
+    // Directly under Prices, and it has to be *found* rather than assumed: both are optional
+    // bulk feeds from a third party, and both leave the app working when they are absent.
+    await expect(canvas.getByRole("heading", { name: "Combos", level: 2 })).toBeInTheDocument();
     await expect(
       canvas.getByRole("heading", { name: "Not here yet", level: 2 }),
     ).toBeInTheDocument();

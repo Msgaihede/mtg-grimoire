@@ -3568,6 +3568,17 @@ export function DeckEditor({ deckId }: { deckId: number }) {
             spec?.commanderRule != null && (
               <DeckBracket
                 cards={deck.cards}
+                // The reader's own answer, and the write that sets it. `AUTO_BRACKET` is `0` and
+                // is a real value in the patch rather than an absent field, which is what makes
+                // "put it back to Auto" reachable at all — `DeckPatch`'s rule is that an absent
+                // field means "leave it", so the sentinel is the same shape `defaultCategoryId`
+                // already uses for the same reason.
+                //
+                // `deck.update` and not a mutation of its own: it is already in this editor's
+                // `writes` array, so a refused bracket lands in the one banner above with every
+                // other write's, and the refusal rule stays on the mutation's single definition.
+                bracket={row.bracket}
+                onBracket={(bracket) => deck.update.mutate({ bracket })}
                 open={layer?.kind === "bracket"}
                 buttonRef={bracketRef}
                 onOpen={openBracket}

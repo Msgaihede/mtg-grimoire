@@ -641,6 +641,14 @@ mod tests {
                 "cards_fts_data",
                 "cards_fts_docsize",
                 "cards_fts_idx",
+                // The Commander Spellbook feed's three (schema v26). They map to nothing for
+                // `cards`' and `marketplace_prices`' reason and a sharper one: a refresh
+                // rewrites all three wholesale, the reader never edits a row in any of them,
+                // and no mirrored file quotes a combo — so a surface here would be tens of
+                // thousands of hook calls per refresh in exchange for nothing on disk.
+                "combo_cards",
+                "combo_meta",
+                "combos",
                 "deck_audit",
                 "deck_undo",
                 "error_log",

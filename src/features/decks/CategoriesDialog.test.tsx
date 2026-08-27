@@ -132,6 +132,7 @@ const DECK_ROW: DeckRow = {
   lastSortBy: "alphabetical",
   separateXGroup: false,
   defaultCategoryId: 0,
+  bracket: 0,
 };
 
 const DECK: DeckDetail = { deck: DECK_ROW, cards: [], categories: CATEGORIES, tags: TAGS };

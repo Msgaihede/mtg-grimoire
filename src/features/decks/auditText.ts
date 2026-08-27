@@ -501,6 +501,24 @@ function deckLine(p: Record<string, unknown>): AuditLine {
         text: to ? `New cards now go to ${to}` : "New cards now go by what the card does",
         detail: was,
       };
+    // `decks.bracket` (schema v26). **Numbers on both sides, and `0` is a value rather than an
+    // absence** — the `AUTO_BRACKET` sentinel, spelled the same way `defaultCategory` above
+    // spells Auto and for the same reason. So this arm cannot use `to`/`was`, which are
+    // `text()`'d and answer `null` for a `0` they would have to print as "0"; it reads the raw
+    // payload instead and says which of the two answers each side was.
+    //
+    // It says what the *reader* decided, never what the cards read as: the estimate is a floor
+    // computed on every render and is nobody's edit, so a history line claiming a bracket
+    // "changed" when a card was added would be recording an event that never happened.
+    case "bracket": {
+      const now = numberField(p.to);
+      const before = numberField(p.from);
+      const name = (n: number) => (n === 0 ? "Auto" : `bracket ${n}`);
+      return {
+        text: now === 0 ? "Put the bracket back to Auto" : `Set the deck to bracket ${now}`,
+        detail: before === now ? null : `was ${name(before)}`,
+      };
+    }
     // A field this build has never heard of, written by a newer one — or by an older one,
     // since a database outlives the app that wrote it. A plain line with a date and a delta
     // beats a blank one, and beats a throw by a good deal more.

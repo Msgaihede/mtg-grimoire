@@ -572,6 +572,7 @@ const deck = (over: Partial<DeckRow> & { id: number; name: string }): DeckRow =>
   lastSortBy: "alphabetical",
   separateXGroup: false,
   defaultCategoryId: 0,
+  bracket: 0,
   ...over,
 });
 
