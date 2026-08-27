@@ -92,6 +92,48 @@ impl Default for Decoder {
     }
 }
 
+/// Frames a byte stream into newline-terminated records.
+///
+/// Owns its own tail buffer rather than making the caller hold one. That is deliberate:
+/// the drain and the state that describes it then change together in one place, which is
+/// the class of bug this repo has already paid for once.
+pub struct Lines {
+    tail: Vec<u8>,
+}
+
+impl Lines {
+    pub fn new() -> Self {
+        Lines { tail: Vec::new() }
+    }
+
+    /// Feed decoded bytes; `f` is called once per complete line, without its newline.
+    pub fn push(&mut self, bytes: &[u8], mut f: impl FnMut(&[u8])) {
+        self.tail.extend_from_slice(bytes);
+        let mut start = 0usize;
+        while let Some(rel) = self.tail[start..].iter().position(|b| *b == b'\n') {
+            let end = start + rel;
+            f(&self.tail[start..end]);
+            start = end + 1;
+        }
+        self.tail.drain(..start);
+    }
+
+    /// Emit a final unterminated line, if there is one. A stream that ended on a newline
+    /// has nothing here — emitting an empty record would invent a row.
+    pub fn finish(&mut self, mut f: impl FnMut(&[u8])) {
+        if !self.tail.is_empty() {
+            f(&self.tail);
+            self.tail.clear();
+        }
+    }
+}
+
+impl Default for Lines {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -178,5 +220,63 @@ mod tests {
 
         assert_eq!(whole, src);
         assert_eq!(piecemeal, whole);
+    }
+
+    fn collect_lines(chunks: &[&[u8]]) -> Vec<String> {
+        let mut out = Vec::new();
+        let mut l = Lines::new();
+        for c in chunks {
+            l.push(c, |line| {
+                out.push(String::from_utf8_lossy(line).into_owned())
+            });
+        }
+        l.finish(|line| out.push(String::from_utf8_lossy(line).into_owned()));
+        out
+    }
+
+    #[test]
+    fn frames_whole_lines() {
+        assert_eq!(collect_lines(&[b"a\nbb\nccc\n"]), vec!["a", "bb", "ccc"]);
+    }
+
+    /// The case the whole type exists for: a line split across two chunks.
+    #[test]
+    fn a_line_split_across_chunks_is_emitted_once_and_whole() {
+        assert_eq!(
+            collect_lines(&[b"{\"id\":\"", b"abc\"}\n"]),
+            vec!["{\"id\":\"abc\"}"]
+        );
+    }
+
+    /// A final line with no trailing newline is still a line.
+    #[test]
+    fn an_unterminated_last_line_is_emitted_by_finish() {
+        assert_eq!(collect_lines(&[b"one\ntwo"]), vec!["one", "two"]);
+    }
+
+    /// ...but a stream that ends exactly on a newline must not emit a phantom empty line.
+    #[test]
+    fn a_trailing_newline_does_not_emit_an_empty_line() {
+        assert_eq!(collect_lines(&[b"one\ntwo\n"]), vec!["one", "two"]);
+    }
+
+    /// Byte-for-byte chunking must not change the answer.
+    #[test]
+    fn one_byte_chunks_frame_the_same_as_one_big_chunk() {
+        let src: Vec<u8> = (0..200)
+            .map(|i| format!("line {i}\n"))
+            .collect::<String>()
+            .into_bytes();
+        let whole = collect_lines(&[&src]);
+        let mut out = Vec::new();
+        let mut l = Lines::new();
+        for b in src.chunks(1) {
+            l.push(b, |line| {
+                out.push(String::from_utf8_lossy(line).into_owned())
+            });
+        }
+        l.finish(|line| out.push(String::from_utf8_lossy(line).into_owned()));
+        assert_eq!(out, whole);
+        assert_eq!(out.len(), 200);
     }
 }
