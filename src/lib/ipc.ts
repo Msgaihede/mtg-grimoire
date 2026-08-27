@@ -77,13 +77,35 @@
  * a priced list is the answer, one {@link FinishPrices} triple in it. There is no twin field to
  * pick between and no fallback across marketplaces — see `@/lib/marketplace`.
  */
-import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { core } from "@/lib/core";
 import type { Condition } from "./conditions";
 import type { Finish } from "./finish";
 import type { MarketplaceId } from "./marketplace";
 import type { ImageVariant } from "./images";
 import type { SortSpec } from "./sort";
+
+type UnlistenFn = () => void;
+
+/**
+ * The ~136 methods below are written as `invoke("name", { args })` and stay that way.
+ * Only where the call goes has changed — {@link core} decides that, per build.
+ */
+const invoke = <T,>(command: string, args?: Record<string, unknown>): Promise<T> =>
+  core.call<T>(command, args);
+
+/**
+ * Tauri's `listen` resolved to an unsubscribe and delivered an *envelope*; {@link Core} is
+ * synchronous and delivers the payload. This keeps the old call shape — `listen<T>(name,
+ * (evt) => cb(evt.payload))` — working unchanged by re-wrapping the payload, so this task
+ * touches two import lines rather than six subscription bodies.
+ */
+const listen = <T,>(
+  event: string,
+  handler: (evt: { payload: T }) => void,
+): Promise<UnlistenFn> => {
+  const off = core.listen<T>(event, (payload) => handler({ payload }));
+  return Promise.resolve(off);
+};
 
 /**
  * The search's sortable columns. Mirrors `SEARCH_SORTS` in `src-tauri/src/search.rs`; a key

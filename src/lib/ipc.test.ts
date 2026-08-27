@@ -1393,7 +1393,13 @@ it("unwraps the sync:progress payload and returns the unlisten handle", async ()
 
   expect(listen).toHaveBeenCalledWith("sync:progress", expect.any(Function));
   expect(seen).toEqual([{ phase: "downloading", done: 5, total: 10, message: null }]);
-  expect(stop).toBe(unlisten);
+  // Not `toBe(unlisten)`. `ipc` reaches Tauri through `@/lib/core` now, so the handle it
+  // hands back is the boundary's own unsubscribe rather than the object Tauri returned.
+  // That identity was precisely the transport detail the boundary exists to hide; that the
+  // handle *unsubscribes* is the claim worth pinning, and it is the stronger of the two —
+  // `toBe` passed for a handle that was never wired to anything.
+  stop();
+  expect(unlisten).toHaveBeenCalledTimes(1);
 });
 
 /**
@@ -1426,7 +1432,8 @@ it("unwraps the marketplace:progress payload and returns the unlisten handle", a
   expect(seen).toEqual([
     { marketplace: "cardkingdom", phase: "downloading", done: 5, total: 66_787_283 },
   ]);
-  expect(stop).toBe(unlisten);
+  stop();
+  expect(unlisten).toHaveBeenCalledTimes(1);
 });
 
 /**
@@ -1455,7 +1462,8 @@ it("unwraps the oracle-tags:progress payload and returns the unlisten handle", a
 
   expect(listen).toHaveBeenCalledWith("oracle-tags:progress", expect.any(Function));
   expect(seen).toEqual([{ phase: "downloading", done: 512_000, total: 5_850_000 }]);
-  expect(stop).toBe(unlisten);
+  stop();
+  expect(unlisten).toHaveBeenCalledTimes(1);
 });
 
 /**
