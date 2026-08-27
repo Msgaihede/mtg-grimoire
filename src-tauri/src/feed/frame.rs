@@ -134,6 +134,115 @@ impl Default for Lines {
     }
 }
 
+/// Frames the top-level elements of the first JSON array in a stream.
+///
+/// Used for Commander Spellbook's `variants.json.gz`, whose whole payload is one array
+/// under a `variants` key.
+pub struct Elements {
+    /// The first `[` seen opens the array this frames. The Spellbook document has no other
+    /// array before `variants`; if that ever changes, this is the line that breaks.
+    entered: bool,
+    depth: i32,
+    in_string: bool,
+    escaped: bool,
+    /// Byte offset of the current element's opening brace, within `buf`.
+    start: Option<usize>,
+    /// Scanned up to here already; reset whenever `buf` is drained.
+    scanned: usize,
+    buf: Vec<u8>,
+    peak: usize,
+}
+
+impl Elements {
+    pub fn new() -> Self {
+        Elements {
+            entered: false,
+            depth: 0,
+            in_string: false,
+            escaped: false,
+            start: None,
+            scanned: 0,
+            buf: Vec::new(),
+            peak: 0,
+        }
+    }
+
+    /// The largest the internal buffer has ever been, in bytes.
+    ///
+    /// Exists so tests can assert the thing a row count cannot see: a framer that stops
+    /// draining still returns rows for a while and then quietly holds the whole document.
+    pub fn peak_buffer(&self) -> usize {
+        self.peak
+    }
+
+    pub fn push(&mut self, bytes: &[u8], mut f: impl FnMut(&[u8])) {
+        self.buf.extend_from_slice(bytes);
+        if self.buf.len() > self.peak {
+            self.peak = self.buf.len();
+        }
+
+        let mut consumed = 0usize;
+        let mut i = self.scanned;
+        while i < self.buf.len() {
+            let b = self.buf[i];
+            if self.in_string {
+                if self.escaped {
+                    self.escaped = false;
+                } else if b == b'\\' {
+                    self.escaped = true;
+                } else if b == b'"' {
+                    self.in_string = false;
+                }
+                i += 1;
+                continue;
+            }
+            match b {
+                b'"' => self.in_string = true,
+                b'[' if !self.entered => self.entered = true,
+                b'{' if self.entered => {
+                    if self.depth == 0 {
+                        self.start = Some(i);
+                    }
+                    self.depth += 1;
+                }
+                b'}' if self.entered => {
+                    self.depth -= 1;
+                    if self.depth == 0 {
+                        if let Some(st) = self.start.take() {
+                            f(&self.buf[st..=i]);
+                            consumed = i + 1;
+                        }
+                    }
+                }
+                _ => {}
+            }
+            i += 1;
+        }
+
+        if consumed > 0 {
+            // `consumed` is always the byte just past a closing brace, so the state that
+            // describes the current element is empty by construction - and resetting it
+            // HERE, in the same statement as the drain, is what stops the rescan below
+            // from counting the same braces twice. Splitting these two apart is the bug
+            // that found 63 elements in 610 MB.
+            self.buf.drain(..consumed);
+            self.depth = 0;
+            self.start = None;
+            self.in_string = false;
+            self.escaped = false;
+            self.scanned = 0;
+        } else {
+            self.scanned = self.buf.len();
+        }
+    }
+}
+
+impl Default for Elements {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -278,5 +387,83 @@ mod tests {
         l.finish(|line| out.push(String::from_utf8_lossy(line).into_owned()));
         assert_eq!(out, whole);
         assert_eq!(out.len(), 200);
+    }
+
+    fn collect_elements(chunks: &[&[u8]]) -> (Vec<String>, usize) {
+        let mut out = Vec::new();
+        let mut e = Elements::new();
+        for c in chunks {
+            e.push(c, |el| out.push(String::from_utf8_lossy(el).into_owned()));
+        }
+        (out, e.peak_buffer())
+    }
+
+    #[test]
+    fn frames_the_elements_of_the_variants_array() {
+        let doc = br#"{"timestamp":"t","variants":[{"id":"a"},{"id":"b"},{"id":"c"}]}"#;
+        let (els, _) = collect_elements(&[doc]);
+        assert_eq!(els, vec![r#"{"id":"a"}"#, r#"{"id":"b"}"#, r#"{"id":"c"}"#]);
+    }
+
+    /// Nested objects must not end the element early.
+    #[test]
+    fn nested_objects_do_not_close_an_element() {
+        let doc = br#"{"variants":[{"id":"a","card":{"n":{"deep":1}}},{"id":"b"}]}"#;
+        let (els, _) = collect_elements(&[doc]);
+        assert_eq!(
+            els,
+            vec![r#"{"id":"a","card":{"n":{"deep":1}}}"#, r#"{"id":"b"}"#]
+        );
+    }
+
+    /// A brace inside a string is text, not structure. Card names really do contain them.
+    #[test]
+    fn a_brace_inside_a_string_is_not_structure() {
+        let doc = br#"{"variants":[{"n":"Chandra, {T}: deal damage"},{"n":"ok"}]}"#;
+        let (els, _) = collect_elements(&[doc]);
+        assert_eq!(els.len(), 2);
+        assert!(els[0].contains("{T}"));
+    }
+
+    /// An escaped quote does not end the string, so the brace after it is still text.
+    #[test]
+    fn an_escaped_quote_does_not_end_a_string() {
+        let doc = br#"{"variants":[{"n":"say \"hi\" }"},{"n":"second"}]}"#;
+        let (els, _) = collect_elements(&[doc]);
+        assert_eq!(
+            els.len(),
+            2,
+            "the escaped quote must not desynchronise the framer"
+        );
+        assert_eq!(els[1], r#"{"n":"second"}"#);
+    }
+
+    /// The regression test for the spike's silent failure: chunked input must frame every
+    /// element AND must not accumulate the document in memory.
+    #[test]
+    fn chunked_input_frames_every_element_and_keeps_the_buffer_small() {
+        let mut doc = String::from(r#"{"timestamp":"t","variants":["#);
+        for i in 0..2000 {
+            if i > 0 {
+                doc.push(',');
+            }
+            doc.push_str(&format!(r#"{{"id":"v{i}","pad":"{}"}}"#, "x".repeat(200)));
+        }
+        doc.push_str("]}");
+        let bytes = doc.into_bytes();
+
+        let mut out = 0usize;
+        let mut e = Elements::new();
+        for c in bytes.chunks(64) {
+            e.push(c, |_| out += 1);
+        }
+        assert_eq!(out, 2000, "every element must be framed");
+        // The whole document is ~430 KB. A framer that fails to drain grows to hold all of
+        // it - which is exactly how the spike's bug looked, and a row count alone cannot see it.
+        assert!(
+            e.peak_buffer() < 8 * 1024,
+            "peak buffer was {} bytes; the framer is not draining",
+            e.peak_buffer()
+        );
     }
 }
