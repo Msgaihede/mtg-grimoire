@@ -657,7 +657,9 @@ export const DropTargetsLive: Story = {
 
 /**
  * The same drag with **no deck open** — which is every drag started from Search, Collection or
- * Wishlist, because `setActiveView` clears `openDeckId`.
+ * Wishlist, because `setActiveView` clears `openDeckId`. A deck the reader left open is *parked*
+ * rather than forgotten (issue #162), but it is parked in a field of its own and does not come
+ * back until Decks is on screen again — so on these three views the entry is inert either way.
  *
  * So the Decks entry is inert for all of them, and it is reachable at all only from inside the
  * Decks view: the docked search panel, a deck row, the card pane. Wishlist takes a card from

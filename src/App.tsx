@@ -32,6 +32,11 @@ function ActiveView({ update }: { update: Update }) {
   // a route. Keyed by the deck: opening a second one from anywhere is a fresh editor rather
   // than one that inherits the last deck's grouping and open menu.
   //
+  // **A reader who came back from the Collection lands on this line's second arm** (issue #162):
+  // `setActiveView` parks the open deck on the way out and hands it back on the way in, so the
+  // id read above is already the one they left. Nothing here knows that happened, which is the
+  // point of parking it in the store rather than teaching this component about a previous view.
+  //
   // Last, and with no placeholder branch after it: every `ViewId` is now a real view, so the
   // `BLURB` map that used to catch Settings has nothing left to catch. What is still missing
   // from Settings is a sentence *inside* Settings, where it belongs.
@@ -97,7 +102,13 @@ export default function App() {
    * width the overlay exists to give back.
    *
    * `openDeckId` alone, with no `activeView` clause: `setActiveView` clears the open deck in the
-   * same write, so a non-null id already means the Decks view in its second state.
+   * same write, so a non-null id already means the Decks view in its second state. **That still
+   * holds now that a deck survives a trip to the Collection** (issue #162) — what survives is
+   * `parkedDeckId`, a second field, and this one is emptied on the way out and refilled on the
+   * way back exactly as before. Keeping that invariant is the whole reason the park is not just
+   * a longer-lived `openDeckId`: this line, the branch in `ActiveView`, and `useSidebarDrops`'
+   * "is there a deck to drop into" would each have needed a clause, and the next reader would
+   * have had to remember to write the fourth.
    *
    * **The editor draws no pane until its deck has loaded, and nothing is lost by that**, which is
    * worth stating because it is the one hole in the switch. `setOpenDeckId` deliberately keeps

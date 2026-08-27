@@ -580,6 +580,34 @@ interface AppState {
   openDeckId: number | null;
   setOpenDeckId: (id: number | null) => void;
   /**
+   * The deck an editor was on when the reader left the Decks view, kept so that coming back
+   * lands them in it rather than on the gallery (issue #162).
+   *
+   * **Written and consumed by `setActiveView` alone**, which is why there is no setter beside it:
+   * the whole rule is "leaving Decks parks the open deck, arriving at Decks unparks it", and both
+   * halves are one `set` in one function. A second writer would be a second opinion about a fact
+   * that has exactly one.
+   *
+   * **A second field rather than teaching `openDeckId` to survive a view change**, and the
+   * invariant that buys is the reason: a non-null `openDeckId` means _the editor is on screen_,
+   * with no `activeView` clause anywhere. `App.tsx` reads it that way twice — to pick the editor
+   * over the gallery, and to stand the docked card pane down for the editor's own overlay — and
+   * `useSidebarDrops` reads it a third time to decide whether the Decks entry accepts a dropped
+   * card. Letting the id outlive the view would have put an `activeView === "decks"` clause on
+   * all three and made every future reader remember to write the fourth.
+   *
+   * **Re-picking Decks while already in an editor still closes it**, because the rule is about a
+   * _return_: parking wants the old view to be Decks and the new one not to be, unparking wants
+   * the reverse, and pressing the entry you are already on is neither. That is not a leftover —
+   * it is the way back to the gallery from the sidebar, so a reader who wants the wall rather
+   * than their deck presses Decks twice and gets it.
+   *
+   * **In memory only, like every other field here.** `openDeckId` opens `null` on purpose —
+   * "reopening the last deck would be a decision made for them by the previous session" — and
+   * this changes nothing about that: a park lasts as long as the window does.
+   */
+  parkedDeckId: number | null;
+  /**
    * The deck an editor has just closed, waiting for the gallery to hand the caret back to its
    * tile — written by `setOpenDeckId(null)`, read and cleared once by `DecksPage`.
    *
@@ -820,16 +848,49 @@ export const useAppStore = create<AppState>((set) => ({
   // nothing that could have been acted on. What it buys is that the reader who comes back to a
   // wall finds it as they left every *other* wall — unpicked — rather than holding four cards
   // from before a trip to Settings.
+  //
+  // **`openDeckId` is still cleared on the way out, and since 2026-08-27 it comes back on the way
+  // in** — issue #162, and the two are not in tension: the id is closed because an editor cannot
+  // be on screen while the Collection is, and it is *parked* because the reader who ducked over
+  // to check whether they own a card did not mean to shut their deck. `parkedDeckId` holds it in
+  // between; see its doc for why it is a field of its own rather than a longer-lived `openDeckId`.
+  //
+  // Two facts and three cases, and the third is the one that is easy to leave out: `decks →
+  // decks` is neither a leave nor a return, so it parks nothing and hands nothing back, and the
+  // clear that has always been here stands. That is the sidebar's own way out of an editor.
   setActiveView: (activeView) =>
-    set({
-      activeView,
-      selectedCardId: null,
-      cardSelection: null,
-      paneDeckContext: null,
-      paneFromDeckSearch: false,
-      paneFinish: null,
-      openDeckId: null,
-      returnToDeckId: null,
+    set((s) => {
+      const wasDecks = s.activeView === "decks";
+      const isDecks = activeView === "decks";
+      return {
+        activeView,
+        selectedCardId: null,
+        cardSelection: null,
+        paneDeckContext: null,
+        paneFromDeckSearch: false,
+        paneFinish: null,
+        // The deck comes back on a **return** and only on a return — Decks arrived at from
+        // somewhere else. Re-pressing the entry from inside an editor is not one, so it lands on
+        // the `null` this line has always been.
+        //
+        // `!wasDecks` is belt-and-braces against the line below and it is written down as such:
+        // the park is spent on every arrival, so it is already `null` whenever Decks is on
+        // screen, and `isDecks ? s.parkedDeckId : null` behaves identically today. What the
+        // clause buys is that this line is correct on *its own* terms — the day something else
+        // learns to park a deck, the sidebar's way out of an editor does not quietly become a
+        // way back into it.
+        openDeckId: isDecks && !wasDecks ? s.parkedDeckId : null,
+        // And the park is spent the moment Decks is on screen, however the reader got there:
+        // a return has just consumed it, and a re-press deliberately discards it along with the
+        // deck. Leaving Decks writes one — `null` included, because a reader who was on the
+        // gallery left nothing to come back to. Every other change is not about Decks at all and
+        // carries the park past untouched, which is what makes a two-stop trip work.
+        parkedDeckId: isDecks ? null : wasDecks ? s.openDeckId : s.parkedDeckId,
+        // Not carried across the park, and it is the one field here that would be wrong to carry:
+        // this is a note for the *gallery* about which tile deserves the caret, and a return that
+        // re-opens the editor never draws one. See `returnToDeckId`.
+        returnToDeckId: null,
+      };
     }),
   // Art by default: this is a card app, and the table is the view you switch to when you
   // are comparing prices rather than looking at cards.
@@ -1039,6 +1100,11 @@ export const useAppStore = create<AppState>((set) => ({
       paneFromDeckSearch: false,
       returnToDeckId: openDeckId === null ? s.openDeckId : s.returnToDeckId,
     })),
+  // Nothing parked until a reader walks away from an open editor, and `setActiveView` is the
+  // only thing that ever writes it — a park is a fact about a *view change*, and this setter is
+  // never one. There is deliberately no path by which this is non-null while Decks is on screen:
+  // arriving spends it, which is what stops a stale id reopening a deck two trips later.
+  parkedDeckId: null,
   returnToDeckId: null,
   clearReturnToDeck: () => set({ returnToDeckId: null }),
   printingsRequest: null,
