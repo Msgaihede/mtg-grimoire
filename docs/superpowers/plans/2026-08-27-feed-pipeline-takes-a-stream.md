@@ -1121,3 +1121,52 @@ test asserts the two paths agree variant for variant."
 
 - `ComboFile::stamp` is **`Option<String>`**, not `String`. `stamp_from_head` returns `Option<String>` and yields `None` for a document with no `timestamp`, which is the state `read_file` already produces.
 - `combos.rs`'s test module has **no `variants_fixture`**. Its real helpers are `document(&[String]) -> String`, `ok_variant(id, tag, cards) -> String` and `parse(&str) -> ComboFile`. Task 5 builds on those and adds one local `many_variants(n)` on top of them rather than a second fixture builder.
+
+---
+
+## Executed 2026-08-27 — what the plan got wrong
+
+Commits `c1e07ff` → `3c9b976` on `feed-pipeline-stream`. Full verify green: 213 test files /
+5494 frontend tests, **1428 Rust tests**, `fmt` and `clippy -D warnings` clean. All five
+mutation steps killed a test — **Task 3's reproduced the spike's bug exactly: 2 elements
+instead of 2000, peak buffer 446 671 bytes against the 8 KB ceiling.**
+
+Four corrections, kept because the follow-up PRs are written against this document.
+
+**1. Task 1 Step 2 could not produce the red it claimed, in the order given.** Step 4 adds
+`pub mod feed;`, so at Step 2 the module is undeclared and cargo reports `running 0 tests …
+ok` and **exits 0**. This task's own warning box describes that hazard and the step order then
+walks into it. **Declare the module before the first red step**, always — a TDD plan whose
+first failure is "0 tests ran" has no first failure.
+
+**2. `flate2::write::GzDecoder` withholds a tail until `try_finish`, and that broke a
+pre-existing test.** `progress_fires_every_batch_and_once_at_the_end` went `[2000, 2001]` →
+`[2001]`. Measured on the 2001-line fixture: 327 680 bytes emerged inside the chunk loop and
+**15 163 bytes (~88 lines) only at finish**. The plan drained full batches *only* inside the
+loop, so a file small enough to arrive in one chunk delivered its last batch after the loop and
+the unconditional tail flush wrote it with no progress callback. Fixed by hoisting the drain
+into `flush_full_batches(db, stats, batch, progress)` and calling it in both places.
+
+**This is the single most important thing to carry into the web ingest**: bytes are still owed
+after the last chunk, so any "loop then flush" shape has to run the same drain twice.
+
+**3. `combos::read_file` takes `&mut dyn Read`, not a path**, and the line references were off
+(`read_file` ~416, `ingest_gz` ~696). Removing the now-unused `use flate2::read::GzDecoder;`
+was required for clippy in `combos.rs` too — the plan flagged it only for `ingest.rs`.
+
+**4. `combos.rs`'s module doc still described the replaced pipeline** and needed rewriting.
+A plan that replaces a mechanism must say which prose describes it.
+
+### Two deliberate divergences, neither reachable today
+
+- `ingest_stream` skips empty lines silently where `BufRead::lines()` counted them as
+  `skipped`, and the `Lines` framer splits on `
+` only, so it does not strip a trailing ``.
+  Scryfall's JSONL is `
+`-terminated with no blank lines.
+- `read_stream` counts an undeserialisable variant as `skipped` where `read_file` aborts the
+  document with `ComboError::Parse`. **A total framer desync is still caught** —
+  `combos::store` refuses an empty file with `ComboError::Empty` before creating a staging
+  table, so the existing combo table survives. A *partial* desync would not be caught, and the
+  `peak_buffer` assertion is the only thing standing between that and a silently shrunken
+  table.

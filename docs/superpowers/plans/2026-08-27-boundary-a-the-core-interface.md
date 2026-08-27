@@ -393,3 +393,49 @@ also reaches api/window, and the window frame has no browser equivalent at all."
 **Type consistency.** `Core.call<T>(command: string, args?: Record<string, unknown>): Promise<T>` and `Core.listen<T>(event: string, handler: (payload: T) => void): () => void` are defined in Task 1 and used with those exact signatures in Tasks 2 and 3. `ipc.ts`'s local `invoke` shim keeps the `(command, args?)` shape its ~136 call sites already use, and its local `listen` shim keeps the `Promise<UnlistenFn>` return those call sites already await.
 
 **One risk worth naming.** Task 2 shadows `invoke` and `listen` with local consts of the same names. That is deliberate — it is what makes the diff two lines instead of hundreds — but it means a reader of `ipc.ts` sees `invoke(...)` and must look up to find it is local. The doc comments on both shims say so explicitly, and that is the whole mitigation.
+
+---
+
+## Executed 2026-08-27 — what the plan got wrong
+
+Commits `fef1b2e` → `3912c40` on `boundary-a-core`. **5497 tests passing**; `ipc.ts` names
+Tauri nowhere; the 8 remaining imports are exactly the deferred ones. All six mutations bit.
+
+**1. A real defect in the plan's own test.** `Core.call` as written always passed two
+arguments, so `ipc.mirrorRebuild()` reached the mock as `("mirror_rebuild", undefined)` while
+the test asserts `toHaveBeenCalledWith("mirror_rebuild")` — **vitest compares argument lists**.
+That broke 20 tests. `call` now does `args === undefined ? invoke(command) : invoke(command,
+args)`, and this plan's Task 1 assertion was corrected with it.
+
+**2. "Do not modify `ipc.test.ts`" was the wrong constraint, and it was mine.** Three
+assertions (`:1396`, `:1429`, `:1458`) read `expect(stop).toBe(unlisten)` — `Object.is` against
+Tauri's own unlisten. A synchronous `Core.listen` can never satisfy that, because the
+underlying handle does not exist when it returns. **That assertion pins transport identity,
+which is exactly what the boundary exists to hide**, so honouring it would have meant not doing
+the refactor. Replaced with `stop(); expect(unlisten).toHaveBeenCalledTimes(1)` — relaxed in
+one direction, tightened in the other.
+
+**3. Task 3's "before" snippet did not exist, and its design was wrong.** None of the
+subscribers imported `listen`; all went through `ipc.onX`. The plan's version called
+`core.listen` directly, which would have orphaned six tested methods and moved the event-name
+strings out of the one file whose doc comments say it owns them. What shipped instead: `ipc.onX`
+returns the synchronous unsubscribe, and each effect becomes
+`useEffect(() => ipc.onSyncProgress(setProgress), [])`.
+
+**4. There is a seventh subscriber, and no grep for `@tauri-apps` finds it.**
+`src/lib/useUpdate.ts` holds no such import but awaited
+`ipc.onUpdateProgress(...).then(off => off())`. Against a synchronous API that compiles and
+ships a **dead cleanup**. *Enumerate by who calls the API, not by who imports the platform.*
+
+**5. "Their existing test files — unchanged" was wrong by 158 tests.** Eight files mock the
+subscriptions as promise-returning; against a synchronous `onX`, React throws *"useEffect must
+not return anything besides a function"*. Most of the fix was mechanical
+(`mockResolvedValue` → `mockReturnValue`), but six tests encoded behaviour that had moved: two
+"handle arrives after unmount" tests were deleted with a pointer to `core.test.ts`, and four
+"registration never succeeds" tests kept their names and assertions but dropped
+`mockRejectedValue` — that state is unreachable at the hook now, and a mock asserting an
+impossible state stays green forever.
+
+**6. Step 5's counts were wrong twice over.** Baseline is **16**, not 15; the enumeration listed
+8 while claiming 9; and the grep did not exclude `src/lib/core/tauri.ts`, which is by design the
+one file that *should* import Tauri. Final: **10 raw, 8 excluding `core/tauri.ts`**.
