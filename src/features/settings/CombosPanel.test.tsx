@@ -109,7 +109,8 @@ const downloadButton = () => within(panel()).getByRole("button", { name: "Downlo
 /** Pushes one `combos:progress` event through the listener the panel registered. */
 let emit: (event: ComboProgress) => void;
 
-/** The listener is registered asynchronously; nothing can be emitted before it lands. */
+/** Registration is synchronous now that it goes through `@/lib/core`, but the mount that
+ *  triggers it is not — this waits for the effect to have run. */
 const listening = () => vi.waitFor(() => expect(onCombosProgress).toHaveBeenCalled());
 
 beforeEach(() => {
@@ -118,7 +119,7 @@ beforeEach(() => {
   combosRefresh.mockReset().mockResolvedValue(INGESTED);
   onCombosProgress.mockReset().mockImplementation((cb: (e: ComboProgress) => void) => {
     emit = (event) => act(() => cb(event));
-    return Promise.resolve(unlisten);
+    return unlisten;
   });
 });
 

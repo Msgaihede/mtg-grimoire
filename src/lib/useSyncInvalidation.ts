@@ -1,5 +1,4 @@
 import { useEffect, useRef } from "react";
-import type { UnlistenFn } from "@tauri-apps/api/event";
 import { ipc, type SyncProgressEvent } from "@/lib/ipc";
 import { queryClient } from "@/lib/query";
 
@@ -96,23 +95,9 @@ export function useSyncInvalidation(progress: SyncProgressEvent | null): void {
     }
   }, [phase]);
 
-  useEffect(() => {
-    let cancelled = false;
-    let stop: UnlistenFn | undefined;
-    ipc
-      .onCollectionReconciled(invalidateAll)
-      .then((off) => {
-        // `listen` resolves a tick later than an unmount can happen, so the handle has to
-        // be dropped here too — see `useSyncProgress`, which learned this first.
-        if (cancelled) off();
-        else stop = off;
-      })
-      // Registering fails outside a Tauri window (a plain `vite dev`). The `done` phase
-      // arrives through the props either way, and that is the trigger that matters.
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-      stop?.();
-    };
-  }, []);
+  // The unmount race and the registration that fails outside a Tauri window (a plain
+  // `vite dev`) both belong to `lib/core/tauri.ts` now. Losing this trigger takes nothing
+  // down: the `done` phase arrives through the props either way, and that is the trigger
+  // that matters.
+  useEffect(() => ipc.onCollectionReconciled(invalidateAll), []);
 }

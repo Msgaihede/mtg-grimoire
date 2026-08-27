@@ -45,6 +45,21 @@ describe("the Tauri core", () => {
     expect(seen).toEqual([{ done: 3 }]);
   });
 
+  it("swallows a subscription that never registers", async () => {
+    // Outside a Tauri window the registration rejects. Six subscribers used to carry their own
+    // `.catch(() => {})`; a synchronous listen leaves them nothing to attach one to, so this is
+    // now the only place that rejection can be handled — and an unhandled one is the failure.
+    listen.mockRejectedValue(new Error("not a tauri window"));
+    const seen: unknown[] = [];
+
+    const stop = tauriCore.listen("sync:progress", (p) => seen.push(p));
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(() => stop()).not.toThrow();
+    expect(seen).toEqual([]);
+  });
+
   it("returns a synchronous unsubscribe that survives being called before listen resolves", async () => {
     const off = vi.fn();
     let resolveListen: ((f: () => void) => void) | undefined;

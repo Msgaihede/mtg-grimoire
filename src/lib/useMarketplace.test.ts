@@ -55,7 +55,7 @@ beforeEach(() => {
   setMarketplace.mockReset().mockResolvedValue(undefined);
   marketplaceFeedStatus.mockReset().mockResolvedValue(BOTH_FRESH);
   marketplaceFeedRefresh.mockReset().mockResolvedValue(status());
-  onMarketplaceProgress.mockReset().mockResolvedValue(() => {});
+  onMarketplaceProgress.mockReset().mockReturnValue(() => {});
 });
 
 /**
@@ -253,7 +253,7 @@ describe("useMarketplaceProgress", () => {
     let emit: ((e: FeedProgressEvent) => void) | undefined;
     onMarketplaceProgress.mockImplementation((cb: (e: FeedProgressEvent) => void) => {
       emit = cb;
-      return Promise.resolve(() => {});
+      return () => {};
     });
 
     const { result } = renderHook(
@@ -277,7 +277,7 @@ describe("useMarketplaceProgress", () => {
     let emit: ((e: FeedProgressEvent) => void) | undefined;
     onMarketplaceProgress.mockImplementation((cb: (e: FeedProgressEvent) => void) => {
       emit = cb;
-      return Promise.resolve(() => {});
+      return () => {};
     });
     const invalidate = vi.spyOn(client, "invalidateQueries");
     renderHook(() => useMarketplaceProgress(), { wrapper });
@@ -292,10 +292,12 @@ describe("useMarketplaceProgress", () => {
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["collection"] });
   });
 
-  /** Registering a listener fails outside a Tauri window — a plain `vite dev`, a story. The
-   *  status read is the reliable half of the pair and still answers, so this must not throw. */
+  /** Registering a listener fails outside a Tauri window — a plain `vite dev`, a story. It no
+   *  longer *rejects* here: `lib/core/tauri.ts` swallows that, so what this hook sees is an
+   *  event that never arrives. The status read is the reliable half of the pair and still
+   *  answers, so this must not throw. */
   it("survives a window with no Tauri event bridge", async () => {
-    onMarketplaceProgress.mockRejectedValue(new Error("not a tauri window"));
+    onMarketplaceProgress.mockReturnValue(() => {});
 
     const { result } = renderHook(
       () => {

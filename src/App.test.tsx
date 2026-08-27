@@ -57,14 +57,14 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     // it has always queried by name.
     navCollapsed: vi.fn().mockResolvedValue(false),
     setNavCollapsed: vi.fn().mockResolvedValue(undefined),
-    onSyncProgress: vi.fn().mockResolvedValue(() => {}),
+    onSyncProgress: vi.fn().mockReturnValue(() => {}),
     // The shell listens for the reconcile event too, and a `.catch` cannot catch the
     // synchronous `TypeError` of calling `undefined`.
-    onCollectionReconciled: vi.fn().mockResolvedValue(() => {}),
+    onCollectionReconciled: vi.fn().mockReturnValue(() => {}),
     // And for a price feed's progress, which is the third event this window subscribes to —
     // the backend refreshes the selected feed at start-up, so a window that was not listening
     // would show a fetch nobody could see. Same reason it must be mocked rather than left off.
-    onMarketplaceProgress: vi.fn().mockResolvedValue(() => {}),
+    onMarketplaceProgress: vi.fn().mockReturnValue(() => {}),
     marketplaceFeedStatus: vi.fn().mockResolvedValue([]),
     // And for the Oracle tag taxonomy's progress, which is the **fourth** event this window
     // subscribes to — the backend refreshes the taxonomy at start-up for the same reason it
@@ -72,7 +72,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     // above and it is not a hypothetical: leaving this off failed all 18 tests in this file
     // with `ipc.onOracleTagProgress is not a function`, thrown synchronously inside the
     // shell's mount effect where no `.catch` can reach it.
-    onOracleTagProgress: vi.fn().mockResolvedValue(() => {}),
+    onOracleTagProgress: vi.fn().mockReturnValue(() => {}),
     // The honest never-ingested row: every field null, so nothing in this file's cards is
     // filed by tag and the routing these tests are about is what they measure.
     oracleTagsStatus: vi.fn().mockResolvedValue({
@@ -103,7 +103,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     // its notice down without a reload. Mocked for `onSyncProgress`'s reason: the registration is
     // a bare call inside a mount effect, so a `vi.fn()` that is not there is a synchronous
     // `TypeError` rather than a rejection anything can catch.
-    onArtTagProgress: vi.fn().mockResolvedValue(() => {}),
+    onArtTagProgress: vi.fn().mockReturnValue(() => {}),
     // Settings' combo panel, mocked for exactly the reasons its two neighbours above are.
     // `combosStatus` answers the honest never-ingested row — `fetchedAt: null` is the state a
     // fresh install is in, and it is the one this file wants, because the panel then draws its
@@ -117,7 +117,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
       checkedAt: null,
       stale: true,
     }),
-    onCombosProgress: vi.fn().mockResolvedValue(() => {}),
+    onCombosProgress: vi.fn().mockReturnValue(() => {}),
     // The search view is live now, so opening on it fires a real query; an unresolved
     // mock would surface here as a query error rather than as the routing this file tests.
     searchCards,
@@ -188,7 +188,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
       busy: false,
       staged: false,
     }),
-    onUpdateProgress: vi.fn().mockResolvedValue(() => {}),
+    onUpdateProgress: vi.fn().mockReturnValue(() => {}),
   },
 }));
 

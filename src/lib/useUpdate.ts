@@ -122,12 +122,9 @@ export function useUpdate(): Update {
   // the one that puts a bar on screen.
   const downloading = useRef(false);
   useEffect(() => {
-    const unlisten = ipc.onUpdateProgress((e) => {
+    return ipc.onUpdateProgress((e) => {
       if (downloading.current) setProgress(e);
     });
-    return () => {
-      void unlisten.then((off) => off());
-    };
   }, []);
 
   const check = useCallback(() => {

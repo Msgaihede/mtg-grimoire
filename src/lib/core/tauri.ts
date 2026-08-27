@@ -14,15 +14,24 @@ export const tauriCore: Core = {
   listen: <T,>(event: string, handler: (payload: T) => void) => {
     let stopped = false;
     let off: (() => void) | undefined;
-    void listen<T>(event, (e) => handler(e.payload)).then((fn) => {
-      // Unsubscribed before Tauri finished subscribing: honour it now rather than leaving
-      // a handler attached to a component that is already gone.
-      if (stopped) {
-        fn();
-        return;
-      }
-      off = fn;
-    });
+    void listen<T>(event, (e) => handler(e.payload)).then(
+      (fn) => {
+        // Unsubscribed before Tauri finished subscribing: honour it now rather than leaving
+        // a handler attached to a component that is already gone.
+        if (stopped) {
+          fn();
+          return;
+        }
+        off = fn;
+      },
+      // Registering fails outside a Tauri window — a plain `vite dev`, a story, a jsdom test.
+      // Every subscriber used to carry its own `.catch(() => {})` for this; a *synchronous*
+      // listen gives them nothing to attach one to, so the boundary owns it. Swallowing is the
+      // right answer rather than a shrug: every event this app subscribes to has a polled or
+      // prop-borne counterpart that is the reliable half of its pair, so the cost is the fast
+      // path and never the fact, and an unhandled rejection would be the louder failure.
+      () => {},
+    );
     return () => {
       stopped = true;
       off?.();

@@ -21,7 +21,7 @@ beforeEach(() => {
   unlisten.mockClear();
   onCollectionReconciled.mockReset().mockImplementation((cb: () => void) => {
     emit = () => act(() => cb());
-    return Promise.resolve(unlisten);
+    return unlisten;
   });
   // Cleared, not merely re-spied: `spyOn` over an already-spied method hands back the same
   // spy, so its calls would accumulate across the file.
@@ -29,7 +29,8 @@ beforeEach(() => {
   invalidate.mockClear();
 });
 
-/** The listener is registered asynchronously; nothing can be emitted before it lands. */
+/** Registration is synchronous now that it goes through `@/lib/core`, but the mount that
+ *  triggers it is not — this waits for the effect to have run. */
 const listening = () => vi.waitFor(() => expect(onCollectionReconciled).toHaveBeenCalled());
 
 const event = (phase: SyncPhase): SyncProgressEvent => ({
@@ -165,12 +166,13 @@ it("invalidates on an error that follows an ingest, and not on one that does not
 });
 
 /**
- * Outside a Tauri window (a plain `vite dev`) the registration rejects, exactly as
- * `useSyncProgress`'s does. Losing one of the two triggers is not worth taking the app
- * down for — the `done` phase still arrives through the props.
+ * Outside a Tauri window (a plain `vite dev`) the registration never lands — swallowed by
+ * `lib/core/tauri.ts` rather than rejected here, so this hook simply never hears the event.
+ * Losing one of the two triggers is not worth taking the app down for: the `done` phase still
+ * arrives through the props.
  */
 it("survives a registration that never succeeds", async () => {
-  onCollectionReconciled.mockRejectedValue(new Error("not a tauri window"));
+  onCollectionReconciled.mockReturnValue(() => {});
 
   const { rerender } = renderHook(
     ({ p }: { p: SyncProgressEvent | null }) => useSyncInvalidation(p),
