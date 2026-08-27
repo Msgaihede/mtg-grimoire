@@ -17,7 +17,7 @@ ship; it exists to answer three assumptions before anything is designed against 
 
 ## Verdict
 
-**All three assumptions hold. No kill criterion fires.** Two of the three were resting on
+**All three assumptions hold, and the combo feed measured afterwards holds too. No kill criterion fires.** Two of the three were resting on
 premises that have since gone out of date, and both moved in our favour.
 
 | Assumption from the brief | Outcome |
@@ -25,6 +25,7 @@ premises that have since gone out of date, and both moved in our favour.
 | 1. `rusqlite` can reach the browser | **Yes, natively.** No shim to write. |
 | 2. Cross-origin isolation is one coupled decision | **It is not a decision at all.** COI is not required. |
 | 3. The ingest can run in wasm | **Yes.** 10.4 s desktop, 36.5 s phone. |
+| (added) The 639 MB Spellbook feed | **Yes.** 12.6 s desktop, 23.1 s phone, 2.01 MB peak. |
 
 Three findings force design rather than merely inform it, and they are in
 [What this costs](#what-this-costs) below: **no WAL**, **one connection means one tab**, and
@@ -244,6 +245,72 @@ that FTS5 works and is not pathologically slow, nothing more.
 | FTS `dragon` (2 555 matches) | 3.0 ms | 17.0 ms |
 | FTS `bolt` (157 matches) | 0.0 ms | 1.0 ms |
 
+## Assumption 3b — the Spellbook combo feed
+
+The largest parse in the app, and the only feed that is **not** line-delimited: one JSON object
+whose `variants` key holds the whole array. `Access-Control-Allow-Origin: *`, honours ranges,
+**27 555 788 bytes gzipped over 639 866 292 bytes (610.2 MB) of JSON**, matching the figures in
+[commander-brackets.md](../../reference/commander-brackets.md).
+
+| | Desktop | Android |
+| --- | --- | --- |
+| stream + parse + insert | 12.1 s | 22.0 s |
+| — of which parse | 1.8 s | 5.5 s |
+| — of which insert | 9.7 s | 12.6 s |
+| — of which network + gunzip | 0.6 s | 3.9 s |
+| index on `combo_cards(oracle_id)` | 0.4 s | 0.8 s |
+| **total wall clock** | **12.6 s** | **23.1 s** |
+| resulting database | 78.2 MB | 78.2 MB |
+| **peak framing buffer** | **2.01 MB** | **2.01 MB** |
+
+111 148 variants seen, 105 516 kept, 5 632 skipped by the OK/Commander rule, **0 unparsable**,
+374 040 `combo_cards` rows — identical on both machines. **Both counts were cross-checked by an
+independent scan of the same file in Node** (pattern counting rather than brace framing) and
+agree exactly: 111 148 and 105 516.
+
+Two port problems came out of this, and both are real work rather than harness detail.
+
+### The desktop parser cannot be reused
+
+`combos.rs` streams with `serde_json::Deserializer::from_reader` plus a `DeserializeSeed` over
+the array. That is a **pull** parser: it calls `read()` when it wants more and blocks until it
+gets it. A wasm stream is push and async, and there is no thread to block — so `from_reader`
+cannot be driven from it at all.
+
+The approach used here, and the one worth carrying forward: **frame the array elements by hand,
+then parse each whole element with `serde_json::from_slice`.** Depth-count braces while tracking
+string and escape state, so a `{` inside a card name does not desynchronise the file. Peak
+memory is one element plus one batch — measured at **2.01 MB against a 610 MB document**. It
+keeps serde for what serde is good at and replaces only the part that needed a blocking read.
+
+> ⚠️ **The framer fails silently when it is wrong.** A first version did not reset its
+> per-element state after the caller drained a completed prefix, so the rescan counted the same
+> braces twice, depth never returned to zero, and no further element was ever emitted. The
+> symptom was not an error: it found **63 elements in 610 MB** and grew its buffer to 609.82 MB.
+> Any implementation of this needs the buffer size asserted, not just the row count.
+
+### Who decompresses is not the same on both platforms
+
+| Feed | `Content-Type` | `Content-Encoding` |
+| --- | --- | --- |
+| Scryfall `.jsonl.gz` | `application/gzip` | **none** |
+| Spellbook `variants.json.gz` | `application/json` | **`gzip`** |
+
+Spellbook sends `Content-Encoding: gzip` **even when the client asks for `identity`**. A
+browser's `fetch` transparently decodes any such response and **there is no way to opt out**, so
+`bytes_stream()` yields plain JSON and gunzipping it again fails with `invalid gzip header` —
+which is how this was found. Desktop reqwest, without its `gzip` feature, does not decode, so
+`combos.rs` gunzips explicitly and is correct.
+
+The fix that is right on both: **sniff the two-byte gzip magic (`1f 8b`) off the first chunk**
+and decide from the bytes rather than from a header, a feature flag or a file extension.
+
+> **A note for the desktop.** The absent `gzip` feature is load-bearing for the combo feed, and
+> for a different reason than `Cargo.toml` gives. That comment explains it in terms of Scryfall,
+> which sends no `Content-Encoding` and would be unaffected either way. Spellbook does send one —
+> so enabling that feature would break the combo ingest with exactly the error above, while
+> leaving Scryfall's ingest working.
+
 ## Storage
 
 `opfs-sahpool` in a dedicated Worker, growing a real SQLite file to Tier A's size, then
@@ -312,8 +379,11 @@ whose numbers depend on an opaque auto-download is not a spike whose numbers mea
 
 Named so nothing here reads as more complete than it is.
 
-- **The three optional feeds in a browser.** Spellbook's 639 MB of JSON is the one that matters;
-  it is the largest parse in the app and the only one this spike did not exercise.
+- **The two tagger feeds in a browser.** Oracle tags (5.85 MB) and art tags (12.5 MB) are the
+  same JSONL shape as `default_cards`, which is measured, and are 6× and 13× smaller — so the
+  download and parse are low-risk by inference. What is *not* inferable is their index build:
+  the art tagger is 140.4 MB of the corpus and is index-heavy, and index time was 0.9 s / 3.4 s
+  for three indexes over 117 k card rows. Unmeasured, and labelled so.
 - **The real query shapes.** `facets::compute` (1.8 ms) is pure Rust over in-memory bitsets and
   ports with no VFS involved, but the collapsed browse (131.8 ms end-to-end through IPC) rides
   SQLite and has not been run here against the real corpus and the real SQL.
