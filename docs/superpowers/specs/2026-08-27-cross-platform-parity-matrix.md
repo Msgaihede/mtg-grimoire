@@ -235,7 +235,7 @@ platform a touch-capable drag, so the phone layout question is about *shape*, no
    on a phone undoing something done on a desktop an hour ago is a surprise rather than a
    feature, and it would make undo a distributed-consensus problem for no gain.
 
-   **The synced set is therefore 13 tables:** the brief's twelve, plus `deck_tags`, minus
-   `deck_undo` — that is `collection_entries`, `collection_folders`, `decks`, `deck_cards`,
+   **The synced set is therefore 12 tables** — the same count as the brief's list but not the
+   same list, since `deck_tags` joins as `deck_undo` leaves. That is `collection_entries`, `collection_folders`, `decks`, `deck_cards`,
    `deck_categories`, `deck_folders`, `deck_allocations`, `deck_audit`, `deck_tags`,
    `wishlist_entries`, `wishlist_folders`, `muted_tags`, and the preference subset of `app_meta`.
