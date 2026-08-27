@@ -832,13 +832,26 @@ pub fn ingest_stream(
     if stats.inserted == 0 {
         let conn = crate::db::lock_blocking(db);
         conn.execute_batch("DROP TABLE IF EXISTS cards_staging")?;
-        return Err(IngestError::Empty);
+        // A STRUCT variant, not a unit one — `Empty { skipped: u64 }`, checked against
+        // ingest.rs:51. Its message reads "no card rows found in bulk file (N lines
+        // skipped)", so the count has to travel with it.
+        return Err(IngestError::Empty {
+            skipped: stats.skipped,
+        });
     }
+
+    // The swap is the last thing and belongs to whichever entry point ran the ingest, so it
+    // moves here verbatim from `ingest_gz` — both callers need it, and a stream that filled
+    // staging and never swapped would leave the reader's `cards` table untouched while
+    // reporting success.
+    {
+        let conn = crate::db::lock_blocking(db);
+        schema::swap_staging(&conn)?;
+    }
+    progress(stats.inserted);
     Ok(stats)
 }
 ```
-
-Leave everything after the `stats.inserted == 0` check in the original `ingest_gz` — the swap, the FTS rebuild and the return — in whichever function currently owns it, unchanged. If that tail lives inside `ingest_gz`, move it verbatim into `ingest_stream` so both entry points get it.
 
 Remove the now-unused `use flate2::read::GzDecoder;` and `use std::io::{BufRead, BufReader};` imports at `ingest.rs:21-23` if nothing else in the file needs them; `cargo clippy -D warnings` will fail the commit if they are left dangling.
 
