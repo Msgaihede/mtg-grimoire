@@ -55,10 +55,10 @@ your ruling, and it is the behaviour the app already has.
 > offer Card Kingdom only**, and a database synced from a desktop that had selected Mana Pool has
 > to fall back rather than show blanks.
 >
-> A CORS proxy would fix it and I am **not** proposing one: it means infrastructure we maintain
-> sitting in the path of a feed, which is the thing decision 5 exists to avoid, and it would make
-> a marketplace's availability depend on our uptime. Worth asking Mana Pool for the header
-> instead — one response header, and it costs them nothing.
+> **Decided 2026-08-27: disabled on web.** A Worker CORS proxy was costed (~10 lines, streaming,
+> inside the free tier) and declined — it makes a marketplace depend on our uptime and re-serves
+> another party's data through our account. So was a paired desktop pushing prices for referenced
+> printings only (~363 rows / ~18 KB here, against ~99 502 for the whole feed). Card Kingdom only.
 
 **Mobile-data prompt.** Your brief said an unprompted 27.5 MB download on a phone plan is wrong
 and the fix is a prompt. Proposed: on Web and Android, any feed over 5 MB shows its **measured**
@@ -223,10 +223,9 @@ platform a touch-capable drag, so the phone layout question is about *shape*, no
    against 2 486 ms), which is implementation work rather than spike work. Every PR touching
    search carries a measurement anyway. Supporting evidence that it will be fine: FTS5 answered
    in 3.0 ms, a primary-key lookup in 1.00 ms, and a full scan of a 532 MB table in 509 ms.
-2. **Mana Pool on the web — accept the loss, or chase the header?** Measured and settled: it
-   is blocked. The options are (a) Web offers Card Kingdom only, which is what this matrix
-   assumes; (b) ask Mana Pool to send `Access-Control-Allow-Origin`; (c) proxy it, which I argue
-   against above. Only (a) needs no one else's cooperation.
+2. ~~Mana Pool on the web~~ — **settled: disabled on web.** No alternate endpoint exists
+   (`api.manapool.com` does not resolve; `OPTIONS` answers 405). A Worker CORS proxy and a
+   desktop-shares-prices-for-your-own-cards path were both costed and declined. Card Kingdom only.
 3. ~~The mirror on Android~~ — **settled: desktop-only.** See §4.
 4. ~~Touch drag-and-drop~~ — **settled: `@dnd-kit/react` 0.5.0 on every platform.** See §3.
 5. ~~`deck_undo` and `deck_audit`~~ — **settled: the audit log syncs, undo stays per-device.**

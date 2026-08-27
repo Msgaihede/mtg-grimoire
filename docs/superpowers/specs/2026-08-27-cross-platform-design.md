@@ -215,10 +215,24 @@ to "Not now".
 **Mana Pool is unavailable on web.** `manapool.com/api/v1/prices/singles` returns 200 with no
 `Access-Control-Allow-Origin`, so a browser refuses the response — verified from a real page
 origin, where Card Kingdom returned `type=cors` with a readable body and Mana Pool threw
-`TypeError: Failed to fetch`. The web marketplace picker offers Card Kingdom only, and a database
-synced from a desktop that had chosen Mana Pool falls back rather than showing blanks. **No CORS
-proxy** — that puts infrastructure we maintain in the path of a feed, which is what decision 5
-exists to avoid.
+`TypeError: Failed to fetch`. There is no alternate endpoint: `api.manapool.com` does not resolve,
+`OPTIONS` answers 405 with only `Access-Control-Allow-Headers`, and no path variant carries the
+header.
+
+**Decided: Mana Pool is disabled on web.** The marketplace picker offers Card Kingdom only, and a
+database synced from a desktop that had chosen Mana Pool falls back rather than showing blanks —
+which is the behaviour the app already has for a feed that does not answer.
+
+Two remedies were costed and both declined:
+
+* **A Worker CORS proxy** (~10 lines, streaming, one request per refresh, well inside the free
+  tier). Declined because it makes a marketplace's availability depend on our uptime and re-serves
+  another party's data through our account. *Note this is a trade-off rather than a rule: decision
+  5 governs the **card corpus**, and prices are optional by construction, so a proxy would not
+  have breached it.*
+* **A paired desktop pushing prices for referenced printings only** — bounded at ~363 rows / ~18 KB
+  against this database, since syncing all ~99 502 would consume the relay's entire daily
+  row-write budget. Declined as unnecessary complexity for an optional feed.
 
 ### 5.4 Storage and the PWA
 
@@ -477,10 +491,26 @@ Each phase gets its own implementation plan, written at its turn.
 
 ## 11. Open
 
-- **Mana Pool.** This spec assumes Card Kingdom only on web. Asking Mana Pool to send one response
-  header is the better fix and costs them nothing; nobody has asked.
-- **The two tagger feeds in a browser** are unmeasured. Same JSONL shape as `default_cards` and 6×
-  and 13× smaller, so download and parse are low-risk by inference; their **index build** is the
-  genuine unknown, the art tagger being 140.4 MB of the corpus and index-heavy.
+- **The two tagger feeds in a browser** are unmeasured, and **deliberately left projected until
+  Phase 2**, where the ingest code exists anyway.
+
+  The reason they are not simply "small feeds" is that **download size and database work scale
+  differently**, and here they diverge by an order of magnitude:
+
+  | | Download | Rows produced | Database |
+  | --- | --- | --- | --- |
+  | `default_cards` *(measured)* | 74 MiB | 117 464 | 325 MB |
+  | Oracle tags | 5.85 MB | **655 086** | 66.9 MB |
+  | Art tags | 12.5 MB | **1 449 691** | 140.4 MB |
+
+  `art_tag_illustrations` alone is **953 686 rows** carrying a **46.3 MB index** — an index
+  three-quarters the size of its own table, and an 11× expansion from download to database. So
+  "13× smaller than `default_cards`" is true of the download and misleading about the work.
+
+  Against Probe 3's measured rates (117 464 rows inserted in 3.2 s desktop / 8.6 s Android; three
+  indexes in 0.9 s / 3.4 s), art tags project to roughly **45–60 s desktop and 2–3 minutes on a
+  phone**. ⚠️ **That is a projection, not a measurement.** If it holds, the art-tag prompt needs a
+  progress indicator and a time estimate, and Tier B becomes the sensible *default* on a phone
+  rather than merely available — none of which should be built on a guess.
 - **A mid-range Android phone.** Every Android figure here is a flagship and is an optimistic
   bound.
