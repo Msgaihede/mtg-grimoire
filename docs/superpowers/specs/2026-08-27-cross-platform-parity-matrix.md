@@ -77,7 +77,8 @@ Everything here is user data over local SQLite, and none of it touches a platfor
 | Wishlist entries + folders | ✅ | ✅ | ✅ |
 | Deck editor, categories, validation, formats | ✅ | ✅ | ✅ |
 | Commander brackets (4 signals) | ✅ | ✅ | ✅ |
-| Deck undo / audit log | ✅ | ✅ | ✅ |
+| Deck audit log | ✅ | ✅ | ✅ |
+| Deck undo | ✅ | ✅ | ✅ | 
 | Deck tags | ✅ | ✅ | ✅ |
 | Deck drag-and-drop | ✅ | 🟡 | 🟡 | 
 | Custom deck cover image | ✅ | 🟡 | 🟡 |
@@ -98,7 +99,7 @@ mechanisms.
 | Export — 7 formats, field registry, fold rule | ✅ | 🟡 | 🟡 | Web writes via a `Blob` download or the File System Access API. |
 | Export to clipboard | ✅ | ✅ | ✅ | `navigator.clipboard.writeText` on web. |
 | **The golden fence** | ✅ | ✅ | ✅ | See below. |
-| Plain-text mirror | ✅ | ⛔ | ❓ | See below. |
+| Plain-text mirror | ✅ | ⛔ | ⛔ | **Desktop-only** — decided. See below. |
 
 **The golden fence survives, and gets simpler.** `src/features/transfer/__golden__/` exists
 because `src-tauri/src/transfer/` is a second implementation of the TS writer, needed only
@@ -108,9 +109,15 @@ current job on that platform: one corpus, one golden set, both suites asserting 
 Web and Android run the TS writer alone and inherit the same goldens. **Nothing about the fence
 changes**; it simply guards one platform's second implementation instead of every platform's.
 
-**The mirror on Android is genuinely open** — Android has a real filesystem and Tauri mobile can
-write to scoped storage, so it is *possible*, but scoped storage is not a folder a reader browses
-the way `D:\Decks\` is. Open question 3.
+**The mirror is desktop-only on all three platforms — decided.** Android has a real filesystem
+and Tauri mobile can write to scoped storage, so it is *possible*. It is not built, because the
+mirror's whole point is a folder a reader opens in a text editor, syncs with Dropbox or greps,
+and on Android that directory is reachable mainly through a file-manager app and often not by
+other apps at all. The feature would exist without delivering what it is for.
+
+**This is what keeps the golden fence simple.** The Rust writer exists only to serve the mirror,
+so it compiles on exactly one platform, and `__golden__/` goes on guarding exactly one second
+implementation.
 
 ## 5. Platform services
 
@@ -185,19 +192,27 @@ touch backend.
 
 ## 9. Open questions — I need answers to these
 
-1. **The collapsed browse, unmeasured in wasm.** 131.8 ms end-to-end on desktop today. The
-   spike proved FTS5 and storage but never ran the real browse SQL against the real corpus in a
-   browser. Should I measure it before the spec is written, or accept it as an implementation-PR
-   gate?
+1. ~~The collapsed browse~~ — **settled: an implementation-PR gate.** 131.8 ms end-to-end on
+   desktop today, unmeasured in wasm. Porting it properly means bringing over `search.rs`'s tuned
+   query shape (the `legal_mask` widening at 505 ms → 41 ms, the primary-key join at 108 ms
+   against 2 486 ms), which is implementation work rather than spike work. Every PR touching
+   search carries a measurement anyway. Supporting evidence that it will be fine: FTS5 answered
+   in 3.0 ms, a primary-key lookup in 1.00 ms, and a full scan of a 532 MB table in 509 ms.
 2. **Mana Pool on the web — accept the loss, or chase the header?** Measured and settled: it
    is blocked. The options are (a) Web offers Card Kingdom only, which is what this matrix
    assumes; (b) ask Mana Pool to send `Access-Control-Allow-Origin`; (c) proxy it, which I argue
    against above. Only (a) needs no one else's cooperation.
-3. **The mirror on Android.** Possible via scoped storage, but scoped storage is not a folder a
-   reader browses. Desktop-only, or Android too?
+3. ~~The mirror on Android~~ — **settled: desktop-only.** See §4.
 4. **Touch drag-and-drop.** Replace `pragmatic-drag-and-drop` with something touch-capable
    everywhere, add a touch-only sensor beside it, or design the phone deck editor so dragging is
    never the only way to do a thing?
-5. **`deck_undo` and `deck_audit` — synced or local?** Your brief asks the question and this
-   matrix assumes they are user data and sync. If undo history is per-device, say so: it changes
-   the conflict rules, not just the table list.
+5. ~~`deck_undo` and `deck_audit`~~ — **settled: the audit log syncs, undo stays per-device.**
+   They answer different questions. `deck_audit` is the record of what happened to a deck, which
+   belongs to the deck on every device. `deck_undo` is the state of one editing session — Ctrl+Z
+   on a phone undoing something done on a desktop an hour ago is a surprise rather than a
+   feature, and it would make undo a distributed-consensus problem for no gain.
+
+   **The synced set is therefore 13 tables:** the brief's twelve, plus `deck_tags`, minus
+   `deck_undo` — that is `collection_entries`, `collection_folders`, `decks`, `deck_cards`,
+   `deck_categories`, `deck_folders`, `deck_allocations`, `deck_audit`, `deck_tags`,
+   `wishlist_entries`, `wishlist_folders`, `muted_tags`, and the preference subset of `app_meta`.
