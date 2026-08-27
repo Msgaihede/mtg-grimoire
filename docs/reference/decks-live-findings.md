@@ -1110,3 +1110,52 @@ Pressing `Theory` flipped `aria-pressed` to `Theory=true` / `Actual=false` and r
 (the plan's own pile headings replaced the live list's); pressing `Actual` put it back. Nothing
 about which tab is pressed or remembered moved with the order — `lastVariant` is still what
 decides that.
+
+## The deck a reader parked (#162) — 2026-08-27, `npm run tauri dev` (debug), 1920×1080, a copy of the real db
+
+**What the issue asked for**: editing a deck, ducking over to Collection or Wishlist to check
+whether a card is owned or already wished for, and coming back to Decks should land on the deck
+rather than on the wall of tiles.
+
+The whole change is two lines of `setActiveView` and a field beside `openDeckId`
+(`parkedDeckId` — see its doc), so what a live pass can add over `store.test.ts` and
+`App.test.tsx` is that the *editor* is what actually comes back: keyed on the id, re-read from
+the backend, drawn with its cards. It is also the one place the escape hatch could have been
+lost without anything going red.
+
+The window served this worktree — `fetch('/src/lib/store.ts')` came back with `parkedDeckId` in
+it, which is the check worth making in a worktree because another agent's Vite on 1420 renders
+their tree into your window and nothing on screen says so.
+
+### Five trips, and what came back
+
+| From the editor on… | Route | Landed on |
+| --- | --- | --- |
+| `Azula` (100 cards) | Decks → Collection → Decks | the editor, `Deck name` = `Azula`, cards drawn (`Fire Lord Azula` on the desk) |
+| `Azula` | Decks (from inside the editor) | **the gallery** — `New deck` back, no `Deck name` field |
+| the gallery | Decks → Collection → Decks | the gallery, unchanged — nothing was parked, so nothing was conjured up |
+| `Serah` (100 cards) | Decks → Collection → Wishlist → Settings → Decks | the editor, `Deck name` = `Serah` |
+| `Serah` | Decks → Search → Decks | the editor, `Deck name` = `Serah` |
+
+The second row is the one worth having driven. Pressing the sidebar's Decks entry while already
+inside an editor still closes it, which is what stops the return being a trap: from another view
+the entry is now "back to my deck", and pressing it twice is "back to the wall". If the rule had
+been written as "arriving at Decks reopens the park" with no `!wasDecks`, this row would have
+reopened the deck the press had just closed and the sidebar would have had no way to the gallery
+at all.
+
+### It brings back the deck and nothing else
+
+On Collection with `Serah` parked, `document.querySelectorAll('[role=complementary]').length` was
+**0** — the docked card pane is not left behind by a park, because `setActiveView` clears
+`selectedCardId` on the way out exactly as it always did. `openDeckId` is still `null` off the
+Decks view, so the sidebar's Decks drop target is inert on Collection, Wishlist and Search as
+documented in [decks-storage.md](decks-storage.md).
+
+### The console
+
+A `cdp.mjs console` recorder was attached across a Collection → Decks → Search → Decks round
+trip: **22 lines, no errors**. Every one of them is pragmatic-dnd's `Auto scrolling has been
+attached to an element that appears not to be scrollable`, which the deck's droppable columns
+emit on every editor mount and which predates this change — a park restore is an editor mount, so
+it costs one more batch of them per return and nothing new.

@@ -55,8 +55,13 @@ describe("the open deck", () => {
    * Exactly what `selectedCardId` does, for the same reason: an editor is the *Decks* view,
    * and a deck left open through a trip to Settings would be waiting behind the sidebar with
    * the gallery it was opened from nowhere in sight.
+   *
+   * The id being *parked* rather than dropped (below) does not soften this one bit: what the
+   * three readers of `openDeckId` are entitled to is that a non-null id means an editor is on
+   * screen, and the Collection is not one.
    */
   it("closes when the reader leaves Decks", () => {
+    useAppStore.getState().setActiveView("decks");
     useAppStore.getState().setOpenDeckId(4);
 
     useAppStore.getState().setActiveView("collection");
@@ -93,6 +98,127 @@ describe("the open deck", () => {
     useAppStore.getState().setActiveView("search");
 
     expect(useAppStore.getState().returnToDeckId).toBeNull();
+  });
+});
+
+/**
+ * Issue #162: a reader mid-build who ducks over to the Collection to check whether they own a
+ * card, or to the Wishlist to see whether it is already on the list, did not mean to shut their
+ * deck. So leaving Decks *parks* the open editor and coming back unparks it.
+ *
+ * These are about the state machine and nothing else — `App.test.tsx` owns the question of
+ * whether the editor is actually the thing on screen afterwards.
+ */
+describe("the deck a reader parked on their way out", () => {
+  const park = (view: "collection" | "wishlist" | "search" | "settings" | "tags") => {
+    useAppStore.getState().setActiveView("decks");
+    useAppStore.getState().setOpenDeckId(4);
+    useAppStore.getState().setActiveView(view);
+  };
+
+  it("comes back when the reader returns to Decks", () => {
+    park("collection");
+    expect(useAppStore.getState().openDeckId).toBeNull();
+    expect(useAppStore.getState().parkedDeckId).toBe(4);
+
+    useAppStore.getState().setActiveView("decks");
+
+    expect(useAppStore.getState().openDeckId).toBe(4);
+  });
+
+  /** The trip that motivated the issue is two views long as often as one. */
+  it("survives a walk through several views", () => {
+    park("collection");
+    useAppStore.getState().setActiveView("wishlist");
+    useAppStore.getState().setActiveView("settings");
+
+    useAppStore.getState().setActiveView("decks");
+
+    expect(useAppStore.getState().openDeckId).toBe(4);
+  });
+
+  /**
+   * The gallery is a place a reader goes on purpose, and a park is only ever about the editor
+   * they were *in*. Leaving the wall and coming back must not conjure up a deck.
+   */
+  it("has nothing to hand back when the gallery was what they left", () => {
+    useAppStore.getState().setActiveView("decks");
+
+    useAppStore.getState().setActiveView("collection");
+    useAppStore.getState().setActiveView("decks");
+
+    expect(useAppStore.getState().openDeckId).toBeNull();
+    expect(useAppStore.getState().parkedDeckId).toBeNull();
+  });
+
+  /**
+   * **The sidebar's own way out of an editor, and the reason the rule asks three questions
+   * rather than one.** Pressing Decks while already in Decks is neither a leave nor a return, so
+   * it falls through to the clear that has always been there — which is how a reader gets from
+   * their deck to the wall without hunting for `Back to decks`.
+   */
+  it("still closes the editor when Decks is picked from inside it", () => {
+    useAppStore.getState().setActiveView("decks");
+    useAppStore.getState().setOpenDeckId(4);
+
+    useAppStore.getState().setActiveView("decks");
+
+    expect(useAppStore.getState().openDeckId).toBeNull();
+    expect(useAppStore.getState().parkedDeckId).toBeNull();
+  });
+
+  /**
+   * A park is spent on arrival. Without that, a reader who came back to their deck, closed it,
+   * and went to the Collection and back would be handed the *same* deck a third time — an id
+   * from two trips ago reopening a wall they had deliberately gone back to.
+   */
+  it("is spent by the return, not left lying about", () => {
+    park("collection");
+    useAppStore.getState().setActiveView("decks");
+    expect(useAppStore.getState().parkedDeckId).toBeNull();
+
+    useAppStore.getState().setOpenDeckId(null);
+    useAppStore.getState().setActiveView("collection");
+    useAppStore.getState().setActiveView("decks");
+
+    expect(useAppStore.getState().openDeckId).toBeNull();
+  });
+
+  /** A second deck opened before the trip is the one that comes back, not the first. */
+  it("hands back the deck that was open when they left", () => {
+    park("collection");
+    useAppStore.getState().setActiveView("decks");
+    useAppStore.getState().setOpenDeckId(7);
+    useAppStore.getState().setActiveView("wishlist");
+
+    useAppStore.getState().setActiveView("decks");
+
+    expect(useAppStore.getState().openDeckId).toBe(7);
+  });
+
+  /**
+   * The park carries the deck; it deliberately carries nothing else. Every field
+   * `setActiveView` clears is cleared on a return too — the card pane belongs to the list that
+   * opened it, and a picked set is addressed by slots in a view that has been unmounted since.
+   */
+  it("brings back the deck and nothing else", () => {
+    useAppStore.getState().setActiveView("decks");
+    useAppStore.getState().setOpenDeckId(4);
+    useAppStore.getState().setSelectedCardId("p1");
+    useAppStore.getState().setActiveView("collection");
+
+    useAppStore.getState().setActiveView("decks");
+
+    expect(useAppStore.getState().openDeckId).toBe(4);
+    expect(useAppStore.getState().selectedCardId).toBeNull();
+    expect(useAppStore.getState().cardSelection).toBeNull();
+    expect(useAppStore.getState().paneDeckContext).toBeNull();
+    expect(useAppStore.getState().returnToDeckId).toBeNull();
+  });
+
+  /** Nothing is parked before a reader has been anywhere. */
+  it("starts empty", () => {
+    expect(useAppStore.getState().parkedDeckId).toBeNull();
   });
 });
 

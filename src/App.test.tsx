@@ -554,6 +554,60 @@ it("opens the editor on the deck a tile was picked from, and comes back to that 
 });
 
 /**
+ * Issue #162: the reader mid-build who ducks over to the Collection to check whether they own a
+ * card comes back to their deck, not to the wall of tiles.
+ *
+ * `store.test.ts` owns the state machine; what only this file can see is that the *editor* is
+ * what the app draws afterwards — `ActiveView` picks the branch, `DeckEditor` is keyed on the id
+ * and asks the backend for that deck again, and the gallery's caret note does not fire into a
+ * view that has no tiles in it.
+ */
+it("comes back to the open deck when the reader returns from another view", async () => {
+  deckList.mockResolvedValue([BURN]);
+  deckGet.mockResolvedValue(detail([DECK_BOLT]));
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: "Decks" }));
+  await userEvent.click(await screen.findByRole("button", { name: /^Burn/ }));
+  expect(await screen.findByLabelText("Deck name")).toHaveValue("Burn");
+
+  // Through the sidebar, by name, because the editor draws a `Collection` of its own: the docked
+  // panel's second tab. Both are buttons reading that one word, and an unscoped query finds two.
+  const sidebar = within(screen.getByRole("navigation", { name: "Views" }));
+  await userEvent.click(sidebar.getByRole("button", { name: "Collection" }));
+  expect(await screen.findByText("$801.00")).toBeInTheDocument();
+  // Gone, rather than merely covered: the editor unmounts, which is what makes coming back a
+  // question about the store rather than about a hidden element.
+  expect(screen.queryByLabelText("Deck name")).not.toBeInTheDocument();
+
+  await userEvent.click(sidebar.getByRole("button", { name: "Decks" }));
+
+  expect(await screen.findByLabelText("Deck name")).toHaveValue("Burn");
+  expect(screen.getByText("Lightning Bolt")).toBeInTheDocument();
+  expect(screen.queryByRole("button", { name: "New deck" })).not.toBeInTheDocument();
+});
+
+/**
+ * And the way back to the wall, which is the half a reader would lose if the return above were
+ * unconditional: pressing Decks while already in an editor closes it. Two presses from the
+ * Collection therefore reach the gallery — the first hands the deck back, the second puts it
+ * down.
+ */
+it("closes the deck when Decks is picked from inside the editor", async () => {
+  deckList.mockResolvedValue([BURN]);
+  deckGet.mockResolvedValue(detail([DECK_BOLT]));
+  render(<App />);
+  await userEvent.click(screen.getByRole("button", { name: "Decks" }));
+  await userEvent.click(await screen.findByRole("button", { name: /^Burn/ }));
+  expect(await screen.findByLabelText("Deck name")).toHaveValue("Burn");
+
+  const sidebar = within(screen.getByRole("navigation", { name: "Views" }));
+  await userEvent.click(sidebar.getByRole("button", { name: "Decks" }));
+
+  expect(await screen.findByRole("button", { name: "New deck" })).toBeInTheDocument();
+  expect(screen.queryByLabelText("Deck name")).not.toBeInTheDocument();
+});
+
+/**
  * The sixth view, and the second way into the corpus. The sidebar entry has to reach the real
  * page: `TagsPage`'s own tests render it directly, so nothing there can see whether `ViewId`,
  * `NAV` and `ActiveView` actually agree about the word `tags`.

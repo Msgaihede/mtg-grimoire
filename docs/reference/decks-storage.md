@@ -1230,4 +1230,7 @@ clientWidth` — so the tenth bar fitted the 250px content box with no overflow,
   it. **The sidebar's Decks and Wishlist entries are drop targets**; Decks is inert with no
   deck open, which — because `setActiveView` clears `openDeckId` — is _every_ drag started
   from Search, Collection or Wishlist. So the sidebar's Decks target is reachable only from
-  inside the Decks view (the docked panel, a deck card, the card pane).
+  inside the Decks view (the docked panel, a deck card, the card pane). **A deck the reader
+  left open is _parked_ rather than forgotten since 2026-08-27** (issue #162), and that does
+  not soften this: the park is a field of its own and the deck is not handed back until Decks
+  is on screen again, so on those three views the entry is inert exactly as it was.
