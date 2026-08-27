@@ -1,0 +1,36 @@
+# Probe 3 of the wasm-core spike. THROWAWAY.
+#
+# The riskiest of the three, per the brief: because every platform builds its own corpus,
+# the whole download -> decompress -> parse -> insert path has to run in wasm. This is that
+# path, end to end, against the real Scryfall bulk file and a real OPFS database.
+#
+# The reqwest line is `src-tauri`'s verbatim, deliberately — including the absent `gzip`
+# feature, because the bulk file is a real .gz FILE and transparent decompression would
+# hand the parser something that is neither valid gzip nor the promised size.
+[package]
+name = "probe3"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+rusqlite = "0.40"
+sqlite-wasm-vfs = "0.2"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+flate2 = "1"
+futures-util = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+wasm-bindgen = "0.2.127"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+console_error_panic_hook = "0.1"
+
+[dependencies.web-sys]
+version = "0.3"
+features = ["Navigator", "StorageManager", "WorkerGlobalScope", "WorkerNavigator"]
+
+[workspace]
