@@ -80,12 +80,37 @@ Everything here is user data over local SQLite, and none of it touches a platfor
 | Deck audit log | ✅ | ✅ | ✅ |
 | Deck undo | ✅ | ✅ | ✅ | 
 | Deck tags | ✅ | ✅ | ✅ |
-| Deck drag-and-drop | ✅ | 🟡 | 🟡 | 
+| Deck drag-and-drop | ✅ | ✅ | ✅ | 
 | Custom deck cover image | ✅ | 🟡 | 🟡 |
 
-**Drag-and-drop** is the one real UI risk. `pragmatic-drag-and-drop` is HTML5-DnD-based, which
-has no touch implementation — a phone cannot drag a card into a category today. This is a design
-task, not a port: see [mobile layout](#7-mobile-layout) and open question 4.
+### Drag-and-drop moves to `@dnd-kit/react` on every platform — decided
+
+`@atlaskit/pragmatic-drag-and-drop` is built on native HTML5 drag-and-drop, which **has no touch
+implementation at all**: a phone cannot drag a card into a category, and no version of that
+library will change it. Measured on 2026-08-27, the replacement field is thin:
+
+| Library | Latest | Published | Weekly | Touch |
+| --- | --- | --- | --- | --- |
+| `@atlaskit/pragmatic-drag-and-drop` (today) | 3.0.0 | 2026-08-14 | 1.29 M | ❌ |
+| `@dnd-kit/core` | 6.3.1 | **2024-12-05** | 24.4 M | ✅ |
+| **`@dnd-kit/react`** | **0.5.0** | 2026-06-11 | 1.2 M | ✅ |
+| `sortablejs` | 1.15.7 | 2026-02-11 | 4.4 M | ✅ |
+
+**`@dnd-kit/react` 0.5.0**, chosen with the trade understood: `@dnd-kit/core` has the proven API
+and the download count but has not shipped in 21 months, and adopting a frozen library onto React
+19 buys a migration that has to happen again. The successor has explicit React 19 support and
+active development.
+
+**It is pre-1.0, so it gets treated as such.** Pin the exact version — no caret. The migration is
+its own PR, done desktop-first, and **every shipped drag is re-verified before touch is added**:
+repo memory records that a second drop-target registration on one element silently replaces the
+first, so "the new drop works" is never evidence that the old one still does.
+
+> **One upside worth stating, because it is not obvious.** HTML5 DnD cannot be driven
+> synthetically — Chrome refuses to begin a native drag from an untrusted event — which is why
+> the deck editor's drags are **unverifiable in the live window today**. `@dnd-kit/react` is
+> pointer-event based, and pointer events *can* be dispatched over CDP. This migration converts
+> the app's least-testable interaction into a testable one, on every platform including desktop.
 
 **Deck cover** needs a file picked and re-encoded to WEBP at 626×457. Web: `<input type="file">`
 plus the same `image` crate compiled to wasm. Android: Tauri's dialog plugin. Same outcome, three
@@ -174,8 +199,8 @@ is built, and **its answer is not trusted as a guarantee**.
 Not a media-query exercise, and not settled here. The four things that need a phone answer are
 the ribbon, `CardGrid`, the deck editor's drags, and the filter bar. **Options come to you before
 anything is built**, via the `frontend-design` skill — this matrix only records that they are
-open, and that **touch drag-and-drop is the hard one**, since `pragmatic-drag-and-drop` has no
-touch backend.
+open. The drag question that used to sit here is settled in §3: `@dnd-kit/react` gives every
+platform a touch-capable drag, so the phone layout question is about *shape*, not capability.
 
 ## 8. Deliberately absent, with reasons
 
@@ -203,9 +228,7 @@ touch backend.
    assumes; (b) ask Mana Pool to send `Access-Control-Allow-Origin`; (c) proxy it, which I argue
    against above. Only (a) needs no one else's cooperation.
 3. ~~The mirror on Android~~ — **settled: desktop-only.** See §4.
-4. **Touch drag-and-drop.** Replace `pragmatic-drag-and-drop` with something touch-capable
-   everywhere, add a touch-only sensor beside it, or design the phone deck editor so dragging is
-   never the only way to do a thing?
+4. ~~Touch drag-and-drop~~ — **settled: `@dnd-kit/react` 0.5.0 on every platform.** See §3.
 5. ~~`deck_undo` and `deck_audit`~~ — **settled: the audit log syncs, undo stays per-device.**
    They answer different questions. `deck_audit` is the record of what happened to a deck, which
    belongs to the deck on every device. `deck_undo` is the state of one editing session — Ctrl+Z
