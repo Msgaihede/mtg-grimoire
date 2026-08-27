@@ -239,6 +239,7 @@ const DECK: DeckRow = {
   // setting overrides it through `detail()`, which is the *only* way to move it now — it was a
   // `useState` in this component with a select in the docked search panel until 2026-08-15.
   defaultCategoryId: 0,
+  bracket: 0,
 };
 
 /** The picker, as `format_specs` serves it — every enabled row in `sort_order`. */

@@ -197,6 +197,7 @@ const BURN: DeckRow = {
   lastSortBy: "alphabetical",
   separateXGroup: false,
   defaultCategoryId: 0,
+  bracket: 0,
 };
 
 /** Two drawers, one inside the other — flat rows, because the tree is the page's to build from

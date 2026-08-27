@@ -167,6 +167,61 @@ pub const GONE: &str = "That deck is not there any more.";
 /// turns a card into a pile name reads Oracle tags and is a conclusion.
 pub const AUTO_CATEGORY: i64 = 0;
 
+/// `decks.bracket` when the deck has **not** been told which Commander bracket it is and the
+/// app's estimate stands — schema v26's default, and the value every deck is born with.
+///
+/// `0`, and the rest of the column is `1`–`5`, the five brackets the Commander Format Panel
+/// publishes. A sentinel in a `NOT NULL` column rather than a nullable one, which is
+/// [`AUTO_CATEGORY`]'s arrangement and [`AUTO_CATEGORY`]'s argument: [`DeckPatch`]'s convention
+/// is that an absent field means "leave it", written as `coalesce(?n, column)` — so a NULL
+/// column could not express "put it back to Auto" without a command of its own, which is the
+/// price `decks.folder_id` pays through [`set_folder`]. The frontend spells the same number
+/// `AUTO_BRACKET`, beside `AUTO_CATEGORY`, and the two are one vocabulary on purpose.
+///
+/// **What Auto *does* is TypeScript's and stays there**, [`AUTO_CATEGORY`]'s rule exactly. Rust
+/// holds the number and the four facts the estimate reads (Game Changers, mass land denial,
+/// extra turns, the combo tables); the rule that turns them into a bracket floor is a
+/// conclusion and lives in `src/features/decks/validation/bracket.ts`.
+///
+/// **`0` is not "bracket 0" and the estimate never answers `5`.** The two are unrelated
+/// absences that read alike: this sentinel says the reader has not answered, while the
+/// estimator's refusal to reach 5 is a fact about the rules — brackets 4 and 5 have identical
+/// *deck* restrictions and what separates them is an intent no card list shows. A deck can
+/// still be *set* to 5 by hand, which is exactly why the column takes it and the estimate does
+/// not produce it.
+pub const AUTO_BRACKET: i64 = 0;
+
+/// The highest bracket the Commander Format Panel publishes, and the top of what
+/// [`valid_bracket`] accepts. `5` is cEDH.
+const MAX_BRACKET: i64 = 5;
+
+/// What [`update_deck`] says when it is handed a number that is not a bracket.
+///
+/// A sentence rather than a `CHECK constraint failed`, which is the discipline every refusal in
+/// this file follows: the column carries no CHECK — **not because `ALTER TABLE … ADD COLUMN`
+/// cannot add one**, which is false and which v19's `deck_cards.finish` disproves — but because
+/// a command parameter reaches it, and a refusal in Rust can name the legal answers where a
+/// constraint failure names only the constraint. [`valid_game`]'s arrangement one column along.
+///
+/// The whole vocabulary is in the sentence rather than the offending number, because the reader
+/// arrives here through a picker that offers six choices: what they need is the list, not their
+/// own input read back.
+pub const BAD_BRACKET: &str =
+    "A deck's bracket is 1 to 5, or 0 for Auto — where the app estimates it from the cards.";
+
+/// A bracket [`decks.bracket`](DeckRow::bracket) may hold: [`AUTO_BRACKET`] or `1`–`5`.
+///
+/// **Rust's fence in place of a CHECK the DDL deliberately does not carry** — see
+/// [`BAD_BRACKET`] for why that is a choice rather than a limitation. [`valid_game`]'s shape,
+/// with one difference: a blank is not a case here, because this arrives as a number and
+/// `DeckPatch`'s absent-means-leave-it is what an unsaid bracket already looks like.
+fn valid_bracket(bracket: i64) -> Result<i64, String> {
+    (AUTO_BRACKET..=MAX_BRACKET)
+        .contains(&bracket)
+        .then_some(bracket)
+        .ok_or_else(|| BAD_BRACKET.to_owned())
+}
+
 /// `decks.cover_kind` when the deck shows a card's art crop — the DDL's own default, and what
 /// [`update_deck`] puts back the moment a `coverCardId` arrives.
 const COVER_CARD_ART: &str = "card_art";
@@ -380,6 +435,21 @@ pub struct DeckPatch {
     /// a non-zero id here must name a category **of this deck** ([`category_of_deck`]), because
     /// nothing in the DDL says so.
     pub default_category_id: Option<i64>,
+    /// Which Commander bracket the reader says this deck is — schema v26.
+    ///
+    /// **Absent means "leave it" and `Some(0)` means "back to Auto"**, which is
+    /// [`Self::default_category_id`]'s arrangement and the reason [`AUTO_BRACKET`] is a
+    /// sentinel rather than a NULL: the `coalesce(?n, column)` every field here is written with
+    /// reads a bound NULL as unchanged, so a nullable column could not spell the way back.
+    ///
+    /// Refused outside `0..=5` by name ([`BAD_BRACKET`]) rather than by a CHECK, because this
+    /// is the one v26 column a command parameter reaches.
+    ///
+    /// **Storage only, on this side**, [`Self::separate_x_group`]'s rule. What a bracket
+    /// *means* — which cards raise the estimate, whether the reader's answer sits below the
+    /// floor the deck's contents imply — is domain logic and TypeScript's. Rust records the
+    /// number and concludes nothing from it.
+    pub bracket: Option<i64>,
 }
 
 /// Where the reader was last looking at one deck — the editor's own tab, grouping and sort.
@@ -517,6 +587,25 @@ pub struct DeckRow {
     /// How the editor was sorting the deck when the reader last left it — schema v12, and
     /// [`Self::last_group_by`]'s rule exactly (`alphabetical | manaCost | price | type`).
     pub last_sort_by: String,
+    /// Which Commander bracket the reader says this deck is — schema v26, and
+    /// [`AUTO_BRACKET`] (`0`) for **Auto**, where the app's estimate stands. `1`–`5` is their
+    /// own answer.
+    ///
+    /// Read here as well as written through [`DeckPatch`], for [`Self::theory_enabled`]'s
+    /// reason: a setting the app can write and never see is a setting nothing can draw. The
+    /// deck header's bracket readout is the surface — it prints `Bracket 3` for a set answer
+    /// and `Bracket ~3` for an estimate, and telling those two apart is exactly this number
+    /// being on the row.
+    ///
+    /// **Not a fourth `last_*` field**, [`Self::separate_x_group`]'s distinction: it is not how
+    /// the reader was looking at the deck a moment ago, it is an answer *about the deck* — so
+    /// [`duplicate_deck`] carries it across, where it resets the three `last_*` columns.
+    ///
+    /// **Rust neither computes it nor checks it against the cards.** The estimate, the floor
+    /// the deck's contents imply and the warning when a set bracket sits below that floor are
+    /// all conclusions and all TypeScript's; this is the stored fact and the four signals the
+    /// rule reads are supplied separately.
+    pub bracket: i64,
 }
 
 /// A name a gallery can show. A deck with no name is a nameless tile, and `decks.name` has
@@ -744,7 +833,7 @@ const DECK_SELECT: &str = "SELECT d.id, d.name, d.format_key, fs.display_name, d
                          AND cat.kind IN ('main','commander','maybe')), 0),
             d.updated_at, d.folder_id, d.notes, d.theory_enabled,
             d.last_variant, d.last_group_by, d.last_sort_by, d.separate_x_group,
-            d.default_category_id, d.game_key
+            d.default_category_id, d.game_key, d.bracket
        FROM decks d
        LEFT JOIN format_specs fs ON fs.key = d.format_key
        LEFT JOIN cards c ON c.id = d.cover_card_id";
@@ -790,6 +879,15 @@ fn deck_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<DeckRow> {
         // it belongs — would have handed a deck's variant to its game and back, with both
         // fields still holding a plausible-looking string.
         game_key: r.get(19)?,
+        // 20, at the end of the list, for the reason written three comments up — and the
+        // fourth proof of that rule, this one from the other side of the trap. `bracket` is an
+        // INTEGER and so are `archived` at 8, `card_count` at 9, `updated_at` at 10,
+        // `folder_id` at 11, `theory_enabled` at 13, `separate_x_group` at 17 and
+        // `default_category_id` at 18: a column inserted beside the deck's other *settings*,
+        // where it reads like it belongs, would have handed a bracket to a bool and a pile id
+        // to a bracket, with every field still holding a number SQLite is perfectly happy to
+        // give back.
+        bracket: r.get(20)?,
     })
 }
 
@@ -1148,6 +1246,7 @@ struct DeckBefore {
     theory_enabled: bool,
     separate_x_group: bool,
     default_category_id: i64,
+    bracket: i64,
 }
 
 /// What a `deck`/`cover` history row records as the cover: the card's id when the deck is
@@ -1190,6 +1289,10 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
         Some(g) => Some(valid_game(g)?.to_owned()),
         None => None,
     };
+    // Validated **before the transaction opens**, with the three above it: a refusal here is
+    // about the value the caller sent and has nothing to say about the deck, so there is
+    // nothing to roll back and no reason to have taken a write lock to find out.
+    let bracket = patch.bracket.map(valid_bracket).transpose()?;
     // **One transaction, because a rename is two writes.** `decks.name` and the name on the
     // `collection_folders` row standing for the deck are one fact stored twice — nothing in the
     // schema keeps them in step — so a rename that committed one and lost the other would leave
@@ -1203,7 +1306,7 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
         .query_row(
             "SELECT name, format_key, description, cover_card_id, cover_kind,
                     archived, folder_id, notes, theory_enabled, separate_x_group,
-                    default_category_id, game_key
+                    default_category_id, game_key, bracket
                FROM decks WHERE id = ?1",
             params![id],
             |r| {
@@ -1224,6 +1327,11 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                     // above it — and every index above moved down by one when schema v25
                     // dropped `is_built` out of the middle of the list.
                     game_key: r.get(11)?,
+                    // 12, at the end, same rule. `bracket` is an INTEGER and so are `archived`
+                    // at 5, `folder_id` at 6, `theory_enabled` at 8, `separate_x_group` at 9
+                    // and `default_category_id` at 10 — six columns any one of which would take
+                    // a bracket without complaint.
+                    bracket: r.get(12)?,
                 })
             },
         )
@@ -1271,6 +1379,11 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 separate_x_group = coalesce(?11, separate_x_group),
                 default_category_id = coalesce(?12, default_category_id),
                 game_key = coalesce(?13, game_key),
+                -- `?14`, the next number at the **end** of the list, which is the rule the
+                -- comment nine lines up states. The **validated** binding rather than
+                -- `patch.bracket`: `valid_bracket` ran above, and binding the raw field would
+                -- make the fence decorative on exactly the path it exists for.
+                bracket = coalesce(?14, bracket),
                 updated_at = unixepoch()
               WHERE id = ?1",
             params![
@@ -1287,6 +1400,7 @@ pub fn update_deck(conn: &Connection, id: i64, patch: &DeckPatch) -> Result<Deck
                 patch.separate_x_group,
                 patch.default_category_id,
                 game_key,
+                bracket,
             ],
         )
         .map_err(|e| e.to_string())?;
@@ -1538,6 +1652,18 @@ fn record_deck_edit(
                 default_category_name
             }),
         )?;
+    }
+    // `bracket`, and the **number** rather than a word — `format`'s rule two dozen lines up, for
+    // its reason: `auditText.ts` is the only thing that words a history row, and it is the only
+    // place that knows `4` from "Optimized". `0` on either side is Auto, which that file words
+    // as the app's own estimate standing.
+    //
+    // Read off `patch` rather than off a [`DeckResolved`] field, unlike `name`, `format` and
+    // `game`: [`valid_bracket`] refuses or returns the number it was given, so there is no
+    // "what was written" that differs from "what was typed" for this one — `archived` and
+    // `xGroup` are compared the same way for the same reason.
+    if let Some(to) = patch.bracket.filter(|b| *b != before.bracket) {
+        field("bracket", json!(before.bracket), json!(to))?;
     }
     if let Some(to) = patch.folder_id.filter(|f| Some(*f) != before.folder_id) {
         last = Some(record_filed(tx, id, Some(to))?);
@@ -1996,10 +2122,18 @@ struct CopiedCard {
 /// stated as a fact about where the cards are rather than as a flag beside them.
 ///
 /// Everything that describes the deck rather than its state — format, description, cover, notes,
-/// which folder it is filed in, whether it keeps a theory list, whether it groups its X cards —
-/// comes across, so the copy looks like what was copied. `separate_x_group` is on that side of
-/// the line for the plainest reason available: it decides how the list is *read*, and a copy
-/// that reads differently from its original is a surprise nobody asked for.
+/// which folder it is filed in, whether it keeps a theory list, whether it groups its X cards,
+/// which bracket it is — comes across, so the copy looks like what was copied.
+/// `separate_x_group` is on that side of the line for the plainest reason available: it decides
+/// how the list is *read*, and a copy that reads differently from its original is a surprise
+/// nobody asked for.
+///
+/// **`bracket` is on that side too** (schema v26), and it is worth saying which side rather than
+/// leaving it to whichever list the column happened to land in: it is an answer *about the deck*,
+/// the way `separate_x_group` is, and not a note about how the reader was looking at it a moment
+/// ago the way the three `last_*` columns are. A copy of a deck the reader has declared a
+/// bracket 2 is a bracket 2 deck; making the duplicate revert to Auto would tell them their
+/// estimate had changed when only the row had.
 ///
 /// **Both variants are copied.** A theory list is the deck's plan for itself, and a copy made
 /// to try something out is exactly the copy that wants the plan too. `theory_enabled` travels
@@ -2044,10 +2178,10 @@ pub fn duplicate_deck(
         .query_row(
             "INSERT INTO decks (name, format_key, description, cover_kind, cover_card_id,
                                 cover_image_path, folder_id, notes, theory_enabled,
-                                separate_x_group, archived, created_at, updated_at)
+                                separate_x_group, bracket, archived, created_at, updated_at)
              SELECT name || ' (copy)', format_key, description, cover_kind, cover_card_id,
                     cover_image_path, folder_id, notes, theory_enabled, separate_x_group,
-                    0, unixepoch(), unixepoch()
+                    bracket, 0, unixepoch(), unixepoch()
                FROM decks WHERE id = ?1
              RETURNING id, name, cover_kind",
             params![id],
@@ -7042,6 +7176,7 @@ mod tests {
             last_sort_by: "price".to_owned(),
             separate_x_group: true,
             default_category_id: 12,
+            bracket: 3,
         })
         .unwrap();
         assert_eq!(
@@ -7066,7 +7201,11 @@ mod tests {
                 "defaultCategoryId": 12,
                 // A real platform rather than `"any"`, for the same reason one line up: `any` is
                 // the column's default and would read correct on a field that never left Rust.
-                "gameKey": "paper"
+                "gameKey": "paper",
+                // And a real bracket rather than `0`, third application of the same rule:
+                // zero is [`AUTO_BRACKET`] and would be the answer whether or not the column
+                // reached the wire at all.
+                "bracket": 3
             })
         );
 
@@ -7411,6 +7550,189 @@ mod tests {
 
         let copy = duplicate_deck(&conn, deck.id, None).unwrap();
         assert!(copy.separate_x_group, "how it is read comes across");
+        assert!(!copy.archived, "what state it is in does not");
+    }
+
+    /// The deck's bracket, end to end: a new deck is on Auto, a patch moves it, an absent field
+    /// leaves it, and `Some(0)` is a real answer that puts it back rather than a "leave it" the
+    /// `coalesce` swallows.
+    ///
+    /// **That last assertion is the whole reason this column is `NOT NULL` with a sentinel**,
+    /// and it is `the_default_category_round_trips_and_zero_really_means_auto`'s argument one
+    /// column over: a nullable column would have spelled Auto as `None`, which is exactly what
+    /// [`DeckPatch`]'s convention reads as *make no change* — so "back to Auto" would have
+    /// needed a command of its own, [`set_folder`]'s price.
+    #[test]
+    fn the_bracket_round_trips_and_zero_really_means_auto() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Atraxa", "commander")).unwrap();
+        assert_eq!(
+            deck.bracket, AUTO_BRACKET,
+            "a new deck has not been asked — the column's own DEFAULT 0, never a Rust fallback"
+        );
+
+        let set = |v: i64| {
+            update_deck(
+                &conn,
+                deck.id,
+                &DeckPatch {
+                    bracket: Some(v),
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        };
+
+        assert_eq!(set(3).bracket, 3, "the readback is the write");
+        assert_eq!(
+            read_deck(&conn, deck.id).unwrap().unwrap().bracket,
+            3,
+            "…including through `DECK_SELECT`'s positional reads, which is where a column \
+             added anywhere but the end goes wrong silently"
+        );
+
+        // Every other field is untouched by it, which is the `coalesce(?n, column)` contract —
+        // and the fence against a mis-numbered `?` hole writing over the neighbour. The two
+        // named here are the ones a mis-numbered hole would actually reach: `?14` is the last
+        // in the list, and `default_category_id` and `game_key` are `?12` and `?13`.
+        let after = update_deck(&conn, deck.id, &DeckPatch::default()).unwrap();
+        assert_eq!(after.bracket, 3, "an absent field means leave it");
+        assert_eq!(after.name, "Atraxa");
+        assert_eq!(after.default_category_id, AUTO_CATEGORY);
+        assert_eq!(after.game_key, DEFAULT_GAME);
+
+        assert_eq!(set(5).bracket, 5, "the top of the range is a real answer");
+        assert_eq!(
+            set(AUTO_BRACKET).bracket,
+            AUTO_BRACKET,
+            "and zero is a value, not an absence"
+        );
+    }
+
+    /// The fence the DDL deliberately does not hold: `decks.bracket` carries no CHECK — not
+    /// because `ALTER TABLE … ADD COLUMN` cannot add one, which v19's `deck_cards.finish`
+    /// disproves, but because a command parameter reaches it and [`BAD_BRACKET`] can name the
+    /// legal answers where `CHECK constraint failed` names only the constraint.
+    ///
+    /// **Both ends and both edges**, because an off-by-one at either would be invisible to a
+    /// test that only tried `6`: `0` and `5` are inside and `-1` and `6` are not, so a
+    /// `1..=5` or a `0..=6` fails here rather than in the field.
+    ///
+    /// **And a refusal writes nothing**, which is the half a "does it return an error" test
+    /// misses. [`valid_bracket`] runs before the transaction opens, so a bad number cannot
+    /// leave the deck's `updated_at` moved or a history row behind it.
+    #[test]
+    fn update_deck_refuses_a_bracket_outside_the_five() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Atraxa", "commander")).unwrap();
+        update_deck(
+            &conn,
+            deck.id,
+            &DeckPatch {
+                bracket: Some(2),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        for bad in [-1, 6, 99] {
+            assert_eq!(
+                update_deck(
+                    &conn,
+                    deck.id,
+                    &DeckPatch {
+                        bracket: Some(bad),
+                        ..Default::default()
+                    },
+                )
+                .unwrap_err(),
+                BAD_BRACKET,
+                "{bad} is not a bracket, and the refusal is a sentence"
+            );
+        }
+        assert_eq!(
+            read_deck(&conn, deck.id).unwrap().unwrap().bracket,
+            2,
+            "a refused patch changed nothing"
+        );
+
+        for good in [AUTO_BRACKET, 1, 5] {
+            assert_eq!(
+                update_deck(
+                    &conn,
+                    deck.id,
+                    &DeckPatch {
+                        bracket: Some(good),
+                        ..Default::default()
+                    },
+                )
+                .unwrap()
+                .bracket,
+                good,
+                "{good} is a bracket"
+            );
+        }
+    }
+
+    /// One history row per press, worded by the number rather than a name, and none at all for
+    /// a patch that re-sends the value the deck already has — [`update_deck`]'s rule, asserted
+    /// here because the field is new.
+    #[test]
+    fn a_bracket_change_is_recorded_once_and_a_repeat_is_not() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Atraxa", "commander")).unwrap();
+        let set = |v: i64| {
+            update_deck(
+                &conn,
+                deck.id,
+                &DeckPatch {
+                    bracket: Some(v),
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        };
+        set(4);
+        set(4); // the no-op
+        set(AUTO_BRACKET);
+
+        let words: Vec<serde_json::Value> = crate::deck_audit::list(&conn, deck.id, 10)
+            .unwrap()
+            .iter()
+            .filter(|r| r.kind == crate::deck_audit::DECK)
+            .map(|r| serde_json::from_str(&r.payload).unwrap())
+            .filter(|p: &serde_json::Value| p["field"] == "bracket")
+            .collect();
+        assert_eq!(
+            words,
+            vec![
+                json!({ "field": "bracket", "from": 4, "to": 0 }),
+                json!({ "field": "bracket", "from": 0, "to": 4 }),
+            ],
+            "newest first, two presses, and the repeat between them recorded nothing"
+        );
+    }
+
+    /// A copy is the same deck's bracket. It is an answer *about the deck*, the way
+    /// `separate_x_group` is — not a note about how the reader was looking at it a moment ago —
+    /// so it travels where `archived` is reset.
+    #[test]
+    fn a_duplicate_keeps_the_bracket() {
+        let conn = seeded();
+        let deck = create_deck(&conn, &input("Atraxa", "commander")).unwrap();
+        update_deck(
+            &conn,
+            deck.id,
+            &DeckPatch {
+                bracket: Some(4),
+                archived: Some(true),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        let copy = duplicate_deck(&conn, deck.id, None).unwrap();
+        assert_eq!(copy.bracket, 4, "what the deck *is* comes across");
         assert!(!copy.archived, "what state it is in does not");
     }
 

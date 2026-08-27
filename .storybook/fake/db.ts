@@ -118,11 +118,14 @@ import type {
   CollectionRow,
   CollectionSortKey,
   CollectionSummary,
+  ComboBracketTag,
+  ComboStatus,
   DeckAuditEntry,
   DeckAuditKind,
   ErrorEntry,
   DeckCard,
   DeckCategory,
+  DeckCombo,
   DeckCoverKind,
   DeckFinish,
   DeckFolder,
@@ -441,6 +444,24 @@ export interface FakeDeck {
    * fake that skipped them would story the editor against a state the app cannot reach.
    */
   defaultCategoryId?: number;
+  /**
+   * `decks.bracket` (schema v26): which Commander bracket the reader says this deck is, `1`–`5`,
+   * or {@link AUTO_BRACKET} (`0`) for "the estimate stands".
+   *
+   * **Optional for {@link separateXGroup}'s reason, and this is the fourth column on that
+   * footing** — `NOT NULL DEFAULT 0`, so a seed that says nothing is a deck on Auto rather than
+   * a deck missing an answer, and {@link toDeckRow} resolves the absence so no DTO carries an
+   * `undefined` the app has to think about. `create_deck` does not name this column either
+   * (`deck.rs`'s INSERT stops at `theory_enabled`), so a deck made *here* is on Auto by the same
+   * route a deck made in the app is.
+   *
+   * **A self-declaration, and therefore storage only on this side.** What a bracket *is* — the
+   * floor the deck's own cards imply, and the warning when this number sits under it — is
+   * `features/decks/validation/bracket.ts`'s and is stored in no column: it is read from the
+   * cards every time it is drawn. The two are deliberately separate answers, which is what makes
+   * a mismatch reportable at all.
+   */
+  bracket?: number;
   updatedAt: number;
 }
 
@@ -732,6 +753,21 @@ export interface FakeUpdate {
  * **the taxonomy already ingested stays exactly where it was**, and the reason goes to
  * `error_log`.
  *
+ * **`combosFetchError`** is the same wire a *fourth* time, and the only one of the four that is
+ * not Scryfall: `combos_refresh` refuses, **the combos already ingested stay exactly where they
+ * were**, and the reason goes to `error_log` under `operation: "combos"` with the feed's URL as
+ * its detail. A rejection here may never empty a deck's bracket advisory — the estimate reads
+ * the three signals it has and says so — which is what makes this the one refusal a story can
+ * show with the screen behind it unchanged.
+ *
+ * **There is deliberately no `combosMissing` fault beside it**, where the two taxonomies each
+ * have one, and the asymmetry is the feature's rather than an omission: a never-fetched combo
+ * table is not something that has gone *wrong* with a world, it is the state every install stays
+ * in until somebody presses Refresh, because `combos::refresh_if_due` will not fetch the file
+ * uninvited. So it is a **seed** — `combosMissing` in `seeds.ts` — which is also what lets a
+ * story press Refresh in that state and watch the advisory fill in, exactly as
+ * `oracleTagsMissing` lets one watch the piles regroup.
+ *
  * **`imageUrisMissing`** is `oracleTagsMissing`'s shape one column over, and it is not a failure
  * either: every `cards.image_uris` is NULL, so {@link readHandlers.card_image_uri} answers `null`
  * for every printing at every size and the card menu's "Copy card image" copies nothing. It is
@@ -790,7 +826,8 @@ export type Fault =
   | "artTagsFetchError"
   | "imageUrisMissing"
   | "exportWriteError"
-  | "mirrorRootUnwritable";
+  | "mirrorRootUnwritable"
+  | "combosFetchError";
 
 /**
  * What the picture cache costs, as the Settings page's one button sees it.
@@ -1063,6 +1100,22 @@ export interface FakeDb {
    */
   mutedTags: FakeMutedTag[];
   /**
+   * `combos` — Commander Spellbook's variants, the bracket estimate's **fourth** signal.
+   *
+   * Empty is the honest state of an install that has never fetched the file, and it is the
+   * default here for {@link FakeDb.oracleTags}' reason exactly: a never-ingested feed is a
+   * supported state rather than an error, and the deck advisory then reads the three signals it
+   * already has (Game Changers, mass land denial, extra turns) and says so.
+   */
+  combos: FakeCombo[];
+  /** `combo_cards` — which cards each combo names. Filled and emptied with {@link FakeDb.combos}
+   *  and {@link FakeDb.comboMeta}, because one ingest swaps all three. */
+  comboCards: FakeComboCard[];
+  /** `combo_meta`, or `null` for never fetched — **the three are set together**, the taxonomies'
+   *  rule. A watermark with no combos behind it is what makes the next check 304 past an empty
+   *  table, which is the state the backend goes out of its way never to write. */
+  comboMeta: FakeComboMeta | null;
+  /**
    * The plain-text mirror's settings and this session's last pass.
    *
    * **One object rather than five fields on this interface**, unlike the six `app_meta` rows
@@ -1209,6 +1262,98 @@ export interface FakeTagMeta {
    *  fixture's. See {@link oracleTagMeta}. */
   tagCount: number;
   taggingCount: number;
+}
+
+/**
+ * One row of `combos` — a two-or-more-card interaction Commander Spellbook publishes, narrowed
+ * to what the bracket estimate reads.
+ *
+ * **The fourth optional bulk feed**, after the two price feeds and the two tagger datasets, and
+ * optional in exactly their way: nothing downloads until a reader presses Refresh, a failed
+ * fetch leaves these rows standing, and a database that has never fetched the file is a
+ * *supported* state whose bracket estimate reads three signals instead of four.
+ *
+ * **{@link bracketTag} is the whole reason the feed is worth 27.5 MB.** Wizards' bracket table
+ * restricts "intentional early-game two-card infinite combos", which is a fact about an
+ * *interaction* — no card column answers it and no oracle-text grep can be written for it.
+ * Spellbook's editors have already made that judgement per combo; the ingest carries their
+ * letter through and `validation/bracket.ts` turns it into a floor.
+ */
+export interface FakeCombo {
+  /** Spellbook's variant id, e.g. `"3422-3587"`. The primary key, and stable across rebuilds. */
+  id: string;
+  /** One of `combos::BRACKET_TAGS` — `R|S|P|O|C|E|B`. */
+  bracketTag: ComboBracketTag;
+  /**
+   * DISTINCT oracle ids in {@link FakeDb.comboCards} for this combo, stored rather than counted
+   * — which is what makes the match query a single `GROUP BY` with an equality on the end.
+   *
+   * A row whose count disagrees with its cards therefore matches *nothing*, here as in SQLite,
+   * and that is the honest mirror rather than a bug: {@link comboRows} derives it, so the two
+   * cannot drift.
+   */
+  cardCount: number;
+  /** Spellbook's `requires[]` — templates ("a creature with flying") that resolve to no card id
+   *  at all. **Above zero is a combo this app cannot fully check**, shown as *possible* and kept
+   *  out of the bracket arithmetic entirely. */
+  templateCount: number;
+  /** The combo's colour identity, Spellbook's own letters. Stored and drawn by nothing yet. */
+  identity: string;
+  /** Feature names, `\n`-joined at the ingest because nothing does anything to them but print
+   *  them. */
+  produces: string;
+  /** How many decks Spellbook has seen it in, or `null` where the feed gives no figure. */
+  popularity: number | null;
+}
+
+/**
+ * One row of `combo_cards` — one named card of one combo.
+ *
+ * **Keyed on `oracle_id`, never on a printing**, which is what makes any printing of a combo
+ * piece count: a Sol Ring is a Sol Ring, and the match query joins the deck's distinct oracle
+ * ids straight onto `idx_combo_cards_oracle`. `name` rides along denormalised for exactly the
+ * reason `deck_cards.name` does — it is what a combo prints beside itself, and looking it back
+ * up would tie the display to a corpus the feed was not collected against.
+ *
+ * **Row order is the file's order**, because `combo_cards` carries no ordinal column: the ingest
+ * inserts in the order the variant listed and `match_combos` reads them back `ORDER BY rowid`.
+ * An array in a fixture is the same promise.
+ */
+export interface FakeComboCard {
+  comboId: string;
+  oracleId: string;
+  name: string;
+  quantity: number;
+  /** Whether the combo needs this card *in the command zone*. Stored, and deliberately not read
+   *  by the match: "contains" is all the query answers, and whether a card really is the
+   *  commander is a domain question this side does not ask. */
+  mustBeCommander: boolean;
+}
+
+/**
+ * `combo_meta`, or `null` for a database that has never asked — {@link FakeTagMeta}'s shape one
+ * feed over, and nullable for the same reason it is.
+ *
+ * **`fetchedAt` and `checkedAt` are separate and must stay separate**: a 304 moves the second
+ * and leaves the first alone, so collapsing them would make an up-to-date table read as due on
+ * every launch and cost a request per start.
+ */
+export interface FakeComboMeta {
+  /** The `ETag` the last fetch carried, replayed for a free 304. */
+  etag: string | null;
+  /** The **file's own** `timestamp`, as Spellbook published it. The honest as-of line: the file
+   *  rotates continuously, so when *this app* asked is a different question. */
+  stamp: string | null;
+  /** Unix seconds when the rows last changed. `null` here would be a watermark with no ingest
+   *  behind it, which is why the whole meta row is nullable instead. */
+  fetchedAt: number;
+  /** Unix seconds when the feed was last asked, whatever the answer. */
+  checkedAt: number;
+  /** What the ingest wrote, for the record. **Neither count on {@link ComboStatus} is read from
+   *  here** — see {@link toComboStatus}. */
+  comboCount: number;
+  /** Variants dropped: not `status == "OK"`, or not Commander-legal. */
+  skipped: number;
 }
 
 /**
@@ -1405,6 +1550,14 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // Never seeded, always earned — {@link FakeDb.deckUndo}'s rule: a mute exists only where a
     // story pressed the control, so a Settings list showing one is about that press.
     mutedTags: [],
+    // The fourth optional feed, empty for the reason the two taxonomies above it are: a database
+    // that has never fetched Commander Spellbook's file is what every install is on its first
+    // launch, and `combos::refresh_if_due` deliberately **never** fetches it uninvited — unlike
+    // the tag files, which a first run pulls because deck adds are filed by them. So this stays
+    // empty until a story presses Refresh or asks for `starter`, which seeds it.
+    combos: [],
+    comboCards: [],
+    comboMeta: null,
     // On, at the folder nobody has chosen, with **no pass having run** — and that last part is
     // a fact about this fake rather than about the app. The real mirror runs a full pass at
     // startup, so a reader opening Settings has always missed one; here there is no thread and
@@ -2270,6 +2423,390 @@ function toTagStatus(meta: FakeTagMeta | null): TagStatus {
     stale: isTaxonomyStale(meta?.checkedAt ?? null, CLOCK_BASE),
     refreshing: false,
   };
+}
+
+/* ------------------------------------------------------------------ the combo feed ---- */
+
+/**
+ * `combos::REFRESH_INTERVAL_SECS` — **a week**, the taxonomies' interval and for their reason.
+ *
+ * A constant of its own rather than a share of {@link TAG_REFRESH_INTERVAL_SECS}, mirroring the
+ * crate, because it is a separate decision about a separate file: Spellbook's catalogue moves in
+ * increments and a deck's bracket should not change between two sessions on the same afternoon.
+ * That the two numbers agree today is not a reason for one of them to be the other's.
+ */
+const COMBO_REFRESH_INTERVAL_SECS = 7 * 86_400;
+
+/** `combos::is_stale`, over **`checked_at`**: a 304 means the rows are current, so asking again
+ *  because they were *built* a week ago would spend a request to learn nothing. Never checked is
+ *  stale by definition, and a stamp in the future counts as stale rather than underflowing. */
+function isComboStale(checkedAt: number | null, now: number): boolean {
+  if (checkedAt === null) return true;
+  return checkedAt > now || now - checkedAt >= COMBO_REFRESH_INTERVAL_SECS;
+}
+
+/** `combos::FEED_URL`. It is what `error_log.detail` carries on a failure, which is the only
+ *  place a reader ever sees it — and the one line saying this feed is **not Scryfall**. */
+const COMBO_FEED_URL = "https://json.commanderspellbook.com/variants.json.gz";
+
+/**
+ * What the combo file weighs — **27 542 314 bytes** gzipped, measured live 2026-08-27 from the
+ * `Content-Range` of a range request, with 639 585 506 bytes of JSON behind it.
+ *
+ * Here so a `downloading` event carries a real denominator, {@link ORACLE_TAG_BYTES}' reason,
+ * and it is by far the largest of the four optional feeds: a story stands in `0 / 27 MB`, and
+ * that is what the app will actually show.
+ */
+const COMBO_FEED_BYTES = 27_542_314;
+
+/** `combos::MAX_CARD_IDS` — the largest deck one combo check accepts. The match is a single
+ *  statement and is deliberately not chunked, so this is a real bound rather than a formality;
+ *  1 000 is ten Commander decks' worth of distinct printings. */
+const MAX_COMBO_CARD_IDS = 1_000;
+
+/** `combos::TOO_MANY_CARDS`, verbatim. A sentence, because a bound that answers with a bare
+ *  rejection is a bound the caller can only guess at. */
+const TOO_MANY_COMBO_CARDS =
+  "That is more cards than one combo check can look at. Ask about 1000 or fewer.";
+
+/**
+ * One fixture combo, named by **card name** rather than by oracle id.
+ *
+ * By name for {@link ORACLE_TAGGINGS}' reason and it is the stronger case here: a table of UUIDs
+ * is a table nobody can check, and what is being checked is whether the combo a story draws is
+ * made of cards the seeded deck actually holds. `cards.ts` is generated wholesale, so the names
+ * are resolved against it at build time and a combo naming a card the corpus no longer carries
+ * contributes **nothing at all** rather than a half-combo that can never match — see
+ * {@link comboRows}.
+ */
+interface ComboFixture {
+  id: string;
+  bracketTag: ComboBracketTag;
+  /** Card names in the order the feed listed them, which is the order `DeckCombo.cards` prints
+   *  and the order `combo_cards` is inserted in. */
+  cards: readonly string[];
+  templateCount: number;
+  identity: string;
+  produces: string;
+  popularity: number | null;
+}
+
+/**
+ * The combos in the fixture — seven, chosen so every branch the bracket advisory has to draw is
+ * reachable from one seeded deck.
+ *
+ * **Two of the seven are live-verified and five are not, and the split is the corpus's fault
+ * rather than a shortcut.** `POST /find-my-combos` was asked about all 42 oracle cards in
+ * `cards.ts` on 2026-08-27 and answered **two** fully-contained combos — the two `S` rows below,
+ * with Spellbook's own ids, tags, feature names and popularity figures. There is no `R`, `P`,
+ * `C` or `E` combo whose every card is in these 52 printings, and there is no combo with a
+ * `requires[]` template either, so the other five are **constructed**: real cards from this
+ * corpus, plausible interactions, and Spellbook-shaped ids that are not Spellbook's. Each says
+ * so at its own line.
+ *
+ * **Adding Thassa's Oracle and Demonic Consultation would fix that and is out of this file's
+ * reach**: the corpus is generated by `scripts/gen-storybook-cards.mjs` from a synced database,
+ * `db.test.ts` pins its size at 52 printings and 42 of them tagged, and a hand-written card row
+ * would be a UUID nothing regenerates. It is a change to that script's `SELECTIONS`, not to a
+ * fixture.
+ *
+ * What every story needs and what carries it:
+ *
+ * * **`R`, two cards, no templates** — the floor-4 row, and the whole of what makes the seeded
+ *   deck's stored bracket 2 a *mismatch* to report.
+ * * **`R` with `templateCount: 1`** — named cards all present, one requirement this app cannot
+ *   check. It is deliberately tagged `R` as well, so a story can show that a *possible* combo
+ *   raises nothing even when a definite one of the same letter would raise everything.
+ * * **`P`** (floor 3), **`C`** (floor 2) and **`E`** (raises nothing at all).
+ * * **Two `S` rows sharing a card**, neither of which the seeded deck holds — which is what
+ *   proves {@link readHandlers.combos_for_cards} is really matching rather than answering a
+ *   canned list.
+ */
+const COMBO_FIXTURES: readonly ComboFixture[] = [
+  // **Live**, `find-my-combos` 2026-08-27: Spellbook's id, letter, features and popularity
+  // exactly as the API answered them. The most-played combo the fixture corpus can make.
+  {
+    id: "3422-3587",
+    bracketTag: "S",
+    cards: ["Boros Reckoner", "Boros Charm"],
+    templateCount: 0,
+    identity: "RW",
+    produces: "Infinite lifegain\nInfinite lifegain triggers",
+    popularity: 13_433,
+  },
+  // **Live**, same probe. It shares Boros Reckoner with the row above, which is the pair a
+  // fixture needs: one card can be in two combos, and a match that stopped at the first would
+  // look right until a reader owned the second.
+  {
+    id: "3149-3587",
+    bracketTag: "S",
+    cards: ["Boros Reckoner", "Avacyn, Angel of Hope"],
+    templateCount: 0,
+    identity: "RW",
+    produces: "Infinite lifegain\nInfinite lifegain triggers",
+    popularity: 1_318,
+  },
+  // **Constructed.** The floor-4 row, and the one the `bracketMismatch` seed is built around.
+  // Thrasios is a real infinite-mana outlet and Consecrated Sphinx a real draw engine; that they
+  // loop together is this fixture's invention and not Spellbook's.
+  {
+    id: "4109-1983",
+    bracketTag: "R",
+    cards: ["Thrasios, Triton Hero", "Consecrated Sphinx"],
+    templateCount: 0,
+    identity: "GU",
+    produces: "Infinite card draw\nInfinite mana\nWin the game",
+    popularity: 6_204,
+  },
+  // **Constructed**, and the only row here with a template. Its named cards are both ordinary
+  // Commander staples, so the seeded deck holds them by accident of being a deck — which is
+  // exactly the shape the *possible* line exists for: everything this app can check is present
+  // and the one thing it cannot check decides whether the combo is real.
+  {
+    id: "4109-2030--17",
+    bracketTag: "R",
+    cards: ["Thrasios, Triton Hero", "Sol Ring"],
+    templateCount: 1,
+    identity: "GU",
+    produces: "Infinite colorless mana\nWin the game",
+    popularity: 812,
+  },
+  // **Constructed** — the floor-3 row.
+  {
+    id: "1983-2309",
+    bracketTag: "P",
+    cards: ["Consecrated Sphinx", "Jace, the Mind Sculptor"],
+    templateCount: 0,
+    identity: "U",
+    produces: "Draw four cards on each opponent's turn",
+    popularity: 947,
+  },
+  // **Constructed**, but the interaction is real: these two cards genuinely meld into Brisela,
+  // which the corpus carries as a printing of its own. `C` — "for unoptimized decks in bracket
+  // 2+" — is the letter a value play of this shape would earn.
+  {
+    id: "1076-1174",
+    bracketTag: "C",
+    cards: ["Bruna, the Fading Light", "Gisela, the Broken Blade"],
+    templateCount: 0,
+    identity: "W",
+    produces: "Brisela, Voice of Nightmares",
+    popularity: 2_045,
+  },
+  // **Constructed**, and the interaction is real again: Ragavan is a 2/1 and crewing a Copter
+  // costs 1, so the monkey flies and loots. `E` — "for any deck" — is the letter, and this row
+  // is the one that raises **nothing**: a combo the estimate lists and never counts.
+  //
+  // It is also the one combo `starter`'s own Commander deck already contains, which is not an
+  // accident: deck 2 sleeves both cards, so every deck story written before this feature existed
+  // gets a bracket advisory with exactly one honest, floor-raising-nothing row in it.
+  {
+    id: "1268-2357",
+    bracketTag: "E",
+    cards: ["Smuggler's Copter", "Ragavan, Nimble Pilferer"],
+    templateCount: 0,
+    identity: "",
+    produces: "Ragavan, Nimble Pilferer with flying\nTreasure on combat damage",
+    popularity: 431,
+  },
+];
+
+/** Every card name {@link COMBO_FIXTURES} depends on, for a test that wants to prove they all
+ *  still resolve against the generated corpus. A name that stops resolving takes its whole combo
+ *  out of the fixture silently, which is the drift this export exists to make loud. */
+export const COMBO_CARD_NAMES: readonly string[] = [
+  ...new Set(COMBO_FIXTURES.flatMap((c) => c.cards)),
+];
+
+/** The corpus's first printing of each name, as an oracle id — a combo is keyed on the oracle
+ *  card, so which printing answers does not matter and all four Lightning Bolts would give the
+ *  same id. */
+function oracleIdsByName(cards: readonly FakeCard[]): Map<string, string> {
+  const byName = new Map<string, string>();
+  for (const card of cards) if (!byName.has(card.name)) byName.set(card.name, card.oracleId);
+  return byName;
+}
+
+/** The fixtures whose every named card resolves against a corpus. **A combo with a card the
+ *  corpus does not carry is dropped whole**: half a combo in `combo_cards` would be a row that
+ *  can never match, which is worse than a shorter catalogue because it looks like data. */
+function resolvedCombos(
+  cards: readonly FakeCard[],
+): { fixture: ComboFixture; oracleIds: string[] }[] {
+  const byName = oracleIdsByName(cards);
+  const out: { fixture: ComboFixture; oracleIds: string[] }[] = [];
+  for (const fixture of COMBO_FIXTURES) {
+    const oracleIds = fixture.cards.map((name) => byName.get(name));
+    if (oracleIds.some((id) => id === undefined)) continue;
+    out.push({ fixture, oracleIds: oracleIds as string[] });
+  }
+  return out;
+}
+
+/**
+ * `combos` for a corpus, sorted by id as the table's own primary key answers.
+ *
+ * **`cardCount` is derived and never typed in**, which is what keeps it honest: the column is
+ * "DISTINCT oracle ids in `combo_cards` for this combo", the match query's `WHERE h.have =
+ * c.card_count` is an equality against it, and a hand-written number that disagreed would make
+ * the combo silently unmatchable — the one defect in this table that looks exactly like a
+ * working fixture.
+ */
+export function comboRows(cards: readonly FakeCard[]): FakeCombo[] {
+  return resolvedCombos(cards)
+    .map(({ fixture, oracleIds }) => ({
+      id: fixture.id,
+      bracketTag: fixture.bracketTag,
+      cardCount: new Set(oracleIds).size,
+      templateCount: fixture.templateCount,
+      identity: fixture.identity,
+      produces: fixture.produces,
+      popularity: fixture.popularity,
+    }))
+    .sort((a, b) => cmp(a.id, b.id));
+}
+
+/** `combo_cards` for a corpus — **in the file's order within each combo**, which is what
+ *  `match_combos` reads back with `ORDER BY rowid` and what `DeckCombo.cards` prints.
+ *  `mustBeCommander` is `false` throughout: it was on all four cards the live probe returned,
+ *  and inventing a `true` would seed a condition nothing here reads. */
+export function comboCardRows(cards: readonly FakeCard[]): FakeComboCard[] {
+  const rows: FakeComboCard[] = [];
+  for (const { fixture, oracleIds } of resolvedCombos(cards)) {
+    fixture.cards.forEach((name, i) => {
+      rows.push({
+        comboId: fixture.id,
+        oracleId: oracleIds[i],
+        name,
+        quantity: 1,
+        mustBeCommander: false,
+      });
+    });
+  }
+  return rows;
+}
+
+/**
+ * `combo_meta` for an ingest that has just landed.
+ *
+ * **`comboCount` and `skipped` are the real file's figures and not this fixture's**, which is
+ * {@link oracleTagMeta}'s one honest exception restated: they describe the catalogue Spellbook
+ * published, and these seven rows are a slice of the corpus it applies to rather than a smaller
+ * catalogue. A Settings line reading "7 combos" would be describing the workbench while looking
+ * like it described the app. The two counts a *status* answers are a different question and do
+ * come from the rows — see {@link toComboStatus}.
+ */
+export function comboFeedMeta(at: number): FakeComboMeta {
+  return {
+    etag: 'W/"6a3f1c9e2d"',
+    // The file's own `timestamp`, in its own format — the string `ComboStatus.stamp` carries
+    // verbatim and nothing parses. Read live at 03:32Z on 2026-08-27, twenty minutes old, which
+    // is what "rotates continuously" looks like from outside.
+    stamp: "2026-08-27T03:12:44Z",
+    fetchedAt: at,
+    checkedAt: at,
+    comboCount: 34_812,
+    skipped: 21_507,
+  };
+}
+
+/**
+ * `combos::read_status` — **both counts off the tables and neither off `combo_meta`**.
+ *
+ * That is the crate's own choice and it matters here: a watermark can outlive the rows it
+ * describes, so a status that read the meta row would report a full catalogue over two empty
+ * tables — which is exactly the world the `combosMissing` seed is, and exactly the sentence a
+ * Settings panel would then get wrong.
+ *
+ * **`cards` is `count(DISTINCT oracle_id)`**, not a count of rows: a card in two combos is one
+ * card. (`ipc.ts`'s comment on that field says "card *slots* … not distinct cards", which is the
+ * opposite of what `combos.rs` counts. The crate is the behaviour and this mirrors the crate.)
+ *
+ * **Total and unfailing**, {@link toTagStatus}'s contract: a store with no meta row answers zero
+ * counts and null stamps with `stale: true` rather than refusing, which is what lets the bracket
+ * advisory and the Settings panel read it with no guard.
+ */
+function toComboStatus(db: FakeDb): ComboStatus {
+  const meta = db.comboMeta;
+  return {
+    combos: db.combos.length,
+    cards: new Set(db.comboCards.map((c) => c.oracleId)).size,
+    stamp: meta?.stamp ?? null,
+    fetchedAt: meta?.fetchedAt ?? null,
+    checkedAt: meta?.checkedAt ?? null,
+    stale: isComboStale(meta?.checkedAt ?? null, CLOCK_BASE),
+  };
+}
+
+/**
+ * `combos::match_combos` — every combo whose named cards are **all** in `cardIds`.
+ *
+ * The real containment, not a canned list: the ids are resolved to oracle ids through `cards`
+ * exactly as the query's `WITH deck(oracle_id)` does, each combo's distinct oracle ids are
+ * counted against the deck's, and the ones that reach their own `cardCount` come back. So a
+ * story's answer is a fact about the deck it seeded, and a deck holding one half of a combo gets
+ * nothing.
+ *
+ * **The order is `template_count, popularity DESC, id`**, which is this app's and not the
+ * query's contract: fully-checkable combos first (a `templateCount` of `0` is a combo the deck
+ * definitely has), then most-played, then the id so two runs over one deck cannot answer in two
+ * different orders. SQLite sorts NULLs first, so `popularity DESC` puts an unranked combo last —
+ * which is where it belongs, and is what the explicit `Infinity`-free comparison below
+ * reproduces.
+ *
+ * A deck with no combos and a database that has never ingested both answer `[]`. Telling those
+ * apart is {@link readHandlers.combos_status}' job, because a caller that cannot will say the
+ * wrong one of the two.
+ */
+function matchCombos(db: FakeDb, cardIds: readonly string[] | undefined): DeckCombo[] {
+  // Trimmed and deduplicated **before** the cap, the crate's order: a caller sending one card
+  // twice has not asked about two cards, and refusing a deck over a list would be a refusal the
+  // reader cannot act on.
+  const wanted = requestedIds(cardIds);
+  if (wanted.length === 0) return [];
+  if (wanted.length > MAX_COMBO_CARD_IDS) throw refuse(TOO_MANY_COMBO_CARDS);
+
+  const deck = new Set<string>();
+  for (const id of wanted) {
+    const oracleId = cardById(db, id)?.oracleId;
+    // `AND oracle_id IS NOT NULL`: an id this corpus does not have contributes nothing, which is
+    // an answer rather than a miss — an orphaned deck row is still a row in a deck.
+    if (oracleId) deck.add(oracleId);
+  }
+  if (deck.size === 0) return [];
+
+  const have = new Map<string, Set<string>>();
+  const names = new Map<string, string[]>();
+  for (const row of db.comboCards) {
+    const known = names.get(row.comboId);
+    if (known) known.push(row.name);
+    else names.set(row.comboId, [row.name]);
+    if (!deck.has(row.oracleId)) continue;
+    const hit = have.get(row.comboId);
+    if (hit) hit.add(row.oracleId);
+    else have.set(row.comboId, new Set([row.oracleId]));
+  }
+
+  return db.combos
+    .filter((combo) => (have.get(combo.id)?.size ?? 0) === combo.cardCount)
+    .map((combo) => ({
+      id: combo.id,
+      bracketTag: combo.bracketTag,
+      cards: names.get(combo.id) ?? [],
+      templateCount: combo.templateCount,
+      produces: combo.produces,
+      popularity: combo.popularity,
+    }))
+    .sort(
+      (a, b) =>
+        a.templateCount - b.templateCount ||
+        // Descending, with `null` last: SQLite sorts NULLs first and `DESC` reverses that, so an
+        // unranked combo lands at the bottom. Written as a three-way rather than as
+        // `(b.popularity ?? -1) - …` because `-1` would be a *rank*, and a feed that ever
+        // published a negative one would sort it above the unranked rows.
+        (a.popularity === null ? 1 : b.popularity === null ? -1 : b.popularity - a.popularity) ||
+        cmp(a.id, b.id),
+    );
 }
 
 /* ------------------------------------------------------------------ tag reads --------- */
@@ -3391,6 +3928,25 @@ const LIVE = VARIANTS[0];
 const SIZE_KINDS: CategoryKind[] = ["main", "commander", "maybe"];
 
 /**
+ * `deck::AUTO_BRACKET` — `decks.bracket` on a deck whose reader has not answered the bracket
+ * question, and the one entry in a bracket picker that is not a bracket.
+ *
+ * **Spelled here rather than imported from `@/lib/ipc`**, which is this file's rule for every
+ * constant on it: the fake is a *second implementation* of the backend's answers, and one that
+ * read the app's own copy would agree with it by construction rather than by being right. It is
+ * `AUTO_CATEGORY`'s sentinel one column over, and a value rather than an absence for that
+ * column's reason — `DeckPatch`'s absent-means-leave-it is already what "do not touch the
+ * bracket" looks like, so a nullable column would make "put it back to Auto" unreachable.
+ */
+const AUTO_BRACKET = 0;
+
+/** The top of what {@link validBracket} accepts — `deck::MAX_BRACKET`. `5` is cEDH, and the
+ *  estimate deliberately never *reaches* it: brackets 4 and 5 have identical deck restrictions
+ *  and what separates them is an intent no card list shows. That is a fact about the rules and
+ *  not about this column, which stores whatever the reader picked. */
+const MAX_BRACKET = 5;
+
+/**
  * `schema::PREDEFINED_CATEGORIES` as `(kind, name, isActive)` — the categories every deck is
  * born with, seeded by {@link ensurePredefinedCategories}.
  *
@@ -3459,6 +4015,12 @@ function toDeckRow(db: FakeDb, d: FakeDeck): DeckRow {
     // was never asked which platform it is for, and it is what makes the format picker offer
     // every format — so a seed written before this column existed behaves as it always did.
     gameKey: d.gameKey ?? "any",
+    // v26's, and the **fourth** column on that footing: `DEFAULT 0` is `AUTO_BRACKET`, so a deck
+    // nobody has told is a deck handing the question back to the estimate rather than a deck
+    // claiming bracket 0 — there is no bracket 0. `DECK_SELECT` appends it, never inserts it,
+    // because the crate's reads are positional; here it is last for the same reason read as a
+    // habit rather than a requirement.
+    bracket: d.bracket ?? AUTO_BRACKET,
   };
 }
 
@@ -5765,6 +6327,44 @@ export function readHandlers(db: FakeDb) {
         ),
 
     /**
+     * `combos::combos_status` — the combo table's own freshness, and the fourth optional feed's
+     * answer to the question the other three already answer.
+     *
+     * **It cannot fail**, {@link readHandlers.oracle_tags_status}' contract word for word: two
+     * small tables, no network call, and safe before the first refresh has ever run — a store
+     * with no `combo_meta` answers zero counts and null stamps with `stale: true`. So it honours
+     * no fault, `combosFetchError` included: that one is about a *fetch*, and a status is
+     * supposed to report what a failed fetch left behind.
+     *
+     * **Read it before drawing "this deck has no combos".** A never-fetched table and a deck with
+     * nothing in it are the same empty {@link readHandlers.combos_for_cards} answer, and this is
+     * the only call that tells them apart.
+     */
+    combos_status: (): ComboStatus => toComboStatus(db),
+
+    /**
+     * `combos::combos_for_cards` — which combos a set of printings fully contains.
+     *
+     * **It takes card ids and not a deck id**, which is this repo's Rust/TS boundary drawn where
+     * it always draws it: *which* of a deck's piles count toward a combo — active categories
+     * only, `live` rather than `theory`, the sideboard and the companion beside the deck rather
+     * than in it — is a domain question and lives in `features/decks`. So the caller decides
+     * which cards are in play and this answers a fact about them. A `combos_for_deck` would have
+     * moved those pile rules into SQL, where a second copy of them would drift.
+     *
+     * The matching itself is {@link matchCombos}: real containment against the fixture combos,
+     * oracle-grained, with the crate's cap and the crate's `ORDER BY`. A story's deck therefore
+     * gets its **own** answer — which is the whole value of storying a bracket advisory at all,
+     * since a fake that returned the same list whatever it was handed would draw a beautiful
+     * panel about nothing.
+     *
+     * A read, so it answers through every second of a sync — it takes `lock_db_read` in the
+     * crate — and it honours no fault: a refusal here would be a bracket advisory that could not
+     * be drawn, and the estimate is supposed to degrade to three signals rather than to stop.
+     */
+    combos_for_cards: (args: { cardIds: string[] }): DeckCombo[] => matchCombos(db, args.cardIds),
+
+    /**
      * `error_log_list` — newest first, clamped exactly as the Rust does.
      *
      * The clamp's low end is the part worth mirroring: SQLite reads a negative `LIMIT` as no
@@ -6276,6 +6876,28 @@ function validFormat(key: string): string {
   if (trimmed === "") return DEFAULT_FORMAT;
   if (SPECS[trimmed]) return trimmed;
   throw refuse(`\`${trimmed}\` is not a format this app knows. Pick one from the format list.`);
+}
+
+/**
+ * `deck::valid_bracket` — {@link AUTO_BRACKET} or `1`–`5`, and nothing else.
+ *
+ * **Rust's fence in place of a CHECK the DDL deliberately does not carry**, and the reason is
+ * worth having here too: a command parameter reaches this column, and a refusal in words can
+ * name the legal answers where a constraint failure names only the constraint. The sentence is
+ * `deck::BAD_BRACKET` verbatim, and it carries the whole vocabulary rather than the offending
+ * number because the reader arrives through a picker that offers six choices — what they need is
+ * the list, not their own input read back.
+ *
+ * Unlike {@link validFormat} there is no blank case: this arrives as a number, and an *unsaid*
+ * bracket is already `DeckPatch`'s absent-means-leave-it.
+ */
+function validBracket(bracket: number): number {
+  if (Number.isInteger(bracket) && bracket >= AUTO_BRACKET && bracket <= MAX_BRACKET) {
+    return bracket;
+  }
+  throw refuse(
+    "A deck's bracket is 1 to 5, or 0 for Auto — where the app estimates it from the cards.",
+  );
 }
 
 /**
@@ -8688,9 +9310,9 @@ export function writeHandlers(db: FakeDb) {
     },
 
     /**
-     * `deck::update_deck` — rename, re-format, cover, notes, archive, the theory switch and the
-     * X-group switch all arrive here. There is no Built toggle any more: schema v25 dropped
-     * `decks.is_built` along with the allocator it meant something to.
+     * `deck::update_deck` — rename, re-format, cover, notes, archive, the theory switch, the
+     * X-group switch and the Commander bracket all arrive here. There is no Built toggle any
+     * more: schema v25 dropped `decks.is_built` along with the allocator it meant something to.
      *
      * `coalesce(?n, column)`, so absent means "leave it" and there is no field that *clears*
      * one: `description: ""` writes an empty string rather than a NULL, `coverCardId` cannot be
@@ -8723,6 +9345,7 @@ export function writeHandlers(db: FakeDb) {
       const patch = args.patch;
       const name = patch.name === undefined ? undefined : validName(patch.name);
       const formatKey = patch.formatKey === undefined ? undefined : validFormat(patch.formatKey);
+      const bracket = patch.bracket === undefined ? undefined : validBracket(patch.bracket);
       const deck = requireDeck(db, args.id);
       const before = { ...deck };
       const field = (key: string, from: unknown, to: unknown) =>
@@ -8793,6 +9416,14 @@ export function writeHandlers(db: FakeDb) {
       if (patch.gameKey !== undefined && patch.gameKey !== gameWas) {
         field("game", gameWas, patch.gameKey);
       }
+      // v26's, and the field name is `deck.rs`'s once more — `"bracket"`, one word. **The payload
+      // carries the number and not a word**, which is `format`'s rule rather than
+      // `defaultCategory`'s: a bracket is not a row with a name of its own, `1`–`5` is the whole
+      // vocabulary, and `auditText.ts` is the only thing that knows Auto from `0`. `?? AUTO_BRACKET`
+      // on the `from` side for {@link FakeDeck.bracket}'s reason — an absent column is the DDL's
+      // `0`, so a deck that has never been asked and a deck put back to Auto are one state.
+      const bracketWas = before.bracket ?? AUTO_BRACKET;
+      if (bracket !== undefined && bracket !== bracketWas) field("bracket", bracketWas, bracket);
       if (patch.folderId !== undefined && patch.folderId !== before.folderId) {
         recordFiled(db, deck.id, patch.folderId);
       }
@@ -8839,6 +9470,11 @@ export function writeHandlers(db: FakeDb) {
       // `patch.defaultCategoryId === 0` is a reader asking to go back to Auto, and `||` would
       // read it as no change at all.
       deck.defaultCategoryId = patch.defaultCategoryId ?? deck.defaultCategoryId;
+      // `coalesce(?14, bracket)`, and **`0` is a value here** for `defaultCategoryId`'s reason
+      // one line up: `patch.bracket === 0` is a reader asking to go back to Auto, and a
+      // truthiness test would read it as no change at all. The validated local rather than
+      // `patch.bracket`, so a refused number can never reach the row.
+      deck.bracket = bracket ?? deck.bracket;
       deck.updatedAt = stamp(db);
       return toDeckRow(db, deck);
     },
@@ -10757,6 +11393,91 @@ export function writeHandlers(db: FakeDb) {
       db.artTagMeta = artTagMeta(CLOCK_BASE);
       emitFake("art-tags:progress", { phase: "done", done: 0, total: 0 });
       return toTagStatus(db.artTagMeta);
+    },
+
+    /**
+     * `combos::combos_refresh` — fetch Commander Spellbook's combo file if it is due and rebuild
+     * the combo tables from it.
+     *
+     * **It does not honour `busy`**, and it joins the handful here that do not — the two tag
+     * refreshes' reason exactly: `combos::refresh` opens with `sync::lock_db_read` and a network
+     * call, and only its ingest reaches for the write connection, through `db::lock_blocking`.
+     * So a running sync **delays** a combo refresh rather than refusing it at the door, and
+     * `db.test.ts`'s busy sweep has to list it beside `oracle_tags_refresh` and `art_tags_refresh`
+     * rather than counting it. (`ipc.ts`'s comment on `combosRefresh` says it "answers
+     * `collection::BUSY` under a running sync like every other write"; `combos.rs` does not, and
+     * the crate is the behaviour.)
+     *
+     * **`force` skips the weekly throttle and nothing else** — not the ETag check, which is where
+     * the real command's cheapness comes from. A run that is not due answers the status it
+     * already had and emits no event at all, which is why a story that wants to watch the phases
+     * has to send `force: true`.
+     *
+     * The five phases are emitted around work that takes no time, exactly as the two tag
+     * refreshes' are: what they prove is that the **wiring** is real — that a listener registered
+     * by the Settings panel hears `combos:progress` with the right payload — not that a bar can
+     * be watched moving. A story that wants to watch one emits the event itself.
+     *
+     * **This is the one command that can move a world out of the never-fetched state**, which is
+     * the whole reason the `combosMissing` seed empties rows rather than branching in a handler:
+     * a story can open on "no combo data", press Refresh, and watch the deck's advisory fill in.
+     */
+    combos_refresh: (args: { force: boolean }): ComboStatus => {
+      if (!args.force && !isComboStale(db.comboMeta?.checkedAt ?? null, CLOCK_BASE)) {
+        return toComboStatus(db);
+      }
+      emitFake("combos:progress", { phase: "checking", done: 0, total: 0 });
+      if (db.fault === "combosFetchError") {
+        // **The rows stay.** A failed fetch leaves the previous combos exactly where they were —
+        // a bracket advisory drawn from week-old combo data beats one drawn from none — so this
+        // writes to `error_log` and to nothing else.
+        //
+        // `source` is **`database`** and not `scryfall_api`, which is `combos.rs`' own choice and
+        // an uncomfortable one it documents: these are HTTP failures against
+        // `json.commanderspellbook.com`, which is neither Scryfall nor this app's SQLite, and a
+        // source of its own would need a CHECK rebuild on `error_log`, a variant in
+        // `errors::Source` and an arm in the frontend's total `SOURCE_LABEL` map. What names the
+        // feed is `operation`, which is free text precisely so a new call site can report a
+        // failure without a migration first — and `detail` carries the URL, which is the one
+        // place a reader ever sees that this feed is not Scryfall.
+        db.errorLog = [
+          ...db.errorLog,
+          {
+            id: db.errorLog.length + 1,
+            firstAt: CLOCK_BASE,
+            lastAt: CLOCK_BASE,
+            source: "database",
+            operation: "combos",
+            kind: "timeout",
+            message: "could not reach Commander Spellbook: operation timed out",
+            detail: COMBO_FEED_URL,
+            count: 1,
+          },
+        ];
+        emitFake("combos:progress", { phase: "error", done: 0, total: 0 });
+        // `ComboError::Http`'s own sentence, which is what the command hands back verbatim.
+        throw refuse("could not reach Commander Spellbook: operation timed out");
+      }
+      emitFake("combos:progress", { phase: "downloading", done: 0, total: COMBO_FEED_BYTES });
+      emitFake("combos:progress", {
+        phase: "downloading",
+        done: COMBO_FEED_BYTES,
+        total: COMBO_FEED_BYTES,
+      });
+      // Zeroes, and not a count of what was written: `combos_refresh` hands `ingest_gz` a
+      // `&mut |_, _| {}` and emits `("ingesting", 0, 0)` **once**, because the ingest runs on a
+      // blocking thread with no channel back. The panel draws an indeterminate bar for the whole
+      // ingest because there is genuinely no number, and a fixture that invented one here would
+      // be storying a bar the app cannot draw.
+      emitFake("combos:progress", { phase: "ingesting", done: 0, total: 0 });
+      // All three tables together, because one file writes all three and the swap is atomic: a
+      // watermark with no combos behind it is the state the backend goes out of its way never to
+      // leave, since it is what makes the next check 304 past an empty table.
+      db.combos = comboRows(db.cards);
+      db.comboCards = comboCardRows(db.cards);
+      db.comboMeta = comboFeedMeta(CLOCK_BASE);
+      emitFake("combos:progress", { phase: "done", done: 0, total: 0 });
+      return toComboStatus(db);
     },
 
     /**

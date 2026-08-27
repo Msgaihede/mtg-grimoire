@@ -16,7 +16,7 @@ is [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md) a
 | `singleton.ts`  | Exact-phrase exceptions, **re-derived from oracle text and never a card list** |
 | `commanders.ts` | Eligibility, partners, colour identity                                         |
 | `companions.ts` | Companion rules                                                                |
-| `bracket.ts`    | **Advisory only — `engine.ts` does not import it**                             |
+| `bracket.ts`    | The Commander bracket **floor**. **Advisory only — `engine.ts` does not import it** |
 
 - **`validateDeck` answers for the deck and `validateForMarks` answers for every card drawn**, and
   which one a surface calls is the whole of issue #134 — see the second bullet of **The category
@@ -25,6 +25,37 @@ is [docs/reference/decks-storage.md](../../../docs/reference/decks-storage.md) a
   case because each row carries its own printing's answer.
 - `format_specs` is data seeded in a migration, never an engine branch. `restricted_semantic`
   (`max_one` | `banned_as_commander`) is **never inferred from the key**.
+
+### The bracket, and the rules that bind it
+
+Full record, with every measurement and the provenance of each rung:
+[docs/reference/commander-brackets.md](../../../docs/reference/commander-brackets.md).
+
+- **`estimateBracket` answers a _floor_, never a bracket.** Every bracket restriction is written
+  as a prohibition — bracket 2 may not play mass land denial, bracket 3 may play at most three
+  Game Changers — so what a card list can honestly say is "not allowed below N". Highest rung
+  wins, a rule that fired lower is a *signal* and not a `reason`, and `reasons` is empty exactly
+  when the floor is 1. **Nothing here may make a deck illegal**, which is why this module returns
+  a `BracketEstimate` rather than `ValidationIssue`s and why every sentence it words is a remark.
+- **It never returns 5, and nothing may add a rung that does.** Brackets 4 and 5 have identical
+  *deck* restrictions; what separates them is whether the deck is built for the cEDH metagame,
+  which is an intent no card list shows. 5 is a number only a reader can write down.
+- **`decks.bracket` is that reader's answer, and `AUTO_BRACKET` (`0`) hands the question back to
+  the estimate.** The button prints `Bracket ~3` for a reading and `Bracket 3` for an answer, and
+  the `~` is the whole of the visible difference. `bracketWarning` is the **only** place a
+  mismatch is decided — a set bracket *below* the floor, never above it — so the button's
+  treatment and the panel's first line cannot come to disagree about whether there is one.
+- **A combo list that changes nothing about the number is the normal case, not a bug.** 78 % of
+  Commander Spellbook's file is tagged `E` ("for any deck"), which raises no floor at all, and a
+  combo needing a `requires[]` template is kept out of the arithmetic and shown as *possible*. So
+  five combos under an unchanged bracket is the system working. **The one thing the panel may
+  never do is let silence imply the deck has none**: a database that has never fetched the feed,
+  a read in flight and a read that failed are three states that look like an empty list and mean
+  something else, which is why `DeckBracket`'s `ComboState` has four arms.
+- **The card ids sent to `combosForCards` must be the same pile `estimateBracket` counts.** Both
+  drop an inactive category; the combos handed to the estimate are *not* re-checked there, so a
+  query built off an unfiltered list would report a combo out of a switched-off Maybeboard and
+  nothing downstream could tell.
 
 ## The category model
 
@@ -892,6 +923,13 @@ reader to configure the deck they had just made; it now asks all of them.
     *reading* rather than a count, and the edge says the number came from somewhere the reader can
     go and look. The check beside it colours a glyph instead, because red and green there mean
     broken and clean and there is no such pair here — a bracket 5 deck is not a worse deck.
+  - **2026-08-27 put an answer and a fourth signal behind it** (see **The bracket** above): an
+    `Auto` + 1–5 radio group writing `deckUpdate(id, { bracket })`, and the deck's combos read
+    through `combosForCardsKey`. **That key is the sorted, deduplicated card ids themselves**, so
+    an edit is a different question and fetches by construction — a key on the deck id would need
+    an invalidation on every write that can change what is in a deck, and `query.ts`'s 30 s
+    `staleTime` would hide whichever one was forgotten. A *quantity* change does not move it, and
+    that is correct: a second Sol Ring is not a fifth combo piece.
 - **Four views** — `Stacks | Table | Text | Grid` (`DeckEditor`'s `VIEWS`) — crossed with three
   `Group by` modes (`category | manaValue | type`) and four sorts (`alphabetical | manaCost |
 price | type`). An **inactive category stays its own group in all three grouping modes** — as long

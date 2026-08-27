@@ -363,6 +363,43 @@ describe("auditSentence", () => {
   });
 
   /**
+   * `decks.bracket` (schema v26), and **the arm that `0` would otherwise swallow**.
+   *
+   * Every other deck field in this switch is read through `text()`, which answers `null` for a
+   * value it cannot print — and `0` is a value here, the `AUTO_BRACKET` sentinel, so a
+   * `text()`-based arm renders "put it back to Auto" as an empty sentence. That is the failure
+   * this pins: the arm reads the raw payload, not `to`/`was`.
+   *
+   * It also pins the field name against `deck.rs`'s, for the reason the X-split test above
+   * gives — an unrecognised field is "Changed the deck", which never fails.
+   */
+  it("names a bracket the reader set, and says which way Auto went", () => {
+    const deck = (payload: Record<string, unknown>) =>
+      auditSentence(entry("deck", payload, { cardId: null, cardName: null }));
+
+    expect(deck({ field: "bracket", from: 0, to: 4 })).toEqual({
+      text: "Set the deck to bracket 4",
+      detail: "was Auto",
+    });
+    // Back to Auto is the half a `text()` reader loses: `0` prints as nothing.
+    expect(deck({ field: "bracket", from: 4, to: 0 })).toEqual({
+      text: "Put the bracket back to Auto",
+      detail: "was bracket 4",
+    });
+    // One set answer to another names both, because neither is the default.
+    expect(deck({ field: "bracket", from: 2, to: 5 })).toEqual({
+      text: "Set the deck to bracket 5",
+      detail: "was bracket 2",
+    });
+    // A row a newer build wrote with a spelling this one does not know still says something
+    // true, rather than throwing on a missing `from`.
+    expect(deck({ field: "bracket", to: 3 })).toEqual({
+      text: "Set the deck to bracket 3",
+      detail: "was Auto",
+    });
+  });
+
+  /**
    * **Two different rows wear `field: "theory"`.** The copy row carries `copied` and no
    * `from`/`to` at all; the toggle carries `to` and no `copied`. Reading only the toggle
    * answers a copy as `flag(undefined)` — "Turned the theory list off" — which is a sentence

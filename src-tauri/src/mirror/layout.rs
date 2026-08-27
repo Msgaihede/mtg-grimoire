@@ -613,6 +613,11 @@ mod tests {
             last_variant: "live".to_owned(),
             last_group_by: "category".to_owned(),
             last_sort_by: "alphabetical".to_owned(),
+            // Schema v26's column. `0` is Auto, which is what a fresh deck carries and what the
+            // layout — which reads five of these fields and not this one — would draw either
+            // way. It is here because `DeckRow` has no `Default`, which is the whole of what
+            // this builder is for.
+            bracket: 0,
         }
     }
 

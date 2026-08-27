@@ -433,7 +433,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   been its only statement that was not about folders. **v25 sweeps it**, in the same
   `execute_batch` that drops `deck_allocations` and `decks.is_built`, because that rung is what
   answers the question the switch was asking — the decks *are* where the cards are now.
-- **Schema is v25**, and `schema::SCHEMA_VERSION` is the answer — this line read **v18** for two
+- **Schema is v26**, and `schema::SCHEMA_VERSION` is the answer — this line read **v18** for two
   whole rungs, because a prose-only edit routes to neither CI job and nothing goes red when a
   ladder entry rots.
   **v25 makes the collection's folders the physical ledger of where every card sits.** It inserts

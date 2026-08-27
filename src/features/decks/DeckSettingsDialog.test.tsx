@@ -61,6 +61,7 @@ const BURN: DeckRow = {
   lastSortBy: "alphabetical",
   separateXGroup: false,
   defaultCategoryId: 0,
+  bracket: 0,
 };
 
 const SPECS: FormatSpec[] = [spec("modern"), spec("commander"), spec("casual")];

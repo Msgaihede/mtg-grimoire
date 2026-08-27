@@ -25,13 +25,25 @@
 //! CASCADE where the parent's deletion genuinely means the child should go too, SET NULL
 //! where the child has to outlive it.
 //!
-//! CASCADE is the common case, and there are **ten** of them — `deck_cards.deck_id`,
+//! CASCADE is the common case, and there are **eleven** of them — `deck_cards.deck_id`,
 //! `deck_cards.category_id`, `deck_categories.deck_id`, `deck_audit.deck_id`,
 //! `deck_undo.audit_id`, `deck_undo.deck_id`, `deck_folders.parent_id`,
-//! `wishlist_folders.parent_id`, `collection_folders.parent_id` and
-//! `collection_folders.deck_id` — because a deleted deck's cards, a deleted category's cards,
-//! a reversal for a history row that is gone, and a deleted folder's sub-folders have nowhere
-//! else to be.
+//! `wishlist_folders.parent_id`, `collection_folders.parent_id`,
+//! `collection_folders.deck_id` and `combo_cards.combo_id` — because a deleted deck's cards, a
+//! deleted category's cards, a reversal for a history row that is gone, a deleted folder's
+//! sub-folders and the cards of a combo that no longer exists have nowhere else to be.
+//!
+//! **`combo_cards.combo_id` (schema v26) is the eleventh and the odd one, because it is the
+//! only enforced key in this schema that joins two tables that are neither the user's nor
+//! Scryfall's.** Both sides are the Commander Spellbook feed's, both are rebuilt wholesale by
+//! the same ingest, and the key is legal here for the plainest reason in the paragraph above
+//! it: it points at `combos.id`, not at `cards.id`, so no sync can abort on it. What it buys
+//! is the one thing the tag tables' soft keys do not — a `combo_cards` row that has outlived
+//! its combo is not a thing the match query can ever see, because a half-written parent cannot
+//! leave orphaned children behind it. Its price is written down at [`swap_combo_staging`]: the
+//! child is dropped **before** the parent, since a `DROP TABLE` with foreign keys on is an
+//! implicit `DELETE` and doing it the other way round drags every child row through a cascade
+//! on the way to dropping that table too.
 //!
 //! **`deck_allocations.deck_id` and `deck_allocations.collection_entry_id` left this list at
 //! schema v25, with their table**, and they are worth a line rather than a silent deletion
@@ -254,7 +266,7 @@ fn json_raw(col: &str) -> String {
 /// wrote *head* would commit "fully migrated" before the steps after it had run — and
 /// would keep the version assertion passing while doing it. This constant is the thing
 /// tests compare against, not the thing steps write.
-pub const SCHEMA_VERSION: i64 = 25;
+pub const SCHEMA_VERSION: i64 = 26;
 
 /// What makes two collection rows the *same* row, as one SQL fragment.
 ///
@@ -2621,6 +2633,141 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         tx.execute_batch("PRAGMA user_version = 25;")?;
         tx.commit()?;
     }
+    if v < 26 {
+        let tx = conn.unchecked_transaction()?;
+        // **A deck can be told which Commander bracket it is, and the app gains somewhere to
+        // keep the combos it needs to guess.** Two unrelated-looking halves in one rung because
+        // they answer one question: the bracket readout on a deck's header was an estimate the
+        // reader could not correct and could not see the working of, and the two things it was
+        // missing are a stored answer and a combo list.
+        //
+        // **`bracket` is `NOT NULL DEFAULT 0` with `0` meaning *Auto*, deliberately mirroring
+        // `decks.default_category_id`'s sentinel rather than being nullable** —
+        // [`crate::deck::AUTO_BRACKET`] is the name, and [`crate::deck::AUTO_CATEGORY`] is the
+        // column it is copying. [`crate::deck::DeckPatch`]'s convention is that an absent field
+        // means "leave it", written as `coalesce(?n, column)`, which reads a bound NULL the
+        // same way — so a nullable column could not express "put it back to Auto" without a
+        // command of its own or a double-`Option` across the whole struct. `1`–`5` are the
+        // reader's own answer; `0` says the estimate stands.
+        //
+        // **The range fence is Rust's, because `ALTER TABLE … ADD COLUMN` cannot carry a
+        // CHECK**, and that restriction is real where two other comments in this file have had
+        // to be corrected: SQLite's documented ADD COLUMN restrictions are PRIMARY KEY, UNIQUE,
+        // a non-constant DEFAULT, NOT NULL without a default, REFERENCES without a NULL default
+        // and GENERATED STORED — a plain `CHECK (bracket BETWEEN 0 AND 5)` is **not** on that
+        // list and v19's `deck_cards.finish` adds an enforced one exactly this way. What is on
+        // the list is the thing this column needs: it is `NOT NULL DEFAULT 0`, and a CHECK
+        // added by `ALTER` is evaluated against every existing row, which is fine here and
+        // still leaves the fence in the wrong place. A command parameter reaches this column,
+        // and a refusal in Rust can say *which* number was wrong and what the legal ones are
+        // where a `CHECK constraint failed` names the constraint — `deck::valid_game`'s
+        // argument over `decks.game_key`, one column along. [`crate::deck::valid_bracket`] is
+        // that fence.
+        //
+        // **Every existing deck reads `0`, and that is the answer rather than a lie a DEFAULT
+        // is telling** — v24's `folder_id` shape, and the distinction its comment draws: a
+        // reader who has never been asked which bracket their deck is has not answered "1", they
+        // have left it on Auto, which is what the app did for them before this rung existed.
+        tx.execute_batch("ALTER TABLE decks ADD COLUMN bracket INTEGER NOT NULL DEFAULT 0;")?;
+        // The combo feed's three tables. **A fourth optional bulk download**, ingested the way
+        // the price feeds and the two tagger datasets are: nothing is fetched until a reader
+        // asks, a failure keeps the previous rows, and a database that has never ingested is a
+        // supported state whose bracket estimate simply reads three signals instead of four.
+        //
+        // Spelled out **literally**, [`CARDS_COLUMNS`]' rule and the one every rung from v4 on
+        // repeats: a migration step is history, and a step that interpolated a constant would
+        // silently rewrite what a *fresh* install creates the next time that constant moved.
+        // [`COMBO_STAGING_SQL`] is a second literal for [`ORACLE_TAG_STAGING_SQL`]'s reason.
+        //
+        // The rows are the feed's own facts and nothing here concludes anything from them:
+        // `bracket_tag` is Commander Spellbook's editorial letter carried through verbatim, and
+        // what a letter *means* for a deck's bracket floor is TypeScript's, which is the
+        // crate's boundary applied to a fourth data source.
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS combos (
+                 -- Commander Spellbook's variant id, e.g. `1957-4050-7918--204`. TEXT because
+                 -- it is theirs: nothing here mints one, and a row is only ever replaced
+                 -- wholesale by the next ingest.
+                 id             TEXT PRIMARY KEY,
+                 -- One of R|S|P|O|C|E|B — Ruthless, Spicy, Powerful, Oddball, Core, Exhibition,
+                 -- Banned. No CHECK: the vocabulary is the *feed's* and may grow the day they
+                 -- add a letter, and a CHECK here would turn that into an ingest that fails
+                 -- rather than a letter this app does not raise a floor for.
+                 bracket_tag    TEXT NOT NULL,
+                 -- DISTINCT oracle ids in `combo_cards` for this combo, stored rather than
+                 -- counted: the match query compares it against what a deck holds, and a
+                 -- correlated count per candidate combo is the shape that turns a deck check
+                 -- into a scan.
+                 card_count     INTEGER NOT NULL,
+                 -- The feed's `requires[]` — *templates* like `a creature with flying`, which
+                 -- resolve to no card id. `> 0` means this app cannot fully check the combo, so
+                 -- it is shown as possible and kept out of the arithmetic.
+                 template_count INTEGER NOT NULL,
+                 -- Colour identity of the combo, the feed's own spelling.
+                 identity       TEXT NOT NULL,
+                 -- What it does: feature names, newline-joined. One column rather than a fourth
+                 -- table because nothing queries it — it is read whole, for one combo, to be
+                 -- printed.
+                 produces       TEXT NOT NULL,
+                 -- How many decks Spellbook has seen it in. NULL where the feed carries none,
+                 -- which is not the same as zero and must not be faked into it.
+                 popularity     INTEGER
+             );
+             CREATE TABLE IF NOT EXISTS combo_cards (
+                 -- **The one enforced foreign key in this rung**, and the module doc says why
+                 -- it is legal where a key on `cards.id` never is. ON DELETE CASCADE so a combo
+                 -- cannot leave its own card list behind it.
+                 combo_id          TEXT NOT NULL REFERENCES combos(id) ON DELETE CASCADE,
+                 -- `cards.oracle_id`, **softly** — the corpus is dropped and recreated on every
+                 -- sync, so a declared reference here would abort one. A combo naming a card
+                 -- this database has never synced is a row that simply never matches.
+                 oracle_id         TEXT NOT NULL,
+                 -- Denormalised for the same reason every user table denormalises a printing:
+                 -- the list has to stay readable when the id stops resolving.
+                 name              TEXT NOT NULL,
+                 quantity          INTEGER NOT NULL,
+                 must_be_commander INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS combo_meta (
+                 -- One row, ever — `oracle_tag_meta`'s shape and its reason: this watermark and
+                 -- the card sync's describe different files on different schedules, and a
+                 -- failed combo refresh must not read as a failed sync.
+                 id          INTEGER PRIMARY KEY CHECK (id = 1),
+                 -- Replayed as `If-None-Match`, so a re-run of an unchanged file costs zero
+                 -- bytes. NULL when the response carried none.
+                 etag        TEXT,
+                 -- The file's own `timestamp`, verbatim. The second half of the short-circuit:
+                 -- a 200 with no ETag still names the file it is offering.
+                 stamp       TEXT,
+                 -- Unix seconds: when rows last **changed**. NULL means never ingested, which
+                 -- is a supported state the panel and the estimator both have to be able to
+                 -- read — it is why this one is nullable where `checked_at` is not.
+                 fetched_at  INTEGER,
+                 -- Unix seconds: when we last **asked**. A 304 moves this and leaves
+                 -- `fetched_at` alone, `sync_meta.last_check_at`'s reason — without the split a
+                 -- feed that is simply up to date reads as due on every launch.
+                 checked_at  INTEGER NOT NULL,
+                 combo_count INTEGER NOT NULL DEFAULT 0,
+                 -- Variants dropped on the way in: not `OK`, or not Commander-legal. Counted
+                 -- rather than discarded silently, because `1 of 40 000 kept` and
+                 -- `39 999 of 40 000 kept` are the same empty-looking result otherwise.
+                 skipped     INTEGER NOT NULL DEFAULT 0
+             );",
+        )?;
+        // **The two indexes the match query turns on**, replayed here from the same constant
+        // [`swap_combo_staging`] replays — one copy, so an ingest cannot leave the live tables
+        // indexed differently from the way this rung built them. `oracle_id` is the one that
+        // matters: the query starts from the deck's oracle ids and joins *into* `combo_cards`,
+        // so without it every deck check is a full scan of the whole combo card list.
+        tx.execute_batch(COMBO_INDEXES_SQL)?;
+        // Nothing here is FTS-indexed and no `cards` rowid moves, so no rebuild is owed — the
+        // reasoning `the_v2_backfill_leaves_the_search_index_answering` pins.
+        //
+        // Literal `26`, for the reason every step before it writes its own: this step is what
+        // *makes* a database version 26.
+        tx.execute_batch("PRAGMA user_version = 26;")?;
+        tx.commit()?;
+    }
 
     // **Outside the ladder, on purpose: the tag indexes are replayed on every launch, from
     // every version.** Not belt and braces — the thing this prevents is a hung window, and the
@@ -2860,6 +3007,29 @@ const TAG_INDEXES_SQL: &str = "
     CREATE INDEX IF NOT EXISTS idx_art_tag_illustrations_slug
         ON art_tag_illustrations(slug);
     CREATE INDEX IF NOT EXISTS idx_oracle_tag_cards_slug ON oracle_tag_cards(slug);";
+
+/// The two indexes on `combo_cards`, written once because they are created twice: by the v26
+/// rung that makes the table, and by [`swap_combo_staging`] after every ingest.
+///
+/// **The replay is not optional and [`swap_combo_staging`] says why**: a rename carries the
+/// *staging* table's indexes rather than the live table's, and no staging DDL creates one. One
+/// constant, so the two sites cannot come to disagree about what `combo_cards` is indexed by.
+///
+/// `idx_combo_cards_oracle` is the one the feature turns on. The match query starts from the
+/// deck — a hundred distinct oracle ids — and joins *into* `combo_cards`, so without it every
+/// bracket check is a full scan of a table with one row per card per combo. `..._combo` serves
+/// the `GROUP BY cc.combo_id` on the other side of the same statement and the cascade behind
+/// `combo_cards.combo_id`.
+///
+/// **Deliberately not replayed outside the ladder the way [`TAG_INDEXES_SQL`] is.** That one
+/// earns its per-launch replay with a measured number — 49 ms against 531 seconds, a window
+/// that stops responding rather than a slow page. Nothing here has been measured, the combos
+/// query is a press rather than a keystroke, and a replay nobody can justify is a line the next
+/// reader has to guess the reason for. If a missing index here is ever found to cost more than
+/// a slow panel, this constant is already in the right shape to be added to that replay.
+const COMBO_INDEXES_SQL: &str = "
+    CREATE INDEX IF NOT EXISTS idx_combo_cards_combo  ON combo_cards(combo_id);
+    CREATE INDEX IF NOT EXISTS idx_combo_cards_oracle ON combo_cards(oracle_id);";
 
 /// (Re)create the external-content FTS5 index over `cards` and populate it.
 ///
@@ -3248,6 +3418,121 @@ pub fn swap_art_tag_staging(conn: &Connection) -> rusqlite::Result<()> {
     swap_tag_staging(conn, &ART_TAG_TABLES)
 }
 
+/// The combo feed's two data tables again, `_staging` and empty.
+///
+/// [`ORACLE_TAG_STAGING_SQL`]'s shape and every one of its reasons — a second literal rather
+/// than the v26 rung's DDL with its names rewritten, because the live DDL is *history* the day
+/// it ships while this one describes head and moves with it.
+/// `the_combo_staging_tables_match_the_live_ones` is what stops the two coming apart.
+///
+/// No `combo_meta_staging`: the watermark is one row written *with* the swap, not a table that
+/// is rebuilt.
+///
+/// **The one difference from the tag family, and it is the foreign key.** `combo_cards_staging`
+/// references **`combos_staging`** and not `combos`, which is the only spelling that works: a
+/// staging child pointed at the live parent would be checked against the *previous* ingest's
+/// ids on every insert, so the first variant the feed had not published last week would fail
+/// the whole run. SQLite rewrites a `REFERENCES` clause in any other table when the table it
+/// names is renamed — foreign keys are on for every connection in this crate — so
+/// [`swap_combo_staging`]'s `combos_staging → combos` is also what turns this clause into the
+/// live one, and `the_swapped_combo_cards_still_reference_combos` is the fence that says it
+/// really happened rather than that somebody believed it would.
+///
+/// The two `DROP`s are child-first for [`swap_combo_staging`]'s reason, which is the same
+/// reason read one table over.
+const COMBO_STAGING_SQL: &str = "
+    DROP TABLE IF EXISTS combo_cards_staging;
+    DROP TABLE IF EXISTS combos_staging;
+    CREATE TABLE combos_staging (
+        id             TEXT PRIMARY KEY,
+        bracket_tag    TEXT NOT NULL,
+        card_count     INTEGER NOT NULL,
+        template_count INTEGER NOT NULL,
+        identity       TEXT NOT NULL,
+        produces       TEXT NOT NULL,
+        popularity     INTEGER
+    );
+    CREATE TABLE combo_cards_staging (
+        combo_id          TEXT NOT NULL REFERENCES combos_staging(id) ON DELETE CASCADE,
+        oracle_id         TEXT NOT NULL,
+        name              TEXT NOT NULL,
+        quantity          INTEGER NOT NULL,
+        must_be_commander INTEGER NOT NULL
+    );";
+
+/// The combo feed's two live tables and their staging twins, paired — [`ORACLE_TAG_TABLES`]'s
+/// rule: the swap, the cleanup and the shape-comparison test all name the same tables.
+///
+/// **Parent first, and the order is read backwards by one of the three.** [`drop_combo_staging`]
+/// and the shape test do not care; [`swap_combo_staging`] drops the *child* first and so walks
+/// this list in reverse for that half, which is why it is written out rather than folded into
+/// [`swap_tag_staging`]'s loop.
+///
+/// `combo_meta` is deliberately not here and is not a third entry waiting to be added: it is the
+/// watermark, and everything on this list is emptied by the next refresh.
+pub const COMBO_TABLES: [(&str, &str); 2] = [
+    ("combos", "combos_staging"),
+    ("combo_cards", "combo_cards_staging"),
+];
+
+/// Create the two empty `combo*_staging` tables, dropping any an interrupted run left behind.
+///
+/// [`create_oracle_tag_staging`]'s shape and its reason: the refresh writes here for the length
+/// of the ingest, so no reader ever sees a half-built combo list — a deck matched against a
+/// table holding the first eight thousand variants of forty thousand would be told it has no
+/// combos, confidently and wrongly.
+pub fn create_combo_staging(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(COMBO_STAGING_SQL)
+}
+
+/// Drop the two `combo*_staging` tables. What a refused or failed run leaves owing.
+///
+/// **Child first**, [`swap_combo_staging`]'s rule and for its reason: with foreign keys on, a
+/// `DROP TABLE` is an implicit `DELETE`, so dropping the parent first drags every staged child
+/// row through a cascade on the way to dropping that table too. The list is walked in reverse
+/// rather than spelled out, so a third table added to [`COMBO_TABLES`] is covered without
+/// anybody remembering this line.
+pub fn drop_combo_staging(conn: &Connection) -> rusqlite::Result<()> {
+    let batch: String = COMBO_TABLES
+        .iter()
+        .rev()
+        .map(|(_, staging)| format!("DROP TABLE IF EXISTS {staging};"))
+        .collect();
+    conn.execute_batch(&batch)
+}
+
+/// Promote the two `combo*_staging` tables over the live ones.
+///
+/// **The caller supplies the transaction**, [`swap_oracle_tag_staging`]'s contract and its
+/// reason: the `combo_meta` row that says which file these rows came from has to commit with
+/// them. A swap that landed without its watermark would make the next run re-download and
+/// re-ingest a file it already holds — or, worse the other way round, a meta row that landed
+/// without its rows would make it 304 past an empty table forever.
+///
+/// **The index replay is [`swap_tag_staging`]'s and it is not optional.** A rename carries the
+/// *staging* table's indexes rather than the live table's, and [`COMBO_STAGING_SQL`] creates
+/// none at all — so without [`COMBO_INDEXES_SQL`] here the first refresh silently un-indexes
+/// `combo_cards` and every bracket check after it scans the whole table. That failure is a
+/// panel that got slower a week after a refresh nobody noticed, with nothing anywhere pointing
+/// at this function; `the_combo_indexes_survive_a_swap` is the fence.
+///
+/// **The order of the four statements is the rest of it.** The child is dropped before the
+/// parent because a `DROP TABLE` with foreign keys on is an implicit `DELETE` — the other way
+/// round takes every live `combo_cards` row through the cascade behind `combo_cards.combo_id`
+/// first, which is work done to rows that are about to be dropped anyway. The parent is
+/// *renamed* before the child, and that half is load-bearing rather than tidy: SQLite rewrites
+/// `REFERENCES` clauses that name a renamed table, so `combos_staging → combos` is exactly what
+/// turns `combo_cards_staging`'s key into the live one this schema declares.
+pub fn swap_combo_staging(conn: &Connection) -> rusqlite::Result<()> {
+    conn.execute_batch(
+        "DROP TABLE IF EXISTS combo_cards;
+         DROP TABLE IF EXISTS combos;
+         ALTER TABLE combos_staging RENAME TO combos;
+         ALTER TABLE combo_cards_staging RENAME TO combo_cards;",
+    )?;
+    conn.execute_batch(COMBO_INDEXES_SQL)
+}
+
 /// `pub(crate)` for the deck seed helpers at the bottom of the module: Task 3's
 /// reconciler tests need the same deck-shaped fixture, and a second hand-rolled copy of
 /// it is a second thing to keep true. `#[cfg(test)]` still bounds all of it to test builds.
@@ -3265,12 +3550,17 @@ pub(crate) mod tests {
                 "SELECT count(*) FROM sqlite_master WHERE name IN
                  ('cards','sets','sync_meta','cards_fts',
                   'collection_entries','collection_folders','wishlist_entries',
-                  'card_migrations','decks','deck_cards','format_specs')",
+                  'card_migrations','decks','deck_cards','format_specs',
+                  'combos','combo_cards','combo_meta')",
                 [],
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(n, 11);
+        assert_eq!(n, 14);
+        // v26's column, on the same fresh database: a rerun of `migrate` must not answer
+        // `duplicate column name`, which is the one way an `ALTER TABLE … ADD COLUMN` rung can
+        // break the idempotence this test is named for.
+        assert_eq!(has_column(&conn, "decks", "bracket"), 1);
 
         // Without this the test would still pass while `migrate` re-ran its whole batch
         // every call (the CREATEs are all `IF NOT EXISTS`), silently rebuilding FTS each
@@ -6082,6 +6372,37 @@ pub(crate) mod tests {
          INSERT OR REPLACE INTO app_meta (key, value)
             VALUES ('deck_driven_collection', '1');";
 
+    /// And v26's bracket column and its three combo tables.
+    ///
+    /// Owed for [`UNDO_V13`]'s **loud** reason: `ALTER TABLE decks ADD COLUMN bracket` is not
+    /// idempotent, so a fixture that forgot this line does not merely mislabel itself — it dies
+    /// at `duplicate column name` on the way back up, a failure no real upgrade can produce.
+    /// The three `DROP TABLE`s are owed for [`UNDO_V14`]'s quieter one as well, the rung's own
+    /// DDL being `CREATE TABLE IF NOT EXISTS` throughout: a fixture that kept them would migrate
+    /// perfectly happily while claiming a version that never had them.
+    ///
+    /// **One `DROP COLUMN` is the whole of the deck half.** No index names `decks.bracket` and
+    /// no constraint references it — it is a sentinel in a `NOT NULL` column rather than a
+    /// nullable foreign key, [`UNDO_V16`]'s situation exactly — so this rewind has nothing to
+    /// take down first, where [`UNDO_V19`]'s and [`UNDO_V24`]'s do.
+    ///
+    /// **The two indexes need no line of their own**, [`UNDO_V20`]'s rule about which one does:
+    /// `DROP TABLE combo_cards` takes `idx_combo_cards_combo` and `idx_combo_cards_oracle` with
+    /// it, because the table they are on is the table that goes.
+    ///
+    /// **Child before parent**, `swap_combo_staging`'s reason: with foreign keys on a
+    /// `DROP TABLE` is an implicit `DELETE`, and dropping `combos` while `combo_cards` still
+    /// references it walks every row through the cascade first. No fixture on this ladder has
+    /// a row in either, so this is a rule stated where it can be read rather than a cost being
+    /// avoided.
+    ///
+    /// **It runs first, before [`UNDO_V25`]**, for that constant's stated reason: newest-first
+    /// is the order every rewind always meant.
+    const UNDO_V26: &str = "ALTER TABLE decks DROP COLUMN bracket;
+         DROP TABLE IF EXISTS combo_cards;
+         DROP TABLE IF EXISTS combos;
+         DROP TABLE IF EXISTS combo_meta;";
+
     /// A database that stopped at version 9 — the version below the step that *widens*
     /// `idx_cards_collapse`, which is the property this fixture exists for.
     ///
@@ -6128,7 +6449,7 @@ pub(crate) mod tests {
              ALTER TABLE cards DROP COLUMN legal_mask;
              CREATE INDEX idx_cards_collapse
                  ON cards(oracle_id, is_paper, released_at, id, name, price_usd);
-             {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20}
+             {UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20}
              {UNDO_V12}
              {UNDO_V13}
              {UNDO_V14}
@@ -6329,7 +6650,7 @@ pub(crate) mod tests {
         conn.execute_batch(&format!(
             "DROP TABLE marketplace_prices;
              DROP TABLE marketplace_feed_meta;
-             {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20}
+             {UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20}
              {UNDO_V12}
              {UNDO_V13}
              {UNDO_V14}
@@ -6357,7 +6678,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V12} {UNDO_V13} {UNDO_V14} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} \
+            "{UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V12} {UNDO_V13} {UNDO_V14} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} \
              {UNDO_V19} PRAGMA user_version = 11;"
         ))
         .unwrap();
@@ -6431,7 +6752,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V13} {UNDO_V14} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} \
+            "{UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V13} {UNDO_V14} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} \
              {UNDO_V19} PRAGMA user_version = 12;"
         ))
         .unwrap();
@@ -6745,7 +7066,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V14} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 13;"
+            "{UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V14} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 13;"
         ))
         .unwrap();
         conn
@@ -7043,7 +7364,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 14;"
+            "{UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 14;"
         ))
         .unwrap();
         conn
@@ -7218,7 +7539,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V16} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 15;"
+            "{UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V16} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 15;"
         ))
         .unwrap();
         conn
@@ -7241,7 +7562,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 16;"
+            "{UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 16;"
         ))
         .unwrap();
         conn
@@ -7346,7 +7667,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} PRAGMA user_version = 19;"
+            "{UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} PRAGMA user_version = 19;"
         ))
         .unwrap();
         conn
@@ -7363,7 +7684,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} PRAGMA user_version = 20;"
+            "{UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} PRAGMA user_version = 20;"
         ))
         .unwrap();
         conn
@@ -7911,7 +8232,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V25} {UNDO_V24} {UNDO_V23} PRAGMA user_version = 21;"
+            "{UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} PRAGMA user_version = 21;"
         ))
         .unwrap();
         conn
@@ -8287,7 +8608,7 @@ pub(crate) mod tests {
         // that replaces it is a literal for `v9_database`'s reason -- this is a description of
         // history, and history does not change when `WISHLIST_GRAIN` does.
         conn.execute_batch(&format!(
-            "{UNDO_V25} {UNDO_V24} {UNDO_V23}
+            "{UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23}
              DROP INDEX IF EXISTS idx_wishlist_grain;
              ALTER TABLE wishlist_entries DROP COLUMN folder_id;
              CREATE UNIQUE INDEX idx_wishlist_grain
@@ -8359,7 +8680,7 @@ pub(crate) mod tests {
             "DROP INDEX IF EXISTS idx_collection_folder;
              DROP INDEX IF EXISTS idx_collection_grain;
              ALTER TABLE collection_entries DROP COLUMN folder_id;
-             {UNDO_V25} {UNDO_V24}
+             {UNDO_V26} {UNDO_V25} {UNDO_V24}
              CREATE UNIQUE INDEX idx_collection_grain ON collection_entries (
                  card_id, finish, condition, lang, altered, signed, proxy, misprint,
                  coalesce(serial_number, ''), coalesce(grading, '')
@@ -8377,28 +8698,80 @@ pub(crate) mod tests {
         conn
     }
 
-    /// [`v24_database`] must really sit one step below head, or the tests below it are a fresh
+    /// [`v25_database`] must really sit one step below head, or the tests below it are a fresh
     /// install compared against itself. The next step added to the ladder renumbers this
     /// fixture, and `SCHEMA_VERSION - 1` is the line that says so.
     ///
-    /// **The fixture named here has changed eleven times** — v14's, then v15's, v16's, v17's,
-    /// v18's, v19's, v20's, v21's, v22's, v23's, now v24's — and each move was this assertion
-    /// going red, which is the whole reason it is written against `SCHEMA_VERSION - 1` rather
-    /// than a number.
+    /// **The fixture named here has changed twelve times** — v14's, then v15's, v16's, v17's,
+    /// v18's, v19's, v20's, v21's, v22's, v23's, v24's, now v25's — and each move was this
+    /// assertion going red, which is the whole reason it is written against `SCHEMA_VERSION - 1`
+    /// rather than a number.
     ///
-    /// **What head-minus-one has to lack is now three things it *has*, which inverts this
-    /// test.** Every rung before v25 added; v25 takes away, so a real v24 database is the one
-    /// that still carries `deck_allocations`, `decks.is_built` and the `app_meta` flag —
-    /// [`schema_at_24`] pays the full rewind that puts all three back, and this is the one
-    /// fixture that can be asked about any of them.
+    /// **v26 puts this test the usual way round again.** v25 was the one rung that took things
+    /// away, so head-minus-one had to be asked what it still *had*; v26 only adds, so a real v25
+    /// database is one that lacks `decks.bracket` and the three combo tables and gains all four.
+    /// [`the_v24_fixture_carries_none_of_v25`] keeps the inverted half, which is about v25's own
+    /// rung and is still worth driving.
     #[test]
     fn the_head_minus_one_fixture_really_sits_one_step_below_head() {
-        let conn = v24_database();
+        let conn = v25_database();
 
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(version, SCHEMA_VERSION - 1, "one step below head");
+        assert_eq!(
+            has_column(&conn, "decks", "bracket"),
+            0,
+            "the fixture is a real v25 database, not head wearing a v25 label"
+        );
+        assert_eq!(
+            combo_table_count(&conn),
+            0,
+            "and none of v26's three tables may be standing yet"
+        );
+
+        migrate(&conn).unwrap();
+
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        assert_eq!(
+            has_column(&conn, "decks", "bracket"),
+            1,
+            "and the v26 step must not have been skipped"
+        );
+        assert_eq!(combo_table_count(&conn), 3);
+    }
+
+    /// How many of v26's three tables `sqlite_master` carries — the shape
+    /// [`oracle_tag_table_count`] has one feed over, so a fixture assertion is one number rather
+    /// than three `EXISTS` queries that can each be forgotten.
+    fn combo_table_count(conn: &Connection) -> i64 {
+        conn.query_row(
+            "SELECT count(*) FROM sqlite_master
+              WHERE type = 'table' AND name IN ('combos','combo_cards','combo_meta')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// [`v24_database`] kept the "one step below head" title until v26 arrived and
+    /// [`v25_database`] took it, and it keeps the half of the assertion that is about *v25's*
+    /// rung — the inverted half, because v25 is the one rung on this ladder that takes something
+    /// away. A real v24 database still carries `deck_allocations`, `decks.is_built` and the
+    /// `app_meta` flag, [`schema_at_24`] pays the full rewind that puts all three back, and this
+    /// is the one fixture that can be asked about any of them.
+    #[test]
+    fn the_v24_fixture_carries_none_of_v25() {
+        let conn = v24_database();
+
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 24);
         assert_eq!(
             has_column(&conn, "decks", "is_built"),
             1,
@@ -8621,7 +8994,7 @@ pub(crate) mod tests {
     /// would fail that test on ordinals, which is the failure it exists to catch.
     fn schema_at_24(conn: &Connection) {
         migrate(conn).unwrap();
-        conn.execute_batch(&format!("{UNDO_V25} PRAGMA user_version = 24;"))
+        conn.execute_batch(&format!("{UNDO_V26} {UNDO_V25} PRAGMA user_version = 24;"))
             .unwrap();
     }
 
@@ -8630,6 +9003,29 @@ pub(crate) mod tests {
     fn v24_database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         schema_at_24(&conn);
+        conn
+    }
+
+    /// Rewind a head-shaped database to version 25 — **head minus one since v26**, and the
+    /// shortest rewind on the ladder: v26 adds and takes nothing away, so [`UNDO_V26`] alone is
+    /// the whole of it.
+    ///
+    /// The `ALTER TABLE decks DROP COLUMN bracket` inside it is what makes this a real v25
+    /// database rather than head wearing a label: the v26 rung's `ADD COLUMN` has no
+    /// `IF NOT EXISTS`, so a fixture that skipped it would die on the way back up rather than
+    /// quietly mislabel itself. [`UNDO_V14`]'s quieter failure is the one the three
+    /// `DROP TABLE`s prevent.
+    fn schema_at_25(conn: &Connection) {
+        migrate(conn).unwrap();
+        conn.execute_batch(&format!("{UNDO_V26} PRAGMA user_version = 25;"))
+            .unwrap();
+    }
+
+    /// A database at version 25, as a fixture. [`schema_at_25`] with the connection made for
+    /// it — the shape every other `vNN_database` on this ladder has.
+    fn v25_database() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        schema_at_25(&conn);
         conn
     }
 
@@ -8982,6 +9378,353 @@ pub(crate) mod tests {
         );
     }
 
+    // ---- v26: the bracket column, and the combo feed's tables ---------------------------
+
+    /// The rung over the version below it: a deck that already existed gains `bracket` reading
+    /// **0**, which is Auto, and the three combo tables arrive.
+    ///
+    /// **The deck is seeded into the v25 fixture before the migration and not after**, which is
+    /// the whole of what this test is for. A fresh install has no decks, so every deck in it is
+    /// born with the column's DEFAULT and the question "what does an *existing* deck read" is
+    /// one only an upgrade fixture can answer — the trap `src-tauri/CLAUDE.md` states as *a
+    /// fresh worktree is a fresh install and is the one population that cannot show it*.
+    #[test]
+    fn v26_gives_an_existing_deck_the_auto_bracket_and_creates_the_combo_tables() {
+        let conn = v25_database();
+        let deck_id = deck(&conn, "Atraxa");
+        assert_eq!(has_column(&conn, "decks", "bracket"), 0);
+
+        migrate(&conn).unwrap();
+
+        let version: i64 = conn
+            .query_row("PRAGMA user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, SCHEMA_VERSION);
+        let bracket: i64 = conn
+            .query_row("SELECT bracket FROM decks WHERE id = ?1", [deck_id], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(
+            bracket,
+            crate::deck::AUTO_BRACKET,
+            "a deck that predates the column has not answered the question — it is on Auto"
+        );
+        assert_eq!(combo_table_count(&conn), 3);
+    }
+
+    /// The column is `NOT NULL`, so no deck can ever read "no answer" — the sentinel is the
+    /// answer, and the difference matters to every reader of it.
+    ///
+    /// Driven rather than trusted, because `NOT NULL DEFAULT 0` on an `ALTER TABLE … ADD COLUMN`
+    /// is exactly the pair `src-tauri/CLAUDE.md` warns about: a default is a promise to a
+    /// population, and the only way to know which population it is lying to is to try to write
+    /// the value it is supposed to make impossible.
+    #[test]
+    fn a_deck_can_never_carry_a_null_bracket() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let id = deck(&conn, "Atraxa");
+        let err = conn
+            .execute("UPDATE decks SET bracket = NULL WHERE id = ?1", [id])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            err.contains("NOT NULL"),
+            "a NULL bracket must be refused by the column: {err}"
+        );
+    }
+
+    /// **The range is not the database's**, and this is the assertion that says so out loud
+    /// rather than leaving the next reader to discover it from a bug report.
+    ///
+    /// `ALTER TABLE … ADD COLUMN` *can* carry a CHECK — v19's `deck_cards.finish` does, and
+    /// `the_deck_card_finish_column_refuses_nonfoil` proves it — so the absence of one here is
+    /// a choice: a command parameter reaches this column, and `deck::valid_bracket` can say
+    /// which number was wrong and what the legal ones are where `CHECK constraint failed` names
+    /// only the constraint. `decks.game_key`'s arrangement, one column along.
+    #[test]
+    fn the_bracket_column_carries_no_check_because_rust_is_the_fence() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        let id = deck(&conn, "Atraxa");
+        conn.execute("UPDATE decks SET bracket = 9 WHERE id = ?1", [id])
+            .expect("the column itself takes any integer — the fence is deck::valid_bracket");
+        assert_eq!(
+            crate::deck::update_deck(
+                &conn,
+                id,
+                &crate::deck::DeckPatch {
+                    bracket: Some(9),
+                    ..Default::default()
+                },
+            )
+            .unwrap_err(),
+            crate::deck::BAD_BRACKET,
+            "and the command is where 9 is refused"
+        );
+    }
+
+    /// The watermark holds one row, and **the two stamps are nullable in opposite directions**
+    /// — which is the whole of how "never ingested" is spelled.
+    ///
+    /// `fetched_at` NULL means the feed has never been ingested here, a supported state the
+    /// settings panel and the bracket estimator both have to be able to read; `checked_at` is
+    /// `NOT NULL` because a row exists only once something has asked. Getting that pair the
+    /// wrong way round would make a database that has never downloaded anything
+    /// indistinguishable from one whose last check found nothing new, and the panel would say
+    /// "up to date" about a table with no rows in it.
+    ///
+    /// The `CHECK (id = 1)` is the "one row, ever" that `oracle_tag_meta` has, driven the same
+    /// way: a second row is what a refresh that forgot its `INSERT OR REPLACE` would leave.
+    #[test]
+    fn the_combo_watermark_is_one_row_and_says_when_it_has_never_ingested() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+
+        conn.execute_batch(
+            "INSERT INTO combo_meta (id, etag, stamp, fetched_at, checked_at)
+                VALUES (1, NULL, NULL, NULL, 1800000000);",
+        )
+        .expect("a database that has asked and never ingested is a row with a NULL fetched_at");
+        let never: Option<i64> = conn
+            .query_row("SELECT fetched_at FROM combo_meta WHERE id = 1", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(never, None);
+
+        // **The other stamp, probed on `id = 1` in a database of its own.** Reaching for a
+        // second id here would have been the trap this test caught in its own first draft: an
+        // `INSERT … VALUES (2, NULL)` is refused by `CHECK (id = 1)` before nullability is ever
+        // consulted, so the assertion passed whether `checked_at` was `NOT NULL` or not — a
+        // green test measuring the wrong constraint. The mutation that survived it was
+        // `checked_at INTEGER`, and this is the shape that kills it.
+        let fresh = Connection::open_in_memory().unwrap();
+        migrate(&fresh).unwrap();
+        let no_stamp = fresh
+            .execute_batch("INSERT INTO combo_meta (id, checked_at) VALUES (1, NULL);")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            no_stamp.contains("NOT NULL"),
+            "a row exists only once something has asked: {no_stamp}"
+        );
+
+        let second = conn
+            .execute_batch("INSERT INTO combo_meta (id, checked_at) VALUES (2, 1);")
+            .unwrap_err()
+            .to_string();
+        assert!(second.contains("CHECK"), "one row, ever: {second}");
+    }
+
+    /// The staging twins have to match the live tables column for column, because the swap is a
+    /// rename and what the ingest filled *becomes* the live table.
+    /// [`the_oracle_tag_staging_tables_match_the_live_ones`]'s fence, one feed over.
+    #[test]
+    fn the_combo_staging_tables_match_the_live_ones() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        create_combo_staging(&conn).unwrap();
+
+        for (live, staging) in COMBO_TABLES {
+            let want = table_shape(&conn, live);
+            assert!(!want.is_empty(), "{live} must exist at head");
+            assert_eq!(
+                table_shape(&conn, staging),
+                want,
+                "`{staging}` must match `{live}`"
+            );
+        }
+    }
+
+    /// **The trap the swap exists to avoid.** A rename carries the *staging* table's indexes
+    /// rather than the live table's, and [`COMBO_STAGING_SQL`] creates none — so a swap that
+    /// forgot [`COMBO_INDEXES_SQL`] would leave `combo_cards` unindexed after the very first
+    /// refresh, with nothing going red and nothing in the log. `the_tag_indexes_survive_a_*`
+    /// are the two fences this one is copied from, and they were written after the same trap
+    /// was measured at 531 seconds one feed over.
+    #[test]
+    fn the_combo_indexes_survive_a_swap() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        create_combo_staging(&conn).unwrap();
+        swap_combo_staging(&conn).unwrap();
+        for index in ["idx_combo_cards_combo", "idx_combo_cards_oracle"] {
+            conn.query_row(
+                "SELECT 1 FROM sqlite_master WHERE type='index' AND name=?1",
+                [index],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap_or_else(|_| panic!("{index} did not survive the combo swap"));
+        }
+    }
+
+    /// And the key survives it too. `combo_cards_staging` is declared against
+    /// **`combos_staging`**, because a staging child pointed at the live parent would be
+    /// checked against the previous ingest's ids on every insert; what turns that clause into
+    /// the live one is SQLite rewriting a `REFERENCES` when the table it names is renamed.
+    ///
+    /// **Asserted rather than believed**, because it is a behaviour of the engine rather than
+    /// of this code, it is conditional on foreign keys being on, and its failure is silent: the
+    /// swap would succeed, the rows would be there, and `combo_cards` would simply have stopped
+    /// being able to lose its orphans.
+    #[test]
+    fn the_swapped_combo_cards_still_reference_combos() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        create_combo_staging(&conn).unwrap();
+        swap_combo_staging(&conn).unwrap();
+
+        let (table, on_delete): (String, String) = conn
+            .query_row(
+                "SELECT \"table\", on_delete FROM pragma_foreign_key_list('combo_cards')",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .expect("combo_cards must still declare a foreign key after the swap");
+        assert_eq!(table, "combos");
+        assert_eq!(on_delete, "CASCADE");
+
+        // And it is enforced, which is the thing the clause is for: a combo that goes takes its
+        // card list with it rather than leaving rows the match query would count.
+        conn.execute_batch(
+            "INSERT INTO combos (id,bracket_tag,card_count,template_count,identity,produces)
+                VALUES ('c-1','R',2,0,'ub','Infinite mill');
+             INSERT INTO combo_cards (combo_id,oracle_id,name,quantity,must_be_commander)
+                VALUES ('c-1','oid-thoracle','Thassa''s Oracle',1,0);
+             DELETE FROM combos WHERE id = 'c-1';",
+        )
+        .unwrap();
+        let left: i64 = conn
+            .query_row("SELECT count(*) FROM combo_cards", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(left, 0, "the cascade must take the combo's cards with it");
+    }
+
+    /// The swap is a rename, so the previous ingest's rows have to be **gone** rather than
+    /// merged with — a refresh that appended would leave every combo Spellbook has ever
+    /// published, including the ones its editors have since retracted.
+    /// [`the_oracle_tag_swap_replaces_rather_than_merges`]'s assertion, one feed over.
+    #[test]
+    fn the_combo_swap_replaces_rather_than_merges() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO combos (id,bracket_tag,card_count,template_count,identity,produces)
+                VALUES ('retired','C',2,0,'w','Nothing much');
+             INSERT INTO combo_cards (combo_id,oracle_id,name,quantity,must_be_commander)
+                VALUES ('retired','oid-1','Old Card',1,0);",
+        )
+        .unwrap();
+
+        create_combo_staging(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO combos_staging
+                (id,bracket_tag,card_count,template_count,identity,produces,popularity)
+                VALUES ('fresh','R',2,0,'ub','Infinite mill',9001);
+             INSERT INTO combo_cards_staging
+                (combo_id,oracle_id,name,quantity,must_be_commander)
+                VALUES ('fresh','oid-thoracle','Thassa''s Oracle',1,0);",
+        )
+        .unwrap();
+        // **Inside a transaction, which is the contract and not decoration.** The watermark
+        // commits with the rows, so this is the only way the swap is ever actually called — and
+        // it is where the two `ALTER TABLE … RENAME`s and the `REFERENCES` rewrite they trigger
+        // have to work. Driven here because a swap that only ever ran in autocommit in tests
+        // would be a swap nobody had tried the way Task B uses it.
+        let tx = conn.unchecked_transaction().unwrap();
+        swap_combo_staging(&tx).unwrap();
+        tx.execute_batch(
+            "INSERT OR REPLACE INTO combo_meta (id, etag, stamp, fetched_at, checked_at,
+                                                combo_count, skipped)
+                VALUES (1, NULL, '2026-08-27T03:12:44Z', 1800000000, 1800000000, 1, 0);",
+        )
+        .unwrap();
+        tx.commit().unwrap();
+
+        let ids: Vec<String> = conn
+            .prepare("SELECT id FROM combos ORDER BY id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            ids,
+            vec!["fresh".to_owned()],
+            "the retired combo must be gone"
+        );
+        let cards: i64 = conn
+            .query_row("SELECT count(*) FROM combo_cards", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(cards, 1);
+        for (_, staging) in COMBO_TABLES {
+            assert_eq!(
+                table_count(&conn, staging),
+                0,
+                "{staging} must be renamed away"
+            );
+        }
+    }
+
+    /// A refused or failed run leaves the staging tables owing, and dropping them may not touch
+    /// the rows the last successful ingest left standing.
+    /// [`dropping_the_art_staging_tables_leaves_the_live_ones_standing`]'s assertion.
+    #[test]
+    fn dropping_the_combo_staging_tables_leaves_the_live_ones_standing() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        create_combo_staging(&conn).unwrap();
+        // A staged child row, so the drop is walked over a table the cascade could reach —
+        // which is the ordering `drop_combo_staging`'s doc is about.
+        conn.execute_batch(
+            "INSERT INTO combos_staging
+                (id,bracket_tag,card_count,template_count,identity,produces)
+                VALUES ('c-1','R',1,0,'u','Infinite mill');
+             INSERT INTO combo_cards_staging
+                (combo_id,oracle_id,name,quantity,must_be_commander)
+                VALUES ('c-1','oid-1','Some Card',1,0);",
+        )
+        .unwrap();
+        drop_combo_staging(&conn).unwrap();
+
+        for (live, staging) in COMBO_TABLES {
+            assert_eq!(table_count(&conn, staging), 0, "{staging} must be gone");
+            assert_eq!(table_count(&conn, live), 1, "{live} must be standing");
+        }
+        assert_eq!(table_count(&conn, "combo_meta"), 1);
+    }
+
+    /// `create_combo_staging` has to survive an interrupted run that committed its staging
+    /// tables — the `DROP TABLE IF EXISTS` pair at the top of [`COMBO_STAGING_SQL`] — and the
+    /// second call must leave them empty rather than carrying half of yesterday's file.
+    #[test]
+    fn creating_the_combo_staging_twice_starts_from_empty() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate(&conn).unwrap();
+        create_combo_staging(&conn).unwrap();
+        conn.execute_batch(
+            "INSERT INTO combos_staging
+                (id,bracket_tag,card_count,template_count,identity,produces)
+                VALUES ('c-1','R',1,0,'u','Infinite mill');
+             INSERT INTO combo_cards_staging
+                (combo_id,oracle_id,name,quantity,must_be_commander)
+                VALUES ('c-1','oid-1','Some Card',1,0);",
+        )
+        .unwrap();
+        create_combo_staging(&conn).unwrap();
+
+        let staged: i64 = conn
+            .query_row("SELECT count(*) FROM combos_staging", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(staged, 0);
+        let staged_cards: i64 = conn
+            .query_row("SELECT count(*) FROM combo_cards_staging", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(staged_cards, 0);
+    }
+
     // ---- v19: a deck card names a finish ---------------------------------------------
 
     /// A database at version 18: everything v18 left behind, and none of v19.
@@ -8995,7 +9738,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V19} PRAGMA user_version = 18;"
+            "{UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V19} PRAGMA user_version = 18;"
         ))
         .unwrap();
         conn
@@ -9146,7 +9889,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 17;"
+            "{UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 17;"
         ))
         .unwrap();
         conn
@@ -9380,14 +10123,14 @@ pub(crate) mod tests {
     /// the first found this assertion already reading a higher number and had to choose the next
     /// rung rather than discover the clash in the field.
     #[test]
-    fn the_schema_version_is_twenty_five() {
+    fn the_schema_version_is_twenty_six() {
         let conn = Connection::open_in_memory().unwrap();
         migrate(&conn).unwrap();
         let v: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(v, SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 25);
+        assert_eq!(SCHEMA_VERSION, 26);
     }
 
     /// The v19 grain widens rather than the row changing meaning: a foil copy and a regular
@@ -9596,6 +10339,12 @@ pub(crate) mod tests {
             // nowhere. This row is what says which.
             ("v19", v19_database()),
             ("v20", v20_database()),
+            // Head minus one since v26, and the arrival that matters most to it: `bracket`
+            // arrives by `ALTER TABLE … ADD COLUMN`, which always **appends**, so a database
+            // entering the ladder here has to end with `decks`' columns in the same *order* a
+            // fresh install builds them — which is the one thing `deck_columns` is compared
+            // ordinally for, and the one thing a column added by an `ALTER` can get wrong.
+            ("v25", v25_database()),
         ] {
             migrate(&conn).unwrap_or_else(|e| panic!("{name} must migrate to head: {e}"));
 

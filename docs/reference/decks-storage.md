@@ -528,9 +528,13 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
   errors. **That index is not a constant and this document will not name it**: it was 15 when the
   column was written, and merging the view-state step's three columns underneath moved it — which
   is the trap itself, not a footnote to it. Read it off `deck_row`.
-  And `update_deck` binds it as **`?12`, not `?11`** — that hole is `COVER_CARD_ART`, bound rather
+  And `update_deck` binds it as **`?11`, not `?10`** — that hole is `COVER_CARD_ART`, bound rather
   than spelled in the `SET` list, so a new column takes the next number at the **end** of the list
-  and never the next one that merely _reads_ free.
+  and never the next one that merely _reads_ free. **A _dropped_ column renumbers every binding
+  after it**, which is what v25 taking `is_built` out did to the holes quoted in these bullets:
+  each moved down by one, and this page still said `?12` here on 2026-08-27, because a prose-only
+  edit routes to neither CI job and nothing went red for two rungs. Read them off `update_deck`
+  rather than off this page.
 - **The audit word is `"xGroup"`, and it is the only multi-word field name `record_deck_edit`
   writes.** Every other arm of that switch — and of `auditText.ts`'s, which is the only thing that
   reads the payload — is a single lowercase word, so this is the first place the two spellings can
@@ -547,7 +551,7 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
   `useState` in `DeckEditor` with a select on the docked search panel until 2026-08-15 and is now
   asked in the deck settings dialog. It rides `DeckPatch`, `DeckRow`, `DeckBefore` and
   `DECK_SELECT` exactly as `separate_x_group` does, takes the **last** index in `deck_row` and the
-  **next** `?` hole at the end of `update_deck`'s `SET` list (`?13`), and is deliberately **not on
+  **next** `?` hole at the end of `update_deck`'s `SET` list (`?12`), and is deliberately **not on
   `DeckInput`**: a deck being born has no categories to point at — `create_deck` seeds the four
   zones in the same transaction — so it takes its DDL default like the columns beside it.
   **It is a sentinel in a `NOT NULL` column rather than a nullable foreign key, and that is the
@@ -588,7 +592,7 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
   platforms each format is playable on.** Both **schema v18**, both `TEXT NOT NULL` with a
   default (`'any'`; `'paper,arena,mtgo'`). `game_key` rides `DeckInput`, `DeckPatch`, `DeckRow`,
   `DeckBefore` and `DECK_SELECT` exactly as `default_category_id` does, takes the **last** index in
-  `deck_row` and the **next** `?` hole at the end of `update_deck`'s `SET` list (`?14`) — and that
+  `deck_row` and the **next** `?` hole at the end of `update_deck`'s `SET` list (`?13`) — and that
   positional discipline is sharper here than it was for the column before it, because `game_key`
   is `TEXT` and so are four of the columns above it: inserted beside the format, where it _reads_
   like it belongs, it would have swapped a deck's variant for its platform with both fields still
@@ -616,6 +620,50 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
   **`create_deck` writes no `last_deck_game` beside `last_deck_format`.** The format a reader last
   built in is a preference; the game is a filter set to find a format, and remembering it would
   open the next New deck dialog with most of the list already hidden.
+- **`decks.bracket` is which Commander bracket the reader says this deck is, and `0` is `Auto`.**
+  `INTEGER NOT NULL DEFAULT 0`, **schema v26** — `1`–`5` are the Commander Format Panel's five
+  brackets and the reader's own answer, `0` says the estimate stands. It rides `DeckPatch`,
+  `DeckRow`, `DeckBefore` and `DECK_SELECT` as the three columns above it do, takes the **last** index in
+  `deck_row` and the **next** `?` hole at the end of `update_deck`'s `SET` list (`?14`), and is
+  deliberately **not on `DeckInput`**: a deck being born has not been asked, which is what Auto
+  already says. It is on `deck_undo::DECK_FIELDS` for `game_key`'s reason — an ordinary
+  `deck_update` writes it and an ordinary history row records it, so a Ctrl+Z that left it alone
+  would put a deck's format back and leave the bracket the same press moved.
+  **The sentinel is `default_category_id`'s and so is the argument for it**, two bullets up:
+  `DeckPatch`'s `coalesce(?14, bracket)` reads a bound NULL as _leave it_, so a nullable column
+  could not have expressed "back to Auto" without a command of its own. What is different is that
+  nothing points at anything — there is no clean-up site, no remap in `duplicate_deck`, and
+  `deck_categories.id`'s "rowids start at 1" argument is not needed, because the panel's own scale
+  starts at 1 and a sixth number would have to be invented before `0` could collide with one.
+  **The fence is `deck::valid_bracket` and the DDL carries no CHECK — but _not_ because
+  `ALTER TABLE … ADD COLUMN` cannot add one.** That claim is false and v19's `deck_cards.finish`
+  disproves it: SQLite's documented `ADD COLUMN` restrictions are PRIMARY KEY, UNIQUE, a
+  non-constant DEFAULT, NOT NULL without a default, REFERENCES without a NULL default, and
+  GENERATED STORED. A plain `CHECK (bracket BETWEEN 0 AND 5)` is on none of those lists. The
+  reason is `valid_game`'s one column along: a command parameter reaches this column, and a
+  refusal in Rust can say which numbers are legal (`BAD_BRACKET` spells the whole vocabulary,
+  because the reader arrived through a picker offering six choices) where a
+  `CHECK constraint failed` names only the constraint. **The `?14` binding is the _validated_
+  value and not `patch.bracket`** — binding the raw field would make the fence decorative on
+  exactly the path it exists for.
+  **`duplicate_deck` carries it across** and `archived` still resets, the same line
+  `separate_x_group` sits on: what describes the deck comes over, what state the deck is _in_ does
+  not. A copy of a deck the reader has declared bracket 2 is a bracket 2 deck, and a duplicate that
+  reverted to Auto would tell them their estimate had changed when only the row had.
+  **The audit word is `"bracket"`** — a single word, under the same silent-drift rule as
+  `"xGroup"` and `"defaultCategory"` — and the payload carries the **number** on both sides
+  (`{"field":"bracket","from":0,"to":4}`), `format`'s rule rather than `defaultCategory`'s: there
+  is no row to name and no id to go stale, so nothing has to be resolved at write time.
+  **`auditText.ts` has no `bracket` arm as of 2026-08-27, so the history dialog draws that row as
+  "Changed the deck"** — the `default` arm, which is true of every deck edit and therefore never
+  fails. That is exactly the silent drift the `"xGroup"` paragraph above describes, arriving from
+  the other direction: the word is right and nothing reads it. The row is written, `deck_undo`
+  reverses it (`bracket` is on `DECK_FIELDS`), and only the sentence is missing.
+  **Rust stores the number and concludes nothing from it**, `AUTO_CATEGORY`'s rule exactly. The
+  four facts an estimate reads are the crate's (`cards.game_changer`, oracle text, and the `combos`
+  tables the same v26 rung created); the floor they become — a floor rather than a bracket, and
+  never 5 — is `src/features/decks/validation/bracket.ts`'s.
+  [commander-brackets.md](commander-brackets.md) is the whole record.
 - **The six single-card commands, and what each takes** (the two bulk ones,
   `deck_import_commit` and `deck_category_clear`, have their own bullets below).\
   `deck_get(id, variant)`;

@@ -234,6 +234,47 @@ shared_cell` walks both into two databases and compares them column by column.
   corpus are collected on different days. `src/marketplace_feed.rs` is the only writer:
   Near Mint from both feeds, cheapest row wins a collision, and an unpriced finish gets
   **no row** rather than a zero.
+- **Commander Spellbook's combos are a fourth optional bulk download and live in `combos` /
+  `combo_cards` / `combo_meta`** (schema v26). `src/combos.rs` is the only writer, and it is
+  modelled on `marketplace_feed.rs` and **not** on `tags/` — this is not Scryfall, so it gets its
+  **own `reqwest` client**, its own timeouts, no share of Scryfall's pacing budget and no place in
+  its 429 lockout. What binds every part of it, each rule a way this feed is allowed to fail:
+  - **Streaming end to end**, because the file expands 23× (27 542 314 B gzipped → 639 585 506 B,
+    measured 2026-08-27) and almost all of that is Scryfall image URLs nothing here wants. Byte
+    stream → a temp file under `tmp/` → `GzDecoder` → `serde_json` with a `DeserializeSeed` over
+    the `variants` array, one variant live at a time. `MAX_FEED_BYTES` is checked against the
+    declared `Content-Length` **and** against the running total, because a chunked response
+    declares nothing.
+  - **The write is staged and promoted by one rename transaction**, with the `combo_meta` row
+    inside it: a watermark without its rows would 304 past an empty database forever, and rows
+    without their watermark would re-download a file the database already holds. **A failure
+    leaves the previous combos exactly where they were** and writes the reason to `error_log`
+    (`Source::Database`, `operation = "combos"`, borrowed for `marketplace_feed`'s reason).
+  - **A file that yields zero storable combos is refused** (`ComboError::Empty`) before a single
+    staging table is created — `ingest`'s rule for a bulk card file that holds no cards. A swap
+    there would promote an empty table *and* stamp the ETag in one transaction, and every weekly
+    check from then on would be told 304.
+  - **Nothing may break a launch.** `refresh_if_due` returns immediately on a database whose
+    `fetched_at` is NULL — the deliberate difference from `tags::refresh_if_due` — so nothing is
+    fetched until a reader presses Refresh in Settings. `combos_status` is safe before the first
+    refresh has ever run: two zeros, three nulls and `stale: true`, never a rejection.
+  - **The rows are the feed's facts and the crate concludes nothing from them.** `bracket_tag` is
+    Spellbook's editorial letter carried through verbatim and the column takes **no CHECK**,
+    because the vocabulary is theirs and an eighth letter must be a skipped variant rather than a
+    failed ingest. What a letter means for a deck's bracket is TypeScript's
+    (`features/decks/validation/bracket.ts`), which is this crate's facts/conclusions boundary
+    applied to a fourth data source.
+  `combo_cards.combo_id` is the **only enforced key in this schema joining two tables that are
+  neither the user's nor Scryfall's** — legal where a key on `cards.id` never is, because `combos`
+  is the feed's own table and no sync can abort on it. What it buys is what the tag tables' soft
+  keys do not have: a `combo_cards` row cannot outlive its combo. Its price is in
+  `swap_combo_staging`, which drops the **child first** — a `DROP TABLE` with foreign keys on is
+  an implicit `DELETE`, so the other order drags every child row through a cascade on the way to
+  dropping that table too. `idx_combo_cards_oracle` is what the whole feature turns on — the match query
+  starts from the deck's oracle ids and joins *into* `combo_cards` — and it is replayed from one
+  constant (`COMBO_INDEXES_SQL`) by the v26 rung and by `swap_combo_staging`, because a rename
+  carries the *staging* table's indexes. Every measurement:
+  [commander-brackets.md](../docs/reference/commander-brackets.md).
 
 - **A price filter is built where the marketplace is known, and there are two of them because the
   two lists price different objects.** `search::scope` bands
@@ -591,7 +632,10 @@ with the measurements: [text-mirror.md](../docs/reference/text-mirror.md).
 Full detail, with the measurements and the traps behind each rule, is in
 [docs/reference/decks-storage.md](../docs/reference/decks-storage.md). The binding rules:
 
-- **Enforced foreign keys exist only _between user tables_, never against `cards.id`.** The
+- **Enforced foreign keys never point at `cards.id`**, and on the deck side they exist only
+  _between user tables_ — schema v26's `combo_cards.combo_id` is the one pair anywhere in this
+  schema that is neither the user's nor Scryfall's, and it is legal for the same reason: both
+  sides are the combo feed's own tables, so no sync can abort on it. The
   `ON DELETE` action is chosen per delete-site: **CASCADE** where a row has nowhere else to be
   (`deck_cards.deck_id`/`.category_id`, `deck_categories.deck_id`,
   `deck_audit.deck_id`, both `deck_undo` keys, `deck_folders.parent_id`), **SET NULL** on
@@ -603,10 +647,12 @@ Full detail, with the measurements and the traps behind each rule, is in
   lists rather than on this one: a deck no longer claims copies another row holds, so deleting a
   deck takes the *group* (`collection_folders.deck_id`, CASCADE) while the cards go elsewhere
   (`collection_entries.folder_id`, SET NULL). **Both whole-schema
-  lists have grown twice since, and none of the four additions is a deck's**: v23 added
-  `wishlist_folders.parent_id` (CASCADE) and `wishlist_entries.folder_id` (SET NULL), and v24
+  lists have grown three times since, and none of the six additions is a deck's**: v23 added
+  `wishlist_folders.parent_id` (CASCADE) and `wishlist_entries.folder_id` (SET NULL), v24
   added `collection_folders.parent_id` **and** `collection_folders.deck_id` (both CASCADE) and
-  `collection_entries.folder_id` (SET NULL) — so the CASCADE list is three longer than the deck
+  `collection_entries.folder_id` (SET NULL), and **v26 added `combo_cards.combo_id` (CASCADE),
+  which is the only enforced key in this schema joining two tables that are neither the user's
+  nor Scryfall's** — so the CASCADE list is four longer than the deck
   side's own and the SET NULL list two. `collection_folders.deck_id` is the odd one and the one to
   read twice: the three keys that join a folder to the thing it *files* all SET NULL, and this one
   CASCADEs because it points the other way — a folder that **stands for** a deck has no meaning
@@ -698,6 +744,22 @@ Full detail, with the measurements and the traps behind each rule, is in
   category **of this deck**, `category_of_deck`, because nothing in the DDL says so — and knows
   nothing about what Auto *does*: `autoCategoryFor` reads Oracle tags and is a conclusion.
   The history row names the **pile**, resolved at write time, `null` for Auto.
+- **`decks.bracket` is which Commander bracket the reader says this deck is, and `0` is `Auto`**
+  (schema v26, `deck::AUTO_BRACKET`). **The sentinel is `default_category_id`'s, for its reason**:
+  `DeckPatch`'s `coalesce(?n, bracket)` reads a bound NULL as "leave it", so a nullable column
+  could not express "back to Auto". `1`–`5` are the panel's five brackets and the reader's own
+  answer. **The fence is `deck::valid_bracket` and not a CHECK** — not because `ALTER TABLE … ADD
+  COLUMN` cannot carry one, which is false and which v19's `deck_cards.finish` disproves, but
+  because a command parameter reaches this column and a refusal in Rust can name the legal answers
+  (`BAD_BRACKET`) where a constraint failure names only the constraint; `valid_game`'s argument one
+  column along. It rides `DeckPatch`/`DeckRow`/`DeckBefore`/`DECK_SELECT` and **not `DeckInput`** (a
+  deck being born is on Auto), takes the **last** index in `deck_row` and the **next** `?` hole at
+  the end of `update_deck`'s `SET` list, is on `deck_undo::DECK_FIELDS`, and **`duplicate_deck`
+  carries it across** — a copy of a bracket 2 deck is a bracket 2 deck. **Rust stores the number
+  and estimates nothing.** The four facts an estimate reads are the crate's (`cards.game_changer`,
+  oracle text, the combo tables); the floor those become, and the warning when a set bracket sits
+  below it, are `features/decks/validation/bracket.ts`'s —
+  [commander-brackets.md](../docs/reference/commander-brackets.md).
 - **The editor's last view lives on the deck, and reading a deck is not editing it.** v12's
   `decks.last_variant`/`last_group_by`/`last_sort_by`, written by `deck_set_view_state(deckId,
 viewState)` — absent field means "leave it". It moves **no `updated_at`**, records **no
@@ -1006,6 +1068,7 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
 | [search-faceting.md](../docs/reference/search-faceting.md) | `src/index/` — why the index is in memory, and the fail-open rule |
 | [in-app-updates.md](../docs/reference/in-app-updates.md) | `update.rs` — why the portable swap is hand-written |
 | [decks-storage.md](../docs/reference/decks-storage.md) | The deck tables, the card commands, how owned/missing is answered, the audit log, the decklist import |
+| [commander-brackets.md](../docs/reference/commander-brackets.md) | `combos.rs` and the v26 rung — the feed measured end to end, what is kept and what is skipped, the match query, and `decks.bracket` |
 | [wishlist-folders.md](../docs/reference/wishlist-folders.md) | The wishlist's cabinet (v23) — the four-term grain, the merge rule, the root-add duplicate |
 | [collection-folders.md](../docs/reference/collection-folders.md) | The collection's cabinet (v24–v25) — the eleventh grain term, the deck groups and `Recently removed`, the conversion that made them, what a zero quantity now costs |
 | [text-mirror.md](../docs/reference/text-mirror.md) | `mirror/` — the layout, the dirty map, why the pruner reads a manifest instead of guessing, what a pass costs measured, and the bugs still open |

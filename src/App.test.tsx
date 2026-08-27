@@ -104,6 +104,20 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     // a bare call inside a mount effect, so a `vi.fn()` that is not there is a synchronous
     // `TypeError` rather than a rejection anything can catch.
     onArtTagProgress: vi.fn().mockResolvedValue(() => {}),
+    // Settings' combo panel, mocked for exactly the reasons its two neighbours above are.
+    // `combosStatus` answers the honest never-ingested row — `fetchedAt: null` is the state a
+    // fresh install is in, and it is the one this file wants, because the panel then draws its
+    // standing copy and no figures at all. `onCombosProgress` is a bare call inside a mount
+    // effect, so an absent mock is a synchronous `TypeError` that no `.catch` can reach.
+    combosStatus: vi.fn().mockResolvedValue({
+      combos: 0,
+      cards: 0,
+      stamp: null,
+      fetchedAt: null,
+      checkedAt: null,
+      stale: true,
+    }),
+    onCombosProgress: vi.fn().mockResolvedValue(() => {}),
     // The search view is live now, so opening on it fires a real query; an unresolved
     // mock would surface here as a query error rather than as the routing this file tests.
     searchCards,
@@ -223,6 +237,7 @@ const BURN: DeckRow = {
   lastSortBy: "alphabetical",
   separateXGroup: false,
   defaultCategoryId: 0,
+  bracket: 0,
 };
 
 const BOLT: CardSummary = {

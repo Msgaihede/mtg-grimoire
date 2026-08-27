@@ -1,5 +1,5 @@
 /**
- * The four worlds a story can mount against.
+ * The six worlds a story can mount against.
  *
  * A story asks for one by name — `parameters: { fake: { seed: "empty" } }` — and
  * `preview.tsx` hands the result to {@link allHandlers}. The names are the four questions a
@@ -21,6 +21,16 @@
  *   it.
  * * **`large`** — past `search::TOTAL_CAP`, so `totalIsCapped` is reachable, and deep enough
  *   that the virtualisers are doing work rather than rendering every row they are given.
+ * * **`bracketMismatch`** — `starter` plus a fifth deck, a Commander deck the reader has told
+ *   `Bracket 2` whose contents force the estimate's floor to **4**. It is the only world where
+ *   the deck header's bracket readout has a real disagreement to report, and the only one whose
+ *   combo list draws every branch at once — a definite `R`, a *possible* `R` the app cannot
+ *   check, a `P`, a `C` and an `E` that raises nothing.
+ * * **`combosMissing`** — `starter` with the combo tables never fetched. A **seed** and not a
+ *   fault, where the two taxonomies each get a fault for the same state, because
+ *   `combos::refresh_if_due` deliberately never fetches this file uninvited: it is not something
+ *   that has gone wrong with a world, it is the world every install stays in until somebody
+ *   presses Refresh. See {@link combosMissingSeed}.
  *
  * **Every seed builds its rows fresh on every call**, and that is load-bearing rather than
  * tidy: the writes in `db.ts` mutate row objects in place (`existing.quantity += …`), so a
@@ -36,6 +46,9 @@ import {
   artTagIllustrations,
   artTagMeta,
   artTagRows,
+  comboCardRows,
+  comboFeedMeta,
+  comboRows,
   makeDb,
   marketplaceFeedMeta,
   marketplaceFeedPrices,
@@ -61,7 +74,13 @@ import type {
 import { DECK_CATEGORIES, printing } from "./fixtures";
 import type { CategoryKind, CategoryOrigin, DeckAuditKind, DeckVariant } from "@/lib/ipc";
 
-export type SeedName = "empty" | "starter" | "needsReview" | "large";
+export type SeedName =
+  | "empty"
+  | "starter"
+  | "needsReview"
+  | "large"
+  | "bracketMismatch"
+  | "combosMissing";
 
 /* ------------------------------------------------------------------ row builders ------- */
 
@@ -1222,6 +1241,34 @@ function starterTaxonomy(cards: readonly FakeCard[]) {
   };
 }
 
+/**
+ * The combo catalogue, already ingested — the **fourth** optional feed, seeded here for the
+ * reason the price feeds and the two taxonomies are: it is the state a reader who has pressed
+ * Refresh once is in, and the only one a story about a bracket *advisory* can be written
+ * against. Without it every Commander deck's advisory reads three signals and says so, which is
+ * honest and is what {@link combosMissingSeed} is for.
+ *
+ * **`empty`, `large` and `needsReview` behave exactly as they do for the other three feeds.**
+ * `empty` is a first launch with no cards to match against; `large`'s 5 243 synthetic printings
+ * carry oracle ids no combo has ever heard of, so every one of them would answer nothing anyway;
+ * `needsReview` is `starter` and inherits this along with everything else.
+ *
+ * Ingested at the same instant the feeds were fetched, which is well inside the combo table's own
+ * seven-day window: the status answers `stale: false`, so nothing is due for a refresh until a
+ * story forces one.
+ *
+ * **Three tables and they land together**, because one file writes all three: the combos, their
+ * cards and the watermark. A watermark with no combos behind it is the one state the backend goes
+ * out of its way never to write — it is what makes the next check 304 past an empty table.
+ */
+function starterCombos(cards: readonly FakeCard[]) {
+  return {
+    combos: comboRows(cards),
+    comboCards: comboCardRows(cards),
+    comboMeta: comboFeedMeta(FETCHED_AT),
+  };
+}
+
 function starterSeed(): FakeDb {
   const decks = starterDecks();
   const deckCategories = starterCategories();
@@ -1230,6 +1277,7 @@ function starterSeed(): FakeDb {
   return makeDb({
     ...starterFeeds(CARDS),
     ...starterTaxonomy(CARDS),
+    ...starterCombos(CARDS),
     collectionEntries: starterEntries(),
     collectionFolders: starterCollectionFolders(decks),
     wishlistEntries: starterWishes(),
@@ -1557,6 +1605,162 @@ function largeSeed(): FakeDb {
   return makeDb({ cards, collectionEntries: largeEntries(cards) });
 }
 
+/* ------------------------------------------------------------------ brackets ----------- */
+
+/** The fifth deck's id, and the fifth deck's group. Named because a bare `5` in three places is
+ *  a number a story author has to resolve by reading this file. */
+const BRACKET_DECK = 5;
+
+/** What the reader has told the fifth deck it is: **`2`, against a floor of `4`**.
+ *
+ * The one thing the whole seed exists to produce. `2` is a deliberate, plausible answer — the
+ * bracket a reader picks when they think of a deck as their casual one — and every combo and
+ * game changer below is a card they actually sleeved. Nothing here is a deck nobody would build;
+ * it is a deck whose owner is wrong about it, which is the only interesting case. */
+const BRACKET_DECK_SET = 2;
+
+/**
+ * `starter`, plus a Commander deck whose stored bracket and estimated floor **disagree**.
+ *
+ * The header's bracket readout has three states — an estimate (`Bracket ~3`), a set answer
+ * (`Bracket 3`), and a set answer *below* the floor its own cards imply. `starter` reaches the
+ * first two and cannot reach the third: every deck in it is on Auto. This seed is the third.
+ *
+ * **What forces the floor to 4** is the `R` combo `4109-1983` — Thrasios plus Consecrated Sphinx
+ * — and only that: the deck's two game changers (Rhystic Study, Ancient Tomb) would take it to
+ * 3 on their own, so a story can point at the combo as *the* reason and be right. What is
+ * deliberately in the deck beside it:
+ *
+ * * **A possible combo of the same letter** — `4109-2030--17`, Thrasios plus Sol Ring with one
+ *   template this app cannot resolve. It sits on its own line and raises **nothing**, which is
+ *   the rule that is hardest to believe from a screenshot and easiest to get wrong in code.
+ * * **A `P` and a `C`** (Consecrated Sphinx + Jace; Bruna + Gisela), so the list has rows at
+ *   three different floors and the *highest* one visibly wins.
+ * * **An `E`** (Smuggler's Copter + Ragavan), which is drawn like the rest and counts for
+ *   nothing at all.
+ * * **Neither of the two `S` combos**, whose cards are simply not here — which is what proves
+ *   `combos_for_cards` is matching this deck rather than listing the catalogue.
+ *
+ * **A hundred cards exactly**, so the deck's own validation is quiet and the bracket panel is
+ * the only thing with something to say: the commander, fifteen spells, and 84 basics. The
+ * basics are two rows at quantity 42, `starter`'s own arrangement for deck 2.
+ *
+ * Written as a push onto {@link starterSeed} rather than as a fifth entry in
+ * {@link starterDecks}, which is not tidiness: `db.test.ts` pins `deck_list()` at four rows for
+ * the starter world, and every gallery story ever written was written against those four.
+ */
+function bracketMismatchSeed(): FakeDb {
+  const db = starterSeed();
+  db.decks.push({
+    id: BRACKET_DECK,
+    name: "Bracket Testbed",
+    formatKey: "commander",
+    description: "Filed under bracket 2 by its owner. Its cards disagree.",
+    coverCardId: printing("eld", "303").id,
+    coverKind: "card_art",
+    archived: false,
+    folderId: null,
+    notes:
+      "It is a casual deck. The Thrasios line is a coincidence and I have never drawn both " +
+      "halves of it.",
+    theoryEnabled: false,
+    lastVariant: "live",
+    lastGroupBy: "category",
+    lastSortBy: "alphabetical",
+    bracket: BRACKET_DECK_SET,
+    // Newer than every other deck, so the gallery opens on it — this is the deck the seed is
+    // about — and still under `CLOCK_BASE`, which is {@link starterDecks}' rule and what keeps
+    // the first edit of any story at `CLOCK_BASE + 1`.
+    updatedAt: CLOCK_BASE - 60,
+  });
+  // The five every deck is born with, `ensure_predefined_categories`' rows — ids continuing the
+  // store's own sequence rather than restarting, which is `INTEGER PRIMARY KEY`'s behaviour and
+  // what {@link categoryOf} then resolves against.
+  let nextCategory = Math.max(...db.deckCategories.map((c) => c.id));
+  for (const c of DECK_CATEGORIES) {
+    db.deckCategories.push({
+      id: (nextCategory += 1),
+      deckId: BRACKET_DECK,
+      name: c.name,
+      kind: c.kind,
+      isActive: c.isActive,
+      sortOrder: c.sortOrder,
+      origin: c.origin,
+    });
+  }
+  // Its group in the collection cabinet, empty and named after the deck — `deck_create`'s line,
+  // and the row schema v25 makes every deck have. Nothing is filed into it: this deck was typed
+  // out of a list rather than built off a shelf, so every row of it reads owned 0.
+  db.collectionFolders.push({
+    id: Math.max(...db.collectionFolders.map((f) => f.id)) + 1,
+    parentId: null,
+    name: "Bracket Testbed",
+    kind: "deck",
+    deckId: BRACKET_DECK,
+    sortOrder: 0,
+  });
+  const main = categoryNamed(db.deckCategories, BRACKET_DECK, "Main deck");
+  const commander = categoryOf(db.deckCategories, BRACKET_DECK, "commander");
+  let nextCard = db.deckCards.length;
+  const add = (card: FakeCard, category: FakeDeckCategory, quantity: number) =>
+    db.deckCards.push(deckCard((nextCard += 1), BRACKET_DECK, card, category, quantity));
+  // Five colours from a mono-white card, so nothing in the 99 is out of identity — which is why
+  // this is Kenrith and not one of the corpus's other legends.
+  add(printing("eld", "303"), commander, 1);
+  // The four combo pieces the advisory turns on, and they are four cards rather than six because
+  // Thrasios and Consecrated Sphinx are each in two of the five combos this deck holds.
+  add(printing("fca", "58"), main, 1); // Thrasios, Triton Hero
+  add(printing("mp2", "8"), main, 1); // Consecrated Sphinx
+  add(printing("c21", "263"), main, 1); // Sol Ring — the *possible* combo's second card
+  add(printing("wwk", "31"), main, 1); // Jace, the Mind Sculptor
+  add(printing("emn", "15"), main, 1); // Bruna, the Fading Light
+  add(printing("emn", "28"), main, 1); // Gisela, the Broken Blade
+  add(printing("kld", "235"), main, 1); // Smuggler's Copter
+  add(printing("mh2", "138"), main, 1); // Ragavan, Nimble Pilferer
+  // The two game changers, so the estimate has a *second* signal and the combo is visibly the
+  // one that outranks it — two of them is a floor of 3 on their own.
+  add(printing("pcy", "45"), main, 1); // Rhystic Study
+  add(printing("tmp", "315"), main, 1); // Ancient Tomb
+  // Filler, so the deck is a hundred cards and its own validation has nothing to say. Ordinary
+  // Commander staples, none of them in any combo here.
+  add(printing("mh2", "267"), main, 1); // Counterspell
+  add(printing("ema", "32"), main, 1); // Swords to Plowshares
+  add(printing("dom", "168"), main, 1); // Llanowar Elves
+  add(printing("2x2", "117"), main, 1); // Lightning Bolt
+  add(printing("mh2", "259"), main, 1); // Urza's Saga
+  // 84 basics in two rows, which is the only thing in a singleton deck that may repeat.
+  add(printing("unf", "239"), main, 42);
+  add(printing("lea", "288"), main, 42);
+  return db;
+}
+
+/**
+ * `starter`, with the combo file **never fetched**.
+ *
+ * A supported state and not a failure, which is why it is a seed rather than a fault: the two
+ * taxonomies are pulled by a first launch and this one is not — `combos::refresh_if_due` refuses
+ * to fetch a file nobody has asked for — so every install stays here until somebody presses
+ * Refresh in Settings. That makes it the *opening* state of the feature rather than a state a
+ * world falls into.
+ *
+ * `combos_status` answers `combos: 0`, `cards: 0`, every stamp `null` and `stale: true`, and
+ * `combos_for_cards` answers `[]` for every deck — which is the same empty answer a deck with no
+ * combos gives, and telling those apart is what the status call is for. The Settings panel and
+ * the bracket advisory each have their own sentence for it, and this is the only world either
+ * can be storied in on a full corpus.
+ *
+ * **The rows go rather than a handler branching**, `oracleTagsMissing`'s shape: it is what lets a
+ * story open here, press Refresh, and watch the deck's advisory fill in — which a branch could
+ * never do, because the branch would still be there after the write.
+ */
+function combosMissingSeed(): FakeDb {
+  const db = starterSeed();
+  db.combos = [];
+  db.comboCards = [];
+  db.comboMeta = null;
+  return db;
+}
+
 /* ------------------------------------------------------------------ the switch --------- */
 
 /**
@@ -1573,6 +1777,10 @@ export function seed(name: SeedName): FakeDb {
       return needsReviewSeed();
     case "large":
       return largeSeed();
+    case "bracketMismatch":
+      return bracketMismatchSeed();
+    case "combosMissing":
+      return combosMissingSeed();
     default:
       return starterSeed();
   }

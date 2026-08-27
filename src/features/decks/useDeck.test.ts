@@ -78,6 +78,7 @@ const DECK: DeckRow = {
   // asserted on.
   separateXGroup: false,
   defaultCategoryId: 0,
+  bracket: 0,
 };
 
 /**

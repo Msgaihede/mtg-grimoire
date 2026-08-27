@@ -5287,12 +5287,19 @@ describe("the busy fault", () => {
       // `db::lock_for`. It is the *larger* of the two (12.5 MB against 5.85), which is why
       // `tags::art::refresh_if_due` is emphatic that nothing may wait on it.
       "art_tags_refresh",
-      // The seventh, and the only one here that touches **no database at all**:
+      // The combo feed's refresh, unlocked for the same reason as both taxonomies above it and
+      // with the most at stake in it: `combos::refresh` opens on `lock_db_read` and a network
+      // call, and only its ingest reaches for the write connection — one 2 000-combo batch at a
+      // time, standing aside between them. It is by far the largest of the three (27.5 MB
+      // compressed against 12.5 and 5.85), so a `BUSY` at the door would throw a whole download
+      // away over a lock it would have got a moment later.
+      "combos_refresh",
+      // The only one here that touches **no database at all**:
       // `export::export_write_file` takes no `AppState`, so there is no connection for a sync
       // to be holding and no `BUSY` it could ever answer. It writes a file at a path the OS
       // save dialog produced and nothing else.
       "export_write_file",
-      // The eighth, unlocked for the first reason on this list rather than a ninth one:
+      // Unlocked for the first reason on this list rather than a new one:
       // `mirror::settings::mirror_rebuild` runs on the blocking pool against `db_read`, like
       // every other read-shaped command, because a pass reads the whole collection and writes a
       // few hundred small files — far too much to do while holding the write connection, and

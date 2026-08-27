@@ -33,3 +33,40 @@ export const OWNED_WRITE_KEYS: readonly QueryKey[] = [
   ["cards", "search"],
   ["decks"],
 ];
+
+/**
+ * The combo feed's query roots, spelled once.
+ *
+ * **Two features read this data and neither owns it.** Settings' `CombosPanel` refreshes the feed
+ * and invalidates it; the deck editor's `DeckBracket` reads the status *and* one entry per deck
+ * it draws. They arrived in one branch from two hands, which is exactly how two files come to
+ * agree on a string literal by accident — and the agreement is load-bearing, because
+ * `invalidateQueries` matches by **prefix**: a refresh in Settings refills the open deck's
+ * advisory only while both files spell the root the same way. Renaming one side would break that
+ * link with nothing going red, because a stale advisory is a correct-looking one that is merely
+ * out of date — and the 30 s `staleTime` above is exactly long enough to make it look deliberate.
+ *
+ * `COMBOS_KEY` is the bare root rather than a list of leaves: a refresh replaces the whole table,
+ * so everything read out of it goes stale at once.
+ */
+export const COMBOS_KEY: QueryKey = ["combos"];
+
+/** Whether the feed has ever been ingested, and how old it is — `ipc.combosStatus`. */
+export const COMBOS_STATUS_KEY: QueryKey = ["combos", "status"];
+
+/**
+ * Which combos a set of cards fully contains — `ipc.combosForCards`.
+ *
+ * **Keyed on the card ids themselves, which is what makes a deck edit produce a fresh answer with
+ * no invalidation at all.** A `["combos", "forCards", deckId]` key would instead have to be right
+ * about every write that can change what is in a deck — an add, a move between piles, a category
+ * switched off — and `staleTime` would hide whichever one was forgotten for half a minute.
+ *
+ * Sort and dedupe the ids before calling: an unsorted list makes a regroup look like a new
+ * question, and the answer does not depend on the order.
+ */
+export const combosForCardsKey = (sortedCardIds: readonly string[]): QueryKey => [
+  "combos",
+  "forCards",
+  sortedCardIds,
+];

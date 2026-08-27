@@ -101,6 +101,10 @@ const DECK_FIELDS: &[&str] = &[
     "archived",
     "separate_x_group",
     "default_category_id",
+    // Schema v26, and on the list for the same reason `game_key` is: it is a deck-level answer
+    // an ordinary `deck_update` writes and an ordinary history row records, so a Ctrl+Z that
+    // left it alone would put a deck's format back and leave the bracket the same press moved.
+    "bracket",
     "last_variant",
     "last_group_by",
     "last_sort_by",
@@ -1781,6 +1785,20 @@ mod tests {
                 )
                 .unwrap();
             }),
+            // Schema v26's column, driven for the reason the case above it is: [`snapshot`]
+            // sweeps [`DECK_FIELDS`], so a column added to the patch and *not* to that list
+            // would leave this case passing while the bracket stayed where the press put it.
+            ("deck_update (bracket)", nothing, |c, id| {
+                crate::deck::update_deck(
+                    c,
+                    id,
+                    &crate::deck::DeckPatch {
+                        bracket: Some(4),
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            }),
             (
                 // **Two history rows, one step, one Ctrl+Z.** A cursor that could land between
                 // them would put half a settings form back.
@@ -2392,6 +2410,55 @@ mod tests {
             .unwrap();
         assert_eq!(theory, 0);
         assert_eq!(notes, None);
+    }
+
+    /// A bracket the reader set and then took back, through the two real commands — schema v26.
+    ///
+    /// **`deck_write_cases` already sweeps this field and this test is not a duplicate of it.**
+    /// That sweep compares a whole-deck snapshot and would go green if `bracket` were simply
+    /// missing from [`DECK_FIELDS`] *and* from [`snapshot`]'s sweep, since the sweep reads the
+    /// list rather than the table. This one names the column, so a bracket that fell off both
+    /// ends at once still fails here — the shape of the hole `src-tauri/CLAUDE.md` calls a mock
+    /// encoding an impossible state.
+    ///
+    /// **Both directions**, because an undo that restored the value it was already at would
+    /// look identical to a working one from either end alone: Auto → 4 and back to Auto, then
+    /// the redo that puts 4 back.
+    #[test]
+    fn undoing_a_bracket_change_puts_the_deck_back_on_auto() {
+        let conn = seeded();
+        let id = deck(&conn, "Atraxa");
+        let bracket = |c: &Connection| -> i64 {
+            c.query_row(
+                "SELECT bracket FROM decks WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(bracket(&conn), 0, "a new deck is on Auto");
+
+        crate::deck::update_deck(
+            &conn,
+            id,
+            &crate::deck::DeckPatch {
+                bracket: Some(4),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+        assert_eq!(bracket(&conn), 4);
+
+        let audit_id = next_undo(&conn, id).unwrap().expect("a step to reverse");
+        undo(&conn, id).unwrap();
+        assert_eq!(bracket(&conn), 0, "Ctrl+Z puts the deck back on Auto");
+
+        redo(&conn, id, audit_id).unwrap();
+        assert_eq!(
+            bracket(&conn),
+            4,
+            "and Ctrl+Y puts the reader's answer back"
+        );
     }
 
     /// The fence against a refactor, not against a user: a step naming a column nobody decided

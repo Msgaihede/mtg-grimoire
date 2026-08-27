@@ -24,6 +24,18 @@ stamps were the previous day when checked on 2026-08-20. The week is
 `tags::{oracle,art}::REFRESH_INTERVAL_SECS`, a choice this app made about how often to ask — so a
 taxonomy up to seven days behind Scryfall is the design working, not a stale download.
 
+**Commander Spellbook's combo database is the third optional feed, and the first that is neither
+Scryfall nor a price list.** `variants.json.gz` is where a Commander deck's bracket estimate gets
+its fourth signal: a two-card infinite combo is a fact about an _interaction_, so no amount of
+reading either card's own text finds one. It is optional the same way the others are — nothing
+downloads until a reader presses Refresh in Settings, a failure keeps the combos already stored,
+and a database that has never fetched it estimates from three signals instead of four, which is a
+supported state rather than an error. 27.5 MB gzipped over 639 MB of JSON, so the ingest streams
+throughout; `combos::REFRESH_INTERVAL_SECS` is **the same week**, against a file Spellbook rebuilds
+through the day, and the reason is the tagger week's: a bracket readout that changed between two
+sessions on one afternoon, for a reason the reader cannot see, is the failure worth avoiding.
+[commander-brackets.md](docs/reference/commander-brackets.md) has every measurement.
+
 ## Commands
 
 - `npm run tauri dev` — run the app (Vite HMR + Rust rebuild). Takes the `app` lock: only
@@ -109,6 +121,7 @@ number to compare against.
 | [tag-search-syntax.md](docs/reference/tag-search-syntax.md) | Scryfall tagger syntax in the search box — the keywords, why resolution is exact, and the two failures that fail closed |
 | [in-app-updates.md](docs/reference/in-app-updates.md) | Why the portable swap is hand-written |
 | [decks-storage.md](docs/reference/decks-storage.md) | Deck tables, the card commands, how owned/missing is answered, the audit log, the decklist import |
+| [commander-brackets.md](docs/reference/commander-brackets.md) | The bracket table as it stands, why the estimate is a floor and never 5, what the four signals can and cannot see, and Commander Spellbook's combo feed measured |
 | [import-export.md](docs/reference/import-export.md) | The seven formats, the field registry, the fold rule, the four import destinations |
 | [text-mirror.md](docs/reference/text-mirror.md) | The plain-text mirror — the layout, the dirty map, why the pruner reads a manifest instead of guessing, the measured cost of a pass, and the bugs still open |
 | [wishlist-folders.md](docs/reference/wishlist-folders.md) | The two folder tables, the four-term grain, the merge rule, the root-add duplicate and the `elsewhere` mark |

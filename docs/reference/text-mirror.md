@@ -151,7 +151,7 @@ that true rather than a claim about SQLite's release notes.
 | `decks` | Decks **and** Collection |
 | `collection_entries`, `collection_folders` | Collection |
 | `wishlist_entries`, `wishlist_folders` | Wishlist |
-| **everything else** — `cards`, `sets`, `marketplace_prices`, `image_cache`, `deck_audit`, `deck_undo`, `error_log`, the tag tables, `app_meta`, `sync_meta`, every staging twin | **nothing** |
+| **everything else** — `cards`, `sets`, `marketplace_prices`, `image_cache`, `deck_audit`, `deck_undo`, `error_log`, the tag tables, the combo tables, `app_meta`, `sync_meta`, every staging twin | **nothing** |
 
 **The last row is the one that matters, and it is the default arm rather than a list.** A sync
 rewrites the whole `cards` table — ~116,700 printings on the 2026-08-25 corpus — and a price-feed
