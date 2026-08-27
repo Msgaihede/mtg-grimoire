@@ -1,0 +1,23 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Probe 2 — OPFS capacity and the second load</title>
+<pre id="out">running…</pre>
+<script type="module">
+  // ?mode=fill builds the corpus; ?mode=verify is the SECOND load, run against whatever a
+  // previous page left behind. They are separate page loads on purpose — the brief asked
+  // for the second load specifically, and reusing one page would not be one.
+  const mode = new URLSearchParams(location.search).get("mode") ?? "fill";
+  const out = document.getElementById("out");
+  out.textContent = "mode=" + mode + " — running…";
+
+  const w = new Worker("./worker.js", { type: "module" });
+  w.onmessage = (e) => {
+    out.textContent = e.data.report;
+    document.title = "done";
+  };
+  w.onerror = (e) => {
+    out.textContent = "WORKER ERROR: " + (e.message ?? "(no message)");
+    document.title = "done";
+  };
+  w.postMessage(mode);
+</script>

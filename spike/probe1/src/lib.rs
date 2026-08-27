@@ -30,7 +30,7 @@ pub fn run() -> String {
     let mut out = String::new();
 
     // --- Step 1: the C is linked and answers at all. -------------------------------
-    let threadsafe = unsafe { sqlite_wasm_rs::sqlite3_threadsafe() };
+    let threadsafe = unsafe { rusqlite::ffi::sqlite3_threadsafe() };
     line(
         &mut out,
         "link/sqlite3_threadsafe",
@@ -39,7 +39,7 @@ pub fn run() -> String {
     );
 
     let version = unsafe {
-        let p = sqlite_wasm_rs::sqlite3_libversion();
+        let p = rusqlite::ffi::sqlite3_libversion();
         std::ffi::CStr::from_ptr(p).to_string_lossy().into_owned()
     };
     line(&mut out, "link/sqlite3_libversion", true, &version);
@@ -109,14 +109,27 @@ pub fn run() -> String {
     }
 
     // --- Step 6: the update_hook the plain-text mirror is built on. ----------------
-    // Desktop-only feature, but if the hook is unavailable the *shape* of db.rs changes
-    // for every target, so it is worth knowing now rather than in the I/O-layer PR.
-    line(
-        &mut out,
-        "note/update_hook",
-        true,
-        "not exercised here — rusqlite's `hooks` feature is off in this probe",
+    // The mirror itself is desktop-only, but `db.rs` hangs the hook off the one write
+    // connection for every target, so if the hook were unavailable on wasm the shape of
+    // that module would change everywhere. A static counter rather than a captured cell
+    // because rusqlite requires the closure to be `Send`.
+    static HOOK_FIRED: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    conn.update_hook(Some(|_action, _db: &str, _tbl: &str, _rowid: i64| {
+        HOOK_FIRED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }));
+    let hook_res = conn.execute_batch(
+        "CREATE TABLE hooked (v INTEGER); INSERT INTO hooked VALUES (1);          UPDATE hooked SET v = 2; DELETE FROM hooked WHERE v = 2;",
     );
+    let fired = HOOK_FIRED.load(std::sync::atomic::Ordering::Relaxed);
+    match hook_res {
+        Ok(()) => line(
+            &mut out,
+            "rusqlite/update_hook",
+            fired == 3,
+            &format!("hook fired {fired} times (expected 3: insert, update, delete-with-WHERE)"),
+        ),
+        Err(e) => line(&mut out, "rusqlite/update_hook", false, &format!("{e:?}")),
+    }
 
     out
 }

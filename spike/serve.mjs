@@ -26,8 +26,9 @@ const TYPES = {
 
 createServer(async (req, res) => {
   const url = new URL(req.url, "http://localhost");
-  const rel = normalize(decodeURIComponent(url.pathname)).replace(/^([/\])+/, "");
-  const path = join(root, rel === "" ? "index.html" : rel);
+  const raw = decodeURIComponent(url.pathname);
+  const rel = normalize(raw === "/" ? "index.html" : raw).replace(/^[/\\]+/, "");
+  const path = join(root, rel);
   const headers = { "Content-Type": TYPES[extname(path)] ?? "application/octet-stream" };
   if (coi) {
     headers["Cross-Origin-Opener-Policy"] = "same-origin";
