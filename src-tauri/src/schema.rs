@@ -222,7 +222,7 @@ fn cards_indexes_sql(schema: &str) -> String {
 ///
 /// **Only DDL and pragmas need this.** An unqualified `SELECT`/`INSERT`/`UPDATE`/`DELETE`
 /// resolves into whichever attached database holds the table — measured — which is why none
-/// of the ~136 commands changed when the corpus moved out. A bare `CREATE`, `DROP`, `ALTER`
+/// of the commands changed when the corpus moved out. A bare `CREATE`, `DROP`, `ALTER`
 /// or `PRAGMA` does not: every one of them means `main` and says nothing about it.
 fn on_schema(schema: &str, sql: &str) -> String {
     sql.replace("{schema}", schema)
