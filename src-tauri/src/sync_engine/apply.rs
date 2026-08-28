@@ -521,8 +521,12 @@ enum Resolution {
     Unknown,
 }
 
-fn resolve_parent(conn: &Connection, p: &Parent, g: &Group) -> Result<Resolution, String> {
-    let Some((uid, _)) = g.resolved.parents.get(p.key) else {
+fn resolve_parent(
+    conn: &Connection,
+    p: &Parent,
+    resolved: &Resolved,
+) -> Result<Resolution, String> {
+    let Some((uid, _)) = resolved.parents.get(p.key) else {
         return Ok(Resolution::None);
     };
     let Some(uid) = uid else {
@@ -699,7 +703,7 @@ fn write_group<'a>(
     let mut parents: BTreeMap<&'static str, Sql> = BTreeMap::new();
     let mut soft_pending = false;
     for p in spec.parents {
-        match resolve_parent(conn, p, g)? {
+        match resolve_parent(conn, p, &g.resolved)? {
             Resolution::Id(id) => {
                 parents.insert(p.key, Sql::Integer(id));
             }
@@ -746,7 +750,38 @@ fn write_group<'a>(
         .map_err(|e| e.to_string())?;
     let written = match &existing.uid {
         Some(uid) => update_row(conn, meta, spec, g, &combined, &parents, uid),
-        None => insert_row(conn, meta, spec, g, &combined, &parents),
+        None => {
+            // **A row being created resolves its parents from the combined fold**, and the
+            // difference only shows on a resurrection. A row this device deleted and add-wins
+            // has just brought back is described by *this device's own* history: the incoming
+            // op that saved it can be a sparse note edit that mentions no folder at all, and
+            // resolving from it alone would put the row back at the root — a card that jumped
+            // out of its binder because somebody else edited a note.
+            //
+            // An unknown uid here is `absent` rather than a deferral. Every parent in the
+            // combined fold that is not also in the incoming one came from an op this device
+            // wrote, so its row is local by construction; deferring on it would be a deadlock
+            // against a condition that cannot arise.
+            // **`g.resolved.parents` and not `parents`**, because the latter always holds
+            // every key: an op that mentions no parent resolves to `Resolution::None`, which
+            // is written in as the absent value. Asking the map whether it "has" the key would
+            // therefore always be yes, and this whole arm would be dead code that reads as a
+            // fix. The test caught it: `left: None, right: Some("Binder")`.
+            let mut wide = parents.clone();
+            for p in spec.parents {
+                if g.resolved.parents.contains_key(p.key) {
+                    continue;
+                }
+                wide.insert(
+                    p.key,
+                    match resolve_parent(conn, p, &combined)? {
+                        Resolution::Id(id) => Sql::Integer(id),
+                        Resolution::None | Resolution::Unknown => absent_value(p),
+                    },
+                );
+            }
+            insert_row(conn, meta, spec, g, &combined, &wide)
+        }
     };
     match written {
         Ok(uid) => {
@@ -977,7 +1012,7 @@ fn settle_soft_parents(conn: &Connection, g: &Group, uid: &str) -> Result<(), St
         return Ok(());
     };
     for p in spec.parents.iter().filter(|p| p.soft) {
-        let value = match resolve_parent(conn, p, g)? {
+        let value = match resolve_parent(conn, p, &g.resolved)? {
             Resolution::Id(id) => Sql::Integer(id),
             // Still unknown after the whole batch: the category is on a device this one has not
             // heard from. `Auto` is the honest answer and the one the column defaults to.

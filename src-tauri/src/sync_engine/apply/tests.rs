@@ -212,6 +212,59 @@ fn a_delete_that_lost_a_race_resurrects_the_row_on_both_devices() {
     assert_eq!(report_b.resurrected, 1);
 }
 
+/// **A resurrected row goes back where it was filed.** The row is rebuilt from this device's
+/// own history, because the incoming op that saved it is a note edit that mentions no folder --
+/// and a card that jumped out of its binder because somebody else edited a note is exactly the
+/// kind of quiet loss this whole module is arranged against.
+#[test]
+fn a_resurrected_row_keeps_the_folder_it_was_filed_in() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let (mut ma, mut mb) = (0, 0);
+    a.execute(
+        "INSERT INTO collection_folders (name, kind, sort_order, created_at, updated_at)
+         VALUES ('Binder', 'user', 1, unixepoch(), unixepoch())",
+        [],
+    )
+    .unwrap();
+    a.execute(
+        "INSERT INTO collection_entries
+            (card_id,set_code,collector_number,lang,finish,condition,quantity,folder_id,
+             created_at,updated_at)
+         VALUES ('c1','lea','1','en','nonfoil','NM',1,
+                 (SELECT id FROM collection_folders WHERE name = 'Binder'),
+                 unixepoch(),unixepoch())",
+        [],
+    )
+    .unwrap();
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    let _ = since(&b, &mut mb);
+
+    // `a` throws the card away; `b` edits it at the same moment, and add-wins keeps it.
+    a.execute("DELETE FROM collection_entries", []).unwrap();
+    b.execute("UPDATE collection_entries SET notes = 'keep it'", [])
+        .unwrap();
+
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    let report = apply(&a, &since(&b, &mut mb)).unwrap();
+    assert_eq!(report.resurrected, 1);
+
+    for (who, c) in [("a", &a), ("b", &b)] {
+        let folder: Option<String> = c
+            .query_row(
+                "SELECT f.name FROM collection_entries e
+                   LEFT JOIN collection_folders f ON f.id = e.folder_id",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            folder.as_deref(),
+            Some("Binder"),
+            "{who} put the card back at the root"
+        );
+    }
+}
+
 /// ...and an uncontested delete really deletes, quietly.
 #[test]
 fn a_delete_with_nothing_against_it_deletes() {
