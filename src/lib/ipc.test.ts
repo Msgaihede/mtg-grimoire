@@ -1684,3 +1684,101 @@ describe("the collection folder wrappers name the commands `collection_folders.r
     });
   });
 });
+
+/**
+ * Pairing's nine commands — spec §7.5 and §7.6.
+ *
+ * `invoke` matches arguments **by name**, so a wrapper that spells one differently fails at
+ * runtime with a deserialization error and no type error anywhere. These pin the five names
+ * Rust declares: `code`, `response`, `sealedKey`, `deviceId` and `name`.
+ */
+describe("pairing", () => {
+  const status = {
+    deviceId: "aa".repeat(16),
+    deviceName: "This device",
+    groupId: null,
+    epoch: null,
+    devices: [],
+  };
+
+  it("reads the panel with no arguments", async () => {
+    invoke.mockResolvedValue(status);
+
+    const answered = await ipc.syncPairingStatus();
+
+    expect(invoke).toHaveBeenCalledWith("sync_pairing_status");
+    // `groupId` and `epoch` are null on an unpaired device, and the panel draws a different
+    // section for that — a mirror that typed them as numbers would make "not paired" and
+    // "in a group with epoch 0" the same thing.
+    expect(answered.groupId).toBeNull();
+    expect(answered.epoch).toBeNull();
+  });
+
+  it("starts an offer with no arguments and reads back both forms of it", async () => {
+    invoke.mockResolvedValue({ code: "ABCDE-FGHJK", qr: { width: 21, modules: [true, false] } });
+
+    const offer = await ipc.syncPairingBegin();
+
+    expect(invoke).toHaveBeenCalledWith("sync_pairing_begin");
+    expect(offer.code).toBe("ABCDE-FGHJK");
+    // The matrix is booleans, not a data URI: the page draws the SVG.
+    expect(offer.qr.modules[0]).toBe(true);
+  });
+
+  it("sends the typed code under `code` and answers six digits", async () => {
+    invoke.mockResolvedValue({ sas: "042913", response: "BLOB" });
+
+    const shake = await ipc.syncPairingAccept("ABCDE-FGHJK");
+
+    expect(invoke).toHaveBeenCalledWith("sync_pairing_accept", { code: "ABCDE-FGHJK" });
+    // A string and not a number, and the leading zero is why: `042913` and `42913` are the
+    // same number and not the same code, and the reader is comparing characters.
+    expect(shake.sas).toBe("042913");
+  });
+
+  it("sends the joiner's blob under `response`", async () => {
+    invoke.mockResolvedValue({ sas: "042913", response: "" });
+
+    await ipc.syncPairingRespond("BLOB");
+
+    expect(invoke).toHaveBeenCalledWith("sync_pairing_respond", { response: "BLOB" });
+  });
+
+  it("confirms with no arguments and answers the sealed key", async () => {
+    invoke.mockResolvedValue({ sealedKey: "SEALED" });
+
+    const sealed = await ipc.syncPairingConfirm();
+
+    expect(invoke).toHaveBeenCalledWith("sync_pairing_confirm");
+    expect(sealed.sealedKey).toBe("SEALED");
+  });
+
+  it("sends the sealed key under `sealedKey`", async () => {
+    invoke.mockResolvedValue(undefined);
+
+    await ipc.syncPairingComplete("SEALED");
+
+    expect(invoke).toHaveBeenCalledWith("sync_pairing_complete", { sealedKey: "SEALED" });
+  });
+
+  it("cancels with no arguments", async () => {
+    invoke.mockResolvedValue(undefined);
+
+    await ipc.syncPairingCancel();
+
+    expect(invoke).toHaveBeenCalledWith("sync_pairing_cancel");
+  });
+
+  it("renames and revokes by `deviceId`", async () => {
+    invoke.mockResolvedValue(undefined);
+
+    await ipc.syncDeviceRename("cc".repeat(16), "Phone");
+    expect(invoke).toHaveBeenCalledWith("sync_device_rename", {
+      deviceId: "cc".repeat(16),
+      name: "Phone",
+    });
+
+    await ipc.syncDeviceRevoke("cc".repeat(16));
+    expect(invoke).toHaveBeenCalledWith("sync_device_revoke", { deviceId: "cc".repeat(16) });
+  });
+});

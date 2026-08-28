@@ -80,7 +80,8 @@ export type SeedName =
   | "needsReview"
   | "large"
   | "bracketMismatch"
-  | "combosMissing";
+  | "combosMissing"
+  | "paired";
 
 /* ------------------------------------------------------------------ row builders ------- */
 
@@ -1753,6 +1754,41 @@ function bracketMismatchSeed(): FakeDb {
  * story open here, press Refresh, and watch the deck's advisory fill in — which a branch could
  * never do, because the branch would still be there after the write.
  */
+/**
+ * `starter` with this device already in a pairing group of three, one of them removed.
+ *
+ * **A seed rather than a fault**, `combosMissing`'s argument the other way up: being paired is
+ * not something that has gone wrong with a world, it is the state a reader is in after two
+ * presses — and every panel state that matters (the roster, a removed row, the key version) is
+ * only reachable from it.
+ *
+ * **The removed device is what earns the third row.** §7.6 keeps a revoked device on the roster
+ * rather than deleting it, so the panel has to draw a row that is history rather than a control,
+ * and a seed with two live devices could never show it. `epoch: 2` is the consequence of that
+ * removal having happened: the rotation *is* the removal.
+ */
+function pairedSeed(): FakeDb {
+  const db = starterSeed();
+  const now = Math.floor(Date.now() / 1000);
+  db.pairing = {
+    deviceId: db.pairing.deviceId,
+    deviceName: "Desk",
+    group: { groupId: "0f1e2d3c4b5a69788796a5b4c3d2e1f0", epoch: 2 },
+    devices: [
+      { deviceId: db.pairing.deviceId, name: "Desk", addedAt: now - 86_400 * 30, revokedAt: null },
+      { deviceId: "c0ffee00c0ffee00c0ffee00c0ffee00", name: "Phone", addedAt: now - 86_400 * 12, revokedAt: null },
+      {
+        deviceId: "dead10ccdead10ccdead10ccdead10cc",
+        name: "Old laptop",
+        addedAt: now - 86_400 * 200,
+        revokedAt: now - 86_400 * 3,
+      },
+    ],
+    pending: null,
+  };
+  return db;
+}
+
 function combosMissingSeed(): FakeDb {
   const db = starterSeed();
   db.combos = [];
@@ -1781,6 +1817,8 @@ export function seed(name: SeedName): FakeDb {
       return bracketMismatchSeed();
     case "combosMissing":
       return combosMissingSeed();
+    case "paired":
+      return pairedSeed();
     default:
       return starterSeed();
   }

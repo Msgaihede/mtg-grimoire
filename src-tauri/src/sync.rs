@@ -150,6 +150,28 @@ pub struct AppState {
     /// hook — SQLite allows one per connection. See [`crate::db::CrossFileFence`], which also
     /// names what it cannot see.
     pub fence: Arc<crate::db::CrossFileFence>,
+    /// A pairing in flight, if there is one.
+    ///
+    /// **In memory rather than in the database, deliberately**, and it is the same argument
+    /// [`AppState::mirror_status`] makes one field up: an offer that survived a restart would
+    /// be an invite a reader printed last month still being accepted today. It outlives the
+    /// webview, which is what a reader who opens Settings twice needs, and dies with the
+    /// process, which is what makes the pairing token one-time in fact.
+    ///
+    /// It holds the derived pair key, which is the other reason it is here and not in SQLite:
+    /// nothing this side of a completed pairing has any business surviving a crash.
+    ///
+    /// **Desktop and Android only, and this one is temporary in a way the other gates on this
+    /// struct are not.** `db_read`, `client`, `images` and `mirror` are gated because the web
+    /// target genuinely does not have those things. This is gated because `sync_pair` is not
+    /// in `web::COMMANDS` yet — the browser has no pairing panel to drive it, and PR 4 carried
+    /// no sync. The spec's whole premise is one dataset across all three platforms, so when
+    /// the relay lands the web target needs this field and its module, and the honest fix then
+    /// is to compile `sync_pair` for wasm rather than to widen anything here. The crates it
+    /// needs (`x25519-dalek`, `chacha20poly1305`, `hkdf`, `getrandom`) all support wasm;
+    /// nothing about the protocol is desktop-shaped. Nobody has tried it.
+    #[cfg(not(target_family = "wasm"))]
+    pub pairing: Mutex<Option<crate::sync_pair::pairing::Pending>>,
 }
 
 /// Result of a sync run. `updated_at` is `Some` only when `updated` is true, so a
@@ -1353,6 +1375,7 @@ mod tests {
                 // what an `AppState` looks like before the first pass.
                 mirror,
                 mirror_status: std::sync::Mutex::new(crate::mirror::watch::LastPass::default()),
+                pairing: std::sync::Mutex::new(None),
                 fence,
             },
             dir,

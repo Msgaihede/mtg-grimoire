@@ -10,7 +10,8 @@ import type {
   DeckTag,
   GlobalTag,
 } from "@/lib/ipc";
-import { startDrag } from "@/test-drag";
+import { dndManager } from "@/lib/dndManager";
+import { boxed, startPointerDrag } from "@/test-drag";
 import { pickOption } from "@/test-dropdown";
 
 const deckCategoryList = vi.hoisted(() => vi.fn());
@@ -212,6 +213,18 @@ function row(name: string): HTMLElement {
   const li = heading.closest("li");
   if (!li) throw new Error(`No row for ${name}`);
   return li;
+}
+
+/**
+ * Every row a box, stacked down the page in the order they are drawn.
+ *
+ * jsdom lays nothing out and dnd-kit hit-tests by coordinate, so a reorder driven here needs the
+ * rows to actually be somewhere. 60px apart is enough that no two overlap — the pointer arrives at
+ * a row's centre, and only that row contains it.
+ */
+function boxRows(): void {
+  const rows = screen.getAllByRole("listitem");
+  rows.forEach((li, index) => boxed(li, index * 60));
 }
 
 beforeEach(() => {
@@ -573,6 +586,35 @@ describe("categories", () => {
     await screen.findByRole("button", { name: "Move Ramp, 3 of 5" });
   });
 
+  /**
+   * **The grip is both a declared dnd-kit handle and a control with a keyboard of its own**, and
+   * this is the case that says the two do not collide. `KeyboardSensor` binds its `keydown`
+   * listener to `source.handle ?? source.element` — from 3b onward, this exact button — so Space
+   * would start a library drag on the one control in the app that already answers arrow keys.
+   *
+   * It does not, and not by luck: a source's own `sensors` list **replaces** the manager's rather
+   * than extending it (`Draggable`'s effect reads `this.sensors ?? [...manager.sensors]`), and
+   * this source declares a `PointerSensor` and nothing else. Pressed with `user.keyboard` on a
+   * genuinely focused button, because a synthetic `dispatchEvent` collapses the capture ladder
+   * into registration order and would report a pass it had not earned.
+   */
+  it("keeps Space off the grip, so the arrow keys are still the only reorder", async () => {
+    mount();
+    await screen.findByText("Ramp");
+    const user = userEvent.setup();
+
+    const handle = screen.getByRole("button", { name: "Move Ramp, 2 of 5" });
+    handle.focus();
+    await user.keyboard(" ");
+    expect(dndManager.dragOperation.status.idle).toBe(true);
+    expect(deckCategoryReorder).not.toHaveBeenCalled();
+
+    await user.keyboard("{ArrowDown}");
+    expect(deckCategoryReorder).toHaveBeenCalledTimes(1);
+    expect(deckCategoryReorder).toHaveBeenCalledWith(1, [1, 3, 2, 4, 5]);
+    expect(dndManager.dragOperation.status.idle).toBe(true);
+  });
+
   it("puts the order back when the reorder is refused", async () => {
     deckCategoryReorder.mockRejectedValue("The database is busy.");
     mount();
@@ -595,15 +637,18 @@ describe("categories", () => {
     mount();
     await screen.findByText("Ramp");
 
+    boxRows();
     const source = row("Removal");
     const handle = within(source).getByRole("button", { name: "Move Removal, 3 of 5" });
 
-    const refused = await startDrag(source);
+    // A press anywhere but the grip is not a drag: `PointerSensor` binds its listener to the
+    // declared handle, so the row itself never hears the press at all.
+    const refused = await startPointerDrag(source);
     expect(refused.started).toBe(false);
     await refused.cancel();
     expect(deckCategoryReorder).not.toHaveBeenCalled();
 
-    const held = await startDrag(source, { pressOn: handle });
+    const held = await startPointerDrag(source, { pressOn: handle });
     try {
       expect(held.started).toBe(true);
       await held.over(row("Commander"));
@@ -618,11 +663,13 @@ describe("categories", () => {
   it("refuses to drop a category onto itself", async () => {
     mount();
     await screen.findByText("Ramp");
+    boxRows();
     const source = row("Ramp");
     const handle = within(source).getByRole("button", { name: "Move Ramp, 2 of 5" });
 
-    const held = await startDrag(source, { pressOn: handle });
+    const held = await startPointerDrag(source, { pressOn: handle });
     try {
+      expect(held.started).toBe(true);
       await held.over(source);
       await held.drop();
     } finally {

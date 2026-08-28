@@ -1,8 +1,5 @@
-import { useEffect, useRef, useState, type RefObject } from "react";
-import {
-  dropTargetForElements,
-  monitorForElements,
-} from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
+import { type RefObject } from "react";
+import { useDndDropTarget } from "@/lib/dndTarget";
 import { composedDraggable, dragData, type DragPayload } from "@/features/decks/dnd";
 
 /**
@@ -133,11 +130,11 @@ export function wishDraggable({
  * refuses the wish already filed in it, so "would this folder accept the thing currently in the
  * air" is a question only the folder itself can answer, and answering it once centrally would
  * mean threading every folder's own state back out to a shared caller instead of asking the
- * target that already has it. So `armed` is computed **per target**, through its own
- * `monitorForElements` gated by its own `canDrop` — which is what raises **every** eligible
- * folder's ring at once while a wish is in the air, never only the one under the pointer — and
- * `over` is the one further fact that only the target the pointer is actually over can answer,
- * through `dropTargetForElements`.
+ * target that already has it. So `armed` is computed **per target**, gated by its own `canDrop`
+ * — which is what raises **every** eligible folder's ring at once while a wish is in the air,
+ * never only the one under the pointer — and `over` is the one further fact that only the target
+ * the pointer is actually over can answer. Both come out of `lib/dndTarget.ts`'s
+ * {@link useDndDropTarget}, which is that pair written once for the eight targets that ask it.
  *
  * `canDrop` and `onDrop` are read through a ref rather than through either effect's deps, so a
  * target does not tear itself down and re-register every time the folder list or the wish list
@@ -154,46 +151,5 @@ export function useWishDropTarget({
   canDrop: (drag: WishDrag) => boolean;
   onDrop: (drag: WishDrag) => void;
 }): { armed: boolean; over: boolean } {
-  const [armed, setArmed] = useState(false);
-  const [over, setOver] = useState(false);
-  const latest = useRef({ canDrop, onDrop });
-  useEffect(() => {
-    latest.current = { canDrop, onDrop };
-  });
-
-  useEffect(
-    () =>
-      monitorForElements({
-        canMonitor: ({ source }) => {
-          const drag = readWishDrag(source.data);
-          return drag !== null && latest.current.canDrop(drag);
-        },
-        onDragStart: () => setArmed(true),
-        // Fires for a cancelled drag as well as a completed one — the platform ends both the
-        // same way — so the ring stands down on Escape without this hearing a keypress.
-        onDrop: () => setArmed(false),
-      }),
-    [],
-  );
-
-  useEffect(() => {
-    const element = ref.current;
-    if (!element) return;
-    return dropTargetForElements({
-      element,
-      canDrop: ({ source }) => {
-        const drag = readWishDrag(source.data);
-        return drag !== null && latest.current.canDrop(drag);
-      },
-      onDragEnter: () => setOver(true),
-      onDragLeave: () => setOver(false),
-      onDrop: ({ source }) => {
-        setOver(false);
-        const drag = readWishDrag(source.data);
-        if (drag !== null && latest.current.canDrop(drag)) latest.current.onDrop(drag);
-      },
-    });
-  }, [ref]);
-
-  return { armed, over };
+  return useDndDropTarget({ ref, read: readWishDrag, canDrop, onDrop });
 }

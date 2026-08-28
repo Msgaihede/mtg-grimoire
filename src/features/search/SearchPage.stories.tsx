@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { DND_SOURCE_ATTR } from "@/lib/dndTarget";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 import { GAME_CHANGER_HINT, GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
@@ -138,7 +139,7 @@ export const Default: Story = {
     // tile's wrapper (pragmatic-drag-and-drop's `addAttribute`). The collection's wall is handed
     // no payload and carries no such attribute — `Collection/Page`'s `CardMode` asserts the
     // other half of that pair, and the two claims are only worth anything together.
-    await expect(first.closest('[draggable="true"]')).not.toBeNull();
+    await expect(first.closest(`[${DND_SOURCE_ATTR}]`)).not.toBeNull();
   },
 };
 

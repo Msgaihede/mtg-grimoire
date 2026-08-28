@@ -1246,7 +1246,6 @@ function Tile<T extends GridCard>({
             const primary = readDragData(now);
             return primary === null ? now : withDragGroup(now, primary, dragRest?.(card) ?? []);
           },
-          count: dragRest ? () => dragRest(card).length + 1 : undefined,
         });
         return () => {
           stop();

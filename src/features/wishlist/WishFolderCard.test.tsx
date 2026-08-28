@@ -14,7 +14,7 @@ import {
 } from "@/lib/folderDrag";
 import type { FolderNode } from "@/lib/folderTree";
 import type { WishlistFolder } from "@/lib/ipc";
-import { startDrag, startPointerDrag } from "@/test-drag";
+import { boxed, startPointerDrag } from "@/test-drag";
 import { dndManager } from "@/lib/dndManager";
 import { WishFolderCard } from "./WishFolderCard";
 import { WishlistBreadcrumb } from "./WishlistBreadcrumb";
@@ -29,12 +29,20 @@ import { wishDraggable, type WishDrag } from "./wishDrag";
  * segment takes it *back out*, and "without the breadcrumb a drag can only ever push wishes
  * deeper" is a claim no test of either component alone can make.
  *
- * **The drags are driven over the library's real code path** — `src/test-drag.ts` says why jsdom
- * can carry `dragstart`/`dragenter`/`drop` at all, and lists what it cannot. What is out of reach
- * here and stays the live pass's to prove: that a ring drawn *outside* a card's border box
- * survives the wall's own `overflow` (that is `DROP_MARK_ROOM`, and jsdom has no layout engine
- * and therefore no clip), and the pointer hit-testing that decides which card a `dragover` lands
- * on.
+ * **Both drags are driven over the library's real code path, and both are pointer gestures** — a
+ * press, a few moves and a release, which is what `@dnd-kit/dom` listens for and what a reader
+ * actually does. `src/test-drag.ts` supplies the two things jsdom cannot. It lays nothing out,
+ * so **every source, and every target a pointer has to reach, states its own box** or the
+ * coordinate the library hit-tests by finds nothing at all; and it never runs the collision pass
+ * the library drives off its own drag preview, so the harness forces one. Both failures are
+ * silent — the registration is correct, the droppable accepts the payload, and the operation's
+ * target is `null` on every frame — which is why the boxes below are setup rather than
+ * decoration.
+ *
+ * What is out of reach here and stays the live pass's to prove: that a ring drawn *outside* a
+ * card's border box survives the wall's own `overflow` (that is `DROP_MARK_ROOM`, and jsdom has
+ * no layout engine and therefore no clip), and the drag preview a reader watches follow the
+ * pointer.
  */
 
 const WISH: WishDrag = { wishId: 7, name: "Lightning Bolt", folderId: null };
@@ -65,7 +73,7 @@ function marked(element: Element | null | undefined, mark: string): boolean {
   return mark.split(" ").every((one) => element!.classList.contains(one));
 }
 
-/** Something to pick up. `wishDraggable` rather than the library's `draggable` directly, so the
+/** Something to pick up. `wishDraggable` rather than the library's `Draggable` directly, so the
  *  payload travels exactly as a wish tile's does — `card: () => null` is the *any-printing* wish,
  *  whose payload is the wish mark alone and which folders are the only targets for. */
 function Source({ wish = WISH }: { wish?: WishDrag }) {
@@ -73,6 +81,10 @@ function Source({ wish = WISH }: { wish?: WishDrag }) {
   useEffect(() => {
     const element = ref.current;
     if (!element) return;
+    // A box of its own, well clear of the card's: dnd-kit reads the press coordinate off the
+    // source's own rect and jsdom measures every rect as four zeroes, so a source with no box is
+    // pressed at the origin — which is inside whatever else has been given a rect there.
+    element.getBoundingClientRect = () => SOURCE_BOX;
     return wishDraggable({ element, wish: () => wish, card: () => null });
   }, [wish]);
   return <div ref={ref}>the wish</div>;
@@ -113,6 +125,11 @@ function FolderSource({ drag = OTHER_FOLDER }: { drag?: FolderDrag }) {
  * lays its drawers out as a grid; `EDGE_ZONE` is a quarter, so a tenth in from either end is
  * unambiguously beside it and the middle is unambiguously inside.
  * `CollectionFolderCard.test.tsx`'s arrangement, for its reason.
+ *
+ * **Two boxes for both drags**: a wish and a sibling drawer are each carried from
+ * {@link SOURCE_BOX} onto {@link CARD_BOX}, which is one card's worth of screen and clear of the
+ * source along the x axis. A wish has no three landings — a folder either takes it or does not —
+ * so it aims at the middle, and the three fractions belong to the folder drag alone.
  */
 const SOURCE_BOX = new DOMRect(0, 0, 240, 120);
 const CARD_BOX = new DOMRect(400, 0, 240, 120);
@@ -225,9 +242,14 @@ describe("WishFolderCard", () => {
 
   /**
    * The box the **folder** drop target is registered on: an inner wrapper rather than the `<li>`,
-   * because the drag library keeps one element drop target per element and the wish drag already
-   * owns the `<li>`. A drag aimed at {@link face} finds it by walking up, exactly as a pointer
-   * does; this is the handle for the one thing a walk cannot do, which is state the box.
+   * which is where the wish target sits.
+   *
+   * **The two boxes are nested and that is now free rather than merely tolerated.** dnd-kit lets a
+   * droppable sit inside another and resolves the pair by asking each one's `accept()` before it
+   * measures anything, so the wish target refuses a folder payload and the folder target refuses a
+   * wish's and the pointer never has to choose. `WishFolderCard` keeps them on two elements for the
+   * reason it always did — the folder target is the box `folderEdge` measures the three landings
+   * against, and the `<li>` is the one every existing wish target, test and story already addresses.
    */
   const slot = () => card().firstElementChild as HTMLElement;
 
@@ -241,9 +263,18 @@ describe("WishFolderCard", () => {
   const line = () =>
     card().querySelector(`[${FOLDER_DROP_LINE_ATTR}]`)?.getAttribute(FOLDER_DROP_LINE_ATTR) ?? null;
 
-  /** Give the folder drop target the box it is measured against — see {@link CARD_BOX}. Every
-   *  folder drag below aims at a fraction along it. */
+  /**
+   * Give the card's **two** drop targets the one box they share — see {@link CARD_BOX}.
+   *
+   * On screen they are the same rectangle: the folder target is a wrapper that covers every pixel
+   * of the `<li>` the wish target is on, so a pointer over the card is over both and nothing about
+   * *where* it is separates them. What does is `accept`, asked once per collision pass before
+   * either box is measured, so stating one rect for the pair is what a reader's pointer actually
+   * meets rather than a convenience. Every folder drag below aims at a fraction along it and every
+   * wish drag at its middle.
+   */
   const stand = () => {
+    card().getBoundingClientRect = () => CARD_BOX;
     slot().getBoundingClientRect = () => CARD_BOX;
   };
 
@@ -399,23 +430,31 @@ describe("WishFolderCard", () => {
 
   it("raises a ring for a wish it can take, and a wash under the pointer", async () => {
     mount({ withSource: true });
-    const held = await startDrag(screen.getByText("the wish"));
+    stand();
+    const held = await startPointerDrag(screen.getByText("the wish"));
+    // **Asked while the drag is still up.** `started` is a live reading over the manager's one
+    // operation rather than a remembered flag, so after a cancel or a drop it is false for every
+    // drag there has ever been.
     expect(held.started).toBe(true);
+    // The ring is a `dragstart` fact and needs no pointer over this card — that is the whole point
+    // of it: every drawer a wish could go in lights up at once, not only the one under the hand.
     expect(marked(card(), DROP_RING)).toBe(true);
-    expect(marked(card().querySelector("button"), DROP_OVER)).toBe(false);
+    expect(marked(face(), DROP_OVER)).toBe(false);
 
     await held.over(card());
-    expect(marked(card().querySelector("button"), DROP_OVER)).toBe(true);
+    expect(marked(face(), DROP_OVER)).toBe(true);
 
     await held.cancel();
   });
 
   it("draws no ring at all for a wish it refuses", async () => {
     mount({ withSource: true, canDrop: () => false });
-    const held = await startDrag(screen.getByText("the wish"));
+    stand();
+    const held = await startPointerDrag(screen.getByText("the wish"));
     expect(marked(card(), DROP_RING)).toBe(false);
 
-    // And refusing means refusing the drop too, not merely declining to advertise it.
+    // And refusing means refusing the drop too, not merely declining to advertise it — which is
+    // why the pointer really travels onto the card first.
     await held.over(card());
     await held.drop();
     expect(onDropWish).not.toHaveBeenCalled();
@@ -423,7 +462,8 @@ describe("WishFolderCard", () => {
 
   it("files the wish it is dropped", async () => {
     mount({ withSource: true });
-    const held = await startDrag(screen.getByText("the wish"));
+    stand();
+    const held = await startPointerDrag(screen.getByText("the wish"));
     await held.over(card());
     await held.drop();
     expect(onDropWish).toHaveBeenCalledWith(WISH);
@@ -581,21 +621,25 @@ describe("WishFolderCard", () => {
    * **The two drags stay two.** They carry different marks under different keys, so each reader
    * answers `null` for the other's payload — which is what lets one card be a wish's destination
    * and a folder's neighbour at once without either handler learning about the other.
+   *
+   * **One pixel, two payloads, and that is what makes the claim worth pinning now.** Both drags
+   * are `@dnd-kit/dom` gestures over one registry and one coordinate space, and {@link stand}
+   * gives the two nested targets the same rectangle — so both drops below land on the identical
+   * point and nothing about *where* the pointer is can be doing the separating.
    */
   it("keeps the wish drag and the folder drag apart, in both directions", async () => {
     mount({ withSource: true, withFolder: true });
     stand();
 
-    // The wish is still an HTML5 drag and the folder is a pointer one — which is the whole of
-    // what "the two drags stay two" now means, and a stronger separation than the two marks
-    // were: the libraries do not share a registry, an event or a coordinate space.
-    const wish = await startDrag(screen.getByText("the wish"));
-    await wish.over(face());
+    const wish = await startPointerDrag(screen.getByText("the wish"));
+    await wish.over(card());
     await wish.drop();
     expect(onDropWish).toHaveBeenCalledWith(WISH);
     expect(onDropFolder).not.toHaveBeenCalled();
 
     onDropWish.mockReset();
+    // The same point, reached from the other source: `INSIDE` is the middle of {@link CARD_BOX}
+    // and so is `card()`'s centre above.
     const drawer = await startPointerDrag(screen.getByText("the folder"));
     await drawer.over(slot(), INSIDE);
     await drawer.drop();
@@ -630,6 +674,18 @@ describe("WishlistBreadcrumb", () => {
     );
   }
 
+  /**
+   * Give the trail's segments boxes, stacked clear of one another and of the wish in the air.
+   *
+   * jsdom lays nothing out and dnd-kit hit-tests by **coordinate**, so a segment with no box can
+   * never be collided with — and the failure is silent: the registration is correct, the droppable
+   * accepts the payload, and the operation's target is `null` on every frame. 100px apart, so a
+   * pointer over one segment is unambiguously not over its neighbour, and all of them well below
+   * {@link SOURCE_BOX} so the press that starts the drag lands on none of them.
+   */
+  const stack = (...segments: HTMLElement[]) =>
+    segments.forEach((segment, index) => boxed(segment, 200 + index * 100));
+
   it("draws the trail root-most first, with the folder you are in current and inert", () => {
     mount();
     expect(screen.getByRole("button", { name: "Wishlist" })).toBeInTheDocument();
@@ -659,7 +715,9 @@ describe("WishlistBreadcrumb", () => {
   it("takes a wish dropped on the root and un-files it", async () => {
     mount({ withSource: true });
     const root = screen.getByRole("button", { name: "Wishlist" });
-    const held = await startDrag(screen.getByText("the wish"));
+    stack(root, screen.getByRole("button", { name: "Expensive" }));
+
+    const held = await startPointerDrag(screen.getByText("the wish"));
     expect(marked(root, DROP_RING)).toBe(true);
 
     await held.over(root);
@@ -670,27 +728,40 @@ describe("WishlistBreadcrumb", () => {
 
   it("takes a wish dropped on an ancestor and moves it up", async () => {
     mount({ withSource: true });
-    const held = await startDrag(screen.getByText("the wish"));
-    await held.over(screen.getByRole("button", { name: "Expensive" }));
+    const ancestor = screen.getByRole("button", { name: "Expensive" });
+    stack(screen.getByRole("button", { name: "Wishlist" }), ancestor);
+
+    const held = await startPointerDrag(screen.getByText("the wish"));
+    await held.over(ancestor);
     await held.drop();
     expect(onDropWish).toHaveBeenCalledWith(WISH, 3);
   });
 
   it("offers no drop on the folder the reader is already standing in", async () => {
     mount({ withSource: true });
-    const held = await startDrag(screen.getByText("the wish"));
-    expect(marked(screen.getByText("Someday"), DROP_RING)).toBe(false);
+    // Boxed like its neighbours, so "nothing happened" is the target refusing rather than a
+    // pointer that was never over it.
+    const current = screen.getByText("Someday");
+    stack(
+      screen.getByRole("button", { name: "Wishlist" }),
+      screen.getByRole("button", { name: "Expensive" }),
+      current,
+    );
 
-    await held.over(screen.getByText("Someday"));
+    const held = await startPointerDrag(screen.getByText("the wish"));
+    expect(marked(current, DROP_RING)).toBe(false);
+
+    await held.over(current);
     await held.drop();
     expect(onDropWish).not.toHaveBeenCalled();
   });
 
   it("asks the page about each segment separately", async () => {
     // Only the root says yes, so only the root lights up — one `canDrop` per segment rather than
-    // one answer for the whole bar.
+    // one answer for the whole bar. No boxes: the ring is raised at `dragstart` on every eligible
+    // target at once, which is a fact about the payload rather than about where the pointer is.
     mount({ withSource: true, canDrop: (_drag, folderId) => folderId === null });
-    const held = await startDrag(screen.getByText("the wish"));
+    const held = await startPointerDrag(screen.getByText("the wish"));
     expect(marked(screen.getByRole("button", { name: "Wishlist" }), DROP_RING)).toBe(true);
     expect(marked(screen.getByRole("button", { name: "Expensive" }), DROP_RING)).toBe(false);
 
@@ -699,11 +770,13 @@ describe("WishlistBreadcrumb", () => {
 
   it("says so and takes nothing while flattened", async () => {
     mount({ withSource: true, flattened: true });
-    expect(screen.getByText("Wishlist · all folders")).toBeInTheDocument();
+    const bar = screen.getByText("Wishlist · all folders");
+    expect(bar).toBeInTheDocument();
     expect(screen.queryAllByRole("button")).toHaveLength(0);
 
-    const held = await startDrag(screen.getByText("the wish"));
-    await held.over(screen.getByText("Wishlist · all folders"));
+    stack(bar);
+    const held = await startPointerDrag(screen.getByText("the wish"));
+    await held.over(bar);
     await held.drop();
     expect(onDropWish).not.toHaveBeenCalled();
   });

@@ -1,8 +1,8 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { DND_SOURCE_ATTR } from "@/lib/dndTarget";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { monitorForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import type { ReactElement } from "react";
 import {
   TOOLTIP_OPEN_MS,
@@ -22,7 +22,7 @@ import type {
 import { MARKETPLACES } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
 import { MARKETPLACE_KEY } from "@/lib/useMarketplace";
-import { startDrag, startPointerDrag } from "@/test-drag";
+import { recordDrags, startPointerDrag } from "@/test-drag";
 import { openDropdown, pickOption } from "@/test-dropdown";
 import { readCollectionTileDrag } from "./collectionDrag";
 
@@ -387,25 +387,27 @@ function rightClick(element: HTMLElement): void {
 /**
  * The **card** drag sources on screen, in document order.
  *
- * A bare `[draggable="true"]` used to mean "a table row or a wall tile" and stopped meaning it the
+ * A bare `[data-dnd-source]` used to mean "a table row or a wall tile" and stopped meaning it the
  * day folder cards became draggable: the reader's cabinet is drawn *above* the table, so the first
  * match on a page with folders is a drawer. Filtering by the wall it sits in rather than by the
  * element's own shape, because both are `<li>`s and both are draggable — the difference is which
  * list they belong to.
  */
 const cardSources = (container: HTMLElement): HTMLElement[] =>
-  [...container.querySelectorAll<HTMLElement>('[draggable="true"]')].filter(
+  [...container.querySelectorAll<HTMLElement>(`[${DND_SOURCE_ATTR}]`)].filter(
     (element) => element.closest('[aria-label="Folders"]') === null,
   );
 
 /**
  * A folder card by name, and the inner box its **folder** drop target is registered on.
  *
- * Two boxes rather than one because the copy drag already owns the `<li>` and pragmatic-dnd keeps
- * a single element drop target per element — `CollectionFolderCard` carries the whole reason, and
- * it survives the folder drag moving to `@dnd-kit/dom`, because the two libraries must not be put
- * on one element either. {@link folderSlot} is the inner box, and it is what a folder drag is
- * measured against and aimed at.
+ * Two boxes rather than one because the copy drag already owns the `<li>`, and the reason has
+ * outlived the library it was written about: pragmatic-dnd kept a single element drop target per
+ * element, so a second registration there silently replaced the first. dnd-kit would register
+ * both, and the two would then compete for one rectangle in the collision pass. What keeps them
+ * apart either way is that each refuses the other's payload outright — `accept` here — so the two
+ * boxes stay two. {@link folderSlot} is the inner one, and it is what a folder drag is measured
+ * against and aimed at.
  */
 const folderCard = (name: string): HTMLElement =>
   screen.getByRole("button", { name: new RegExp(`^${name} folder`) }).closest("li")!;
@@ -413,15 +415,19 @@ const folderSlot = (name: string): HTMLElement =>
   folderCard(name).firstElementChild as HTMLElement;
 
 /**
- * One box and three landings, because dnd-kit hit-tests by **coordinate** and jsdom measures every
- * rectangle as zero.
+ * Two boxes and three landings, because dnd-kit hit-tests by **coordinate** and jsdom measures
+ * every rectangle as zero.
  *
  * jsdom has no layout engine, so every real `getBoundingClientRect` is four zeroes and
  * `folderEdge` answers `inside` for all of them: an edge-dependent test has to state the box, and
- * a pointer-driven library needs the pointer to be somewhere real as well. The card is read along
- * the **horizontal** axis, since the wall lays its drawers out as a grid; `EDGE_ZONE` is a
- * quarter, so a tenth in from either end is unambiguously beside and the middle is unambiguously
- * inside.
+ * a pointer-driven library needs the pointer to be somewhere real as well. **Every drag on this
+ * page needs both ends stated, not only the folder ones** — a row or a tile with no box is pressed
+ * at the origin and a drawer with no box can never be collided with, and both failures are silent.
+ * The two boxes are kept well apart so that a gesture between them really travels.
+ *
+ * The card is read along the **horizontal** axis, since the wall lays its drawers out as a grid;
+ * `EDGE_ZONE` is a quarter, so a tenth in from either end is unambiguously beside and the middle
+ * is unambiguously inside.
  */
 const SOURCE_BOX = new DOMRect(0, 0, 100, 100);
 const CARD_BOX = new DOMRect(400, 400, 100, 100);
@@ -429,9 +435,30 @@ const AT_START = { x: 0.1 };
 const AT_MIDDLE = { x: 0.5 };
 const AT_END = { x: 0.9 };
 
-/** Give a folder card's drop target somewhere to be. */
+/**
+ * Give a folder card somewhere to be — the `<li>`, the wrapper inside it and its face, all at
+ * {@link CARD_BOX}.
+ *
+ * **All three, because a drawer is two nested droppables over one rectangle.** A copy is taken by
+ * the `<li>` and a folder by the wrapper inside it, and in a real window the one covers the other;
+ * what keeps them apart is `accept`, which refuses the payload each was not written for before
+ * dnd-kit measures either. The face takes the same rect because it is what a real pointer is over
+ * for all but the `⋯`'s corner.
+ *
+ * **Leaving the `<li>` out of that list still passes, and that is the trap rather than a licence
+ * to.** Measured 2026-08-28: with only the inner boxes stated, the `<li>`'s shape is four zeroes
+ * at the origin and `over(folderCard(…))` therefore aims the pointer at `0, 0` — which a zero
+ * rectangle *contains*, so the drop lands and every assertion below is green. It proves nothing:
+ * every other drawer on the wall is an equally unmeasured zero at the same point, and which one
+ * takes the copy is registry order. A boxed `<li>` is the difference between a hit-test and a
+ * coincidence.
+ */
 const stand = (name: string) => {
-  folderSlot(name).getBoundingClientRect = () => CARD_BOX;
+  const card = folderCard(name);
+  for (const element of [card, folderSlot(name), card.querySelector("button")!]) {
+    element.getBoundingClientRect = () => CARD_BOX;
+  }
+  return card;
 };
 
 /** Pick a folder card up. dnd-kit reads the press coordinate off the source's own box, so a
@@ -439,6 +466,19 @@ const stand = (name: string) => {
 async function holdCard(name: string) {
   folderCard(name).getBoundingClientRect = () => SOURCE_BOX;
   return startPointerDrag(folderCard(name));
+}
+
+/**
+ * Pick a **copy** up — a table row or a wall tile — pressing where a reader would.
+ *
+ * `holdCard`'s counterpart for the other drag on this page, and it exists for the same one
+ * reason: the source needs a box or dnd-kit presses the origin. The press and the drag land on
+ * two different elements, which is the case that bites — a press on a control inside a row is a
+ * press on the control, and `NOT_A_DRAG` is what says so.
+ */
+async function holdCopy(source: HTMLElement, { pressOn }: { pressOn: Element }) {
+  source.getBoundingClientRect = () => SOURCE_BOX;
+  return startPointerDrag(source, { pressOn });
 }
 
 /**
@@ -702,9 +742,9 @@ describe("CollectionPage", () => {
    *
    * What it carries is the *card*, not the entry: a deck names a printing, and the finish and
    * condition that make this row an entry are the collection's own business (which is also
-   * why the collection is never a drop *target*). This asks the drag rather than the
-   * `draggable="true"` attribute, because a registration that closed over the wrong row would
-   * still set it.
+   * why the collection is never a drop *target*). This asks the drag rather than the attribute a
+   * registered source wears, because a registration that closed over the wrong row would still
+   * set it.
    */
   it("carries the row's printing when the row is dragged", async () => {
     const { container } = wrap(<CollectionPage />);
@@ -714,13 +754,16 @@ describe("CollectionPage", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]).toHaveTextContent("Lightning Bolt");
 
-    const carried: Record<string, unknown>[] = [];
-    const stop = monitorForElements({ onDragStart: ({ source }) => carried.push(source.data) });
-    const held = await startDrag(rows[0], { pressOn: screen.getByText("Lightning Bolt") });
+    const drags = recordDrags();
+    const held = await holdCopy(rows[0], { pressOn: screen.getByText("Lightning Bolt") });
+    // Asked while the drag is still up: `started` is a live reading of the manager's own
+    // operation rather than a remembered one, so after a cancel it is false for every drag there
+    // has ever been.
+    expect(held.started).toBe(true);
     await held.cancel();
-    stop();
+    drags.stop();
 
-    expect(carried.map(readDragData)).toEqual([
+    expect(drags.records.map(readDragData)).toEqual([
       { kind: "card", cardId: "c1", name: "Lightning Bolt", typeLine: "Instant" },
     ]);
   });
@@ -729,18 +772,19 @@ describe("CollectionPage", () => {
    * **A press on the stepper is a press on the stepper.**
    *
    * The whole row is the drag handle and the row is full of controls, so this is the failure
-   * that costs a reader their counts: Chromium starts a drag from the nearest draggable
-   * *ancestor* of whatever was pressed, and the drag library excludes nothing of its own — so
-   * without the mark, a press on `−` that travels five pixels drags the row and the press is
-   * never delivered as a click. `cardDraggable` reads where the *press* landed, which is why
-   * this presses one place and drags from another, exactly as the platform does.
+   * that costs a reader their counts: a pointer sensor listens on the row, so a press on `−`
+   * that travels five pixels would drag the row and the press would never be delivered as a
+   * click. `dndManager.ts` configures `PointerSensor.preventActivation` with the app's own
+   * `NOT_A_DRAG` selector, once, for every draggable in the window — so the guard reads where
+   * the *press* landed, which is why this presses one place and drags from another, exactly as
+   * a reader's hand does.
    */
   it("does not drag a row when the press landed on its stepper", async () => {
     const { container } = wrap(<CollectionPage />);
     await screen.findByText("Lightning Bolt");
     const row = cardSources(container)[0];
 
-    const held = await startDrag(row, {
+    const held = await holdCopy(row, {
       pressOn: screen.getByRole("button", {
         name: "Decrease Quantity of Lightning Bolt (Foil, NM)",
       }),
@@ -748,8 +792,10 @@ describe("CollectionPage", () => {
     expect(held.started).toBe(false);
     await held.cancel();
 
-    // And the row itself still is one: the guard is a control's press, not a row's.
-    const again = await startDrag(row, { pressOn: screen.getByText("Lightning Bolt") });
+    // And the row itself still is one: the guard is a control's press, not a row's. Asked before
+    // the cancel, because `started` is a live reading of the manager's operation rather than a
+    // remembered one.
+    const again = await holdCopy(row, { pressOn: screen.getByText("Lightning Bolt") });
     expect(again.started).toBe(true);
     await again.cancel();
   });
@@ -1249,7 +1295,7 @@ describe("CollectionPage", () => {
    * name and the price is the whole of what tells them apart on screen.
    */
   const tileQuoting = (money: string): HTMLElement =>
-    screen.getByText(money).closest('[draggable="true"]') as HTMLElement;
+    screen.getByText(money).closest(`[${DND_SOURCE_ATTR}]`) as HTMLElement;
 
   /**
    * A foil and a played nonfoil are two objects at two prices sharing only a set and a number.
@@ -2248,8 +2294,9 @@ describe("the collection's folders", () => {
     )!;
     const invalidate = vi.spyOn(client, "invalidateQueries");
 
+    stand("Trade binder");
     const row = cardSources(container)[0];
-    const held = await startDrag(row, { pressOn: screen.getByText("Lightning Bolt") });
+    const held = await holdCopy(row, { pressOn: screen.getByText("Lightning Bolt") });
     await held.over(card);
     await held.drop();
 
@@ -2280,8 +2327,9 @@ describe("the collection's folders", () => {
       "li",
     )!;
 
+    stand("Trade binder");
     const row = cardSources(container)[0];
-    const held = await startDrag(row, { pressOn: screen.getByText("Lightning Bolt") });
+    const held = await holdCopy(row, { pressOn: screen.getByText("Lightning Bolt") });
     expect(card.classList.contains("ring-2")).toBe(false);
 
     await held.over(card);
@@ -2361,8 +2409,12 @@ describe("the collection's folders", () => {
       "li",
     )!;
 
+    // The group's own box, since {@link stand} finds a drawer by its `folder` label and a deck
+    // group's says `deck`. Boxed all the same, so the pointer really arrives on it and the
+    // refusal below is a target saying no rather than a drop that missed.
+    group.getBoundingClientRect = () => CARD_BOX;
     const row = cardSources(container)[0];
-    const held = await startDrag(row, { pressOn: screen.getByText("Lightning Bolt") });
+    const held = await holdCopy(row, { pressOn: screen.getByText("Lightning Bolt") });
     expect(group.classList.contains("ring-2")).toBe(false);
 
     await held.over(group);
@@ -2392,8 +2444,9 @@ describe("the collection's folders", () => {
       "li",
     )!;
 
+    stand("Trade binder");
     const row = cardSources(container)[0];
-    const held = await startDrag(row, { pressOn: screen.getByText("Lightning Bolt") });
+    const held = await holdCopy(row, { pressOn: screen.getByText("Lightning Bolt") });
     expect(binder.classList.contains("ring-2")).toBe(false);
 
     await held.over(binder);
@@ -2421,20 +2474,20 @@ describe("the collection's folders", () => {
     const tiles = cardSources(container);
     expect(tiles).toHaveLength(1);
 
-    const carried: Record<string, unknown>[] = [];
-    const stop = monitorForElements({ onDragStart: ({ source }) => carried.push(source.data) });
-    const held = await startDrag(tiles[0], {
+    const drags = recordDrags();
+    const held = await holdCopy(tiles[0], {
       pressOn: screen.getByRole("button", { name: "Lightning Bolt" }),
     });
+    expect(held.started).toBe(true);
     await held.cancel();
-    stop();
+    drags.stop();
 
-    expect(carried.map(readDragData)).toEqual([
+    expect(drags.records.map(readDragData)).toEqual([
       { kind: "card", cardId: "c1", name: "Lightning Bolt", typeLine: "Instant" },
     ]);
     // The same payload, read by the other key: both entries behind the art, with where each
     // one sits — which is what lets a folder refuse the copies already in it.
-    expect(carried.map(readCollectionTileDrag)).toEqual([
+    expect(drags.records.map(readCollectionTileDrag)).toEqual([
       {
         cardId: "c1",
         name: "Lightning Bolt",
@@ -2473,13 +2526,13 @@ describe("the collection's folders", () => {
     const tiles = cardSources(container);
     expect(tiles).toHaveLength(2);
 
-    const carried: Record<string, unknown>[] = [];
-    const stop = monitorForElements({ onDragStart: ({ source }) => carried.push(source.data) });
-    const held = await startDrag(tiles[0], {
+    const drags = recordDrags();
+    const held = await holdCopy(tiles[0], {
       pressOn: screen.getAllByRole("button", { name: "Lightning Bolt" })[0],
     });
+    expect(held.started).toBe(true);
     await held.cancel();
-    stop();
+    drags.stop();
 
     // Entries 7 and 9 — the two foils, one of them already filed — and **not** entry 8.
     //
@@ -2487,10 +2540,10 @@ describe("the collection's folders", () => {
     // than the design: `deck_add_card` does take a `DeckFinish`, but `dragData`'s `{ kind:
     // "card" }` payload has no finish slot to carry one, so a foil dropped onto a deck lands
     // plain. It predates the split; the split is what made it fixable.
-    expect(carried.map(readDragData)).toEqual([
+    expect(drags.records.map(readDragData)).toEqual([
       { kind: "card", cardId: "c1", name: "Lightning Bolt", typeLine: "Instant" },
     ]);
-    expect(carried.map(readCollectionTileDrag)).toEqual([
+    expect(drags.records.map(readCollectionTileDrag)).toEqual([
       {
         cardId: "c1",
         name: "Lightning Bolt",
@@ -2543,8 +2596,9 @@ describe("the collection's folders", () => {
       "li",
     )!;
 
+    stand("Trade binder");
     const tile = cardSources(container)[0];
-    const held = await startDrag(tile, {
+    const held = await holdCopy(tile, {
       pressOn: screen.getByRole("button", { name: "Lightning Bolt" }),
     });
     await held.over(binder);
@@ -2571,8 +2625,9 @@ describe("the collection's folders", () => {
       "li",
     )!;
 
+    stand("Trade binder");
     const tile = cardSources(container)[0];
-    const held = await startDrag(tile, {
+    const held = await holdCopy(tile, {
       pressOn: screen.getByRole("button", { name: "Lightning Bolt" }),
     });
     await held.over(binder);
@@ -2615,8 +2670,9 @@ describe("the collection's folders", () => {
       "li",
     )!;
 
+    stand("Trade binder");
     const tile = cardSources(container)[0];
-    const held = await startDrag(tile, {
+    const held = await holdCopy(tile, {
       pressOn: screen.getByRole("button", { name: "Lightning Bolt" }),
     });
     await held.over(binder);
@@ -2672,8 +2728,9 @@ describe("the collection's folders", () => {
     )!;
     const invalidate = vi.spyOn(client, "invalidateQueries");
 
+    stand("Trade binder");
     const row = cardSources(container)[0];
-    const held = await startDrag(row, { pressOn: screen.getByText("Lightning Bolt") });
+    const held = await holdCopy(row, { pressOn: screen.getByText("Lightning Bolt") });
     await held.over(binder);
     await held.drop();
 
@@ -3215,8 +3272,8 @@ describe("the New folder tile", () => {
  *
  * **The three landings are driven by stating the box.** jsdom has no layout engine, so every real
  * `getBoundingClientRect` is four zeroes and `folderEdge` would answer `inside` for every drop —
- * a test that hoped for a rect would pass over any threshold at all. {@link stand} slides the card
- * under the one coordinate `test-drag` sends instead.
+ * a test that hoped for a rect would pass over any threshold at all. {@link stand} states it, and
+ * the pointer is then walked to a fraction along it, which is the gesture a reader makes.
  */
 describe("rearranging the collection's cabinet", () => {
   /** Two drawers at the top level and one inside the first — enough for a nest, a reorder and the
@@ -3434,17 +3491,21 @@ describe("rearranging the collection's cabinet", () => {
   });
 
   /**
-   * **The copy drag still files a copy**, which is the thing this change could have taken away
-   * without a single folder test noticing: the drag library keeps **one element drop target per
-   * element** and a second registration silently replaces the first, so a folder target on the
-   * `<li>` would have stopped the drawer accepting cards while everything above stayed green.
+   * **The copy drag still files a copy**, which is the thing the folder drop could have taken
+   * away without a single folder test noticing. The hazard has changed shape with the library and
+   * not gone: pragmatic-dnd kept **one element drop target per element** and a second
+   * registration silently replaced the first, so a folder target put on the `<li>` would have
+   * stopped the drawer taking cards at all. dnd-kit registers both and lets them compete for the
+   * one rectangle instead — so the failure is now the folder target *winning* the collision. Both
+   * come out the same way here: the copy is never filed, and everything above stays green.
    */
   it("still files a copy dropped on a drawer", async () => {
     const { container } = wrap(<CollectionPage />);
     await wall();
     await screen.findByText("Lightning Bolt");
 
-    const held = await startDrag(cardSources(container)[0], {
+    stand("Trade binder");
+    const held = await holdCopy(cardSources(container)[0], {
       pressOn: screen.getByText("Lightning Bolt"),
     });
     await held.over(folderCard("Trade binder"));

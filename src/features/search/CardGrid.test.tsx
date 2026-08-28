@@ -1,13 +1,13 @@
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
+import { DND_SOURCE_ATTR } from "@/lib/dndTarget";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { monitorForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import type { ReactElement } from "react";
 import { readDragData, readDragGroup, type DragPayload } from "@/features/decks/dnd";
 import { IMAGE_RETRY_FLOOR_MS, IMAGE_RETRY_SPREAD_MS, WALL_CARD_VARIANT } from "@/lib/images";
 import type { CardSummary, WishInput } from "@/lib/ipc";
-import { startDrag } from "@/test-drag";
+import { boxed, recordDrags, startPointerDrag } from "@/test-drag";
 
 // The tiles carry a quick-add now, and a wish written from one is a real `invoke` — which
 // in jsdom is a rejected promise about a missing Tauri runtime rather than a call anything
@@ -197,7 +197,7 @@ describe("CardGrid", () => {
         zoomSection="search"
       />,
     );
-    expect(inert.container.querySelector('[draggable="true"]')).toBeNull();
+    expect(inert.container.querySelector(`[${DND_SOURCE_ATTR}]`)).toBeNull();
     inert.unmount();
 
     const { container } = render(
@@ -216,17 +216,17 @@ describe("CardGrid", () => {
       />,
     );
 
-    const tiles = [...container.querySelectorAll('[draggable="true"]')];
+    const tiles = [...container.querySelectorAll(`[${DND_SOURCE_ATTR}]`)];
     expect(tiles).toHaveLength(1);
     expect(tiles[0]).toContainElement(screen.getByAltText("Lightning Bolt"));
 
-    const carried: Record<string, unknown>[] = [];
-    const stop = monitorForElements({ onDragStart: ({ source }) => carried.push(source.data) });
-    const held = await startDrag(tiles[0]);
+    // A box, because dnd-kit hit-tests by coordinate and jsdom measures every rect as zero.
+    const drags = recordDrags();
+    const held = await startPointerDrag(boxed(tiles[0] as HTMLElement, 0));
     await held.cancel();
-    stop();
+    drags.stop();
 
-    expect(carried.map(readDragData)).toEqual([
+    expect(drags.records.map(readDragData)).toEqual([
       { kind: "card", cardId: "aaa", name: "Lightning Bolt", typeLine: "Instant" },
     ]);
   });
@@ -1736,14 +1736,15 @@ describe("CardGrid multi-select", () => {
     await userEvent.click(screen.getByRole("button", { name: "Lightning Bolt" }));
     await pressWith("Ponder", "Control");
 
-    const carried: Record<string, unknown>[] = [];
-    const stop = monitorForElements({ onDragStart: ({ source }) => carried.push(source.data) });
-    const tile = screen.getByRole("button", { name: "Lightning Bolt" }).closest("[draggable]")!;
-    const held = await startDrag(tile);
+    const drags = recordDrags();
+    const tile = screen
+      .getByRole("button", { name: "Lightning Bolt" })
+      .closest<HTMLElement>(`[${DND_SOURCE_ATTR}]`)!;
+    const held = await startPointerDrag(boxed(tile, 0));
     await held.cancel();
-    stop();
+    drags.stop();
 
-    expect(readDragGroup(carried[0]).map((p) => p.cardId)).toEqual(["aaa", "ccc"]);
+    expect(readDragGroup(drags.records[0]).map((p) => p.cardId)).toEqual(["aaa", "ccc"]);
   });
 
   /** And a drag from outside the set carries one card and throws the set away. */
@@ -1758,14 +1759,15 @@ describe("CardGrid multi-select", () => {
     await userEvent.click(screen.getByRole("button", { name: "Lightning Bolt" }));
     await pressWith("Ponder", "Control");
 
-    const carried: Record<string, unknown>[] = [];
-    const stop = monitorForElements({ onDragStart: ({ source }) => carried.push(source.data) });
-    const tile = screen.getByRole("button", { name: "Brainstorm" }).closest("[draggable]")!;
-    const held = await startDrag(tile);
+    const drags = recordDrags();
+    const tile = screen
+      .getByRole("button", { name: "Brainstorm" })
+      .closest<HTMLElement>(`[${DND_SOURCE_ATTR}]`)!;
+    const held = await startPointerDrag(boxed(tile, 0));
     await held.cancel();
-    stop();
+    drags.stop();
 
-    expect(readDragGroup(carried[0]).map((p) => p.cardId)).toEqual(["ddd"]);
+    expect(readDragGroup(drags.records[0]).map((p) => p.cardId)).toEqual(["ddd"]);
     expect(useAppStore.getState().cardSelection).toBeNull();
   });
 

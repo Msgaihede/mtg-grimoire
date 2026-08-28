@@ -1,14 +1,14 @@
 import { render, screen, within } from "@testing-library/react";
+import { DND_SOURCE_ATTR } from "@/lib/dndTarget";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { monitorForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import { readDragData } from "@/features/decks/dnd";
 import { DEFAULT_SECTION_ZOOMS } from "@/lib/cardZoom";
 import type { FolderNode } from "@/lib/folderTree";
 import type { WishlistFolder, WishRow } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
 import { useAppStore } from "@/lib/store";
-import { startDrag } from "@/test-drag";
+import { boxed, recordDrags, startPointerDrag } from "@/test-drag";
 import { WishlistGrid } from "./WishlistGrid";
 import { WishlistTable } from "./WishlistTable";
 import { readWishDrag } from "./wishDrag";
@@ -148,19 +148,22 @@ const chinOf = (printing: string): HTMLElement =>
 /**
  * What one drag actually put in the library's store.
  *
- * The payload never travels in the platform's `DataTransfer` — it lives in the adapter's own
- * store, keyed off `getInitialData` — so a monitor is the only way to read it, and the drag has
- * to be ended (`cancel`) or the library's one global "a drag is active" flag strands every later
- * test in the file.
+ * The payload never travels in a `DataTransfer` — it lives in the library's own store, keyed off
+ * the source's `data` — so a monitor is the only way to read it, and the drag has to be ended
+ * (`cancel`) or the manager's one drag operation strands every later test in the file.
  */
 async function carriedBy(source: Element): Promise<Record<string, unknown> | null> {
-  const seen: Record<string, unknown>[] = [];
-  const stop = monitorForElements({ onDragStart: ({ source: s }) => seen.push(s.data) });
-  const held = await startDrag(source);
-  await held.cancel();
-  stop();
+  const drags = recordDrags();
+  // A box of its own, because dnd-kit hit-tests by coordinate and jsdom measures every rect as
+  // four zeroes — a source with no box is pressed at the origin and never travels.
+  const held = await startPointerDrag(boxed(source as HTMLElement, 0));
+  // **Asked before the drag is let go, because `started` is a live reading rather than a
+  // remembered one**: `PointerHeld.started` is a getter over the manager's own operation status,
+  // so after a cancel it is false for every drag there has ever been.
   expect(held.started).toBe(true);
-  return seen[0] ?? null;
+  await held.cancel();
+  drags.stop();
+  return drags.records[0] ?? null;
 }
 
 /**
@@ -188,7 +191,7 @@ describe("a wish's drag", () => {
    */
   it("carries both marks on a pinned wish, in both views", async () => {
     const { container, unmount } = wall([{ ...BOLT, folderId: EXPENSIVE.id }]);
-    const tile = container.querySelector('[draggable="true"]');
+    const tile = container.querySelector(`[${DND_SOURCE_ATTR}]`);
     expect(tile).not.toBeNull();
 
     const fromWall = await carriedBy(tile!);
@@ -207,7 +210,7 @@ describe("a wish's drag", () => {
     unmount();
 
     const listed = list([{ ...BOLT, folderId: EXPENSIVE.id }]);
-    const row = listed.container.querySelector('[draggable="true"]');
+    const row = listed.container.querySelector(`[${DND_SOURCE_ATTR}]`);
     const fromList = await carriedBy(row!);
     expect(readDragData(fromList!)).toEqual(readDragData(fromWall!));
     expect(readWishDrag(fromList!)).toEqual(readWishDrag(fromWall!));
@@ -221,7 +224,7 @@ describe("a wish's drag", () => {
    */
   it("carries the wish mark alone on an any-printing wish, in both views", async () => {
     const { container, unmount } = wall([ANY]);
-    const tile = container.querySelector('[draggable="true"]');
+    const tile = container.querySelector(`[${DND_SOURCE_ATTR}]`);
     expect(tile).not.toBeNull();
 
     const fromWall = await carriedBy(tile!);
@@ -236,7 +239,7 @@ describe("a wish's drag", () => {
     unmount();
 
     const listed = list([ANY]);
-    const row = listed.container.querySelector('[draggable="true"]');
+    const row = listed.container.querySelector(`[${DND_SOURCE_ATTR}]`);
     expect(row).not.toBeNull();
     const fromList = await carriedBy(row!);
     expect(readDragData(fromList!)).toBeNull();

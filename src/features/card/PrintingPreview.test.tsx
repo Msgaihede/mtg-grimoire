@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { CardDetail, Printing, PrintingsResponse } from "@/lib/ipc";
 import type { MarketplaceId } from "@/lib/marketplace";
-import { fireDragEvent } from "@/test-drag";
+import { boxed, startPointerDrag } from "@/test-drag";
 
 const detail: CardDetail = {
   promoTypes: null,
@@ -258,22 +258,28 @@ describe("the printings list preview", () => {
   });
 
   /**
-   * A row that is being dragged is not a row being read. The listener is on the row rather than
-   * on any drag machinery, so it is already right for the day every card surface becomes a drag
-   * source and these rows carry their printing with them — which is now, so the press goes
-   * through `test-drag`'s own event: a bare `fireEvent.dragStart` at a registered `cardDraggable`
-   * has no `dataTransfer`, and the library says so on stderr rather than starting anything.
+   * A row that is being dragged is not a row being read.
+   *
+   * **The gesture is a real pointer drag**, because `@dnd-kit/dom` is pointer-driven and the app
+   * fires no native `dragstart` anywhere any more — a synthetic one would prove nothing about a
+   * drag a reader can make. What takes the picture down is therefore the press the drag begins
+   * with, which is the same claim reached one event earlier: the handlers are the **row's** own
+   * rather than any drag machinery's, so the dwell has never had to know which library carries
+   * the printing away.
    */
   it("cancels the dwell when the row starts a drag", async () => {
     await openPane();
-    const row = rowOf("M10 146");
+    // Boxed, because dnd-kit hit-tests by coordinate and jsdom measures every rect as zero.
+    const row = boxed(rowOf("M10 146"), 0);
 
     fireEvent.mouseEnter(row);
     tick(200);
-    fireDragEvent(row, "dragstart");
+    const held = await startPointerDrag(row);
+    expect(held.started).toBe(true);
 
     tick(10_000);
     expect(preview()).toBeNull();
+    await held.cancel();
   });
 
   /**

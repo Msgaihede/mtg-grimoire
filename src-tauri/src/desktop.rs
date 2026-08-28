@@ -18,8 +18,8 @@ use crate::sync::AppState;
 use crate::{
     card, collection, collection_alloc, collection_folders, combos, db, deck, deck_audit,
     deck_meta, deck_theory, deck_undo, errors, export, flatten, images, import, index, listview,
-    marketplace, marketplace_feed, mirror, nav, paths, reset, schema, scryfall, search, sync, tags,
-    update, window, wishlist, wishlist_folders, zoom,
+    marketplace, marketplace_feed, mirror, nav, paths, reset, schema, scryfall, search, sync,
+    sync_pair, tags, update, window, wishlist, wishlist_folders, zoom,
 };
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
@@ -484,7 +484,19 @@ pub fn run() {
             mirror::settings::mirror_status,
             mirror::settings::mirror_set_enabled,
             mirror::settings::mirror_set_root,
-            mirror::settings::mirror_rebuild
+            mirror::settings::mirror_rebuild,
+            // Pairing (spec §7.5 and §7.6). Nine commands: the panel's read, the five
+            // steps of the handshake, cancelling one, and the two things a roster row
+            // can be told.
+            sync_pair::pairing::sync_pairing_status,
+            sync_pair::pairing::sync_pairing_begin,
+            sync_pair::pairing::sync_pairing_accept,
+            sync_pair::pairing::sync_pairing_respond,
+            sync_pair::pairing::sync_pairing_confirm,
+            sync_pair::pairing::sync_pairing_complete,
+            sync_pair::pairing::sync_pairing_cancel,
+            sync_pair::pairing::sync_device_rename,
+            sync_pair::pairing::sync_device_revoke
         ])
         .setup(|app| {
             // First, and before anything that can fail: the window is created **hidden**
@@ -807,6 +819,7 @@ fn init_state(app: &tauri::App) -> Result<AppState, String> {
         // The mask's twin, and hooked up in the same call for the same reason: SQLite allows
         // one update hook per connection, so the fence has to ride in the mirror's.
         fence: Arc::new(db::CrossFileFence::new()),
+        pairing: Mutex::new(None),
     })
 }
 

@@ -1,5 +1,13 @@
-import { describe, expect, it } from "vitest";
-import { categoryDragData, movedTo, readCategoryDrag } from "./categoryDrag";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { act, renderHook } from "@testing-library/react";
+import { boxed, startPointerDrag } from "@/test-drag";
+import {
+  categoryDragData,
+  movedTo,
+  readCategoryDrag,
+  useCategoryDragSource,
+  useCategoryReorderDrop,
+} from "./categoryDrag";
 
 describe("movedTo", () => {
   it("moves an id to a position, closing the gap it left", () => {
@@ -61,5 +69,143 @@ describe("the category drag's own mark", () => {
     expect(readCategoryDrag({ "mtg-grimoire/category-order": true, categoryId: -3 })).toBeNull();
     expect(readCategoryDrag({ "mtg-grimoire/category-order": true, categoryId: 1.5 })).toBeNull();
     expect(readCategoryDrag({ "mtg-grimoire/category-order": true, categoryId: "4" })).toBeNull();
+  });
+});
+
+const undo: (() => void)[] = [];
+afterEach(() => {
+  while (undo.length) undo.pop()!();
+});
+
+/** A heading with a grip inside it — the shape both surfaces draw, and the only shape where the
+ *  press guard means anything. */
+function mountSource(id: number, top = 0) {
+  const heading = boxed(document.createElement("div"), top);
+  const grip = document.createElement("button");
+  grip.textContent = "Move";
+  // A `<span>`, which is what `GroupHeader` really draws the pile's name as — and the choice
+  // matters to the case below. dnd-kit's *default* `preventActivation` refuses a press that lands
+  // on an interactive element, so a heading whose name were a `<button>` would refuse the press
+  // even with no handle declared, and the test would pass without the handle doing any work.
+  const name = document.createElement("span");
+  name.textContent = "Ramp";
+  heading.append(grip, name);
+  document.body.append(heading);
+  const view = renderHook(() => useCategoryDragSource(id));
+  // Two acts, because that is what React does: `attachSource` is keyed on the handle, so the
+  // grip's own ref lands first and the source's callback is a *new* function by the time React
+  // runs it. Attaching both from one snapshot of the hook's result would register a source that
+  // had never heard of the grip — which is the failure the early return exists for.
+  act(() => {
+    view.result.current.attachHandle(grip);
+  });
+  let stop: (() => void) | undefined;
+  act(() => {
+    stop = view.result.current.attachSource(heading);
+  });
+  undo.push(() => {
+    stop?.();
+    heading.remove();
+  });
+  return { heading, grip, name };
+}
+
+function mountTarget(id: number, onMove: (from: number, to: number) => void, top = 200) {
+  const element = boxed(document.createElement("div"), top);
+  document.body.append(element);
+  const view = renderHook(() => useCategoryReorderDrop(id, onMove));
+  act(() => {
+    view.result.current.attach(element);
+  });
+  undo.push(() => element.remove());
+  return {
+    element,
+    get state() {
+      return view.result.current;
+    },
+  };
+}
+
+describe("the category reorder, as a pointer gesture", () => {
+  it("moves a pile onto the pile it was let go over", async () => {
+    const onMove = vi.fn();
+    const target = mountTarget(2, onMove);
+    const { heading, grip } = mountSource(1);
+
+    const held = await startPointerDrag(heading, { pressOn: grip });
+    expect(held.started).toBe(true);
+    await held.over(target.element);
+    await held.drop();
+
+    expect(onMove).toHaveBeenCalledTimes(1);
+    expect(onMove).toHaveBeenCalledWith(1, 2);
+  });
+
+  /**
+   * **The press guard, which is the whole reason the heading is the source and the grip is only
+   * where a press may start.** A heading carries the pile's name, its markers and its two
+   * numbers, and a press anywhere on it plus five pixels of travel must not carry the column
+   * away.
+   */
+  it("does not start from a press on the heading's own name", async () => {
+    const target = mountTarget(2, () => {});
+    const { heading, name } = mountSource(1);
+
+    const held = await startPointerDrag(heading, { pressOn: name });
+    expect(held.started).toBe(false);
+    await held.cancel();
+    expect(target.state.eligible).toBe(false);
+  });
+
+  /**
+   * **A click on the grip is a click, not a zero-pixel reorder.** dnd-kit switches its activation
+   * constraints off for a press inside a declared handle, so this is the behaviour the source has
+   * to put back — 5px of travel, which is what the gesture has always cost.
+   */
+  it("needs travel before a press on the grip becomes a drag", async () => {
+    mountTarget(2, () => {});
+    const { heading, grip } = mountSource(1);
+
+    // The press lands at the heading's centre, `boxed(…, 0)` putting that at (100, 20) — so the
+    // two moves below are 3px and 20px of travel, either side of the 5 the source asks for.
+    const held = await startPointerDrag(heading, { pressOn: grip, move: false });
+    expect(held.started).toBe(false);
+    await held.moveTo(103, 20);
+    expect(held.started).toBe(false);
+    await held.moveTo(120, 20);
+    expect(held.started).toBe(true);
+    await held.cancel();
+  });
+
+  it("arms every other pile and never the one being dragged", async () => {
+    const other = mountTarget(2, () => {});
+    const itself = mountTarget(1, () => {}, 400);
+    const { heading, grip } = mountSource(1);
+
+    const held = await startPointerDrag(heading, { pressOn: grip });
+    expect(other.state.eligible).toBe(true);
+    expect(itself.state.eligible).toBe(false);
+
+    await held.cancel();
+    expect(other.state.eligible).toBe(false);
+  });
+
+  it("writes nothing when the reorder is cancelled", async () => {
+    const onMove = vi.fn();
+    const target = mountTarget(2, onMove);
+    const { heading, grip } = mountSource(1);
+
+    const held = await startPointerDrag(heading, { pressOn: grip });
+    await held.over(target.element);
+    await held.cancel();
+
+    expect(onMove).not.toHaveBeenCalled();
+    expect(target.state.over).toBe(false);
+  });
+
+  /** The fence between the two drags in this feature, from the source side: a category payload
+   *  carries this module's mark and `dnd.ts`'s reader must go on finding nothing in it. */
+  it("carries a payload no card reader can read", () => {
+    expect(categoryDragData(4)).toEqual({ "mtg-grimoire/category-order": true, categoryId: 4 });
   });
 });

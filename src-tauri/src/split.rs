@@ -103,7 +103,7 @@ fn finish(data_dir: &Path) -> Result<(), String> {
         // **Outside the transaction, and that is not a style choice**: `PRAGMA foreign_keys`
         // is documented as a no-op while one is open, so the same statement one line lower
         // would leave the drops running with enforcement on and say nothing about it. OFF
-        // for the drop and only the drop: the fifteen go in reverse dependency order, but
+        // for the drop and only the drop: they go in reverse dependency order, but
         // `deck_cards → deck_categories` and friends make any order a violation for the
         // duration of a batch, and this batch ends with none of them present.
         conn.pragma_update(None, "foreign_keys", "OFF")
@@ -140,7 +140,7 @@ fn finish(data_dir: &Path) -> Result<(), String> {
     std::fs::rename(data_dir.join(LEGACY_DB), data_dir.join(CORPUS_DB)).map_err(|e| e.to_string())
 }
 
-/// Build `user.db.part` beside the legacy file and copy the fifteen tables into it.
+/// Build `user.db.part` beside the legacy file and copy the reader's tables into it.
 ///
 /// Attached rather than opened separately so the copy is `INSERT … SELECT` inside one
 /// transaction on one connection — and the transaction is honest here where it would not be
@@ -164,7 +164,15 @@ pub fn extract_user_file(conn: &Connection, data_dir: &Path) -> rusqlite::Result
     let tx = conn.unchecked_transaction()?;
     schema::create_user_schema(&tx, SCRATCH)?;
     for (table, _) in schema::TABLES.iter().filter(|(_, s)| *s == Side::User) {
-        let columns = shared_columns(&tx, table)?;
+        // **A user table the legacy file never had is nothing to copy, and user schema v28 is
+        // the rung that made that a real state.** [`schema::migrate_single_file`] is frozen at
+        // [`schema::LEGACY_SINGLE_FILE_VERSION`], so every user rung above it describes a
+        // table that exists in the destination and in no source this function will ever see —
+        // pairing's three first. The empty table the destination already has is the right
+        // answer: a database being converted has never been paired.
+        let Some(columns) = shared_columns(&tx, table)? else {
+            continue;
+        };
         tx.execute_batch(&format!(
             "INSERT INTO {SCRATCH}.{table} ({columns}) SELECT {columns} FROM main.{table}"
         ))?;
@@ -183,22 +191,29 @@ pub fn extract_user_file(conn: &Connection, data_dir: &Path) -> rusqlite::Result
     conn.execute_batch(&format!("DETACH DATABASE {SCRATCH}"))
 }
 
-/// The columns both copies of `table` have, in the destination's order.
+/// The columns both copies of `table` have, in the destination's order, or `None` when the
+/// source has no such table at all.
 ///
 /// A `SELECT *` would be one line and would break the first time a user rung adds a column:
 /// the destination is at head and the source is at [`schema::LEGACY_SINGLE_FILE_VERSION`],
-/// which are the same shape today and are not required to stay that way.
+/// and since user schema v28 they are **not** the same shape.
 ///
 /// **`PRAGMA main.table_info` on a table that does not exist is an empty result, not an
-/// error** — measured — so an empty answer here is a real failure mode and is refused rather
-/// than turned into `INSERT INTO t () SELECT`.
-fn shared_columns(conn: &Connection, table: &str) -> rusqlite::Result<String> {
+/// error** — measured. That is why the two answers are told apart here rather than collapsed:
+/// a source with no such table is `None` and the caller skips it, which is what a rung above
+/// the frozen ladder looks like from down here; a source that *has* the table and shares no
+/// column with the destination is still a refusal, because that is a schema nobody meant and
+/// `INSERT INTO t () SELECT` is not a sentence.
+fn shared_columns(conn: &Connection, table: &str) -> rusqlite::Result<Option<String>> {
     let read = |schema: &str| -> rusqlite::Result<Vec<String>> {
         let mut stmt = conn.prepare(&format!("PRAGMA {schema}.table_info({table})"))?;
         let names = stmt.query_map([], |r| r.get::<_, String>(1))?.collect();
         names
     };
     let source = read("main")?;
+    if source.is_empty() {
+        return Ok(None);
+    }
     let dest = read(SCRATCH)?;
     let shared: Vec<String> = dest
         .into_iter()
@@ -211,7 +226,7 @@ fn shared_columns(conn: &Connection, table: &str) -> rusqlite::Result<String> {
             Some(format!("cannot split: `{table}` has no columns in common")),
         ));
     }
-    Ok(shared.join(", "))
+    Ok(Some(shared.join(", ")))
 }
 
 /// Hand the freed pages back, a chunk at a time. Best-effort: a corpus that is larger than
@@ -286,16 +301,38 @@ mod tests {
     }
 
     /// One row count per user table, read through whichever schema `schema` names.
+    ///
+    /// **A table the schema does not hold counts zero**, and that is a reading rather than a
+    /// dodge: since user schema v28 the destination is at head while the source is frozen at
+    /// [`schema::LEGACY_SINGLE_FILE_VERSION`], so a table a later user rung created exists on
+    /// one side only — and it holds no rows on either. The question this answers is how many
+    /// rows there are, which is exactly what "keeps every user row" is about. It still catches
+    /// a conversion that *invented* rows in such a table, because the count afterwards would
+    /// not be zero; that the table exists at all is asserted directly by the caller's
+    /// `sqlite_master` loop.
     fn user_counts(conn: &Connection, schema: &str) -> Vec<(String, i64)> {
         crate::schema::TABLES
             .iter()
             .filter(|(_, s)| *s == Side::User)
             .map(|(t, _)| {
-                let n: i64 = conn
-                    .query_row(&format!("SELECT count(*) FROM {schema}.{t}"), [], |r| {
+                let here: i64 = conn
+                    .query_row(
+                        &format!(
+                            "SELECT count(*) FROM {schema}.sqlite_master
+                              WHERE type='table' AND name=?1"
+                        ),
+                        [t],
+                        |r| r.get(0),
+                    )
+                    .unwrap();
+                let n: i64 = if here == 0 {
+                    0
+                } else {
+                    conn.query_row(&format!("SELECT count(*) FROM {schema}.{t}"), [], |r| {
                         r.get(0)
                     })
-                    .unwrap();
+                    .unwrap()
+                };
                 ((*t).to_owned(), n)
             })
             .collect()
@@ -534,18 +571,44 @@ mod tests {
         let dir = scratch("real");
         std::fs::copy(&fixture, dir.join(crate::db::LEGACY_DB)).unwrap();
 
-        let before: Vec<(String, i64)> = {
-            let conn = crate::db::open_read_only(&dir.join(crate::db::LEGACY_DB)).unwrap();
-            crate::schema::TABLES
-                .iter()
-                .filter(|(_, s)| *s == crate::schema::Side::User)
+        // **Only the tables the legacy file actually has**, which is not all of them and gets
+        // less so with every user rung. `TABLES` is head's list; a pre-27 `mtg.db` predates
+        // every rung added since, so v28's three pairing tables are simply not in it. Counting
+        // one of those here fails *this test* with `no such table: sync_devices` — a failure
+        // that looks exactly like a broken conversion and is nothing of the kind, which is the
+        // one distinction this test exists to draw. (It is also the same shape as the bug
+        // `shared_columns` was fixed for: head's list walked over a file that predates it.)
+        let legacy = dir.join(crate::db::LEGACY_DB);
+        let (before, absent): (Vec<(String, i64)>, Vec<&str>) = {
+            let conn = crate::db::open_read_only(&legacy).unwrap();
+            let present = |t: &str| -> bool {
+                conn.query_row(
+                    "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                    [t],
+                    |r| r.get::<_, i64>(0),
+                )
+                .unwrap()
+                    == 1
+            };
+            let user = || {
+                crate::schema::TABLES
+                    .iter()
+                    .filter(|(_, s)| *s == crate::schema::Side::User)
+            };
+            let counts = user()
+                .filter(|(t, _)| present(t))
                 .map(|(t, _)| {
                     let n: i64 = conn
                         .query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get(0))
                         .unwrap();
                     ((*t).to_owned(), n)
                 })
-                .collect()
+                .collect();
+            let missing = user()
+                .map(|(t, _)| *t)
+                .filter(|t| !present(t))
+                .collect::<Vec<_>>();
+            (counts, missing)
         };
 
         let started = std::time::Instant::now();
@@ -577,13 +640,69 @@ mod tests {
             .unwrap()
             .len();
         drop(conn);
-        let _ = std::fs::remove_dir_all(&dir);
 
         eprintln!(
-            "conversion took {elapsed:?}, user.db is {user_bytes} B, corpus.db is {corpus_bytes} B"
+            "conversion took {elapsed:?}, user.db is {user_bytes} B, corpus.db is {corpus_bytes} B; \
+             {} user tables carried over, {} created by a later rung: {absent:?}",
+            before.len(),
+            absent.len()
         );
         assert_eq!(after, before, "a user row count changed across the split");
         assert_eq!(violations, 0);
         assert!(cards > 100_000, "the corpus must still hold its cards");
+
+        // **What this proves, stated narrowly, because the obvious wider claim is false.**
+        // A converted file opens at head and keeps every one of a real reader's rows through
+        // `prepare_database` — which no fixture can show, because a fixture's rows are ours.
+        //
+        // It does **not** prove the v28 rung, and the tempting comment saying it does was
+        // written and then deleted. `convert` writes the user file through
+        // `create_user_schema`, which builds the *head* shape and stamps
+        // `USER_SCHEMA_VERSION` directly, so on this path `migrate_user` finds nothing to do
+        // and the rung never runs. Mutating the rung's guard to `if v < 27` — never fires on a
+        // v27 file — leaves this test **green**. That is how it was established rather than
+        // assumed. The rung is proved by `schema::tests::v28_creates_the_three_pairing_tables`
+        // and by the byte-identity test that compares a rung-built database against
+        // `USER_SCHEMA_SQL`.
+        //
+        // The path neither this nor a fresh install reaches is a database **already split** at
+        // v27 walked to v28 — a reader who upgraded before pairing shipped. That is the v27
+        // fixture's, in `schema.rs`.
+        let conn = crate::db::open_write(&dir).unwrap();
+        crate::schema::prepare_database(&conn).unwrap();
+        let v: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            v,
+            crate::schema::USER_SCHEMA_VERSION,
+            "the converted file did not walk to head"
+        );
+        // Present because `create_user_schema` built them, not because a rung ran.
+        for t in &absent {
+            let n: i64 = conn
+                .query_row(
+                    "SELECT count(*) FROM main.sqlite_master WHERE type = 'table' AND name = ?1",
+                    [t],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(n, 1, "`{t}` is missing from a file converted at head");
+        }
+        let kept: Vec<(String, i64)> = before
+            .iter()
+            .map(|(t, _)| {
+                let n: i64 = conn
+                    .query_row(&format!("SELECT count(*) FROM main.{t}"), [], |r| r.get(0))
+                    .unwrap();
+                (t.clone(), n)
+            })
+            .collect();
+        assert_eq!(
+            kept, before,
+            "a user row count changed across the migration"
+        );
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
