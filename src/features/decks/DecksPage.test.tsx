@@ -72,7 +72,7 @@ import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { FOLDER_DROP_LINE_ATTR } from "@/components/FolderDropLine";
 import { DEFAULT_SECTION_ZOOMS, DEFAULT_ZOOM, ZOOM_SECTIONS } from "@/lib/cardZoom";
 import { useAppStore } from "@/lib/store";
-import { startDrag } from "@/test-drag";
+import { startDrag, startPointerDrag } from "@/test-drag";
 
 /** A deck with a cover, which is the only kind that can carry an artist credit. */
 const BURN: DeckRow = {
@@ -1522,20 +1522,32 @@ function withNestedFolders() {
  * **jsdom has no layout engine, so every box it measures is four zeroes** — and a drop on a box
  * with no length is an `inside` by `folderEdge`'s own rule, so a suite that hoped for a real rect
  * would pass over any threshold at all. Which landing a drop means is arithmetic over a rect, so
- * the rect is what a test has to state.
+ * the rect is what a test has to state, and dnd-kit hit-tests by coordinate, so the pointer has
+ * to be somewhere real too.
  *
- * `test-drag` sends exactly one pointer position — `clientX`/`clientY` 8 — so the *folder* is slid
- * under a stationary pointer rather than the pointer moved over a still folder. The two are the
- * same relative move and only one of them is a gesture jsdom can make; `folderDrag.test.ts` uses
- * these same three boxes for the same reason. They are square, so one set serves both axes.
+ * Two boxes and three landings: the folder being carried, the folder it is carried to, and where
+ * along the second one the reader lets go. The boxes are **square**, so the same three landings
+ * serve the sidebar's vertical tree and the wall's horizontal grid without saying which is which
+ * — `folderEdge` reads only the axis it is handed. `EDGE_ZONE` is a quarter, so a tenth in from
+ * either end is unambiguously beside and the middle is unambiguously inside.
+ * `folderDrag.test.ts` uses the same arrangement for the same reason.
  */
-const LEADING = new DOMRect(0, 0, 100, 100);
-const MIDDLE = new DOMRect(-50, -50, 100, 100);
-const TRAILING = new DOMRect(-85, -85, 100, 100);
+const SOURCE_BOX = new DOMRect(0, 0, 100, 100);
+const TARGET_BOX = new DOMRect(400, 400, 100, 100);
+const LEADING = { x: 0.1, y: 0.1 };
+const MIDDLE = { x: 0.5, y: 0.5 };
+const TRAILING = { x: 0.9, y: 0.9 };
 
 /** Where a drop target is, as far as the drag is concerned. */
 function place(element: Element, rect: DOMRect) {
   element.getBoundingClientRect = () => rect;
+}
+
+/** Pick a folder up, having first given it somewhere to be picked up *from*: dnd-kit reads the
+ *  press coordinate off the source's own box, and a source with no box presses the origin. */
+async function hold(source: HTMLElement) {
+  place(source, SOURCE_BOX);
+  return startPointerDrag(source);
 }
 
 /**
@@ -1558,12 +1570,19 @@ async function folderCard(name: string): Promise<HTMLElement> {
   return button.parentElement as HTMLElement;
 }
 
-/** Pick a folder up, carry it over another one measured as `rect`, and let go. */
-async function dropOn(source: HTMLElement, target: HTMLElement, rect: DOMRect) {
-  place(target, rect);
-  const held = await startDrag(source);
+/** Pick a folder up, carry it over another one, let go at one of the three landings. */
+async function dropOn(
+  source: HTMLElement,
+  target: HTMLElement,
+  at: { x: number; y: number },
+) {
+  // A folder dropped on itself is a real gesture and the two arguments are then one element, so
+  // the target keeps the box it was picked up from rather than being moved out from under the
+  // pointer.
+  if (target !== source) place(target, TARGET_BOX);
+  const held = await hold(source);
   expect(held.started).toBe(true);
-  await held.over(target);
+  await held.over(target, at);
   await held.drop();
 }
 
@@ -1628,25 +1647,23 @@ describe("dragging a folder", () => {
     wrap(<DecksPage />);
     const commander = await folderRow("Commander");
 
-    const held = await startDrag(await folderRow("Modern"));
+    place(commander, TARGET_BOX);
+    const held = await hold(await folderRow("Modern"));
     // Armed the moment the folder leaves the ground: this row takes it somehow, and which way is
     // not a question a `dragstart` has a pointer position to answer.
     expect(ringed(commander)).toBe(true);
 
-    place(commander, LEADING);
-    await held.over(commander);
+    await held.over(commander, LEADING);
     expect(dropLine(commander)).toBe("before");
 
-    place(commander, MIDDLE);
-    await held.over(commander);
+    await held.over(commander, MIDDLE);
     // A nest wears the ring and the wash — the two marks the deck drag already draws for the same
     // two claims — and never a line, which is a position between folders rather than a folder
     // taking the drag.
     expect(dropLine(commander)).toBeNull();
     expect(washed(commander)).toBe(true);
 
-    place(commander, TRAILING);
-    await held.over(commander);
+    await held.over(commander, TRAILING);
     // "After Commander" is exactly where Modern already sits, so there is nothing to promise.
     expect(dropLine(commander)).toBeNull();
     expect(washed(commander)).toBe(false);
@@ -1670,11 +1687,11 @@ describe("dragging a folder", () => {
     wrap(<DecksPage />);
     const legends = await folderRow("Legends");
 
-    place(legends, MIDDLE);
-    const held = await startDrag(await folderRow("Commander"));
+    place(legends, TARGET_BOX);
+    const held = await hold(await folderRow("Commander"));
     expect(ringed(legends)).toBe(false);
 
-    await held.over(legends);
+    await held.over(legends, MIDDLE);
     expect(dropLine(legends)).toBeNull();
     expect(washed(legends)).toBe(false);
     await held.drop();
@@ -1741,11 +1758,11 @@ describe("dragging a folder", () => {
     wrap(<DecksPage />);
     const root = await folderRow("All decks");
 
-    place(root, LEADING);
-    const held = await startDrag(await folderRow("Legends"));
+    place(root, TARGET_BOX);
+    const held = await hold(await folderRow("Legends"));
     expect(ringed(root)).toBe(true);
 
-    await held.over(root);
+    await held.over(root, LEADING);
     expect(dropLine(root)).toBeNull();
     await held.drop();
 
@@ -1771,9 +1788,9 @@ describe("dragging a folder", () => {
     wrap(<DecksPage />);
     const commander = await folderCard("Commander");
 
-    place(commander, LEADING);
-    const held = await startDrag(await folderCard("Modern"));
-    await held.over(commander);
+    place(commander, TARGET_BOX);
+    const held = await hold(await folderCard("Modern"));
+    await held.over(commander, LEADING);
     expect(dropLine(commander)).toBe("before");
     await held.drop();
 
@@ -1791,7 +1808,12 @@ describe("dragging a folder", () => {
     wrap(<DecksPage />);
     const tile = (await tileFor("Burn")).closest("li") as HTMLElement;
 
-    await dropOn(tile, await folderRow("Commander"), MIDDLE);
+    // `startDrag` rather than `dropOn`: a deck is still a pragmatic-dnd HTML5 drag, and that the
+    // two libraries cannot reach each other's handlers is now the strongest form this claim has
+    // ever had — they share no registry, no event and no coordinate space.
+    const held = await startDrag(tile);
+    await held.over(await folderRow("Commander"));
+    await held.drop();
 
     await waitFor(() => expect(deckSetFolder).toHaveBeenCalledWith(BURN.id, 1));
     expect(deckFolderReorder).not.toHaveBeenCalled();

@@ -177,7 +177,11 @@ describe("motion vocabulary", () => {
    * throw, no console error, just exiting siblings that jump. `MotionConfig`'s `nonce` prop is
    * not a way out: it needs a nonce-based `style-src` and this app has `'self'`.
    *
-   * **The dev CSP has `style-src 'self' 'unsafe-inline'`.** So `tauri dev`, Storybook, jsdom
+   * **There is no CSP in `tauri dev` at all** — not a laxer one. Vite's dev server sends no
+   * `Content-Security-Policy` header and the HTML has no CSP `meta` (measured 2026-08-28),
+   * because a `devUrl` puts the webview on Vite's origin with Tauri out of the response
+   * path. `devCsp` is therefore not the reason, and editing it does not make dev strict.
+   * So `tauri dev`, Storybook, jsdom
    * and every test in this suite are green on a violation that appears only in the built exe.
    * There is no runtime check to write, no story that can fail, and no assertion to make about
    * behaviour — the only observable is the source text.

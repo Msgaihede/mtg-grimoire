@@ -1159,3 +1159,118 @@ trip: **22 lines, no errors**. Every one of them is pragmatic-dnd's `Auto scroll
 attached to an element that appears not to be scrollable`, which the deck's droppable columns
 emit on every editor mount and which predates this change — a park restore is an editor mount, so
 it costs one more batch of them per return and nothing new.
+
+## The folder drag, driven as a gesture — 2026-08-27, `npm run tauri dev` (debug), 1920×1080, a copy of the real db
+
+**The first drag in this app's history that a live pass could actually drive.** HTML5 drag and
+drop cannot be started from a synthetic event — Chromium refuses — so every
+`@atlaskit/pragmatic-drag-and-drop` drop in this app has been undrivable over CDP, and the live
+passes could only ever confirm that the right elements *were* draggable. The folder tree moved to
+`@dnd-kit/dom` in this branch, dnd-kit is pointer-based, and `Input.dispatchMouseEvent` produces
+pointer events the renderer trusts. `scripts/cdp.mjs pull <css> <dx> <dy>` is the command: a real
+`mousePressed` → several `mouseMoved` with the button held → `mouseReleased`, which is exactly the
+gesture the sensor is watching for.
+
+Driven against a copy of the main checkout's dev database, on a top level holding one real folder
+(`Expensive Decks`) and two made for the pass.
+
+### What was asserted
+
+Four drops, each read back in a **second** `eval` after the release and then again after a full
+`location.reload()` — a reorder that only moved React state looks identical to one that reached
+SQLite until you reload.
+
+| Gesture | Landing | Result, after reload |
+| --- | --- | --- |
+| `B` up onto `A`'s top eighth | `before` | top level reordered: `Expensive`, `B`, `A` |
+| `B` down onto `A`'s middle | `inside` | `B` nested in `A` — off the top-level wall entirely |
+| `B` up onto `Expensive`'s leading edge | `before` | `B` first at the top level, out of `A` |
+| `B` down past `A` | `after` | `B` last again |
+
+All four persisted. The console recorder was attached across the last one: **no errors**, and
+nothing but Vite's own connect lines and the MCP bridge's.
+
+### The marks, sampled per frame
+
+`pull`'s own `--probe` is read once at the last held frame and once after the release, and that is
+one sample too coarse for a mark driven by React state — so the reading below comes from a sampler
+armed on the manager's `dragmove` and run inside `requestAnimationFrame`. Carrying `B` up over
+`Expensive Decks` (`top 178`, `height 32`, so `before` 178–186, `inside` 186–202, `after`
+202–210):
+
+| pointer `y` | line | wash | ring |
+| --- | --- | --- | --- |
+| 227 → 212 | — | — | yes |
+| 207, 202 | `after` | — | yes |
+| 197 → 182 | — | yes | yes |
+
+Which is `folderEdge`'s quarters, drawn. Three things it settles that no test could: the ring is
+up on an eligible row from the moment the folder leaves the ground, the line names the **end** it
+would land beside rather than merely appearing, and the wash and the line are never both on.
+
+**The mark is one render behind the manager's position, and that is the design rather than a
+defect.** The last row above reads `y: 182` — inside the `before` band — while the DOM still shows
+the `inside` wash from the previous frame. That is exactly why `useFolderDropTarget` measures the
+drop from the release event's **own** coordinate instead of from `edge` state, and the comment
+saying so predates this pass.
+
+**A landing the page refuses draws nothing, live.** Carrying `B` over `A`'s `before` band while
+`B` already sat immediately before `A` sampled `line: null` at `y` 247, 250 and 252 with the row
+still ringed — the drop would have reproduced the order already on screen, `canDropFolder` refuses
+it, and `edge` is `null`. No line leading to a write that never happens.
+
+### What the pass found: two droppables on every element, and a drop that silently did nothing
+
+**The first three drags did not write anything, and everything about them looked right.** The row
+rang, the overlay clone followed the pointer, `dragend` arrived with
+`target: "folder-target-12"` — and the order on screen never changed.
+
+`[...dndManager.registry.droppables]` said why: **four folders on screen, eleven droppables**,
+every visible row carrying two of them, and the same doubling on the draggables. dnd-kit's
+`Entity` constructor ends with `queueMicrotask(this.register)` while `destroy()` unregisters
+synchronously, so an entity built and destroyed **in the same tick** unregisters first and is
+registered afterwards by the microtask, with nothing left holding a reference to undo it.
+`React.StrictMode` — which `main.tsx` wraps the app in — does exactly that on every mount in
+development: run the effect, clean it up, run it again.
+
+And the orphan is not harmless, because it is the one from the **first** run, whose monitor
+listeners were cleaned up. Collision detection picked it as the operation's target; the live hook
+compared it against its own droppable, saw a different object and returned. Every mark was
+correct and the drop wrote nothing.
+
+`register: false` at both call sites plus an explicit `entity.register()` fixes it — the
+registration is then synchronous and `destroy()` can always undo it. Re-measured on the same
+window after the change: **7 droppables and 6 draggables**, one per element, four sidebar rows and
+three wall cards. All four drops above were driven after the fix.
+
+**Nothing in the suite could have caught it, and the regression test needed a second correction to
+be able to.** Neither `render` nor `renderHook` wraps anything in `StrictMode`, so every test
+mounted each effect once and every registration was the live one; `folderDrag.test.ts` now has two
+tests that ask for `StrictMode` explicitly. The first draft of them passed against the bug —
+counting immediately after the render reads **1** whether the leak is there or not, because the
+orphan arrives on a microtask. They wait a macrotask now, and both go red when `register: false`
+is removed.
+
+### Two traps for the next live pass from a worktree
+
+- **Vite's watcher ignores every worktree, so HMR is dead there and the dev server serves a stale
+  transform.** `vite.config.ts` sets `server.watch.ignored: ["**/src-tauri/**", "**/.claude/**"]`,
+  and a worktree lives at `.claude/worktrees/<name>` — so the second pattern matches the whole
+  checkout. An edit made mid-pass reaches neither the window nor a `location.reload()`, and a
+  cache-busting query string does not help either: `fetch('/src/lib/folderDrag.ts')` still came
+  back without the change. Restart `tauri dev` (and clear `node_modules/.vite`) and re-`fetch` the
+  module to confirm the new text is being served before trusting a reading. The main checkout does
+  not have this problem.
+- **`cdp.mjs type` takes no selector.** It joins *all* its arguments into the text, so
+  `type "Zeta drag A" "input[aria-label='New folder name']"` created a folder called
+  `Zeta drag A input[aria-label='New folder name']`. Focus the field first — `press` does take a
+  selector — and give `type` the text alone.
+
+### Still not driven
+
+**The packaged build.** `tauri dev` serves `devCsp`, which carries `style-src 'self'
+'unsafe-inline'`; the shipped `csp` does not, and dnd-kit's `StyleInjector` — a `CorePlugin` that
+cannot be removed — positions its drag preview from a runtime `<style>` element. So the drag
+preview in a `tauri build` copy is unverified and has reason to be broken. That is
+[frontend-design.md](frontend-design.md)'s "The shipped CSP blocks a plugin dnd-kit cannot be told
+not to load", and it needs a portable exe rather than another dev-server pass.
