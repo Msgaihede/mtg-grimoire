@@ -39,6 +39,14 @@ export default tseslint.config(
       "ds-bundle/",
       ".ds-sync/",
       ".design-sync/",
+      // `spike/` is the throwaway harness from the 2026-08-27 wasm-core spike, kept because
+      // it is what would re-measure any of those figures later. It is deliberately NOT app
+      // code: three of its files are a dedicated Worker, a bare-node static server and a CDP
+      // driver, so `no-undef` fires on `self`, `process`, `fetch` and `WebAssembly` alike —
+      // 167 errors, none of them a defect. Linting it would mean teaching this config three
+      // environments for code that ships nowhere and is meant to be deleted when the web
+      // target lands. See docs/superpowers/research/2026-08-27-wasm-core-spike.md.
+      "spike/",
     ],
   },
   js.configs.recommended,

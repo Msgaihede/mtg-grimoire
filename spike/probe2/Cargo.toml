@@ -1,0 +1,32 @@
+# Probe 2 of the wasm-core spike. THROWAWAY.
+#
+# Question: can a browser hold Tier A — the full corpus with `cards.raw` dropped, measured
+# at 526 MB — in OPFS, does it survive a SECOND load, and what does the single-connection
+# ceiling cost? The brief asked for the second load specifically, because a first load
+# passing is exactly the shape this failure takes.
+#
+# `sqlite-wasm-vfs` rather than a hand-written VFS: it is the same author as the FFI crate
+# rusqlite already depends on, and both sit on `rsqlite-vfs 0.1`, so the versions align
+# without pinning.
+[package]
+name = "probe2"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+rusqlite = "0.40"
+sqlite-wasm-vfs = "0.2"
+wasm-bindgen = "0.2.127"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+console_error_panic_hook = "0.1"
+
+[dependencies.web-sys]
+version = "0.3"
+features = ["Navigator", "StorageManager", "WorkerGlobalScope", "WorkerNavigator"]
+
+[workspace]
