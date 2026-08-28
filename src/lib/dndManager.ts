@@ -7,6 +7,7 @@ import {
   PointerSensor,
 } from "@dnd-kit/dom";
 import { NOT_A_DRAG } from "@/features/decks/dnd";
+import { installCardCountPreview } from "@/lib/dragPreview";
 
 /**
  * The app's one `@dnd-kit/dom` manager, and the reason there is no `DragDropProvider` anywhere.
@@ -139,6 +140,15 @@ dndManager.monitor.addEventListener("dragstart", () => {
 dndManager.monitor.addEventListener("dragend", () => {
   document.documentElement.removeAttribute(DRAGGING_ATTRIBUTE);
 });
+
+/**
+ * The multi-card count chip, armed for the life of the window.
+ *
+ * Here rather than in `dragPreview.ts`'s own module scope because that module must not import
+ * this one — it takes the manager as an argument precisely so the dependency runs one way and a
+ * test can install a chip against a manager of its own.
+ */
+installCardCountPreview(dndManager);
 
 let nextId = 0;
 
