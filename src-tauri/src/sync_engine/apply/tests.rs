@@ -1125,6 +1125,75 @@ fn the_watermark_follows_what_was_applied() {
     assert_eq!((ms, ctr), (last.at.ms, last.at.ctr));
 }
 
+/// **Every UNIQUE index on a synced table is decided about, and the list is read off a live
+/// database rather than off `schema.rs`.**
+///
+/// This is the fence the last three bugs would have hit. `collection_folders` has two partial
+/// unique indexes and the plan called the table uid-only; `deck_categories` has a second one
+/// nobody had noticed. A uid-only table with a unique index does not fail loudly: the insert
+/// hits the index, the group's savepoint rolls back, and the two devices quietly keep separate
+/// rows while every count still reads one.
+///
+/// `pragma_index_list` and not a grep, for the reason
+/// `schema.rs`'s own ladder makes necessary: that file is a migration ladder, so a `CREATE
+/// UNIQUE INDEX` in it can name a shape a later rung replaced.
+#[test]
+fn every_unique_index_on_a_synced_table_has_been_decided_about() {
+    let conn = crate::schema::memory_pair();
+    let mut found: Vec<String> = Vec::new();
+    for table in crate::schema::SYNCED_TABLES {
+        let mut stmt = conn
+            .prepare(&format!(
+                "SELECT name FROM pragma_index_list('{table}') WHERE \"unique\" = 1"
+            ))
+            .unwrap();
+        for name in stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .map(Result::unwrap)
+        {
+            // Every synced table has one of these and it is the identity column itself, not a
+            // grain: `apply` looks a row up by it after the grains have missed.
+            if name == format!("idx_{table}_uid") {
+                continue;
+            }
+            found.push(format!("{table}.{name}"));
+        }
+    }
+    found.sort();
+
+    // Each of these is a grain in `META` above, except where the comment says otherwise.
+    assert_eq!(
+        found,
+        [
+            // `COLLECTION_GRAIN`, eleven terms.
+            "collection_entries.idx_collection_grain",
+            // Partial: one group per deck.
+            "collection_folders.idx_collection_folder_deck",
+            // Partial: one holding area per database, and every database seeds its own.
+            "collection_folders.idx_collection_folder_removed",
+            // `DECK_CARD_GRAIN`, five terms since v19.
+            "deck_cards.idx_deck_cards_grain",
+            // `DECK_CATEGORY_GRAIN`.
+            "deck_categories.idx_deck_categories_grain",
+            // Partial: one Sideboard, Commander, Companion and Maybeboard per deck.
+            "deck_categories.idx_deck_categories_kind",
+            // `DECK_TAG_GRAIN` — one app-wide list since v21.
+            "deck_tags.idx_deck_tags_grain",
+            // **The one that is not a `CREATE INDEX` at all**: `muted_tags` is `WITHOUT ROWID`
+            // on `(namespace, tag_id)`, so its primary key IS the table and SQLite reports it
+            // here under a generated name. It is the table's grain, and `apply`'s spec for it
+            // spells those two columns out.
+            "muted_tags.sqlite_autoindex_muted_tags_1",
+            // `WISHLIST_GRAIN`, four terms since v23.
+            "wishlist_entries.idx_wishlist_grain",
+        ]
+        .map(str::to_owned),
+        "a UNIQUE index on a synced table with no grain is two devices keeping separate rows, \
+         silently and forever"
+    );
+}
+
 /// Applying nothing is a no-op that still commits cleanly.
 #[test]
 fn an_empty_batch_does_nothing() {
