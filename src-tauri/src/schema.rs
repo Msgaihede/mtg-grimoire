@@ -3150,6 +3150,383 @@ const COMBO_INDEXES_SQL: &str = "
 /// Public because `VACUUM` needs it. Anything that renumbers `cards`' rowids leaves this
 /// index pointing at the wrong rows, and the failure is silent — see
 /// [`crate::maintenance::convert_to_incremental`], which calls this unconditionally.
+/// The fifteen user tables and their twenty-three indexes, at [`USER_SCHEMA_VERSION`]'s
+/// shape, with `{schema}` where the file goes.
+///
+/// **Copied verbatim out of a migrated database's own `sqlite_master`, not retyped from the
+/// rungs**, which is why it reads oddly in places: `decks` carries its later columns as one
+/// long `ALTER TABLE` tail, and `deck_cards` and `deck_tags` wear the quotes a
+/// `RENAME TO` left on their names. Every one of those artefacts is load-bearing here —
+/// `the_user_schema_is_byte_identical_to_what_the_ladder_builds` compares this against the
+/// ladder's answer string for string, and a tidied-up transcription would be a shape that
+/// merely looks the same.
+///
+/// **A `{schema}.` prefix does not survive into `sqlite_master`** — measured: SQLite
+/// re-renders the name token and stores the rest of the statement verbatim, so
+/// `CREATE TABLE part.decks (…)` is stored as `CREATE TABLE decks (…)`. That is what
+/// makes the comparison possible at all.
+///
+/// Substituted rather than `format!`ed, and that is not a style choice: the DDL carries a
+/// `DEFAULT` of an empty JSON object and a JSON shape inside a comment, and `format!` would
+/// need every brace in both of them doubled — a hand transcription over a literal whose
+/// whole point is that nobody transcribed it.
+const USER_SCHEMA_SQL: &str = r#"
+CREATE TABLE {schema}.collection_entries (
+                id INTEGER PRIMARY KEY,
+                -- Soft reference. No REFERENCES clause, deliberately and permanently.
+                card_id TEXT NOT NULL,
+                -- Migration insurance: what the user actually owns, in the terms printed
+                -- on the card, still readable when the id stops resolving.
+                set_code TEXT NOT NULL,
+                collector_number TEXT NOT NULL,
+                lang TEXT NOT NULL DEFAULT 'en',
+                -- Enum, never a boolean: `etched` is a third thing, and collapsing it is
+                -- the most common importer data-loss bug there is.
+                finish TEXT NOT NULL CHECK (finish IN ('nonfoil','foil','etched')),
+                condition TEXT NOT NULL DEFAULT 'NM'
+                    CHECK (condition IN ('NM','LP','MP','HP','DMG')),
+                -- What the import said before it was normalised. Kept because the
+                -- normalisation is lossy (EU 'GD' and NA 'MP' arrive as one grade) and the
+                -- user's own file is the only place the difference still exists.
+                condition_original TEXT,
+                -- `>= 0`, not `> 0`, and the wishlist's `> 0` differs on purpose. A
+                -- stepper taken down to zero is a real state here: the row keeps its
+                -- condition, its price, its tags and its acquisition story while the user
+                -- owns none of that printing today. So every aggregate that reads this has
+                -- to decide *deliberately* whether a zero row counts as owned — and a
+                -- 'cards owned' figure that counts rows rather than quantity will be
+                -- wrong the first time somebody trades a playset away.
+                quantity INTEGER NOT NULL CHECK (quantity >= 0),
+                tradelist_quantity INTEGER NOT NULL DEFAULT 0
+                    CHECK (tradelist_quantity >= 0),
+                purchase_price REAL,
+                purchase_currency TEXT,
+                acquired_at TEXT,
+                -- No competitor stores this. It is one TEXT column and it is the answer to
+                -- 'where did I get this?', which is the question a collection is actually
+                -- asked years later.
+                acquisition_source TEXT,
+                -- 042/500. Not in Scryfall's data at all — user-supplied, and part of the
+                -- grain, because two serialized copies are two different objects.
+                serial_number TEXT,
+                altered INTEGER NOT NULL DEFAULT 0,
+                signed INTEGER NOT NULL DEFAULT 0,
+                proxy INTEGER NOT NULL DEFAULT 0,
+                misprint INTEGER NOT NULL DEFAULT 0,
+                -- {company, grade, cert}. JSON because the shape differs per grader
+                -- (CGC has two grades numbered 10; PSA has no 9.5) and a column per
+                -- grader is a migration per grader.
+                grading TEXT CHECK (grading IS NULL OR json_valid(grading)),
+                tags TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(tags)),
+                notes TEXT,
+                -- NULL is the normal state. A sentence here means the row needs the user's
+                -- attention — the printing vanished from Scryfall, or a merge landed it
+                -- somewhere this database cannot see. Never a reason to delete the row.
+                needs_review TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+             , folder_id INTEGER
+                     REFERENCES collection_folders(id) ON DELETE SET NULL);
+
+CREATE TABLE {schema}.wishlist_entries (
+                id INTEGER PRIMARY KEY,
+                -- The oracle card. NULLABLE because `cards.oracle_id` is: a wish for a
+                -- printing whose oracle card is unknown can only be a wish for that
+                -- printing. (No live row is null — the reversible-card story that used to
+                -- be told here is wrong, see `card_row` — so this is a fence, not a case.)
+                oracle_id TEXT,
+                -- NULL = any printing (spec §6). Set = that printing and no other.
+                card_id TEXT,
+                set_code TEXT,
+                collector_number TEXT,
+                lang TEXT,
+                -- Denormalised here but not in the collection, on purpose: an any-printing
+                -- wish has no card row to join for a name, and a shopping list that cannot
+                -- say what it is shopping for is not a list.
+                name TEXT NOT NULL,
+                quantity INTEGER NOT NULL DEFAULT 1 CHECK (quantity > 0),
+                preferred_finish TEXT
+                    CHECK (preferred_finish IS NULL
+                           OR preferred_finish IN ('nonfoil','foil','etched')),
+                notes TEXT,
+                needs_review TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL, folder_id INTEGER
+                    REFERENCES wishlist_folders(id) ON DELETE SET NULL,
+                -- A wish that names neither an oracle card nor a printing is a wish for
+                -- nothing, and would collide with every other such row on the grain.
+                CHECK (oracle_id IS NOT NULL OR card_id IS NOT NULL)
+             );
+
+CREATE TABLE {schema}.card_migrations (
+                id TEXT PRIMARY KEY,
+                performed_at TEXT,
+                strategy TEXT NOT NULL CHECK (strategy IN ('merge','delete')),
+                old_card_id TEXT NOT NULL,
+                new_card_id TEXT,
+                note TEXT,
+                applied_at INTEGER NOT NULL
+             );
+
+CREATE TABLE {schema}.decks (
+                id INTEGER PRIMARY KEY,
+                name TEXT NOT NULL,
+                format_key TEXT NOT NULL DEFAULT 'casual',
+                description TEXT,
+                -- Spec §6: card_art today; 'custom' + cover_image_path are Plan 6's
+                -- (a user file copied into data/covers/), reserved here so the column
+                -- story is stable.
+                cover_kind TEXT NOT NULL DEFAULT 'card_art'
+                    CHECK (cover_kind IN ('card_art','custom')),
+                -- Soft reference, like every other card id in a user table.
+                cover_card_id TEXT,
+                cover_image_path TEXT,
+                -- Reserves availability, never decrements the collection (spec §6).
+                archived INTEGER NOT NULL DEFAULT 0,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+             , folder_id INTEGER
+                REFERENCES deck_folders(id) ON DELETE SET NULL, notes TEXT, theory_enabled INTEGER NOT NULL DEFAULT 0, last_variant TEXT NOT NULL DEFAULT 'live', last_group_by TEXT NOT NULL DEFAULT 'category', last_sort_by TEXT NOT NULL DEFAULT 'alphabetical', separate_x_group INTEGER NOT NULL DEFAULT 0, default_category_id INTEGER NOT NULL DEFAULT 0, game_key TEXT NOT NULL DEFAULT 'any', bracket INTEGER NOT NULL DEFAULT 0);
+
+CREATE TABLE {schema}.app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+
+CREATE TABLE {schema}.deck_folders (
+                id INTEGER PRIMARY KEY,
+                -- User↔user, CASCADE: deleting a folder deletes the folders inside it. The
+                -- DECKS inside it are NOT deleted — see `decks.folder_id` below, which is
+                -- SET NULL. A folder is a filing decision; a deck is the user's work.
+                parent_id INTEGER REFERENCES deck_folders(id) ON DELETE CASCADE,
+                name TEXT NOT NULL,
+                sort_order INTEGER NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+             );
+
+CREATE TABLE {schema}.deck_categories (
+                id INTEGER PRIMARY KEY,
+                deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+                name TEXT NOT NULL,
+                -- The rules role, and the same five words `deck_cards.zone` held. A category
+                -- the user makes is always 'main'; the other four are predefined, one per deck.
+                kind TEXT NOT NULL
+                    CHECK (kind IN ('main','side','commander','companion','maybe')),
+                -- 'Only active groups are treated as being included in the deck.' Seeded 0 for
+                -- the Maybeboard and 1 for everything else.
+                is_active INTEGER NOT NULL DEFAULT 1,
+                sort_order INTEGER NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+             , origin TEXT NOT NULL DEFAULT 'user');
+
+CREATE TABLE {schema}.deck_audit (
+                id INTEGER PRIMARY KEY,
+                deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+                at INTEGER NOT NULL,
+                variant TEXT NOT NULL DEFAULT 'live'
+                    CHECK (variant IN ('live','theory')),
+                kind TEXT NOT NULL CHECK (kind IN
+                    ('add','remove','quantity','move','swap','tag','category','folder','deck')),
+                -- Soft, like every card id in a user table, and nullable: a category rename
+                -- is about no card at all.
+                card_id TEXT,
+                card_name TEXT,
+                -- The facts the sentence is built from. Rust records WHAT happened; the
+                -- webview writes the sentence, because a sentence is domain logic and this
+                -- table has to survive the day the wording changes.
+                payload TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(payload)),
+                -- Signed copies, for the day header's '+7 / -6' roll-up.
+                delta INTEGER NOT NULL DEFAULT 0
+             );
+
+CREATE TABLE {schema}."deck_cards" (
+                id INTEGER PRIMARY KEY,
+                deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+                -- CASCADE: deleting a category deletes the cards filed under it, which is
+                -- what the confirm dialog says it will do. Moving them out first is the
+                -- caller's job and `deck_category_delete` does exactly that when asked.
+                category_id INTEGER NOT NULL
+                    REFERENCES deck_categories(id) ON DELETE CASCADE,
+                variant TEXT NOT NULL DEFAULT 'live'
+                    CHECK (variant IN ('live','theory')),
+                card_id TEXT NOT NULL,
+                set_code TEXT NOT NULL,
+                collector_number TEXT NOT NULL,
+                lang TEXT NOT NULL DEFAULT 'en',
+                name TEXT NOT NULL,
+                -- SET NULL, not CASCADE: deleting a tag must never delete a card.
+                tag_id INTEGER REFERENCES deck_tags(id) ON DELETE SET NULL,
+                quantity INTEGER NOT NULL CHECK (quantity > 0),
+                needs_review TEXT,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+             , finish TEXT
+                CHECK (finish IS NULL OR finish IN ('foil','etched')));
+
+CREATE TABLE {schema}.error_log (
+                id INTEGER PRIMARY KEY,
+                -- Unix seconds, like every stamp in this schema.
+                first_at INTEGER NOT NULL,
+                last_at INTEGER NOT NULL,
+                -- Which of the app's dealings with the outside world this was.
+                source TEXT NOT NULL CHECK (source IN
+                    ('scryfall_api','scryfall_image','github_update','database','image_store')),
+                -- The specific call: 'bulk_check', 'sets', 'migrations', 'image_fetch', …
+                -- Free text rather than a CHECK: a new call site must not need a migration
+                -- before it is allowed to report that it failed.
+                operation TEXT NOT NULL,
+                -- The shape of the failure, which is what a reader filters on.
+                kind TEXT NOT NULL CHECK (kind IN
+                    ('rate_limited','timeout','http','io','parse','other')),
+                message TEXT NOT NULL,
+                -- The URL, card id or path. Nullable, outside the grain, most recent wins.
+                detail TEXT,
+                count INTEGER NOT NULL DEFAULT 1 CHECK (count > 0)
+             );
+
+CREATE TABLE {schema}.deck_undo (
+                audit_id INTEGER PRIMARY KEY
+                    REFERENCES deck_audit(id) ON DELETE CASCADE,
+                deck_id INTEGER NOT NULL REFERENCES decks(id) ON DELETE CASCADE,
+                -- The reversal, both ways: {"undo":[Op,…],"redo":[Op,…]}. JSON for
+                -- `deck_audit.payload`'s reason one table over: the shapes are Rust's, they
+                -- grow with the write sites, and a step written by a newer build must not
+                -- fail an older build's read of the rows beside it.
+                step TEXT NOT NULL CHECK (json_valid(step)),
+                -- NULL while the change is still applied. Stamped by an undo, cleared by a
+                -- redo; the cursor is the newest row of this deck that is still NULL.
+                undone_at INTEGER
+             );
+
+CREATE TABLE {schema}.muted_tags (
+        -- 'art' | 'oracle'
+        namespace TEXT NOT NULL,
+        -- Scryfall's STABLE uuid, not the slug. Their docs: 'Do not treat tag slugs or
+        -- labels as permanent identifiers.' A mute keyed on a slug silently un-mutes
+        -- itself the week Tagger renames the tag -- which is exactly the week it mattered.
+        tag_id TEXT NOT NULL,
+        -- The slug as it read when muted, so Settings can name the tag without a join
+        -- against a taxonomy that may have been rebuilt since.
+        slug TEXT NOT NULL,
+        muted_at INTEGER NOT NULL,
+        PRIMARY KEY (namespace, tag_id)
+    ) WITHOUT ROWID;
+
+CREATE TABLE {schema}.wishlist_folders (
+                id INTEGER PRIMARY KEY,
+                -- User↔user, CASCADE: deleting a folder deletes the folders inside it. The
+                -- WISHES inside it are NOT deleted — see `wishlist_entries.folder_id` below,
+                -- which is SET NULL. A folder is a filing decision; a wish is the reader's
+                -- shopping list.
+                parent_id INTEGER REFERENCES wishlist_folders(id) ON DELETE CASCADE,
+                name TEXT NOT NULL,
+                sort_order INTEGER NOT NULL,
+                created_at INTEGER NOT NULL,
+                updated_at INTEGER NOT NULL
+             );
+
+CREATE TABLE {schema}."deck_tags" (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL,
+            -- The uniqueness grain, and never shown to anyone: see `tag_name_key`.
+            name_key TEXT NOT NULL,
+            color TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL
+         );
+
+CREATE TABLE {schema}.collection_folders (
+                 id INTEGER PRIMARY KEY,
+                 parent_id INTEGER REFERENCES collection_folders(id) ON DELETE CASCADE,
+                 name TEXT NOT NULL,
+                 kind TEXT NOT NULL DEFAULT 'user'
+                     CHECK (kind IN ('user','deck','removed')),
+                 deck_id INTEGER REFERENCES decks(id) ON DELETE CASCADE,
+                 sort_order INTEGER NOT NULL,
+                 created_at INTEGER NOT NULL,
+                 updated_at INTEGER NOT NULL,
+                 CHECK ((kind = 'deck') = (deck_id IS NOT NULL))
+             );
+
+CREATE UNIQUE INDEX {schema}.idx_collection_grain ON collection_entries (
+                 card_id, finish, condition, lang, altered, signed, proxy, misprint,
+                 coalesce(serial_number, ''), coalesce(grading, ''), coalesce(folder_id, 0)
+             );
+
+CREATE INDEX {schema}.idx_collection_card
+                ON collection_entries (card_id);
+
+CREATE INDEX {schema}.idx_collection_review
+                ON collection_entries (needs_review) WHERE needs_review IS NOT NULL;
+
+CREATE UNIQUE INDEX {schema}.idx_wishlist_grain
+                ON wishlist_entries (coalesce(oracle_id, ''), coalesce(card_id, ''),
+                                     coalesce(preferred_finish, ''), coalesce(folder_id, 0));
+
+CREATE INDEX {schema}.idx_wishlist_card ON wishlist_entries (card_id);
+
+CREATE INDEX {schema}.idx_wishlist_oracle ON wishlist_entries (oracle_id);
+
+CREATE INDEX {schema}.idx_card_migrations_old
+                ON card_migrations (old_card_id);
+
+CREATE UNIQUE INDEX {schema}.idx_deck_cards_grain
+                ON deck_cards (deck_id, variant, category_id, card_id, coalesce(finish, ''));
+
+CREATE INDEX {schema}.idx_deck_cards_card ON deck_cards (card_id);
+
+CREATE INDEX {schema}.idx_deck_cards_category ON deck_cards (category_id);
+
+CREATE INDEX {schema}.idx_deck_folders_parent ON deck_folders (parent_id);
+
+CREATE UNIQUE INDEX {schema}.idx_deck_categories_grain
+                ON deck_categories (deck_id, name);
+
+CREATE UNIQUE INDEX {schema}.idx_deck_categories_kind
+                ON deck_categories (deck_id, kind) WHERE kind <> 'main';
+
+CREATE UNIQUE INDEX {schema}.idx_deck_tags_grain ON deck_tags (name_key);
+
+CREATE INDEX {schema}.idx_wishlist_folder ON wishlist_entries (folder_id);
+
+CREATE INDEX {schema}.idx_deck_audit_deck ON deck_audit (deck_id, at DESC);
+
+CREATE UNIQUE INDEX {schema}.idx_error_log_grain
+                ON error_log (source, operation, kind, message);
+
+CREATE INDEX {schema}.idx_error_log_recent ON error_log (last_at DESC);
+
+CREATE INDEX {schema}.idx_deck_undo_deck
+                ON deck_undo (deck_id, audit_id DESC);
+
+CREATE INDEX {schema}.idx_wishlist_folders_parent
+                ON wishlist_folders (parent_id);
+
+CREATE UNIQUE INDEX {schema}.idx_collection_folder_removed
+                 ON collection_folders(kind) WHERE kind = 'removed';
+
+CREATE UNIQUE INDEX {schema}.idx_collection_folder_deck
+                 ON collection_folders(deck_id) WHERE deck_id IS NOT NULL;
+
+CREATE INDEX {schema}.idx_collection_folder
+                 ON collection_entries (folder_id);
+"#;
+
+/// Create the fifteen user tables and their indexes in `schema`, at
+/// [`USER_SCHEMA_VERSION`]'s shape.
+///
+/// **One function, two callers, and that is deliberate**: [`crate::split::extract_user_file`]
+/// builds them in an attached scratch file, and `memory_pair` builds them for a test — a
+/// fresh install goes through the same conversion as an upgrade, so nothing else ever builds
+/// them at all. A second literal here would be two shapes that must agree, which is the
+/// failure [`ORACLE_TAG_STAGING_SQL`] describes from the other side.
+///
+/// `schema` is interpolated rather than bound: SQLite has no parameter for a schema name. It
+/// is only ever `"main"`, [`crate::db::CORPUS`] or `split`'s own scratch name, none of which
+/// comes from anywhere near a reader.
+pub fn create_user_schema(conn: &Connection, schema: &str) -> rusqlite::Result<()> {
+    conn.execute_batch(&USER_SCHEMA_SQL.replace("{schema}", schema))
+}
+
 pub fn create_fts(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(
         "DROP TABLE IF EXISTS cards_fts;
@@ -3650,6 +4027,81 @@ pub fn swap_combo_staging(conn: &Connection) -> rusqlite::Result<()> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    /// [`USER_SCHEMA_SQL`] was copied out of a migrated database rather than retyped, and
+    /// this is what makes "copied" a fact instead of a claim.
+    ///
+    /// Byte-for-byte, because the split *renames a file into place*: the user file has to be
+    /// the shape the ladder would have left, not a shape that reads the same. A `DEFAULT`
+    /// dropped in transcription, a `CHECK` reflowed, an `ALTER TABLE` tail tidied into the
+    /// column list — none of those would fail a query, and every one of them is a
+    /// database that quietly disagrees with the one every other install has.
+    #[test]
+    fn the_user_schema_is_byte_identical_to_what_the_ladder_builds() {
+        let dump = |conn: &Connection| -> Vec<(String, String, String)> {
+            let mut stmt = conn
+                .prepare(
+                    "SELECT type, name, tbl_name, coalesce(sql, '') FROM sqlite_master
+                     ORDER BY type, name",
+                )
+                .unwrap();
+            stmt.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                ))
+            })
+            .unwrap()
+            .map(Result::unwrap)
+            .filter(|(_, _, tbl, _)| side_of(tbl) == Some(Side::User))
+            .map(|(ty, name, _, sql)| (ty, name, sql))
+            .collect()
+        };
+
+        let ladder = Connection::open_in_memory().unwrap();
+        migrate_single_file(&ladder).unwrap();
+        let want = dump(&ladder);
+
+        let head = Connection::open_in_memory().unwrap();
+        create_user_schema(&head, "main").unwrap();
+        let got = dump(&head);
+
+        assert_eq!(
+            want.len(),
+            40,
+            "fifteen tables, twenty-three indexes, and the two `sqlite_autoindex` rows a \
+             TEXT PRIMARY KEY brings with it"
+        );
+        for (w, g) in want.iter().zip(got.iter()) {
+            assert_eq!(w, g, "{} {} differs from the ladder's", g.0, g.1);
+        }
+        assert_eq!(want, got);
+    }
+
+    /// The same DDL built into an *attached* file is the same DDL. SQLite re-renders the
+    /// name token of a `CREATE` and stores the rest verbatim, so the `{schema}.` prefix does
+    /// not reach `sqlite_master` — which is the whole reason one literal can serve both
+    /// `main` and the scratch file `crate::split` builds.
+    #[test]
+    fn the_schema_prefix_does_not_reach_sqlite_master() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("ATTACH DATABASE ':memory:' AS part")
+            .unwrap();
+        create_user_schema(&conn, "part").unwrap();
+        let sql: String = conn
+            .query_row(
+                "SELECT sql FROM part.sqlite_master WHERE name = 'app_meta'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            sql,
+            "CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+        );
+    }
 
     /// Every table a migrated database creates is on exactly one side, named here on purpose.
     ///

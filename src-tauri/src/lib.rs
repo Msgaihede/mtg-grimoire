@@ -34,6 +34,7 @@ pub mod schema;
 pub mod scryfall;
 pub mod search;
 pub mod sorting;
+pub mod split;
 pub mod sync;
 pub mod tags;
 pub mod transfer;
