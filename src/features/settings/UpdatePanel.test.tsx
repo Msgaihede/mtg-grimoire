@@ -112,6 +112,32 @@ describe("UpdatePanel", () => {
   });
 
   /**
+   * Android, where the Play Store installed this app and the store is what replaces it.
+   *
+   * **The whole panel goes quiet, which is the difference from `other`.** That one still
+   * delivers the news and offers the release page — right for an MSI install on the machine
+   * that page's assets are built for, and wrong on a phone, where every asset is a Windows
+   * one. So `managed` hides the Check-now button, the release block and the version history,
+   * and says the one true sentence instead.
+   *
+   * A release IS offered in this fixture on purpose: the fixture's `available` is set, so a
+   * panel that merely happened to have nothing to show would pass this test. What must be
+   * absent is absent because of `installKind`.
+   */
+  it("says the store owns the update on a managed install, and offers nothing", () => {
+    render(panel(update({ status: status({ installKind: "managed" }), action: "none" })));
+
+    expect(screen.getByText(/Updates arrive through Google Play/)).toBeInTheDocument();
+    expect(screen.getByText(/nothing to check for here/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Check now$/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Download/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /View on GitHub/ })).not.toBeInTheDocument();
+    expect(screen.queryByText(/is available/)).not.toBeInTheDocument();
+    // The About half of the panel stays: this is still where the version is read.
+    expect(screen.getByText(/MTG Grimoire/)).toBeInTheDocument();
+  });
+
+  /**
    * An MSI install or a Linux build. The news is still delivered — a reader should know a
    * new version exists — but nothing here promises to install it, and the sentence says why
    * and what happens to their collection.

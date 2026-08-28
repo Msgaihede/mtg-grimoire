@@ -655,7 +655,7 @@ Every one of these has its measurement and its story in
   `onClick` still stands, because everywhere but Windows 11 the plugin is a documented no-op.
 - **Every window verb goes through `src/lib/window.ts`, for `lib/ipc.ts`'s reason.** One module
   names them, so a story and a test have one thing to fake — and its four exports match the four
-  `core:window:allow-*` permissions in `capabilities/default.json` exactly, in both directions: a
+  `core:window:allow-*` permissions in `capabilities/desktop.json` exactly, in both directions: a
   fifth verb needs its permission, and a granted permission nothing here calls is a widening
   nobody asked for. `TitleBar` importing `@tauri-apps/api/event` directly is what made every
   existing `AppShell` and `App` test reach the real module and print **336** unhandled rejections
@@ -669,6 +669,19 @@ Every one of these has its measurement and its story in
   `bg-accent` surfaces to `bg-surface`. `bg-muted` needs no rewrite.
 - Card images arrive over `mtgimg://`; `mtgimg:` is an `img-src` and nothing else — **read images
   with `<img>`, never with `fetch`** (a `fetch()` at it fails CORS by design).
+- **`src/lib/platform.ts` is the only place the page asks what platform it is on**, and it asks
+  the **user agent** — `src/lib/images.ts`'s `imageOrigin()` is the shipped precedent, and both
+  readers need the answer synchronously during their first render. It answers `false` for
+  anything it does not recognise, which is what keeps jsdom and Storybook on the desktop shape
+  without either of them having to say so; the token is `Android` and not `Linux` or `Mobile`,
+  because an Android agent is a Linux one with one extra word. Two readers: `AppShell` (no
+  caption — three of `TitleBar`'s four verbs are `#[cfg(desktop)]` in tauri and
+  `capabilities/mobile.json` grants none of them) and `SettingsPage` (no Backup panel — the
+  mirror is desktop-only by decision). **A third reader is a reason to re-open whether this
+  belongs behind the core boundary instead**, where `ipc.ts` already knows which core it is
+  talking to. `UpdatePanel` is deliberately *not* one: it branches on the backend's own
+  `installKind`, because two independent answers to one question are free to disagree. See
+  [android-target.md](../docs/reference/android-target.md).
 
 ## The context menu
 

@@ -1001,7 +1001,8 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
 ## Tauri capabilities
 
 - **`@tauri-apps/plugin-dialog` names files and never opens them, and the capability says so.**
-  `capabilities/default.json` grants **`dialog:allow-open`** (choosing a deck cover) and
+  `capabilities/desktop.json` and `capabilities/mobile.json` both grant
+  **`dialog:allow-open`** (choosing a deck cover) and
   **`dialog:allow-save`** (naming an export's destination, added 2026-08-14) — never
   `dialog:default`, so message, ask and confirm stay unreachable from the webview however the
   plugin is initialised. The app's own questions are drawn in the page instead, which is
@@ -1015,11 +1016,14 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
   permission, and **no `fs:` permission is granted anywhere**. So this is the app's **habit** now
   rather than one precedent, and it is the shape to copy: the day one of these is "simplified"
   into a `readTextFile`/`writeTextFile` from the page, the answer is another twelve-line command,
-  never a wider capability. **`tauri-plugin-fs` and `rfd` entered `Cargo.lock` transitively** as
-  the dialog plugin's own dependencies and are **unreachable**: `tauri_plugin_fs::init()` is never
-  called — `lib.rs` registers single-instance, opener, dialog, clipboard-manager, and the MCP
-  bridge in a debug build only — and the ACL would deny them even if it were. Adding a plugin
-  means adding its narrowest permission, never its `:default`.
+  never a wider capability. **`rfd` entered `Cargo.lock` transitively** as one of the dialog
+  plugin's own dependencies and is **unreachable**. **`tauri-plugin-fs` came in the same way and
+  is no longer unreachable — on Android only**, where `lib.rs` registers it under
+  `#[cfg(target_os = "android")]` because a picked file there is a `content://` URI rather than a
+  path. It is still granted **no `fs:` permission on any platform**: the ACL gates commands the
+  *webview* invokes, and `picked.rs` reaches `Fs::open` from Rust, where the ACL is not in the
+  path. See the Android section below. Adding a plugin means adding its narrowest permission,
+  never its `:default`.
 - **`tauri-plugin-clipboard-manager` is granted `clipboard-manager:allow-write-text` and
   deliberately not the read half.** Nothing in this app reads the clipboard; `:default` grants
   both, and a page that can read the clipboard can read whatever the reader last copied out of
@@ -1078,6 +1082,48 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
   in `src/lib/window.ts`. A mismatch creates no overlay, raises no error and logs nothing: the
   button keeps working and Snap Layouts simply never appear, which is a regression neither a test
   nor a launch can catch. `TitleBar.test.tsx` pins the frontend half.
+- **`capabilities/` is two files and `platforms` is why** (2026-08-28). `default.json` targeted
+  every platform because there was only one; `desktop.json` carries
+  `"platforms": ["windows", "linux", "macOS"]` and the shipped permission set unchanged, and
+  `mobile.json` carries `["android"]` and four absences, each a decision:
+  **no `core:window:` verbs** — `minimize`, `toggle_maximize` and `start_dragging` are all
+  `#[cfg(desktop)]` in tauri 2.11.5 and are not commands on Android at all, and the fourth,
+  `close`, would kill the app from a button no phone user is looking for;
+  **no `snap-layout:`** (no caption to park an overlay over);
+  **no `mcp-bridge:`** (an unauthenticated WebSocket that evaluates arbitrary JavaScript, and
+  `tauri android dev` is a *debug* build, so `#[cfg(debug_assertions)]` alone would put it on a
+  phone); and **`opener` narrowed from `:default`** to `allow-open-url` + `allow-default-urls`,
+  because the third verb reveals an item in a directory and the plugin's own manifest records
+  Android as not supporting it. **`platforms` filters before permission resolution** — a
+  nonexistent permission planted in `desktop.json` fails the Windows build and is invisible to
+  the `aarch64-linux-android` one, which is how that was established rather than assumed.
+- **`tauri-plugin-fs` is a dependency with no permission, deliberately, and this paragraph exists
+  to stop the next edit granting one.** On Android a file the reader picks is a `content://` URI:
+  `tauri-plugin-dialog`'s `DialogPlugin.kt` fires `ACTION_OPEN_DOCUMENT`/`ACTION_CREATE_DOCUMENT`
+  and returns `uri.toString()`, so `std::fs` of one answers "No such file or directory".
+  `src/picked.rs` is the one place that knows the difference, and `Fs::open` resolves the URI
+  through the ContentResolver into a **`std::fs::File`** built from the descriptor — a Rust-side
+  method on managed state, with no `invoke` crossing the boundary. **The page's filesystem access
+  is unchanged: none**, and
+  `the_mobile_capability_drops_every_verb_the_platform_has_no_answer_for` asserts no `fs:` entry
+  exists. `open_read` answers a concrete `File` rather than a boxed `Read` because
+  `image::ImageReader` needs `Seek` and `encode_cover` reopens its source.
+- **Android is native, and the wasm constraints are the web target's alone.** The mobile build is
+  this same crate compiled for `aarch64-linux-android`, so it has `rusqlite` with `bundled`, a
+  real filesystem, `tokio`, threads and WAL. It is the fact most easily lost, and a plan that
+  treats Android as a wasm port is wrong from its first line.
+- **`cfg(desktop)` and `cfg(mobile)` are real cfgs**, emitted by `tauri_build::build()`, so cargo
+  checks every gate. Three things are gated because they **cannot compile** on Android —
+  `tauri_plugin_single_instance::init` (an empty crate there), `window.rs` (`center()` is
+  `#[cfg(desktop)]`) and `focus_existing_window` (`unminimize()` likewise). Four more are gated
+  because they **must not run**: the `--await-predecessor` handshake, the mirror's hook and
+  thread, `update::clean_up` and the daily update check. **`mirror/`, `transfer/` and `update.rs`
+  still compile there and that is deliberate** — `AppState` names two mirror types and a dozen
+  modules call `get_app_meta`/`set_app_meta`, and in a library crate a `pub fn` in a `pub mod`
+  raises no `dead_code`, so not *running* them costs nothing where not *compiling* them costs a
+  six-file ripple. When adding a `cfg`, prefer a `bool` parameter over a `cfg!` inside a body —
+  `paths::data_dir_for` and `update::install_kind_for` both do this, so both arms compile and are
+  tested on every platform. Full record: [android-target.md](../docs/reference/android-target.md).
 - `tauri.conf.json` is embedded at **compile time** — editing it needs a Rust rebuild
   (`touch src-tauri/src/main.rs`), not just a dev-server restart. `"dragDropEnabled": false` is
   load-bearing; re-enabling it kills all in-app drag-and-drop on Windows. **So are the window's

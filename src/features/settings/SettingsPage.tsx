@@ -1,4 +1,5 @@
 import { BackupPanel } from "@/features/settings/BackupPanel";
+import { isAndroid } from "@/lib/platform";
 import { CachePanel } from "@/features/settings/CachePanel";
 import { CombosPanel } from "@/features/settings/CombosPanel";
 import { DangerZonePanel } from "@/features/settings/DangerZonePanel";
@@ -86,8 +87,20 @@ export function SettingsPage({ update }: { update: Update }) {
       {/* Still in the group that throws nothing away, and beside the cache because the two are
           this page's only panels about the folder on disk — one says what is kept there and the
           other what can be swept out of it. Above it rather than below for the ordering rule:
-          the mirror deletes nothing a reader owns, and Clear cache does. */}
-      <BackupPanel />
+          the mirror deletes nothing a reader owns, and Clear cache does.
+
+          **Desktop only, and the decision is the mirror's purpose rather than a limitation.**
+          The mirror's whole point is a folder a reader opens in a text editor, syncs with
+          Dropbox or greps; on Android that directory is reachable mainly through a file-manager
+          app and often not by other apps at all, so the feature would exist without delivering
+          what it is for. The picker it needs is not there either — `tauri-plugin-dialog`'s own
+          manifest records Android support as "partial — Does not support folder picker", so a
+          reader could not choose the root.
+
+          Rust agrees from the other side: `lib.rs` installs neither the mirror's update hook nor
+          its thread on mobile, so `mirror_status` would answer about a mirror that cannot
+          run. */}
+      {!isAndroid() && <BackupPanel />}
 
       <CachePanel cache={cache} />
 
