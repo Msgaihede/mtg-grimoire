@@ -54,7 +54,7 @@
 
 use crate::sync_engine::capture::{self, Absent, Parent, Spec};
 use crate::sync_engine::hlc::Hlc;
-use crate::sync_engine::merge::{fold, Op, Resolved};
+use crate::sync_engine::merge::{fold, Kind, Op, Resolved};
 use rusqlite::types::Value as Sql;
 use rusqlite::{Connection, OptionalExtension};
 use std::collections::BTreeMap;
@@ -75,7 +75,9 @@ pub const CYCLE_BROKEN: &str = "A folder move on another device would have put t
 pub struct ApplyReport {
     /// Ops written into the reader's tables.
     pub applied: usize,
-    /// Rows a delete lost the race for — §7.4's first surfaced outcome.
+    /// Rows a delete lost the race for — §7.4's first surfaced outcome, and an **event**
+    /// rather than a state: a row that is *in* a resurrected condition is counted by the batch
+    /// that put it there and by no later one.
     pub resurrected: usize,
     /// Folders returned to the root because a concurrent move made a loop.
     pub cycles_broken: usize,
@@ -827,7 +829,18 @@ fn write_group<'a>(
         Ok(uid) => {
             conn.execute_batch(&format!("RELEASE {savepoint}"))
                 .map_err(|e| e.to_string())?;
-            if combined.resurrected {
+            // **A resurrection is an EVENT, not a state, and the difference is whether the
+            // reader can ever put the sentence away.** `combined.resurrected` stays true for
+            // as long as the tombstone sits in this device's own op log — which is forever,
+            // because the log is not pruned. Flagging on that alone re-writes the sentence on
+            // every later batch, so "Looks fine" clears it and the next pull puts it straight
+            // back. The test that found it drives exactly that: clear on one device, apply on
+            // the other, and the sentence was there again.
+            //
+            // So it is flagged when this batch is the one that *did* the resurrecting: either
+            // it carried the tombstone, or the row was not here and had to be rebuilt.
+            let brought_a_tombstone = g.ops.iter().any(|o| o.kind == Kind::Del);
+            if combined.resurrected && (brought_a_tombstone || existing.uid.is_none()) {
                 report.resurrected += 1;
                 if meta.needs_review {
                     flag(conn, meta.table, &uid, RESURRECTED)?;

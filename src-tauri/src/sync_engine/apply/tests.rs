@@ -1194,6 +1194,50 @@ fn every_unique_index_on_a_synced_table_has_been_decided_about() {
     );
 }
 
+/// **"Looks fine" travels**, which is the claim `sync_engine::commands` makes in prose and
+/// nothing else proves. Clearing a sentence is an ordinary write, so it is captured like any
+/// other — a row one device has looked at stops asking on the others too, which is the whole
+/// reason the sentence lives on the row rather than in a notification.
+///
+/// The sentence itself does NOT travel: `apply` writes it inside `capture::suppressed`, and
+/// both devices reach the same conclusion from the same ops. Only the reader's answer moves.
+#[test]
+fn clearing_a_review_sentence_travels_to_the_other_device() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let (mut ma, mut mb) = (0, 0);
+    add_copy(&a);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    let _ = since(&b, &mut mb);
+
+    a.execute("DELETE FROM collection_entries", []).unwrap();
+    b.execute("UPDATE collection_entries SET notes = 'keep'", [])
+        .unwrap();
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    apply(&a, &since(&b, &mut mb)).unwrap();
+    for c in [&a, &b] {
+        let review: Option<String> = c
+            .query_row("SELECT needs_review FROM collection_entries", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(review.as_deref(), Some(RESURRECTED));
+    }
+
+    // The reader looks at it on `b` and says it is fine. `a` should stop asking.
+    let _ = since(&a, &mut ma);
+    let _ = since(&b, &mut mb);
+    b.execute("UPDATE collection_entries SET needs_review = NULL", [])
+        .unwrap();
+    apply(&a, &since(&b, &mut mb)).unwrap();
+
+    let review: Option<String> = a
+        .query_row("SELECT needs_review FROM collection_entries", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(review, None, "the other device is still asking");
+}
+
 /// Applying nothing is a no-op that still commits cleanly.
 #[test]
 fn an_empty_batch_does_nothing() {

@@ -628,6 +628,18 @@ standing — the arrangement more devices have already seen and drawn. Convergen
 requirement and both directions satisfy it; what convergence needs is that both devices consult
 the same set of stamps.
 
+### A resurrection is an event, not a state
+
+`combined.resurrected` stays true for as long as the tombstone sits in this device's own op log
+— which is forever, because the log is not pruned. Flagging on that alone re-writes the
+sentence on every later batch, so **"Looks fine" clears it and the next pull puts it straight
+back**: the reader can never put it away on the device that did the delete.
+
+So the flag is written when *this* batch is the one that resurrected the row: either it carried
+the tombstone, or the row was not here and had to be rebuilt. `ApplyReport::resurrected` counts
+the same way. The test that found it clears the sentence on one device and applies on the other,
+and the sentence was there again.
+
 ### The clock must observe what it applied
 
 Without it, an edit made *after* seeing a peer's op can carry a stamp that sorts *before* it, and
