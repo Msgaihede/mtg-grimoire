@@ -1,0 +1,14 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Probe 1 — rusqlite on wasm32</title>
+<pre id="out">running…</pre>
+<script type="module">
+  import init, { run } from "./pkg/probe1.js";
+  try {
+    await init();
+    document.getElementById("out").textContent = run();
+  } catch (e) {
+    document.getElementById("out").textContent = "HARNESS FAILURE\n" + (e && e.stack || e);
+  }
+  document.title = "probe1-done";
+</script>

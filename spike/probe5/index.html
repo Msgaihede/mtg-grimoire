@@ -1,0 +1,28 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Probe 5 - price feed CORS</title>
+<pre id="out">running...</pre>
+<script type="module">
+  const out = document.getElementById("out");
+  const feeds = [
+    ["Card Kingdom", "https://api.cardkingdom.com/api/v2/pricelist"],
+    ["Mana Pool", "https://manapool.com/api/v1/prices/singles"],
+  ];
+  const lines = ["origin: " + location.origin, ""];
+  for (const [name, url] of feeds) {
+    const ac = new AbortController();
+    try {
+      const r = await fetch(url, { signal: ac.signal });
+      // Reading one chunk proves the body is readable, not merely that headers arrived.
+      const reader = r.body.getReader();
+      const first = await reader.read();
+      ac.abort();
+      lines.push(`PASS ${name}  |  HTTP ${r.status}, type=${r.type}, first chunk ${first.value?.length ?? 0} bytes`);
+    } catch (e) {
+      ac.abort();
+      lines.push(`FAIL ${name}  |  ${e.name}: ${e.message}`);
+    }
+  }
+  out.textContent = lines.join(String.fromCharCode(10));
+  document.title = "done";
+</script>

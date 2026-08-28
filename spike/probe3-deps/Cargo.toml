@@ -1,0 +1,22 @@
+# Probe 3, part A: do the app's EXACT network + decompression dependency lines compile
+# for the browser? No compiler needed — every crate here is pure Rust, so this answers
+# ahead of clang landing.
+#
+# The feature lines are copied verbatim from `src-tauri/Cargo.toml`, deliberately, so a
+# pass here is a statement about the real build rather than about a convenient subset.
+# The suspicion under test: reqwest's `stream` feature expands to
+# `["tokio/fs", "dep:futures-util", "dep:tokio-util", "dep:wasm-streams"]`, and `tokio/fs`
+# is not something wasm32-unknown-unknown has.
+[package]
+name = "probe3-deps"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+flate2 = "1"
+futures-util = "0.3"
+serde_json = "1"
+
+[workspace]

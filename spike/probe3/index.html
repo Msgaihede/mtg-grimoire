@@ -1,0 +1,11 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>Probe 3 - the ingest</title>
+<pre id="out">running...</pre>
+<script type="module">
+  const out = document.getElementById("out");
+  const w = new Worker("./worker.js", { type: "module" });
+  w.onmessage = (e) => { out.textContent = e.data.report; document.title = "done"; };
+  w.onerror = (e) => { out.textContent = "WORKER ERROR: " + (e.message ?? "(none)"); document.title = "done"; };
+  w.postMessage("go");
+</script>
