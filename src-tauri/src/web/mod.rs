@@ -5,3 +5,6 @@
 //! a compile error, and a module gated to `wasm32-unknown-unknown` is invisible to
 //! `cargo test`. So they are ordinary Rust that the suite covers, and only the
 //! `#[wasm_bindgen]` shell around them is target-gated.
+
+pub mod route;
+pub mod wire;
