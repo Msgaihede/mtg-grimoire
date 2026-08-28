@@ -741,7 +741,7 @@ async function main() {
 
       default:
         console.error(
-          "usage: cdp.mjs <eval|click|text|key|press|hover|type|drag|size|media|shot|console> " +
+          "usage: cdp.mjs <eval|click|text|key|press|hover|type|drag|pull|size|media|shot|console> " +
             "[args]\n" +
             "  --shift / --ctrl on click/text/press/key hold that modifier for the gesture\n" +
             `  key takes one of: ${Object.keys(KEYS).join(", ")}\n` +
