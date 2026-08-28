@@ -21,6 +21,7 @@ const show = (over: Partial<Props> = {}) =>
       error={null}
       busy={false}
       onRetry={onRetry}
+      reason="never-built"
       {...over}
     />,
   );
@@ -236,11 +237,39 @@ describe("the first-run variant", () => {
           progress={event({ phase: "error", message: "rate limited by Scryfall" })}
           error={null}
           onRetry={onRetry}
+          reason="never-built"
         />,
       );
 
       expect(screen.getByText(/rate limited by Scryfall/i)).toBeInTheDocument();
       expect(screen.getByRole("button", { name: /retry/i })).toBeEnabled();
     });
+  });
+});
+
+/**
+ * The two ways this screen is reached, and the only thing that differs between them.
+ *
+ * Spec §5.4's "shell loaded, corpus gone": the shell lives in Cache Storage and the corpus in
+ * OPFS, browsers evict the two independently, and a reader who has used this app for a month
+ * can open it to an empty database with the app itself intact. Calling that a first run is a
+ * lie about what happened to a month of syncing.
+ */
+describe("why the database is empty", () => {
+  it("calls a genuine first run a first run", () => {
+    show({ cardCount: 0, busy: false, reason: "never-built" });
+    expect(
+      screen.getByRole("heading", { name: "Setting up your card database" }),
+    ).toBeInTheDocument();
+    expect(screen.getByText(/Downloading every Magic card from Scryfall/)).toBeInTheDocument();
+  });
+
+  it("says the data was cleared when this browser has had a corpus before", () => {
+    show({ cardCount: 0, busy: false, reason: "evicted" });
+    expect(screen.getByRole("heading", { name: "Your card data was cleared" })).toBeInTheDocument();
+    expect(screen.getByText(/removed the card database to free up space/)).toBeInTheDocument();
+    // Everything else on the screen is the same screen: there is no card data either way, and
+    // the way out is the same download.
+    expect(screen.getByRole("button", { name: /retry/i })).toBeEnabled();
   });
 });

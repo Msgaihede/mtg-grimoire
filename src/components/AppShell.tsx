@@ -48,6 +48,7 @@ import { useOracleTagProgress } from "@/lib/useOracleTagProgress";
 import { statusLine, useSync } from "@/lib/useSync";
 import { useSyncInvalidation } from "@/lib/useSyncInvalidation";
 import { useSyncProgress } from "@/lib/useSyncProgress";
+import { useWebStorageLifecycle } from "@/pwa/useWebStorageLifecycle";
 import type { Update } from "@/lib/useUpdate";
 import { cn } from "@/lib/utils";
 
@@ -109,6 +110,9 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   const setActiveView = useAppStore((s) => s.setActiveView);
   const { status, error, refresh, refreshing, upToDate } = useSync();
   const progress = useSyncProgress();
+  // Web only in effect: on desktop this answers "present" for every count and its effect
+  // returns immediately, so the gate below behaves exactly as it always has.
+  const corpus = useWebStorageLifecycle(status?.cardCount ?? null);
   // The sidebar is the one part of the window that is always on screen, which is what makes
   // it the place a card can be dropped from any view — the Search wall and the deck editor
   // never coexist, so without this a card found in Search has nowhere to go.
@@ -406,6 +410,7 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
             error={error}
             busy={busy}
             onRetry={refresh}
+            reason={corpus}
           />
 
           {/* The banner grows into place rather than shoving the whole view down by its height
