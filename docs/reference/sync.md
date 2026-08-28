@@ -860,4 +860,12 @@ clang on `PATH`; on this machine that is `C:\Program Files\LLVM\bin`.
 - **A revoked device's rewrapped key over the relay.** §7.6's rotation is PR 6's and works; the
   hop that hands the new key to the remaining devices is not built, which is why an envelope from
   a newer epoch holds the pull cursor rather than being stepped over.
+- **`sync_ops` has no retention rule.** `pushed_at` is stamped and the row is kept, because the
+  log is also this device's memory of what it did — add-wins and the cycle-break both read
+  it. Nothing prunes it, so it grows for the life of the install: at the measured 453—698 B per
+  op and fifty edits a day, that is a few megabytes a year, which is small beside a 787 MB
+  corpus and is still unbounded. A pruner would have to keep whatever the two readers above can
+  still need, which is a decision nobody has taken.
+- **Nothing has been driven in the shipped window.** Every figure here is from `cargo test`; the
+  relay is not deployed, so there is no end-to-end pass over a real network to have driven.
 - **The bulk-import cost.** 4.22× is measured and unaddressed; see above.
