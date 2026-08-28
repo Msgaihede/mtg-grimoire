@@ -13,6 +13,7 @@ pub mod deck_theory;
 pub mod deck_undo;
 pub mod errors;
 pub mod export;
+pub mod feed;
 pub mod filters;
 pub mod flatten;
 pub mod images;

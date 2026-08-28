@@ -26,11 +26,20 @@
 //! * **Streaming, end to end, because the ratio is the whole problem.** The file expands 23×,
 //!   and almost all of that is Scryfall image URLs — every `uses[].card` carries ten `imageUri*`
 //!   fields plus a type line, and every variant carries a description, notes and prices. None of
-//!   it is wanted. So: byte stream → a temp file under `tmp/` → [`flate2::read::GzDecoder`] →
-//!   `serde_json::Deserializer::from_reader` with a [`DeserializeSeed`] over the `variants`
-//!   array, so exactly one variant is live at a time and every image URL is *stepped over* on
-//!   the way past rather than allocated. `from_str` on 639 MB is not available, and neither is
-//!   `serde_json::Value`.
+//!   it is wanted. So: byte stream → a temp file under `tmp/` → 64 KB chunks →
+//!   [`crate::feed::frame::Decoder`], which sniffs the gzip magic and decompresses →
+//!   [`crate::feed::frame::Elements`], which frames one `variants[]` element at a time by
+//!   brace depth → `serde_json::from_slice` on that one element. Exactly one variant is live
+//!   at a time and every image URL is dropped with the raw variant that carried it.
+//!   `from_str` on 639 MB is not available, and neither is `serde_json::Value`.
+//!
+//!   **The framing is push-shaped on purpose, and that is a change from what shipped.** This
+//!   module used to drive `serde_json::Deserializer::from_reader` with a [`DeserializeSeed`]
+//!   over the array, which is a *pull* parser: it calls `read()` when it wants more and blocks
+//!   until it gets it. A browser stream is push and async with no thread to block, so it could
+//!   not be driven from one at all. [`read_file`] and the seed below stay — they are still the
+//!   file-shaped entry point the tests use — but [`ingest_gz`] now goes through
+//!   [`read_stream`].
 //! * **A size guard, against the declared length *and* the streamed total.** [`MAX_FEED_BYTES`]
 //!   is a bound on what a host that is not the one we think it is can make this process spend,
 //!   not a budget. A chunked response declares nothing, which is why the running total is
@@ -56,7 +65,6 @@
 //! commander. Everything else is read and dropped.
 
 use crate::sync::AppState;
-use flate2::read::GzDecoder;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 use serde::de::{DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
@@ -429,6 +437,88 @@ pub fn read_file(body: &mut dyn Read) -> Result<ComboFile, ComboError> {
     Ok(file)
 }
 
+/// Read `{ timestamp, version, variants: [ … ] }` from a stream of byte chunks.
+///
+/// **Why this exists beside [`read_file`].** That one streams with
+/// `serde_json::Deserializer::from_reader` plus a `DeserializeSeed` - a *pull* parser,
+/// which calls `read()` when it wants more and blocks until it gets it. A browser stream
+/// is push and async with no thread to block, so `from_reader` cannot be driven from one
+/// at all. This frames each element by brace depth and hands it whole to `from_slice`,
+/// which keeps serde doing the part serde is good at.
+///
+/// Peak memory is one element plus the reduced list, the same as `read_file`'s.
+pub fn read_stream(
+    chunks: impl Iterator<Item = std::io::Result<Vec<u8>>>,
+) -> Result<ComboFile, ComboError> {
+    let mut file = ComboFile::default();
+    let mut decoder = crate::feed::frame::Decoder::new();
+    let mut elements = crate::feed::frame::Elements::new();
+    let mut decoded: Vec<u8> = Vec::new();
+    // The document's own `timestamp` sits before `variants`, so it is scraped from the
+    // head rather than parsed structurally - the framer deliberately does not model the
+    // enclosing object.
+    let mut head: Vec<u8> = Vec::new();
+
+    for chunk in chunks {
+        let chunk = chunk?;
+        decoded.clear();
+        decoder.push(&chunk, &mut decoded)?;
+        take_head(&mut head, &decoded);
+        elements.push(&decoded, |el| take_element(&mut file, el));
+    }
+    decoded.clear();
+    decoder.finish(&mut decoded)?;
+    take_head(&mut head, &decoded);
+    elements.push(&decoded, |el| take_element(&mut file, el));
+
+    file.stamp = stamp_from_head(&head);
+    Ok(file)
+}
+
+/// Keep the first [`HEAD_SCRAPE_BYTES`] of the decoded stream, for [`stamp_from_head`].
+fn take_head(head: &mut Vec<u8>, decoded: &[u8]) {
+    if head.len() < HEAD_SCRAPE_BYTES {
+        let want = HEAD_SCRAPE_BYTES - head.len();
+        head.extend_from_slice(&decoded[..decoded.len().min(want)]);
+    }
+}
+
+/// Reduce one framed element into `file`, counting it either way.
+///
+/// A variant that will not deserialise is `skipped`, not fatal - [`crate::ingest`]'s rule,
+/// for its reason. Note that this is *more* forgiving than [`read_file`], where a variant
+/// serde cannot read aborts the whole document with [`ComboError::Parse`].
+fn take_element(file: &mut ComboFile, el: &[u8]) {
+    file.seen += 1;
+    match serde_json::from_slice::<RawVariant>(el) {
+        Ok(raw) => match reduce(raw) {
+            Some(combo) => file.combos.push(combo),
+            None => file.skipped += 1,
+        },
+        Err(_) => file.skipped += 1,
+    }
+}
+
+/// How much of the document's head is kept so the `timestamp` can be scraped out of it.
+///
+/// The key sits within the first few dozen bytes of every file Spellbook has served; this
+/// is slack, not a measurement.
+const HEAD_SCRAPE_BYTES: usize = 512;
+
+/// Pull the document's `"timestamp"` out of its first bytes.
+///
+/// A scrape and not a parse, because the enclosing object is never modelled: the framer
+/// starts at the first `[`. `None` for a document that omits the key, which is what
+/// [`read_file`] also produces - `ComboFile::stamp` is `Option<String>` precisely because
+/// a file without one is a real state rather than an error.
+fn stamp_from_head(head: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(head);
+    let rest = text.split_once("\"timestamp\"").map(|(_, r)| r)?;
+    // Past the colon and the opening quote of the value.
+    let rest = rest.split_once('"').map(|(_, r)| r)?;
+    Some(rest.split('"').next()?.to_owned())
+}
+
 struct Document<'a> {
     sink: &'a mut dyn FnMut(RawVariant),
 }
@@ -700,14 +790,38 @@ pub fn ingest_gz(
     fetched_at: i64,
     progress: &mut dyn FnMut(u64, u64),
 ) -> Result<Ingested, ComboError> {
+    use std::io::Read as _;
+
     // Opened before the database is touched: a missing or unreadable path must not cost the
     // caller the staging tables it was about to fill.
-    let handle = std::fs::File::open(gz_path)?;
-    // **The parse finishes before the write begins.** What it keeps is small — an id, a letter,
-    // a colour string, the feature names and two or three card rows per variant — and holding
-    // it costs a fraction of what the file would if any of it were read twice.
-    let mut decoder = GzDecoder::new(handle);
-    let file = read_file(&mut decoder)?;
+    let mut handle = std::fs::File::open(gz_path)?;
+    let chunks = std::iter::from_fn(move || {
+        let mut buf = vec![0u8; 64 * 1024];
+        match handle.read(&mut buf) {
+            Ok(0) => None,
+            Ok(n) => {
+                buf.truncate(n);
+                Some(Ok(buf))
+            }
+            Err(e) => Some(Err(e)),
+        }
+    });
+    ingest_stream(db, chunks, etag, fetched_at, progress)
+}
+
+/// Ingest the combo feed from a stream of byte chunks.
+///
+/// **The parse finishes before the write begins.** What it keeps is small - an id, a letter,
+/// a colour string, the feature names and two or three card rows per variant - and holding
+/// it costs a fraction of what the file would if any of it were read twice.
+pub fn ingest_stream(
+    db: &Mutex<Connection>,
+    chunks: impl Iterator<Item = std::io::Result<Vec<u8>>>,
+    etag: Option<&str>,
+    fetched_at: i64,
+    progress: &mut dyn FnMut(u64, u64),
+) -> Result<Ingested, ComboError> {
+    let file = read_stream(chunks)?;
     store(db, &file, etag, fetched_at, progress)
 }
 
@@ -2589,5 +2703,62 @@ mod tests {
             std::fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0)
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Many distinct variants, built from the module's own helpers.
+    fn many_variants(n: usize) -> String {
+        let vs: Vec<String> = (0..n)
+            .map(|i| {
+                ok_variant(
+                    &format!("v{i}"),
+                    "R",
+                    &[("Card A", &format!("o{i}a")), ("Card B", &format!("o{i}b"))],
+                )
+            })
+            .collect();
+        document(&vs)
+    }
+
+    /// The stream path must reduce a document to exactly what the file path does.
+    #[test]
+    fn read_stream_matches_read_file() {
+        let doc = many_variants(120);
+        let bytes = doc.clone().into_bytes();
+
+        let from_file = parse(&doc);
+        let chunks = bytes.chunks(97).map(|c| Ok(c.to_vec())).collect::<Vec<_>>();
+        let from_stream = read_stream(chunks.into_iter()).unwrap();
+
+        assert_eq!(from_file.seen, from_stream.seen);
+        assert_eq!(from_file.skipped, from_stream.skipped);
+        assert_eq!(from_file.combos.len(), from_stream.combos.len());
+        // `stamp` is Option<String>; both paths must find the document's own timestamp.
+        assert_eq!(from_file.stamp, from_stream.stamp);
+        assert_eq!(from_stream.stamp.as_deref(), Some("2026-08-27T03:12:44Z"));
+        for (a, b) in from_file.combos.iter().zip(from_stream.combos.iter()) {
+            assert_eq!(a.id, b.id);
+            assert_eq!(a.bracket_tag, b.bracket_tag);
+            assert_eq!(a.card_count, b.card_count);
+        }
+    }
+
+    /// The browser case: already-decompressed bytes must ingest like gzipped ones.
+    #[test]
+    fn read_stream_accepts_plain_and_gzipped_alike() {
+        use flate2::{write::GzEncoder, Compression};
+        use std::io::Write as _;
+
+        let doc = many_variants(40);
+        let plain = doc.into_bytes();
+        let mut enc = GzEncoder::new(Vec::new(), Compression::fast());
+        enc.write_all(&plain).unwrap();
+        let gz = enc.finish().unwrap();
+
+        let a = read_stream(plain.chunks(64).map(|c| Ok(c.to_vec()))).unwrap();
+        let b = read_stream(gz.chunks(64).map(|c| Ok(c.to_vec()))).unwrap();
+        assert_eq!(a.combos.len(), b.combos.len());
+        assert_eq!(a.seen, b.seen);
+        assert_eq!(a.stamp, b.stamp);
+        assert!(a.seen > 0, "the fixture must actually contain variants");
     }
 }
