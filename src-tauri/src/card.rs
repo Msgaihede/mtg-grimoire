@@ -798,8 +798,7 @@ mod tests {
     /// its own — plus an MTGO printing of the same card that must never be offered as a
     /// copy to own, and a double-faced card, which is the shape `faces` has to survive.
     fn seeded() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate_single_file(&conn).unwrap();
+        let conn = crate::schema::memory_pair();
         let rows = [
             ("p1", "o1", "lea", "161", "1993-08-05", "art-a"),
             ("p2", "o1", "2ed", "162", "1993-12-01", "art-a"),
@@ -1549,9 +1548,7 @@ mod tests {
     /// The schema and nothing else. The setting lives in `app_meta`, which no card row is
     /// involved in, so seeding printings here would only make the failures harder to read.
     fn meta_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate_single_file(&conn).unwrap();
-        conn
+        crate::schema::memory_pair()
     }
 
     /// The setting outlives the process, so the only thing that matters about it is that what
@@ -1657,8 +1654,7 @@ mod tests {
 
     /// One card row with a real `image_uris` blob, for [`card_image_uri_inner`]'s tests.
     fn fixture_with_image_uris(id: &str, image_uris_json: &str) -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate_single_file(&conn).unwrap();
+        let conn = crate::schema::memory_pair();
         conn.execute(
             "INSERT INTO cards (id, name, set_code, collector_number, lang, layout, image_uris, raw)
              VALUES (?1, 'Test Card', 'tst', '1', 'en', 'normal', ?2, '{}')",
@@ -1671,8 +1667,7 @@ mod tests {
     /// A card whose `image_uris` column is `NULL` — it carried none at all, as opposed to a
     /// present key holding JSON `null`.
     fn fixture_with_no_image_uris(id: &str) -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate_single_file(&conn).unwrap();
+        let conn = crate::schema::memory_pair();
         conn.execute(
             "INSERT INTO cards (id, name, set_code, collector_number, lang, layout, raw)
              VALUES (?1, 'Test Card', 'tst', '1', 'en', 'normal', '{}')",
@@ -1736,8 +1731,7 @@ mod tests {
     /// face in `card_faces` order, and a face the source gave no images for is a `null` in
     /// place (`card_row::webp_uris`).
     fn fixture_with_faces(id: &str, top: Option<&str>, face_json: &str) -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate_single_file(&conn).unwrap();
+        let conn = crate::schema::memory_pair();
         conn.execute(
             "INSERT INTO cards (id, name, set_code, collector_number, lang, layout,
                                 image_uris, face_image_uris, raw)
@@ -1882,8 +1876,7 @@ mod tests {
     /// Every row is `layout = 'meld'` and every one is credited to Clint Cearley, who
     /// illustrated all three cards.
     fn seeded_meld() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate_single_file(&conn).unwrap();
+        let conn = crate::schema::memory_pair();
         let art = Some("Clint Cearley");
 
         // Bruna's list, in Scryfall's order: the result first, then itself, then its

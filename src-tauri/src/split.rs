@@ -453,6 +453,69 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// Throw the corpus away and the collection is still there. **This is the third
+    /// consequence in the brief, as a property rather than as a button**: a corrupt corpus
+    /// is a file to delete, not a reason to lose anything.
+    ///
+    /// The Danger Zone gets no new row in this change, deliberately — the frontend's own PR
+    /// will find the Rust side already true, and this is what says so.
+    #[test]
+    fn a_destroyed_corpus_costs_a_resync_and_nothing_else() {
+        let dir = scratch("corpus-loss");
+        legacy(&dir);
+        convert(&dir).unwrap();
+        {
+            let conn = crate::db::open_write(&dir).unwrap();
+            crate::db::checkpoint_truncate(&conn).unwrap();
+        }
+
+        // What an OPFS eviction, a half-written sync or a bad sector leaves behind.
+        std::fs::write(dir.join(crate::db::CORPUS_DB), b"not a database at all").unwrap();
+        for suffix in ["-wal", "-shm"] {
+            let _ = std::fs::remove_file(dir.join(format!("corpus.db{suffix}")));
+        }
+
+        let recovered = crate::schema::prepare_data_dir(&dir).unwrap();
+        let conn = crate::db::open_write(&dir).unwrap();
+        // The rest of a launch: `ATTACH` made an empty file, and this is what puts a shape
+        // in it.
+        crate::schema::prepare_database(&conn).unwrap();
+        let decks: i64 = conn
+            .query_row("SELECT count(*) FROM decks", [], |r| r.get(0))
+            .unwrap();
+        let entries: i64 = conn
+            .query_row("SELECT count(*) FROM collection_entries", [], |r| r.get(0))
+            .unwrap();
+        let migrations: i64 = conn
+            .query_row("SELECT count(*) FROM card_migrations", [], |r| r.get(0))
+            .unwrap();
+        let cards: i64 = conn
+            .query_row("SELECT count(*) FROM cards", [], |r| r.get(0))
+            .unwrap();
+        let formats: i64 = conn
+            .query_row("SELECT count(*) FROM format_specs", [], |r| r.get(0))
+            .unwrap();
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(recovered, "a corrupt corpus should have been replaced");
+        assert_eq!(decks, 1, "the deck must survive losing the card database");
+        assert_eq!(entries, 1, "and so must the collection");
+        assert_eq!(
+            migrations, 1,
+            "and the ledger of which folds have been applied, or the next poll doubles a \
+             quantity"
+        );
+        assert_eq!(
+            cards, 0,
+            "the corpus is empty and owes a sync, which is a supported state"
+        );
+        assert!(
+            formats > 0,
+            "the one corpus table no feed produces is seeded by the rebuild"
+        );
+    }
+
     /// **The one that cannot be faked with a fixture.** A worktree is a fresh install and can
     /// never show an upgrade bug; the main checkout's database is at `user_version` 25 with
     /// 116 843 cards and 2 581 `card_migrations` rows. Point `MTG_SPLIT_FIXTURE` at a **copy**

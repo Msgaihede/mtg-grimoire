@@ -1898,8 +1898,7 @@ mod tests {
     }
 
     fn seeded() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate_single_file(&conn).unwrap();
+        let conn = crate::schema::memory_pair();
         conn.execute(
             "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
                 rarity,finishes,prices,raw)
@@ -4040,8 +4039,7 @@ mod tests {
     /// table; **Mana Pool prices it**, because that feed publishes an etched column where
     /// Scryfall's euro keys do not. The same card, three different right answers.
     fn seeded_marketplaces() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate_single_file(&conn).unwrap();
+        let conn = crate::schema::memory_pair();
         for (id, prices) in [
             ("cheap-usd", r#"{"usd":"1.00","eur":"90.00"}"#),
             ("dear-usd", r#"{"usd":"50.00","eur":"2.00"}"#),

@@ -354,8 +354,7 @@ mod tests {
     /// A migrated in-memory database in the shape the ingest is handed now: the shared
     /// write mutex, not a bare connection.
     fn mem_db() -> Mutex<Connection> {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate_single_file(&conn).unwrap();
+        let conn = crate::schema::memory_pair();
         Mutex::new(conn)
     }
 
@@ -649,7 +648,7 @@ mod tests {
             assert_eq!(kept, 1, "an empty ingest must not touch the live table");
             let fts: i64 = conn
                 .query_row(
-                    "SELECT count(*) FROM sqlite_master WHERE name='cards_fts'",
+                    "SELECT count(*) FROM corpus.sqlite_master WHERE name='cards_fts'",
                     [],
                     |r| r.get(0),
                 )
@@ -657,7 +656,7 @@ mod tests {
             assert_eq!(fts, 1, "the search index must survive an empty ingest");
             let staging: i64 = conn
                 .query_row(
-                    "SELECT count(*) FROM sqlite_master WHERE name='cards_staging'",
+                    "SELECT count(*) FROM corpus.sqlite_master WHERE name='cards_staging'",
                     [],
                     |r| r.get(0),
                 )
@@ -816,9 +815,8 @@ mod tests {
         let dir = std::env::temp_dir().join("mtgtest-ingest-chunked");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let conn = crate::db::open(&dir.join("mtg.db")).unwrap();
-        crate::schema::migrate_single_file(&conn).unwrap();
-        let db = std::sync::Mutex::new(conn);
+        crate::split::convert(&dir).unwrap();
+        let db = std::sync::Mutex::new(crate::db::open_write(&dir).unwrap());
 
         // Eight batches' worth. Only the seven release points *after* the first batch
         // count, so the run has to have plenty of them left once counting opens.

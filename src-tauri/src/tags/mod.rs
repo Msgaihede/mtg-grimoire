@@ -1485,8 +1485,7 @@ pub(crate) mod testing {
     /// A migrated in-memory database behind the write mutex, which is how the ingest is
     /// handed one.
     pub(crate) fn mem_db() -> Mutex<Connection> {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate_single_file(&conn).unwrap();
+        let conn = crate::schema::memory_pair();
         Mutex::new(conn)
     }
 

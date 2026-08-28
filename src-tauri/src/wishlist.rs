@@ -1072,8 +1072,7 @@ mod tests {
     }
 
     fn seeded() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate_single_file(&conn).unwrap();
+        let conn = crate::schema::memory_pair();
         for (id, set, cn) in [("bolt-lea", "lea", "161"), ("bolt-2ed", "2ed", "162")] {
             conn.execute(
                 "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
@@ -1104,9 +1103,7 @@ mod tests {
     /// the price fixtures below must not have: each of them seeds the printings its own
     /// question is about.
     fn empty() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate_single_file(&conn).unwrap();
-        conn
+        crate::schema::memory_pair()
     }
 
     /// One printing, with its own `finishes` list and its own price blob.
@@ -2637,8 +2634,7 @@ mod tests {
     /// take, and which Card Kingdom's feed has never listed while Mana Pool's has. Quantities
     /// differ too, so `cost` and `price` cannot agree by accident.
     fn seeded_marketplaces() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate_single_file(&conn).unwrap();
+        let conn = crate::schema::memory_pair();
         for (id, prices) in [
             ("cheap-usd", r#"{"usd":"1.00","eur":"90.00"}"#),
             ("dear-usd", r#"{"usd":"50.00","eur":"2.00"}"#),

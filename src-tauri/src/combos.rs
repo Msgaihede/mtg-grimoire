@@ -1519,8 +1519,7 @@ mod tests {
     // ---- fixtures ---------------------------------------------------------------------
 
     fn mem_db() -> Mutex<Connection> {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate_single_file(&conn).unwrap();
+        let conn = crate::schema::memory_pair();
         Mutex::new(conn)
     }
 
@@ -2220,8 +2219,7 @@ mod tests {
     /// to say out loud: nothing ingested is not the same as "this deck has no combos".
     #[test]
     fn a_never_ingested_database_reports_itself_as_never_and_stale() {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate_single_file(&conn).unwrap();
+        let conn = crate::schema::memory_pair();
 
         assert_eq!(
             read_status(&conn, 1_800_000_000),
@@ -2588,9 +2586,9 @@ mod tests {
 
         // A **file** database rather than an in-memory one, because one of the figures this
         // test exists to take is what the feed costs a reader on disk.
-        let db_path = dir.join("combos.db");
-        let db = Mutex::new(Connection::open(&db_path).unwrap());
-        crate::schema::migrate_single_file(&db.lock().unwrap()).unwrap();
+        crate::split::convert(&dir).unwrap();
+        let db_path = dir.join(crate::db::CORPUS_DB);
+        let db = Mutex::new(crate::db::open_write(&dir).unwrap());
 
         let parsing = std::time::Instant::now();
         let ingested =

@@ -4463,8 +4463,7 @@ mod tests {
     /// fixture, both traps, and neither of them invented — those are the real rarities and
     /// the real legalities.
     fn seeded() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate_single_file(&conn).unwrap();
+        let conn = crate::schema::memory_pair();
         conn.execute_batch(
             r#"INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
                     rarity,artist,mana_cost,cmc,type_line,oracle_text,colors,color_identity,

@@ -767,8 +767,7 @@ mod tests {
     /// with the test**, so no later measurement of the real corpus can be made a fiction by
     /// it. Everything else goes in through the app's own write commands.
     fn seeded_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate_single_file(&conn).unwrap();
+        let conn = crate::schema::memory_pair();
         for (id, oracle, name, set, num) in [
             ("bolt-lea", "o1", "Lightning Bolt", "lea", "161"),
             ("sol-lea", "o2", "Sol Ring", "lea", "263"),

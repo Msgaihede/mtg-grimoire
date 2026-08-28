@@ -320,7 +320,7 @@ fn backoff_for(failures: u32) -> Duration {
 fn watch(state: &AppState) {
     // Spelled here, in `lib.rs`'s `init_state`, and in `index::lifecycle::build_now` — three
     // readers, three connections, one file.
-    let conn = match crate::db::open_read_only(&state.data_dir.join("mtg.db")) {
+    let conn = match crate::db::open_read(&state.data_dir) {
         Ok(conn) => conn,
         Err(e) => {
             // The end of the mirror for this session, and it is reported three ways rather
@@ -508,13 +508,10 @@ fn unix_now() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schema;
     use std::path::Path;
 
     fn migrated_memory_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        schema::migrate_single_file(&conn).unwrap();
-        conn
+        crate::schema::memory_pair()
     }
 
     /// An [`AppState`] over a real file database inside a `tempfile` root.
@@ -524,10 +521,9 @@ mod tests {
     /// `std::env::temp_dir()` because a pass writes files and nothing in this suite may put
     /// one where a later run would find it.
     fn state_at(dir: &Path) -> AppState {
-        let path = dir.join("mtg.db");
-        let conn = crate::db::open(&path).unwrap();
-        schema::migrate_single_file(&conn).unwrap();
-        let read = crate::db::open_read_only(&path).unwrap();
+        crate::split::convert(dir).unwrap();
+        let conn = crate::db::open_write(dir).unwrap();
+        let read = crate::db::open_read(dir).unwrap();
         AppState {
             db: std::sync::Mutex::new(conn),
             db_read: std::sync::Mutex::new(read),
@@ -586,8 +582,18 @@ mod tests {
     #[test]
     fn every_table_in_the_schema_has_been_decided_about() {
         let conn = migrated_memory_db();
+        // **Both files, and the `UNION ALL` is the whole of why this test still means
+        // anything.** `sqlite_master` unqualified is `main`'s, so from the day the corpus
+        // moved into a file of its own an unqualified read would have gone on passing while
+        // covering fifteen tables instead of forty — a guard that silently halves its own
+        // scope, which is exactly the failure it exists to catch.
         let mut stmt = conn
-            .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+            .prepare(
+                "SELECT name FROM main.sqlite_master WHERE type = 'table'
+                 UNION ALL
+                 SELECT name FROM corpus.sqlite_master WHERE type = 'table'
+                 ORDER BY name",
+            )
             .unwrap();
         let tables: Vec<String> = stmt
             .query_map([], |r| r.get::<_, String>(0))
@@ -933,7 +939,7 @@ mod tests {
     /// pass reads four listings and writes ~350 files, and doing that on `AppState.db_read`
     /// queues every search behind it. The tests below take one the same way.
     fn own_conn(dir: &Path) -> Connection {
-        crate::db::open_read_only(&dir.join("mtg.db")).unwrap()
+        crate::db::open_read(dir).unwrap()
     }
 
     /// Point the mirror at `root` without going through `set_root`'s validation.

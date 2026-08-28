@@ -2178,9 +2178,7 @@ mod tests {
     use crate::schema::tests::{category, deck, deck_card};
 
     fn conn() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate_single_file(&conn).unwrap();
-        conn
+        crate::schema::memory_pair()
     }
 
     /// The marketplace a test that is **not about prices** reads through —

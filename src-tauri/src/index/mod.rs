@@ -372,8 +372,7 @@ pub(crate) mod fixtures {
     /// over it — a green test that proves nothing, which is why `search.rs` grew
     /// `fill_legal_mask` for its own fixtures.
     pub(crate) fn seeded() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate_single_file(&conn).unwrap();
+        let conn = crate::schema::memory_pair();
         seed(&conn);
         conn
     }
@@ -427,11 +426,10 @@ pub(crate) mod fixtures {
         let dir = std::env::temp_dir().join(format!("mtgtest-lifecycle-{name}"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("mtg.db");
-        let conn = crate::db::open(&path).unwrap();
-        crate::schema::migrate_single_file(&conn).unwrap();
+        crate::split::convert(&dir).unwrap();
+        let conn = crate::db::open_write(&dir).unwrap();
         seed(&conn);
-        let read = crate::db::open_read_only(&path).unwrap();
+        let read = crate::db::open_read(&dir).unwrap();
         std::sync::Arc::new(crate::sync::AppState {
             db: std::sync::Mutex::new(conn),
             db_read: std::sync::Mutex::new(read),
@@ -752,7 +750,15 @@ mod tests {
     #[ignore]
     fn warmup_timing() {
         let path = std::env::var("MTG_WARMUP_DB").expect("set MTG_WARMUP_DB to a copied mtg.db");
-        let conn = crate::db::open_read_only(std::path::Path::new(&path)).unwrap();
+        let path = std::path::Path::new(&path);
+        // **A directory means the pair**, which is what the app opens since schema 27: the
+        // build scans `cards` and `collection_entries`, and those are in two files now. A
+        // file is still accepted so the pre-split baseline can be taken with the same test.
+        let conn = if path.is_dir() {
+            crate::db::open_read(path).unwrap()
+        } else {
+            crate::db::open_read_only(path).unwrap()
+        };
         let t = std::time::Instant::now();
         let ix = CardIndex::build(&conn).unwrap();
         println!(

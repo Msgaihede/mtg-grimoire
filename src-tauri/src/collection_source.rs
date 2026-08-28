@@ -97,7 +97,6 @@ pub(crate) fn with_write_owned<T>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schema;
 
     /// Two printings of one oracle card, and a hand-built collection holding **only the
     /// first**: 4 regular and 1 foil Sol Ring. `p2` gets no row, so every builder below is
@@ -106,8 +105,7 @@ mod tests {
     /// `cards` is seeded here because a worktree database has never synced — and these rows are
     /// torn down with the connection, so no later measurement is made a fiction by them.
     fn db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        schema::migrate_single_file(&conn).unwrap();
+        let conn = crate::schema::memory_pair();
         conn.execute_batch(
             "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
                                 rarity,finishes,prices,raw)

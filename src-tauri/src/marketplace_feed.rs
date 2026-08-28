@@ -1162,8 +1162,7 @@ mod tests {
     use super::*;
 
     fn mem_db() -> Mutex<Connection> {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate_single_file(&conn).unwrap();
+        let conn = crate::schema::memory_pair();
         Mutex::new(conn)
     }
 
@@ -1690,8 +1689,7 @@ mod tests {
     /// empty" rather than "these prices are old".
     #[test]
     fn a_never_fetched_feed_reports_itself_as_never_fetched_and_stale() {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate_single_file(&conn).unwrap();
+        let conn = crate::schema::memory_pair();
 
         let status = read_status(&conn, &CardKingdom, 1_800_000_000);
         assert_eq!(
@@ -1833,9 +1831,10 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let conn = crate::db::open(&dir.join("mtg.db")).unwrap();
+        crate::schema::prepare_data_dir(&dir).unwrap();
+        let conn = crate::db::open_write(&dir).unwrap();
         crate::schema::prepare_database(&conn).unwrap();
-        let read = crate::db::open_read_only(&dir.join("mtg.db")).unwrap();
+        let read = crate::db::open_read(&dir).unwrap();
         (
             Arc::new(AppState {
                 db: Mutex::new(conn),

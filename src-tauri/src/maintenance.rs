@@ -7,6 +7,7 @@
 //! Compaction is therefore an *operation*, with a phase on the sync progress channel, and
 //! it happens after the sync it follows rather than before the app the user launched.
 
+use crate::db::CORPUS;
 use rusqlite::Connection;
 use std::sync::Mutex;
 
@@ -48,10 +49,12 @@ pub const K_AUTO_VACUUM_ERROR: &str = "auto_vacuum_error";
 /// A database that cannot answer the pragma at all reads as "no conversion needed": the
 /// caller's only response would be to start a `VACUUM` on a file that just failed to answer
 /// a one-word question, which is not a repair.
-pub fn needs_conversion(conn: &Connection) -> bool {
-    conn.query_row("PRAGMA auto_vacuum", [], |r| r.get::<_, i64>(0))
-        .map(|mode| mode != 2)
-        .unwrap_or(false)
+pub fn needs_conversion(conn: &Connection, schema: &str) -> bool {
+    conn.query_row(&format!("PRAGMA {schema}.auto_vacuum"), [], |r| {
+        r.get::<_, i64>(0)
+    })
+    .map(|mode| mode != 2)
+    .unwrap_or(false)
 }
 
 /// Is the search index owed a rebuild? See [`K_FTS_REBUILD_PENDING`].
@@ -148,8 +151,8 @@ pub fn convert_to_incremental(conn: &Connection) -> rusqlite::Result<()> {
 /// Split out so its failure has one place to be handled. Everything before `create_fts` is
 /// atomic — a failure here leaves the database exactly as it was found, index included.
 fn vacuum_into_incremental(conn: &Connection) -> rusqlite::Result<()> {
-    conn.pragma_update(None, "auto_vacuum", "INCREMENTAL")?;
-    conn.execute_batch("VACUUM;")
+    conn.pragma_update(Some(CORPUS), "auto_vacuum", "INCREMENTAL")?;
+    conn.execute_batch(&format!("VACUUM {CORPUS};"))
 }
 
 /// How many pages are waiting to be handed back to the filesystem.
@@ -157,8 +160,8 @@ fn vacuum_into_incremental(conn: &Connection) -> rusqlite::Result<()> {
 /// Also the denominator of the `reclaiming` phase — the one phase of a sync that can report
 /// a true fraction, because unlike a download or an ingest this number is known before the
 /// work starts and only ever falls.
-pub fn freelist_pages(conn: &Connection) -> i64 {
-    conn.query_row("PRAGMA freelist_count", [], |r| r.get(0))
+pub fn freelist_pages(conn: &Connection, schema: &str) -> i64 {
+    conn.query_row(&format!("PRAGMA {schema}.freelist_count"), [], |r| r.get(0))
         .unwrap_or(0)
 }
 
@@ -226,10 +229,10 @@ pub fn reclaim_freed_pages(
         let conn = crate::db::lock_blocking(db);
         // A database still on NONE has a freelist too, and `incremental_vacuum` would
         // silently do nothing with it. Reporting a phase for that would be a lie.
-        if needs_conversion(&conn) {
+        if needs_conversion(&conn, CORPUS) {
             return Ok(());
         }
-        freelist_pages(&conn)
+        freelist_pages(&conn, CORPUS)
     };
     if total == 0 {
         return Ok(());
@@ -245,8 +248,13 @@ pub fn reclaim_freed_pages(
             // per page it returns, and `execute_batch` steps a statement once and resets it.
             // The obvious spelling hands back exactly **one page** and reports success —
             // measured, 264 free pages in and 263 still free out.
-            conn.pragma(None, "incremental_vacuum", RECLAIM_CHUNK_PAGES, |_| Ok(()))?;
-            freelist_pages(&conn)
+            conn.pragma(
+                Some(CORPUS),
+                "incremental_vacuum",
+                RECLAIM_CHUNK_PAGES,
+                |_| Ok(()),
+            )?;
+            freelist_pages(&conn, CORPUS)
         };
         if now >= left {
             // A chunk that returned nothing will not do better on the next attempt, so the
@@ -295,10 +303,23 @@ mod tests {
         conn
     }
 
+    /// The same legacy file, taken through the split, opened as the app opens it.
+    ///
+    /// **The corpus keeps the `auto_vacuum = NONE` the single file had**, because
+    /// `split::finish` renames that very file into place — which is what makes this the
+    /// shape every existing install arrives in, and what the whole module is about. The user
+    /// file is built fresh and is therefore already incremental, which is the asymmetry
+    /// `the_reclaim_reads_the_corpus_and_not_the_user_file` turns into an assertion.
+    fn legacy_pair(dir: &std::path::Path) -> Connection {
+        crate::split::convert(dir).unwrap();
+        crate::db::open_write(dir).unwrap()
+    }
+
     #[test]
     fn a_legacy_database_is_converted_once_and_keeps_its_search_index() {
         let dir = scratch("convert");
-        let conn = legacy_database(&dir.join("mtg.db"));
+        drop(legacy_database(&dir.join("mtg.db")));
+        let conn = legacy_pair(&dir);
         for i in 0..500 {
             conn.execute(
                 "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,search_text,raw)
@@ -315,12 +336,18 @@ mod tests {
         )
         .unwrap();
 
-        assert!(needs_conversion(&conn), "a legacy database starts at NONE");
+        assert!(
+            needs_conversion(&conn, CORPUS),
+            "a legacy corpus starts at NONE"
+        );
         convert_to_incremental(&conn).unwrap();
 
-        assert!(!needs_conversion(&conn), "and is incremental afterwards");
+        assert!(
+            !needs_conversion(&conn, CORPUS),
+            "and is incremental afterwards"
+        );
         let mode: String = conn
-            .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+            .query_row(&format!("PRAGMA {CORPUS}.journal_mode"), [], |r| r.get(0))
             .unwrap();
         assert_eq!(
             mode.to_lowercase(),
@@ -359,8 +386,10 @@ mod tests {
     /// Fill a database and then free most of it, which is the shape a staging swap leaves.
     /// Returns the connection and the freelist it produced.
     fn database_with_a_freelist(dir: &std::path::Path) -> (Connection, i64) {
-        let conn = crate::db::open(&dir.join("mtg.db")).unwrap();
-        conn.execute_batch("CREATE TABLE t (v TEXT);").unwrap();
+        let conn = crate::db::open_write(dir).unwrap();
+        // **In the corpus**, which is where the gigabyte a swap frees actually is.
+        conn.execute_batch(&format!("CREATE TABLE {CORPUS}.t (v TEXT);"))
+            .unwrap();
         let tx = conn.unchecked_transaction().unwrap();
         for i in 0..5000 {
             tx.execute(
@@ -371,7 +400,7 @@ mod tests {
         }
         tx.commit().unwrap();
         conn.execute("DELETE FROM t", []).unwrap();
-        let free = freelist_pages(&conn);
+        let free = freelist_pages(&conn, CORPUS);
         assert!(free > 0, "the deletes should have freed pages");
         (conn, free)
     }
@@ -387,7 +416,7 @@ mod tests {
         reclaim_freed_pages(&db, &mut |_, _| {}).unwrap();
 
         let conn = db.into_inner().unwrap();
-        let after = freelist_pages(&conn);
+        let after = freelist_pages(&conn, CORPUS);
         assert!(before > 0, "the deletes should have freed pages");
         assert_eq!(after, 0, "and this is what hands them back");
 
@@ -408,7 +437,7 @@ mod tests {
         reclaim_freed_pages(&db, &mut |done, total| seen.push((done, total))).unwrap();
 
         let conn = db.into_inner().unwrap();
-        assert_eq!(freelist_pages(&conn), 0);
+        assert_eq!(freelist_pages(&conn, CORPUS), 0);
         assert!(
             seen.len() >= 2,
             "a chunked run reports more than once: {seen:?}"
@@ -460,8 +489,9 @@ mod tests {
         let dir = scratch("interleave");
         // Rows a little larger than a page, so a modest row count buys a freelist of
         // several chunks without writing tens of megabytes.
-        let conn = crate::db::open(&dir.join("mtg.db")).unwrap();
-        conn.execute_batch("CREATE TABLE t (v TEXT);").unwrap();
+        let conn = crate::db::open_write(&dir).unwrap();
+        conn.execute_batch(&format!("CREATE TABLE {CORPUS}.t (v TEXT);"))
+            .unwrap();
         let tx = conn.unchecked_transaction().unwrap();
         for i in 0..10_000 {
             tx.execute(
@@ -472,7 +502,7 @@ mod tests {
         }
         tx.commit().unwrap();
         conn.execute("DELETE FROM t", []).unwrap();
-        let free = freelist_pages(&conn);
+        let free = freelist_pages(&conn, CORPUS);
         assert!(
             free > 4 * RECLAIM_CHUNK_PAGES,
             "the run needs several chunks, and has {free} pages"
@@ -535,8 +565,8 @@ mod tests {
     #[test]
     fn a_read_only_handle_reports_a_stale_auto_vacuum_after_a_conversion() {
         let dir = scratch("reader");
-        let path = dir.join("mtg.db");
-        let conn = legacy_database(&path);
+        drop(legacy_database(&dir.join("mtg.db")));
+        let conn = legacy_pair(&dir);
         for i in 0..500 {
             conn.execute(
                 "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,search_text,raw)
@@ -547,7 +577,7 @@ mod tests {
         }
         // The app's second handle, exactly as `init_state` builds it, and warmed with a
         // query so it is a real open reader rather than an unused file descriptor.
-        let reader = crate::db::open_read_only(&path).unwrap();
+        let reader = crate::db::open_read(&dir).unwrap();
         let n: i64 = reader
             .query_row("SELECT count(*) FROM cards", [], |r| r.get(0))
             .unwrap();
@@ -556,11 +586,11 @@ mod tests {
         convert_to_incremental(&conn).expect("a VACUUM must not lose to the app's own reader");
 
         assert!(
-            !needs_conversion(&conn),
+            !needs_conversion(&conn, CORPUS),
             "the connection that ran the VACUUM knows it ran"
         );
         assert!(
-            needs_conversion(&reader),
+            needs_conversion(&reader, CORPUS),
             "if this ever stops being stale, `compact_once` may read `db_read` again"
         );
         // What clears it: any real query, because that is what re-reads the header.
@@ -568,7 +598,7 @@ mod tests {
             .query_row("SELECT count(*) FROM cards", [], |r| r.get(0))
             .unwrap();
         assert_eq!(after, 500, "and the reader still sees every row");
-        assert!(!needs_conversion(&reader));
+        assert!(!needs_conversion(&reader, CORPUS));
 
         drop(reader);
         drop(conn);
@@ -576,8 +606,9 @@ mod tests {
     }
 
     /// Fill a legacy database with 500 cards and an index that answers correctly for them.
-    fn legacy_database_with_cards(path: &std::path::Path) -> Connection {
-        let conn = legacy_database(path);
+    fn legacy_database_with_cards(dir: &std::path::Path) -> Connection {
+        drop(legacy_database(&dir.join("mtg.db")));
+        let conn = legacy_pair(dir);
         for i in 0..500 {
             conn.execute(
                 "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,search_text,raw)
@@ -624,22 +655,21 @@ mod tests {
     #[test]
     fn a_kill_between_the_vacuum_and_the_rebuild_is_repaired_at_the_next_launch() {
         let dir = scratch("killed");
-        let path = dir.join("mtg.db");
-        let conn = legacy_database_with_cards(&path);
+        let conn = legacy_database_with_cards(&dir);
         delete_half_the_cards(&conn);
 
         // The conversion, killed mid-flight: everything `convert_to_incremental` does up to
         // and including the VACUUM, and then the process dies.
         crate::sync::set_meta(&conn, K_FTS_REBUILD_PENDING, "1").unwrap();
-        conn.pragma_update(None, "auto_vacuum", "INCREMENTAL")
+        conn.pragma_update(Some(CORPUS), "auto_vacuum", "INCREMENTAL")
             .unwrap();
-        conn.execute_batch("VACUUM;").unwrap();
+        conn.execute_batch(&format!("VACUUM {CORPUS};")).unwrap();
         drop(conn);
 
         // The next launch. The header says the work is finished...
-        let conn = crate::db::open(&path).unwrap();
+        let conn = crate::db::open_write(&dir).unwrap();
         assert!(
-            !needs_conversion(&conn),
+            !needs_conversion(&conn, CORPUS),
             "the VACUUM already flipped the header — this is the trap"
         );
         // ...and the index is lying: 500 hits over 250 surviving rows.
@@ -667,8 +697,7 @@ mod tests {
     #[test]
     fn a_completed_conversion_leaves_no_rebuild_owing() {
         let dir = scratch("nopending");
-        let path = dir.join("mtg.db");
-        let conn = legacy_database_with_cards(&path);
+        let conn = legacy_database_with_cards(&dir);
         delete_half_the_cards(&conn);
 
         convert_to_incremental(&conn).unwrap();
@@ -692,8 +721,7 @@ mod tests {
     #[test]
     fn a_failed_conversion_leaves_no_rebuild_owing_because_it_broke_nothing() {
         let dir = scratch("failedvacuum");
-        let path = dir.join("mtg.db");
-        let conn = legacy_database_with_cards(&path);
+        let conn = legacy_database_with_cards(&dir);
         assert_eq!(lightning_hits(&conn), 500, "the index starts correct");
 
         let tx = conn.unchecked_transaction().unwrap();
@@ -705,7 +733,7 @@ mod tests {
             "the failure must be the VACUUM, not something else: {err}"
         );
         assert!(
-            needs_conversion(&conn),
+            needs_conversion(&conn, CORPUS),
             "a failed conversion converted nothing"
         );
         assert!(
@@ -726,14 +754,15 @@ mod tests {
     #[test]
     fn a_launch_survives_a_repair_it_cannot_carry_out() {
         let dir = scratch("repairfails");
-        let path = dir.join("mtg.db");
-        let conn = crate::db::open(&path).unwrap();
-        crate::schema::migrate_single_file(&conn).unwrap();
+        let conn = crate::db::open_write(&dir).unwrap();
+        crate::schema::prepare_database(&conn).unwrap();
         crate::sync::set_meta(&conn, K_FTS_REBUILD_PENDING, "1").unwrap();
         // A rebuild needs the table it indexes. Without `cards` there is no way to do the
-        // work, and `migrate_single_file` will not put it back — this database is already at head.
-        conn.execute_batch("DROP TABLE cards_fts; DROP TABLE cards;")
-            .unwrap();
+        // work, and nothing will put it back — this corpus is already at head.
+        conn.execute_batch(&format!(
+            "DROP TABLE {CORPUS}.cards_fts; DROP TABLE {CORPUS}.cards;"
+        ))
+        .unwrap();
 
         crate::schema::prepare_database(&conn)
             .expect("a launch must not die on a rebuild it cannot do");
@@ -747,6 +776,45 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// The reclaim is about the gigabyte an old `cards` leaves behind, and after the split
+    /// that gigabyte is in the attached file. Every one of these pragmas means `main` when it
+    /// is not told otherwise — measured after the split: `page_count` unqualified 323 against
+    /// `corpus.page_count` 192 149 — so an unqualified reclaim is a reclaim of nothing that
+    /// reports success.
+    #[test]
+    fn the_reclaim_reads_the_corpus_and_not_the_user_file() {
+        let dir = scratch("reclaim-side");
+        crate::split::convert(&dir).unwrap();
+        let conn = crate::db::open_write(&dir).unwrap();
+        conn.execute_batch(&format!(
+            "CREATE TABLE {CORPUS}.ballast (v TEXT);
+             INSERT INTO ballast (v)
+               WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i < 20000)
+               SELECT hex(randomblob(200)) FROM n;
+             DROP TABLE {CORPUS}.ballast;"
+        ))
+        .unwrap();
+
+        let user_free = freelist_pages(&conn, "main");
+        let corpus_free = freelist_pages(&conn, CORPUS);
+
+        let db = std::sync::Mutex::new(conn);
+        reclaim_freed_pages(&db, &mut |_, _| {}).unwrap();
+        let after = freelist_pages(&crate::db::lock_blocking(&db), CORPUS);
+        drop(db);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(user_free, 0, "the user file has nothing to reclaim");
+        assert!(
+            corpus_free > 100,
+            "the drop should have freed corpus pages, got {corpus_free}"
+        );
+        assert_eq!(
+            after, 0,
+            "the reclaim must have emptied the CORPUS freelist"
+        );
+    }
+
     /// The production path, which no other test walks: an *existing* file created before
     /// this plan, opened through `db::open` exactly as `init_state` opens it. The pragma in
     /// `open` cannot help such a file — that is the whole premise of the module — so this is
@@ -754,17 +822,16 @@ mod tests {
     #[test]
     fn an_existing_database_opened_normally_is_recognised_as_needing_conversion() {
         let dir = scratch("legacyfile");
-        let path = dir.join("mtg.db");
-        drop(legacy_database(&path));
+        drop(legacy_database(&dir.join("mtg.db")));
 
-        let conn = crate::db::open(&path).unwrap();
+        let conn = legacy_pair(&dir);
 
         assert!(
-            needs_conversion(&conn),
-            "`db::open` cannot convert a file that already exists"
+            needs_conversion(&conn, CORPUS),
+            "the split renames the old file into place, pragmas and all"
         );
         let mode: String = conn
-            .query_row("PRAGMA journal_mode", [], |r| r.get(0))
+            .query_row(&format!("PRAGMA {CORPUS}.journal_mode"), [], |r| r.get(0))
             .unwrap();
         assert_eq!(mode.to_lowercase(), "wal");
 
@@ -779,14 +846,18 @@ mod tests {
     #[test]
     fn a_database_this_app_creates_never_needs_converting() {
         let dir = scratch("fresh");
-        let conn = crate::db::open(&dir.join("mtg.db")).unwrap();
-        crate::schema::migrate_single_file(&conn).unwrap();
+        crate::split::convert(&dir).unwrap();
+        let conn = crate::db::open_write(&dir).unwrap();
 
-        assert!(!needs_conversion(&conn));
+        assert!(!needs_conversion(&conn, "main"));
+        assert!(!needs_conversion(&conn, CORPUS));
 
         drop(conn);
-        let reopened = crate::db::open(&dir.join("mtg.db")).unwrap();
-        assert!(!needs_conversion(&reopened), "and it stays that way");
+        let reopened = crate::db::open_write(&dir).unwrap();
+        assert!(
+            !needs_conversion(&reopened, CORPUS),
+            "and it stays that way"
+        );
         drop(reopened);
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -235,12 +235,9 @@ pub fn clear(conn: &Connection) -> rusqlite::Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schema;
 
     fn db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        schema::migrate_single_file(&conn).unwrap();
-        conn
+        crate::schema::memory_pair()
     }
 
     /// The point of the grain. Six hundred failed images are one fault that happened six

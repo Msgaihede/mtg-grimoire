@@ -84,6 +84,7 @@
 //! wearing it. [`crate::reset::clear_decks`] sweeps that table by hand, which is the one case —
 //! every deck at once — where clearing it is right.
 
+use crate::db::CORPUS;
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::HashMap;
 
@@ -166,9 +167,9 @@ const CARDS_COLUMNS: &str = "
 /// tables, and v14, the oracle-tag tables — neither needs the list nor may replay it, and none
 /// of them takes the title of newest creator.
 const CARDS_INDEXES: &[&str] = &[
-    "CREATE INDEX IF NOT EXISTS idx_cards_oracle ON cards(oracle_id)",
-    "CREATE INDEX IF NOT EXISTS idx_cards_set_cn ON cards(set_code, collector_number)",
-    "CREATE INDEX IF NOT EXISTS idx_cards_name ON cards(name)",
+    "CREATE INDEX IF NOT EXISTS {schema}.idx_cards_oracle ON cards(oracle_id)",
+    "CREATE INDEX IF NOT EXISTS {schema}.idx_cards_set_cn ON cards(set_code, collector_number)",
+    "CREATE INDEX IF NOT EXISTS {schema}.idx_cards_name ON cards(name)",
     // The collapsed search's whole cost model. Its group step reads `oracle_id` in group
     // order and finds every other column it needs inside the index, so the scan is
     // *covering*: 108 ms for the default collapsed browse against 767 ms without it,
@@ -192,7 +193,7 @@ const CARDS_INDEXES: &[&str] = &[
     //
     // `legal_mask` and not `legalities`: a JSON path is not indexable, which is the whole
     // reason [`crate::legalities`] exists.
-    "CREATE INDEX IF NOT EXISTS idx_cards_collapse \
+    "CREATE INDEX IF NOT EXISTS {schema}.idx_cards_collapse \
      ON cards(oracle_id, is_paper, released_at, id, name, price_usd, \
               legal_mask, cmc, color_identity)",
     // Art tags key on `illustration_id` — an art tag is a fact about a *picture*, so the
@@ -205,12 +206,26 @@ const CARDS_INDEXES: &[&str] = &[
     // drops and recreates `cards` on every sync, so an index declared only in a migration is
     // an index the app has until the next morning — and the failure is silent, because nothing
     // becomes wrong, only slow.
-    "CREATE INDEX IF NOT EXISTS idx_cards_illustration ON cards(illustration_id)",
+    "CREATE INDEX IF NOT EXISTS {schema}.idx_cards_illustration ON cards(illustration_id)",
 ];
 
-/// [`CARDS_INDEXES`] as one executable batch.
-fn cards_indexes_sql() -> String {
-    CARDS_INDEXES.join(";\n") + ";"
+/// [`CARDS_INDEXES`] as one executable batch, over one schema.
+///
+/// **A bare `CREATE INDEX` lands in `main`, whatever file the table is in.** The ladder is
+/// the one caller that means `main` — it builds a single pre-split file and nothing else —
+/// and [`swap_staging`] means [`CORPUS`], which is where `cards` has lived since schema 27.
+fn cards_indexes_sql(schema: &str) -> String {
+    on_schema(schema, &(CARDS_INDEXES.join(";\n") + ";"))
+}
+
+/// Resolve a DDL literal written against `{schema}` onto one file.
+///
+/// **Only DDL and pragmas need this.** An unqualified `SELECT`/`INSERT`/`UPDATE`/`DELETE`
+/// resolves into whichever attached database holds the table — measured — which is why none
+/// of the ~136 commands changed when the corpus moved out. A bare `CREATE`, `DROP`, `ALTER`
+/// or `PRAGMA` does not: every one of them means `main` and says nothing about it.
+fn on_schema(schema: &str, sql: &str) -> String {
+    sql.replace("{schema}", schema)
 }
 
 /// The image variants stored as real columns, WEBP only.
@@ -1009,7 +1024,7 @@ pub fn migrate_single_file(conn: &Connection) -> rusqlite::Result<()> {
                 set_type TEXT, released_at TEXT, icon_svg_uri TEXT);
              CREATE TABLE IF NOT EXISTS sync_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);"
         ))?;
-        create_fts(&tx)?;
+        create_fts_in(&tx, "main")?;
         tx.execute_batch("PRAGMA user_version = 1;")?;
         tx.commit()?;
     }
@@ -2281,13 +2296,13 @@ pub fn migrate_single_file(conn: &Connection) -> rusqlite::Result<()> {
         // The indexes over the two taxonomies. Beside the tables rather than in them because
         // both live tables are renamed over by a swap, which is the same reason
         // [`CARDS_INDEXES`] is a list — see [`TAG_INDEXES_SQL`].
-        tx.execute_batch(TAG_INDEXES_SQL)?;
+        tx.execute_batch(&on_schema("main", TAG_INDEXES_SQL))?;
         // **This step takes the [`CARDS_INDEXES`] replay over from v10**, which is the rule
         // that constant states: it describes `cards` at head, this is the newest step to touch
         // it, and a database sitting anywhere above v10 would otherwise never be handed
         // `idx_cards_illustration`. `IF NOT EXISTS` on every entry makes it a no-op for the
         // four that are already there.
-        tx.execute_batch(&cards_indexes_sql())?;
+        tx.execute_batch(&cards_indexes_sql("main"))?;
         // Nothing here is FTS-indexed and no rowid is renumbered, so no `cards_fts` rebuild is
         // owed — the reasoning `the_v2_backfill_leaves_the_search_index_answering` pins.
         //
@@ -2870,7 +2885,7 @@ pub fn migrate_single_file(conn: &Connection) -> rusqlite::Result<()> {
         // indexed differently from the way this rung built them. `oracle_id` is the one that
         // matters: the query starts from the deck's oracle ids and joins *into* `combo_cards`,
         // so without it every deck check is a full scan of the whole combo card list.
-        tx.execute_batch(COMBO_INDEXES_SQL)?;
+        tx.execute_batch(&on_schema("main", COMBO_INDEXES_SQL))?;
         // Nothing here is FTS-indexed and no `cards` rowid moves, so no rebuild is owed — the
         // reasoning `the_v2_backfill_leaves_the_search_index_answering` pins.
         //
@@ -2915,7 +2930,7 @@ pub fn migrate_single_file(conn: &Connection) -> rusqlite::Result<()> {
     // than a launch that says what is wrong. And a `CREATE INDEX IF NOT EXISTS` that fails at
     // all means the database is not accepting DDL, so nothing after this point would have
     // worked either.
-    conn.execute_batch(TAG_INDEXES_SQL)?;
+    conn.execute_batch(&on_schema("main", TAG_INDEXES_SQL))?;
     Ok(())
 }
 
@@ -3113,11 +3128,11 @@ const MUTED_TAGS_SQL: &str = "
 /// The cost is one slug-ordered copy of each closure — ~380 ms to build at swap time, on a
 /// weekly background refresh.
 const TAG_INDEXES_SQL: &str = "
-    CREATE INDEX IF NOT EXISTS idx_art_tags_norm ON art_tags(slug_norm);
-    CREATE INDEX IF NOT EXISTS idx_oracle_tags_norm ON oracle_tags(slug_norm);
-    CREATE INDEX IF NOT EXISTS idx_art_tag_illustrations_slug
+    CREATE INDEX IF NOT EXISTS {schema}.idx_art_tags_norm ON art_tags(slug_norm);
+    CREATE INDEX IF NOT EXISTS {schema}.idx_oracle_tags_norm ON oracle_tags(slug_norm);
+    CREATE INDEX IF NOT EXISTS {schema}.idx_art_tag_illustrations_slug
         ON art_tag_illustrations(slug);
-    CREATE INDEX IF NOT EXISTS idx_oracle_tag_cards_slug ON oracle_tag_cards(slug);";
+    CREATE INDEX IF NOT EXISTS {schema}.idx_oracle_tag_cards_slug ON oracle_tag_cards(slug);";
 
 /// The two indexes on `combo_cards`, written once because they are created twice: by the v26
 /// rung that makes the table, and by [`swap_combo_staging`] after every ingest.
@@ -3139,8 +3154,8 @@ const TAG_INDEXES_SQL: &str = "
 /// reader has to guess the reason for. If a missing index here is ever found to cost more than
 /// a slow panel, this constant is already in the right shape to be added to that replay.
 const COMBO_INDEXES_SQL: &str = "
-    CREATE INDEX IF NOT EXISTS idx_combo_cards_combo  ON combo_cards(combo_id);
-    CREATE INDEX IF NOT EXISTS idx_combo_cards_oracle ON combo_cards(oracle_id);";
+    CREATE INDEX IF NOT EXISTS {schema}.idx_combo_cards_combo  ON combo_cards(combo_id);
+    CREATE INDEX IF NOT EXISTS {schema}.idx_combo_cards_oracle ON combo_cards(oracle_id);";
 
 /// (Re)create the external-content FTS5 index over `cards` and populate it.
 ///
@@ -3527,14 +3542,382 @@ pub fn create_user_schema(conn: &Connection, schema: &str) -> rusqlite::Result<(
     conn.execute_batch(&USER_SCHEMA_SQL.replace("{schema}", schema))
 }
 
+/// The twenty corpus tables the DDL builds and their eleven indexes, at
+/// [`CORPUS_SCHEMA_VERSION`]'s shape, with `{schema}` where the file goes.
+///
+/// [`USER_SCHEMA_SQL`]'s twin and every one of its rules: copied out of a migrated
+/// database's own `sqlite_master` rather than retyped, `ALTER TABLE` tails and all, and held
+/// to that by `the_corpus_schema_is_byte_identical_to_what_the_ladder_builds`.
+///
+/// `cards_fts` is not here and the four `cards_fts_*` shadow tables cannot be: the virtual
+/// table is created by [`create_fts_in`] once `cards` exists, and FTS5 makes its own shadows.
+const CORPUS_SCHEMA_SQL: &str = r#"
+CREATE TABLE {schema}.cards (
+    id TEXT PRIMARY KEY,
+    oracle_id TEXT,
+    name TEXT NOT NULL,
+    lang TEXT NOT NULL,
+    released_at TEXT,
+    set_code TEXT NOT NULL,
+    set_name TEXT,
+    collector_number TEXT NOT NULL,
+    rarity TEXT,
+    layout TEXT NOT NULL,
+    mana_cost TEXT,
+    cmc REAL,
+    type_line TEXT,
+    oracle_text TEXT,
+    colors TEXT,
+    color_identity TEXT,
+    legalities TEXT,
+    games TEXT,
+    finishes TEXT,
+    prices TEXT,
+    price_usd REAL,
+    price_eur REAL,
+    faces TEXT,
+    illustration_id TEXT,
+    frame_effects TEXT,
+    border_color TEXT,
+    full_art INTEGER NOT NULL DEFAULT 0,
+    promo INTEGER NOT NULL DEFAULT 0,
+    promo_types TEXT,
+    digital INTEGER NOT NULL DEFAULT 0,
+    is_paper INTEGER NOT NULL DEFAULT 1,
+    edhrec_rank INTEGER,
+    game_changer INTEGER,
+    image_status TEXT,
+    image_updated_at TEXT,
+    search_text TEXT,
+    raw TEXT NOT NULL, image_uris TEXT, face_image_uris TEXT, artist TEXT, power TEXT, toughness TEXT, legal_mask INTEGER NOT NULL DEFAULT 0);
+
+CREATE TABLE {schema}.sets (
+                code TEXT PRIMARY KEY, name TEXT NOT NULL, arena_code TEXT, mtgo_code TEXT,
+                set_type TEXT, released_at TEXT, icon_svg_uri TEXT);
+
+CREATE TABLE {schema}.sync_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+
+CREATE TABLE {schema}.image_cache (
+                card_id TEXT NOT NULL,
+                face INTEGER NOT NULL,
+                variant TEXT NOT NULL,
+                -- The exact URI the bytes on disk came from, cache-buster and all.
+                -- Scryfall's `?<epoch>` equals `image_updated_at`, so a URI that no
+                -- longer matches *is* the invalidation signal, with no clock to trust.
+                source_uri TEXT NOT NULL,
+                bytes INTEGER NOT NULL,
+                fetched_at INTEGER NOT NULL,
+                PRIMARY KEY (card_id, face, variant)
+             ) WITHOUT ROWID;
+
+CREATE TABLE {schema}.combos (
+                 -- Commander Spellbook's variant id, e.g. `1957-4050-7918--204`. TEXT because
+                 -- it is theirs: nothing here mints one, and a row is only ever replaced
+                 -- wholesale by the next ingest.
+                 id             TEXT PRIMARY KEY,
+                 -- One of R|S|P|O|C|E|B — Ruthless, Spicy, Powerful, Oddball, Core, Exhibition,
+                 -- Banned. No CHECK: the vocabulary is the *feed's* and may grow the day they
+                 -- add a letter, and a CHECK here would turn that into an ingest that fails
+                 -- rather than a letter this app does not raise a floor for.
+                 bracket_tag    TEXT NOT NULL,
+                 -- DISTINCT oracle ids in `combo_cards` for this combo, stored rather than
+                 -- counted: the match query compares it against what a deck holds, and a
+                 -- correlated count per candidate combo is the shape that turns a deck check
+                 -- into a scan.
+                 card_count     INTEGER NOT NULL,
+                 -- The feed's `requires[]` — *templates* like `a creature with flying`, which
+                 -- resolve to no card id. `> 0` means this app cannot fully check the combo, so
+                 -- it is shown as possible and kept out of the arithmetic.
+                 template_count INTEGER NOT NULL,
+                 -- Colour identity of the combo, the feed's own spelling.
+                 identity       TEXT NOT NULL,
+                 -- What it does: feature names, newline-joined. One column rather than a fourth
+                 -- table because nothing queries it — it is read whole, for one combo, to be
+                 -- printed.
+                 produces       TEXT NOT NULL,
+                 -- How many decks Spellbook has seen it in. NULL where the feed carries none,
+                 -- which is not the same as zero and must not be faked into it.
+                 popularity     INTEGER
+             );
+
+CREATE TABLE {schema}.combo_cards (
+                 -- **The one enforced foreign key in this rung**, and the module doc says why
+                 -- it is legal where a key on `cards.id` never is. ON DELETE CASCADE so a combo
+                 -- cannot leave its own card list behind it.
+                 combo_id          TEXT NOT NULL REFERENCES combos(id) ON DELETE CASCADE,
+                 -- `cards.oracle_id`, **softly** — the corpus is dropped and recreated on every
+                 -- sync, so a declared reference here would abort one. A combo naming a card
+                 -- this database has never synced is a row that simply never matches.
+                 oracle_id         TEXT NOT NULL,
+                 -- Denormalised for the same reason every user table denormalises a printing:
+                 -- the list has to stay readable when the id stops resolving.
+                 name              TEXT NOT NULL,
+                 quantity          INTEGER NOT NULL,
+                 must_be_commander INTEGER NOT NULL
+             );
+
+CREATE TABLE {schema}.format_specs (
+                key TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL,
+                enabled_in_picker INTEGER NOT NULL DEFAULT 1,
+                deck_min INTEGER NOT NULL,
+                deck_max INTEGER,             -- NULL = no maximum
+                max_copies INTEGER,           -- NULL = unlimited (casual, limited)
+                sideboard_max INTEGER,        -- 0 = no sideboard; NULL = uncapped (casual, limited)
+                singleton INTEGER NOT NULL DEFAULT 0,
+                requires_commander INTEGER NOT NULL DEFAULT 0,
+                -- Which eligibility rule the TS engine applies. Data, not code:
+                -- NULL | 'edh' | 'brawl' | 'oathbreaker' | 'pdh' | 'duel' | 'tlr'.
+                commander_rule TEXT,
+                life INTEGER NOT NULL,
+                -- TRAP A: what `restricted` MEANS here. Never inferred from the key.
+                restricted_semantic TEXT NOT NULL DEFAULT 'max_one'
+                    CHECK (restricted_semantic IN ('max_one','banned_as_commander')),
+                -- 0 for the two pseudo-formats: casual and limited check no legality
+                -- and no pool (spec §6).
+                has_legality_data INTEGER NOT NULL DEFAULT 1,
+                -- Tiny Leaders: every card AND every face, MV <= this.
+                max_mana_value INTEGER,
+                -- Gladiator: no sideboard → no companions. EDH has sideboard_max 0 and
+                -- DOES allow one ('effectively a 101st card'), so this cannot be derived
+                -- from sideboard_max — it is its own fact.
+                allows_companion INTEGER NOT NULL DEFAULT 1,
+                sort_order INTEGER NOT NULL
+             , games TEXT NOT NULL DEFAULT 'paper,arena,mtgo');
+
+CREATE TABLE {schema}.marketplace_prices (
+                -- One of `crate::marketplace::MARKETPLACE_IDS`, and always a feed-backed one:
+                -- TCGplayer and Cardmarket are read out of `cards.prices` and are never here.
+                marketplace TEXT NOT NULL,
+                -- A Scryfall id. Soft: no FK, for the reason above.
+                card_id TEXT NOT NULL,
+                finish TEXT NOT NULL CHECK (finish IN ('nonfoil','foil','etched')),
+                -- Near Mint, in the marketplace's own currency. One price per finish; a
+                -- finish the feed does not quote has no row at all, never a zero — `$0.00`
+                -- is a price nobody offered, and the app renders absence as an em dash.
+                price REAL NOT NULL,
+                PRIMARY KEY (marketplace, card_id, finish)
+             ) WITHOUT ROWID;
+
+CREATE TABLE {schema}.marketplace_feed_meta (
+                marketplace TEXT PRIMARY KEY,
+                -- Unix seconds, like every stamp in this schema: when *we* pulled it.
+                fetched_at INTEGER NOT NULL,
+                -- The feed's own stamp, verbatim (Card Kingdom's `meta.created_at`). NULL
+                -- for a feed that publishes none, which Mana Pool does not — the two answer
+                -- different questions and a missing one must not be faked from `fetched_at`.
+                feed_built_at TEXT,
+                row_count INTEGER NOT NULL
+             );
+
+CREATE TABLE {schema}.oracle_tags (
+        -- Scryfall's `slug`. Stable, readable, and what TypeScript matches on.
+        slug TEXT PRIMARY KEY,
+        -- The file's `label`. Falls back to the slug when a line carries none, so this is
+        -- always something a person can be shown.
+        label TEXT NOT NULL,
+        description TEXT
+    , id TEXT NOT NULL DEFAULT '', slug_norm TEXT NOT NULL DEFAULT '') WITHOUT ROWID;
+
+CREATE TABLE {schema}.oracle_tag_parents (
+        -- Child first: every read of this table asks 'what is above this tag'.
+        child_slug TEXT NOT NULL,
+        parent_slug TEXT NOT NULL,
+        PRIMARY KEY (child_slug, parent_slug)
+    ) WITHOUT ROWID;
+
+CREATE TABLE {schema}.oracle_taggings (
+        -- A Scryfall oracle id. Soft: no FK, for the reason above.
+        oracle_id TEXT NOT NULL,
+        slug TEXT NOT NULL,
+        -- The file's own word about the tagging (`median` on 99.74 % of them). Stored
+        -- because it is data we were given; read by nothing, and nothing may branch on it.
+        weight TEXT,
+        annotation TEXT,
+        PRIMARY KEY (oracle_id, slug)
+    ) WITHOUT ROWID;
+
+CREATE TABLE {schema}.oracle_tag_cards (
+        oracle_id TEXT NOT NULL,
+        -- Every tag the card holds *and* every ancestor of those tags.
+        slug TEXT NOT NULL,
+        PRIMARY KEY (oracle_id, slug)
+    ) WITHOUT ROWID;
+
+CREATE TABLE {schema}.oracle_tag_meta (
+        -- One row, ever. A key/value pair would have been `sync_meta`, and this is
+        -- deliberately not that: the card sync's watermark and this one describe different
+        -- files on different schedules, and a failed tag refresh must not read as a failed
+        -- card sync.
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        -- Replayed as `If-None-Match`, so a re-run costs zero bytes. NULL when the response
+        -- carried none.
+        etag TEXT,
+        -- Scryfall's `updated_at` for the file these rows came from, verbatim. The second
+        -- half of the short-circuit: a 200 with no ETag still names the file it is offering.
+        updated_at TEXT,
+        -- Unix seconds: when *we* built these rows.
+        ingested_at INTEGER NOT NULL,
+        -- Unix seconds: when we last **asked** whether the file had changed, which a 304
+        -- moves and an ingest does not. Separate from `ingested_at` for `sync_meta`'s
+        -- `last_check_at` reason — without it a taxonomy that is simply up to date reads as
+        -- due on every launch, and the throttle buys nothing but one API call per start.
+        checked_at INTEGER NOT NULL,
+        tag_count INTEGER NOT NULL,
+        tagging_count INTEGER NOT NULL
+    );
+
+CREATE TABLE {schema}.art_tags (
+        slug TEXT PRIMARY KEY,
+        -- Scryfall's stable uuid. `slug` stays the key — storage is rebuilt wholesale on every
+        -- ingest, so a rename is harmless there — but anything that *persists* a tag across
+        -- ingests has to be able to notice one, and `muted_tags` is exactly that. Their docs:
+        -- 'Do not treat tag slugs or labels as permanent identifiers […] Use the id field.'
+        id TEXT NOT NULL,
+        label TEXT NOT NULL,
+        description TEXT,
+        -- The slug reduced to `[a-z0-9]`, computed at ingest. SQLite has no `regexp_replace`,
+        -- so the alternative is normalising every row on every keystroke of the tag search.
+        slug_norm TEXT NOT NULL
+    ) WITHOUT ROWID;
+
+CREATE TABLE {schema}.art_tag_parents (
+        -- Child first: every read of this table asks 'what is above this tag'.
+        child_slug TEXT NOT NULL,
+        parent_slug TEXT NOT NULL,
+        PRIMARY KEY (child_slug, parent_slug)
+    ) WITHOUT ROWID;
+
+CREATE TABLE {schema}.art_taggings (
+        illustration_id TEXT NOT NULL,
+        slug TEXT NOT NULL,
+        -- Stored because it is data we were given. **Unlike the oracle side this one is
+        -- read**: art tags use the full scale (median 462 008, strong 5 980, weak 4 495,
+        -- very_strong 2 680, measured 2026-08-20), where oracle taggings are 99.7 % median
+        -- and `strong` occurs exactly once in the whole file.
+        weight TEXT,
+        -- OMITTED rather than null on ~99 % of taggings, which is a different absence from
+        -- `description`'s null and needs a different parse.
+        annotation TEXT,
+        PRIMARY KEY (illustration_id, slug)
+    ) WITHOUT ROWID;
+
+CREATE TABLE {schema}.art_tag_illustrations (
+        illustration_id TEXT NOT NULL,
+        -- Every tag the illustration holds *and* every ancestor of those tags.
+        slug TEXT NOT NULL,
+        -- The STRONGEST weight among the direct taggings this row descends from
+        -- ('very_strong' > 'strong' > 'median' > 'weak'). Resolved once here because a closure
+        -- row can be reached from several taggings that disagree: a printing whose `dog`
+        -- tagging is weak but whose `hound` tagging is strong is not a weak match, and
+        -- deciding that per row at read time would be work on every keystroke.
+        weight TEXT NOT NULL,
+        PRIMARY KEY (illustration_id, slug)
+    ) WITHOUT ROWID;
+
+CREATE TABLE {schema}.art_tag_meta (
+        -- One row, ever — `oracle_tag_meta`'s shape and its reasons, for a second file on a
+        -- schedule of its own. A failed art refresh must not read as a failed oracle one.
+        id INTEGER PRIMARY KEY CHECK (id = 1),
+        etag TEXT,
+        updated_at TEXT,
+        ingested_at INTEGER NOT NULL,
+        checked_at INTEGER NOT NULL,
+        tag_count INTEGER NOT NULL,
+        tagging_count INTEGER NOT NULL
+    );
+
+CREATE TABLE {schema}.combo_meta (
+                 -- One row, ever — `oracle_tag_meta`'s shape and its reason: this watermark and
+                 -- the card sync's describe different files on different schedules, and a
+                 -- failed combo refresh must not read as a failed sync.
+                 id          INTEGER PRIMARY KEY CHECK (id = 1),
+                 -- Replayed as `If-None-Match`, so a re-run of an unchanged file costs zero
+                 -- bytes. NULL when the response carried none.
+                 etag        TEXT,
+                 -- The file's own `timestamp`, verbatim. The second half of the short-circuit:
+                 -- a 200 with no ETag still names the file it is offering.
+                 stamp       TEXT,
+                 -- Unix seconds: when rows last **changed**. NULL means never ingested, which
+                 -- is a supported state the panel and the estimator both have to be able to
+                 -- read — it is why this one is nullable where `checked_at` is not.
+                 fetched_at  INTEGER,
+                 -- Unix seconds: when we last **asked**. A 304 moves this and leaves
+                 -- `fetched_at` alone, `sync_meta.last_check_at`'s reason — without the split a
+                 -- feed that is simply up to date reads as due on every launch.
+                 checked_at  INTEGER NOT NULL,
+                 combo_count INTEGER NOT NULL DEFAULT 0,
+                 -- Variants dropped on the way in: not `OK`, or not Commander-legal. Counted
+                 -- rather than discarded silently, because `1 of 40 000 kept` and
+                 -- `39 999 of 40 000 kept` are the same empty-looking result otherwise.
+                 skipped     INTEGER NOT NULL DEFAULT 0
+             );
+
+CREATE INDEX {schema}.idx_art_tags_norm ON art_tags(slug_norm);
+
+CREATE INDEX {schema}.idx_oracle_tags_norm ON oracle_tags(slug_norm);
+
+CREATE INDEX {schema}.idx_art_tag_illustrations_slug
+        ON art_tag_illustrations(slug);
+
+CREATE INDEX {schema}.idx_oracle_tag_cards_slug ON oracle_tag_cards(slug);
+
+CREATE INDEX {schema}.idx_cards_oracle ON cards(oracle_id);
+
+CREATE INDEX {schema}.idx_cards_set_cn ON cards(set_code, collector_number);
+
+CREATE INDEX {schema}.idx_cards_name ON cards(name);
+
+CREATE INDEX {schema}.idx_cards_collapse ON cards(oracle_id, is_paper, released_at, id, name, price_usd, legal_mask, cmc, color_identity);
+
+CREATE INDEX {schema}.idx_cards_illustration ON cards(illustration_id);
+
+CREATE INDEX {schema}.idx_combo_cards_combo  ON combo_cards(combo_id);
+
+CREATE INDEX {schema}.idx_combo_cards_oracle ON combo_cards(oracle_id);
+"#;
+
+/// Create the corpus in `schema` — its tables, its indexes, the search index and the format
+/// rules the ladder seeds.
+///
+/// **This is what "a corpus is rebuildable" means in code.** A file that will not open is
+/// deleted at startup and this rebuilds its shape; everything in it then comes back from a
+/// feed, except `format_specs`, which no feed produces and this seeds directly — which is why
+/// that table can afford to be on this side at all.
+///
+/// Only ever called on an *empty* schema, which is what lets the DDL be byte-identical to the
+/// ladder's rather than carrying `IF NOT EXISTS`: [`migrate_corpus`] guards it on the version.
+pub fn create_corpus_schema(conn: &Connection, schema: &str) -> rusqlite::Result<()> {
+    conn.execute_batch(&on_schema(schema, CORPUS_SCHEMA_SQL))?;
+    create_fts_in(conn, schema)?;
+    // Unqualified, and correct unqualified: `format_specs` exists in exactly one attached
+    // database and DML resolves into it — the same reason no command changed. It is also
+    // the literal the v20 rung runs, so a rebuilt corpus and a migrated one seed identically.
+    conn.execute_batch(FORMAT_SPECS_SEED)
+}
+
 pub fn create_fts(conn: &Connection) -> rusqlite::Result<()> {
-    conn.execute_batch(
-        "DROP TABLE IF EXISTS cards_fts;
-         CREATE VIRTUAL TABLE cards_fts USING fts5(
+    create_fts_in(conn, CORPUS)
+}
+
+/// [`create_fts`] over a named schema.
+///
+/// **An external-content FTS5 index resolves `content='cards'` in its own schema**, measured:
+/// a `main.cards_fts` beside a `corpus.cards` creates cleanly and fails on its first rebuild
+/// with `no such table: main.cards`. So the index is not free to sit anywhere, and this
+/// argument is the reason the five `cards_fts*` rows are on the corpus side of [`TABLES`].
+///
+/// Two callers, and they mean different files: [`migrate_single_file`]'s v1 rung builds one
+/// pre-split file, and everything since schema 27 means [`CORPUS`]. The `INSERT` is left
+/// unqualified because DML resolves on its own — see [`on_schema`].
+fn create_fts_in(conn: &Connection, schema: &str) -> rusqlite::Result<()> {
+    conn.execute_batch(&format!(
+        "DROP TABLE IF EXISTS {schema}.cards_fts;
+         CREATE VIRTUAL TABLE {schema}.cards_fts USING fts5(
             name, type_line, search_text,
             content='cards', tokenize='unicode61 remove_diacritics 2');
-         INSERT INTO cards_fts(cards_fts) VALUES('rebuild');",
-    )
+         INSERT INTO {schema}.cards_fts(cards_fts) VALUES('rebuild');"
+    ))
 }
 
 /// Everything a freshly opened database needs before the app touches it: the schema is
@@ -3585,14 +3968,15 @@ pub fn create_fts(conn: &Connection) -> rusqlite::Result<()> {
 /// does need a `VACUUM` runs after a sync instead, once per database: see
 /// [`crate::maintenance::convert_to_incremental`].
 pub fn prepare_database(conn: &Connection) -> rusqlite::Result<()> {
-    migrate_single_file(conn)?;
+    migrate_user(conn)?;
+    migrate_corpus(conn)?;
     if let Err(e) = crate::maintenance::rebuild_fts_if_pending(conn) {
         eprintln!(
             "the search index still owes a rebuild from an interrupted compaction, and it \
              could not be done now: {e}\nSearch results may be wrong until the next sync."
         );
     }
-    if let Err(e) = conn.execute_batch("DROP TABLE IF EXISTS cards_staging") {
+    if let Err(e) = conn.execute_batch(&format!("DROP TABLE IF EXISTS {CORPUS}.cards_staging")) {
         eprintln!(
             "an interrupted sync left a `cards_staging` table behind and it could not be \
              dropped now: {e}\nThe data folder is using more space than it needs to until \
@@ -3600,6 +3984,142 @@ pub fn prepare_database(conn: &Connection) -> rusqlite::Result<()> {
         );
     }
     Ok(())
+}
+
+/// Bring `main` — the reader's own file — to [`USER_SCHEMA_VERSION`].
+///
+/// **There is nothing to do yet and that is the honest state of it.** Every user file reaches
+/// this already at 27, because [`crate::split::convert`] is what makes one and it stamps that
+/// version; the first rung above 27 goes here, and it may never restart or give up, because
+/// its rows exist nowhere else.
+///
+/// What it does do is refuse a file from the future. `PRAGMA user_version` unqualified means
+/// `main`, which is one of the three smaller reasons the *user* file is the one
+/// `Connection::open` names: the version that gates compatibility is the one an unqualified
+/// read returns.
+fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
+    let v: i64 = conn.query_row("PRAGMA main.user_version", [], |r| r.get(0))?;
+    if v > USER_SCHEMA_VERSION {
+        return Err(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_ERROR),
+            Some(format!(
+                "this collection is at schema version {v} and this build knows \
+                 {USER_SCHEMA_VERSION}. It is from a newer version of MTG Grimoire."
+            )),
+        ));
+    }
+    Ok(())
+}
+
+/// Bring the attached corpus to [`CORPUS_SCHEMA_VERSION`], **building it from nothing if that
+/// is what it takes**.
+///
+/// This is the half of the split that is allowed to give up and rebuild, and the empty-file
+/// case is not an edge: [`prepare_data_dir`] deletes a corpus that will not open, and
+/// `ATTACH` then silently creates a new empty one in its place. A version below head here
+/// means "this file has no shape yet", which is exactly what an empty database reads as.
+///
+/// It ends with the tag indexes, unconditionally and fatally, for the reason
+/// [`migrate_single_file`] ends with them: without `idx_art_tag_illustrations_slug` the Tags
+/// page is 531 seconds rather than 49 ms, which is a window that stops responding rather
+/// than a page that is slow. That replay moved here with the tables it indexes — the
+/// ladder's copy now only ever reaches a pre-split file.
+fn migrate_corpus(conn: &Connection) -> rusqlite::Result<()> {
+    let v: i64 = conn.query_row(&format!("PRAGMA {CORPUS}.user_version"), [], |r| r.get(0))?;
+    if v < CORPUS_SCHEMA_VERSION {
+        create_corpus_schema(conn, CORPUS)?;
+        conn.execute_batch(&format!(
+            "PRAGMA {CORPUS}.user_version = {CORPUS_SCHEMA_VERSION};"
+        ))?;
+    }
+    conn.execute_batch(&on_schema(CORPUS, TAG_INDEXES_SQL))
+}
+
+/// Bring `data_dir` to a state the app can open: convert if a single file is there, and
+/// replace a corpus that will not open at all.
+///
+/// `Ok(true)` means something was rebuilt or converted. **A corpus that fails to open is a
+/// file to replace, not a failure to report**: that is what having two files buys, and it is
+/// checked here — before any connection the app keeps — because the check is "can this be
+/// opened", and the honest way to ask is to try.
+///
+/// Deleting it is enough. `ATTACH` on a path that does not exist creates the file, and
+/// [`migrate_corpus`] finds a version of 0 there and builds the shape back; the rows come
+/// from the next sync. Nothing in the collection, the decks or the wishlist is touched,
+/// which is the whole point of the split stated as code.
+pub fn prepare_data_dir(data_dir: &std::path::Path) -> Result<bool, String> {
+    let converted = crate::split::convert(data_dir)?;
+    if corpus_is_readable(data_dir) {
+        return Ok(converted);
+    }
+    for suffix in ["", "-wal", "-shm"] {
+        let _ = std::fs::remove_file(data_dir.join(format!("{}{suffix}", crate::db::CORPUS_DB)));
+    }
+    eprintln!(
+        "the card database could not be opened and has been replaced; the next sync \
+         will rebuild it. Nothing in your collection, decks or wishlist was touched."
+    );
+    Ok(true)
+}
+
+/// Whether `corpus.db` opens and passes a one-error `quick_check`.
+///
+/// Asked by opening it rather than by reading its header, because "can this be opened" has
+/// no cheaper honest answer — and asked *before* the app's own connections exist, so a
+/// corpus that has to be replaced is replaced while nothing is holding it.
+fn corpus_is_readable(data_dir: &std::path::Path) -> bool {
+    let path = data_dir.join(crate::db::CORPUS_DB);
+    if !path.is_file() {
+        return false;
+    }
+    let Ok(conn) = crate::db::open(&path) else {
+        return false;
+    };
+    conn.query_row("PRAGMA quick_check(1)", [], |r| r.get::<_, String>(0))
+        .map(|answer| answer == "ok")
+        .unwrap_or(false)
+}
+
+/// The one row [`migrate_single_file`]'s v25 rung seeds into a *user* table.
+///
+/// Not part of [`USER_SCHEMA_SQL`], and that is load-bearing: the split copies the reader's
+/// rows in, so a seed there would land beside the one already copied and fail
+/// `idx_collection_folder_removed`. It is here for `memory_pair`, which builds a pair from
+/// the DDL rather than from the ladder and would otherwise hand every test a database with
+/// no holding area — a state no converted database is ever in.
+#[cfg(test)]
+const USER_SEED_SQL: &str = "
+    INSERT INTO {schema}.collection_folders
+         (parent_id, name, kind, deck_id, sort_order, created_at, updated_at)
+     VALUES (NULL, 'Recently removed', 'removed', NULL, 0, unixepoch(), unixepoch());";
+
+/// An in-memory pair shaped exactly like the app's: `main` is the user file and a second,
+/// private in-memory database is attached as [`CORPUS`].
+///
+/// Two `ATTACH ':memory:'` calls give two *distinct* databases, measured — so this is one
+/// connection over two schemas with no files involved.
+///
+/// **This is what a test should reach for**, not `Connection::open_in_memory` plus
+/// [`migrate_single_file`]: a test on a single file cannot see a statement that landed in the
+/// wrong one, which is the whole class of bug the split introduces. The ~100 setups still on
+/// the ladder are the exception that proves it — they build *pre-split* databases on
+/// purpose, which is what those tests are about.
+#[cfg(test)]
+pub fn memory_pair() -> Connection {
+    let conn = Connection::open_in_memory().unwrap();
+    conn.execute_batch(&format!("ATTACH DATABASE ':memory:' AS {CORPUS}"))
+        .unwrap();
+    create_user_schema(&conn, "main").unwrap();
+    create_corpus_schema(&conn, CORPUS).unwrap();
+    conn.execute_batch(&on_schema("main", USER_SEED_SQL))
+        .unwrap();
+    conn.execute_batch(&format!(
+        "PRAGMA main.user_version = {USER_SCHEMA_VERSION};
+         PRAGMA {CORPUS}.user_version = {CORPUS_SCHEMA_VERSION};"
+    ))
+    .unwrap();
+    conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+    conn
 }
 
 /// Create a fresh, empty `cards_staging` table with the exact `cards` layout.
@@ -3615,8 +4135,8 @@ pub fn prepare_database(conn: &Connection) -> rusqlite::Result<()> {
 pub fn create_staging(conn: &Connection) -> rusqlite::Result<()> {
     let columns = cards_column_defs(conn)?;
     conn.execute_batch(&format!(
-        "DROP TABLE IF EXISTS cards_staging;
-         CREATE TABLE cards_staging ({columns});",
+        "DROP TABLE IF EXISTS {CORPUS}.cards_staging;
+         CREATE TABLE {CORPUS}.cards_staging ({columns});",
     ))
 }
 
@@ -3626,7 +4146,7 @@ pub fn create_staging(conn: &Connection) -> rusqlite::Result<()> {
 /// — everything `cards` is declared with. A `CREATE TABLE … AS SELECT` clone would be one
 /// line instead, and would silently drop all four.
 fn cards_column_defs(conn: &Connection) -> rusqlite::Result<String> {
-    let mut stmt = conn.prepare("PRAGMA table_info(cards)")?;
+    let mut stmt = conn.prepare(&format!("PRAGMA {CORPUS}.table_info(cards)"))?;
     let defs: Vec<String> = stmt
         .query_map([], |row| {
             let name: String = row.get("name")?;
@@ -3688,12 +4208,14 @@ fn cards_column_defs(conn: &Connection) -> rusqlite::Result<String> {
 /// [`Transaction`]: rusqlite::Transaction
 pub fn swap_staging(conn: &Connection) -> rusqlite::Result<()> {
     let tx = conn.unchecked_transaction()?;
+    // The new name is unqualified on purpose: `RENAME TO corpus.cards` is a syntax error,
+    // and a rename cannot move a table between schemas at all.
     tx.execute_batch(&format!(
-        "DROP TABLE IF EXISTS cards_fts;
-         DROP TABLE cards;
-         ALTER TABLE cards_staging RENAME TO cards;
+        "DROP TABLE IF EXISTS {CORPUS}.cards_fts;
+         DROP TABLE {CORPUS}.cards;
+         ALTER TABLE {CORPUS}.cards_staging RENAME TO cards;
          {indexes}",
-        indexes = cards_indexes_sql()
+        indexes = cards_indexes_sql(CORPUS)
     ))?;
     create_fts(&tx)?;
     // A rebuild an interrupted compaction was still owed has just been paid off, by this.
@@ -3715,11 +4237,11 @@ pub fn swap_staging(conn: &Connection) -> rusqlite::Result<()> {
 /// No `oracle_tag_meta_staging`: the watermark is one row written *with* the swap, not a
 /// table that is rebuilt.
 const ORACLE_TAG_STAGING_SQL: &str = "
-    DROP TABLE IF EXISTS oracle_tags_staging;
-    DROP TABLE IF EXISTS oracle_tag_parents_staging;
-    DROP TABLE IF EXISTS oracle_taggings_staging;
-    DROP TABLE IF EXISTS oracle_tag_cards_staging;
-    CREATE TABLE oracle_tags_staging (
+    DROP TABLE IF EXISTS {schema}.oracle_tags_staging;
+    DROP TABLE IF EXISTS {schema}.oracle_tag_parents_staging;
+    DROP TABLE IF EXISTS {schema}.oracle_taggings_staging;
+    DROP TABLE IF EXISTS {schema}.oracle_tag_cards_staging;
+    CREATE TABLE {schema}.oracle_tags_staging (
         slug TEXT PRIMARY KEY,
         label TEXT NOT NULL,
         description TEXT,
@@ -3743,19 +4265,19 @@ const ORACLE_TAG_STAGING_SQL: &str = "
         id TEXT NOT NULL,
         slug_norm TEXT NOT NULL
     ) WITHOUT ROWID;
-    CREATE TABLE oracle_tag_parents_staging (
+    CREATE TABLE {schema}.oracle_tag_parents_staging (
         child_slug TEXT NOT NULL,
         parent_slug TEXT NOT NULL,
         PRIMARY KEY (child_slug, parent_slug)
     ) WITHOUT ROWID;
-    CREATE TABLE oracle_taggings_staging (
+    CREATE TABLE {schema}.oracle_taggings_staging (
         oracle_id TEXT NOT NULL,
         slug TEXT NOT NULL,
         weight TEXT,
         annotation TEXT,
         PRIMARY KEY (oracle_id, slug)
     ) WITHOUT ROWID;
-    CREATE TABLE oracle_tag_cards_staging (
+    CREATE TABLE {schema}.oracle_tag_cards_staging (
         oracle_id TEXT NOT NULL,
         slug TEXT NOT NULL,
         PRIMARY KEY (oracle_id, slug)
@@ -3783,30 +4305,30 @@ pub const ORACLE_TAG_TABLES: [(&str, &str); 4] = [
 /// No `art_tag_meta_staging`: the watermark is one row written *with* the swap, not a table
 /// that is rebuilt.
 const ART_TAG_STAGING_SQL: &str = "
-    DROP TABLE IF EXISTS art_tags_staging;
-    DROP TABLE IF EXISTS art_tag_parents_staging;
-    DROP TABLE IF EXISTS art_taggings_staging;
-    DROP TABLE IF EXISTS art_tag_illustrations_staging;
-    CREATE TABLE art_tags_staging (
+    DROP TABLE IF EXISTS {schema}.art_tags_staging;
+    DROP TABLE IF EXISTS {schema}.art_tag_parents_staging;
+    DROP TABLE IF EXISTS {schema}.art_taggings_staging;
+    DROP TABLE IF EXISTS {schema}.art_tag_illustrations_staging;
+    CREATE TABLE {schema}.art_tags_staging (
         slug TEXT PRIMARY KEY,
         id TEXT NOT NULL,
         label TEXT NOT NULL,
         description TEXT,
         slug_norm TEXT NOT NULL
     ) WITHOUT ROWID;
-    CREATE TABLE art_tag_parents_staging (
+    CREATE TABLE {schema}.art_tag_parents_staging (
         child_slug TEXT NOT NULL,
         parent_slug TEXT NOT NULL,
         PRIMARY KEY (child_slug, parent_slug)
     ) WITHOUT ROWID;
-    CREATE TABLE art_taggings_staging (
+    CREATE TABLE {schema}.art_taggings_staging (
         illustration_id TEXT NOT NULL,
         slug TEXT NOT NULL,
         weight TEXT,
         annotation TEXT,
         PRIMARY KEY (illustration_id, slug)
     ) WITHOUT ROWID;
-    CREATE TABLE art_tag_illustrations_staging (
+    CREATE TABLE {schema}.art_tag_illustrations_staging (
         illustration_id TEXT NOT NULL,
         slug TEXT NOT NULL,
         weight TEXT NOT NULL,
@@ -3825,14 +4347,14 @@ pub const ART_TAG_TABLES: [(&str, &str); 4] = [
 /// Create the four empty `art_tag_*_staging` tables, dropping any an interrupted run left
 /// behind. [`create_oracle_tag_staging`]'s shape and its reason.
 pub fn create_art_tag_staging(conn: &Connection) -> rusqlite::Result<()> {
-    conn.execute_batch(ART_TAG_STAGING_SQL)
+    conn.execute_batch(&on_schema(CORPUS, ART_TAG_STAGING_SQL))
 }
 
 /// Drop the four `art_tag_*_staging` tables. What a refused or failed run leaves owing.
 pub fn drop_art_tag_staging(conn: &Connection) -> rusqlite::Result<()> {
     let batch: String = ART_TAG_TABLES
         .iter()
-        .map(|(_, staging)| format!("DROP TABLE IF EXISTS {staging};"))
+        .map(|(_, staging)| format!("DROP TABLE IF EXISTS {CORPUS}.{staging};"))
         .collect();
     conn.execute_batch(&batch)
 }
@@ -3849,14 +4371,14 @@ pub fn drop_art_tag_staging(conn: &Connection) -> rusqlite::Result<()> {
 /// table: these tables carry composite primary keys, which `PRAGMA table_info` describes but
 /// [`cards_column_defs`] does not reproduce.
 pub fn create_oracle_tag_staging(conn: &Connection) -> rusqlite::Result<()> {
-    conn.execute_batch(ORACLE_TAG_STAGING_SQL)
+    conn.execute_batch(&on_schema(CORPUS, ORACLE_TAG_STAGING_SQL))
 }
 
 /// Drop the four `oracle_tag_*_staging` tables. What a refused or failed run leaves owing.
 pub fn drop_oracle_tag_staging(conn: &Connection) -> rusqlite::Result<()> {
     let batch: String = ORACLE_TAG_TABLES
         .iter()
-        .map(|(_, staging)| format!("DROP TABLE IF EXISTS {staging};"))
+        .map(|(_, staging)| format!("DROP TABLE IF EXISTS {CORPUS}.{staging};"))
         .collect();
     conn.execute_batch(&batch)
 }
@@ -3881,11 +4403,16 @@ fn swap_tag_staging(conn: &Connection, tables: &[(&str, &str)]) -> rusqlite::Res
     let batch: String = tables
         .iter()
         .map(|(live, staging)| {
-            format!("DROP TABLE IF EXISTS {live}; ALTER TABLE {staging} RENAME TO {live};")
+            // The new name stays unqualified: `RENAME TO corpus.cards` is a syntax
+            // error, and a rename cannot move a table between schemas at all.
+            format!(
+                "DROP TABLE IF EXISTS {CORPUS}.{live}; \
+                 ALTER TABLE {CORPUS}.{staging} RENAME TO {live};"
+            )
         })
         .collect();
     conn.execute_batch(&batch)?;
-    conn.execute_batch(TAG_INDEXES_SQL)
+    conn.execute_batch(&on_schema(CORPUS, TAG_INDEXES_SQL))
 }
 
 /// Promote the four `oracle_tag_*_staging` tables over the live ones.
@@ -3929,9 +4456,9 @@ pub fn swap_art_tag_staging(conn: &Connection) -> rusqlite::Result<()> {
 /// The two `DROP`s are child-first for [`swap_combo_staging`]'s reason, which is the same
 /// reason read one table over.
 const COMBO_STAGING_SQL: &str = "
-    DROP TABLE IF EXISTS combo_cards_staging;
-    DROP TABLE IF EXISTS combos_staging;
-    CREATE TABLE combos_staging (
+    DROP TABLE IF EXISTS {schema}.combo_cards_staging;
+    DROP TABLE IF EXISTS {schema}.combos_staging;
+    CREATE TABLE {schema}.combos_staging (
         id             TEXT PRIMARY KEY,
         bracket_tag    TEXT NOT NULL,
         card_count     INTEGER NOT NULL,
@@ -3940,7 +4467,7 @@ const COMBO_STAGING_SQL: &str = "
         produces       TEXT NOT NULL,
         popularity     INTEGER
     );
-    CREATE TABLE combo_cards_staging (
+    CREATE TABLE {schema}.combo_cards_staging (
         combo_id          TEXT NOT NULL REFERENCES combos_staging(id) ON DELETE CASCADE,
         oracle_id         TEXT NOT NULL,
         name              TEXT NOT NULL,
@@ -3970,7 +4497,7 @@ pub const COMBO_TABLES: [(&str, &str); 2] = [
 /// table holding the first eight thousand variants of forty thousand would be told it has no
 /// combos, confidently and wrongly.
 pub fn create_combo_staging(conn: &Connection) -> rusqlite::Result<()> {
-    conn.execute_batch(COMBO_STAGING_SQL)
+    conn.execute_batch(&on_schema(CORPUS, COMBO_STAGING_SQL))
 }
 
 /// Drop the two `combo*_staging` tables. What a refused or failed run leaves owing.
@@ -3984,7 +4511,7 @@ pub fn drop_combo_staging(conn: &Connection) -> rusqlite::Result<()> {
     let batch: String = COMBO_TABLES
         .iter()
         .rev()
-        .map(|(_, staging)| format!("DROP TABLE IF EXISTS {staging};"))
+        .map(|(_, staging)| format!("DROP TABLE IF EXISTS {CORPUS}.{staging};"))
         .collect();
     conn.execute_batch(&batch)
 }
@@ -4012,13 +4539,13 @@ pub fn drop_combo_staging(conn: &Connection) -> rusqlite::Result<()> {
 /// `REFERENCES` clauses that name a renamed table, so `combos_staging → combos` is exactly what
 /// turns `combo_cards_staging`'s key into the live one this schema declares.
 pub fn swap_combo_staging(conn: &Connection) -> rusqlite::Result<()> {
-    conn.execute_batch(
-        "DROP TABLE IF EXISTS combo_cards;
-         DROP TABLE IF EXISTS combos;
-         ALTER TABLE combos_staging RENAME TO combos;
-         ALTER TABLE combo_cards_staging RENAME TO combo_cards;",
-    )?;
-    conn.execute_batch(COMBO_INDEXES_SQL)
+    conn.execute_batch(&format!(
+        "DROP TABLE IF EXISTS {CORPUS}.combo_cards;
+         DROP TABLE IF EXISTS {CORPUS}.combos;
+         ALTER TABLE {CORPUS}.combos_staging RENAME TO combos;
+         ALTER TABLE {CORPUS}.combo_cards_staging RENAME TO combo_cards;"
+    ))?;
+    conn.execute_batch(&on_schema(CORPUS, COMBO_INDEXES_SQL))
 }
 
 /// `pub(crate)` for the deck seed helpers at the bottom of the module: Task 3's
@@ -4027,6 +4554,187 @@ pub fn swap_combo_staging(conn: &Connection) -> rusqlite::Result<()> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    /// `sqlite_master` over **every** database attached to `conn`, as a subquery.
+    ///
+    /// A test that spells `sqlite_master` unqualified stops covering the corpus the moment
+    /// one is attached, and says nothing about it — which is the failure
+    /// `crate::mirror::watch`'s own schema guard had. This reads `PRAGMA database_list`
+    /// instead, so one helper serves a pre-split single file and a pair without either test
+    /// having to know which it was handed.
+    fn master(conn: &Connection) -> String {
+        let mut stmt = conn.prepare("PRAGMA database_list").unwrap();
+        let names: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(1))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        let parts: Vec<String> = names
+            .iter()
+            .map(|n| format!("SELECT * FROM {n}.sqlite_master"))
+            .collect();
+        format!("({})", parts.join(" UNION ALL "))
+    }
+
+    /// The assertion the whole of the wiring exists to make, and the only cheap way to catch
+    /// forty unqualified statements: after a pair has been built **and put through a full
+    /// sync of all four feeds**, every table is in the file [`TABLES`] names.
+    ///
+    /// A staging table created unqualified lands in `main`, is renamed over a `cards` that is
+    /// not there, and the failure surfaces days later as a user file that has grown to
+    /// 800 MB. This is where it surfaces instead.
+    #[test]
+    fn a_full_sync_leaves_every_table_on_its_own_side() {
+        let conn = memory_pair();
+
+        // The four staging paths, in the order a sync runs them.
+        create_staging(&conn).unwrap();
+        swap_staging(&conn).unwrap();
+        create_oracle_tag_staging(&conn).unwrap();
+        swap_oracle_tag_staging(&conn).unwrap();
+        create_art_tag_staging(&conn).unwrap();
+        swap_art_tag_staging(&conn).unwrap();
+        create_combo_staging(&conn).unwrap();
+        swap_combo_staging(&conn).unwrap();
+
+        for (table, side) in TABLES {
+            let here = |schema: &str| -> i64 {
+                conn.query_row(
+                    &format!(
+                        "SELECT count(*) FROM {schema}.sqlite_master
+                         WHERE type='table' AND name=?1"
+                    ),
+                    [table],
+                    |r| r.get(0),
+                )
+                .unwrap()
+            };
+            let (want_user, want_corpus) = match side {
+                Side::User => (1, 0),
+                Side::Corpus => (0, 1),
+            };
+            assert_eq!(
+                here("main"),
+                want_user,
+                "{table} should be in the user file"
+            );
+            assert_eq!(here(CORPUS), want_corpus, "{table} should be in the corpus");
+        }
+
+        // And nothing else in either — a staging table left behind is a table too.
+        let leftovers: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM main.sqlite_master
+                 WHERE type='table' AND name LIKE '%\\_staging' ESCAPE '\\'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(leftovers, 0, "a staging table was created in the user file");
+        let stray: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM main.sqlite_master WHERE type='table'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            stray, 15,
+            "the user file holds the fifteen and nothing else"
+        );
+    }
+
+    /// FTS5 resolves `content='cards'` in **its own schema**, so an index built in the wrong
+    /// file creates cleanly and fails on its first rebuild with `no such table: main.cards`.
+    #[test]
+    fn the_search_index_is_built_beside_the_cards_it_indexes() {
+        let conn = memory_pair();
+        conn.execute(
+            "INSERT INTO cards (id, name, set_code, collector_number, lang, layout, raw)
+             VALUES ('x','Lightning Bolt','lea','161','en','normal','{}')",
+            [],
+        )
+        .unwrap();
+        create_fts(&conn).unwrap();
+        let hits: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM cards_fts WHERE cards_fts MATCH 'lightning'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(hits, 1);
+    }
+
+    /// [`CORPUS_SCHEMA_SQL`]'s half of [`USER_SCHEMA_SQL`]'s guarantee, and it matters more
+    /// here rather than less: this is the shape a *rebuilt* corpus gets, so a column dropped
+    /// in transcription would be a difference between the reader who has resynced and the
+    /// reader who has not.
+    #[test]
+    fn the_corpus_schema_is_byte_identical_to_what_the_ladder_builds() {
+        let dump = |conn: &Connection, schema: &str| -> Vec<(String, String, String)> {
+            let mut stmt = conn
+                .prepare(&format!(
+                    "SELECT type, name, tbl_name, coalesce(sql, '') FROM {schema}.sqlite_master
+                     ORDER BY type, name"
+                ))
+                .unwrap();
+            let rows = stmt
+                .query_map([], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, String>(2)?,
+                        r.get::<_, String>(3)?,
+                    ))
+                })
+                .unwrap()
+                .map(Result::unwrap)
+                .filter(|(_, _, tbl, _)| side_of(tbl) == Some(Side::Corpus))
+                .map(|(ty, name, _, sql)| (ty, name, sql))
+                .collect();
+            rows
+        };
+
+        let ladder = Connection::open_in_memory().unwrap();
+        migrate_single_file(&ladder).unwrap();
+        let want = dump(&ladder, "main");
+
+        let pair = memory_pair();
+        let got = dump(&pair, CORPUS);
+
+        for (w, g) in want.iter().zip(got.iter()) {
+            assert_eq!(w, g, "{} {} differs from the ladder's", g.0, g.1);
+        }
+        assert_eq!(want, got);
+
+        // And the one table on this side that no feed produces has its rows.
+        let formats: i64 = pair
+            .query_row("SELECT count(*) FROM format_specs", [], |r| r.get(0))
+            .unwrap();
+        let seeded: i64 = ladder
+            .query_row("SELECT count(*) FROM format_specs", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            formats, seeded,
+            "a rebuilt corpus owes the format rules too"
+        );
+    }
+
+    /// The one row the ladder puts in a user table reaches a test pair as well, because a
+    /// database with no `Recently removed` folder is a state no converted database is in.
+    #[test]
+    fn a_test_pair_has_the_holding_area_a_converted_database_has() {
+        let pair = memory_pair();
+        let n: i64 = pair
+            .query_row(
+                "SELECT count(*) FROM collection_folders WHERE kind = 'removed'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1);
+    }
 
     /// [`USER_SCHEMA_SQL`] was copied out of a migrated database rather than retyped, and
     /// this is what makes "copied" a fact instead of a claim.
@@ -4351,24 +5059,25 @@ pub(crate) mod tests {
         let dir = std::env::temp_dir().join("mtgtest-schema-residue");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("mtg.db");
+        crate::split::convert(&dir).unwrap();
 
         // The state a killed ingest leaves: a migrated database, a swap that never ran,
         // and committed rows in staging.
         {
-            let conn = crate::db::open(&path).unwrap();
+            let conn = crate::db::open_write(&dir).unwrap();
             prepare_database(&conn).unwrap();
             create_staging(&conn).unwrap();
             conn.execute("INSERT INTO cards_staging (id, name, set_code, collector_number, lang, layout, raw) VALUES ('half','Half Ingested','x','1','en','normal','{}')", []).unwrap();
+            crate::db::checkpoint_truncate(&conn).unwrap();
         }
 
         // The next launch, which is `init_state`'s one act of database preparation.
-        let conn = crate::db::open(&path).unwrap();
+        let conn = crate::db::open_write(&dir).unwrap();
         prepare_database(&conn).unwrap();
 
         let staging: i64 = conn
             .query_row(
-                "SELECT count(*) FROM sqlite_master WHERE name='cards_staging'",
+                &format!("SELECT count(*) FROM {CORPUS}.sqlite_master WHERE name='cards_staging'"),
                 [],
                 |r| r.get(0),
             )
@@ -4377,8 +5086,10 @@ pub(crate) mod tests {
         // And the launch is still a launch: the schema it was there to prepare is intact.
         let tables: i64 = conn
             .query_row(
-                "SELECT count(*) FROM sqlite_master
-                 WHERE name IN ('cards','sets','sync_meta','cards_fts')",
+                &format!(
+                    "SELECT count(*) FROM {CORPUS}.sqlite_master
+                     WHERE name IN ('cards','sets','sync_meta','cards_fts')"
+                ),
                 [],
                 |r| r.get(0),
             )
@@ -4401,10 +5112,11 @@ pub(crate) mod tests {
     /// statement fails for a reason of its own while everything around it stays healthy.
     #[test]
     fn a_launch_survives_a_staging_drop_it_cannot_carry_out() {
-        let conn = Connection::open_in_memory().unwrap();
-        migrate_single_file(&conn).unwrap();
-        conn.execute_batch("CREATE VIEW cards_staging AS SELECT 1 AS x;")
-            .unwrap();
+        let conn = memory_pair();
+        conn.execute_batch(&format!(
+            "CREATE VIEW {CORPUS}.cards_staging AS SELECT 1 AS x;"
+        ))
+        .unwrap();
 
         prepare_database(&conn).expect("a launch must not die on a drop it cannot do");
 
@@ -4412,7 +5124,7 @@ pub(crate) mod tests {
         // `create_staging` at the next sync, `prepare_database` at the next launch.
         let still: i64 = conn
             .query_row(
-                "SELECT count(*) FROM sqlite_master WHERE name='cards_staging'",
+                &format!("SELECT count(*) FROM {CORPUS}.sqlite_master WHERE name='cards_staging'"),
                 [],
                 |r| r.get(0),
             )
@@ -4427,12 +5139,14 @@ pub(crate) mod tests {
     /// that has already migrated.
     #[test]
     fn the_collapse_index_exists_after_migrate_and_survives_a_swap() {
-        let conn = Connection::open_in_memory().unwrap();
-        migrate_single_file(&conn).unwrap();
+        let conn = memory_pair();
 
         let sql: String = conn
             .query_row(
-                "SELECT sql FROM sqlite_master WHERE type='index' AND name='idx_cards_collapse'",
+                &format!(
+                    "SELECT sql FROM {m} WHERE type='index' AND name='idx_cards_collapse'",
+                    m = master(&conn)
+                ),
                 [],
                 |r| r.get(0),
             )
@@ -4448,8 +5162,11 @@ pub(crate) mod tests {
         swap_staging(&conn).unwrap();
         let after: i64 = conn
             .query_row(
-                "SELECT count(*) FROM sqlite_master
-                  WHERE type='index' AND tbl_name='cards' AND name='idx_cards_collapse'",
+                &format!(
+                    "SELECT count(*) FROM {m}
+                      WHERE type='index' AND tbl_name='cards' AND name='idx_cards_collapse'",
+                    m = master(&conn)
+                ),
                 [],
                 |r| r.get(0),
             )
@@ -4514,8 +5231,7 @@ pub(crate) mod tests {
 
     #[test]
     fn staging_swap_replaces_cards_and_fts_finds_new_rows() {
-        let conn = Connection::open_in_memory().unwrap();
-        migrate_single_file(&conn).unwrap();
+        let conn = memory_pair();
         conn.execute("INSERT INTO cards (id, name, set_code, collector_number, lang, layout, raw) VALUES ('old','Old Card','abc','1','en','normal','{}')", []).unwrap();
         create_staging(&conn).unwrap();
         conn.execute("INSERT INTO cards_staging (id, name, set_code, collector_number, lang, layout, raw) VALUES ('new','Lightning Bolt','lea','161','en','normal','{}')", []).unwrap();
@@ -4537,9 +5253,12 @@ pub(crate) mod tests {
         // or every query planned against `cards` silently loses its index.
         let idx: i64 = conn
             .query_row(
-                "SELECT count(*) FROM sqlite_master WHERE type='index' AND tbl_name='cards'
-                 AND name IN ('idx_cards_oracle','idx_cards_set_cn','idx_cards_name',
-                              'idx_cards_collapse')",
+                &format!(
+                    "SELECT count(*) FROM {m} WHERE type='index' AND tbl_name='cards'
+                     AND name IN ('idx_cards_oracle','idx_cards_set_cn','idx_cards_name',
+                                  'idx_cards_collapse')",
+                    m = master(&conn)
+                ),
                 [],
                 |r| r.get(0),
             )
@@ -4551,7 +5270,10 @@ pub(crate) mod tests {
 
         let staging: i64 = conn
             .query_row(
-                "SELECT count(*) FROM sqlite_master WHERE name='cards_staging'",
+                &format!(
+                    "SELECT count(*) FROM {m} WHERE name='cards_staging'",
+                    m = master(&conn)
+                ),
                 [],
                 |r| r.get(0),
             )
@@ -4570,9 +5292,7 @@ pub(crate) mod tests {
     /// — and a hand-built stand-in would no longer even create (the name is taken).
     #[test]
     fn user_rows_survive_the_swap_that_drops_cards() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
-        migrate_single_file(&conn).unwrap();
+        let conn = memory_pair();
         conn.execute(
             "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,raw)
              VALUES ('bolt','Lightning Bolt','lea','161','en','normal','{}')",
@@ -4818,8 +5538,7 @@ pub(crate) mod tests {
     /// constant would omit the new column, and the next sync would drop it silently.
     #[test]
     fn staging_takes_its_columns_from_the_live_table_not_from_the_v1_constant() {
-        let conn = Connection::open_in_memory().unwrap();
-        migrate_single_file(&conn).unwrap();
+        let conn = memory_pair();
         conn.execute_batch("ALTER TABLE cards ADD COLUMN scryfall_uri TEXT;")
             .unwrap();
 
@@ -4851,8 +5570,7 @@ pub(crate) mod tests {
     /// what catches an index that comes back over the wrong columns.
     #[test]
     fn the_indexes_on_cards_are_identical_before_and_after_a_swap() {
-        let conn = Connection::open_in_memory().unwrap();
-        migrate_single_file(&conn).unwrap();
+        let conn = memory_pair();
         // The list also carries SQLite's implicit `sqlite_autoindex_cards_1` (`sql` NULL),
         // which is the PRIMARY KEY — so comparing the whole list across the swap proves
         // the derived staging clone kept the key too.
@@ -4894,10 +5612,11 @@ pub(crate) mod tests {
 
     fn indexes_on_cards(conn: &Connection) -> Vec<(String, Option<String>)> {
         let mut stmt = conn
-            .prepare(
-                "SELECT name, sql FROM sqlite_master
+            .prepare(&format!(
+                "SELECT name, sql FROM {m}
                  WHERE type='index' AND tbl_name='cards' ORDER BY name",
-            )
+                m = master(conn)
+            ))
             .unwrap();
         let rows = stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
         rows.collect::<rusqlite::Result<_>>().unwrap()
@@ -4909,8 +5628,7 @@ pub(crate) mod tests {
     /// swap *after* it has already dropped `cards` and `cards_fts`.
     #[test]
     fn failed_swap_rolls_back_and_leaves_connection_usable() {
-        let conn = Connection::open_in_memory().unwrap();
-        migrate_single_file(&conn).unwrap();
+        let conn = memory_pair();
         conn.execute("INSERT INTO cards (id, name, set_code, collector_number, lang, layout, raw) VALUES ('old','Old Card','abc','1','en','normal','{}')", []).unwrap();
 
         assert!(
@@ -4924,7 +5642,10 @@ pub(crate) mod tests {
         assert_eq!(n, 1, "`cards` and its rows must survive a failed swap");
         let fts: i64 = conn
             .query_row(
-                "SELECT count(*) FROM sqlite_master WHERE name='cards_fts'",
+                &format!(
+                    "SELECT count(*) FROM {m} WHERE name='cards_fts'",
+                    m = master(&conn)
+                ),
                 [],
                 |r| r.get(0),
             )
@@ -4964,7 +5685,7 @@ pub(crate) mod tests {
              PRAGMA user_version = 1;"
         ))
         .unwrap();
-        create_fts(&conn).unwrap();
+        create_fts_in(&conn, "main").unwrap();
         conn
     }
 
@@ -5279,8 +6000,7 @@ pub(crate) mod tests {
     /// promise, checked against the columns this plan actually adds.
     #[test]
     fn the_image_columns_survive_a_staging_swap() {
-        let conn = Connection::open_in_memory().unwrap();
-        migrate_single_file(&conn).unwrap();
+        let conn = memory_pair();
         create_staging(&conn).unwrap();
         conn.execute(
             "INSERT INTO cards_staging
@@ -5417,8 +6137,7 @@ pub(crate) mod tests {
     /// fails silently: staging would clone the column and every row would come back NULL.
     #[test]
     fn the_artist_column_survives_a_staging_swap() {
-        let conn = Connection::open_in_memory().unwrap();
-        migrate_single_file(&conn).unwrap();
+        let conn = memory_pair();
         create_staging(&conn).unwrap();
         conn.execute(
             "INSERT INTO cards_staging
@@ -5440,8 +6159,7 @@ pub(crate) mod tests {
     /// cost the next launch a silent rebuild of 116 k rows for work already done.
     #[test]
     fn a_swap_settles_a_rebuild_an_interrupted_compaction_owed() {
-        let conn = Connection::open_in_memory().unwrap();
-        migrate_single_file(&conn).unwrap();
+        let conn = memory_pair();
         crate::sync::set_meta(&conn, crate::maintenance::K_FTS_REBUILD_PENDING, "1").unwrap();
         create_staging(&conn).unwrap();
         conn.execute("INSERT INTO cards_staging (id, name, set_code, collector_number, lang, layout, raw) VALUES ('new','Lightning Bolt','lea','161','en','normal','{}')", []).unwrap();
@@ -5466,9 +6184,7 @@ pub(crate) mod tests {
     /// refresh — which is exactly why it carries no foreign key to `cards.id`.
     #[test]
     fn image_cache_rows_survive_the_swap_that_drops_cards() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
-        migrate_single_file(&conn).unwrap();
+        let conn = memory_pair();
         conn.execute(
             "INSERT INTO image_cache (card_id, face, variant, source_uri, bytes, fetched_at)
              VALUES ('bolt', 0, 'grid', 'https://cards.scryfall.io/grid/front/b/o/bolt.webp?17', 62000, 1800000000)",
@@ -5584,9 +6300,7 @@ pub(crate) mod tests {
     /// *card* rather than the row's folder.
     #[test]
     fn deleting_a_deck_cascades_its_cards_and_its_group_but_never_the_cards_in_it() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
-        migrate_single_file(&conn).unwrap();
+        let conn = memory_pair();
         seed_card(&conn, "bolt", "lea", "161");
         let deck = deck(&conn, "Burn");
         let main = category(&conn, deck, "main", "Main deck");
@@ -5651,9 +6365,7 @@ pub(crate) mod tests {
     /// of any reach from the collection into the decks at all.
     #[test]
     fn removing_a_collection_entry_leaves_the_deck_wanting_the_card() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
-        migrate_single_file(&conn).unwrap();
+        let conn = memory_pair();
         seed_card(&conn, "bolt", "lea", "161");
         let deck = deck(&conn, "Burn");
         let entry = entry(&conn, "bolt", 4);
@@ -5688,9 +6400,7 @@ pub(crate) mod tests {
     /// with CASCADE, quietly delete the user's decks on the next refresh).
     #[test]
     fn deck_rows_survive_the_swap_that_drops_cards() {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
-        migrate_single_file(&conn).unwrap();
+        let conn = memory_pair();
         seed_card(&conn, "bolt", "lea", "161");
         let deck = deck(&conn, "Burn");
         // The cover art is a printing too, and it is the other soft reference.
@@ -7595,8 +8305,7 @@ pub(crate) mod tests {
     /// seeded price and asserts it is still there afterwards.
     #[test]
     fn marketplace_prices_survive_the_staging_swap() {
-        let conn = Connection::open_in_memory().unwrap();
-        migrate_single_file(&conn).unwrap();
+        let conn = memory_pair();
         conn.execute_batch(
             "INSERT INTO marketplace_prices (marketplace, card_id, finish, price)
                 VALUES ('cardkingdom','bolt','nonfoil',0.35);
@@ -7885,8 +8594,7 @@ pub(crate) mod tests {
     /// hanging off `cards`: `swap_staging` drops and recreates that table on every refresh.
     #[test]
     fn oracle_tags_survive_the_staging_swap() {
-        let conn = Connection::open_in_memory().unwrap();
-        migrate_single_file(&conn).unwrap();
+        let conn = memory_pair();
         conn.execute_batch(
             "INSERT INTO oracle_tags (slug,label,description) VALUES ('ramp','ramp',NULL);
              INSERT INTO oracle_tag_cards (oracle_id, slug) VALUES ('oid-1','ramp');
@@ -7925,8 +8633,7 @@ pub(crate) mod tests {
     /// migration step is history.
     #[test]
     fn the_oracle_tag_staging_tables_match_the_live_ones() {
-        let conn = Connection::open_in_memory().unwrap();
-        migrate_single_file(&conn).unwrap();
+        let conn = memory_pair();
         create_oracle_tag_staging(&conn).unwrap();
 
         for (live, staging) in ORACLE_TAG_TABLES {
@@ -7946,8 +8653,7 @@ pub(crate) mod tests {
     /// the ones Scryfall has since retired.
     #[test]
     fn the_oracle_tag_swap_replaces_rather_than_merges() {
-        let conn = Connection::open_in_memory().unwrap();
-        migrate_single_file(&conn).unwrap();
+        let conn = memory_pair();
         conn.execute_batch(
             "INSERT INTO oracle_tags (slug,label,description) VALUES ('retired','retired',NULL);
              INSERT INTO oracle_tag_cards (oracle_id,slug) VALUES ('oid-1','retired');",
@@ -8291,7 +8997,10 @@ pub(crate) mod tests {
     /// because two tests above ask the same question about the same table.
     fn table_count(conn: &Connection, name: &str) -> i64 {
         conn.query_row(
-            "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+            &format!(
+                "SELECT count(*) FROM {m} WHERE type = 'table' AND name = ?1",
+                m = master(conn)
+            ),
             rusqlite::params![name],
             |r| r.get(0),
         )
@@ -8582,7 +9291,10 @@ pub(crate) mod tests {
         }
         assert_eq!(table_count(&conn, "art_tag_meta"), 1, "the watermark too");
         conn.query_row(
-            "SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_cards_illustration'",
+            &format!(
+                "SELECT 1 FROM {m} WHERE type='index' AND name='idx_cards_illustration'",
+                m = master(&conn)
+            ),
             [],
             |r| r.get::<_, i64>(0),
         )
@@ -8604,12 +9316,14 @@ pub(crate) mod tests {
     /// session, because the app stays correct and merely becomes slow.
     #[test]
     fn the_illustration_index_survives_a_cards_swap() {
-        let conn = Connection::open_in_memory().unwrap();
-        migrate_single_file(&conn).unwrap();
+        let conn = memory_pair();
         create_staging(&conn).unwrap();
         swap_staging(&conn).unwrap();
         conn.query_row(
-            "SELECT 1 FROM sqlite_master WHERE type='index' AND name='idx_cards_illustration'",
+            &format!(
+                "SELECT 1 FROM {m} WHERE type='index' AND name='idx_cards_illustration'",
+                m = master(&conn)
+            ),
             [],
             |r| r.get::<_, i64>(0),
         )
@@ -8622,8 +9336,7 @@ pub(crate) mod tests {
     /// than one with the names rewritten, which is what makes this a fence and not a tautology.
     #[test]
     fn the_art_tag_staging_tables_match_the_live_ones() {
-        let conn = Connection::open_in_memory().unwrap();
-        migrate_single_file(&conn).unwrap();
+        let conn = memory_pair();
         create_art_tag_staging(&conn).unwrap();
 
         for (live, staging) in ART_TAG_TABLES {
@@ -8646,8 +9359,7 @@ pub(crate) mod tests {
     /// a download that never finished.
     #[test]
     fn dropping_the_art_staging_tables_leaves_the_live_ones_standing() {
-        let conn = Connection::open_in_memory().unwrap();
-        migrate_single_file(&conn).unwrap();
+        let conn = memory_pair();
         create_art_tag_staging(&conn).unwrap();
         drop_art_tag_staging(&conn).unwrap();
 
@@ -8672,7 +9384,10 @@ pub(crate) mod tests {
         }
         for index in ["idx_art_tags_norm", "idx_oracle_tags_norm"] {
             conn.query_row(
-                "SELECT 1 FROM sqlite_master WHERE type='index' AND name=?1",
+                &format!(
+                    "SELECT 1 FROM {m} WHERE type='index' AND name=?1",
+                    m = master(&conn)
+                ),
                 [index],
                 |r| r.get::<_, i64>(0),
             )
@@ -8697,7 +9412,10 @@ pub(crate) mod tests {
             "idx_oracle_tag_cards_slug",
         ] {
             conn.query_row(
-                "SELECT 1 FROM sqlite_master WHERE type='index' AND name=?1",
+                &format!(
+                    "SELECT 1 FROM {m} WHERE type='index' AND name=?1",
+                    m = master(&conn)
+                ),
                 [index],
                 |r| r.get::<_, i64>(0),
             )
@@ -8717,13 +9435,15 @@ pub(crate) mod tests {
     /// after this test stopped being true.
     #[test]
     fn the_tag_indexes_survive_an_oracle_tag_swap() {
-        let conn = Connection::open_in_memory().unwrap();
-        migrate_single_file(&conn).unwrap();
+        let conn = memory_pair();
         create_oracle_tag_staging(&conn).unwrap();
         swap_oracle_tag_staging(&conn).unwrap();
         for index in ["idx_oracle_tags_norm", "idx_oracle_tag_cards_slug"] {
             conn.query_row(
-                "SELECT 1 FROM sqlite_master WHERE type='index' AND name=?1",
+                &format!(
+                    "SELECT 1 FROM {m} WHERE type='index' AND name=?1",
+                    m = master(&conn)
+                ),
                 [index],
                 |r| r.get::<_, i64>(0),
             )
@@ -8774,7 +9494,10 @@ pub(crate) mod tests {
             "idx_oracle_tag_cards_slug",
         ] {
             conn.query_row(
-                "SELECT 1 FROM sqlite_master WHERE type='index' AND name=?1",
+                &format!(
+                    "SELECT 1 FROM {m} WHERE type='index' AND name=?1",
+                    m = master(&conn)
+                ),
                 [index],
                 |r| r.get::<_, i64>(0),
             )
@@ -8788,13 +9511,15 @@ pub(crate) mod tests {
     /// half of the failure the oracle test cannot see.
     #[test]
     fn the_tag_indexes_survive_an_art_tag_swap() {
-        let conn = Connection::open_in_memory().unwrap();
-        migrate_single_file(&conn).unwrap();
+        let conn = memory_pair();
         create_art_tag_staging(&conn).unwrap();
         swap_art_tag_staging(&conn).unwrap();
         for index in ["idx_art_tags_norm", "idx_art_tag_illustrations_slug"] {
             conn.query_row(
-                "SELECT 1 FROM sqlite_master WHERE type='index' AND name=?1",
+                &format!(
+                    "SELECT 1 FROM {m} WHERE type='index' AND name=?1",
+                    m = master(&conn)
+                ),
                 [index],
                 |r| r.get::<_, i64>(0),
             )
@@ -8858,7 +9583,10 @@ pub(crate) mod tests {
             "idx_oracle_tag_cards_slug",
         ] {
             conn.query_row(
-                "SELECT 1 FROM sqlite_master WHERE type='index' AND name=?1",
+                &format!(
+                    "SELECT 1 FROM {m} WHERE type='index' AND name=?1",
+                    m = master(&conn)
+                ),
                 [index],
                 |r| r.get::<_, i64>(0),
             )
@@ -9004,8 +9732,7 @@ pub(crate) mod tests {
     /// neither and must stay off both.
     #[test]
     fn a_mute_survives_a_card_sync_and_a_taxonomy_rebuild() {
-        let conn = Connection::open_in_memory().unwrap();
-        migrate_single_file(&conn).unwrap();
+        let conn = memory_pair();
         conn.execute(
             "INSERT INTO muted_tags (namespace, tag_id, slug, muted_at)
              VALUES ('art', 'uuid-1', 'dog', 1)",
@@ -10193,8 +10920,7 @@ pub(crate) mod tests {
     /// [`the_oracle_tag_staging_tables_match_the_live_ones`]'s fence, one feed over.
     #[test]
     fn the_combo_staging_tables_match_the_live_ones() {
-        let conn = Connection::open_in_memory().unwrap();
-        migrate_single_file(&conn).unwrap();
+        let conn = memory_pair();
         create_combo_staging(&conn).unwrap();
 
         for (live, staging) in COMBO_TABLES {
@@ -10216,13 +10942,15 @@ pub(crate) mod tests {
     /// was measured at 531 seconds one feed over.
     #[test]
     fn the_combo_indexes_survive_a_swap() {
-        let conn = Connection::open_in_memory().unwrap();
-        migrate_single_file(&conn).unwrap();
+        let conn = memory_pair();
         create_combo_staging(&conn).unwrap();
         swap_combo_staging(&conn).unwrap();
         for index in ["idx_combo_cards_combo", "idx_combo_cards_oracle"] {
             conn.query_row(
-                "SELECT 1 FROM sqlite_master WHERE type='index' AND name=?1",
+                &format!(
+                    "SELECT 1 FROM {m} WHERE type='index' AND name=?1",
+                    m = master(&conn)
+                ),
                 [index],
                 |r| r.get::<_, i64>(0),
             )
@@ -10241,8 +10969,7 @@ pub(crate) mod tests {
     /// being able to lose its orphans.
     #[test]
     fn the_swapped_combo_cards_still_reference_combos() {
-        let conn = Connection::open_in_memory().unwrap();
-        migrate_single_file(&conn).unwrap();
+        let conn = memory_pair();
         create_combo_staging(&conn).unwrap();
         swap_combo_staging(&conn).unwrap();
 
@@ -10278,8 +11005,7 @@ pub(crate) mod tests {
     /// [`the_oracle_tag_swap_replaces_rather_than_merges`]'s assertion, one feed over.
     #[test]
     fn the_combo_swap_replaces_rather_than_merges() {
-        let conn = Connection::open_in_memory().unwrap();
-        migrate_single_file(&conn).unwrap();
+        let conn = memory_pair();
         conn.execute_batch(
             "INSERT INTO combos (id,bracket_tag,card_count,template_count,identity,produces)
                 VALUES ('retired','C',2,0,'w','Nothing much');
@@ -10343,8 +11069,7 @@ pub(crate) mod tests {
     /// [`dropping_the_art_staging_tables_leaves_the_live_ones_standing`]'s assertion.
     #[test]
     fn dropping_the_combo_staging_tables_leaves_the_live_ones_standing() {
-        let conn = Connection::open_in_memory().unwrap();
-        migrate_single_file(&conn).unwrap();
+        let conn = memory_pair();
         create_combo_staging(&conn).unwrap();
         // A staged child row, so the drop is walked over a table the cascade could reach —
         // which is the ordering `drop_combo_staging`'s doc is about.
@@ -10371,8 +11096,7 @@ pub(crate) mod tests {
     /// second call must leave them empty rather than carrying half of yesterday's file.
     #[test]
     fn creating_the_combo_staging_twice_starts_from_empty() {
-        let conn = Connection::open_in_memory().unwrap();
-        migrate_single_file(&conn).unwrap();
+        let conn = memory_pair();
         create_combo_staging(&conn).unwrap();
         conn.execute_batch(
             "INSERT INTO combos_staging
@@ -10983,10 +11707,14 @@ pub(crate) mod tests {
             "a fresh install must carry every index in the list: {want_indexes:?}"
         );
         for stmt in CARDS_INDEXES {
+            // `CREATE INDEX IF NOT EXISTS {schema}.<name> …` since the split: the hole is
+            // filled by `cards_indexes_sql`, so the constant itself still carries it here.
             let name = stmt
                 .split_whitespace()
                 .nth(5)
-                .expect("`CREATE INDEX IF NOT EXISTS <name> …`");
+                .and_then(|q| q.split_once('.'))
+                .map(|(_, name)| name)
+                .expect("`CREATE INDEX IF NOT EXISTS {schema}.<name> …`");
             assert!(declared.contains(&name), "{name} missing: {declared:?}");
         }
 

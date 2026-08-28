@@ -1547,10 +1547,9 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("mtgtest-update-{name}"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("mtg.db");
-        let conn = crate::db::open(&path).unwrap();
-        crate::schema::migrate_single_file(&conn).unwrap();
-        let read = crate::db::open_read_only(&path).unwrap();
+        crate::split::convert(&dir).unwrap();
+        let conn = crate::db::open_write(&dir).unwrap();
+        let read = crate::db::open_read(&dir).unwrap();
         (
             Arc::new(AppState {
                 db: Mutex::new(conn),
@@ -1820,8 +1819,7 @@ mod tests {
 
     #[test]
     fn app_meta_round_trips_and_a_missing_key_reads_as_none() {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate_single_file(&conn).unwrap();
+        let conn = crate::schema::memory_pair();
 
         assert!(get_app_meta(&conn, K_LAST_CHECK_AT).is_none());
         set_app_meta(&conn, K_LAST_CHECK_AT, "1800000000").unwrap();
@@ -1843,8 +1841,7 @@ mod tests {
     /// before any network call has been made in this session.
     #[test]
     fn the_cached_release_survives_a_round_trip_through_app_meta() {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate_single_file(&conn).unwrap();
+        let conn = crate::schema::memory_pair();
         let release = parse_release(&live_payload()).unwrap();
 
         set_app_meta(

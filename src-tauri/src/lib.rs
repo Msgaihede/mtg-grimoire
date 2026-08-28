@@ -678,21 +678,35 @@ fn init_state(app: &tauri::App) -> Result<AppState, String> {
         }
     };
 
-    let db_path = data_dir.join("mtg.db");
-    let conn = db::open(&db_path).map_err(|e| data_dir_error(portable.as_deref(), &fallback, e))?;
+    // **Before any connection the app keeps.** A folder holding a single pre-27 `mtg.db` is
+    // taken apart here, and a `corpus.db` that will not open at all is deleted here — both
+    // are file operations, and a file the app is holding open is a file it cannot replace.
+    schema::prepare_data_dir(&data_dir).map_err(|e| {
+        format!(
+            "MTG Grimoire could not prepare its data folder at {}: {e}\n\
+             The collection file may be from a newer version of the app, or damaged. \
+             Moving it aside will let the app start from empty.",
+            data_dir.display()
+        )
+    })?;
+    let user_path = data_dir.join(db::USER_DB);
+    let conn =
+        db::open_write(&data_dir).map_err(|e| data_dir_error(portable.as_deref(), &fallback, e))?;
     schema::prepare_database(&conn).map_err(|e| {
         format!(
             "MTG Grimoire could not prepare its database at {}: {e}\n\
              The file may be from a newer version of the app, or damaged. Moving it \
              aside will let the app rebuild it from Scryfall.",
-            db_path.display()
+            user_path.display()
         )
     })?;
     // Opened after `prepare_database`, and only after: a read-only connection to a file
     // that has no tables yet would be a handle that can never be made useful. Same error
-    // message as the write connection — if this fails, the folder is the reason.
-    let conn_read = db::open_read_only(&db_path)
-        .map_err(|e| data_dir_error(portable.as_deref(), &fallback, e))?;
+    // message as the write connection — if this fails, the folder is the reason. It attaches
+    // the corpus too: every search reads `cards` and `collection_entries` in one statement,
+    // and a handle that saw only one file would report an empty collection rather than fail.
+    let conn_read =
+        db::open_read(&data_dir).map_err(|e| data_dir_error(portable.as_deref(), &fallback, e))?;
 
     // Built before the struct, because `data_dir` is moved into it.
     let images = images::Cache::new(data_dir.join("images"));

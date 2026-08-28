@@ -861,7 +861,7 @@ async fn compact_once(state: &Arc<AppState>, app: &tauri::AppHandle) -> bool {
     let (convert, rebuild) = {
         let conn = lock_db(state);
         (
-            crate::maintenance::needs_conversion(&conn)
+            crate::maintenance::needs_conversion(&conn, crate::db::CORPUS)
                 && get_meta(&conn, crate::maintenance::K_AUTO_VACUUM_ERROR).is_none(),
             // A launch normally pays this off first, so reaching it here means the kill
             // happened during *this* session — or that the launch's own rebuild failed.
@@ -1201,13 +1201,10 @@ pub fn status(state: &AppState) -> SyncStatus {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schema;
     use rusqlite::Connection;
 
     fn db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        schema::migrate_single_file(&conn).unwrap();
-        conn
+        crate::schema::memory_pair()
     }
 
     /// A real file with both connections on it — the shape `init_state` builds — because
@@ -1218,10 +1215,9 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("mtgtest-sync-{name}"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("mtg.db");
-        let conn = crate::db::open(&path).unwrap();
-        schema::migrate_single_file(&conn).unwrap();
-        let read = crate::db::open_read_only(&path).unwrap();
+        crate::split::convert(&dir).unwrap();
+        let conn = crate::db::open_write(&dir).unwrap();
+        let read = crate::db::open_read(&dir).unwrap();
         (
             AppState {
                 db: Mutex::new(conn),

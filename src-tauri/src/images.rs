@@ -1538,8 +1538,7 @@ mod tests {
     /// A normal card (top-level images), a transform (per-face), one of the 162 printings
     /// that have no image anywhere, and one of the eight that have something worse.
     fn seeded() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate_single_file(&conn).unwrap();
+        let conn = crate::schema::memory_pair();
         conn.execute(
             "INSERT INTO cards (id, name, set_code, collector_number, lang, layout, image_uris, raw)
              VALUES ('0000419b-0bba-4488-8f7a-6194544ce91d','Bolt','lea','161','en','normal',
@@ -2046,10 +2045,9 @@ mod tests {
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(&dir).unwrap();
 
-            let db = dir.join("mtg.db");
-            let write = crate::db::open(&db).unwrap();
-            crate::schema::migrate_single_file(&write).unwrap();
-            let read = crate::db::open_read_only(&db).unwrap();
+            crate::split::convert(&dir).unwrap();
+            let write = crate::db::open_write(&dir).unwrap();
+            let read = crate::db::open_read(&dir).unwrap();
 
             Fixture {
                 cache: Cache::new(dir.join("images")),

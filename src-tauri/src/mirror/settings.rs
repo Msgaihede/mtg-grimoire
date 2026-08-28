@@ -307,7 +307,7 @@ pub async fn mirror_rebuild(
 /// falls back to the shared one rather than refusing: a slow rebuild is better than a button
 /// that does nothing, and the reader asked for this explicitly.
 pub fn rebuild_now(state: &AppState) -> Result<crate::mirror::run::PassReport, String> {
-    let own = crate::db::open_read_only(&state.data_dir.join("mtg.db")).ok();
+    let own = crate::db::open_read(&state.data_dir).ok();
     let outcome = {
         let shared = own.is_none().then(|| crate::sync::lock_db_read(state));
         let conn = own
@@ -330,12 +330,9 @@ pub fn rebuild_now(state: &AppState) -> Result<crate::mirror::run::PassReport, S
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schema;
 
     fn migrated_memory_db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        schema::migrate_single_file(&conn).unwrap();
-        conn
+        crate::schema::memory_pair()
     }
 
     /// A database nobody has told is a database that mirrors, into the folder beside itself.

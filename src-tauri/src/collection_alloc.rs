@@ -818,8 +818,7 @@ mod tests {
     /// hands out: `collection_entries.folder_id` SET NULLs and `collection_folders.deck_id`
     /// CASCADEs, and both are per-connection settings an in-memory database starts without.
     fn open() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate_single_file(&conn).unwrap();
+        let conn = crate::schema::memory_pair();
         conn.pragma_update(None, "foreign_keys", "ON").unwrap();
         conn
     }
