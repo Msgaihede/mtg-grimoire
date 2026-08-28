@@ -25,6 +25,7 @@
 
 pub mod apply;
 pub mod capture;
+pub mod client;
 pub mod hlc;
 pub mod merge;
 pub mod wire;
