@@ -367,6 +367,68 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
+    /// **A converted database must be able to record an op, and until 2026-08-29 it could not.**
+    ///
+    /// Every capture trigger ends `FROM sync_clock c, sync_identity i, sync_group g` — a cross
+    /// join, so an empty `sync_clock` makes the whole `SELECT` yield nothing and the device
+    /// writes no op. `convert` builds the user file with `create_user_schema` and stamps head,
+    /// so `migrate_user` runs no rung and `USER_SEED_SQL`'s `v == 0` arm never fires: the
+    /// conversion path was seeded by neither, and it is the path every existing desktop install
+    /// takes exactly once.
+    ///
+    /// **Why this asserts an op and not just a row count.** A test that only counted
+    /// `sync_clock` would pass the moment anyone seeded it anywhere, including somewhere that
+    /// does not run on this path. What the reader needs is that an edit *travels*, so the test
+    /// pairs the database the way pairing does — the two tables the trigger joins — and then
+    /// makes one ordinary write.
+    #[test]
+    fn a_converted_database_can_record_an_op() {
+        let dir = scratch("convert-clock");
+        legacy(&dir);
+        convert(&dir).unwrap();
+
+        let conn = crate::db::open_write(&dir).unwrap();
+        crate::schema::prepare_database(&conn).unwrap();
+
+        let clock: i64 = conn
+            .query_row("SELECT count(*) FROM main.sync_clock", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            clock, 1,
+            "a converted file has no clock, so it can capture nothing"
+        );
+
+        // What pairing writes, and nothing else.
+        conn.execute(
+            "INSERT INTO sync_identity (device_id, secret_key, public_key, name, created_at)
+             VALUES ('d', '00', '00', 'probe', 0)",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO sync_group (group_id, epoch, group_key, joined_at)
+             VALUES ('g', 1, '00', 0)",
+            [],
+        )
+        .unwrap();
+
+        conn.execute(
+            "INSERT INTO decks (name, format_key, created_at, updated_at)
+             VALUES ('probe', 'casual', unixepoch(), unixepoch())",
+            [],
+        )
+        .unwrap();
+
+        let ops: i64 = conn
+            .query_row("SELECT count(*) FROM sync_ops", [], |r| r.get(0))
+            .unwrap();
+        assert!(
+            ops > 0,
+            "a paired, converted database recorded no op for an ordinary insert — \
+             the capture triggers' cross join found an empty sync_clock"
+        );
+    }
+
     /// The conversion, end to end, on a database this app actually built.
     #[test]
     fn a_legacy_database_becomes_two_and_keeps_every_user_row() {

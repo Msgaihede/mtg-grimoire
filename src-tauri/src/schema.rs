@@ -4510,6 +4510,34 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
         tx.execute_batch("PRAGMA main.user_version = 29;")?;
         tx.commit()?;
     }
+
+    // **The clock, repaired on every launch at every version — and this is not belt-and-braces.**
+    //
+    // Every capture trigger ends `FROM sync_clock c, sync_identity i, sync_group g`. That is a
+    // cross join: **an empty `sync_clock` makes the whole `SELECT` produce no row**, so the
+    // device records no ops at all. It is invisible until the reader pairs, because `identity`
+    // and `group` are empty before that and the join produces nothing either way — which is
+    // correct then. After pairing, the device reports itself paired and syncs *nothing*, for
+    // ever, with no error anywhere.
+    //
+    // The two existing seeds do not cover every file, and the third path is the common one:
+    //
+    // | how a user file comes to exist | seeded by |
+    // | --- | --- |
+    // | fresh (`v == 0`, the browser's only path) | [`USER_SEED_SQL`] |
+    // | already split, walked v27 → v29 | the rung above |
+    // | **`split::convert` from a legacy `mtg.db`** | **neither** |
+    //
+    // `convert` builds the file with [`create_user_schema`] and stamps `USER_SCHEMA_VERSION`
+    // directly, so `migrate_user` sees head and runs no rung, and `v == 0` never fires. That is
+    // the path **every existing desktop install takes exactly once**, on the upgrade that
+    // introduces sync.
+    //
+    // So it is repaired here rather than seeded in `convert`: databases converted by a build
+    // that shipped without this line already exist, and only something that runs unconditionally
+    // reaches them. `INSERT OR IGNORE` on a singleton `id = 1` is one indexed probe per launch
+    // and cannot disturb a clock that has advanced.
+    conn.execute_batch("INSERT OR IGNORE INTO main.sync_clock (id, ms, ctr) VALUES (1, 0, 0);")?;
     Ok(())
 }
 
@@ -4599,11 +4627,18 @@ fn corpus_is_readable(data_dir: &std::path::Path) -> bool {
 /// by neither, so without the column here it is the one row in a fresh database whose uid is
 /// NULL — and `sync_ops.uid` is `NOT NULL`, so the first edit to it on a paired device would
 /// fail the reader's own write.
-/// **The clock's one row is seeded here as well as in the v29 rung, and both are owed.** Every
-/// capture trigger joins `sync_clock`, and a join against an empty table produces no row — so a
-/// file that never got the seed records no ops at all, silently, which is the worst way for a
-/// sync to not happen. The rung reaches upgraded files; this reaches converted and fresh ones,
-/// and the browser has only ever had the second kind.
+/// **The clock's one row is seeded here as well as in the v29 rung.** Every capture trigger
+/// joins `sync_clock`, and a join against an empty table produces no row — so a file that never
+/// got the seed records no ops at all, silently, which is the worst way for a sync to not
+/// happen.
+///
+/// **This reaches fresh files only, and the line that once said "converted and fresh" was
+/// wrong.** `split::convert` copies the reader's rows in rather than seeding them, so it never
+/// runs this constant — and it stamps head, so no rung runs either. A converted database
+/// therefore got no clock at all until `migrate_user` grew the unconditional repair at its end.
+/// See that comment for the three paths side by side; measured on a real converted database on
+/// 2026-08-29: paired with an empty clock, a deck rename produced **0** ops; with the clock
+/// seeded, **1**.
 const USER_SEED_SQL: &str = "
     INSERT INTO {schema}.collection_folders
          (parent_id, name, kind, deck_id, sort_order, created_at, updated_at, sync_uid)
