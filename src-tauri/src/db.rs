@@ -2,7 +2,11 @@ use rusqlite::{Connection, OpenFlags};
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard, TryLockError};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+// `Instant::now()` **panics** on `wasm32-unknown-unknown`. Gating the import rather than
+// only its caller is the fence: on the web target the name is not in scope at all.
+#[cfg(not(target_family = "wasm"))]
+use std::time::Instant;
 
 /// Ceiling on the write-ahead log *file* after a checkpoint, in bytes.
 ///
@@ -35,7 +39,40 @@ pub const LEGACY_DB: &str = "mtg.db";
 /// half-qualified against a name somebody typed differently.
 pub const CORPUS: &str = "corpus";
 
-/// Apply the four file-level pragmas to one schema.
+/// Which journal a schema actually ended up on.
+///
+/// A *value* rather than an assumption, because the answer is not the same on every platform
+/// and the difference is about durability rather than speed. `PRAGMA journal_mode = WAL`
+/// answers `delete` on the browser's `opfs-sahpool` VFS — measured 2026-08-28 on **both**
+/// files of the pair, `main=delete corpus=delete` — and a database on a filesystem without
+/// shared memory can answer `delete` on desktop too.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Journal {
+    /// Write-ahead logging — what desktop gets, and what [`checkpoint_truncate`] is for.
+    Wal,
+    /// A rollback journal. The web target's, and the only durability story available there.
+    Delete,
+    /// An in-memory database, which has no journal file to speak of.
+    Memory,
+    /// Something SQLite offers that this app never asks for. Never a panic and never a
+    /// guess: a mode this build has not heard of must not be mistaken for one it has.
+    Other,
+}
+
+impl Journal {
+    /// Read SQLite's own answer. Case-insensitive: the pragma answers lowercase, but the
+    /// value can also arrive from a stored string.
+    pub fn parse(answer: &str) -> Journal {
+        match answer.to_ascii_lowercase().as_str() {
+            "wal" => Journal::Wal,
+            "delete" => Journal::Delete,
+            "memory" => Journal::Memory,
+            _ => Journal::Other,
+        }
+    }
+}
+
+/// Apply the four file-level pragmas to one schema, and answer the journal SQLite settled on.
 ///
 /// **`auto_vacuum` first, before any statement writes a page**, and that ordering is
 /// load-bearing on both schemas for the same reason: once `journal_mode=WAL` has
@@ -47,12 +84,23 @@ pub const CORPUS: &str = "corpus";
 ///
 /// `schema` is `None` for `main` and `Some(CORPUS)` for the attached half. `foreign_keys`
 /// and `busy_timeout` are **not** here: both are per-connection and take no schema.
-fn configure(conn: &Connection, schema: Option<&str>) -> rusqlite::Result<()> {
+///
+/// **The journal is returned rather than discarded, and that is the web target's doing.**
+/// `journal_mode` is issued with `query_row` and not `pragma_update`: the latter goes through
+/// `execute_batch`, which throws returned rows away, so the old code could not see SQLite's
+/// answer even in principle. The browser's pool refuses WAL, so a caller there has to be able
+/// to *record* what it got instead of assuming; the same read makes a desktop that quietly
+/// fell off WAL visible, which it was not.
+pub fn apply_pragmas(conn: &Connection, schema: Option<&str>) -> rusqlite::Result<Journal> {
     conn.pragma_update(schema, "auto_vacuum", "INCREMENTAL")?;
-    conn.pragma_update(schema, "journal_mode", "WAL")?;
+    let qualified = match schema {
+        Some(name) => format!("PRAGMA {name}.journal_mode = WAL"),
+        None => "PRAGMA journal_mode = WAL".to_owned(),
+    };
+    let journal: String = conn.query_row(&qualified, [], |r| r.get(0))?;
     conn.pragma_update(schema, "synchronous", "NORMAL")?;
     conn.pragma_update(schema, "journal_size_limit", JOURNAL_SIZE_LIMIT)?;
-    Ok(())
+    Ok(Journal::parse(&journal))
 }
 
 /// Open (or create) the SQLite database at `path` with the app's standard PRAGMAs:
@@ -64,7 +112,7 @@ fn configure(conn: &Connection, schema: Option<&str>) -> rusqlite::Result<()> {
 /// and because the pragma set has exactly one definition either way.
 pub fn open(path: &Path) -> rusqlite::Result<Connection> {
     let conn = Connection::open(path)?;
-    configure(&conn, None)?;
+    apply_pragmas(&conn, None)?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
     conn.busy_timeout(BUSY_TIMEOUT)?;
     Ok(conn)
@@ -86,7 +134,7 @@ pub fn attach_corpus(conn: &Connection, data_dir: &Path) -> rusqlite::Result<()>
         &format!("ATTACH DATABASE ?1 AS {CORPUS}"),
         [path.to_string_lossy().as_ref()],
     )?;
-    configure(conn, Some(CORPUS))
+    apply_pragmas(conn, Some(CORPUS)).map(|_| ())
 }
 
 /// The one write connection: `user.db` as `main`, `corpus.db` attached.
@@ -98,7 +146,7 @@ pub fn attach_corpus(conn: &Connection, data_dir: &Path) -> rusqlite::Result<()>
 /// and `PRAGMA user_version` unqualified means `main`.
 pub fn open_write(data_dir: &Path) -> rusqlite::Result<Connection> {
     let conn = Connection::open(data_dir.join(USER_DB))?;
-    configure(&conn, None)?;
+    apply_pragmas(&conn, None)?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
     conn.busy_timeout(BUSY_TIMEOUT)?;
     attach_corpus(&conn, data_dir)?;
@@ -284,6 +332,10 @@ pub fn lock_write<T>(lock: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
 
 /// How long [`lock_for`] sleeps between attempts. Short enough that the wait is invisible,
 /// long enough that a contended lock is not a spin.
+///
+/// Gated because the web arm has no waiting to do, and an unused constant fails
+/// `clippy -D warnings` on that target.
+#[cfg(not(target_family = "wasm"))]
 const LOCK_POLL_INTERVAL: Duration = Duration::from_millis(20);
 
 /// Take `mutex`, giving up after `timeout` rather than queueing behind whatever holds it.
@@ -303,20 +355,42 @@ const LOCK_POLL_INTERVAL: Duration = Duration::from_millis(20);
 ///
 /// Poisoning is recovered exactly as [`lock_blocking`] does: the panicking thread's
 /// `Connection` survives, and refusing the lock forever would brick the app for no gain.
+///
+/// **On web there is no waiting arm at all** — see the body. One Worker means one thread, so
+/// `timeout` has nothing to spend.
 pub fn lock_for(
     mutex: &Mutex<Connection>,
     timeout: Duration,
 ) -> Option<MutexGuard<'_, Connection>> {
-    let deadline = Instant::now() + timeout;
-    loop {
+    // One thread — the Worker — so there is nobody to wait for, and no clock to wait by:
+    // `Instant::now()` panics on wasm32-unknown-unknown, *before* the `try_lock` and whatever
+    // the timeout, so even a `Duration::ZERO` call would panic. A `WouldBlock` here means
+    // this same thread already holds the guard, which is a reentrancy bug to surface rather
+    // than a wait to sit out. This is exactly the `Duration::ZERO` behaviour the doc above
+    // already describes.
+    #[cfg(target_family = "wasm")]
+    {
+        let _ = timeout;
         match mutex.try_lock() {
-            Ok(guard) => return Some(guard),
-            Err(TryLockError::Poisoned(e)) => return Some(e.into_inner()),
-            Err(TryLockError::WouldBlock) => {
-                if Instant::now() >= deadline {
-                    return None;
+            Ok(guard) => Some(guard),
+            Err(TryLockError::Poisoned(e)) => Some(e.into_inner()),
+            Err(TryLockError::WouldBlock) => None,
+        }
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    {
+        let deadline = Instant::now() + timeout;
+        loop {
+            match mutex.try_lock() {
+                Ok(guard) => return Some(guard),
+                Err(TryLockError::Poisoned(e)) => return Some(e.into_inner()),
+                Err(TryLockError::WouldBlock) => {
+                    if Instant::now() >= deadline {
+                        return None;
+                    }
+                    std::thread::sleep(LOCK_POLL_INTERVAL);
                 }
-                std::thread::sleep(LOCK_POLL_INTERVAL);
             }
         }
     }
@@ -329,6 +403,77 @@ pub fn lock_for(
 /// either way, and the next launch replays it. See the exit handler in `lib.rs`.
 pub fn checkpoint_truncate(conn: &Connection) -> rusqlite::Result<()> {
     conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))
+}
+
+/// The VFS name the pool registers under. Named rather than inline so that a future second
+/// VFS cannot be confused with this one by a typo.
+#[cfg(target_family = "wasm")]
+pub const OPFS_VFS_NAME: &str = "opfs-sahpool";
+
+/// How many files the pool preallocates.
+///
+/// **Files, not bytes**, and the app needs more of them than the spike did: two databases
+/// rather than one, each with a rollback journal — the pool refuses WAL — plus SQLite's own
+/// temporary files and headroom. Twelve was what probe 6 ran the pair on.
+#[cfg(target_family = "wasm")]
+const OPFS_INITIAL_CAPACITY: u32 = 12;
+
+/// Install the browser's OPFS VFS and make it the default.
+///
+/// **Web only, and it must run inside a dedicated Worker.** `opfs-sahpool` holds exclusive
+/// `FileSystemSyncAccessHandle`s, which are only obtainable off the main thread. That is not
+/// a detail of the harness: it is why the whole database lives in one Worker.
+///
+/// **This call is the one-tab guard's trigger, and that was measured rather than assumed.**
+/// A second document of the same origin fails *here* — not at [`open_pooled_pair`] — with
+/// `CreateSyncAccessHandle(JsValue(NoModificationAllowedError: …))`. The first tab holds every
+/// handle in the pool, so the second never gets as far as naming a database.
+///
+/// **Cross-origin isolation is not required.** The same page was served with and without
+/// `Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy: require-corp`
+/// and passed both ways; the timing difference was cache noise. Do not add those headers.
+///
+/// The error is a `String` because the crate hands back a `JsValue` and the caller needs its
+/// *text*: [`crate::web::wire::Opened::from_open_error`] tells "already open elsewhere" from
+/// "genuinely broken" by matching the DOMException's name inside it.
+#[cfg(target_family = "wasm")]
+pub async fn install_opfs_pool(directory: &str) -> Result<(), String> {
+    let cfg = sqlite_wasm_vfs::sahpool::OpfsSAHPoolCfgBuilder::new()
+        .vfs_name(OPFS_VFS_NAME)
+        .directory(directory)
+        .initial_capacity(OPFS_INITIAL_CAPACITY)
+        .build();
+    sqlite_wasm_vfs::sahpool::install::<rusqlite::ffi::WasmOsCallback>(&cfg, true)
+        .await
+        .map(|_| ())
+        .map_err(|e| format!("{e:?}"))
+}
+
+/// [`open_write`]'s pair, on the pool installed by [`install_opfs_pool`].
+///
+/// The names are bare rather than paths: **the pool is the filesystem**. Everything else is
+/// `open_write` line for line — `user.db` as `main`, `corpus.db` attached as [`CORPUS`], the
+/// same four file pragmas on each schema and the same two per-connection ones — because the
+/// split is a fact about the app's data and not about the medium it sits on.
+///
+/// **That the pool can hold two databases, and that `ATTACH` reaches the second through the
+/// same VFS, was measured before this was written** (2026-08-28, Chrome/Edge 151, probe 6):
+/// `PRAGMA database_list` answered `main=user.db corpus=corpus.db`, one transaction wrote to
+/// both, a join across them answered, `DETACH` and re-`ATTACH` both worked, and both files
+/// survived a page reload. It is not a thing to assume — the spike only ever proved one file.
+///
+/// Both journals come back [`Journal::Delete`]: the sahpool VFS refuses WAL on either half.
+/// That is the web target's durability story, and the caller is expected to record it rather
+/// than retry.
+#[cfg(target_family = "wasm")]
+pub fn open_pooled_pair() -> rusqlite::Result<(Connection, Journal, Journal)> {
+    let conn = Connection::open(USER_DB)?;
+    let user = apply_pragmas(&conn, None)?;
+    conn.pragma_update(None, "foreign_keys", "ON")?;
+    conn.busy_timeout(BUSY_TIMEOUT)?;
+    conn.execute(&format!("ATTACH DATABASE ?1 AS {CORPUS}"), [CORPUS_DB])?;
+    let corpus = apply_pragmas(&conn, Some(CORPUS))?;
+    Ok((conn, user, corpus))
 }
 
 #[cfg(test)]
@@ -663,6 +808,62 @@ mod tests {
             after_corpus, 0,
             "an unqualified checkpoint must reach the attached file"
         );
+    }
+
+    /// A real file gets WAL. This is the assertion [`apply_pragmas`] has always *implied* and
+    /// never made — `pragma_update` runs through `execute_batch`, which throws the answer away.
+    #[test]
+    fn a_file_database_reports_the_journal_it_actually_got() {
+        let dir = scratch("journal");
+        let conn = Connection::open(dir.join("journal.db")).unwrap();
+
+        assert_eq!(apply_pragmas(&conn, None).unwrap(), Journal::Wal);
+
+        // And the pragmas that do not depend on the medium are on. `foreign_keys` is not one
+        // of them — it is per-connection and `open` sets it, not `apply_pragmas`.
+        let av: i64 = conn
+            .query_row("PRAGMA auto_vacuum", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(av, 2, "auto_vacuum INCREMENTAL is 2");
+
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// **Both halves of the pair report, and separately.** A journal is a property of a
+    /// *file*, so the answer for `main` says nothing about the attached corpus — which is the
+    /// same reason `apply_pragmas` takes a schema at all, and the reason the corpus's
+    /// `journal_size_limit` had to be set by hand.
+    #[test]
+    fn both_files_report_the_journal_they_got() {
+        let dir = scratch("journal-pair");
+        let conn = open_write(&dir).unwrap();
+
+        // Re-asking is idempotent and answers what the file is on now.
+        assert_eq!(apply_pragmas(&conn, None).unwrap(), Journal::Wal);
+        assert_eq!(apply_pragmas(&conn, Some(CORPUS)).unwrap(), Journal::Wal);
+
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// An in-memory database cannot be on WAL, and saying so is the whole point: the web
+    /// target gets `delete` from the sahpool VFS for the same kind of reason, and the app
+    /// has to be able to *see* which journal it ended up on rather than assume one.
+    #[test]
+    fn an_in_memory_database_reports_memory_rather_than_wal() {
+        let conn = Connection::open_in_memory().unwrap();
+        assert_eq!(apply_pragmas(&conn, None).unwrap(), Journal::Memory);
+    }
+
+    /// The vocabulary is closed, and an unknown answer is `Other` rather than a panic or a
+    /// wrong guess. `truncate` is a real SQLite journal mode this app never asks for.
+    #[test]
+    fn an_unrecognised_journal_name_is_other_and_not_a_guess() {
+        assert_eq!(Journal::parse("truncate"), Journal::Other);
+        assert_eq!(Journal::parse("DELETE"), Journal::Delete);
+        assert_eq!(Journal::parse("wal"), Journal::Wal);
+        assert_eq!(Journal::parse("memory"), Journal::Memory);
     }
 
     /// What the exit handler buys: without a truncating checkpoint the `-wal` file
