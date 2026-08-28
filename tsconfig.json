@@ -57,6 +57,10 @@
   // it is the half that needs Node types and this half must never see them (see `types`
   // above). `npm run build` runs both.
   "include": ["src"],
-  "exclude": [".claude"],
+  /* The two files that belong to `tsconfig.sw.json` instead. They are compiled with
+     `lib.webworker`, where `self` is a `ServiceWorkerGlobalScope`; in this program `self` is a
+     `Window` and every line of `sw.ts` is an error. `swCore.ts` stays in BOTH programs — it
+     names only types the two libraries share. */
+  "exclude": [".claude", "src/pwa/sw.ts", "src/pwa/sw-env.d.ts"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }
