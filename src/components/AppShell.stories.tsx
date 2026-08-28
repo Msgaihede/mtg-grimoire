@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { dndManager } from "@/lib/dndManager";
 import { useQueryClient } from "@tanstack/react-query";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
@@ -160,100 +161,118 @@ function CardSource() {
 /* ------------------------------------------------------------------- a real drag ------- */
 
 /**
- * The platform's drag clipboard, in the only shape this app's drags need.
+ * A pointer drag, driven from a story.
  *
  * **`src/test-drag.ts` is the same thing and cannot be imported here.** That module registers an
- * `afterEach` from `vitest` at import time and pulls in `@testing-library/react`, so importing
- * it would put a test runner into the Storybook browser bundle and throw outside Vitest. What is
- * copied is the minimum: the app's own payload never travels in this object — it lives in
- * pragmatic-drag-and-drop's store, keyed off the draggable's `getInitialData` — so only the
- * methods the library itself calls need to exist.
+ * `afterEach` from `vitest` at import time and pulls in `@testing-library/react`, so importing it
+ * would put a test runner into the Storybook browser bundle and throw outside Vitest. So this is a
+ * copy, and it is deliberately the smallest one that drives `@dnd-kit/dom`: a press, two moves
+ * past the 5px activation distance, and a release.
  *
- * This works in jsdom *and* in a real browser for the same reason it works in the suite: the
- * library hit-tests with `event.target` and `Element.closest`, never with `elementFromPoint`,
- * and listens for the platform's own drag events on `document` and `window`. A synthetic
- * `MouseEvent` with a `dataTransfer` bolted on is what the platform's drag event really is.
+ * **Two things it has to do that a browser does for free**, and both are jsdom's doing rather than
+ * the library's. jsdom lays nothing out, so an element with no box is given one — only when it has
+ * none, so in a real Storybook window every rectangle is the window's own. And dnd-kit recomputes
+ * collisions from a reactive effect its `Feedback` plugin drives through WAAPI, which jsdom does
+ * not have, so the droppables' shapes and the collision pass are forced by hand after every move.
  *
- * What it still does not reach — and what a live pass therefore owes — is the platform's own
- * drag preview, the pointer-driven hit-testing that decides which element a `dragover` lands on,
- * and auto-scrolling, all three of which measure rectangles.
- */
-class StoryDataTransfer {
-  private store = new Map<string, string>();
-  effectAllowed = "uninitialized";
-  dropEffect = "none";
-  get types(): string[] {
-    return [...this.store.keys()];
-  }
-  setData(format: string, data: string): void {
-    this.store.set(format, data);
-  }
-  getData(format: string): string {
-    return this.store.get(format) ?? "";
-  }
-  clearData(): void {
-    this.store.clear();
-  }
-  setDragImage(): void {}
-  items = { add: () => {} };
-}
-
-function send(target: Element, type: string, dataTransfer: StoryDataTransfer): void {
-  const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX: 8, clientY: 8 });
-  // Not a `MouseEvent` field, and read-only where it does exist.
-  Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
-  target.dispatchEvent(event);
-}
-
-/**
- * One frame, so the library's `requestAnimationFrame`-scheduled `onDragStart` has landed before
- * the next assertion reads the DOM — it batches that with the drag preview.
- *
- * **Necessary and not sufficient, and every assertion that reads a drag's result must therefore
- * go through `waitFor`.** The library schedules its drop-target change on a frame; React's
- * commit of the state that change sets is a *second* hop, and {@link send} dispatches outside
- * `act`, so nothing forces the two into one tick. Under a loaded suite they routinely are not:
- * measured 2026-08-09, the bare `toHaveClass(DROP_OVER)` that used to follow `over()` failed
- * **5 of 10** runs of this file alone, and passed **10 of 10** wrapped.
+ * **Every drag started here must be finished, and a `finally` is what finishes it.** The manager
+ * has one drag operation and `handlePointerDown` returns early unless it is idle, so a story that
+ * walked away holding a card leaves the next one unable to pick anything up. That is not
+ * hypothetical: it is the second half of the flake this file used to have, where one broken
+ * assertion mid-drag reported as two failures. {@link pickUp}'s `cancel` is Escape at the body and
+ * is inert when nothing is in flight, so a story that ends in a real `drop` pays a no-op for the
+ * same guarantee.
  */
 const frame = () =>
   new Promise<void>((resolve) => {
     requestAnimationFrame(() => resolve());
   });
 
-/**
- * Pick a card up. **Every drag started here must be finished, and a `finally` is what finishes
- * it** — the library keeps one global "a drag is active" flag, and a story that walked away
- * holding a card leaves the next one unable to pick one up. That is not a hypothetical: it is
- * the second half of the flake this file used to have. A failed assertion mid-drag threw past
- * the `cancel` below, and `DecksDropTargetInert` — the next story on the page — then failed on
- * a ring that never lit, which is how **one** broken assertion reported **two** failures
- * (measured 2026-08-09: 5 of 10 runs red, every one of them `2 failed`, never `1`).
- *
- * So every `play` here holds its drag inside `try { … } finally { await held.cancel(); }`.
- * {@link cancel} is idempotent by construction — the library binds its `dragend` handling for
- * the life of one drag and unbinds on the first one — so the stories that end in a real
- * {@link drop} pay a no-op for the same guarantee.
- */
+/** Somewhere for the next unmeasured element to be. Stacked, so no two ever overlap. */
+let unmeasured = 0;
+
+/** Where an element is — and, under jsdom, where it is going to pretend to be. */
+function centreOf(element: Element): { x: number; y: number } {
+  const box = element.getBoundingClientRect();
+  if (box.width > 0 || box.height > 0)
+    return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+  const top = (unmeasured += 120);
+  element.getBoundingClientRect = () =>
+    ({
+      x: 0,
+      y: top,
+      top,
+      left: 0,
+      right: 200,
+      bottom: top + 60,
+      width: 200,
+      height: 60,
+      toJSON: () => ({}),
+    }) as DOMRect;
+  return { x: 100, y: top + 30 };
+}
+
+function firePointer(type: string, at: { x: number; y: number }, target: EventTarget): void {
+  target.dispatchEvent(
+    new PointerEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      clientX: at.x,
+      clientY: at.y,
+      pointerId: 1,
+      pointerType: "mouse",
+      isPrimary: true,
+      button: 0,
+      buttons: type === "pointerup" ? 0 : 1,
+    }),
+  );
+}
+
+/** The collision pass jsdom cannot schedule, plus the measurement it cannot take — **twice**,
+ *  because the operation's target follows the collisions one hop behind: the observer's reaction
+ *  disables it, calls `setDropTarget`, and re-enables on a promise. */
+async function settle(): Promise<void> {
+  for (let pass = 0; pass < 2; pass++) {
+    await frame();
+    for (const droppable of dndManager.registry.droppables) droppable.refreshShape();
+    dndManager.collisionObserver.forceUpdate();
+    await frame();
+  }
+}
+
+/** Move the pointer. **Twice per step**, because the operation's own position lags one
+ *  `pointermove` behind: the sensor records the coordinates and hands the move to its scheduler. */
+async function pointerTo(at: { x: number; y: number }): Promise<void> {
+  for (let i = 0; i < 2; i++) {
+    firePointer("pointermove", at, document);
+    await frame();
+  }
+  await settle();
+}
+
 async function pickUp(source: Element) {
-  const data = new StoryDataTransfer();
-  send(source, "mousedown", data);
-  send(source, "dragstart", data);
-  await frame();
+  const start = centreOf(source);
+  let at = start;
+  firePointer("pointerdown", start, source);
+  await pointerTo({ x: start.x, y: start.y + 8 });
+  await pointerTo({ x: start.x, y: start.y + 16 });
   return {
     over: async (target: Element) => {
-      send(target, "dragenter", data);
-      send(target, "dragover", data);
-      await frame();
+      at = centreOf(target);
+      await pointerTo(at);
     },
     drop: async (target: Element) => {
-      send(target, "drop", data);
-      send(source, "dragend", data);
+      at = centreOf(target);
+      await pointerTo(at);
+      firePointer("pointerup", at, document);
       await frame();
     },
     /** How a real drag ends when the reader presses Escape or lets go over nothing. */
     cancel: async () => {
-      send(source, "dragend", data);
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+      );
       await frame();
     },
   };

@@ -1,4 +1,5 @@
 import { useEffect, useRef, type ComponentProps } from "react";
+import { dndManager } from "@/lib/dndManager";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, waitFor, within } from "storybook/test";
 import { useContextMenu } from "@/components/menu/useContextMenu";
@@ -279,72 +280,118 @@ export const Thousands: Story = {
 /* ---------------------------------------------------------------- a real drag ------- */
 
 /**
- * The platform's drag clipboard, in the only shape this app's drags need.
+ * A pointer drag, driven from a story.
  *
- * **`src/test-drag.ts` is the same thing and cannot be imported here** — it registers an
+ * **`src/test-drag.ts` is the same thing and cannot be imported here.** That module registers an
  * `afterEach` from `vitest` at import time and pulls in `@testing-library/react`, so importing it
- * would put a test runner into the Storybook browser bundle. `AppShell.stories.tsx`,
- * `QuickZones.stories.tsx` and `WishFolderCard.stories.tsx` each carry the same copy for the same
- * reason, and the second of those has the long version of why a synthetic `MouseEvent` with a
- * `dataTransfer` bolted on *is* the platform's drag event.
+ * would put a test runner into the Storybook browser bundle and throw outside Vitest. So this is a
+ * copy, and it is deliberately the smallest one that drives `@dnd-kit/dom`: a press, two moves
+ * past the 5px activation distance, and a release.
+ *
+ * **Two things it has to do that a browser does for free**, and both are jsdom's doing rather than
+ * the library's. jsdom lays nothing out, so an element with no box is given one — only when it has
+ * none, so in a real Storybook window every rectangle is the window's own. And dnd-kit recomputes
+ * collisions from a reactive effect its `Feedback` plugin drives through WAAPI, which jsdom does
+ * not have, so the droppables' shapes and the collision pass are forced by hand after every move.
+ *
+ * **Every drag started here must be finished, and a `finally` is what finishes it.** The manager
+ * has one drag operation and `handlePointerDown` returns early unless it is idle, so a story that
+ * walked away holding a card leaves the next one unable to pick anything up. That is not
+ * hypothetical: it is the second half of the flake this file used to have, where one broken
+ * assertion mid-drag reported as two failures. {@link pickUp}'s `cancel` is Escape at the body and
+ * is inert when nothing is in flight, so a story that ends in a real `drop` pays a no-op for the
+ * same guarantee.
  */
-class StoryDataTransfer {
-  private store = new Map<string, string>();
-  effectAllowed = "uninitialized";
-  dropEffect = "none";
-  get types(): string[] {
-    return [...this.store.keys()];
-  }
-  setData(format: string, data: string): void {
-    this.store.set(format, data);
-  }
-  getData(format: string): string {
-    return this.store.get(format) ?? "";
-  }
-  clearData(): void {
-    this.store.clear();
-  }
-  setDragImage(): void {}
-  items = { add: () => {} };
-}
-
-function send(target: Element, type: string, dataTransfer: StoryDataTransfer): void {
-  const event = new MouseEvent(type, { bubbles: true, cancelable: true, clientX: 8, clientY: 8 });
-  Object.defineProperty(event, "dataTransfer", { value: dataTransfer });
-  target.dispatchEvent(event);
-}
-
-/** One frame, so the library's `requestAnimationFrame`-scheduled `onDragStart` has landed.
- *  Necessary and not sufficient — every assertion about a drag's result goes through
- *  `waitFor`. */
 const frame = () =>
   new Promise<void>((resolve) => {
     requestAnimationFrame(() => resolve());
   });
 
-/** Pick a copy up. **Every drag started here must be finished** — the library keeps one global
- *  "a drag is active" flag, and a story that walked away holding one leaves the next story unable
- *  to pick anything up. Hence the `finally` in the play below. */
+/** Somewhere for the next unmeasured element to be. Stacked, so no two ever overlap. */
+let unmeasured = 0;
+
+/** Where an element is — and, under jsdom, where it is going to pretend to be. */
+function centreOf(element: Element): { x: number; y: number } {
+  const box = element.getBoundingClientRect();
+  if (box.width > 0 || box.height > 0)
+    return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+  const top = (unmeasured += 120);
+  element.getBoundingClientRect = () =>
+    ({
+      x: 0,
+      y: top,
+      top,
+      left: 0,
+      right: 200,
+      bottom: top + 60,
+      width: 200,
+      height: 60,
+      toJSON: () => ({}),
+    }) as DOMRect;
+  return { x: 100, y: top + 30 };
+}
+
+function firePointer(type: string, at: { x: number; y: number }, target: EventTarget): void {
+  target.dispatchEvent(
+    new PointerEvent(type, {
+      bubbles: true,
+      cancelable: true,
+      composed: true,
+      clientX: at.x,
+      clientY: at.y,
+      pointerId: 1,
+      pointerType: "mouse",
+      isPrimary: true,
+      button: 0,
+      buttons: type === "pointerup" ? 0 : 1,
+    }),
+  );
+}
+
+/** The collision pass jsdom cannot schedule, plus the measurement it cannot take — **twice**,
+ *  because the operation's target follows the collisions one hop behind: the observer's reaction
+ *  disables it, calls `setDropTarget`, and re-enables on a promise. */
+async function settle(): Promise<void> {
+  for (let pass = 0; pass < 2; pass++) {
+    await frame();
+    for (const droppable of dndManager.registry.droppables) droppable.refreshShape();
+    dndManager.collisionObserver.forceUpdate();
+    await frame();
+  }
+}
+
+/** Move the pointer. **Twice per step**, because the operation's own position lags one
+ *  `pointermove` behind: the sensor records the coordinates and hands the move to its scheduler. */
+async function pointerTo(at: { x: number; y: number }): Promise<void> {
+  for (let i = 0; i < 2; i++) {
+    firePointer("pointermove", at, document);
+    await frame();
+  }
+  await settle();
+}
+
 async function pickUp(source: Element) {
-  const data = new StoryDataTransfer();
-  send(source, "mousedown", data);
-  send(source, "dragstart", data);
-  await frame();
+  const start = centreOf(source);
+  let at = start;
+  firePointer("pointerdown", start, source);
+  await pointerTo({ x: start.x, y: start.y + 8 });
+  await pointerTo({ x: start.x, y: start.y + 16 });
   return {
     over: async (target: Element) => {
-      send(target, "dragenter", data);
-      send(target, "dragover", data);
-      await frame();
+      at = centreOf(target);
+      await pointerTo(at);
     },
-    /** Let go over a target — `AppShell.stories.tsx`'s copy of this helper, verbatim: the platform
-     *  sends the `drop` to the element and the `dragend` back to the source it came from. */
     drop: async (target: Element) => {
-      send(target, "drop", data);
-      send(source, "dragend", data);
+      at = centreOf(target);
+      await pointerTo(at);
+      firePointer("pointerup", at, document);
       await frame();
     },
+    /** How a real drag ends when the reader presses Escape or lets go over nothing. */
     cancel: async () => {
-      send(source, "dragend", data);
+      document.body.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+      );
       await frame();
     },
   };
@@ -614,10 +661,13 @@ const OTHER_FOLDER: FolderDrag = {
  * guard is not decoration: Chromium starts a drag from the nearest draggable *ancestor* of whatever
  * was pressed.
  *
- * **The card carries two drop targets on two boxes**, which is a fact about the library rather than
- * a preference — `@atlaskit/pragmatic-drag-and-drop` keeps one element drop target per element and
- * a second registration silently replaces the first. The copy's is the `<li>`; the folder's is an
- * inner wrapper that covers every pixel of the card, and a pointer finds both by walking up.
+ * **The card carries two drop targets on two boxes, and that stopped being a fact about the
+ * library.** `@atlaskit/pragmatic-drag-and-drop` kept one element drop target per element and a
+ * second registration silently replaced the first, so two payloads needed two boxes;
+ * `@dnd-kit/dom` keys its registry by entity id and resolves the pair through `accepts()`, asked
+ * before anything is measured. The two boxes stay for the geometry and for every test and story
+ * that addresses them by name. The copy's is the `<li>`; the folder's is an inner wrapper that
+ * covers every pixel of the card.
  */
 export const FolderTarget: Story = {
   render: (args) => (

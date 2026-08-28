@@ -1,8 +1,8 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { DND_SOURCE_ATTR } from "@/lib/dndTarget";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { monitorForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import type { ReactElement } from "react";
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { readDragData } from "@/features/decks/dnd";
@@ -17,7 +17,7 @@ import type {
 } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
-import { startDrag } from "@/test-drag";
+import { boxed, recordDrags, startPointerDrag } from "@/test-drag";
 
 const searchCards = vi.hoisted(() => vi.fn());
 /** Hoisted so a test can read what the *facet* request carried — see
@@ -314,8 +314,26 @@ let artProgress: ((e: TagProgressEvent) => void) | null = null;
  * would fail with "found multiple elements" rather than with what it was asking about. A reach
  * always starts with a digit; neither chip word does.
  */
+/**
+ * A rail row, waited for with an explicit timeout rather than testing-library's default.
+ *
+ * **The default is 1000 ms and it is a bet on machine speed, not a statement about this
+ * page.** The rail is fetched lazily — a level arrives from the component that draws it —
+ * so every one of these is a wait on an async round trip rather than on a render, and the
+ * assertions that follow are about *what* the rail asked for, never about how fast. It
+ * failed once at 1000 ms in a full-suite run on a loaded machine (2026-08-28) while passing
+ * that same file in isolation, on this branch and on `main` alike.
+ *
+ * Five seconds is chosen to be far outside the noise while still failing in seconds if the
+ * rail genuinely stops loading. It is deliberately on this helper and not on the whole file:
+ * a blanket `testTimeout` would also slacken the assertions that are about behaviour.
+ */
 const railRow = (label: string) =>
-  screen.findByRole("button", { name: new RegExp(`^${label}, (art|oracle) tag, \\d`) });
+  screen.findByRole(
+    "button",
+    { name: new RegExp(`^${label}, (art|oracle) tag, \\d`) },
+    { timeout: 5000 },
+  );
 
 /** The last `search_cards` payload — what every filter assertion below reads. */
 const lastRequest = () =>
@@ -1097,21 +1115,35 @@ describe("the card menu", () => {
 });
 
 describe("dragging a tile", () => {
+  /**
+   * The tile, **with a box**: jsdom has no layout engine, so every `getBoundingClientRect` is
+   * four zeroes and dnd-kit hit-tests by coordinate — a source with no box is pressed at the
+   * origin and travels nowhere. The wall sits at the top and every drop target below it.
+   */
+  const boxedTile = (container: HTMLElement) =>
+    boxed(container.querySelector<HTMLElement>(`[${DND_SOURCE_ATTR}]`)!, 0);
+
+  /** A sidebar entry, boxed clear of the wall above it, so a drop really arrives somewhere
+   *  else. */
+  const boxedEntry = (name: string) => boxed(screen.getByRole("button", { name }), 300, 40);
+
   it("carries the printing the tile draws", async () => {
     const { container } = wrap(<TagsPage />);
     const art = await screen.findByRole("button", { name: "Lightning Bolt" });
 
-    const tiles = [...container.querySelectorAll('[draggable="true"]')];
+    const tiles = [...container.querySelectorAll<HTMLElement>(`[${DND_SOURCE_ATTR}]`)];
     expect(tiles).toHaveLength(1);
     expect(tiles[0]).toContainElement(art);
 
-    const carried: Record<string, unknown>[] = [];
-    const stop = monitorForElements({ onDragStart: ({ source }) => carried.push(source.data) });
-    const held = await startDrag(tiles[0]);
+    const drags = recordDrags();
+    const held = await startPointerDrag(boxed(tiles[0], 0));
+    // Asked while the drag is still up: `started` is a live reading of the manager's operation
+    // rather than a remembered one, so after a cancel it is false for every drag there has been.
+    expect(held.started).toBe(true);
     await held.cancel();
-    stop();
+    drags.stop();
 
-    expect(carried.map(readDragData)).toEqual([
+    expect(drags.records.map(readDragData)).toEqual([
       { kind: "card", cardId: "c-bolt-lea", name: "Lightning Bolt", typeLine: "Instant" },
     ]);
   });
@@ -1124,10 +1156,9 @@ describe("dragging a tile", () => {
   it("wishes for a tile dropped on the sidebar's Wishlist entry", async () => {
     const { container } = wrapInShell(<TagsPage />);
     await screen.findByRole("button", { name: "Lightning Bolt" });
-    const tile = container.querySelector('[draggable="true"]') as HTMLElement;
 
-    const held = await startDrag(tile);
-    await held.over(screen.getByRole("button", { name: "Wishlist" }));
+    const held = await startPointerDrag(boxedTile(container));
+    await held.over(boxedEntry("Wishlist"));
     await held.drop();
 
     await waitFor(() =>
@@ -1141,7 +1172,7 @@ describe("dragging a tile", () => {
     deckAddCard.mockResolvedValue({ id: 1, quantity: 1 });
     const { container } = wrapInShell(<TagsPage />);
     await screen.findByRole("button", { name: "Lightning Bolt" });
-    const tile = container.querySelector('[draggable="true"]') as HTMLElement;
+    const tile = boxedTile(container);
 
     // **The guard for the `queryClient.clear()` above, and it is not ceremony.** These two
     // tests share the app's module-level client at a 30 s `staleTime`, so without that clear
@@ -1149,8 +1180,8 @@ describe("dragging a tile", () => {
     // measured, not assumed. It passes either way while both fixtures are the same card, which
     // is exactly the kind of test that stops meaning anything without anyone noticing.
     expect(searchCards).toHaveBeenCalled();
-    const held = await startDrag(tile);
-    await held.over(screen.getByRole("button", { name: "Decks" }));
+    const held = await startPointerDrag(tile);
+    await held.over(boxedEntry("Decks"));
     await held.drop();
 
     // Filed by what the card does — no category id, because a nav item several views away from

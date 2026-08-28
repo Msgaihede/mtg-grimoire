@@ -1,5 +1,5 @@
-import { draggable } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
-import { setCardCountPreview } from "@/lib/dragPreview";
+import { KeyboardSensor, PointerSensor } from "@dnd-kit/dom";
+import { dndDraggable } from "@/lib/dndTarget";
 import type { DeckFinish } from "@/lib/ipc";
 
 /**
@@ -262,19 +262,21 @@ export function deckCardSlot(categoryId: number, cardId: string, finish: DeckFin
  * one of its own controls that is a press on the control, not on the element.
  *
  * **Why the press guard exists at all.** A whole deck row is draggable, and a deck row is full of
- * controls: a stepper, a menu trigger, the menu itself. Chromium starts a drag from the
- * nearest draggable *ancestor* of whatever was pressed, and the drag library adds no
- * exclusion of its own — so without this, a press on the stepper's `−` plus five pixels of
- * travel is a drag of the whole row, the click that was meant is never delivered, and letting
- * go over the remove tray takes every copy out of the deck with nothing to undo it.
+ * controls: a stepper, a menu trigger, the menu itself. A drag starts from the nearest draggable
+ * *ancestor* of whatever was pressed — so without an exclusion, a press on the stepper's `−` plus
+ * five pixels of travel is a drag of the whole row, the click that was meant is never delivered,
+ * and letting go over the remove tray takes every copy out of the deck with nothing to undo it.
  * **Measured in the running window before it was fixed** (2026-08-05): 4 copies moved zones
  * from a press on `−`.
  *
- * `canDrag` is asked at `dragstart` and is handed the pointer's coordinates rather than what
- * it pressed, so the press is remembered here: `mousedown` always precedes `dragstart` (a
- * native drag is a mouse gesture — Chromium starts none from touch), and the listener is in
- * the **capture** phase on the element itself so a control that stops the press from propagating
- * cannot hide it from this.
+ * **The guard is the library's now, and it is the same rule.** It used to be a capture-phase
+ * `mousedown` listener here, remembered for a `canDrag` that pragmatic-dnd handed the pointer's
+ * *coordinates* rather than what was pressed. `@dnd-kit/dom`'s `PointerSensor` asks the question
+ * itself through `preventActivation`, and `lib/dndManager.ts` configures it with {@link NOT_A_DRAG}
+ * **once, for every draggable in the window**, rather than once per registration. {@link notFrom}
+ * is what a source passes to narrow it, and a source that does gets a sensor list of its own —
+ * which is why the list below spells out `KeyboardSensor` as well: a per-source `sensors` replaces
+ * the manager's rather than extending it.
  *
  * **It takes a bare record rather than a {@link DragPayload}, and that is the whole reason it is
  * a function of its own rather than the body of {@link cardDraggable}.** A payload is one mark
@@ -283,61 +285,44 @@ export function deckCardSlot(categoryId: number, cardId: string, finish: DeckFin
  * `wishDragData`'s keys merged into one flat object, each reader answering only its own
  * (`features/wishlist/wishDrag.ts` argues that at length). The two alternatives were both worse
  * where it counts: widening `DragPayload` puts a wishlist concept inside the deck drag's type,
- * and registering a *second* `draggable()` on the same element gives one tile two competing
- * registrations, which the library resolves by keeping whichever went on last. So the composing
- * happens in the caller and this function's only opinion is the press guard above — **written
- * once, here**, because a second copy of it is a second place for the stepper bug to come back.
+ * and the reader would be back to threading a wishlist concept through the deck's type. **The
+ * second half of that argument expired with pragmatic-dnd** and is written down because it looks
+ * like it still holds: that library kept one `draggable()` per element in a `WeakMap` and a second
+ * registration silently replaced the first, so a second `draggable()` on one tile was not an
+ * option at all. dnd-kit keys its registry by entity id and two registrations on one element both
+ * stand. The first half is still enough on its own, so the composing goes on happening in the
+ * caller.
  */
 export function composedDraggable({
   element,
   data,
   notFrom = NOT_A_DRAG,
-  count,
 }: {
   element: HTMLElement;
-  /** Read at `dragstart`, so a row that has been renumbered — or re-filed — since it mounted
+  /** Read at the press, so a row that has been renumbered — or re-filed — since it mounted
    *  still carries what it is now. */
   data: () => Record<string, unknown>;
   /** Overridable for the one case where the default is wrong — nothing today. */
   notFrom?: string;
-  /**
-   * How many cards this drag is carrying, for the count chip — issue #214.
-   *
-   * A function for {@link data}'s reason and read a moment earlier: `onGenerateDragPreview` fires
-   * *before* `dragstart`, so a selection that changed since the element mounted is still answered
-   * correctly. Absent, or answering below two, and the drag keeps the native preview it has today
-   * — which is every single-card drag in the app.
-   */
-  count?: () => number;
 }): () => void {
-  let onControl = false;
-  const press = (event: Event) => {
-    const target = event.target;
-    onControl = target instanceof Element && target.closest(notFrom) !== null;
-  };
-  element.addEventListener("mousedown", press, true);
-  const stop = draggable({
+  return dndDraggable({
     element,
-    canDrag: () => !onControl,
-    getInitialData: () => data(),
-    // Registered unconditionally when a caller passed a `count`, because the *number* is what
-    // decides whether a chip is drawn and the number is not known until the gesture starts.
-    // `setCardCountPreview` returning without touching `nativeSetDragImage` is what leaves the
-    // browser to draw its own ghost, which is the documented way to decline.
-    ...(count
-      ? {
-          onGenerateDragPreview: ({
-            nativeSetDragImage,
-          }: {
-            nativeSetDragImage: Parameters<typeof setCardCountPreview>[1];
-          }) => setCardCountPreview(count(), nativeSetDragImage),
-        }
-      : {}),
+    data,
+    // The app-wide rule is `dndManager.ts`'s `PointerSensor.preventActivation`, which is this
+    // same selector said once. A source that narrows it gets its own sensors — and a per-source
+    // list *replaces* the manager's, so `KeyboardSensor` is named here rather than inherited.
+    ...(notFrom === NOT_A_DRAG
+      ? {}
+      : {
+          sensors: [
+            PointerSensor.configure({
+              preventActivation: (event) =>
+                event.target instanceof Element && event.target.closest(notFrom) !== null,
+            }),
+            KeyboardSensor,
+          ],
+        }),
   });
-  return () => {
-    element.removeEventListener("mousedown", press, true);
-    stop();
-  };
 }
 
 /**
@@ -363,8 +348,12 @@ export function cardDraggable({
    *  {@link composedDraggable}, so the selector is spelled in one place. */
   notFrom?: string;
   /**
-   * The **other** cards a multi-select drag is carrying — issue #214. A function, read at
-   * `dragstart` like the payload beside it, and empty (or absent) for an ordinary drag.
+   * The **other** cards a multi-select drag is carrying — issue #214. A function, read at the
+   * press like the payload beside it, and empty (or absent) for an ordinary drag.
+   *
+   * It no longer feeds a `count`: the chip is drawn off the *payload* now
+   * (`lib/dragPreview.ts`'s `installCardCountPreview`), which reads the same group `dragData`
+   * writes below — so there is nothing for a call site to pass and nothing for one to get wrong.
    *
    * It is here rather than folded into `payload` because the two are answered by different
    * things: the payload is what *this element* is, and this is what the reader's selection says
@@ -377,8 +366,6 @@ export function cardDraggable({
     element,
     data: () => dragData(payload(), rest?.() ?? []),
     notFrom,
-    // `+ 1` for the card the pointer went down on, which `rest` deliberately excludes.
-    count: rest ? () => rest().length + 1 : undefined,
   });
 }
 
@@ -477,6 +464,24 @@ export function readDragGroup(data: Record<string, unknown>): DragPayload[] {
     return read === null ? [] : [read];
   });
   return members.length === 0 ? [primary] : members;
+}
+
+/**
+ * Every card this drag is carrying, or **`null`** for a drag that is not this app's.
+ *
+ * **The wrapper exists because an empty array is not the same answer as `null`, and
+ * `useDndDropTarget` reads `null` as "not mine".** {@link readDragGroup} answers `[]` for a folder
+ * drag, a category reorder and a deck being filed — all perfectly good answers to "how many cards
+ * is this carrying" and all of them *truthy objects*. A target that handed that function straight
+ * to the primitive would arm on every one of those and then refuse the drop, which looks fine in
+ * every test written about cards.
+ *
+ * So every card-reading drop target in the app goes through this, and nothing goes through
+ * `readDragGroup` directly.
+ */
+export function readCards(data: Record<string, unknown>): DragPayload[] | null {
+  const cards = readDragGroup(data);
+  return cards.length === 0 ? null : cards;
 }
 
 /**

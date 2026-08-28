@@ -52,10 +52,6 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type JSX } from "react";
 import { GripVertical } from "lucide-react";
-import {
-  draggable,
-  dropTargetForElements,
-} from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
 import type { DropdownOption } from "@/components/Dropdown/types";
 import { ToggleChip } from "@/components/FilterChips";
@@ -68,7 +64,7 @@ import { cn } from "@/lib/utils";
 import { PREDEFINED_CATEGORY_NAMES } from "./autoCategory";
 // The gesture itself is `categoryDrag.ts`, shared with the deck's own piles: this dialog and
 // `StackView` draw a category completely differently and mean exactly the same write.
-import { categoryDragData, movedTo, readCategoryDrag } from "./categoryDrag";
+import { movedTo, useCategoryDragSource, useCategoryReorderDrop } from "./categoryDrag";
 import { Dialog } from "@/components/Dialog";
 import type { CardGroup } from "./grouping";
 import {
@@ -190,6 +186,23 @@ function CategoriesBody({ deckId, variant }: { deckId: number; variant: DeckVari
     [ordered, reorderCategories],
   );
 
+  /**
+   * The drop's own spelling of the same move.
+   *
+   * `useCategoryReorderDrop` hands back the **id** of the pile the drag was let go over — a move
+   * is two ids and never an index, because the piles a surface draws are a subset of the deck's
+   * list — while this dialog's `move` takes a position, since the arrow keys ask for one. This
+   * dialog holds the whole list in order, so it is the place that can resolve the one into the
+   * other.
+   */
+  const moveOnto = useCallback(
+    (dragged: number, targetId: number) => {
+      const to = ordered.findIndex((one) => one.id === targetId);
+      if (to >= 0) move(dragged, to);
+    },
+    [ordered, move],
+  );
+
   const add = (e: FormEvent) => {
     e.preventDefault();
     const trimmed = name.trim();
@@ -236,6 +249,7 @@ function CategoriesBody({ deckId, variant }: { deckId: number; variant: DeckVari
               meta={meta}
               marketplace={marketplace}
               onMove={move}
+              onMoveOnto={moveOnto}
               renaming={renaming === category.id}
               onRename={() => setRenaming(category.id)}
               confirming={confirming === category.id}
@@ -335,6 +349,7 @@ function CategoryRow({
   meta,
   marketplace,
   onMove,
+  onMoveOnto,
   renaming,
   onRename,
   confirming,
@@ -348,7 +363,11 @@ function CategoryRow({
   meta: DeckMeta;
   /** Which marketplace this row's total is quoted from. */
   marketplace: Marketplace;
+  /** The keyboard's move: this row, to a position. */
   onMove: (id: number, to: number) => void;
+  /** The drop's move: the dragged pile, onto the pile it was let go over. Two ids, resolved
+   *  against the whole list by the dialog. */
+  onMoveOnto: (dragged: number, targetId: number) => void;
   renaming: boolean;
   onRename: () => void;
   confirming: boolean;
@@ -358,12 +377,15 @@ function CategoryRow({
   others: readonly DeckCategory[];
 }) {
   const tip = useTooltip();
-  const rowRef = useRef<HTMLLIElement>(null);
-  const handleRef = useRef<HTMLButtonElement>(null);
   const deleteRef = useRef<HTMLButtonElement>(null);
   const owedFocus = useRef(false);
-  const [over, setOver] = useState(false);
   const group = groupOf(category);
+
+  // The gesture is `categoryDrag.ts`'s, shared with the desk's own piles. This dialog carried its
+  // own copy of it from before that module existed; the row and the pile are the same write, so
+  // there is one of it now.
+  const { attach, over } = useCategoryReorderDrop(category.id, onMoveOnto);
+  const { attachSource, attachHandle } = useCategoryDragSource(category.id);
 
   // The other end of the hand-back, and it has to be an effect for `DecksPage`'s
   // `refocusFolderRef` reason: the trigger is **disabled** while the question is up, so
@@ -376,58 +398,32 @@ function CategoryRow({
     deleteRef.current?.focus();
   }, [confirming]);
 
-  useEffect(() => {
-    const row = rowRef.current;
-    const handle = handleRef.current;
-    if (!row || !handle) return;
-    // Only a press that started on the handle may drag the row, and it is remembered from
-    // `mousedown` rather than declared with the library's own `dragHandle`.
-    //
-    // Two reasons, and the second is why this is not a style choice. The first is the one
-    // `cardDraggable` already documents: a row is full of controls — a toggle, two text
-    // buttons, a field while it is being renamed — and `canDrag` is asked at `dragstart` with
-    // the pointer's *coordinates*, never with what was pressed, so without this a press on the
-    // toggle plus five pixels of travel is a drag of the whole row. The second: the library's
-    // `dragHandle` resolves the pointer through `elementFromPoint`, which jsdom does not
-    // answer — so a handle declared that way is a reorder **no test in this repository can
-    // reach**, and this is a gesture whose whole risk is landing a row in the wrong place.
-    // Capture phase, so a control that stops the press cannot hide it from this.
-    let fromHandle = false;
-    const press = (event: Event) => {
-      fromHandle = event.target instanceof Node && handle.contains(event.target);
-    };
-    row.addEventListener("mousedown", press, true);
-
-    const stops = [
-      draggable({
-        element: row,
-        canDrag: () => fromHandle,
-        getInitialData: () => categoryDragData(category.id),
-      }),
-      dropTargetForElements({
-        element: row,
-        canDrop: ({ source }) => {
-          const dragged = readCategoryDrag(source.data);
-          return dragged !== null && dragged !== category.id;
-        },
-        onDragEnter: () => setOver(true),
-        onDragLeave: () => setOver(false),
-        onDrop: ({ source }) => {
-          setOver(false);
-          const dragged = readCategoryDrag(source.data);
-          if (dragged !== null && dragged !== category.id) onMove(dragged, index);
-        },
-      }),
-    ];
-    return () => {
-      row.removeEventListener("mousedown", press, true);
-      for (const stop of stops) stop();
-    };
-  }, [category.id, index, onMove]);
+  /**
+   * The row is both the drag source and the drop target, and since 3b that is two registrations
+   * on one element rather than one.
+   *
+   * **dnd-kit keys its registry by entity id**, and a `Draggable` and a `Droppable` are two
+   * registries besides — so unlike `StackView.tsx`, which nests its reorder target in a `<div>` of
+   * its own, this row needs no second box. What pragmatic-dnd could not do was put two *drop*
+   * targets on one element; that is what the nesting elsewhere is for, and it is not this.
+   *
+   * React takes one ref per element, so the two callbacks are joined here.
+   */
+  const attachRow = useCallback(
+    (element: HTMLLIElement | null) => {
+      const stopSource = attachSource(element);
+      const stopTarget = attach(element);
+      return () => {
+        stopSource?.();
+        stopTarget();
+      };
+    },
+    [attachSource, attach],
+  );
 
   return (
     <li
-      ref={rowRef}
+      ref={attachRow}
       className={cn(
         "rounded-md border bg-bg px-2 py-1.5",
         "transition-colors duration-150 motion-reduce:transition-none",
@@ -436,7 +432,7 @@ function CategoryRow({
     >
       <div className="flex items-center gap-2.5">
         <button
-          ref={handleRef}
+          ref={attachHandle}
           type="button"
           // The whole of the keyboard reorder. A handle a mouse can drag and a keyboard cannot
           // is a reorder half the readers do not have — and the position is in the name because

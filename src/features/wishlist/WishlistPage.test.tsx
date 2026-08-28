@@ -1,8 +1,8 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { DND_SOURCE_ATTR } from "@/lib/dndTarget";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { monitorForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import type { ReactElement } from "react";
 import { TOOLTIP_OPEN_MS, TOOLTIP_PANEL_ID, TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { readDragData } from "@/features/decks/dnd";
@@ -17,7 +17,7 @@ import type {
 import { MARKETPLACES } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
 import { folderDraggable, type FolderDrag } from "@/lib/folderDrag";
-import { dragOnto, startDrag, startPointerDrag } from "@/test-drag";
+import { boxed, pointerDrag, recordDrags, startPointerDrag } from "@/test-drag";
 import { openDropdown, pickOption } from "@/test-dropdown";
 
 const wishlistList = vi.hoisted(() => vi.fn());
@@ -303,30 +303,48 @@ function rightClick(element: HTMLElement): void {
 /**
  * The **wish** drag sources on screen, in document order.
  *
- * A bare `[draggable="true"]` used to mean "a table row or a wall tile" and stopped meaning it the
+ * A bare `[data-dnd-source]` used to mean "a table row or a wall tile" and stopped meaning it the
  * day folder cards became draggable: the cabinet is drawn *above* the list, so the first match on
  * a page with folders is a drawer. Filtering by the wall it sits in rather than by the element's
  * own shape, because both are `<li>`s and both are draggable — the difference is which list they
  * belong to.
  */
 const cardSources = (container: HTMLElement): HTMLElement[] =>
-  [...container.querySelectorAll<HTMLElement>('[draggable="true"]')].filter(
+  [...container.querySelectorAll<HTMLElement>(`[${DND_SOURCE_ATTR}]`)].filter(
     (element) => element.closest('[aria-label="Folders"]') === null,
   );
 
 /**
  * A folder card by name, and the inner box its **folder** drop target is registered on.
  *
- * Two boxes rather than one because the wish drag already owns the `<li>` and pragmatic-dnd keeps
- * a single element drop target per element — `WishFolderCard` carries the whole reason, and it
- * survives the folder drag moving to `@dnd-kit/dom`, because the two libraries must not be put on
- * one element either. {@link folderSlot} is the inner box, and it is what a folder drag is
- * measured against and aimed at.
+ * Two boxes rather than one, and with both drags on `@dnd-kit/dom` the nesting is free: the wish
+ * target keeps the `<li>` and the folder target takes the wrapper inside it, and each one's
+ * `accept` refuses the other's payload before either box is measured, so the pointer never has to
+ * choose. `WishFolderCard` carries the rest of the reason. {@link folderSlot} is the inner box,
+ * and it is what a folder drag is measured against and aimed at.
  */
 const folderCard = (name: string): HTMLElement =>
   screen.getByRole("button", { name: new RegExp(`^${name} folder`) }).closest("li")!;
 const folderSlot = (name: string): HTMLElement =>
   folderCard(name).firstElementChild as HTMLElement;
+
+/**
+ * A wish carried out of the list and onto one of the two places it can be filed — a folder card,
+ * or a segment of the breadcrumb.
+ *
+ * **Both ends need a box.** jsdom has no layout engine, so every real `getBoundingClientRect` is
+ * four zeroes, and dnd-kit hit-tests by **coordinate**: a source with no box is pressed at the
+ * origin and a target with no box can never be collided with, both silently. The destination is
+ * boxed well clear of the row, so the pointer really travels between two distinct places rather
+ * than teleporting — which is what a library watching for a distance threshold has to see.
+ *
+ * `views.test.tsx`'s `cardOnto`, for its reason.
+ */
+async function wishOnto(source: HTMLElement, target: HTMLElement): Promise<void> {
+  boxed(source, 0);
+  boxed(target, 200, 60);
+  await pointerDrag(source, target);
+}
 
 /**
  * One box and three landings, because dnd-kit hit-tests by **coordinate** and jsdom measures every
@@ -996,20 +1014,34 @@ describe("WishlistPage", () => {
     expect(rows[0]).toHaveTextContent("Lightning Bolt");
     expect(rows[1]).toHaveTextContent("Ancestral Recall");
 
-    const carried: Record<string, unknown>[] = [];
-    const stop = monitorForElements({ onDragStart: ({ source }) => carried.push(source.data) });
-    const pinned = await startDrag(rows[0], { pressOn: screen.getByText("Lightning Bolt") });
+    // The payload never travels in a `DataTransfer` — it lives in the library's own store, keyed
+    // off the source's `data` — so a monitor is the only way to read it, and every drag started
+    // here has to be ended or the manager's one operation strands the next one.
+    const drags = recordDrags();
+    // A box each and well clear of each other: dnd-kit reads the press coordinate off the source's
+    // own rect, and jsdom measures every rect as four zeroes, so an unboxed row is pressed at the
+    // origin — which is wherever the last thing given a rect happens to be.
+    const pinned = await startPointerDrag(boxed(rows[0], 0), {
+      pressOn: screen.getByText("Lightning Bolt"),
+    });
+    // **Asked while the drag is still up.** `started` is a live reading over the manager's one
+    // operation rather than a remembered flag, so after a cancel it is false for every drag there
+    // has ever been.
+    expect(pinned.started).toBe(true);
     await pinned.cancel();
-    const loose = await startDrag(rows[1], { pressOn: screen.getByText("Ancestral Recall") });
+    const loose = await startPointerDrag(boxed(rows[1], 200), {
+      pressOn: screen.getByText("Ancestral Recall"),
+    });
+    expect(loose.started).toBe(true);
     await loose.cancel();
-    stop();
+    drags.stop();
 
-    expect(carried.map(readDragData)).toEqual([
+    expect(drags.records.map(readDragData)).toEqual([
       { kind: "card", cardId: "c1", name: "Lightning Bolt", typeLine: "Instant" },
       null,
     ]);
     // And both are wishes, which is what a folder card reads.
-    expect(carried.map(readWishDrag)).toEqual([
+    expect(drags.records.map(readWishDrag)).toEqual([
       { wishId: 7, name: "Lightning Bolt", folderId: null },
       { wishId: 8, name: "Ancestral Recall", folderId: null },
     ]);
@@ -1018,26 +1050,32 @@ describe("WishlistPage", () => {
   /**
    * **A press on the row's removal is a press on the removal.**
    *
-   * The row is the drag handle, and Chromium starts a drag from the nearest draggable
-   * *ancestor* of what was pressed — so without the mark, a press on the bin that travelled
-   * five pixels would drag the wish and never deliver the click. `cardDraggable` reads where
-   * the press landed, which is why this presses one place and drags from another.
+   * The row is the drag handle and a press inside it belongs to the row, so without the mark a
+   * press on the bin that travelled five pixels would drag the wish and never deliver the click.
+   * The guard is the library's now and it is the same rule: `lib/dndManager.ts` configures
+   * `PointerSensor.preventActivation` with the app's own `NOT_A_DRAG` selector, once, for every
+   * draggable in the window — and it is asked about **where the press landed**, which is why this
+   * presses one place and drags from another.
    */
   it("does not drag a wish when the press landed on its removal", async () => {
     const { container } = wrap(<WishlistPage />);
     await screen.findByText("Lightning Bolt");
-    const row = cardSources(container)[0];
+    // The row is pressed at the centre of its own box, so it needs one — see {@link wishOnto}.
+    const row = boxed(cardSources(container)[0], 0);
 
-    const held = await startDrag(row, {
+    const held = await startPointerDrag(row, {
       pressOn: screen.getByRole("button", {
         name: /^Remove Lightning Bolt \(LEA 161, Foil\) from your wishlist/,
       }),
     });
+    // **Before the cancel, both times.** `started` reads the manager's live operation rather than
+    // remembering one, so asked afterwards it is `false` whether or not a drag ever began — and
+    // the second half of this test would then pass on a source that cannot be picked up at all.
     expect(held.started).toBe(false);
     await held.cancel();
 
     // And the row itself still is one: the guard is a control's press, not a row's.
-    const again = await startDrag(row, { pressOn: screen.getByText("Lightning Bolt") });
+    const again = await startPointerDrag(row, { pressOn: screen.getByText("Lightning Bolt") });
     expect(again.started).toBe(true);
     await again.cancel();
   });
@@ -1954,7 +1992,7 @@ describe("the folders", () => {
     await screen.findByText("Lightning Bolt");
 
     const card = (await screen.findByRole("button", { name: /^Ordered folder/ })).closest("li")!;
-    await dragOnto(cardSources(container)[0], card);
+    await wishOnto(cardSources(container)[0], card);
 
     expect(wishlistSetFolder).toHaveBeenCalledWith(7, 1);
     // The whole root, never the summary alone: the level being left, the level being joined and
@@ -2124,7 +2162,7 @@ describe("the folders", () => {
     const row = cardSources(container)[0];
     const card = (await screen.findByRole("button", { name: /^Ordered folder/ })).closest("li")!;
 
-    await dragOnto(row, card);
+    await wishOnto(row, card);
 
     expect(wishlistSetFolder).toHaveBeenCalledWith(7, 1);
   });
@@ -2140,7 +2178,7 @@ describe("the folders", () => {
 
     const row = cardSources(container)[0];
     const trail = screen.getByRole("navigation", { name: "Wishlist folders" });
-    await dragOnto(row, within(trail).getByRole("button", { name: "Wishlist" }));
+    await wishOnto(row, within(trail).getByRole("button", { name: "Wishlist" }));
 
     expect(wishlistSetFolder).toHaveBeenCalledWith(12, null);
   });
@@ -2316,8 +2354,9 @@ describe("the folders", () => {
  *
  * **The three landings are driven by stating the box.** jsdom has no layout engine, so every real
  * `getBoundingClientRect` is four zeroes and `folderEdge` would answer `inside` for every drop — a
- * test that hoped for a rect would pass over any threshold at all. {@link stand} slides the card
- * under the one coordinate `test-drag` sends instead.
+ * test that hoped for a rect would pass over any threshold at all. {@link stand} states the card's
+ * rect, and the pointer is then aimed at a fraction along it — `AT_START`, `AT_MIDDLE`, `AT_END` —
+ * which is the gesture rather than a coordinate posted to a target.
  */
 describe("rearranging the wishlist's cabinet", () => {
   beforeEach(() => {
@@ -2448,17 +2487,19 @@ describe("rearranging the wishlist's cabinet", () => {
   });
 
   /**
-   * **The wish drag still files a wish**, which is the thing this change could have taken away
-   * without a single folder test noticing: the drag library keeps **one element drop target per
-   * element** and a second registration silently replaces the first, so a folder target on the
-   * `<li>` would have stopped the drawer accepting wishes while everything above stayed green.
+   * **The wish drag still files a wish**, which is the thing the folder gesture could have taken
+   * away without a single folder test noticing. Under pragmatic-dnd the danger was the registry —
+   * one element drop target per element, a second registration silently replacing the first — and
+   * under `@dnd-kit/dom` it is `accepts()`: the two targets now sit on nested boxes the pointer is
+   * inside at once, and only `readWishDrag` refusing a folder and `readFolderDrag` refusing a wish
+   * keeps the drop on the right one.
    */
   it("still files a wish dropped on a drawer", async () => {
     const { container } = wrap(<WishlistPage />);
     await wall();
     await screen.findByText("Lightning Bolt");
 
-    await dragOnto(cardSources(container)[0], folderCard("Ordered"));
+    await wishOnto(cardSources(container)[0], folderCard("Ordered"));
 
     expect(wishlistSetFolder).toHaveBeenCalledWith(7, 1);
     expect(wishlistFolderReorder).not.toHaveBeenCalled();

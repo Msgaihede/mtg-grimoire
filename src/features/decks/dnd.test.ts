@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { dragData, dropWrite, readDragData, type DragPayload } from "./dnd";
+import { folderDragData } from "@/lib/folderDrag";
+import { dragData, dropWrite, readCards, readDragData, readDragGroup, type DragPayload } from "./dnd";
 
 /**
  * **What is tested here, and what is left to the running app.**
@@ -10,12 +11,12 @@ import { dragData, dropWrite, readDragData, type DragPayload } from "./dnd";
  * gives, without a DOM in sight.
  *
  * The wiring is tested too, over the library's own code path, in `DeckEditor.test.tsx`:
- * `src/test-drag.ts` drives real `dragstart`/`dragenter`/`dragover`/
- * `drop` events at the real registrations, which works because
- * `@atlaskit/pragmatic-drag-and-drop` hit-tests with `event.target` and `Element.closest`
- * rather than with `elementFromPoint`. That file records exactly what jsdom still cannot
- * reach — the platform's drag preview, pointer hit-testing, auto-scroll, and Escape, which
- * the browser handles without telling the page — and those are the live CDP pass's to prove.
+ * `src/test-drag.ts` drives a real press, real pointer moves and a real release at the real
+ * registrations. That works because `@dnd-kit/dom` is pointer-based and reads coordinates, and
+ * it costs the one thing that file records: **every source and every target has to be given a
+ * box**, because jsdom lays nothing out. What is still beyond it is what measures the window —
+ * the drag preview, auto-scrolling, and the overlap between a sticky bar and the pile under it —
+ * and those are the live CDP pass's to prove.
  */
 
 /**
@@ -270,5 +271,30 @@ describe("dropWrite", () => {
       cardId: "c-bolt",
       from: SIDE,
     });
+  });
+});
+
+/**
+ * **`readCards` is `readDragGroup` with the empty answer turned into `null`, and the difference is
+ * the quietest bug in this feature.**
+ *
+ * `useDndDropTarget` reads `null` as "not this feature's payload" and anything else as a payload —
+ * and `readDragGroup` answers `[]` for a folder drag, a category reorder and a deck being filed,
+ * every one of them a truthy object. A target handed that function directly would arm on all
+ * three and then refuse the drop, which looks perfectly correct in every test written about
+ * cards. So every card-reading drop target in the app goes through the wrapper and nothing goes
+ * through `readDragGroup`.
+ */
+describe("readCards", () => {
+  it("answers every card a drag is carrying", () => {
+    expect(readCards(dragData(CARD))).toEqual([CARD]);
+    expect(readCards(dragData(CARD, [ROW]))).toEqual([CARD, ROW]);
+  });
+
+  it("answers null for a drag that is not this app's card drag, where readDragGroup answers []", () => {
+    const folder = folderDragData({ folderId: 3, name: "Reds", parentId: null, scope: "deck" });
+    expect(readDragGroup(folder)).toEqual([]);
+    expect(readCards(folder)).toBeNull();
+    expect(readCards({})).toBeNull();
   });
 });

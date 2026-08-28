@@ -72,7 +72,7 @@ import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { FOLDER_DROP_LINE_ATTR } from "@/components/FolderDropLine";
 import { DEFAULT_SECTION_ZOOMS, DEFAULT_ZOOM, ZOOM_SECTIONS } from "@/lib/cardZoom";
 import { useAppStore } from "@/lib/store";
-import { startDrag, startPointerDrag } from "@/test-drag";
+import { startPointerDrag } from "@/test-drag";
 
 /** A deck with a cover, which is the only kind that can carry an artist credit. */
 const BURN: DeckRow = {
@@ -1807,12 +1807,21 @@ describe("dragging a folder", () => {
     deckList.mockResolvedValue([BURN]);
     wrap(<DecksPage />);
     const tile = (await tileFor("Burn")).closest("li") as HTMLElement;
+    // **The two drags are on one library now, so the claim rests entirely on the two marks.**
+    // Until 3b a deck was a native HTML5 drag and a folder was dnd-kit's, and they could not have
+    // reached each other's handlers whatever their payloads said; from here on they share a
+    // registry, an event and a coordinate space, and the only thing keeping them apart is that
+    // `readDeckDrag` refuses a folder record and `readFolderDrag` refuses a deck's.
+    //
+    // The deck's drop target is the row's **outer** box and the folder's is the inner one. Only
+    // the outer gets a rect, which in a suite with no layout engine is what puts the deck target
+    // in the collision pass and leaves the folder target out of it.
+    const drawer = (await folderRow("Commander")).parentElement as HTMLElement;
+    place(drawer, TARGET_BOX);
 
-    // `startDrag` rather than `dropOn`: a deck is still a pragmatic-dnd HTML5 drag, and that the
-    // two libraries cannot reach each other's handlers is now the strongest form this claim has
-    // ever had — they share no registry, no event and no coordinate space.
-    const held = await startDrag(tile);
-    await held.over(await folderRow("Commander"));
+    const held = await hold(tile);
+    expect(held.started).toBe(true);
+    await held.over(drawer);
     await held.drop();
 
     await waitFor(() => expect(deckSetFolder).toHaveBeenCalledWith(BURN.id, 1));

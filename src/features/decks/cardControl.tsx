@@ -31,15 +31,11 @@ import {
   useCallback,
   useEffect,
   useRef,
-  useState,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
-import {
-  dropTargetForElements,
-  monitorForElements,
-} from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
+import { useDndDropTarget, useDndTargetRef } from "@/lib/dndTarget";
 import { QuantityStepper } from "@/components/QuantityStepper";
 import { FINISH_LABEL, playedFinish } from "@/lib/finish";
 import { finishTreatments, treatmentName } from "@/lib/treatment";
@@ -52,7 +48,7 @@ import {
   deckCardSlot,
   DECK_CARD_ATTR,
   dropWrites,
-  readDragGroup,
+  readCards,
   type DeckWrite,
   type DragPayload,
 } from "./dnd";
@@ -806,54 +802,29 @@ export interface DeckCardGroupDrag {
  * this pile really would take *this* card and not merely that something is being dragged.
  */
 export function useCategoryDrop(categoryId: number | null, onDrop?: (writes: DeckWrite[]) => void) {
-  const [over, setOver] = useState(false);
-  const [eligible, setEligible] = useState(false);
   const enabled = categoryId !== null && onDrop !== undefined;
-
-  useEffect(() => {
-    if (categoryId === null || !onDrop) return;
-    return monitorForElements({
-      canMonitor: ({ source }) =>
-        dropWrites(readDragGroup(source.data), { kind: "category", categoryId }).length > 0,
-      onDragStart: () => setEligible(true),
-      // Fires for a cancelled drag as well as a completed one — the platform ends both the same
-      // way — so the ring stands down on Escape without this hearing a keypress.
-      onDrop: () => {
-        setEligible(false);
-        setOver(false);
-      },
-    });
-  }, [categoryId, onDrop]);
-
   // Named `attach` rather than `ref`, which is not fussiness: React's ref lint reads a hook
   // result called `ref` as a ref object and flags every read of the value beside it as a ref
-  // access during render. It is a callback the caller hands to `ref=`, not a ref.
-  const attach = useCallback(
-    (element: HTMLElement | null) => {
-      if (!element || categoryId === null || !onDrop) return;
-      // The rule, asked twice: once in `canDrop`, so a drop that would mean nothing never
-      // lights up and never accepts the card, and again on the drop itself, because the two
-      // questions can be a second apart and only the second one writes.
-      const writesFor = (data: Record<string, unknown>) =>
-        dropWrites(readDragGroup(data), { kind: "category", categoryId });
-      return dropTargetForElements({
-        element,
-        // "At least one member writes" — `dropWrites`' rule, which for a single-card drag is the
-        // same question `dropWrite(…) !== null` asked before groups existed.
-        canDrop: ({ source }) => writesFor(source.data).length > 0,
-        onDragEnter: () => setOver(true),
-        onDragLeave: () => setOver(false),
-        onDrop: ({ source }) => {
-          setOver(false);
-          const writes = writesFor(source.data);
-          if (writes.length > 0) onDrop(writes);
-        },
-      });
-    },
-    [categoryId, onDrop],
-  );
+  // access during render. It is a callback the caller hands to `ref=`, not a ref —
+  // {@link useDndTargetRef} carries why the element behind it has to be state.
+  const { ref, attach } = useDndTargetRef();
 
-  return { attach, over: over && enabled, eligible: eligible && enabled };
+  // "At least one member writes" — `dropWrites`' rule, which for a single-card drag is the same
+  // question `dropWrite(…) !== null` asked before groups existed. Asked twice: once so a drop
+  // that would mean nothing never lights up and never accepts the card, and again on the drop,
+  // because the two questions can be a second apart and only the second one writes.
+  const writesFor = (payloads: DragPayload[]) =>
+    categoryId === null ? [] : dropWrites(payloads, { kind: "category", categoryId });
+  // **`readCards` and not `readDragGroup`**: that function answers `[]` for a folder drag, and an
+  // empty array is not `null` — a target reading it directly would arm on one. See `dnd.ts`.
+  const { armed, over } = useDndDropTarget({
+    ref,
+    read: readCards,
+    canDrop: (payloads) => writesFor(payloads).length > 0,
+    onDrop: (payloads) => onDrop?.(writesFor(payloads)),
+  });
+
+  return { attach, over: over && enabled, eligible: armed && enabled };
 }
 
 /**

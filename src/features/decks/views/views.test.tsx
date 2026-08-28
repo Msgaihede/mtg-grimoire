@@ -18,7 +18,8 @@ import { LAYER } from "@/lib/layers";
 import { MARKETPLACES, type Marketplace } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
-import { dragOnto, startDrag } from "@/test-drag";
+import { dndManager } from "@/lib/dndManager";
+import { boxed, pointerDrag, startPointerDrag } from "@/test-drag";
 import { card } from "../validation/fixtures";
 import type { ValidationIssue } from "../validation/types";
 import { stackCardWidth, stackLiftRoom } from "../CardStack";
@@ -42,6 +43,26 @@ import {
 } from "./StackView";
 import { TableView } from "./TableView";
 import { TextView } from "./TextView";
+
+/**
+ * A card carried from wherever it sits into a pile, as a real pointer gesture.
+ *
+ * **Both ends need a box.** jsdom has no layout engine, so every `getBoundingClientRect` is four
+ * zeroes, and dnd-kit hit-tests by coordinate — a source with no box is pressed at the origin and
+ * a target with no box can never be collided with, both silently. The pile is boxed well clear of
+ * the card so the pointer really travels between two distinct places.
+ *
+ * The pile's `<section>` is the target: it carries the card drop (`useCategoryDrop`), while the
+ * reorder wrapper nested inside it carries the category drop. Both are dnd-kit `Droppable`s on
+ * overlapping boxes now, and what keeps them apart is `accepts()` — `readCards` refuses a category
+ * payload and `readCategoryDrag` refuses a card's — asked by `computeCollisions` before either is
+ * measured.
+ */
+async function cardOnto(source: HTMLElement, pile: HTMLElement): Promise<void> {
+  boxed(source, 0);
+  boxed(pile, 200, 80);
+  await pointerDrag(source, pile);
+}
 
 /**
  * jsdom lays nothing out, so `@tanstack/react-virtual` computes an empty window and the table
@@ -730,7 +751,7 @@ describe.each(VIEWS)("$name editing", ({ render: renderView }) => {
       `[${DECK_CARD_ATTR}="${deckCardSlot(RAMP.id, "c-Sol Ring", null)}"]`,
     )!;
 
-    await dragOnto(marked.closest("li") ?? marked, target);
+    await cardOnto(marked.closest("li") ?? marked, target);
 
     // A list of one, because a drop carries every card it was picked up with (issue #214) and an
     // ordinary drag carries one. The array is the shape, not the count.
@@ -1719,7 +1740,7 @@ describe("StackView command zone", () => {
     expect(target).not.toBeNull();
     const marked = control(RAMP.id, "Sol Ring")!;
 
-    await dragOnto(marked.closest("li") ?? marked, target!);
+    await cardOnto(marked.closest("li") ?? marked, target!);
 
     expect(drop).toHaveBeenCalledWith([
       {
@@ -2269,7 +2290,7 @@ describe.each(COLUMN_VIEWS)(
         `[${DECK_CARD_ATTR}="${deckCardSlot(RAMP.id, "c-Sol Ring", null)}"]`,
       )!;
 
-      await dragOnto(marked.closest("li") ?? marked, target!);
+      await cardOnto(marked.closest("li") ?? marked, target!);
 
       expect(drop).toHaveBeenCalledWith([
         {
@@ -2944,25 +2965,31 @@ describe("StackView reordering", () => {
    */
   const grip = (name: string) => screen.getByRole("button", { name: new RegExp(`^Move ${name},`) });
   /**
-   * What is actually picked up: the **heading**, with the grip marking where the press has to
-   * start.
+   * The pile's `<section>` — what a pointer aims at, and what everything inside it is boxed to.
    *
-   * The grip is not the drag source — it marks where the press has to land, so that what travels
-   * under the pointer is the heading rather than a 14px glyph. `startDrag` splits exactly those
-   * two things, which is what `pressOn` is for, and a test that dragged the grip would be
-   * addressing a registration that does not exist.
+   * The reorder target is still a wrapper *inside* that section rather than the section itself
+   * (see {@link StackView}), so a pointer at the section's centre is inside both. Only one of the
+   * two accepts a category, and `computeCollisions` skips the other before it measures it.
    */
-  const headingOf = (name: string) => grip(name).closest("[draggable]")!;
+  const sectionOf = (group: CardGroup) =>
+    document.querySelector<HTMLElement>(`[${DECK_GROUP_ATTR}="${group.categoryId}"]`)!;
   /**
-   * Where a dragged pile is let go, and it is deliberately **not** the `<section>`.
+   * Give a pile somewhere to be — the section and every wrapper drawn inside it.
    *
-   * The section is the *card* drop target and pdnd allows one per element, so the reorder target
-   * is a wrapper inside it — an ancestor of the heading and of every card, which is what makes
-   * the whole column the target while a card drag still walks up to the section. Aiming at the
-   * heading is how a test lands inside that wrapper; a real pointer lands inside it anywhere but
-   * the section's own 6px rim.
+   * **jsdom lays nothing out and dnd-kit hit-tests by coordinate**, so a pile with no box is a
+   * pile no drag can arrive at and no press can start from, silently. The wrappers take the same
+   * rect as the section because in a real window they very nearly do: the reorder target wraps
+   * everything the section holds, and the drag source wraps the heading it is grabbed by.
    */
-  const bodyOf = (group: CardGroup) => document.getElementById(`group-${group.key}`)!;
+  const boxPile = (group: CardGroup, top: number) => {
+    const section = sectionOf(group);
+    boxed(section, top, 50);
+    for (const div of section.querySelectorAll("div")) boxed(div, top, 50);
+    return section;
+  };
+  /** Every pile that can be dragged or dropped on, stacked 80px apart so none of them overlap. */
+  const boxPiles = (...groups: CardGroup[]) =>
+    groups.forEach((group, index) => boxPile(group, index * 80));
   /** A pile by its heading, so an index into `piles` never has to be written down. The arrow-key
    *  block's helper, borrowed for the reason it is worth borrowing here now: the deck's own list
    *  and what a reorder can reach stopped being the same run when the command zone was pinned. */
@@ -3034,6 +3061,33 @@ describe("StackView reordering", () => {
    * grip that still answered would reorder a pile under a reader who pressed Down meaning to
    * scroll the desk.
    */
+  /**
+   * **Space on the grip is not a drag**, which is the collision this migration could have made
+   * and did not. `KeyboardSensor` binds its `keydown` listener to `source.handle ?? source.element`
+   * — from 3b onward, this exact button — so a source carrying that sensor would answer Space with
+   * a library drag while the arrows beside it write a real move. `useCategoryDragSource` declares
+   * its own `sensors`, and a source's list **replaces** the manager's rather than extending it, so
+   * the only sensor on this grip is the pointer's.
+   *
+   * Pressed on a genuinely focused button with `user.keyboard`, because a synthetic
+   * `dispatchEvent` collapses the capture ladder into registration order and would report a pass
+   * it had not earned.
+   */
+  it("keeps Space off the grip, so the arrow keys are still the only reorder", async () => {
+    const moveCategory = draw();
+    const user = userEvent.setup();
+
+    grip("Ramp").focus();
+    await user.keyboard(" ");
+    expect(dndManager.dragOperation.status.idle).toBe(true);
+    expect(moveCategory).not.toHaveBeenCalled();
+
+    await user.keyboard("{ArrowRight}");
+    expect(moveCategory).toHaveBeenCalledTimes(1);
+    expect(moveCategory).toHaveBeenCalledWith(RAMP.id, DRAW.id);
+    expect(dndManager.dragOperation.status.idle).toBe(true);
+  });
+
   it("leaves up and down alone on a grip", async () => {
     const moveCategory = draw();
     const user = userEvent.setup();
@@ -3074,17 +3128,21 @@ describe("StackView reordering", () => {
    */
   it("moves a pile onto the pile it was dropped on, and only from the grip", async () => {
     const moveCategory = draw();
+    boxPiles(pile("Ramp"), pile("Draw"));
 
-    const refused = await startDrag(headingOf("Draw"));
+    // **Only from the grip**, and since 3b that is the library's own `handle`: `PointerSensor`
+    // binds its listener to the grip, so a press on the heading's name or its numbers never
+    // reaches the sensor at all rather than being refused after the fact.
+    const refused = await startPointerDrag(sectionOf(pile("Draw")));
     expect(refused.started).toBe(false);
     await refused.cancel();
 
-    const held = await startDrag(headingOf("Draw"), { pressOn: grip("Draw") });
+    const held = await startPointerDrag(sectionOf(pile("Draw")), { pressOn: grip("Draw") });
     try {
       expect(held.started).toBe(true);
       // Ramp, the flow's first pile. It was the Commander until 2026-08-20, which is no longer a
       // place a pile can be moved to — see the case below, where that refusal is the assertion.
-      await held.over(bodyOf(pile("Ramp")));
+      await held.over(sectionOf(pile("Ramp")));
       await held.drop();
     } finally {
       await held.cancel();
@@ -3107,27 +3165,31 @@ describe("StackView reordering", () => {
    */
   it("refuses a drop on itself, on the rail and on the command zone", async () => {
     const moveCategory = draw();
+    const side = piles.find((g) => g.categoryId === SIDE.id)!;
+    boxPiles(pile("Ramp"), pile("Commander"), side);
 
     const press = { pressOn: grip("Ramp") };
-    const held = await startDrag(headingOf("Ramp"), press);
+    const from = sectionOf(pile("Ramp"));
+    const held = await startPointerDrag(from, press);
     try {
-      await held.over(bodyOf(pile("Ramp")));
+      expect(held.started).toBe(true);
+      await held.over(sectionOf(pile("Ramp")));
       await held.drop();
     } finally {
       await held.cancel();
     }
 
-    const onRail = await startDrag(headingOf("Ramp"), press);
+    const onRail = await startPointerDrag(from, press);
     try {
-      await onRail.over(bodyOf(piles.find((g) => g.categoryId === SIDE.id)!));
+      await onRail.over(sectionOf(side));
       await onRail.drop();
     } finally {
       await onRail.cancel();
     }
 
-    const onCommand = await startDrag(headingOf("Ramp"), press);
+    const onCommand = await startPointerDrag(from, press);
     try {
-      await onCommand.over(bodyOf(pile("Commander")));
+      await onCommand.over(sectionOf(pile("Commander")));
       await onCommand.drop();
     } finally {
       await onCommand.cancel();
@@ -3137,14 +3199,15 @@ describe("StackView reordering", () => {
   });
 
   /**
-   * **The card drop the reorder target sits inside still works**, and this is the regression the
-   * wrapper element could cause and nothing else would catch.
+   * **The card drop the reorder target sits inside still works**, and this is the regression two
+   * overlapping droppables could cause and nothing else would catch.
    *
-   * A card let go over a pile hits that wrapper first — it is an ancestor of every card in the
-   * column — and is refused by its `canDrop`; pdnd then walks to `element.parentElement`, which is
-   * the `<section>` that has taken card drops all along. Dropping **on the card** rather than on
-   * the section is the whole point of the case: aimed at the section, the wrapper is never in the
-   * chain and a broken `canDrop` would pass.
+   * The wrapper is an ancestor of every card in the column and takes the same rectangle as the
+   * section around it, so a pointer aimed at the pile is inside both. Under pragmatic-dnd the
+   * wrapper refused the card in `canDrop` and the library then walked to `element.parentElement`;
+   * under dnd-kit there is no walk — `computeCollisions` **skips** a droppable whose `accepts()`
+   * is false before it measures it, so the section is the only candidate left. Disjoint `accept`s
+   * are the whole mechanism, and this is the case that says so.
    */
   it("still lets a card be dropped into a pile through the reorder target", async () => {
     const drop = vi.fn();
@@ -3153,9 +3216,13 @@ describe("StackView reordering", () => {
     const marked = document.querySelector<HTMLElement>(
       `[${DECK_CARD_ATTR}="${deckCardSlot(RAMP.id, "c-Sol Ring", null)}"]`,
     )!;
-    const intoDraw = document.getElementById(`group-cat-${DRAW.id}`)!;
+    // The pile's whole `<section>`, and every wrapper inside it given the same rect — which is
+    // what puts the reorder target in the collision pass beside the card target rather than
+    // leaving it out of it, so the refusal above is exercised rather than assumed.
+    const intoDraw = boxPile(pile("Draw"), 200);
 
-    await dragOnto(marked.closest("li") ?? marked, intoDraw);
+    boxed(marked.closest("li") ?? marked, 0);
+    await pointerDrag(marked.closest("li") ?? marked, intoDraw);
 
     // The whole write, spelled as the sibling case above spells it: this is a claim that the
     // card drop is **untouched** by the reorder target sitting inside its section, so a field

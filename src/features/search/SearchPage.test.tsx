@@ -1,8 +1,8 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { DND_SOURCE_ATTR } from "@/lib/dndTarget";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { monitorForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import type { ReactElement } from "react";
 import { TOOLTIP_OPEN_MS, TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { readDragData } from "@/features/decks/dnd";
@@ -10,7 +10,7 @@ import { WALL_CARD_VARIANT } from "@/lib/images";
 import type { CardSummary, SearchRequest, SearchResponse, SetSummary, WishInput } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
-import { startDrag } from "@/test-drag";
+import { boxed, recordDrags, startPointerDrag } from "@/test-drag";
 import { pickOption } from "@/test-dropdown";
 
 const searchCards = vi.hoisted(() => vi.fn());
@@ -1243,24 +1243,28 @@ describe("the result layout toggle", () => {
    *
    * The wall is generic, so the payload is built *here*, from the search row: what a tile
    * carries is the card it draws, and the wall's own tests pin that a caller who says nothing
-   * gets no drag at all. This asks the drag itself rather than the `draggable="true"`
-   * attribute, because a registration that closed over the wrong card would still set it.
+   * gets no drag at all. This asks the drag itself rather than the mark a live source wears
+   * (`DND_SOURCE_ATTR`), because a registration that closed over the wrong card would still set
+   * it.
    */
   it("carries the card a tile draws when the tile is dragged", async () => {
     const { container } = wrap(<SearchPage />);
     const art = await screen.findByRole("button", { name: "Lightning Bolt" });
 
-    const tiles = [...container.querySelectorAll('[draggable="true"]')];
+    const tiles = [...container.querySelectorAll<HTMLElement>(`[${DND_SOURCE_ATTR}]`)];
     expect(tiles).toHaveLength(1);
     expect(tiles[0]).toContainElement(art);
 
-    const carried: Record<string, unknown>[] = [];
-    const stop = monitorForElements({ onDragStart: ({ source }) => carried.push(source.data) });
-    const held = await startDrag(tiles[0]);
+    const drags = recordDrags();
+    // A box, because dnd-kit hit-tests by coordinate and jsdom measures every rect as zero.
+    const held = await startPointerDrag(boxed(tiles[0], 0));
+    // Asked while the drag is still up: `started` is a live reading of the manager's operation
+    // rather than a remembered one, so after a cancel it is false for every drag there has been.
+    expect(held.started).toBe(true);
     await held.cancel();
-    stop();
+    drags.stop();
 
-    expect(carried.map(readDragData)).toEqual([
+    expect(drags.records.map(readDragData)).toEqual([
       { kind: "card", cardId: "1", name: "Lightning Bolt", typeLine: "Instant" },
     ]);
   });
@@ -1268,25 +1272,28 @@ describe("the result layout toggle", () => {
   /**
    * The tile's one control keeps its press.
    *
-   * Chromium starts a drag from the nearest draggable *ancestor* of whatever was pressed, so
-   * a press on the quick-add that travels five pixels would drag the tile and never deliver
-   * the click — the popup would simply not open. The mark is the control's own
-   * (`AddToCollectionButton`), which is why this holds on the printings list too. The art
-   * beside it is a button as well and is deliberately still the drag handle: the exclusion is
-   * marked, never guessed from the tag.
+   * dnd-kit binds its pointer listener to the drag *source*, so a press anywhere inside the tile
+   * is a press on the tile — and a quick-add press that travelled five pixels would carry the
+   * card off and never deliver the click, so the popup would simply not open. What stands the
+   * sensor down is the control's own `data-no-drag` mark (`AddToCollectionButton`), read for the
+   * whole window by `PointerSensor.preventActivation`, which is why this holds on the printings
+   * list too. The art beside it is a button as well and is deliberately still the drag handle:
+   * the exclusion is marked, never guessed from the tag.
    */
   it("does not drag a tile when the press landed on its quick-add", async () => {
     const { container } = wrap(<SearchPage />);
     const add = await screen.findByRole("button", { name: /^Add Lightning Bolt \(LEA 161\)/ });
-    const tile = container.querySelector('[draggable="true"]')!;
+    const tile = container.querySelector<HTMLElement>(`[${DND_SOURCE_ATTR}]`)!;
 
-    const held = await startDrag(tile, { pressOn: add });
+    const held = await startPointerDrag(boxed(tile, 0), { pressOn: add });
     expect(held.started).toBe(false);
     await held.cancel();
 
-    const again = await startDrag(tile, {
+    const again = await startPointerDrag(boxed(tile, 0), {
       pressOn: screen.getByRole("button", { name: "Lightning Bolt" }),
     });
+    // Asked while the drag is still up: `started` is a live reading of the manager's operation
+    // rather than a remembered one, so after a cancel it is false for every drag there has been.
     expect(again.started).toBe(true);
     await again.cancel();
   });

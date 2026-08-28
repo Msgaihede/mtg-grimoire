@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import userEvent from "@testing-library/user-event";
 import css from "@/index.css?raw";
 import { folderDraggable } from "@/lib/folderDrag";
-import { DRAGGING_ATTRIBUTE } from "@/lib/dndManager";
-import { startPointerDrag } from "@/test-drag";
+import { dndManager, DRAGGING_ATTRIBUTE } from "@/lib/dndManager";
+import { boxed, startPointerDrag } from "@/test-drag";
 
 /**
  * **The fence around the block at the foot of `src/index.css`.**
@@ -138,24 +139,6 @@ function scansTheDocumentPerElement(selector: string): boolean {
   return /[\s>+~]/.test(selector.slice(i + 1));
 }
 
-/** A rect of its own, because jsdom measures every box as zero and a drag has to travel five
- *  pixels from somewhere. */
-function boxed(element: HTMLElement): HTMLElement {
-  element.getBoundingClientRect = () =>
-    ({
-      x: 0,
-      y: 0,
-      top: 0,
-      left: 0,
-      right: 200,
-      bottom: 40,
-      width: 200,
-      height: 40,
-      toJSON: () => ({}),
-    }) as DOMRect;
-  return element;
-}
-
 const undo: (() => void)[] = [];
 
 afterEach(() => {
@@ -171,7 +154,7 @@ afterEach(() => {
  * library's.
  */
 async function injectedDuringADrag(): Promise<string[]> {
-  const element = boxed(document.createElement("div"));
+  const element = boxed(document.createElement("div"), 0);
   element.textContent = "a folder";
   document.body.append(element);
   const stop = folderDraggable({
@@ -252,7 +235,7 @@ describe("the dnd-kit rules copied into index.css", () => {
    * rather than by reading `dndManager.ts`.
    */
   it("marks the document for the length of a drag, and unmarks it after", async () => {
-    const element = boxed(document.createElement("div"));
+    const element = boxed(document.createElement("div"), 0);
     document.body.append(element);
     const stop = folderDraggable({
       element,
@@ -325,5 +308,49 @@ describe("the dnd-kit rules copied into index.css", () => {
     expect(statement, "no `@layer dnd-kit;` statement in index.css").toBeGreaterThanOrEqual(0);
     expect(tailwind).toBeGreaterThanOrEqual(0);
     expect(statement).toBeLessThan(tailwind);
+  });
+});
+
+/**
+ * **A draggable that is also a control keeps its own keys**, which is the whole of why this
+ * manager carries no `KeyboardSensor`.
+ *
+ * That sensor binds a bubble-phase `keydown` to the source element and answers Space or Enter by
+ * starting a drag, with `preventDefault()` and `stopImmediatePropagation()` — so a press on a
+ * deck row, a search tile or a collection row would never reach the handler that opens the card.
+ * Its default `preventActivation` only excuses a press that landed on a *child*.
+ *
+ * Driven with `user.keyboard` on a genuinely focused element rather than a synthetic
+ * `dispatchEvent`, which collapses the capture ladder into registration order and would report a
+ * pass it had not earned.
+ */
+describe("the manager's sensors", () => {
+  it("leaves Enter and Space to a draggable that is also a control", async () => {
+    const pressed = vi.fn();
+    const element = boxed(document.createElement("button"), 0);
+    element.textContent = "Sol Ring";
+    document.body.append(element);
+    const stop = folderDraggable({
+      element,
+      folder: () => ({ folderId: 1, name: "Reds", parentId: null, scope: "deck" }),
+    });
+    // **On an ancestor, and after the registration** — which is where React's own handlers are.
+    // React 19 delegates every keydown handler to the root container, so the sensor's
+    // stopImmediatePropagation on the element does not merely reorder two listeners: it stops
+    // the press reaching the app at all. A listener on the element registered first would go on
+    // firing and prove nothing.
+    const listener = (event: Event) => pressed((event as KeyboardEvent).key);
+    document.body.addEventListener("keydown", listener);
+
+    element.focus();
+    await userEvent.keyboard("{Enter}");
+    await userEvent.keyboard(" ");
+
+    expect(pressed.mock.calls).toEqual([["Enter"], [" "]]);
+    expect(dndManager.dragOperation.status.idle).toBe(true);
+
+    document.body.removeEventListener("keydown", listener);
+    stop();
+    element.remove();
   });
 });

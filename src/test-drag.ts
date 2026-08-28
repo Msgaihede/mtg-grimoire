@@ -5,7 +5,15 @@ import { afterEach } from "vitest";
 /**
  * A native HTML5 drag, driven from a test.
  *
- * **Why this is possible at all.** jsdom implements no drag-and-drop: there is no
+ * **Nothing calls any of this any more, and it is kept for exactly one more plan.** Every drag in
+ * the app is `@dnd-kit/dom`'s since 3b, so `startDrag`, `dragOnto` and `fireDragEvent` have zero
+ * call sites — `grep` says so — and the two `package.json` lines that keep
+ * `@atlaskit/pragmatic-drag-and-drop` installed are what still make this file compile. 3c takes
+ * the dependency and this half of the harness out together; taking it out here would be a
+ * `package.json` change inside a commit about drag payloads. What is live below is
+ * {@link startPointerDrag}, {@link pointerDrag}, {@link boxed} and {@link recordDrags}.
+ *
+ * **Why this was possible at all.** jsdom implements no drag-and-drop: there is no
  * `DragEvent`, no `DataTransfer`, and every rectangle it measures is zero. The usual
  * conclusion — that a drag can only be verified in a real window — is wrong for the library
  * this app drags with. `@atlaskit/pragmatic-drag-and-drop` hit-tests with `event.target` and
@@ -204,18 +212,69 @@ export async function dragOnto(source: Element, target: Element): Promise<void> 
  * `getBoundingClientRect`. These helpers read the rects they are given; supplying them is the
  * caller's job, and a test that forgets will see a drag that lands nowhere.
  *
- * **Giving the two elements rects is necessary and not sufficient.** dnd-kit clamps an element's
- * visible rectangle against every ancestor whose overflow is not `visible`, and jsdom's computed
- * `overflow` on `<body>` is the empty string — so the document itself used to erase every
- * measurement. `test-setup.ts` gives `<body>` the viewport for that reason; **a scrolling box
- * between a target and the body still needs a rect of its own**, or the target inside it has zero
- * area, never gets a shape, and can never be collided with. That failure is silent: registration
- * is correct, the droppable accepts the payload, and the operation's target is `null` on every
- * frame.
+ * **Giving the two elements rects is necessary and not sufficient, and the second half is not
+ * what this comment used to say.** dnd-kit clamps an element's visible rectangle against every
+ * ancestor whose overflow is not `visible`, and jsdom's computed `overflow` on `<body>` is the
+ * empty string — so the document itself would erase every measurement. This said that
+ * `test-setup.ts` "gives `<body>` the viewport" and that "a scrolling box between a target and
+ * the body still needs a rect of its own". **Neither is true of the shim that exists.** That file
+ * wraps `window.getComputedStyle` and answers `visible` wherever jsdom answers the empty string,
+ * so no ancestor counts as clipping, none needs a rectangle, and a test that puts a scroller
+ * between a target and the body inherits the fix rather than having to know about it.
+ *
+ * What *is* still necessary is the box on the source and on the target themselves. That failure
+ * is silent, and worse than silent: an element with no rect is not invisible to the hit test but a
+ * **degenerate box at the origin**, which contains `(0, 0)` — so an unboxed target still "wins" a
+ * drop whose pointer never moved, and two unboxed targets are separated by document order rather
+ * than by where the reader aimed.
  *
  * The whole reading — the four jsdom globals, the ancestor clamp, and the collision pass no shim
  * can schedule — is in `docs/reference/frontend-design.md`.
  */
+
+/**
+ * Every record a drag puts in the air, for a test that is about what a source **carries** rather
+ * than about where it lands.
+ *
+ * The replacement for `monitorForElements({ onDragStart })`, which nine suites used for exactly
+ * this. `dndManager` is a module singleton with one monitor, so a test that leaves this up leaks
+ * a listener into the rest of the file — hence the `stop`, which every caller must run.
+ */
+export function recordDrags(): { records: Record<string, unknown>[]; stop: () => void } {
+  const records: Record<string, unknown>[] = [];
+  const stop = dndManager.monitor.addEventListener("dragstart", ({ operation }) => {
+    if (operation.source) records.push(operation.source.data);
+  });
+  return { records, stop };
+}
+
+/**
+ * Give an element a box.
+ *
+ * **jsdom has no layout engine, so every `getBoundingClientRect` in the suite is four zeroes** —
+ * and dnd-kit hit-tests by coordinate. A source with no box has nowhere to be pressed and a target
+ * with no box can never be collided with, and both failures are silent: the registration is
+ * correct, the droppable accepts the payload, and `operation.target` is `null` on every frame.
+ *
+ * The x axis is fixed at 0–200 because no gesture in this app's tests is about horizontal
+ * position; `top` and `height` are what a caller varies, so two boxes can be made to overlap or to
+ * sit clear of each other.
+ */
+export function boxed<T extends Element>(element: T, top: number, height = 40): T {
+  element.getBoundingClientRect = () =>
+    ({
+      x: 0,
+      y: top,
+      top,
+      left: 0,
+      right: 200,
+      bottom: top + height,
+      width: 200,
+      height,
+      toJSON: () => ({}),
+    }) as DOMRect;
+  return element;
+}
 
 /** A pointer drag in flight: what a test can do while it is holding the folder. */
 export interface PointerHeld {
@@ -282,9 +341,25 @@ function fire(type: string, at: { x: number; y: number }, target: EventTarget): 
  * and never the drop.
  */
 async function settle(): Promise<void> {
-  await frame();
-  dndManager.collisionObserver.forceUpdate();
-  await frame();
+  // **Twice, because the operation's target follows the collisions one hop behind.** The
+  // observer's own reaction disables it, calls `setDropTarget`, and re-enables it on the promise
+  // that resolves — so the pass that *changes* which droppable is first is not the pass that
+  // moves the target onto it. Measured on the quick-zone-over-a-pile case: after one pass the
+  // collisions were `[zone, pile]` and `operation.target` was still the pile.
+  for (let pass = 0; pass < 2; pass++) {
+    await frame();
+    // **Re-measure every target before the collision pass**, because jsdom cannot.
+    // `Droppable`'s shape comes from a `PositionObserver` the library creates the moment a drag
+    // starts and that element accepts the payload; the observer measures once and then waits for
+    // a callback jsdom never delivers. That is fine for a target boxed before the gesture — the
+    // one measurement is right — and silently wrong for one that appears **during** it: the
+    // quick-zone bar and the remove tray are both drawn on `dragstart`, so their first and only
+    // measurement is taken while their rect is still four zeroes, and they could never be
+    // collided with afterwards.
+    for (const droppable of dndManager.registry.droppables) droppable.refreshShape();
+    dndManager.collisionObserver.forceUpdate();
+    await frame();
+  }
 }
 
 /**
@@ -303,10 +378,16 @@ async function settle(): Promise<void> {
  * The gesture crosses dnd-kit's 5px distance constraint on the first move, which is why no test
  * here has to run a timer: the *other* default constraint is a 200ms delay, and either one alone
  * activates the drag.
+ *
+ * **`move: false` presses and does not move**, for the one kind of test that is about the
+ * *threshold* rather than about a drag that has already started — a source that declares a handle
+ * has to put dnd-kit's activation constraints back by hand, and the only way to see that it did is
+ * to press and look before travelling. Every other caller wants a gesture that is under way, which
+ * is why the two moves are the default and are made by omission.
  */
 export async function startPointerDrag(
   from: HTMLElement,
-  { pressOn = from }: { pressOn?: Element } = {},
+  { pressOn = from, move: travel = true }: { pressOn?: Element; move?: boolean } = {},
 ): Promise<PointerHeld> {
   await frame();
   const start = centre(from);
@@ -316,8 +397,10 @@ export async function startPointerDrag(
   // Two moves before anything is asserted: the first crosses the activation threshold, and
   // `dragOperation.position.current` lags one move behind because the sensor batches through its
   // own scheduler — so a gesture read after a single move is read one move early.
-  await move(start.x, start.y + 8);
-  await move(start.x, start.y + 16);
+  if (travel) {
+    await move(start.x, start.y + 8);
+    await move(start.x, start.y + 16);
+  }
 
   async function move(x: number, y: number): Promise<void> {
     at = { x, y };

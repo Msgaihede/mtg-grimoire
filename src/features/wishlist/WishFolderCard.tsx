@@ -180,22 +180,24 @@ export function WishFolderCard({
 }) {
   const ref = useRef<HTMLLIElement>(null);
   /**
-   * The box the **folder** drop target is registered on, and why it is not the `<li>`.
+   * The box the **folder** drop target is registered on, and why it is still not the `<li>`.
    *
-   * **`@atlaskit/pragmatic-drag-and-drop` keeps exactly one element drop target per element** —
-   * `makeDropTarget`'s registry is a `WeakMap` keyed by the node, so a second
-   * `dropTargetForElements` on the same element silently **replaces** the first (it warns in
-   * development and nothing goes red). Two payloads land on this card, so they need two boxes.
-   * The wish's keeps the `<li>`, because that is the box every existing target, test and story
-   * addresses; the folder's takes an inner wrapper that holds both buttons and therefore covers
-   * every pixel of the card, including the `⋯`'s corner.
+   * **The reason changed with the library and the arrangement did not.** `@atlaskit/pragmatic-
+   * drag-and-drop` kept exactly one element drop target per element — `makeDropTarget`'s registry
+   * is a `WeakMap` keyed by the node, so a second `dropTargetForElements` silently *replaced* the
+   * first — and two payloads land on this card, so they needed two boxes. `@dnd-kit/dom` keys its
+   * registry by **entity id**, so two `Droppable`s on one element both register and both compete;
+   * what keeps them apart is `accepts()`, which `computeCollisions` asks before it measures
+   * anything, and `readCollectionDrop`/`readWishDrag` and `readFolderDrag` are disjoint by
+   * construction. So one box would now work.
    *
-   * **Nesting is free**: `getActualDropTargets` walks up from whatever the pointer is over and
-   * collects *every* registered ancestor, skipping the ones whose `canDrop` says no — so a wish
-   * over the face falls through this wrapper to the `<li>`, and a folder over it stops here.
-   * A plain `<div>` with no positioning of its own, so the `⋯` still resolves against the `<li>`
-   * and nothing in the layout moves; its border box is the `<li>`'s, which is what
-   * {@link useFolderDropTarget} measures the three landings against.
+   * It stays two for the two reasons that outlived the registry. **The geometry**: this wrapper
+   * holds both buttons and therefore covers every pixel of the card including the `⋯`'s corner,
+   * and its border box is the `<li>`'s, which is what {@link useFolderDropTarget} divides into
+   * the three landings. And **every test and story here addresses the two boxes by name**, which
+   * is how they tell "the wish target answered" from "the folder target answered" in a suite with
+   * no layout engine. A plain `<div>` with no positioning of its own, so the `⋯` still resolves
+   * against the `<li>` and nothing in the layout moves.
    */
   const slot = useRef<HTMLDivElement>(null);
   const tip = useTooltip();

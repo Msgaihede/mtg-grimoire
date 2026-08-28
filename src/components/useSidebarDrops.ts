@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
-import { monitorForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { readDragData, type DragPayload } from "@/features/decks/dnd";
 import { useDeck } from "@/features/decks/useDeck";
+import { dndManager } from "@/lib/dndManager";
 import { ipc, ipcError } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
 
@@ -94,20 +94,27 @@ export function useSidebarDrops() {
   });
 
   // A card in the air anywhere in the window, and the last sentence taken down as the next one
-  // is picked up. `onDrop` fires for a cancelled drag as well as a completed one — the platform
+  // is picked up. `dragend` fires for a cancelled drag as well as a completed one — the library
   // ends both the same way — so the ring stands down on Escape without this hearing a keypress.
-  useEffect(
-    () =>
-      monitorForElements({
-        canMonitor: ({ source }) => readDragData(source.data) !== null,
-        onDragStart: () => {
-          setDragging(true);
-          setReport(null);
-        },
-        onDrop: () => setDragging(false),
+  //
+  // **The manager's own listener rather than `useDndDragging`**, and the reason is the second
+  // write: picking a card up clears whatever the last drop said, and that is a fact about the
+  // *event* rather than about the payload. Derived from a `dragging` flag it would have to be a
+  // `setState` inside an effect keyed on that flag, which is the shape `no-setState-in-an-effect`
+  // exists to keep out — and two subscriptions where one says both things.
+  useEffect(() => {
+    const off = [
+      dndManager.monitor.addEventListener("dragstart", ({ operation }) => {
+        if (!operation.source || readDragData(operation.source.data) === null) return;
+        setDragging(true);
+        setReport(null);
       }),
-    [],
-  );
+      dndManager.monitor.addEventListener("dragend", () => setDragging(false)),
+    ];
+    return () => {
+      for (const stop of off) stop();
+    };
+  }, []);
 
   // …and the other half of "whichever comes first". Keyed on the report object rather than on
   // its text, so a second identical sentence restarts the clock instead of inheriting what was

@@ -3142,13 +3142,28 @@ three hosts is exactly the half no suite can see, and it is Task 14 of
 [the plan](../superpowers/plans/2026-08-26-card-chin-and-exact-prices.md). The class assertions
 above pin a string rather than a pixel and do not retire it.
 
-## Drag and drop: what `@dnd-kit/react` 0.5.0 actually requires
+## Drag and drop: what `@dnd-kit/dom` 0.5.0 actually requires
 
-Measured 2026-08-27 against `@dnd-kit/react` **0.5.0** (pinned exactly, no caret — it is pre-1.0
-and its API can break between releases), by building the smallest real thing and reading what
-happened rather than reading the docs. The dependency landed alongside
-`@atlaskit/pragmatic-drag-and-drop`; the two coexist on **different elements**, which is safe, and
-putting both on one element is not — a second registration silently replaces the first.
+Measured 2026-08-27 against **0.5.0** (pinned exactly, no caret — it is pre-1.0 and its API can
+break between releases), by building the smallest real thing and reading what happened rather than
+reading the docs.
+
+**The section is titled for `@dnd-kit/dom` and was titled for `@dnd-kit/react` until 2026-08-28,
+which was wrong the day it was written**: nothing in `src/` imports the React package, every
+answer below is about the DOM one, and §1 and §2 are the record of deciding not to use the hooks.
+`@dnd-kit/dom` and `@dnd-kit/abstract` are both declared exactly in `package.json` as of 3b; until
+then the module every drag in the app went through was an undeclared transitive of
+`@dnd-kit/react`.
+
+The dependency landed alongside `@atlaskit/pragmatic-drag-and-drop` and the two coexisted on
+**different elements** for one plan. **Since 3b (2026-08-28) nothing in `src/` imports
+pragmatic-dnd at all**, so the coexistence rule below is history rather than a constraint — and
+the reason it existed is worth keeping, because it is not the reason it looks like: putting both
+on one element is refused not by the registries but by `PointerSensor.handlePointerDown`, which
+binds a capture-phase `dragstart` listener that `preventDefault()`s the native drag whenever the
+press landed on something that is not itself a native draggable. In this app that is nearly every
+press — a card's name is a button and a tile's art is a button — so the pragmatic drag would have
+died on exactly the gestures a test written for either library would not be watching.
 
 The question the spike existed to answer: **`@dnd-kit/react` is provider-and-hooks shaped, and
 `lib/folderDrag.ts` is imperative** (`folderDraggable({ element, folder })` registers on a DOM
@@ -3260,9 +3275,17 @@ they are hit:
    element is invisible, an invisible droppable never gets a `shape`, and a droppable with no
    shape can never be collided with. **This is the one that reads as "the drop target simply does
    not work"**: registration is correct, `accepts()` answers true, the element is right, and the
-   target is `null` on every frame. Giving `document.body` a viewport-sized
-   `getBoundingClientRect` unblocks it — and every ancestor between the target and the body needs
-   one too.
+   target is `null` on every frame.
+
+   **What shipped is not what this paragraph said until 2026-08-28.** It described the fix as
+   giving `document.body` a viewport-sized `getBoundingClientRect`, "and every ancestor between
+   the target and the body needs one too" — the spike's finding, written down and never
+   reconciled with the code. `src/test-setup.ts` gives `<body>` no rect at all: it wraps
+   `window.getComputedStyle` and answers `visible` for `overflow`, `overflowX` and `overflowY`
+   wherever jsdom answers the empty string, so **no** ancestor counts as clipping and no ancestor
+   needs a rectangle. That is a better fix and a different one — it is one shim rather than one
+   per scrolling box, and a test that adds a scroller between a target and the body inherits it
+   for free.
 6. **Collisions are recomputed by a reactive effect the `Feedback` plugin drives, and jsdom
    cannot drive it.** With the five shims above in place a full gesture runs —
    `beforedragstart`, `dragstart`, `dragmove` per move, `dragend` with `canceled: false` — the
@@ -3283,7 +3306,35 @@ Two smaller measurements from the same pass, both of which change how a helper h
 - **The default activation constraints are `Delay(200ms, 10px tolerance)` *or* `Distance(5px)`**
   for a mouse press that is not on a declared handle, and no constraint at all for a press
   *inside* a handle. Synthetic `pointermove`s cross the 5px distance with no waiting, which is why
-  the gesture activates in a test that runs no timers.
+  the gesture activates in a test that runs no timers. **The handle case is a behaviour change
+  nobody asked for and the app puts it back**: a plain click on a category's grip would otherwise
+  be a zero-pixel reorder, so `useCategoryDragSource` declares its own `Distance(5)` — see 3b.
+
+Four more, measured on 2026-08-28 while every remaining drag moved across, and each of which a
+helper or a call site has to know:
+
+- **A `Droppable`'s shape is measured once, by a `PositionObserver` jsdom never calls again.** The
+  observer is created the moment a drag starts *and* that element accepts the payload, and it
+  measures on construction. For a target boxed before the gesture that one measurement is right;
+  for one drawn **during** it — the quick-zone bar, the remove tray, both of which appear on
+  `dragstart` — the only measurement ever taken is of a rectangle that is still four zeroes.
+  `src/test-drag.ts` calls `refreshShape()` on every registered droppable before each forced
+  collision pass for exactly this.
+- **The operation's *target* follows the collisions one hop behind.** The observer's reaction
+  disables the observer, calls `setDropTarget`, and re-enables it when that promise resolves — so
+  the pass that changes which droppable sorts first is not the pass that moves the target onto it.
+  Measured on a quick zone overlapping a pile: after one forced pass the collisions read
+  `[zone, pile]` while `operation.target` was still the pile. The harness forces two.
+- **A droppable with no rectangle is not inert — it is a degenerate box at the origin.** An
+  unboxed element's centre is `(0, 0)` and its zero-area rect still contains that point, so a
+  helper whose pointer has not been moved "lands" on it by accident. Two unboxed targets both
+  contain the pointer and document order picks the winner. Measured twice on 2026-08-28, in the
+  sidebar's two entries and in the wishlist's folder cards: stripping every box out left whole
+  files green while a drop aimed at one entry wrote to the other. **An unboxed target does not
+  fail, it stops discriminating.**
+- **`PointerHeld.started` is a live reading of the manager's operation, not a remembered
+  boolean.** Asserted after a `cancel()` or a `drop()` it is false for every drag there has ever
+  been, which reads as a gesture that never started.
 
 ### The shipped CSP blocks a plugin dnd-kit cannot be told not to load — and the rules moved into `index.css`
 
