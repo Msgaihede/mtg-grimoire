@@ -1038,4 +1038,82 @@ mod tests {
             "an undecorated window needs its shadow asked for"
         );
     }
+
+    /// The Android bundle block, pinned for the reason every other config assertion here is:
+    /// `tauri.conf.json` is embedded at compile time and nothing else in the build reads these
+    /// three fields back. A `minSdkVersion` silently dropped in a merge is a build that still
+    /// succeeds and an app that installs on devices whose WebView cannot render it.
+    ///
+    /// **`minSdkVersion` 26 rather than the config default 24, and the reason is measurable**:
+    /// this app's floor is whatever the system WebView on that release can run, and API 26
+    /// (Android 8.0, 2017) is where the WebView became independently updatable through Play for
+    /// every device. Going lower widens the device list and widens the set of WebViews that
+    /// have to render a React 19 bundle.
+    ///
+    /// **`debugApplicationIdSuffix` is `.debug` so a debug build and a release build install
+    /// side by side.** Without it a `tauri android dev` install replaces a release install and
+    /// takes its data directory's place — which on a phone means the corpus is rebuilt.
+    ///
+    /// `versionCode` is left unset: Tauri derives it as `major*1000000 + minor*1000 + patch`,
+    /// which is monotonic as long as release-please only ever moves the version forward.
+    #[test]
+    fn the_android_bundle_names_its_floor_and_its_debug_suffix() {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let android = &conf["bundle"]["android"];
+        assert_eq!(android["minSdkVersion"], 26);
+        assert_eq!(android["debugApplicationIdSuffix"], ".debug");
+        assert!(android["versionCode"].is_null());
+    }
+
+    /// **And the same two numbers where the build actually reads them, which is not that file.**
+    ///
+    /// `gen/android/` is generated once by `tauri android init` and then **committed**, because
+    /// it carries hand-edits an `init` would drop. So `bundle.android` above is read at
+    /// *generation* time and baked into `app/build.gradle.kts`; a later edit to
+    /// `tauri.conf.json` alone changes nothing about the APK, silently. The test above would
+    /// stay green through exactly that drift, which is the failure it looks like it prevents.
+    ///
+    /// Verified rather than assumed on 2026-08-28: the config was set to 26, `android init`
+    /// re-run, and the generated Gradle went from `minSdk = 24` to `minSdk = 26`.
+    #[test]
+    fn the_generated_gradle_carries_the_floor_the_config_asked_for() {
+        let gradle = include_str!("../gen/android/app/build.gradle.kts");
+        assert!(
+            gradle.contains("minSdk = 26"),
+            "gen/android/app/build.gradle.kts must carry minSdkVersion 26 — re-run \
+             `npx tauri android init` after changing bundle.android in tauri.conf.json"
+        );
+        assert!(
+            gradle.contains("applicationIdSuffix = \".debug\""),
+            "the debug suffix must reach the Gradle project, not just the Tauri config"
+        );
+        // compileSdk/targetSdk come from the CLI template rather than from this repo's config,
+        // and are pinned here so a CLI upgrade that moves them is a red build rather than a
+        // surprise on the phone.
+        assert!(gradle.contains("compileSdk = 36"));
+        assert!(gradle.contains("targetSdk = 36"));
+    }
+
+    /// The manifest asks for `INTERNET` and nothing else, and every absence is the point: no
+    /// storage permission (the document picker grants access per-URI, which is what
+    /// `picked.rs` opens), no location, no camera. A permission here is a permission a Play
+    /// listing has to justify, and the generated template asked for exactly this one.
+    #[test]
+    fn the_android_manifest_asks_for_the_internet_and_nothing_else() {
+        let manifest = include_str!("../gen/android/app/src/main/AndroidManifest.xml");
+        let asked: Vec<&str> = manifest
+            .match_indices("<uses-permission")
+            .map(|(i, _)| {
+                let rest = &manifest[i..];
+                let end = rest.find("/>").unwrap_or(rest.len());
+                &rest[..end]
+            })
+            .collect();
+        assert_eq!(asked.len(), 1, "exactly one permission: {asked:?}");
+        assert!(
+            asked[0].contains("android.permission.INTERNET"),
+            "the one permission is INTERNET: {asked:?}"
+        );
+    }
 }
