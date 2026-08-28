@@ -31,6 +31,12 @@ pub mod sorting;
 /// files — so there is nothing here for the web target to call.
 pub mod split;
 pub mod sync;
+/// **Three of its four layers compile for wasm; `pairing` does not and never will.**
+/// That module is `#[tauri::command]`s and a state machine over `AppState`, which is the
+/// desktop's IPC surface; `crypto`, `invite` and `identity` are pure functions and three
+/// SQLite tables, and [`sync_engine::wire`] seals every batch with the first of them. A
+/// browser that could not open an envelope would be a browser that cannot sync.
+pub mod sync_pair;
 /// **Every module in here compiles for wasm, and that is the point rather than a bonus.**
 /// The conflict rules are one implementation on three targets (spec §2), so a layer that
 /// only built on the desktop would be a second copy of them waiting to be written.
@@ -84,8 +90,6 @@ pub mod reconcile;
 pub mod reset;
 #[cfg(not(target_family = "wasm"))]
 pub mod scryfall;
-#[cfg(not(target_family = "wasm"))]
-pub mod sync_pair;
 #[cfg(not(target_family = "wasm"))]
 pub mod tags;
 #[cfg(not(target_family = "wasm"))]
