@@ -493,6 +493,32 @@ turn into a row at all.
 
 ---
 
+## A write every device derives for itself must not be captured
+
+`reconcile.rs` is the only module in the crate that makes one, and it is not in the plan at all.
+
+`card_migrations` is on the user side and is deliberately **not** synced, so every device applies
+Scryfall's id log against its own rows after its own ingest. Captured, both devices would do the
+fold **and** then receive the other's — and `fold_into_existing` sums the source row into the
+survivor, which is a counter delta. **A counter delta applied twice is a collection that has
+grown by itself**, on the one path where two devices are guaranteed to compute the same change
+independently.
+
+So `reconcile::apply` runs behind `capture::Suppressed` and `sweep_orphans` behind
+`capture::suppressed`. The two devices converge because they compute the same answer, not
+because they told each other. The sweep is the same rule read from the other end: whether a
+printing is in *this* device's card database is a fact about this device, and two machines that
+synced on different days can honestly disagree — each clears its own flag when its own corpus
+catches up.
+
+`Suppressed` is a second shape of the same guard, for a **mutable** connection: `suppressed()`
+takes `&Connection` and `reconcile::apply` needs `&mut` for its `Transaction`, which the borrow
+checker will not let a caller hold at once. It owns the `&mut` and lends it back, and its `Drop`
+is the whole point — a sticky `applying` row is a device that silently stops syncing, and it
+survives a restart because the row is in the database.
+
+---
+
 ## §7.3's rules, and the test that proves each
 
 `sync_engine::merge::fold` is pure. **Every test folds the same ops in both orders through one
