@@ -314,8 +314,26 @@ let artProgress: ((e: TagProgressEvent) => void) | null = null;
  * would fail with "found multiple elements" rather than with what it was asking about. A reach
  * always starts with a digit; neither chip word does.
  */
+/**
+ * A rail row, waited for with an explicit timeout rather than testing-library's default.
+ *
+ * **The default is 1000 ms and it is a bet on machine speed, not a statement about this
+ * page.** The rail is fetched lazily — a level arrives from the component that draws it —
+ * so every one of these is a wait on an async round trip rather than on a render, and the
+ * assertions that follow are about *what* the rail asked for, never about how fast. It
+ * failed once at 1000 ms in a full-suite run on a loaded machine (2026-08-28) while passing
+ * that same file in isolation, on this branch and on `main` alike.
+ *
+ * Five seconds is chosen to be far outside the noise while still failing in seconds if the
+ * rail genuinely stops loading. It is deliberately on this helper and not on the whole file:
+ * a blanket `testTimeout` would also slacken the assertions that are about behaviour.
+ */
 const railRow = (label: string) =>
-  screen.findByRole("button", { name: new RegExp(`^${label}, (art|oracle) tag, \\d`) });
+  screen.findByRole(
+    "button",
+    { name: new RegExp(`^${label}, (art|oracle) tag, \\d`) },
+    { timeout: 5000 },
+  );
 
 /** The last `search_cards` payload — what every filter assertion below reads. */
 const lastRequest = () =>
