@@ -172,6 +172,24 @@ windows-sys = { version = "0.61", features = [
     "Win32_System_Threading",
 ] }
 
+# Android only, and reached only from Rust. A file the reader picks on Android is a
+# `content://` URI, not a path: `tauri-plugin-dialog`'s DialogPlugin.kt fires
+# ACTION_OPEN_DOCUMENT / ACTION_CREATE_DOCUMENT and returns `uri.toString()`. This plugin's
+# `Fs::open` resolves such a URI through the ContentResolver and hands back a std::fs::File
+# built from the descriptor -- which is what lets `picked.rs` keep every byte-handling path
+# downstream unchanged, `image::ImageReader`'s need for `Seek` included.
+#
+# **No `fs:` permission is granted to it, on any platform.** The ACL gates commands the
+# webview invokes; this is a Rust-side handle on managed state. The page's filesystem access
+# is unchanged: none. See `capabilities/mobile.json` and the test
+# `the_mobile_capability_drops_every_verb_the_platform_has_no_answer_for`.
+#
+# It was already in `Cargo.lock` transitively -- `tauri-plugin-dialog` depends on it -- so
+# this adds a direct edge rather than a new crate. No `url` dependency comes with it either:
+# `FilePath: FromStr` is infallible and makes the path-or-URL decision itself.
+[target.'cfg(target_os = "android")'.dependencies]
+tauri-plugin-fs = "2"
+
 [dev-dependencies]
 httpmock = "0.8"
 tokio = { version = "1", features = ["macros", "rt"] }

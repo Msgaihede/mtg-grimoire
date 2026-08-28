@@ -73,6 +73,8 @@ pub mod nav;
 #[cfg(not(target_family = "wasm"))]
 pub mod paths;
 #[cfg(not(target_family = "wasm"))]
+pub mod picked;
+#[cfg(not(target_family = "wasm"))]
 pub mod reconcile;
 #[cfg(not(target_family = "wasm"))]
 pub mod reset;
@@ -84,7 +86,15 @@ pub mod tags;
 pub mod transfer;
 #[cfg(not(target_family = "wasm"))]
 pub mod update;
-#[cfg(not(target_family = "wasm"))]
+// Desktop only. `open_sized_to_monitor` calls `WebviewWindow::center()`, which tauri
+// declares `#[cfg(desktop)]` (tauri/src/window/mod.rs:1924) — so this module is not merely
+// useless on a phone, it does not compile there. Android's window is the activity and the
+// OS sizes it.
+//
+// **`desktop` already excludes wasm and is not a second spelling of the gate above.** It is
+// `tauri_build`'s cfg, emitted from `build.rs` — which returns before `tauri_build::build()`
+// runs for a wasm `TARGET`, so nothing sets it there.
+#[cfg(desktop)]
 pub mod window;
 #[cfg(not(target_family = "wasm"))]
 pub mod wishlist;

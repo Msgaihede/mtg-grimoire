@@ -114,9 +114,33 @@ jobs:
                 powershell=true
                 ;;
 
+              # The two files under `gen/android/` that a Rust test actually reads, and they
+              # must sit above the arm that silences the rest of that tree.
+              # `the_generated_gradle_carries_the_floor_the_config_asked_for` and
+              # `the_android_manifest_asks_for_the_internet_and_nothing_else` `include_str!`
+              # exactly these — one pins `minSdk`/`targetSdk`/the debug suffix the APK is
+              # really built with, the other pins the permission list to `INTERNET` alone. Both
+              # are Kotlin-and-XML files that are also Rust test inputs, which is the case the
+              # arm below explicitly assumed did not exist.
+              src-tauri/gen/android/app/build.gradle.kts|src-tauri/gen/android/app/src/main/AndroidManifest.xml)
+                rust=true
+                ;;
+
+              # The rest of the Android Gradle project. Nothing in either build job reads it:
+              # `cargo` does not compile Kotlin, `eslint` does not lint a `.gradle.kts`, and the
+              # Rust job builds for the host target only. Building an APK needs an SDK and an
+              # NDK on the runner, which no job here installs. So this routes nowhere, exactly
+              # like `docs/`.
+              #
+              # **It must sit above `src-tauri/*`** — `case` is first-match-wins, and the arm
+              # below would otherwise run the whole clippy-and-test matrix on Windows *and*
+              # Linux for a theme colour or a launcher icon.
+              src-tauri/gen/android/*) ;;
+
               # Rust. The crate is self-contained: nothing under `src-tauri/` reads a file
-              # outside it (the one `include_str!` is its own `tauri.conf.json`), and the
-              # `dist/index.html` that `tauri-build` demands is stubbed by the job itself.
+              # outside it — every `include_str!` names its own `tauri.conf.json`, a
+              # `capabilities/` file, or one of the two `gen/android/` files routed above — and
+              # the `dist/index.html` that `tauri-build` demands is stubbed by the job itself.
               src-tauri/*)
                 rust=true
                 ;;

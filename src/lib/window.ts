@@ -12,7 +12,7 @@
  * fake that resolved synchronously would let a component get away with an ordering the shipped
  * app does not allow.
  *
- * The four verbs match the four permissions granted in `src-tauri/capabilities/default.json`
+ * The four verbs match the four permissions granted in `src-tauri/capabilities/desktop.json`
  * — `core:window:allow-minimize`, `-toggle-maximize`, `-close`, `-start-dragging`. Adding a
  * fifth here means adding its permission there, and the reverse: a granted permission nothing
  * on this page calls is a widening nobody asked for.

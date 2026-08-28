@@ -19,6 +19,14 @@ fn main() {
     // also has nothing to do here: there is no `frontendDist` to embed and no binary to sign.
     let target = std::env::var("TARGET").unwrap_or_default();
     if target.starts_with("wasm32") {
+        // `tauri_build` normally emits these two, and returning before it runs makes
+        // `#[cfg(desktop)]` in `lib.rs`'s module map an *unknown* cfg name on this target —
+        // `unexpected_cfgs`, which the wasm CI job turns into an error with `-D warnings`.
+        // Declaring them without setting either is the honest answer: on wasm there is
+        // neither a desktop nor a mobile Tauri build, and `#[cfg(desktop)]` correctly
+        // excludes this target for free.
+        println!("cargo:rustc-check-cfg=cfg(desktop)");
+        println!("cargo:rustc-check-cfg=cfg(mobile)");
         return;
     }
     tauri_build::build()

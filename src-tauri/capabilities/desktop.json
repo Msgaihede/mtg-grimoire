@@ -1,7 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
-  "identifier": "default",
-  "description": "Capability for the main window",
+  "identifier": "desktop",
+  "description": "Capability for the main window on desktop. Split from `default` when the Android target arrived: three of the four window verbs below are `#[cfg(desktop)]` in tauri itself, so an unsplit file would grant a phone commands that do not exist there.",
+  "platforms": ["windows", "linux", "macOS"],
   "windows": ["main"],
   "permissions": [
     "core:default",

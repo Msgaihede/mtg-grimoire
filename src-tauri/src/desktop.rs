@@ -4,6 +4,9 @@
 //! Split out of `lib.rs` so that the crate's *module map* is the only thing at the root.
 //! `lib.rs` is then readable as the one place that says what compiles where, and this file
 //! is `#[cfg(not(target_family = "wasm"))]` in one line rather than in a hundred.
+//!
+//! The `#[cfg(desktop)]` / `#[cfg(mobile)]` gates *inside* are a different axis and are
+//! Android's, not wasm's: this whole file is already excluded from the browser build.
 
 // **These are here because `lib.rs`'s bare paths were crate-root paths.** Every one of them
 // was spelled `sync::…`, `card::…`, `deck::…` in the file this was cut out of, and that
@@ -176,6 +179,10 @@ fn update_api_base() -> String {
 ///
 /// Without this, double-clicking the exe a second time looks like nothing happened —
 /// the guard is silent by design, so the app has to answer with the window itself.
+/// Desktop only: it is called from the single-instance callback, which does not exist on
+/// Android — and `WebviewWindow::unminimize` is itself `#[cfg(desktop)]` in tauri 2.11.5, so
+/// this function does not merely go unused on a phone, it does not compile there.
+#[cfg(desktop)]
 fn focus_existing_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
@@ -192,25 +199,47 @@ pub fn run() {
     // second instance is given exit code 0, no window and no stderr, so a successor that
     // starts too early simply vanishes — and the user is left looking at the old version
     // with nothing to say why. See `update::await_predecessor`.
-    let exe = std::env::current_exe().unwrap_or_default();
-    let args: Vec<String> = std::env::args().collect();
-    if args.iter().any(|a| a == update::AWAIT_FLAG) {
-        update::await_predecessor(&exe, update::predecessor_pid(args));
+    //
+    // **Desktop only, and this one is "must not run" rather than "cannot compile"** — the
+    // block builds fine for Android. There is no portable exe on a phone to swap, no
+    // single-instance lock to wait on, and `current_exe()` there names the app's own
+    // native-library directory. The flag is one only a self-replacing build ever passes
+    // itself, so on Android this is dead weight with a `current_exe()` syscall attached.
+    #[cfg(desktop)]
+    {
+        let exe = std::env::current_exe().unwrap_or_default();
+        let args: Vec<String> = std::env::args().collect();
+        if args.iter().any(|a| a == update::AWAIT_FLAG) {
+            update::await_predecessor(&exe, update::predecessor_pid(args));
+        }
     }
 
-    let builder = tauri::Builder::default()
-        // First, before every other plugin: this one has to decide whether the process
-        // lives at all, and by the time another plugin has initialised, a second instance
-        // has already opened `mtg.db` and the image cache directory that the first one
-        // owns. Two processes sharing a WAL database is survivable; two sharing the temp
-        // `.gz` an ingest streams from is not.
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+    // First, before every other plugin: this one has to decide whether the process
+    // lives at all, and by the time another plugin has initialised, a second instance
+    // has already opened `mtg.db` and the image cache directory that the first one
+    // owns. Two processes sharing a WAL database is survivable; two sharing the temp
+    // `.gz` an ingest streams from is not.
+    //
+    // **On Android the crate does not exist.** `tauri-plugin-single-instance`'s `lib.rs`
+    // opens with `#![cfg(not(any(target_os = "android", target_os = "ios")))]`, so `init` is
+    // not a no-op there — it is an unresolved name and a hard compile error. Android needs
+    // none of it: the OS runs one task per application and there is no second process to
+    // refuse. Two `let` bindings rather than one attribute inside the chain, because an
+    // attribute on a mid-chain method call is not valid Rust — the same reason the MCP
+    // bridge below is bound separately.
+    #[cfg(desktop)]
+    let builder =
+        tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             focus_existing_window(app);
-        }))
+        }));
+    #[cfg(mobile)]
+    let builder = tauri::Builder::default();
+
+    let builder = builder
         .plugin(tauri_plugin_opener::init())
         // The system file picker: choosing a custom deck cover (`dialog:allow-open`) and
         // naming an export's destination (`dialog:allow-save`, `export_write_file` writes
-        // there). Only those two verbs are granted in `capabilities/default.json` — message,
+        // there). Only those two verbs are granted in `capabilities/desktop.json` — message,
         // ask and confirm are unreachable from the webview however this is initialised. The
         // app's own questions are drawn in the page (`DeleteConfirm`, the settings dialog),
         // which is a deliberate choice and not an oversight: a native message box cannot be
@@ -219,26 +248,44 @@ pub fn run() {
         // Putting a decklist export on the clipboard, the other way out beside the save
         // dialog. `clipboard-manager:allow-write-text` only — nothing here reads the
         // clipboard, so `:default`'s read half is deliberately not granted.
-        .plugin(tauri_plugin_clipboard_manager::init())
-        // Windows 11 Snap Layouts for the app's own maximize button. `tauri.conf.json` sets
-        // `decorations: false`, so the flyout Windows raises over a native maximize button is
-        // gone — the OS asks its own frame `WM_NCHITTEST`, never a `<button>` in a webview.
-        // This parks a transparent child window over that button's rectangle and answers
-        // `HTMAXBUTTON`.
-        //
-        // **The id is the whole contract, and it fails silently on both sides.** A typo here
-        // or in `SNAP_BUTTON_ID` creates no overlay, raises no error and logs nothing: the
-        // button keeps working and Snap Layouts simply never appear, which is a regression no
-        // test and no launch can catch. `src/lib/window.ts` holds the frontend's copy and says
-        // the same thing.
-        //
-        // A no-op everywhere else — the crate's dummy implementation on non-Windows, and
-        // documented as inert on Windows 10, where the OS has no Snap Layouts to raise.
-        .plugin(
-            tauri_plugin_snap_layout::init()
-                .button_id("snap-maximize-button")
-                .build(),
-        );
+        .plugin(tauri_plugin_clipboard_manager::init());
+
+    // Android only, and it is here for `picked.rs` alone — see that module. Registering it is
+    // what makes `app.try_state::<tauri_plugin_fs::Fs<_>>()` resolvable and what wires the
+    // Kotlin `FsPlugin` into the activity, so a `content://` URI the document picker answered
+    // can be turned into a file descriptor. **It grants the webview nothing**:
+    // `capabilities/mobile.json` has no `fs:` entry, so every one of this plugin's own commands
+    // is denied at the ACL and the page's filesystem access is unchanged — none.
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(tauri_plugin_fs::init());
+
+    // Windows 11 Snap Layouts for the app's own maximize button — and therefore desktop only,
+    // since Android draws no caption at all and `capabilities/mobile.json` grants neither of
+    // the two verbs. The crate itself compiles everywhere (a `#[cfg(not(windows))]` dummy that
+    // still registers both commands, which is what keeps `capabilities/` resolvable on the
+    // Linux CI leg), so this gate is about not *asking* for an overlay over a button that is
+    // not on screen.
+    //
+    // `tauri.conf.json` sets
+    // `decorations: false`, so the flyout Windows raises over a native maximize button is
+    // gone — the OS asks its own frame `WM_NCHITTEST`, never a `<button>` in a webview.
+    // This parks a transparent child window over that button's rectangle and answers
+    // `HTMAXBUTTON`.
+    //
+    // **The id is the whole contract, and it fails silently on both sides.** A typo here
+    // or in `SNAP_BUTTON_ID` creates no overlay, raises no error and logs nothing: the
+    // button keeps working and Snap Layouts simply never appear, which is a regression no
+    // test and no launch can catch. `src/lib/window.ts` holds the frontend's copy and says
+    // the same thing.
+    //
+    // A no-op everywhere else — the crate's dummy implementation on non-Windows, and
+    // documented as inert on Windows 10, where the OS has no Snap Layouts to raise.
+    #[cfg(desktop)]
+    let builder = builder.plugin(
+        tauri_plugin_snap_layout::init()
+            .button_id("snap-maximize-button")
+            .build(),
+    );
 
     // The MCP bridge, and the only reason the chain is split in two: this plugin exists in a
     // debug build and not in a release one, which `.plugin(…)` mid-chain cannot express.
@@ -254,12 +301,23 @@ pub fn run() {
     // `withGlobalTauri` puts `window.__TAURI__` in reach of that script, every command in the
     // handler below is one `invoke` away from anyone who can open the socket. The plugin's
     // default is for driving a phone across your LAN; this app is a single local user, so it
-    // takes the narrow bind for the same reason `capabilities/default.json` takes
+    // takes the narrow bind for the same reason `capabilities/desktop.json` takes
     // `dialog:allow-open` over `dialog:default`.
     //
     // Port 9223 (the plugin counts upward from it if it is busy), deliberately clear of the
     // three ports this repo hardcodes: 1420 Vite, 6006 Storybook, 9222 CDP.
-    #[cfg(debug_assertions)]
+    //
+    // **`desktop` as well as `debug_assertions`, and the second half is not decoration.**
+    // `tauri android dev` produces a *debug* build, so `debug_assertions` alone puts this
+    // socket on the phone. `127.0.0.1` is a much weaker fence there than it is here: a
+    // workstation's loopback is reachable by processes the reader installed deliberately,
+    // whereas a phone's is reachable by every app on it, and this one evaluates arbitrary
+    // JavaScript in a webview where `withGlobalTauri` has already put every command within
+    // one `invoke`. **Denying the three commands in `capabilities/mobile.json` does not
+    // cover this** — the listener is opened in Rust and the ACL is not in that path, so the
+    // capability closes the front door of a house whose wall is missing. This `cfg` is the
+    // wall.
+    #[cfg(all(debug_assertions, desktop))]
     let builder = builder.plugin(
         tauri_plugin_mcp_bridge::Builder::new()
             .bind_address("127.0.0.1")
@@ -434,6 +492,9 @@ pub fn run() {
             // window at all. It opens at the largest of 1920×1080 and 1280×720 that the
             // monitor's *work area* holds — a 1080p desk cannot hold a 1080-tall window once
             // Windows has taken its taskbar out of it. See `window.rs`.
+            // Android has no hidden-window step and no rungs to choose between — the
+            // activity is already on screen and the OS sizes it.
+            #[cfg(desktop)]
             window::open_sized_to_monitor(app.handle());
 
             // Printed as well as returned: a `Box<dyn Error>` out of `setup` reaches the
@@ -452,26 +513,45 @@ pub fn run() {
             // runs detached.
             index::lifecycle::spawn_build(&state);
 
-            // The plain-text mirror, in two halves that must stay in this order.
+            // The plain-text mirror, in two halves that must stay in this order. **Desktop
+            // only, and this is the decision rather than a limitation**: the mirror's whole
+            // point is a folder a reader opens in a text editor, syncs with Dropbox or greps,
+            // and on Android that directory is reachable mainly through a file-manager app and
+            // often not by other apps at all. `tauri-plugin-dialog`'s own manifest records
+            // Android support as "partial — Does not support folder picker", so the reader
+            // could not choose the root either.
             //
-            // First the hook, on `state.db` and **nowhere else**: that is the one connection
-            // every user-facing write in this crate goes through (`sync::with_write`), and
-            // `db_read` is opened read-only so it could never fire one. It is installed before
-            // the thread starts so that nothing written between here and the first pass can
-            // slip past unmarked — though the first pass is `Dirty::ALL` and would cover it
-            // anyway, which is what makes this ordering cheap insurance rather than a rule.
-            mirror::watch::install_hook(
-                &db::lock_blocking(&state.db),
-                state.mirror.clone(),
-                state.fence.clone(),
-            );
+            // The module still *compiles* on Android — `AppState` carries
+            // `mirror::watch::{Mask, LastPass}` and six sites construct them — so what is
+            // gated is the hook and the thread, which is the whole of what makes the mirror
+            // do anything. `mirror_status` there answers a mirror that never runs.
+            #[cfg(desktop)]
+            {
+                // First the hook, on `state.db` and **nowhere else**: that is the one
+                // connection every user-facing write in this crate goes through
+                // (`sync::with_write`), and `db_read` is opened read-only so it could never
+                // fire one. It is installed before the thread starts so that nothing written
+                // between here and the first pass can slip past unmarked — though the first
+                // pass is `Dirty::ALL` and would cover it anyway, which is what makes this
+                // ordering cheap insurance rather than a rule.
+                //
+                // The guard is bound rather than left a temporary so it is released before
+                // `spawn`, which is the lifetime it had before the block existed.
+                //
+                // The third argument is the cross-file fence, which arrived with the
+                // user/corpus split: the hook has to be able to tell the mirror which of the
+                // two databases a write landed in.
+                let conn = db::lock_blocking(&state.db);
+                mirror::watch::install_hook(&conn, state.mirror.clone(), state.fence.clone());
+                drop(conn);
 
-            // Then the thread. Detached and never fatal, exactly like the facet warm-up above:
-            // it runs one full pass now — the whole of what makes the folder correct after a
-            // crash — and then wakes two seconds after the reader stops editing. It reads
-            // through `db_read` and never takes the write connection, so no press it overlaps
-            // can be answered `db::BUSY` by it.
-            mirror::watch::spawn(state.clone());
+                // Then the thread. Detached and never fatal, exactly like the facet warm-up
+                // above: it runs one full pass now — the whole of what makes the folder
+                // correct after a crash — and then wakes two seconds after the reader stops
+                // editing. It reads through `db_read` and never takes the write connection, so
+                // no press it overlaps can be answered `db::BUSY` by it.
+                mirror::watch::spawn(state.clone());
+            }
 
             // Here rather than before the builder, and the difference is one rare bug: this
             // deletes a staged build, and the second instance of a double-click would
@@ -481,6 +561,10 @@ pub fn run() {
             // deleted earlier still, by `await_predecessor`; this is the path that finally
             // clears one whose successor never got that far.)
             let exe = std::env::current_exe().unwrap_or_default();
+            // Desktop only: what it deletes is a staged `.new`/`.old` beside the executable,
+            // and on Android that directory is the app's own native-library folder — nothing
+            // ever stages anything there, and `current_exe()` may name a read-only mount.
+            #[cfg(desktop)]
             update::clean_up(&exe);
 
             // Decided once here — `Updater::new` probes whether it can write beside the exe
@@ -559,6 +643,12 @@ pub fn run() {
             // result is written to `app_meta`, so the ribbon reads it without an event —
             // which also means nothing is lost if this finishes before the webview is
             // listening, the trap `sync:progress` has to work around.
+            //
+            // **Desktop only.** On Android the store is what notices a new release, and asking
+            // GitHub would spend a request and an `app_meta` row to learn something the app
+            // cannot act on — `Updater::new` has already answered `InstallKind::Managed`
+            // there, so every asset is refused and every button is hidden.
+            #[cfg(desktop)]
             tauri::async_runtime::spawn(async move {
                 if let Err(e) = update::check(&state, &updater, false).await {
                     eprintln!("update check failed: {e}");
@@ -645,15 +735,11 @@ fn init_state(app: &tauri::App) -> Result<AppState, String> {
 
     let portable = exe_dir.as_ref().map(|d| d.join("data"));
     let fallback = app_data.join("data");
-    let data_dir = match &exe_dir {
-        Some(dir) => paths::resolve_data_dir(dir, &app_data),
-        // No executable path (an unusual host, a deleted binary): the portable location
-        // cannot even be named, so go straight to the per-user folder.
-        None => {
-            let _ = std::fs::create_dir_all(&fallback);
-            fallback.clone()
-        }
-    };
+    // `cfg!(desktop)` is passed in rather than tested inside, so both branches compile and are
+    // tested on every platform — see `paths::data_dir_for`. On Android `portable` stays a name
+    // that never becomes the answer: `data_dir_error` still reports both candidates, and the
+    // one beside the executable is never probed.
+    let data_dir = paths::data_dir_for(exe_dir.as_deref(), &app_data, cfg!(desktop));
 
     // **Before any connection the app keeps.** A folder holding a single pre-27 `mtg.db` is
     // taken apart here, and a `corpus.db` that will not open at all is deleted here — both
@@ -831,10 +917,55 @@ mod tests {
     /// `docs/reference/tauri-mcp-bridge.md` has the working out. The likely way this
     /// regresses is someone debugging a bridge problem by reaching for `:default` — which
     /// would fix nothing, because a command the ACL never sees cannot be denied by it.
+    /// The other half of the bridge's fence, and the half a capability file cannot hold.
+    ///
+    /// `the_mcp_bridge_gets_three_permissions_and_never_its_default` above and
+    /// `the_mobile_capability_drops_every_verb_the_platform_has_no_answer_for` below both
+    /// assert **ACL** facts, and both would stay green while a debug APK listened on the
+    /// phone: the socket is opened by `Builder::build()` in Rust, and the ACL is not in that
+    /// path. So the thing to assert is the `cfg` itself.
+    ///
+    /// **Asserting on source text is ugly, and it is the honest option here.** A `cfg` is
+    /// resolved at compile time, so no runtime probe on this host can observe what an
+    /// Android build did with it; and the plugin compiles for `aarch64-linux-android`
+    /// perfectly well, so a green cross-compile proves nothing either. The regression this
+    /// guards is somebody widening the gate back to `debug_assertions` while chasing a
+    /// bridge problem — a one-token edit that no other test in this file can see.
+    #[test]
+    fn the_mcp_bridge_is_gated_on_desktop_and_not_only_on_a_debug_build() {
+        // Lines, not a byte offset: the needle would otherwise have to carry an escaped
+        // newline, and the first `find` in a file that also contains this very test is a
+        // trap — it would happily match the test's own text if the two ever swapped order.
+        //
+        // **`desktop.rs` and not `lib.rs`**: the registration moved here with `run()` when
+        // `lib.rs` became the crate's module map and nothing else. The needle below is now
+        // in the same file as this test, which is exactly the trap the paragraph above
+        // names — it survives because the quoted copy is mid-line and `l.trim()` of it is
+        // the whole `.position(…)` call, and because `run()` sits above `mod tests`.
+        let lines: Vec<&str> = include_str!("desktop.rs").lines().collect();
+        let at = lines
+            .iter()
+            .position(|l| l.trim() == "tauri_plugin_mcp_bridge::Builder::new()")
+            .expect("the bridge registration moved; this test must follow it");
+
+        assert_eq!(
+            lines[at - 2].trim(),
+            "#[cfg(all(debug_assertions, desktop))]",
+            concat!(
+                "the MCP bridge must be gated on `all(debug_assertions, desktop)`. ",
+                "`tauri android dev` builds with `debug_assertions` on, so the weaker gate ",
+                "opens an unauthenticated JavaScript-evaluating socket on the phone's ",
+                "loopback, where every installed app can reach it. Denying the commands in ",
+                "`mobile.json` does not help: the listener is opened in Rust, not through ",
+                "the ACL.",
+            )
+        );
+    }
+
     #[test]
     fn the_mcp_bridge_gets_three_permissions_and_never_its_default() {
         let caps: serde_json::Value =
-            serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
+            serde_json::from_str(include_str!("../capabilities/desktop.json")).unwrap();
         let granted: Vec<&str> = caps["permissions"]
             .as_array()
             .expect("the capability must list permissions")
@@ -875,7 +1006,7 @@ mod tests {
     /// never a plugin's `:default`.
     #[test]
     fn the_capability_grants_two_new_narrow_permissions_and_no_filesystem() {
-        let caps = include_str!("../capabilities/default.json");
+        let caps = include_str!("../capabilities/desktop.json");
         assert!(caps.contains("\"dialog:allow-save\""));
         assert!(caps.contains("\"clipboard-manager:allow-write-text\""));
         // The whole reason `export_write_file` exists. See `export.rs`.
@@ -906,7 +1037,7 @@ mod tests {
     #[test]
     fn the_title_bar_gets_four_window_verbs_and_the_overlay_two() {
         let caps: serde_json::Value =
-            serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
+            serde_json::from_str(include_str!("../capabilities/desktop.json")).unwrap();
         let granted: Vec<&str> = caps["permissions"]
             .as_array()
             .expect("the capability must list permissions")
@@ -951,6 +1082,134 @@ mod tests {
         assert!(!caps.to_string().contains("snap-layout:default"));
     }
 
+    /// The desktop capability is what shipped as `default.json`, unchanged. Splitting the file
+    /// must not be a widening or a narrowing of what the shipped app can do — this is the
+    /// assertion that makes the split a refactor.
+    ///
+    /// `platforms` is a real field: `tauri-utils`' `acl::capability::Capability` declares
+    /// `pub platforms: Option<Vec<Target>>`, serialising as `"macOS"`, `"windows"`, `"linux"`,
+    /// `"android"`, `"iOS"`. Omitting it targets every platform, which is exactly why one file
+    /// could not stay one file.
+    #[test]
+    fn the_desktop_capability_is_the_permission_set_that_shipped() {
+        let cap: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/desktop.json")).unwrap();
+        let got: Vec<&str> = cap["permissions"]
+            .as_array()
+            .expect("the capability must list permissions")
+            .iter()
+            .map(|p| p.as_str().expect("every permission is a string"))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                "core:default",
+                "opener:default",
+                "dialog:allow-open",
+                "dialog:allow-save",
+                "clipboard-manager:allow-write-text",
+                "core:window:allow-minimize",
+                "core:window:allow-toggle-maximize",
+                "core:window:allow-close",
+                "core:window:allow-start-dragging",
+                "snap-layout:allow-update-snap-bounds",
+                "snap-layout:allow-detach-snap-bounds",
+                "mcp-bridge:allow-report-ipc-event",
+                "mcp-bridge:allow-request-script-injection",
+                "mcp-bridge:allow-script-result",
+            ]
+        );
+        assert_eq!(
+            cap["platforms"],
+            serde_json::json!(["windows", "linux", "macOS"])
+        );
+    }
+
+    /// Android's capability, and every absence in it is a decision.
+    ///
+    /// **The four window verbs are gone because three of them do not exist.** In tauri 2.11.5,
+    /// `minimize`, `toggle_maximize` and `start_dragging` are all `#[cfg(desktop)]`
+    /// (`tauri/src/window/plugin.rs`); only `close` is in the shared handler, and an app that
+    /// can close itself from a button no phone user expects is not a feature. `TitleBar` is
+    /// hidden on Android for the same reason — see `src/lib/platform.ts`.
+    ///
+    /// **Snap Layouts are gone** because there is no caption to park an overlay over.
+    ///
+    /// **The MCP bridge is gone** because it binds a WebSocket that authenticates nothing and
+    /// evaluates arbitrary JavaScript, and `tauri android dev` produces a *debug* build — so
+    /// `#[cfg(debug_assertions)]` puts that socket on a phone rather than on this
+    /// workstation's loopback. Denying the three commands is not the whole answer, because the
+    /// socket is opened in Rust and the ACL is not in that path; it is the half this file can
+    /// do. Android is driven over CDP instead (see the reference doc).
+    ///
+    /// **`opener` is narrowed from `:default` to two verbs.** `opener:default` is
+    /// `allow-open-url` + `allow-reveal-item-in-dir` + `allow-default-urls`, and revealing an
+    /// item in a directory is not a thing Android's opener supports — its own manifest records
+    /// Android as "partial — Only allows to open URLs via `open`". `allow-default-urls` stays:
+    /// it is what permits `https:`, `http:`, `mailto:` and `tel:`.
+    #[test]
+    fn the_mobile_capability_drops_every_verb_the_platform_has_no_answer_for() {
+        let cap: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/mobile.json")).unwrap();
+        let got: Vec<&str> = cap["permissions"]
+            .as_array()
+            .expect("the capability must list permissions")
+            .iter()
+            .map(|p| p.as_str().expect("every permission is a string"))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                "core:default",
+                "opener:allow-open-url",
+                "opener:allow-default-urls",
+                "dialog:allow-open",
+                "dialog:allow-save",
+                "clipboard-manager:allow-write-text",
+            ]
+        );
+        assert_eq!(cap["platforms"], serde_json::json!(["android"]));
+
+        for denied in [
+            "core:window:allow-minimize",
+            "core:window:allow-toggle-maximize",
+            "core:window:allow-close",
+            "core:window:allow-start-dragging",
+            "snap-layout:allow-update-snap-bounds",
+            "snap-layout:allow-detach-snap-bounds",
+            "mcp-bridge:allow-report-ipc-event",
+            "mcp-bridge:allow-request-script-injection",
+            "mcp-bridge:allow-script-result",
+            "opener:default",
+        ] {
+            assert!(!got.contains(&denied), "{denied} must not reach Android");
+        }
+
+        // No `fs:` permission, on any platform, ever. Task 5 adds `tauri-plugin-fs` to the
+        // Android build and reaches it from **Rust**, where the ACL is not in the path. A
+        // grant here would be the page gaining a filesystem, which is the one thing this app
+        // has never given it.
+        assert!(
+            !got.iter().any(|p| p.starts_with("fs:")),
+            "no fs: permission is granted anywhere"
+        );
+    }
+
+    /// The two files are a split and not a rewrite: no permission may exist in one and be
+    /// unaccounted for in the other, and `default.json` must be gone rather than left behind
+    /// as a third file targeting every platform — which is what would silently hand Android
+    /// the window verbs back.
+    #[test]
+    fn the_capability_directory_is_exactly_the_two_platform_files() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities");
+        let mut names: Vec<String> = std::fs::read_dir(&dir)
+            .expect("capabilities/ must exist")
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names, vec!["desktop.json", "mobile.json"]);
+    }
+
     /// Without `decorations: false` the app draws two title bars: Windows' and
     /// `src/components/TitleBar.tsx`'s. With it and without the title bar, the window cannot
     /// be moved, maximized or closed at all.
@@ -973,6 +1232,133 @@ mod tests {
             main["shadow"],
             serde_json::Value::Bool(true),
             "an undecorated window needs its shadow asked for"
+        );
+    }
+
+    /// The Android bundle block, pinned for the reason every other config assertion here is:
+    /// `tauri.conf.json` is embedded at compile time and nothing else in the build reads these
+    /// three fields back. A `minSdkVersion` silently dropped in a merge is a build that still
+    /// succeeds and an app that installs on devices whose WebView cannot render it.
+    ///
+    /// **`minSdkVersion` 26 rather than the config default 24, and the reason is measurable**:
+    /// this app's floor is whatever the system WebView on that release can run, and API 26
+    /// (Android 8.0, 2017) is where the WebView became independently updatable through Play for
+    /// every device. Going lower widens the device list and widens the set of WebViews that
+    /// have to render a React 19 bundle.
+    ///
+    /// **`debugApplicationIdSuffix` is `.debug` so a debug build and a release build install
+    /// side by side.** Without it a `tauri android dev` install replaces a release install and
+    /// takes its data directory's place — which on a phone means the corpus is rebuilt.
+    ///
+    /// `versionCode` is left unset: Tauri derives it as `major*1000000 + minor*1000 + patch`,
+    /// which is monotonic as long as release-please only ever moves the version forward.
+    #[test]
+    fn the_android_bundle_names_its_floor_and_its_debug_suffix() {
+        let conf: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
+        let android = &conf["bundle"]["android"];
+        assert_eq!(android["minSdkVersion"], 26);
+        assert_eq!(android["debugApplicationIdSuffix"], ".debug");
+        assert!(android["versionCode"].is_null());
+    }
+
+    /// **And the same two numbers where the build actually reads them, which is not that file.**
+    ///
+    /// `gen/android/` is generated once by `tauri android init` and then **committed**, because
+    /// it carries hand-edits an `init` would drop. So `bundle.android` above is read at
+    /// *generation* time and baked into `app/build.gradle.kts`; a later edit to
+    /// `tauri.conf.json` alone changes nothing about the APK, silently. The test above would
+    /// stay green through exactly that drift, which is the failure it looks like it prevents.
+    ///
+    /// Verified rather than assumed on 2026-08-28: the config was set to 26, `android init`
+    /// re-run, and the generated Gradle went from `minSdk = 24` to `minSdk = 26`.
+    #[test]
+    fn the_generated_gradle_carries_the_floor_the_config_asked_for() {
+        let gradle = include_str!("../gen/android/app/build.gradle.kts");
+        assert!(
+            gradle.contains("minSdk = 26"),
+            "gen/android/app/build.gradle.kts must carry minSdkVersion 26 — re-run \
+             `npx tauri android init` after changing bundle.android in tauri.conf.json"
+        );
+        assert!(
+            gradle.contains("applicationIdSuffix = \".debug\""),
+            "the debug suffix must reach the Gradle project, not just the Tauri config"
+        );
+        // compileSdk/targetSdk come from the CLI template rather than from this repo's config,
+        // and are pinned here so a CLI upgrade that moves them is a red build rather than a
+        // surprise on the phone.
+        assert!(gradle.contains("compileSdk = 36"));
+        assert!(gradle.contains("targetSdk = 36"));
+    }
+
+    /// The manifest asks for `INTERNET` and nothing else, and every absence is the point: no
+    /// storage permission (the document picker grants access per-URI, which is what
+    /// `picked.rs` opens), no location, no camera. A permission here is a permission a Play
+    /// listing has to justify, and the generated template asked for exactly this one.
+    #[test]
+    fn the_android_manifest_asks_for_the_internet_and_nothing_else() {
+        let manifest = include_str!("../gen/android/app/src/main/AndroidManifest.xml");
+        let asked: Vec<&str> = manifest
+            .match_indices("<uses-permission")
+            .map(|(i, _)| {
+                let rest = &manifest[i..];
+                let end = rest.find("/>").unwrap_or(rest.len());
+                &rest[..end]
+            })
+            .collect();
+        assert_eq!(asked.len(), 1, "exactly one permission: {asked:?}");
+        assert!(
+            asked[0].contains("android.permission.INTERNET"),
+            "the one permission is INTERNET: {asked:?}"
+        );
+    }
+
+    /// **`android:allowBackup` is `false`, and the regression this guards is the attribute's
+    /// *absence*** — an unset `allowBackup` defaults to **true**, which is the state the
+    /// generated template shipped in. So there is nothing to see in a diff: the failure is a
+    /// line that is not there.
+    ///
+    /// Android Auto Backup would copy the app's data directory into the reader's Google Drive.
+    /// **This app's design is that no server holds anything it can read** — no account, no
+    /// signup, end-to-end encryption for the sync that does exist — and uploading somebody's
+    /// collection, their decks and what they paid for each card, without them ever choosing it,
+    /// contradicts that. The ~500 MB corpus against Auto Backup's 25 MB quota is the *second*
+    /// reason and the weaker one: it is repaired by excluding the corpus and backing up the
+    /// user tables, which is the same privacy failure with a smaller payload.
+    ///
+    /// **The assertion reads the value out of the `<application>` open tag, and that is the
+    /// whole point of it.** A `manifest.contains("allowBackup=\"false\"")` could not tell the
+    /// attribute's absence from its presence, because the comment standing above the element in
+    /// the manifest quotes it verbatim — deleting the attribute would leave that test green.
+    /// Scoping to the tag fails on the deletion *and* on the sneakier mutation, a flip to
+    /// `"true"`. Both were run.
+    ///
+    /// `include_str!` for `the_android_manifest_asks_for_the_internet_and_nothing_else`'s
+    /// reason: `gen/android/` is committed and `android init` is not re-run, so this file is a
+    /// source file — and a re-init that silently restored the template's manifest, dropping the
+    /// attribute with it, is exactly what turns red here.
+    #[test]
+    fn the_android_application_refuses_auto_backup() {
+        let manifest = include_str!("../gen/android/app/src/main/AndroidManifest.xml");
+        let open = manifest
+            .find("<application")
+            .expect("the manifest declares an <application> element");
+        let rest = &manifest[open..];
+        let tag = &rest[..rest.find('>').expect("the <application> tag is closed")];
+
+        let value = tag
+            .split_whitespace()
+            .find_map(|attr| attr.strip_prefix("android:allowBackup="))
+            .unwrap_or_else(|| {
+                panic!(
+                    "<application> must set android:allowBackup — unset defaults to true, and \
+                     Android Auto Backup would upload the reader's collection to Google Drive: \
+                     {tag}"
+                )
+            });
+        assert_eq!(
+            value, "\"false\"",
+            "android:allowBackup must be exactly \"false\": {tag}"
         );
     }
 }
