@@ -36,6 +36,7 @@ pub mod search;
 pub mod sorting;
 pub mod split;
 pub mod sync;
+pub mod sync_pair;
 pub mod tags;
 pub mod transfer;
 pub mod update;
