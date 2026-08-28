@@ -15,6 +15,24 @@
 Throwaway code lives on the `spike-wasm-core` branch under `spike/`. Nothing there is meant to
 ship; it exists to answer three assumptions before anything is designed against them.
 
+**PR 4 landed and `spike/` is deliberately still here.** Three of its four probes are shipped
+code now — probe 1 as the manifest's wasm table, probe 2 as `db::install_opfs_pool` and
+`db::open_pooled_pair`, probe 4 as `feed::frame::Elements` (PR 1) and `combos::StreamRead` — and
+the plan for that PR said to delete the directory once they were. **Probe 3 is the exception and
+it is why the directory stays**: its `bytes_stream` → decoder → batch loop shipped as
+`web::glue::ingest_cards`, and that path does not yet reliably finish, dying in wasm's allocator
+about two runs in three ([web-target.md](../../reference/web-target.md)). A minimal harness that
+performs the same streaming ingest with none of the app around it is the obvious way to bisect
+that, and deleting it the week it became useful would be the wrong order. It goes when the first
+run is reliable.
+
+A fifth probe was written during PR 4 and is not in this directory: `probe6`, which asked whether
+`opfs-sahpool` can hold **two** database files and `ATTACH` across them — a question this spike
+never had to ask, because the user/corpus split landed after it. It can: `PRAGMA database_list`
+answered `main=user.db corpus=corpus.db`, one transaction wrote to both, a join across them
+answered, `DETACH` and re-`ATTACH` worked, and both files survived a reload. Its measurements are
+in `web-target.md` with the rest.
+
 ## Verdict
 
 **All three assumptions hold, and the combo feed measured afterwards holds too. No kill criterion fires.** Two of the three were resting on

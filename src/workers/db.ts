@@ -39,15 +39,27 @@ let glue: Glue | undefined;
  * `tsc` before Vite, so the *desktop* build breaks on a path only the web build reaches.
  * `@vite-ignore` handles the bundler; a variable is what handles the type checker.
  *
+ * **And it is an absolute URL with an origin, which is not cosmetic — a root-relative one
+ * does not work in the dev server at all.** Vite rewrites every dynamic import whose
+ * specifier it cannot read statically into `__vite__injectQuery(spec, 'import')`, and
+ * `@vite-ignore` does not opt out of that. `injectQuery` opens with
+ * `if (url[0] !== "." && url[0] !== "/") return url`, so `/wasm/…` comes back as
+ * `/wasm/…?import` — which Vite then refuses, because importing an asset out of `publicDir`
+ * from JavaScript is not allowed. Measured 2026-08-28 against the real page: the boot screen
+ * read "The card database would not open — TypeError: Failed to fetch dynamically imported
+ * module: http://localhost:5173/wasm/mtg_grimoire_lib.js?import". Giving the URL an origin
+ * takes the early return and the query is never appended.
+ *
  * `{ module_or_path }` and not a bare argument: wasm-bindgen 0.2.127 deprecated the
  * positional form.
  */
-const GLUE_URL = "/wasm/mtg_grimoire_lib.js";
+const GLUE_URL = new URL("/wasm/mtg_grimoire_lib.js", self.location.origin).href;
+const WASM_URL = new URL("/wasm/mtg_grimoire_lib_bg.wasm", self.location.origin).href;
 
 async function load(): Promise<Glue> {
   if (!glue) {
     const mod = (await import(/* @vite-ignore */ GLUE_URL)) as Glue;
-    await mod.default({ module_or_path: "/wasm/mtg_grimoire_lib_bg.wasm" });
+    await mod.default({ module_or_path: WASM_URL });
     glue = mod;
   }
   return glue;

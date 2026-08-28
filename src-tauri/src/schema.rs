@@ -4008,6 +4008,34 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
             )),
         ));
     }
+    // **A user file at 0 has no shape yet**, which is [`migrate_corpus`]'s `v < head` arm read
+    // for the other half — and it was found by running the web build rather than by reading.
+    // On desktop this never fires: `prepare_data_dir` runs `split::convert` before any
+    // connection the app keeps, and even a fresh install goes the long way round, building a
+    // whole legacy `mtg.db` at 26 and splitting it. **A browser has no `mtg.db` to take
+    // apart**, so before this the web target opened a pair whose corpus had a shape and whose
+    // user half had no tables at all. It failed where you would least look: the facet index
+    // reads `collection_entries` for its `owned` dimension, so the only symptom was
+    // `index build: no such table: collection_entries` in a Worker console, with the page
+    // otherwise working.
+    //
+    // `== 0` and not `< USER_SCHEMA_VERSION`, deliberately: this is the half whose rows exist
+    // nowhere else, so "no shape yet" is the only state it may build from scratch. A rung
+    // above 27 goes below this and may never restart or give up.
+    //
+    // The version is stamped **inside** the transaction: outside it, a process that died in
+    // between would leave tables at version 0 and every later run would fail on
+    // `CREATE TABLE … already exists`, since the DDL is plain `CREATE TABLE`.
+    if v == 0 {
+        let tx = conn.unchecked_transaction()?;
+        create_user_schema(&tx, "main")?;
+        tx.execute_batch(&on_schema("main", USER_SEED_SQL))?;
+        tx.execute_batch(&format!(
+            "PRAGMA main.user_version = {USER_SCHEMA_VERSION};"
+        ))?;
+        tx.commit()?;
+    }
+
     Ok(())
 }
 
@@ -4087,7 +4115,11 @@ fn corpus_is_readable(data_dir: &std::path::Path) -> bool {
 /// `idx_collection_folder_removed`. It is here for `memory_pair`, which builds a pair from
 /// the DDL rather than from the ladder and would otherwise hand every test a database with
 /// no holding area — a state no converted database is ever in.
-#[cfg(test)]
+///
+/// **[`migrate_user`] is the second such caller**, and it is how the web target gets a
+/// user file at all: there is no `mtg.db` in a browser for [`crate::split::convert`] to
+/// take apart. A database without this row is one where no deck can ever release a card,
+/// permanently, because nothing at head ever runs a migration.
 const USER_SEED_SQL: &str = "
     INSERT INTO {schema}.collection_folders
          (parent_id, name, kind, deck_id, sort_order, created_at, updated_at)
@@ -4554,6 +4586,67 @@ pub fn swap_combo_staging(conn: &Connection) -> rusqlite::Result<()> {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    /// **A pair whose user half is an empty file gets its shape from `prepare_database`.**
+    ///
+    /// This is the web target's whole first run, and it has no desktop equivalent to lean on:
+    /// on Windows a fresh install builds a legacy `mtg.db` at 26 and `split::convert` takes it
+    /// apart, and in a browser there is no such file. Driving the real page on 2026-08-28 with
+    /// this arm missing produced a working-looking app whose Worker console said
+    /// `index build: no such table: collection_entries` - the facet index reads that table for
+    /// its `owned` dimension, and it was the only thing that noticed.
+    ///
+    /// A bare `ATTACH ':memory:'` pair is the right fixture precisely because it is what an
+    /// unshaped database looks like: two empty schemas at `user_version = 0`.
+    #[test]
+    fn an_unshaped_user_file_is_built_by_prepare_database() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(&format!("ATTACH DATABASE ':memory:' AS {CORPUS}"))
+            .unwrap();
+        let before: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(before, 0, "the fixture must start with no shape at all");
+
+        prepare_database(&conn).unwrap();
+
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, USER_SCHEMA_VERSION);
+
+        // The table whose absence was the only symptom.
+        let owned: i64 = conn
+            .query_row("SELECT count(*) FROM collection_entries", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(owned, 0);
+
+        // And the one seeded row, without which no deck can ever release a card.
+        let removed: String = conn
+            .query_row(
+                "SELECT name FROM collection_folders WHERE kind = 'removed'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(removed, "Recently removed");
+
+        // Every user table, against the registry - so a table added to `TABLES` and not to
+        // `USER_SCHEMA_SQL` fails here rather than on somebody's first web launch.
+        for (table, side) in TABLES {
+            if *side != Side::User {
+                continue;
+            }
+            let n: i64 = conn
+                .query_row(
+                    "SELECT count(*) FROM main.sqlite_master WHERE type='table' AND name=?1",
+                    [table],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(n, 1, "`{table}` is a user table and was not created");
+        }
+    }
 
     /// `sqlite_master` over **every** database attached to `conn`, as a subquery.
     ///

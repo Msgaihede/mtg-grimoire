@@ -412,11 +412,27 @@ pub const OPFS_VFS_NAME: &str = "opfs-sahpool";
 
 /// How many files the pool preallocates.
 ///
-/// **Files, not bytes**, and the app needs more of them than the spike did: two databases
-/// rather than one, each with a rollback journal — the pool refuses WAL — plus SQLite's own
-/// temporary files and headroom. Twelve was what probe 6 ran the pair on.
+/// **Files, not bytes — and the number is measured, not chosen.** The spike ran one database
+/// on 8 and never built an index or swapped a table. This app opens *two*, each with a
+/// rollback journal (the pool refuses WAL), fills a `cards_staging` table, swaps it in, replays
+/// every index in `CARDS_INDEXES`, and rebuilds an external-content FTS index — and with
+/// [`OPFS_TEMP_STORE`] set to `FILE` every temporary b-tree behind those is a pool file too.
+///
+/// At **12** the first run died 16 s in with `memory access out of bounds`, before a single
+/// 2 000-row batch had reported, and the page sat on "0 cards" forever. At **64** the same run
+/// reaches 117 606 cards and renders the app. This is a ceiling on *concurrent* files rather
+/// than a reservation — the pool grows lazily — so headroom here is close to free and running
+/// out of it is not survivable.
 #[cfg(target_family = "wasm")]
-const OPFS_INITIAL_CAPACITY: u32 = 12;
+const OPFS_INITIAL_CAPACITY: u32 = 64;
+
+/// Where SQLite builds the sort trees behind `CREATE INDEX` and an FTS rebuild.
+///
+/// Named rather than inline because it is half of one decision with
+/// [`OPFS_INITIAL_CAPACITY`]: sending these to the VFS is what stops the ingest exhausting
+/// wasm's linear memory, and it is what makes the pool need the file slots.
+#[cfg(target_family = "wasm")]
+const OPFS_TEMP_STORE: &str = "FILE";
 
 /// Install the browser's OPFS VFS and make it the default.
 ///
@@ -471,6 +487,17 @@ pub fn open_pooled_pair() -> rusqlite::Result<(Connection, Journal, Journal)> {
     let user = apply_pragmas(&conn, None)?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
     conn.busy_timeout(BUSY_TIMEOUT)?;
+    // **Temporary b-trees go to the VFS, not to linear memory, and this is what makes the
+    // first run finish at all.** On `wasm32-unknown-unknown` SQLite's default `temp_store` is
+    // memory, and the staging swap's index replay and FTS rebuild build their sort trees
+    // there: measured 2026-08-28, the ingest reached 116 000 rows and then panicked in
+    // `dlmalloc` — an allocator that cannot grow linear memory any further — leaving the page
+    // on a frozen count. With this line the same run completes and the app renders. The cost
+    // is pool files, which is why [`OPFS_INITIAL_CAPACITY`] is what it is.
+    //
+    // Per-connection and web-only: desktop has a real filesystem and its own default is
+    // already right there.
+    conn.pragma_update(None, "temp_store", OPFS_TEMP_STORE)?;
     conn.execute(&format!("ATTACH DATABASE ?1 AS {CORPUS}"), [CORPUS_DB])?;
     let corpus = apply_pragmas(&conn, Some(CORPUS))?;
     Ok((conn, user, corpus))
