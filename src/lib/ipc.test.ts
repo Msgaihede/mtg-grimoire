@@ -1781,4 +1781,62 @@ describe("pairing", () => {
     await ipc.syncDeviceRevoke("cc".repeat(16));
     expect(invoke).toHaveBeenCalledWith("sync_device_revoke", { deviceId: "cc".repeat(16) });
   });
+
+  it("reads the relay with no arguments", async () => {
+    invoke.mockResolvedValue({
+      relayUrl: "",
+      paired: false,
+      pending: 0,
+      lastSyncAt: null,
+      lastError: null,
+      reviewCount: 0,
+    });
+
+    const status = await ipc.syncRelayStatus();
+
+    expect(invoke).toHaveBeenCalledWith("sync_relay_status");
+    // An empty address is what "sync is off" looks like, and it is what every installation
+    // answers until a reader types one. Never a null: the panel has a text field to fill.
+    expect(status.relayUrl).toBe("");
+  });
+
+  it("sends the relay address under `url`", async () => {
+    invoke.mockResolvedValue({
+      relayUrl: "https://relay.example.workers.dev",
+      paired: true,
+      pending: 3,
+      lastSyncAt: 1_787_000_000,
+      lastError: null,
+      reviewCount: 0,
+    });
+
+    await ipc.syncRelaySetUrl("https://relay.example.workers.dev");
+
+    expect(invoke).toHaveBeenCalledWith("sync_relay_set_url", {
+      url: "https://relay.example.workers.dev",
+    });
+  });
+
+  it("syncs now with no arguments, and null is not a failure", async () => {
+    invoke.mockResolvedValue(null);
+
+    // `null` means there was nothing to do — no relay address, or no pairing group — which
+    // is the state every existing installation is in and is not an error.
+    expect(await ipc.syncNow()).toBeNull();
+    expect(invoke).toHaveBeenCalledWith("sync_now");
+  });
+
+  it("lists the review queue with no arguments and clears one row by table and uid", async () => {
+    invoke.mockResolvedValue([]);
+    await ipc.syncReviewList();
+    expect(invoke).toHaveBeenCalledWith("sync_review_list");
+
+    // By `sync_uid` and never by a rowid: `muted_tags` has none at all, and a rowid means
+    // nothing on the other device anyway.
+    await ipc.syncReviewClear("collection_entries", "aa".repeat(16));
+    expect(invoke).toHaveBeenCalledWith("sync_review_clear", {
+      table: "collection_entries",
+      uid: "aa".repeat(16),
+    });
+  });
 });
