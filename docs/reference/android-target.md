@@ -53,6 +53,33 @@ signed on anyone's behalf.
 as literal strings in `cli.win32-x64-msvc.node`; `ANDROID_NDK_ROOT` does not, so setting only
 that one is a silent no-op. Neither was set machine-wide — they are per-shell.
 
+**Those two are what the *Tauri CLI* reads, and they are not enough for a bare
+`cargo build --target aarch64-linux-android`.** That path goes through `cc-rs` and `rustc`
+directly, neither of which has heard of `NDK_HOME`, and it fails twice in a row with errors that
+name nothing Android:
+
+| Error | What it means | What fixes it |
+| --- | --- | --- |
+| ``error occurred in cc-rs: failed to find tool "clang.exe"`` | `sqlite3` and `ring` compile C, and MSVC cannot emit for this target | the NDK's `toolchains/llvm/prebuilt/windows-x86_64/bin` on `PATH` |
+| ``error: linker `cc` not found`` | rustc has no linker configured for the target triple | `CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER` pointed at `aarch64-linux-android<API>-clang.cmd` in that same directory |
+
+The API number in the wrapper's name must be **at or below `minSdk`** in
+`gen/android/app/build.gradle.kts`, which is **26** — so `aarch64-linux-android26-clang.cmd`.
+The whole invocation, per-shell:
+
+```powershell
+$bin = "$env:NDK_HOME\toolchains\llvm\prebuilt\windows-x86_64\bin"
+$env:PATH = "$bin;$env:PATH"
+$env:CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER = "$bin\aarch64-linux-android26-clang.cmd"
+cargo build --target aarch64-linux-android --lib
+```
+
+**Why this is written down rather than put in `.cargo/config.toml`:** a committed linker path
+would hard-code one NDK revision and one host triple into a file every desktop build reads, and
+break `cargo build` for anyone without that exact NDK. The Tauri CLI supplies all of this itself
+when it drives the build; this recipe is only for checking the crate still cross-compiles without
+one, which is the check worth running after any merge that touches the Rust core.
+
 ### The JDK, which is the blocker
 
 `JAVA_HOME` is `C:\Program Files\OpenJDK\jdk-25`, and **that is the only JDK on this machine** —
@@ -302,7 +329,7 @@ one question are free to disagree.
 | Open | Where it goes |
 | --- | --- |
 | **The JDK**, and therefore the APK, the device run and every number | §2 — Markus's call |
-| **Does the MCP bridge open a socket on the phone?** It is registered under `#[cfg(debug_assertions)]` and `tauri android dev` is a debug build. `capabilities/mobile.json` denies its three commands, but the **socket** is opened in Rust, where the ACL is not in the path. It binds `127.0.0.1`, so the exposure is the phone's own loopback rather than the network — reachable by any other app on the device. **If it listens, it needs a `#[cfg(desktop)]` on the registration.** | unverified; needs the APK |
+| **Does the MCP bridge open a socket on the phone?** **Answered, and fixed.** It was registered under `#[cfg(debug_assertions)]` alone, and `tauri android dev` is a debug build, so it would have bound `127.0.0.1:9223` on the device — reachable by every other app on the phone, evaluating arbitrary JavaScript and authenticating nothing. `capabilities/mobile.json` denying its three commands was never the other half: the listener is opened by `Builder::build()` in Rust, where the ACL is not in the path. The registration is now `#[cfg(all(debug_assertions, desktop))]`, and `the_mcp_bridge_is_gated_on_desktop_and_not_only_on_a_debug_build` fails if that is widened back. | **closed** — no APK needed, because a `cfg` is resolved at compile time |
 | **Does `RunEvent::Exit` ever fire?** `checkpoint_on_exit` folds the WAL back on the way out, and `tauri::RunEvent` has no `Paused` or `Suspended` variant — a phone kills processes rather than exiting them. `db.rs` sets `journal_size_limit` to 64 MB, so the designed floor is 64 MB of `-wal`, not the 857 MB an unbounded ingest journal would leave. A `-wal` larger than 64 MB would be a finding. | unverified; needs the APK |
 | The three pickers against a real ContentResolver | needs the APK — this is the one seam whose Rust has never touched the thing it is written against |
 | **16 KB page sizes.** NDK r27 supports them behind a linker flag; r28 makes them the default. Play requires 16 KB support for apps targeting Android 15+. Not blocking here, but it is a Play-release question. | with the release story |
