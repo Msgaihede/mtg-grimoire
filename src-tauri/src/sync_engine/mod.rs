@@ -25,3 +25,4 @@
 
 pub mod capture;
 pub mod hlc;
+pub mod merge;
