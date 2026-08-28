@@ -7,6 +7,7 @@ import type { SyncProgressEvent } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { scrim } from "@/lib/motion";
 import { cn } from "@/lib/utils";
+import type { CorpusState } from "@/pwa/corpusMark";
 
 export interface SyncProgressProps {
   /**
@@ -25,6 +26,13 @@ export interface SyncProgressProps {
   busy: boolean;
   /** Start a forced sync. The same action the ribbon's Refresh button runs. */
   onRetry: () => void;
+  /**
+   * Why the database is empty - `"never-built"` on a genuine first run, `"evicted"` when this
+   * browser has had a corpus and no longer does (spec 5.4: Cache Storage and OPFS are evicted
+   * independently, so "shell loaded, corpus gone" is a real state). Desktop always passes
+   * `"never-built"`: a file on disk does not vanish while the app around it stays.
+   */
+  reason: CorpusState;
 }
 
 /**
@@ -44,12 +52,26 @@ export interface SyncProgressProps {
  * condition is, and that is this function. It is also the only reason this is two components:
  * the branch is the presence, and {@link FirstRun} is what is present.
  */
-export function SyncProgress({ progress, cardCount, error, busy, onRetry }: SyncProgressProps) {
+export function SyncProgress({
+  progress,
+  cardCount,
+  error,
+  busy,
+  onRetry,
+  reason,
+}: SyncProgressProps) {
   const takingOver = cardCount === 0 && progress?.phase !== "done";
   return (
     <AnimatePresence>
       {takingOver && (
-        <FirstRun key="first-run" progress={progress} error={error} busy={busy} onRetry={onRetry} />
+        <FirstRun
+          key="first-run"
+          progress={progress}
+          error={error}
+          busy={busy}
+          onRetry={onRetry}
+          reason={reason}
+        />
       )}
     </AnimatePresence>
   );
@@ -93,7 +115,13 @@ export function SyncProgress({ progress, cardCount, error, busy, onRetry }: Sync
  * here animates, and there is deliberately no scrim of its own to pair with, no focus trap and
  * no Escape rung: an opaque `bg-bg` takeover has nothing to be dismissed *to*.
  */
-function FirstRun({ progress, error, busy, onRetry }: Omit<SyncProgressProps, "cardCount">) {
+function FirstRun({
+  progress,
+  error,
+  busy,
+  onRetry,
+  reason,
+}: Omit<SyncProgressProps, "cardCount">) {
   /**
    * The failure the reader has already answered by pressing Retry.
    *
@@ -218,12 +246,23 @@ function FirstRun({ progress, error, busy, onRetry }: Omit<SyncProgressProps, "c
       </div>
 
       <div className="max-w-md space-y-2">
+        {/* **The heading and the sentence under it, and nothing else on this screen**, because
+            nothing else about the situation is different: there is no card data, and the way
+            out is the same download. What differs is what the reader is owed as an explanation.
+            A reader who has used this app for a month must not be told this is their first run.
+
+            **The eviction sentence stops short of promising the collection is safe, and that is
+            deliberate.** `collection_entries`, `decks` and the rest live in the same SQLite file
+            as `cards`, so an OPFS eviction takes them too — the promise only becomes true once
+            sync exists and a paired device can restore the user tables (PR 7). Until then this
+            says what it can stand behind and no more. */}
         <h2 id="first-run-title" className="font-heading text-2xl text-text">
-          Setting up your card database
+          {reason === "evicted" ? "Your card data was cleared" : "Setting up your card database"}
         </h2>
         <p className="text-sm text-dim">
-          Downloading every Magic card from Scryfall. This happens once and takes a few minutes —
-          after that the app works offline.
+          {reason === "evicted"
+            ? "This browser removed the card database to free up space. It has to be downloaded again."
+            : "Downloading every Magic card from Scryfall. This happens once and takes a few minutes — after that the app works offline."}
         </p>
       </div>
 

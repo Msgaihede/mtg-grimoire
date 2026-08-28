@@ -11,6 +11,7 @@ vi.mock("@/lib/core/browser", () => ({ browserCore: { open, call, buildCorpus } 
 vi.mock("@/App", () => ({ default: () => <div>the app</div> }));
 
 import { WebBoot } from "@/web/WebBoot";
+import { CORPUS_KEY } from "@/pwa/corpusMark";
 
 /**
  * What `glue::open` actually answers on the web target: **both** journals, because the data
@@ -30,6 +31,7 @@ beforeEach(() => {
   open.mockReset();
   call.mockReset();
   buildCorpus.mockReset();
+  localStorage.clear();
 });
 
 describe("the web boot", () => {
@@ -57,6 +59,24 @@ describe("the web boot", () => {
     render(<WebBoot />);
     expect(await screen.findByRole("button", { name: /build/i })).toBeInTheDocument();
     expect(screen.queryByText("the app")).not.toBeInTheDocument();
+  });
+
+  /**
+   * **The other reason a web database is empty**, and the wiring is what makes it reachable:
+   * `<App />` is gated on a corpus existing, so `SyncProgress`'s eviction copy - which is the
+   * desktop half of this - can never be what a browser that threw the corpus away shows. The
+   * mark lives in `localStorage`, which survives exactly the eviction it detects.
+   */
+  it("tells an eviction from a first run on the screen a reader actually lands on", async () => {
+    localStorage.setItem(CORPUS_KEY, JSON.stringify({ at: 1, cards: 117464 }));
+    open.mockResolvedValue(READY);
+    call.mockResolvedValue({ cardCount: 0 });
+    render(<WebBoot />);
+    expect(
+      await screen.findByRole("heading", { name: "Your card data was cleared" }),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/builds its own copy/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /build/i })).toBeEnabled();
   });
 
   it("shows the running count while the corpus is being built, then the app", async () => {

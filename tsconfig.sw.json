@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    /* `WebWorker` instead of `DOM`, and the two must never be in one program: both declare
+       `self`, `fetch` and `caches` with different types. This is the whole reason the service
+       worker is not in the app's `tsconfig.json`. */
+    "lib": ["ES2020", "WebWorker"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "skipLibCheck": true,
+    "noEmit": true,
+    "isolatedModules": true,
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    /* Not `composite`, and not referenced from `tsconfig.json`. `swCore.ts` is in this program
+       AND in the app's; two plain `noEmit` programs may share a file, but a composite one makes
+       every listed file an *output* and `tsc` then demands a `.d.ts` beside it — TS6305, which
+       `tsconfig.node.json`'s comment records taking main's CI red on two consecutive pushes. */
+    "composite": false,
+    "types": []
+  },
+  "include": ["src/pwa/sw.ts", "src/pwa/sw-env.d.ts", "src/pwa/swCore.ts"]
+}

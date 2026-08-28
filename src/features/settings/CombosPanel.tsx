@@ -7,6 +7,7 @@ import { COMBOS_KEY, COMBOS_STATUS_KEY } from "@/lib/query";
 import { ago } from "@/lib/relativeTime";
 import { nowSeconds } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
+import { useFeedDownload } from "@/pwa/FeedDownloadProvider";
 import { BUTTON } from "./controls";
 import { PanelAlert, SettingsSection } from "./panelChrome";
 
@@ -306,6 +307,9 @@ export function CombosPanel(): JSX.Element {
    * family's own wording for the same flag, and `MarketplacePanel`'s refresh button already
    * behaves this way by construction.
    */
+  // 27.5 MB gzipped over 639 MB of JSON. On the web target a metered link is asked before
+  // this runs; on desktop the guard is a synchronous pass-through.
+  const askFirst = useFeedDownload();
   const refresh = useMutation({
     mutationFn: () => ipc.combosRefresh(true),
     // Every row in both combo tables has just been replaced and no key moved — including the
@@ -397,7 +401,9 @@ export function CombosPanel(): JSX.Element {
             full size so a greyed control cannot answer a press with a dip. */}
         <button
           type="button"
-          onClick={() => refresh.mutate()}
+          // 27.5 MB gzipped. On the web target a metered link is asked first; on desktop
+          // `askFirst` is a synchronous pass-through and this is the press it always was.
+          onClick={() => askFirst("combos", () => refresh.mutate())}
           disabled={refreshing}
           aria-busy={refreshing || undefined}
           className={cn(BUTTON, "border-border hover:bg-bg disabled:hover:bg-transparent")}

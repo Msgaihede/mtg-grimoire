@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import App from "@/App";
+import { corpusState } from "@/pwa/corpusMark";
 import { browserCore } from "@/lib/core/browser";
 import type { Opened } from "@/workers/protocol";
 import { AlreadyOpen } from "./AlreadyOpen";
@@ -63,7 +64,14 @@ export function WebBoot() {
         </div>
       </main>
     );
-  if (phase.at === "empty") return <BuildCorpus onDone={() => setPhase({ at: "ready" })} />;
+  // **The empty screen has two meanings and `corpusMark` is what tells them apart.** The mark
+  // lives in `localStorage`, which is the shell’s own storage rather than the corpus’s, so it
+  // survives exactly the eviction it detects - and a browser that cleared everything cleared
+  // it too, at which point "first run" is the truth.
+  if (phase.at === "empty")
+    return (
+      <BuildCorpus onDone={() => setPhase({ at: "ready" })} reason={corpusState(0, localStorage)} />
+    );
   if (phase.at === "ready") return <App />;
   return (
     <main className="flex min-h-screen items-center justify-center bg-background text-muted-foreground">

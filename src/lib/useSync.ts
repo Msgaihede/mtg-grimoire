@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { count } from "@/lib/counts";
 import { ipc, ipcError, type SyncStatus } from "@/lib/ipc";
+import { useFeedDownload } from "@/pwa/FeedDownloadProvider";
 
 /** How often the header re-reads `sync_status` when nothing is happening. */
 const POLL_IDLE_MS = 30_000;
@@ -142,7 +143,11 @@ export function useSync(): Sync {
   // component that is gone.
   useEffect(() => () => clearTimeout(upToDateTimer.current), []);
 
+  // Web only in effect: on desktop this guard is a synchronous pass-through, so the body
+  // below runs in the same tick it always did. See `FeedDownloadProvider`.
+  const askFirst = useFeedDownload();
   const refresh = useCallback(() => {
+    askFirst("corpus", () => {
     setRefreshing(true);
     setRunError(null);
     // A second click restarts the message rather than letting the first click's timer
@@ -165,7 +170,8 @@ export function useSync(): Sync {
         setRefreshing(false);
         setPollNonce((n) => n + 1);
       });
-  }, []);
+    });
+  }, [askFirst]);
 
   return {
     status,

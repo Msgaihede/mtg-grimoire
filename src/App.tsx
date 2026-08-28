@@ -18,6 +18,7 @@ import { WishlistPage } from "@/features/wishlist/WishlistPage";
 import { queryClient } from "@/lib/query";
 import { useAppStore } from "@/lib/store";
 import { useUpdate, type Update } from "@/lib/useUpdate";
+import { FeedDownloadProvider } from "@/pwa/FeedDownloadProvider";
 
 function ActiveView({ update }: { update: Update }) {
   const activeView = useAppStore((s) => s.activeView);
@@ -128,11 +129,23 @@ export default function App() {
   // and the Settings panel. One hook means one `update:progress` listener — two would be two
   // subscriptions racing to describe the same download.
   const update = useUpdate();
+  // The browser's update is NOT here, and that is a fix rather than an oversight: `PwaShell` in
+  // `main.tsx` owns it, because on the web target this component is mounted only once a corpus
+  // exists and the shell has to be registered long before that. That file has the measurement.
 
   return (
     <MotionConfig reducedMotion="user">
       <QueryClientProvider client={queryClient}>
-        {/* **The provider wraps the shell; the menu it renders is a sibling of it**, for exactly
+        {/* **Inside `QueryClientProvider` and outside `ContextMenuProvider`**, which is
+            `CardToDeckProvider`'s placement argument verbatim: that provider draws its panel as
+            a *sibling* of `children`, so a context mounted inside it would be around every view
+            and around none of the menu's own rows. Inside the query client because the three
+            downloads it guards are all mutations against it.
+
+            Inert on desktop: the guard is a synchronous pass-through and the dialog is never
+            constructed. */}
+        <FeedDownloadProvider>
+          {/* **The provider wraps the shell; the menu it renders is a sibling of it**, for exactly
             the reason `CardZoomIndicator` below is one. A menu takes `LAYER.popup`, a z-index
             competes only inside its own stacking context, and every card surface in this app draws
             rows that are `position: absolute` and transformed — so a menu mounted where it was
@@ -143,7 +156,7 @@ export default function App() {
             from the cache the view beside them reads: a lazy submenu's `Content` runs `useDecks()`
             when the reader expands it, and a chosen action writes through the same client the
             surface it was opened over would have. */}
-        {/* **Above `ContextMenuProvider`, and that placement is the whole of what this line is
+          {/* **Above `ContextMenuProvider`, and that placement is the whole of what this line is
             about.** The provider below draws its panel as a **sibling** of `children`, so
             "inside `AppShell`" and "inside the menu" are two different places: this mounted
             around the shell would be around every *view* and around none of the menu's *rows*,
@@ -153,22 +166,22 @@ export default function App() {
             need goes here, outside the menu provider, not inside the shell it renders.
 
             Inside `QueryClientProvider` because it mounts `useDeck`, which is a query. */}
-        {/* **Above `ContextMenuProvider` for the reason `CardToDeckProvider` is**: that provider
+          {/* **Above `ContextMenuProvider` for the reason `CardToDeckProvider` is**: that provider
             draws its panel as a *sibling* of `children`, so a context mounted inside it would be
             around every view and around none of the menu's own rows — and a menu row binding a
             tooltip would silently get the no-op API. Inside `QueryClientProvider`, because a
             caller's tooltip `content` is rendered here and may be a component that reads the
             cache. Nothing between here and the root transforms, which is what lets the panel be
             `fixed` against the window rather than against a virtualised row. */}
-        <TooltipProvider>
-          <CardToDeckProvider>
-            <ContextMenuProvider>
-              <AppShell update={update}>
-                <div className="flex h-full min-h-0 gap-4">
-                  <div className="min-w-0 flex-1">
-                    <ActiveView update={update} />
-                  </div>
-                  {/* **The pane's *presence*, and nothing finer.** The key here is a constant on
+          <TooltipProvider>
+            <CardToDeckProvider>
+              <ContextMenuProvider>
+                <AppShell update={update}>
+                  <div className="flex h-full min-h-0 gap-4">
+                    <div className="min-w-0 flex-1">
+                      <ActiveView update={update} />
+                    </div>
+                    {/* **The pane's *presence*, and nothing finer.** The key here is a constant on
                   purpose: it used to be `selectedCardId`, which was right when a close was
                   instant and is wrong the moment there is an exit, because every card-to-card
                   move would then be one pane leaving and another arriving — a 440ms cross-fade
@@ -176,14 +189,18 @@ export default function App() {
                   The per-card remount that keying bought is *kept*, one level down and inside
                   the animated element, where React can throw the body away without the box it
                   is in going anywhere. See `CardDetailPane`. */}
-                  <AnimatePresence>
-                    {selectedCardId && !inDeckEditor && (
-                      <CardDetailPane key="card-pane" cardId={selectedCardId} onClose={closeCard} />
-                    )}
-                  </AnimatePresence>
-                </div>
-              </AppShell>
-              {/* **A sibling of the shell, not a child of any view.** The badge is `fixed` and takes
+                    <AnimatePresence>
+                      {selectedCardId && !inDeckEditor && (
+                        <CardDetailPane
+                          key="card-pane"
+                          cardId={selectedCardId}
+                          onClose={closeCard}
+                        />
+                      )}
+                    </AnimatePresence>
+                  </div>
+                </AppShell>
+                {/* **A sibling of the shell, not a child of any view.** The badge is `fixed` and takes
               `LAYER.popup`, and a z-index only competes inside its own stacking context — so
               mounting it inside a view would cap it at whatever that view's transformed or
               positioned ancestors allow, which is exactly the bug `layers.ts` was written about.
@@ -198,8 +215,8 @@ export default function App() {
               be three of them describing a gesture nobody just made, and the one that mattered
               would be no easier to find. It is mounted *here* and drawn *there*, which is the
               whole trick — the corner comes from a measurement, not from where this line sits. */}
-              <CardZoomIndicator />
-              {/* **Every printing of one card, over whatever the reader is already looking at.**
+                <CardZoomIndicator />
+                {/* **Every printing of one card, over whatever the reader is already looking at.**
               A sibling of the shell for the badge's reason one line up: the panel is `fixed` at
               `LAYER.overlay`, a z-index competes only inside its own stacking context, and every
               card surface in this app draws rows that are positioned and transformed — so mounted
@@ -218,10 +235,11 @@ export default function App() {
               card menu every other wall in the app draws, lazy deck picker included; inside
               `QueryClientProvider` because it reads `card_printings` and writes through
               `deck_swap_printing`. */}
-              <AllPrintingsDialog />
-            </ContextMenuProvider>
-          </CardToDeckProvider>
-        </TooltipProvider>
+                <AllPrintingsDialog />
+              </ContextMenuProvider>
+            </CardToDeckProvider>
+          </TooltipProvider>
+        </FeedDownloadProvider>
       </QueryClientProvider>
     </MotionConfig>
   );
