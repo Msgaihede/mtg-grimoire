@@ -661,6 +661,62 @@ pub fn install(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute_batch(CLOCK_TRIGGER)
 }
 
+/// Read one `sync_ops` row as an [`Op`](super::merge::Op).
+///
+/// **One reader, two callers**, and they must not drift: [`super::apply`] loads this device's
+/// own history for a row so that add-wins can compare a remote tombstone against a local edit,
+/// and [`super::client`] drains the unpushed tail. The column order below is the order both
+/// their `SELECT`s use, and `OPS_SELECT` is what keeps that true.
+pub const OPS_SELECT: &str =
+    "SELECT seq, tbl, uid, kind, fields, counters, parents, hlc_ms, hlc_ctr, device_id \
+     FROM sync_ops";
+
+/// `(seq, op)` from a row of [`OPS_SELECT`].
+pub fn op_from_row(row: &rusqlite::Row) -> rusqlite::Result<(i64, super::merge::Op)> {
+    use super::merge::{Kind, Op};
+    let kind: String = row.get(3)?;
+    let json = |i: usize| -> rusqlite::Result<serde_json::Value> {
+        let text: String = row.get(i)?;
+        Ok(serde_json::from_str(&text).unwrap_or(serde_json::Value::Null))
+    };
+    let fields = json(4)?;
+    let counters = json(5)?;
+    let parents = json(6)?;
+    Ok((
+        row.get(0)?,
+        Op {
+            table: row.get(1)?,
+            uid: row.get(2)?,
+            kind: if kind == "del" { Kind::Del } else { Kind::Put },
+            fields: fields
+                .as_object()
+                .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+                .unwrap_or_default(),
+            counters: counters
+                .as_object()
+                .map(|m| {
+                    m.iter()
+                        .filter_map(|(k, v)| v.as_i64().map(|n| (k.clone(), n)))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            parents: parents
+                .as_object()
+                .map(|m| {
+                    m.iter()
+                        .map(|(k, v)| (k.clone(), v.as_str().map(std::borrow::ToOwned::to_owned)))
+                        .collect()
+                })
+                .unwrap_or_default(),
+            at: super::hlc::Hlc {
+                ms: row.get(7)?,
+                ctr: row.get(8)?,
+                device: row.get(9)?,
+            },
+        },
+    ))
+}
+
 /// Run `f` with capture switched off — what [`super::apply`] wraps every write in.
 ///
 /// **The guard is cleared even on a panic**, through a guard struct rather than a bare pair of
