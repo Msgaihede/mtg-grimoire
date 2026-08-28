@@ -24,6 +24,14 @@ stamps were the previous day when checked on 2026-08-20. The week is
 `tags::{oracle,art}::REFRESH_INTERVAL_SECS`, a choice this app made about how often to ask — so a
 taxonomy up to seven days behind Scryfall is the design working, not a stale download.
 
+**Sync is the fourth network dependency and the only one that is not a download.** Nothing is
+fetched and nothing is sent until a reader pairs two devices and types a relay address into
+Settings; an empty `sync_state.relay_url` means sync is off, which is the state every existing
+installation is in. **The relay is a Cloudflare Worker the reader deploys themselves**, it can
+decrypt nothing, and **its address is nowhere in this repository and must never be** — this repo
+is public and the URL is the reader's own. `relay/` holds the source; nobody has deployed it.
+[sync.md](docs/reference/sync.md) has the whole record.
+
 **Commander Spellbook's combo database is the third optional feed, and the first that is neither
 Scryfall nor a price list.** `variants.json.gz` is where a Commander deck's bracket estimate gets
 its fourth signal: a two-card infinite combo is a fact about an _interaction_, so no amount of
@@ -137,7 +145,7 @@ number to compare against.
 | [live-ui-verification.md](docs/reference/live-ui-verification.md) | The CDP harness contract — `scripts/cdp.mjs` and its traps |
 | [tauri-mcp-bridge.md](docs/reference/tauri-mcp-bridge.md) | The other way to drive the window — its four pieces, three permissions, and the one tool that cannot reach an app command |
 | [ci-and-releases.md](docs/reference/ci-and-releases.md) | Both workflows, in full |
-| [sync.md](docs/reference/sync.md) | Pairing — the protocol step by step, why the typed code is 105 characters, what the six digits do and do not defend, where the keys live, and what revocation cannot do |
+| [sync.md](docs/reference/sync.md) | Pairing **and** the relay — the protocol step by step, the six digits, the eleven synced tables, how a row is named across devices, §7.3's five rules against the test that proves each, the envelope measured, and what is not built |
 | [test-coverage.md](docs/reference/test-coverage.md) | What both suites reach, and why the Rust figure needs a correction |
 
 ## Running and verifying

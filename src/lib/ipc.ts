@@ -3257,7 +3257,12 @@ export interface UpdateProgressEvent {
  * arm on the Rust side is a type error here rather than a blank badge.
  */
 export type ErrorSource =
-  "scryfall_api" | "scryfall_image" | "github_update" | "database" | "image_store";
+  | "scryfall_api"
+  | "scryfall_image"
+  | "github_update"
+  | "database"
+  | "image_store"
+  | "relay";
 
 /** The shape of a failure. Mirrors `errors::Kind` and the `CHECK` on `error_log.kind`. */
 export type ErrorKind = "rate_limited" | "timeout" | "http" | "io" | "parse" | "other";
@@ -3912,6 +3917,82 @@ export interface PairingHandshake {
 /** The wrapped group key, for the reader to carry to the joining device. */
 export interface PairingSealedKey {
   sealedKey: string;
+}
+
+/**
+ * What the Sync panel draws about the relay.
+ *
+ * `relayUrl` is **empty when sync is off**, which is the state every installation is in until
+ * a reader types an address. There is no relay address anywhere in this repository and there
+ * must never be one: it is the reader's own Worker, and it lives in their `sync_state`.
+ */
+export interface RelayStatus {
+  relayUrl: string;
+  paired: boolean;
+  /** Changes this device has written and not yet handed over. */
+  pending: number;
+  /** Unix seconds, or null when no round trip has ever finished. */
+  lastSyncAt: number | null;
+  /**
+   * The most recent relay failure, as `error_log` holds it. It is **not** cleared by a later
+   * success: the log is the record, and emptying it is the Error log panel's button.
+   */
+  lastError: string | null;
+  /** Rows carrying a `needs_review` sentence, across all six tables that can hold one. */
+  reviewCount: number;
+}
+
+/**
+ * What one round trip did.
+ *
+ * The five counts after `unreadable` are `ApplyReport`'s, so a page can invalidate the right
+ * query keys once rather than per op. `deferred` is the one worth reading twice: it means a
+ * peer's stream is **stalled** on an op whose parent has not arrived, which self-heals on a
+ * later pull and is visible until it does.
+ */
+export interface RelayOutcome {
+  pushed: number;
+  pulled: number;
+  unreadable: number;
+  applied: number;
+  resurrected: number;
+  cyclesBroken: number;
+  skipped: number;
+  deferred: number;
+}
+
+/**
+ * The six tables that can hold a `needs_review` sentence.
+ *
+ * A closed union, like {@link ErrorSource} and for the same reason: `Record<ReviewTable, string>`
+ * in `ReviewPanel.tsx` is total, so a seventh table added on the Rust side is a **type error**
+ * here rather than a heading nobody wrote. The crate's own
+ * `no_table_with_the_column_is_missing_from_the_list` catches a table the *crate* forgot; this
+ * catches one the crate remembered and the page did not.
+ */
+export type ReviewTable =
+  | "collection_entries"
+  | "deck_cards"
+  | "wishlist_entries"
+  | "collection_folders"
+  | "deck_folders"
+  | "wishlist_folders";
+
+/**
+ * One row asking to be looked at — spec §7.4's two surfaced outcomes, plus whatever the
+ * reconciler has already written about a printing that left Scryfall.
+ *
+ * `sentence` is shown **verbatim**. It was written in Rust, which is `reconcile.rs`'s
+ * convention for this column and deliberately not `deck_audit`'s: one column with two
+ * conventions is worse than either.
+ */
+export interface ReviewRow {
+  /** Which table it is in. The panel groups by this and clearing needs it. */
+  table: ReviewTable;
+  /** The row's `sync_uid`, never a rowid — a rowid means nothing on the other device. */
+  uid: string;
+  title: string;
+  sentence: string;
 }
 
 export const ipc = {
@@ -5431,6 +5512,38 @@ export const ipc = {
   syncPairingComplete: (sealedKey: string) => invoke<void>("sync_pairing_complete", { sealedKey }),
   /** Throw away whatever is in flight. The code that was on screen stops working. */
   syncPairingCancel: () => invoke<void>("sync_pairing_cancel"),
+  /**
+   * The relay, what is waiting to be sent, and what wants looking at.
+   *
+   * A **write** path at the far end, like {@link ipc.syncPairingStatus}: it counts unpushed
+   * ops on the write connection, so it answers `BUSY` while a sync holds it.
+   */
+  syncRelayStatus: () => invoke<RelayStatus>("sync_relay_status"),
+  /**
+   * Point this device at a relay, or at none.
+   *
+   * An empty string switches sync off and is always accepted. Anything else has to start with
+   * `https://` or `http://`, refused with a sentence rather than a constraint failure.
+   */
+  syncRelaySetUrl: (url: string) => invoke<RelayStatus>("sync_relay_set_url", { url }),
+  /**
+   * One round trip now: push, then pull, then ack.
+   *
+   * Answers `null` when there is nothing to do — no relay address, or no pairing group. That
+   * is not an error, it is the state every existing installation is in.
+   */
+  syncNow: () => invoke<RelayOutcome | null>("sync_now"),
+  /** Every row carrying a sentence, from all six tables that can hold one. */
+  syncReviewList: () => invoke<ReviewRow[]>("sync_review_list"),
+  /**
+   * "Looks fine": clear one row's sentence, and answer what is left.
+   *
+   * Clearing is a write like any other, so it is captured and travels — a row one device has
+   * looked at stops asking on the others too, which is why the sentence is on the row rather
+   * than in a notification.
+   */
+  syncReviewClear: (table: ReviewTable, uid: string) =>
+    invoke<ReviewRow[]>("sync_review_clear", { table, uid }),
   /**
    * Rename a device on the roster.
    *

@@ -26,6 +26,10 @@
  *   the deck header's bracket readout has a real disagreement to report, and the only one whose
  *   combo list draws every branch at once — a definite `R`, a *possible* `R` the app cannot
  *   check, a `P`, a `C` and an `E` that raises nothing.
+ * * **`paired`** — `starter` with this device in a group of three, one of them removed, at
+ *   key version 2 — and **three changes waiting to go** with the relay still switched off,
+ *   which is where a reader stands after pairing and before typing an address. Nothing here
+ *   knows a relay address and nothing here may: it is the reader's own server.
  * * **`combosMissing`** — `starter` with the combo tables never fetched. A **seed** and not a
  *   fault, where the two taxonomies each get a fault for the same state, because
  *   `combos::refresh_if_due` deliberately never fetches this file uninvited: it is not something
@@ -1328,6 +1332,19 @@ const MERGED_NOTE =
   "database yet. It should arrive with the next card-data sync.";
 
 /**
+ * The fourth sentence, and the first that is not `reconcile.rs`'.
+ *
+ * `sync_engine::apply::CYCLE_BROKEN`, verbatim - spec 7.4's **second** surfaced outcome, and
+ * the one user schema v29 added a column to the three folder tables for. It is here rather
+ * than in a seed of its own because the column is one column: a reader looking at this queue
+ * does not care which subsystem wanted their attention, and a world that could only ever show
+ * three card rows would let the panel's folder groups go undrawn.
+ */
+const CYCLE_NOTE =
+  "A folder move on another device would have put this folder inside itself. It was moved to " +
+  "the top level.";
+
+/**
  * `starter`, plus one flagged orphan in each of `collection_entries`, `wishlist_entries` and
  * `deck_cards` — the three tables `reconcile::sweep_orphans` walks.
  *
@@ -1380,6 +1397,12 @@ function needsReviewSeed(): FakeDb {
     lang: "en",
     needsReview: MERGED_NOTE,
   });
+  // **The fourth flagged row, and the only one that is not a card.** `Commander` is a folder
+  // *inside* `Constructed` (see {@link starterFolders}), so it is the row a concurrent move
+  // could really have made a loop out of - flagging a root folder would draw the sentence over
+  // a folder that was already where it says it was put.
+  const filed = db.deckFolders.find((f) => f.id === FILED_DECK_FOLDER);
+  if (filed !== undefined) filed.needsReview = CYCLE_NOTE;
   return db;
 }
 
@@ -1786,6 +1809,12 @@ function pairedSeed(): FakeDb {
     ],
     pending: null,
   };
+  // **Three changes written and never handed over, and the relay still switched off.** That is
+  // the honest state of a device that has paired and gone no further: the address is the
+  // reader's own and nothing in this repository knows one, so a paired world cannot come with a
+  // relay already set — but it can come with something to send, which is the whole of what
+  // the Sync panel's *waiting* line and its first round trip are drawn against.
+  db.relay = { url: "", pending: 3, lastSyncAt: null, lastError: null };
   return db;
 }
 

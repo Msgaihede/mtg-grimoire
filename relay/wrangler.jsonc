@@ -1,0 +1,20 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "mtg-grimoire-relay",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-08-27",
+  // One Durable Object per pairing group, addressed by the group id. No R2, no KV: KV allows
+  // 1 000 writes/day on the free plan, which this would spend in an afternoon.
+  "durable_objects": {
+    "bindings": [{ "name": "GROUP", "class_name": "Group" }]
+  },
+  "migrations": [
+    {
+      "tag": "v1",
+      // `new_sqlite_classes` and NOT `new_classes`: Durable Objects are on the free plan
+      // **SQLite-backed only**, and the key-value backend is a paid feature.
+      "new_sqlite_classes": ["Group"]
+    }
+  ],
+  "observability": { "enabled": true }
+}

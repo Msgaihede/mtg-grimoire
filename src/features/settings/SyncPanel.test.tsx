@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { PairingStatus } from "@/lib/ipc";
+import type { PairingStatus, RelayOutcome, RelayStatus } from "@/lib/ipc";
 
 const syncPairingStatus = vi.hoisted(() => vi.fn());
 const syncPairingBegin = vi.hoisted(() => vi.fn());
@@ -14,6 +14,9 @@ const syncPairingComplete = vi.hoisted(() => vi.fn());
 const syncPairingCancel = vi.hoisted(() => vi.fn());
 const syncDeviceRename = vi.hoisted(() => vi.fn());
 const syncDeviceRevoke = vi.hoisted(() => vi.fn());
+const syncRelayStatus = vi.hoisted(() => vi.fn());
+const syncRelaySetUrl = vi.hoisted(() => vi.fn());
+const syncNow = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -26,13 +29,23 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     syncPairingCancel,
     syncDeviceRename,
     syncDeviceRevoke,
+    syncRelayStatus,
+    syncRelaySetUrl,
+    syncNow,
   },
 }));
 
 /** The clipboard is the operating system's, and jsdom has nothing behind Tauri's `invoke`. */
 vi.mock("@/lib/clipboard", () => ({ copyText: vi.fn().mockResolvedValue(undefined) }));
 
-import { PAIRING_KEY, REMOVAL_WARNING, SyncPanel } from "./SyncPanel";
+import {
+  PAIRING_KEY,
+  REMOVAL_WARNING,
+  SyncPanel,
+  outcomeText,
+  relayNote,
+  relayState,
+} from "./SyncPanel";
 
 const ME = "aa".repeat(16);
 const PHONE = "cc".repeat(16);
@@ -60,6 +73,41 @@ const PAIRED: PairingStatus = {
     { deviceId: PHONE, name: "Phone", addedAt: 2, revokedAt: null },
     { deviceId: OLD, name: "Old laptop", addedAt: 3, revokedAt: 99 },
   ],
+};
+
+/**
+ * The relay switched off, which is what every installation is in until a reader types an
+ * address. Empty is the whole of what "off" is — there is no second flag.
+ */
+const RELAY_OFF: RelayStatus = {
+  relayUrl: "",
+  paired: false,
+  pending: 0,
+  lastSyncAt: null,
+  lastError: null,
+  reviewCount: 0,
+};
+
+/** An address, a group, four changes waiting, and a failure still on the record. */
+const RELAY_ON: RelayStatus = {
+  relayUrl: "https://relay.example.workers.dev",
+  paired: true,
+  pending: 4,
+  lastSyncAt: 1_700_000_000,
+  lastError: "the relay answered 502 to a push",
+  reviewCount: 0,
+};
+
+/** What one round trip did. Zero everywhere the panel says nothing about. */
+const OUTCOME: RelayOutcome = {
+  pushed: 4,
+  pulled: 9,
+  unreadable: 0,
+  applied: 9,
+  resurrected: 0,
+  cyclesBroken: 0,
+  skipped: 0,
+  deferred: 0,
 };
 
 /** A 21×21 matrix with a third of its modules dark — enough for the drawing test to count. */
@@ -95,6 +143,9 @@ beforeEach(() => {
   syncPairingCancel.mockReset().mockResolvedValue(undefined);
   syncDeviceRename.mockReset().mockResolvedValue(undefined);
   syncDeviceRevoke.mockReset().mockResolvedValue(undefined);
+  syncRelayStatus.mockReset().mockResolvedValue(RELAY_OFF);
+  syncRelaySetUrl.mockReset().mockResolvedValue(RELAY_OFF);
+  syncNow.mockReset().mockResolvedValue(null);
 });
 
 describe("SyncPanel", () => {
@@ -245,5 +296,177 @@ describe("SyncPanel", () => {
     await user.click(await screen.findByRole("button", { name: /pair a device/i }));
     expect(await screen.findByRole("alert")).toHaveTextContent(/busy/i);
     expect(screen.queryByTestId("pairing-qr")).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * The relay half. **Every one of these mounts the `unpaired` wrapper on purpose**: the relay
+ * section is a query of its own and draws nothing off the pairing one, so a fixture that
+ * disagreed with `RelayStatus.paired` would be testing a coincidence rather than the panel.
+ */
+describe("the relay half", () => {
+  /**
+   * An empty address is sync being **off**, and the panel has to say so.
+   *
+   * A blank field with nothing beside it is unreadable in exactly the place it matters: a
+   * reader cannot tell "off" from "not loaded yet", and off is the state every installation
+   * is in.
+   */
+  it("says sync is off when there is no relay address", async () => {
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    expect(await screen.findByText(/sync is off/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/relay address/i)).toHaveValue("");
+    // No dead control: `sync_now` over an empty address answers `null` rather than refusing,
+    // so the press would be harmless — and a button that can only ever report
+    // "there was nothing to do" is one a reader learns to distrust.
+    expect(screen.queryByRole("button", { name: /sync now/i })).not.toBeInTheDocument();
+  });
+
+  it("saves an address the reader types, and then shows what was stored", async () => {
+    const user = userEvent.setup();
+    syncRelaySetUrl.mockResolvedValue(RELAY_ON);
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    const field = await screen.findByLabelText(/relay address/i);
+    await user.type(field, "https://relay.example.workers.dev/");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    await waitFor(() =>
+      expect(syncRelaySetUrl).toHaveBeenCalledWith("https://relay.example.workers.dev/"),
+    );
+    // The backend normalises, so the field goes back to showing what was *stored* rather than
+    // what was typed — the trailing slash is gone.
+    await waitFor(() =>
+      expect(screen.getByLabelText(/relay address/i)).toHaveValue(
+        "https://relay.example.workers.dev",
+      ),
+    );
+  });
+
+  /** A refusal is a sentence to show, never an error to swallow: the crate's own words say
+   *  what to do about it, and "invalid URL" would not. */
+  it("shows the crate's own sentence when an address is refused", async () => {
+    const user = userEvent.setup();
+    syncRelaySetUrl.mockRejectedValue(
+      "A relay address has to start with https:// (or http:// for one on this machine).",
+    );
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    await user.type(await screen.findByLabelText(/relay address/i), "relay.example");
+    await user.click(screen.getByRole("button", { name: "Save" }));
+
+    expect(await screen.findByText(/has to start with https/i)).toBeInTheDocument();
+  });
+
+  it("draws what is waiting and the failure still on the record", async () => {
+    syncRelayStatus.mockResolvedValue(RELAY_ON);
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    expect(await screen.findByText(/4 changes waiting to go/i)).toBeInTheDocument();
+    expect(screen.getByText(/answered 502 to a push/i)).toBeInTheDocument();
+    // The record survives a later success on purpose, and the line says so rather than letting
+    // a reader read it as "sync is broken right now".
+    expect(screen.getByText(/kept even after a later sync worked/i)).toBeInTheDocument();
+  });
+
+  /**
+   * `null` is the backend's "there was nothing to do" — no relay address, or no
+   * pairing group — and it is the state every existing installation is in. A panel
+   * that drew it as a refusal would report a fault on the first press of every fresh install.
+   */
+  it("reports a null answer as nothing to do rather than as a failure", async () => {
+    const user = userEvent.setup();
+    syncRelayStatus.mockResolvedValue({ ...RELAY_ON, paired: false, pending: 0 });
+    syncNow.mockResolvedValue(null);
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    await user.click(await screen.findByRole("button", { name: /sync now/i }));
+
+    expect(await screen.findByText(/there was nothing to sync/i)).toBeInTheDocument();
+    expect(screen.queryByText(/did not finish/i)).not.toBeInTheDocument();
+  });
+
+  it("reports what a round trip did, and points its two outcomes at the queue", async () => {
+    const user = userEvent.setup();
+    syncRelayStatus.mockResolvedValue(RELAY_ON);
+    syncNow.mockResolvedValue({ ...OUTCOME, resurrected: 1, cyclesBroken: 2 });
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    await user.click(await screen.findByRole("button", { name: /sync now/i }));
+
+    const line = await screen.findByText(/sent 4 changes and received 9 changes/i);
+    expect(line).toHaveTextContent(/kept 1 row another device had deleted/i);
+    expect(line).toHaveTextContent(/moved 2 folders to the top level/i);
+    expect(line).toHaveTextContent(/needs review, just below/i);
+  });
+
+  it("says a refused sync lost nothing", async () => {
+    const user = userEvent.setup();
+    syncRelayStatus.mockResolvedValue(RELAY_ON);
+    syncNow.mockRejectedValue("The database is busy right now.");
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    await user.click(await screen.findByRole("button", { name: /sync now/i }));
+
+    expect(await screen.findByText(/did not finish/i)).toBeInTheDocument();
+    expect(screen.getByText(/busy/i)).toBeInTheDocument();
+  });
+});
+
+/**
+ * The ordering is the whole content of this state machine, so it is asserted directly rather
+ * than through seven renders.
+ */
+describe("relayState", () => {
+  it("puts off first, then a trip in flight, then a failure before never", () => {
+    expect(relayState(null, false, false)).toBe("unknown");
+    // Off outranks a stale failure: the address that error was about has been cleared.
+    expect(relayState({ ...RELAY_ON, relayUrl: "" }, false, true)).toBe("off");
+    expect(relayState(RELAY_ON, true, true)).toBe("syncing");
+    expect(relayState(RELAY_ON, false, true)).toBe("failed");
+    expect(relayState({ ...RELAY_ON, paired: false }, false, false)).toBe("unpaired");
+    expect(relayState({ ...RELAY_ON, lastSyncAt: null }, false, false)).toBe("never");
+    expect(relayState(RELAY_ON, false, false)).toBe("synced");
+    // **The two cases the plan names, and the only ones that pin the order rather than the
+    // arms.** Every assertion above is true of more than one ordering, because each fixture
+    // reaches exactly one arm; these two reach `failed` *and* a later arm at once. A press that
+    // failed on a device that has never finished a trip has to say so, because "we tried and it
+    // did not work" is a different sentence from "nobody has tried" - and one on a device with
+    // no group has to say so too, for the same reason one rung along.
+    expect(relayState({ ...RELAY_ON, lastSyncAt: null }, false, true)).toBe("failed");
+    expect(relayState({ ...RELAY_ON, paired: false }, false, true)).toBe("failed");
+  });
+
+  /** `lastError` is a record and survives a later success, so it must never drive the state —
+   *  a panel that read its state off it would say "failed" forever. */
+  it("does not read failed off the stored error", () => {
+    expect(relayState(RELAY_ON, false, false)).toBe("synced");
+    expect(relayNote("synced", RELAY_ON, 1_700_000_060)).toBe("Last synced 1 minute ago.");
+  });
+
+  it("says nothing while a read or a trip is in flight", () => {
+    expect(relayNote("unknown", null, 0)).toBeNull();
+    expect(relayNote("syncing", RELAY_ON, 0)).toBeNull();
+  });
+});
+
+describe("outcomeText", () => {
+  /** Not a failure, and the sentence has to say what is missing rather than what went wrong. */
+  it("explains a null answer instead of reporting an error", () => {
+    expect(outcomeText(null)).toMatch(/nothing to sync/i);
+    expect(outcomeText(null)).toMatch(/relay address and a paired device/i);
+  });
+
+  it("names only the clauses that are true of this trip", () => {
+    expect(outcomeText(OUTCOME)).toBe("Sent 4 changes and received 9 changes.");
+  });
+
+  it("points the two surfaced outcomes at the panel that lists them", () => {
+    const text = outcomeText({ ...OUTCOME, resurrected: 1, cyclesBroken: 1, deferred: 3 });
+    expect(text).toMatch(/Kept 1 row another device had deleted\./);
+    expect(text).toMatch(/Moved 1 folder to the top level/);
+    expect(text).toMatch(/Needs review, just below, says which\./);
+    expect(text).toMatch(/3 changes arrived before the change they build on/);
   });
 });

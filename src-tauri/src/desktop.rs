@@ -19,7 +19,7 @@ use crate::{
     card, collection, collection_alloc, collection_folders, combos, db, deck, deck_audit,
     deck_meta, deck_theory, deck_undo, errors, export, flatten, images, import, index, listview,
     marketplace, marketplace_feed, mirror, nav, paths, reset, schema, scryfall, search, sync,
-    sync_pair, tags, update, window, wishlist, wishlist_folders, zoom,
+    sync_engine, sync_pair, tags, update, window, wishlist, wishlist_folders, zoom,
 };
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
@@ -496,7 +496,15 @@ pub fn run() {
             sync_pair::pairing::sync_pairing_complete,
             sync_pair::pairing::sync_pairing_cancel,
             sync_pair::pairing::sync_device_rename,
-            sync_pair::pairing::sync_device_revoke
+            sync_pair::pairing::sync_device_revoke,
+            // The relay and the review queue (spec §7.2–§7.4, §7.7). Five: the panel's read, the
+            // relay address, one round trip now, the rows carrying a sentence, and clearing
+            // one of them.
+            sync_engine::commands::sync_relay_status,
+            sync_engine::commands::sync_relay_set_url,
+            sync_engine::commands::sync_now,
+            sync_engine::commands::sync_review_list,
+            sync_engine::commands::sync_review_clear
         ])
         .setup(|app| {
             // First, and before anything that can fail: the window is created **hidden**

@@ -177,6 +177,13 @@ pub fn extract_user_file(conn: &Connection, data_dir: &Path) -> rusqlite::Result
             "INSERT INTO {SCRATCH}.{table} ({columns}) SELECT {columns} FROM main.{table}"
         ))?;
     }
+    // **Every copied row lands with a NULL `sync_uid`, and nothing else here would ever fill
+    // it.** User schema v29 added the column, the legacy file has no such column to copy, and
+    // this function stamps *head* on the way out — so the rung that backfills it never runs on
+    // a converted file. A NULL uid is not cosmetic: `sync_ops.uid` is `NOT NULL`, so the first
+    // time the reader edited one of those rows on a paired device their own write would fail.
+    // This is the third of the three creation paths [`schema::mint_missing_uids`] names.
+    schema::mint_missing_uids(&tx, SCRATCH)?;
     tx.execute_batch(&format!(
         "PRAGMA {SCRATCH}.user_version = {};",
         schema::USER_SCHEMA_VERSION
@@ -633,6 +640,23 @@ mod tests {
         let cards: i64 = conn
             .query_row("SELECT count(*) FROM cards", [], |r| r.get(0))
             .unwrap();
+        // **Every synced row came across with a uid, and this is the only test that can show
+        // it over a real corpus of rows.** A legacy `mtg.db` has no `sync_uid` column to copy,
+        // so without `schema::mint_missing_uids` in `extract_user_file` every row here would
+        // land NULL and the ladder would never reach them — `convert` stamps head. Uniqueness
+        // over two fixture rows proves nothing; over thousands it does.
+        for table in crate::schema::SYNCED_TABLES {
+            let (rows, uids): (i64, i64) = conn
+                .query_row(
+                    &format!("SELECT count(*), count(DISTINCT sync_uid) FROM main.{table}"),
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap();
+            eprintln!("  {table}: {rows} rows, {uids} uids");
+            assert_eq!(rows, uids, "{table} has a NULL or a duplicate sync_uid");
+        }
+
         let user_bytes = std::fs::metadata(dir.join(crate::db::USER_DB))
             .unwrap()
             .len();

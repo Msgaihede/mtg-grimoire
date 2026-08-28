@@ -55,6 +55,9 @@ pub enum Source {
     /// The filesystem refused to store an image that was fetched successfully. Its own
     /// source rather than `Database`, because the fix is a disk and not a query.
     ImageStore,
+    /// The pairing relay — a push or a pull that did not land. Its own source rather than
+    /// `Database`, because the fix is a network and not a query.
+    Relay,
 }
 
 impl Source {
@@ -65,6 +68,7 @@ impl Source {
             Source::GithubUpdate => "github_update",
             Source::Database => "database",
             Source::ImageStore => "image_store",
+            Source::Relay => "relay",
         }
     }
 }

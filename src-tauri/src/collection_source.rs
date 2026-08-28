@@ -84,7 +84,7 @@ pub fn owned_rowids(_conn: &Connection) -> String {
 /// [`crate::reset::collection_clear`] and anything else that can move what the reader owns, and
 /// the thing they have in common is this module rather than that one.
 /// **Compiled for wasm with no caller there yet, and that is the point.** The web target
-/// routes four of the app's 136 commands, so every write in the crate still reaches this
+/// routes four of the app's commands, so every write in the crate still reaches this
 /// only on desktop — but the wasm build type-checking the path is what proves
 /// [`crate::db::lock_for`]'s wasm arm compiles against its real caller rather than in
 /// isolation. `Instant::now()` panics on `wasm32-unknown-unknown`, so that arm exists

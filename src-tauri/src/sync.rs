@@ -440,7 +440,7 @@ fn unchanged(card_count: i64) -> SyncOutcome {
 ///
 /// Shared with [`crate::search`] so that recovery rule lives in exactly one place.
 /// **Compiled for wasm with no caller there yet, and that is the point.** The web target
-/// routes four of the app's 136 commands, so every write in the crate still reaches this
+/// routes four of the app's commands, so every write in the crate still reaches this
 /// only on desktop — but the wasm build type-checking the path is what proves
 /// [`crate::db::lock_for`]'s wasm arm compiles against its real caller rather than in
 /// isolation. `Instant::now()` panics on `wasm32-unknown-unknown`, so that arm exists
@@ -470,7 +470,7 @@ pub(crate) fn lock_conn(mutex: &Mutex<Connection>) -> MutexGuard<'_, Connection>
 /// exactly one definition, in [`crate::db::lock_plain`], and a second copy of
 /// `unwrap_or_else(|e| e.into_inner())` is a second place for it to drift.
 /// **Compiled for wasm with no caller there yet, and that is the point.** The web target
-/// routes four of the app's 136 commands, so every write in the crate still reaches this
+/// routes four of the app's commands, so every write in the crate still reaches this
 /// only on desktop — but the wasm build type-checking the path is what proves
 /// [`crate::db::lock_for`]'s wasm arm compiles against its real caller rather than in
 /// isolation. `Instant::now()` panics on `wasm32-unknown-unknown`, so that arm exists
@@ -523,7 +523,7 @@ pub(crate) fn lock_db_read(state: &AppState) -> MutexGuard<'_, Connection> {
 /// `do_sync`'s orphan-sweep arm is the site that has to remember: it passes its already-open
 /// connection down instead.
 /// **Compiled for wasm with no caller there yet, and that is the point.** The web target
-/// routes four of the app's 136 commands, so every write in the crate still reaches this
+/// routes four of the app's commands, so every write in the crate still reaches this
 /// only on desktop — but the wasm build type-checking the path is what proves
 /// [`crate::db::lock_for`]'s wasm arm compiles against its real caller rather than in
 /// isolation. `Instant::now()` panics on `wasm32-unknown-unknown`, so that arm exists

@@ -276,3 +276,125 @@ export const RemovingSaysWhatItCannotDo: Story = {
     await expect(canvas.getAllByText(/^removed$/i)).toHaveLength(2);
   },
 };
+/* ------------------------------------------------------------------ the relay ---------- */
+
+/**
+ * The relay half, switched off — **which is what every installation opens on.**
+ *
+ * An empty address is not a form waiting to be filled in, it is sync being off, and the panel
+ * says so in words. A blank box with nothing beside it is unreadable in exactly the place it
+ * matters: a reader cannot tell "off" from "not loaded yet".
+ *
+ * There is no *Sync now* either. `sync_now` over an empty address answers `null` rather than
+ * refusing, so the press would be harmless — and a control that can only ever report
+ * "there was nothing to do" is one a reader learns to distrust.
+ */
+export const RelayOff: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await expect(await canvas.findByText(/sync is off/i)).toBeInTheDocument();
+    await expect(canvas.getByLabelText(/relay address/i)).toHaveValue("");
+    await expect(canvas.queryByRole("button", { name: /sync now/i })).not.toBeInTheDocument();
+  },
+};
+
+/**
+ * An address with no scheme on it, refused in the crate's own words.
+ *
+ * **This refusal is reachable from a keyboard, which is why it is not a fault.** Pasting a
+ * hostname without its `https://` is the commonest thing that goes wrong here, and the sentence
+ * has to say *that* rather than "invalid URL" — a different sentence pointing at a
+ * different fix.
+ */
+export const AddressWithoutAScheme: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await userEvent.type(await canvas.findByLabelText(/relay address/i), "relay.example");
+    await userEvent.click(canvas.getByRole("button", { name: "Save" }));
+
+    await expect(await canvas.findByText(/has to start with https/i)).toBeInTheDocument();
+  },
+};
+
+/**
+ * An address, and nothing to sync to yet.
+ *
+ * **`null` is the backend's "there was nothing to do" and it is not a failure.** No relay
+ * address, or no pairing group — and this device has the first and not the second. The
+ * sentence says what is missing rather than reporting a fault, which is the difference between
+ * a button that explains itself and one that looks broken on the first press of a fresh
+ * install.
+ */
+export const NothingToSyncTo: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await userEvent.type(
+      await canvas.findByLabelText(/relay address/i),
+      "https://relay.example.workers.dev",
+    );
+    await userEvent.click(canvas.getByRole("button", { name: "Save" }));
+
+    // The address is stored, so there is somewhere for the press to go — and the panel now
+    // says what is still missing rather than that sync is off.
+    await expect(await canvas.findByText(/nowhere to sync to yet/i)).toBeInTheDocument();
+    await userEvent.click(canvas.getByRole("button", { name: /sync now/i }));
+    await expect(await canvas.findByText(/there was nothing to sync/i)).toBeInTheDocument();
+  },
+};
+
+/**
+ * A group, an address, and one round trip.
+ *
+ * The `paired` world has **three changes written and never handed over**, which is where a
+ * reader stands after pairing and before typing an address, so the *waiting* line has something
+ * true to say the moment the address is saved and the trip has something to send.
+ *
+ * There is no network in the workbench and this story does not pretend there is: what the fake
+ * models is the shape of the answer — everything waiting goes, nothing comes back, and the
+ * stamp moves. The two outcomes spec 7.4 surfaces are seeded rows in the `needsReview` world
+ * rather than something a press invents; see `Settings/ReviewPanel`.
+ */
+export const OneRoundTrip: Story = {
+  parameters: { fake: { seed: "paired" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await userEvent.type(
+      await canvas.findByLabelText(/relay address/i),
+      "https://relay.example.workers.dev",
+    );
+    await userEvent.click(canvas.getByRole("button", { name: "Save" }));
+    await expect(await canvas.findByText(/3 changes waiting to go/i)).toBeInTheDocument();
+
+    await userEvent.click(canvas.getByRole("button", { name: /sync now/i }));
+
+    await expect(
+      await canvas.findByText(/sent 3 changes and received 0 changes/i),
+    ).toBeInTheDocument();
+    // The pile is empty and the stamp has moved, so both lines change together.
+    await expect(canvas.getByText(/nothing is waiting to go/i)).toBeInTheDocument();
+    await expect(canvas.getByText(/last synced just now/i)).toBeInTheDocument();
+  },
+};
+
+/**
+ * A sync holding the write connection — the one way the relay's own read is refused.
+ *
+ * `sync_relay_status` takes `sync::with_write` in the crate, because it counts unpushed rows of
+ * `sync_ops` on the write connection, so it really does answer `BUSY` while a card update is in
+ * flight. The panel says the relay could not be read rather than drawing an empty address
+ * field, which would be the one sentence a reader must not be shown by accident: it reads
+ * exactly like sync having been switched off.
+ */
+export const RelayCouldNotBeRead: Story = {
+  parameters: { fake: { seed: "paired", fault: "busy" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await expect(await canvas.findByText(/could not be read/i)).toBeInTheDocument();
+    await expect(canvas.queryByText(/sync is off/i)).not.toBeInTheDocument();
+  },
+};

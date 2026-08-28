@@ -45,6 +45,70 @@ thiserror = "2"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 futures-util = "0.3"
 
+# HKDF-SHA256's hash, and the updater's integrity check: every GitHub release asset carries a
+# `digest` (`sha256:…`, measured live 2026-08-09 on all five), which is what stands in for the
+# minisign signature a hand-written updater gives up. Every-target because `crypto::pair_key`
+# is.
+sha2 = "0.10"
+# Pairing (spec §7.5) and the sync envelope (§7.7). Five crates, and the version choices are
+# one decision rather than five.
+#
+# **Every-target since PR 7, and that is the spec's premise rather than a convenience.** One
+# dataset across three platforms means one conflict engine, and `sync_engine::wire` seals every
+# batch with `sync_pair::crypto` - so a browser that could not open an envelope would be a
+# browser that cannot sync, which is the whole feature.
+#
+# Verified 2026-08-28 with `cargo clippy --lib --target wasm32-unknown-unknown — -D warnings`:
+# all five compile there, and **two dependency edits were what it took**, both recorded on the
+# lines below. Neither is a workaround; each removes something the tree did not need.
+#
+# `x25519-dalek` gets `getrandom` so `StaticSecret::random()` exists and this crate never has to
+# hold an RNG of its own, and `static_secrets` because a device's key is reused for every pairing
+# it ever does — an `EphemeralSecret` is consumed by its one `diffie_hellman`.
+x25519-dalek = { version = "3", features = ["static_secrets", "getrandom"] }
+# **0.10 and deliberately not 0.11.** 0.11 moves RustCrypto's array types to `hybrid-array`,
+# which would stand a second array stack beside the `sha2 0.10 -> digest 0.10 -> crypto-common
+# 0.1 -> generic-array 0.14` this tree already carries. 0.10 and `hkdf 0.12` sit on that one.
+# XChaCha20-Poly1305 rather than the 96-bit-nonce variant: a 192-bit nonce can be drawn at
+# random for every message with no counter to keep, and a counter kept across three devices and
+# a restore-from-backup is exactly the thing that gets reused.
+#
+# **`default-features = false` drops `getrandom`, and that is the first of the two wasm edits.**
+# The default feature set enables `aead/getrandom`, which pulls `rand_core 0.6` and with it
+# **`getrandom 0.2`** - a third major of that crate, and the only one in the tree that refuses
+# `wasm32-unknown-unknown` outright (`compile_error!`, pointing at a `js` feature). Nothing here
+# uses what it buys: `AeadCore::generate_nonce` is unreachable, because `crypto::seal` draws its
+# own 24 bytes through `crypto::random_bytes`. So the fix is a subtraction.
+chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
+hkdf = "0.12"
+# Random bytes for the group key, the group id, the device id, the pairing token and every
+# nonce. `fill` is the whole API this uses, and it is spelled the same in 0.3 and 0.4 — so the
+# pin follows whichever major `x25519-dalek` resolved, and moving it is a one-word edit with no
+# code change. `cargo tree -d` is the check.
+#
+# **It moved from 0.3 to 0.4 on 2026-08-28, and that is the second wasm edit** — the one this
+# comment already told the next reader to make. `x25519-dalek 3.0.0` resolves **0.4.3**, so
+# declaring 0.3 stood two majors of the same crate in the tree and only one of them had a
+# browser backend switched on; the wasm build failed inside the *other* one. No code changed.
+#
+# **On wasm it also needs `wasm_js`**, which the web block below adds — features across target
+# blocks are additive, so the two lines are one dependency. In 0.3 that feature had to be paired
+# with `--cfg getrandom_backend="wasm_js"` in a `.cargo/config.toml`; **0.4 needs no build flag**,
+# which was established by deleting the file and watching the wasm build stay green.
+getrandom = "0.4"
+# The sealed envelope as a JSON string. **base64url and not hex**: the relay stores ciphertext
+# as TEXT in a Durable Object, and hex would be twice the bytes over the wire and against the
+# 2 MB per-row cap where base64 is four thirds; URL-safe so the blob can be a path segment
+# later without anything having to escape it. `default-features = false` drops `std`, which is
+# what makes it compile for wasm alongside everything else in this block; `alloc` is the whole
+# API `Engine::encode`/`decode` needs.
+base64 = { version = "0.22", default-features = false, features = ["alloc"] }
+# The invite as a picture. This app renders the matrix itself in the webview — see
+# `sync_pair::invite::qr_matrix` — so the crate's own `image` and `svg` renderers are dead
+# weight and `default-features = false` drops them. Building the matrix is the fact; drawing it
+# is the page's, which is this repo's boundary applied to a QR code.
+qrcode = { version = "0.14", default-features = false }
+
 # ── Desktop and Android ──────────────────────────────────────────────────────────
 # Everything here is either impossible in a browser or pointless there. `bundled` is
 # libsqlite3-sys compiling sqlite3.c with the host compiler, which is right on Windows and
@@ -114,35 +178,6 @@ tauri-plugin-mcp-bridge = "0.12"
 # `sync` is the semaphore that caps concurrent image fetches; `time` is the sleep the
 # image cache's pacer and its 429 penalty are made of.
 tokio = { version = "1", features = ["fs", "io-util", "rt", "sync", "time"] }
-# The updater's integrity check. Every GitHub release asset carries a `digest`
-# (`sha256:…`, measured live 2026-08-09 on all five), which is what stands in for the
-# minisign signature a hand-written updater gives up.
-sha2 = "0.10"
-# Pairing (spec §7.5). Five crates, and the version choices are one decision rather than five.
-#
-# `x25519-dalek` gets `getrandom` so `StaticSecret::random()` exists and this crate never has to
-# hold an RNG of its own, and `static_secrets` because a device's key is reused for every pairing
-# it ever does — an `EphemeralSecret` is consumed by its one `diffie_hellman`.
-x25519-dalek = { version = "3", features = ["static_secrets", "getrandom"] }
-# **0.10 and deliberately not 0.11.** 0.11 moves RustCrypto's array types to `hybrid-array`,
-# which would stand a second array stack beside the `sha2 0.10 -> digest 0.10 -> crypto-common
-# 0.1 -> generic-array 0.14` this tree already carries. 0.10 and `hkdf 0.12` sit on that one.
-# XChaCha20-Poly1305 rather than the 96-bit-nonce variant: a 192-bit nonce can be drawn at
-# random for every message with no counter to keep, and a counter kept across three devices and
-# a restore-from-backup is exactly the thing that gets reused.
-chacha20poly1305 = "0.10"
-hkdf = "0.12"
-# Random bytes for the group key, the group id, the device id, the pairing token and every
-# nonce. `fill` is the whole API this uses, and it is spelled the same in 0.3 and 0.4 — so the
-# pin follows whichever major `x25519-dalek` resolved, and moving it is a one-word edit with no
-# code change. `cargo tree -d` is the check. On wasm this crate needs its `wasm_js` feature;
-# that belongs to Phase 2's target block, not here, because this PR ships desktop only.
-getrandom = "0.3"
-# The invite as a picture. This app renders the matrix itself in the webview — see
-# `sync_pair::invite::qr_matrix` — so the crate's own `image` and `svg` renderers are dead
-# weight and `default-features = false` drops them. Building the matrix is the fact; drawing it
-# is the page's, which is this repo's boundary applied to a QR code.
-qrcode = { version = "0.14", default-features = false }
 # Reading one entry — `mtg-grimoire.exe` — out of the portable release archive.
 # `deflate` only: `Compress-Archive` writes plain deflate, and the default feature set
 # drags in bzip2, zstd, lzma and AES for formats this will never see.
@@ -172,6 +207,9 @@ image = { version = "0.25", default-features = false, features = [
 # SQLite here is 3.53.0 with FTS5, DBSTAT, COLUMN_METADATA and PREUPDATE_HOOK.
 [target.'cfg(target_family = "wasm")'.dependencies]
 rusqlite = { version = "0.40", features = ["hooks"] }
+# The browser's `crypto.getRandomValues`. A feature and a `—cfg` are both needed and they do
+# different jobs: this makes the backend available, and `.cargo/config.toml` selects it.
+getrandom = { version = "0.4", features = ["wasm_js"] }
 # The OPFS VFS. Same author as the FFI crate rusqlite already depends on, and both sit on
 # `rsqlite-vfs 0.1`, so the versions align without pinning. Its README marks all three of
 # its VFSes "No COOP/COEP requirements", and that was tested rather than quoted.

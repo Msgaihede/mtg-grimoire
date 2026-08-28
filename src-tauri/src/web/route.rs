@@ -15,7 +15,7 @@ use serde_json::Value;
 
 /// Every command this build routes, in the order they were added.
 ///
-/// **This is a first slice and not the whole surface.** The app has 136 commands; the four
+/// **This is a first slice and not the whole surface.** The app has 152 commands; the four
 /// here are the browse, which is the read path spec 8 requires measured in wasm rather than
 /// guessed. The rest arrive with their modules - see `lib.rs`'s module map for which are
 /// still desktop-only.

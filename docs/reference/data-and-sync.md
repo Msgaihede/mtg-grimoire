@@ -439,7 +439,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   answers the question the switch was asking — the decks *are* where the cards are now.
 - **The single-file ladder is frozen at v26**, and `schema::LEGACY_SINGLE_FILE_VERSION` is the
   answer; schema 27 splits the file in two and the halves number themselves separately
-  (`USER_SCHEMA_VERSION` **28** on the reader's file, `CORPUS_SCHEMA_VERSION` 1 on the
+  (`USER_SCHEMA_VERSION` **29** on the reader's file, `CORPUS_SCHEMA_VERSION` 1 on the
   rebuildable one). This line read **v18** for two
   whole rungs, because a prose-only edit routes to neither CI job and nothing goes red when a
   ladder entry rots.
@@ -456,6 +456,21 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   ladder and the head shape were the same fifteen tables — and left alone it would have
   failed every upgrade from a pre-27 folder with `cannot split: 'sync_identity' has no
   columns in common`. The whole record is [sync.md](sync.md).
+  **v29 is sync's own rung and it is the widest one on either ladder.** It adds `sync_uid` to
+  all eleven synced tables with a unique index each, `needs_review` to the three folder tables,
+  the op log (`sync_ops`, `sync_clock`, `sync_state`, `sync_peers`), and it **rebuilds
+  `error_log`** so `source` can be `'relay'` — that vocabulary is inside a `CHECK` and SQLite
+  has no `ALTER — CHECK`. The user side is **twenty-two tables and thirty-six indexes**
+  afterwards, up from eighteen and twenty-three. Three things about it are worth carrying:
+  `ALTER TABLE — ADD COLUMN` refuses a non-constant `DEFAULT` (verified on SQLite 3.53.0:
+  `Cannot add a column with non-constant default`), so the uid is a nullable column plus an
+  `UPDATE` — a `CREATE TABLE` would take the default, and using it would make an upgraded file
+  a different shape from a fresh one; the rung **spells its eleven `ALTER TABLE`s out** rather
+  than reading `SYNCED_TABLES`, because a step that read the constant would try to alter a
+  twelfth table on every database that climbs through it after v30 adds one; and minting a uid
+  takes **three** sites, not one — the rung for an upgraded file, `schema::mint_missing_uids`
+  inside `split::extract_user_file` for a converted one, and `USER_SEED_SQL` for a fresh one.
+  Measured on a copy of the real database: **14.35 ms** over 1 069 synced rows (debug).
   **v25 makes the collection's folders the physical ledger of where every card sits.** It inserts
   the single `Recently removed` folder and one `deck` folder per deck (**archived decks
   included** — archiving is a flag and an archived deck still holds its cards), converts every
