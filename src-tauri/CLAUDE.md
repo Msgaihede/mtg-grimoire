@@ -38,7 +38,7 @@ both plus the frontend.
   columns does not (schema v2; `the_v2_backfill_leaves_the_search_index_answering` is the
   proof).
 - **The data folder holds two databases, and which one is `main` is the whole design**
-  (schema 27). `data/user.db` is the reader's — the eighteen tables in `schema::TABLES` marked
+  (schema 27). `data/user.db` is the reader's — the twenty-two tables in `schema::TABLES` marked
   `Side::User`, which nothing outside this app can produce again — and it is what
   `Connection::open` names. `data/corpus.db` is everything a feed or this app's own ladder can
   rebuild, and it is **`ATTACH`ed as `corpus`**, because *you cannot `DETACH main`*: discarding
@@ -116,7 +116,7 @@ both plus the frontend.
   every upgraded one, and a fresh worktree is a fresh install, so nothing else here can see it.
   The single-file ladder is frozen at **v26** — `schema::migrate_single_file`
   climbs to `schema::LEGACY_SINGLE_FILE_VERSION` and stops, and the two files carry their own
-  numbers from there (`USER_SCHEMA_VERSION` **28** since pairing's three tables landed,
+  numbers from there (`USER_SCHEMA_VERSION` **29** since sync's op log landed,
   `CORPUS_SCHEMA_VERSION` 1, deliberately
   incomparable). This line read **v25** while that was head, and
   [the ladder's history](../docs/reference/data-and-sync.md) is the story. (This line read
@@ -728,8 +728,67 @@ the 105-character code and the crate pins, is [sync.md](../docs/reference/sync.m
 - **`chacha20poly1305` is pinned at 0.10 and not 0.11**, and the reason is `cargo tree -d`: 0.11
   moves RustCrypto's array types to `hybrid-array`, which stands a second array stack beside the
   `generic-array 0.14` that `sha2 0.10` already puts in this tree.
-- **This PR makes no network request of any kind**, so it adds no `errors::Source` — that CHECK
-  is closed and PR 7 is what owes a rung on it.
+- **Pairing itself makes no network request**, and the transport that does is
+  `sync_engine/`, below.
+
+## Hard rules — sync (`sync_engine/`)
+
+Six layers and five commands; the whole record, with every measurement, is
+[sync.md](../docs/reference/sync.md). The binding rules:
+
+- **The conflict engine is Rust's, and the boundary is unchanged rather than bent.** "Two devices
+  each added one copy and the row must end at +2" is a statement about *rows*, not about Magic —
+  the second kind of question, which is this crate's. `reconcile.rs` already merges two versions
+  of the reader's own rows and writes `needs_review` sentences from Rust. What stays TypeScript's
+  is the pairing panel, the relay-address setting, the review queue's presentation and the query
+  invalidation after a pull.
+- **Eleven tables sync and `schema::SYNCED_TABLES` is the census.** The spec says twelve and names
+  `deck_allocations`, which schema v25 dropped. `capture::TABLES` is held to that constant by a
+  test, and a second test asserts every column a capture spec names exists on its table — a
+  misspelt column is not a compile error and not a runtime error either until the trigger fires,
+  at which point it is a *write* that starts failing for the reader in a command that has nothing
+  to do with sync.
+- **`created_at` and `updated_at` are on no capture list**, and neither is any other local
+  bookkeeping. A synced timestamp is a second answer to "when".
+- **Capture is SQLite triggers, installed from `schema::prepare_database` and dropped-and-recreated
+  at every open.** Not `update_hook` (no values), not `preupdate_hook` (fires before commit, so a
+  crash loses an op silently). Never `CREATE TRIGGER IF NOT EXISTS`: a trigger is stored SQL, and
+  a build that changed the generator would leave every existing database running the old rules.
+- **`PRAGMA recursive_triggers` being OFF does not mean a trigger's statements fire no triggers**
+  — it stops a trigger firing *itself*. The uid mint is an `UPDATE`, so an update trigger without
+  both its guards (`AFTER UPDATE OF <captured columns>` **and** a `WHEN` that compares values)
+  records two ops for one insert.
+- **An op carries only what changed, fields and parents alike.** Last-writer-wins is per field, so
+  a note edit that restated the row's folder would silently undo a concurrent *move*.
+- **A counter carries `NEW - OLD` and never `NEW`.** A value ships as +1 where two devices adding
+  one copy each must end at +2, and it passes every single-device test there is.
+- **A foreign row travels as the parent's `sync_uid`, never as a local id** — including
+  `decks.default_category_id`, which is a parent with `Absent::Zero` rather than a field, because
+  a raw id names a row in a database the far device has never seen.
+- **`apply` runs inside `capture::suppressed`**, or two devices ping-pong an op forever. It folds
+  each row **twice**: incoming ops for the counter deltas, incoming plus this device's own
+  `sync_ops` history for existence and for which side won each field. Without the second fold,
+  add-wins never fires on a two-device group and a concurrent edit is silently deleted.
+- **A pushed op is kept, never pruned.** The op log is also this device's memory of what it did,
+  and both add-wins and the cycle-break read it.
+- **`sync_peers` is a watermark and a deferred op holds it.** Advancing past an op that could not
+  be applied loses it; not advancing replays the ops above it and adds their counter deltas
+  twice. The stream stalls at the first unappliable op instead, which is visible in
+  `ApplyReport::deferred`.
+- **Six tables can hold a `needs_review` sentence** since v29, and `sync_engine::commands::REVIEWABLE`
+  is the list, held to `sqlite_master` by a test. The sentences are Rust's, following
+  `reconcile.rs`, and the first message wins.
+- **The relay's address is `sync_state.relay_url` and is empty by default.** It is never in this
+  repository, in a test, or in a default: this repo is public and the URL is the reader's own.
+  Every client test is against `httpmock`.
+- **Every relay failure goes to `error_log` under `Source::Relay`** with the operation
+  (`push`/`pull`/`ack`), folding on the existing grain so a bad afternoon is one row with a count.
+  `pushed_at` is stamped only on a 200.
+- **`sync_engine` compiles for `wasm32-unknown-unknown` and that is a requirement, not a bonus** —
+  spec §2's one-implementation rule. Only `sync_engine::commands` is gated off it, because a
+  `#[tauri::command]` does not exist in a browser. So are `sync_pair::pairing` and nothing else in
+  that module: `crypto`, `invite` and `identity` are every-target since PR 7. `SystemTime::now()`
+  panics there, which is why `apply`'s clock advance is spelled in SQL.
 
 ## Hard rules — decks (storage side)
 

@@ -1,10 +1,13 @@
-# Sync — pairing two devices without an account
+# Sync — pairing, the relay, and the conflict engine
 
-What PR 6 shipped: the whole of the pairing *protocol*, and none of the transport. Every
-measurement below is from a **debug** build on Windows, on the date it names.
+Two halves, in the order they were built. **Above the PR 7 heading is the pairing protocol** and
+none of the transport; every measurement there is from a **debug** build on Windows, on the date
+it names. **Below it is the transport and the rules** — the op log, the five conflict rules, the
+envelope, the Cloudflare Worker — and those figures are release-build unless they say otherwise.
 
 Spec: [`2026-08-27-cross-platform-design.md`](../superpowers/specs/2026-08-27-cross-platform-design.md)
-§7.5 (pairing) and §7.6 (unpairing and revocation).
+§7.2 (what syncs), §7.3 (conflict semantics), §7.4 (what the reader sees), §7.5 (pairing),
+§7.6 (unpairing and revocation) and §7.7 (the relay).
 
 ---
 
@@ -247,13 +250,15 @@ has no camera permission, `getUserMedia` is not reachable under the CSP in `taur
 through the relay" — names a hop PR 7 builds. Until then the reader carries the sealed key by
 hand.
 
-## What PR 7 changes, and what it does not
+## What PR 7 changed, and what it did not
 
-It replaces the second hand-carried blob with a relay round trip. **The crypto, the SAS, the
-roster and the rotation are all this PR's and PR 7 changes none of them.** What it adds is a
-transport, an `error_log` source of its own (this PR adds none — nothing here touches the
-network) and a second reader of the pairing state, at which point `PAIRING_KEY` moves from
-`SyncPanel.tsx` into `@/lib/query.ts` for `COMBOS_KEY`'s reason.
+**The crypto, the SAS, the roster and the rotation are all PR 6's and PR 7 changed none of them.**
+What it added is the transport below, `errors::Source::Relay`, and the two Settings panels that
+read the relay and the review queue.
+
+**One thing §7.5 step 4 asks for is still hand-carried**: A wraps the group key to B's public key
+and the reader carries the sealed blob across. The relay could carry it and does not yet — see
+"What is still owed" at the end of this document.
 
 ---
 
@@ -328,3 +333,505 @@ the same day is the obvious one.
 `USER_SCHEMA_SQL` and never ran the `migrate_user` rung. The `split::extract_user_file` fix — the
 one that stops `convert` refusing a `sync_identity` table the legacy file has never had — sits on
 exactly that path. It has unit tests; it has not been driven against a real pre-27 `mtg.db`.
+
+---
+
+# PR 7 — the relay and the conflict engine
+
+Everything above is the pairing *protocol*. What follows is the transport and the rules, added
+2026-08-28. **Every figure in this half is from a release build on Windows unless it says
+otherwise**, and the debug/release difference on this machine is roughly 8×.
+
+Spec §7.2 (what syncs), §7.3 (conflict semantics), §7.4 (what the reader sees), §7.7 (the relay).
+
+---
+
+## What syncs: eleven tables, and the twelfth does not exist
+
+`schema::SYNCED_TABLES`:
+
+`collection_entries` · `collection_folders` · `deck_audit` · `deck_cards` · `deck_categories` ·
+`deck_folders` · `deck_tags` · `decks` · `muted_tags` · `wishlist_entries` · `wishlist_folders`
+
+**Eleven and not the spec's twelve.** The spec's list names `deck_allocations`, which **schema
+v25 dropped** — which deck holds a card is now which folder its row sits in, so the work that
+table did is inside `collection_folders`, which is on the list. A table that does not exist
+cannot be synced; the count moved and the intent did not.
+
+Two further corrections, both found by reading `schema.rs` rather than the spec:
+
+- **`deck_tags` has no `deck_id`.** Schema v21 rebuilt it as one app-wide list keyed on
+  `name_key`. That matters here more than anywhere: two devices typing "Ramp" must converge on
+  **one** row, because `idx_deck_tags_grain` is `UNIQUE (name_key)` and a second row is a
+  constraint failure at apply time rather than a duplicate.
+- **`needs_review` was on three tables, not two.** §7.4 names `collection_entries` and
+  `deck_cards`; `wishlist_entries` has had it since schema v4. **No folder table had it at
+  all** — and §7.4's second surfaced outcome is a broken folder cycle, so v29 adds it to
+  `deck_folders`, `wishlist_folders` and `collection_folders`. Six tables can hold a sentence
+  now, and `sync_engine::commands::REVIEWABLE` is the list, held to `sqlite_master` by a test
+  that fails if a table with the column is missing from it.
+
+**`created_at` and `updated_at` are on no capture list.** They are facts about when *this*
+device wrote a row; the group's ordering is the hybrid logical clock, and syncing a timestamp
+would put two answers to "when" in the database with nothing to say which one a reader is being
+shown.
+
+---
+
+## A row's identity: grain first, uid second, `min` tiebreak
+
+Every synced table keys on `INTEGER PRIMARY KEY` — a rowid. Two devices independently create a
+deck and both get `id = 1`. §7 never says what an op names a row by, and nothing in it works
+until that is answered.
+
+**Every synced row carries a minted `sync_uid` (16 random bytes as hex, `UNIQUE`), and the
+applier resolves by grain first, uid second, with a `min(uid)` tiebreak.**
+
+- **A minted uid alone is wrong**, and the counter rule proves it: two devices each adding one
+  copy of the same printing mint two uids, and inserting both is two rows at +1 rather than one
+  row at +2 — plus a violation of `idx_collection_grain`.
+- **A grain alone is wrong too**: `decks`, the three folder tables and `deck_audit` have **no**
+  unique index, so two devices' folders both called "Binder" are two folders and must stay two.
+- So both. On apply the engine looks for a local row on the incoming op's **logical grain** —
+  the table's own unique index with every foreign local id replaced by that parent's `sync_uid`.
+  If it finds one, that is the row, and **both devices set the row's uid to the lower of the
+  two**, which is deterministic and needs no alias table. If it does not, it looks by uid. If
+  neither, it inserts.
+
+| Table | Logical grain |
+| --- | --- |
+| `collection_entries` | `card_id, finish, condition, lang, altered, signed, proxy, misprint, serial_number, grading, folder_uid` (11 terms) |
+| `wishlist_entries` | `oracle_id, card_id, preferred_finish, folder_uid` |
+| `deck_cards` | `deck_uid, variant, category_uid, card_id, finish` (**five** — `finish` joined at v19) |
+| `deck_categories` | `deck_uid, name` |
+| `deck_tags` | `name_key` |
+| `muted_tags` | `namespace, tag_id` |
+
+`decks`, `deck_folders`, `collection_folders`, `wishlist_folders` and `deck_audit` have no grain
+and are uid-only.
+
+**A sparse update op cannot describe a grain and does not need to** — the row it edits is found
+by uid. An *insert* op carries every field, which is what makes the grain rule work at all.
+
+**The row handle in `apply` is the uid and never the rowid.** Ten of the eleven tables have an
+`INTEGER PRIMARY KEY`; `muted_tags` has none at all, being `WITHOUT ROWID` on
+`(namespace, tag_id)`. Addressing by `sync_uid` is one spelling for all eleven.
+
+**Minting takes three sites, not one**, and only one of them is the ladder:
+
+| Path | Who mints |
+| --- | --- |
+| an *upgraded* file | the v29 rung's `UPDATE … SET sync_uid = lower(hex(randomblob(16)))` |
+| a *converted* file | `schema::mint_missing_uids` inside `split::extract_user_file` |
+| a *fresh* file | `USER_SEED_SQL`, plus the capture trigger for every row written afterwards |
+
+A converted file is the one that was missed first: a legacy `mtg.db` has no such column to
+copy, and `split::convert` stamps *head*, so the ladder never reaches it. A NULL uid is not
+cosmetic — `sync_ops.uid` is `NOT NULL`, so the first edit to such a row on a paired device
+would fail **the reader's own write**.
+
+---
+
+## Capture: triggers, and three facts about SQLite that decide the shape
+
+`sync_engine::capture` installs 31 triggers from one census — an insert trigger per table, plus
+an update and a delete for the ten that are not `deck_audit`, plus one that advances the clock.
+They are `DROP` + `CREATE` at every open and never `CREATE … IF NOT EXISTS`: a trigger is stored
+SQL, and a build that changed the generator would otherwise leave every existing database
+running last year's rules forever.
+
+**Not the update hook, and not `preupdate_hook`.** `update_hook` — what `mirror::watch` uses —
+gives the table and the rowid but **no values**. `preupdate_hook` does give values but fires
+*before commit*, so an in-memory buffer is the only record of an op between the commit and the
+drain, and a crash there loses an op: a device diverged for good, silently. A trigger runs
+inside the caller's transaction, rolls back with it, cannot be forgotten by a write site added
+next year, and is identical on native and on wasm.
+
+Three things about SQLite, all measured against **3.53.0 on 2026-08-28**, decide the rest — and
+the plan this was built from had the first two wrong:
+
+1. **`PRAGMA recursive_triggers` is OFF by default and that does *not* mean a trigger's
+   statements fire no triggers.** It stops a trigger firing *itself*; a trigger's `UPDATE` fires
+   the `AFTER UPDATE` trigger on the same table perfectly happily. The uid mint is an `UPDATE`,
+   so the plan's insert trigger wrote **two** ops per insert and failed its own one-op test.
+   Two guards fix it and **either alone would do**, which a mutation established: `AFTER UPDATE
+   OF <captured columns>` is syntactic and the mint names only `sync_uid`; `WHEN (NEW.a IS NOT
+   OLD.a OR …)` is semantic and the mint moves no captured column. Removing either leaves every
+   test green; removing both makes one insert two ops. Both stay — the `OF` clause is the
+   cheaper, and the `WHEN` is the only one that can also see `UPDATE decks SET notes = notes`.
+2. **The obvious sparse-field expression is exponential.** Nesting
+   `CASE WHEN … THEN json_set(<expr>, …) ELSE <expr> END` names `<expr>` twice per column, so the
+   generated SQL doubles per field — 2²⁰ copies of the innermost expression for
+   `collection_entries`, a `CREATE TRIGGER` that never finishes being built. Every test in the
+   module sat at "running for over 60 seconds". It is a `json_group_object` over a `UNION ALL`
+   of guarded one-row `SELECT`s instead, which is linear.
+   **`json_patch` would also have been linear, and wrong in a quieter way**: it implements RFC
+   7386 merge semantics, where a null value *removes* the key — so a field the reader **cleared**
+   would be a field the op never mentions, and the far device would keep the old value forever.
+3. **`last_insert_rowid()` and `changes()` are unaffected by a trigger's own writes.** The op row
+   does not become the answer a caller's `INSERT INTO decks` gets back, which had to be true or
+   most of the crate would have broken silently.
+
+**An update carries only the columns that moved — and that now includes parents.** The plan
+emitted the whole `parents` object on every update; a note edit carrying the row's current
+folder wins last-writer-wins against a concurrent **move** with an earlier stamp, so the move is
+silently undone by an edit that had nothing to do with it. That is exactly the failure per-field
+LWW exists to prevent, one column type over.
+
+**`decks.default_category_id` is a parent, not a field.** The plan had it as a field, which
+means an op carries the *originating device's* category row id — a number that names a row in a
+database the far device has never seen and cannot be translated into anything. It travels as the
+category's uid now, with `Absent::Zero` so the `0` that means Auto survives as a `0` rather than
+failing a `NOT NULL` column. It is also the one **soft** parent: `decks` and `deck_categories`
+name each other, so no order of tables resolves both in one pass, and `apply` settles it after
+the batch instead of deferring the deck.
+
+**`muted_tags` carries its own primary key on the field list**, and it is the only table where
+that is so. Everywhere else the key is a rowid the far device assigns itself; there it is
+`(namespace, tag_id)`, both `NOT NULL`, and an op without them is an op the far device cannot
+turn into a row at all.
+
+---
+
+## §7.3's rules, and the test that proves each
+
+`sync_engine::merge::fold` is pure. **Every test folds the same ops in both orders through one
+`fold_both_ways` helper and asserts the same answer** — two devices fold whatever order their
+relay handed over, and a fold that depended on arrival order leaves them holding different rows
+while both believe they have converged.
+
+| Rule | Test |
+| --- | --- |
+| counters carry deltas; two devices each adding one copy end at **+2** | `two_concurrent_additions_of_one_copy_end_at_plus_two`, plus `a_counter_never_resolves_to_the_last_value_seen`, which asserts the specific wrong answer a value-carrying op would give |
+| scalar fields are last-writer-wins **per field** | `concurrent_edits_to_different_fields_both_survive` |
+| …and on one field, the later stamp wins | `concurrent_edits_to_one_field_take_the_later_stamp`, `a_dead_heat_on_one_field_is_broken_by_the_device_id` |
+| row existence is **add-wins** | `a_delete_concurrent_with_an_edit_resurrects_and_is_flagged`, `a_delete_after_every_edit_really_deletes`, `a_counter_change_also_beats_a_concurrent_delete` |
+| folder moves are LWW, then cycle-break | `a_parent_move_is_last_writer_wins` here; the cycle half is `apply`'s, because it needs the whole tree |
+| `deck_audit` is union/append-only | `an_audit_row_folds_to_itself` |
+
+**`fold` folds a *set*, keyed on the stamp**, which the plan does not have. A stamp is unique per
+device by construction — the clock trigger advances after every op, and a five-row `UPDATE` gets
+five distinct counters, measured — so two ops sharing one **are the same op**. Counters *sum*, so
+an op counted twice adds its delta twice, and a relay that stored a device's retried push twice
+(a 500 after the write landed, which is the ordinary shape of a network failure) would otherwise
+grow the reader's collection by itself. `sync_peers` covers the same hazard *between* batches;
+this covers it *within* one.
+
+**Two of the plan's five mutations are unreachable rather than uncaught**, and both are recorded
+in the source: the field guard's `>=` versus `>` and add-wins' `>` versus `>=` both compare
+stamps from two *different* devices, and the device id is the last term of the ordering, so the
+two stamps can never be equal. What the tests do bite on is the **direction** — reversing the
+add-wins comparison, making a delete always win, or dropping the delete arm each turn tests red.
+
+---
+
+## Apply, and the three things the plan's design could not do
+
+`sync_engine::apply` runs a whole batch in one transaction wrapped in `capture::suppressed`, so
+nothing it writes is captured back into `sync_ops` — without that guard two devices ping-pong an
+op forever. It drops ops at or below `sync_peers[device]`, **and ops this device wrote itself**:
+a counter is not idempotent, so one of this device's own `+1`s coming back would be a card
+appearing out of nothing, and the relay is not trusted to have filtered it.
+
+Three things it does that the plan's design does not, each found by a test rather than by
+reading:
+
+### Add-wins needs this device's own history
+
+Folding only the incoming ops answers the wrong question. Two devices; A deletes a row and B
+edits it concurrently; B pulls A's tombstone alone, folds a set of one, and **deletes the row** —
+with B's edit gone and nothing anywhere to say so. That is the silent loss §7.3's add-wins rule
+exists to prevent, and it happens on the **two-device group**, which is the ordinary one.
+
+So each group is folded **twice**: once over the incoming ops, and once over the incoming ops
+plus this device's own `sync_ops` rows for the same row. The combined fold decides whether the
+row exists and which side won each field; the incoming fold alone supplies the counter deltas,
+because the local ones are already in the row.
+
+**This is why a pushed op is kept rather than deleted.** `client` stamps `pushed_at` and leaves
+the row: the op log is also this device's memory of what it did.
+
+What it does *not* cover is a third device: B has no local ops for a row C edited, so A's
+tombstone and C's edit only meet if they arrive in one batch. The relay hands them over in
+hybrid-logical-clock order, so the common case orders itself; the residual is a sparse edit
+arriving after a tombstone, which is **deferred** rather than lost.
+
+### The cycle-break needs the same
+
+A loop takes **two** moves and each device only ever *receives* one of them — the other is its
+own. Reading the incoming batch alone therefore makes each device break the move the *other* one
+made: A cuts Inner, B cuts Outer, the tree is different on the two machines and neither can tell.
+The test asserting both devices name the same folder failed on its first run with
+`left: "Inner", right: "Outer"`. The stamps come from `sync_ops` as well now, selected with
+`json_type(parents, '$.parent') IS NOT NULL` — `json_type` and not `json_extract`, because a move
+**to the root** is a JSON null and `json_extract` cannot tell that from a key that is not there.
+
+Spec §7.3 says the **later**-moved folder goes to the root, which leaves the *earlier* move
+standing — the arrangement more devices have already seen and drawn. Convergence is a separate
+requirement and both directions satisfy it; what convergence needs is that both devices consult
+the same set of stamps.
+
+### The clock must observe what it applied
+
+Without it, an edit made *after* seeing a peer's op can carry a stamp that sorts *before* it, and
+last-writer-wins is decided by whose clock ran faster. `apply` ends by pulling `sync_clock` past
+the batch's latest stamp — `hlc::Hlc::observe` spelled in SQL, because `SystemTime::now()`
+**panics on `wasm32-unknown-unknown`** and this module compiles for the web target.
+
+### A deferred op holds the watermark
+
+`sync_peers` is a *watermark*: everything at or below it has been applied. So an op that could
+not be applied cannot be counted and stepped over — advancing past it loses it for good, and not
+advancing replays the ops above it and **adds their counter deltas a second time**. Both are
+silent. The stream stalls at the first unappliable op instead; that is visible in
+`ApplyReport::deferred` and self-heals when the missing parent arrives.
+
+### The two `CHECK`s differ and the applier knows it
+
+`collection_entries.quantity` is `CHECK (quantity >= 0)` and clamps: a stepper taken to zero is a
+real state there, and the row keeps its condition, its price and its acquisition story.
+`deck_cards.quantity` and `wishlist_entries.quantity` are `CHECK (quantity > 0)`, so a row taken
+to zero **goes**. Two devices each removing one copy of a two-copy deck card end with the card
+gone rather than with a constraint failure, which is the case no single device can reach: no
+device can *store* the zero this arithmetic produces.
+
+### The sentences
+
+Both are Rust's, following `reconcile.rs` — that column already holds Rust-written sentences, and
+one column with two conventions is worse than either. **The first message wins**: a resurrection
+does not overwrite a sentence the reconciler already wrote about a printing that left Scryfall.
+
+- `apply::RESURRECTED` — "Another device deleted this while this one was still changing it, so it
+  was kept."
+- `apply::CYCLE_BROKEN` — "A folder move on another device would have put this folder inside
+  itself. It was moved to the top level."
+
+---
+
+## The envelope, measured
+
+`sync_engine::wire`. Six fields cross the network and **the relay sees nothing else**: `group`
+routes it, `device` and the two clock fields let the Durable Object order and compact without
+decrypting anything, and `sealed` is opaque. The op count is deliberately absent — "this device
+wrote 431 things today" is not needed in order to relay — and a test asserts the JSON has exactly
+those six keys.
+
+The AAD is `group\0device\0epoch`, and **binding the epoch is what makes revocation mean
+something on the wire**: rotating the group key already stops a removed device reading anything
+new, and the epoch stops the reverse — a blob written before the rotation replayed at a device
+that has moved on, which the key alone cannot refuse because the ciphertext predates it. Removing
+any one of the three terms turns a test red.
+
+**`BATCH = 200`, derived from the write limit and checked against the row cap**, not the other
+way round. Measured 2026-08-28 with 200 realistic `collection_entries` ops — every field
+populated, a real note, a folder uid:
+
+| | |
+| --- | --- |
+| plaintext JSON | **139 601 B** (698 B/op) |
+| sealed + base64url | 186 188 B |
+| the whole stored row | **186 299 B** |
+| against the Durable Object per-row cap | 2 MB — **9%** |
+
+The spec quotes 453 B/op and 90.6 KB per batch. That is the *average* op; a fat one is 698 B and
+the cap is still not the binding constraint. A 50 000-row bulk import is **250 stored rows**
+against a 100 000 rows/day limit.
+
+`base64` joined the tree for one job. Hex was the alternative and is twice the bytes over the
+wire and against that cap; base64 is four thirds and URL-safe.
+
+---
+
+## The relay: three endpoints, and no authentication
+
+`relay/` is a Cloudflare Worker with one SQLite-backed Durable Object per pairing group.
+
+| | | |
+| --- | --- | --- |
+| `POST {relay}/g/{group}/push` | one `Envelope` | 200 with the stored cursor |
+| `GET {relay}/g/{group}/pull?since={cursor}&device={id}` | | 200 with `{ envelopes, cursor }` |
+| `POST {relay}/g/{group}/ack` | `{ device, cursor }` | 204 — what compaction reads |
+
+**There is no authentication and that is the design.** The relay cannot decrypt anything it
+stores; the group key is minted during pairing and lives only on the paired devices. What guards
+a group is that its id is 128 random bits, and what guards its contents is the key the relay has
+never seen. A stranger who guessed a group id could read ciphertext or append rows no device can
+open.
+
+Compaction, the 30-day tail and the pull ordering are pure functions in `relay/src/log.ts`,
+tested by the root vitest. **`since` orders by `(hlcMs, hlcCtr, device)` and not by arrival**, and
+**a device with no ack at all holds everything** — a group whose third device has never connected
+keeps its log rather than compacting away the state that device has not seen.
+
+**Nothing is deployed.** The source is committed and type-checks; no Cloudflare account, Worker,
+Durable Object namespace or API token was created by any agent. The URL a deploy produces goes in
+each reader's own `sync_state.relay_url`, through Settings, and **never in this repository**,
+which is public.
+
+---
+
+## What is not built: the WebSocket
+
+§7.7 says the Durable Object "fans out to connected devices over hibernatable WebSockets". This
+ships **HTTP pull-and-push**, and the Durable Object keeps a `/ws` route in its shape — a `501`
+with the reason in the body — for the PR that adds it. Three reasons, in order of weight:
+
+1. **`reqwest` has no WebSocket client**, and the obvious addition, `tokio-tungstenite`, does not
+   compile to `wasm32-unknown-unknown`. Adding it would make the web target's core un-buildable,
+   which is the one thing this phase is arranged not to do.
+2. **A WebSocket from the page would need the CSP widened.** `tauri.conf.json` grants
+   `connect-src 'self' ipc: http://ipc.localhost` and nothing else. Widening it is a decision to
+   take once, for all three targets.
+3. **Polling is comfortably inside the free tier.** Pull on open, pull every 60 s while the window
+   has focus, push 2 s after the write mask goes quiet — `mirror::watch`'s own debounce. Eight
+   hours is 28 800 / 60 = 480 pulls per device per day; three devices sharing one group is
+   **1 440**, which is 1.4% of 100 000.
+
+What is lost is latency: a change made on a phone shows on the desktop within a minute rather
+than instantly. What is kept is a core that still compiles to wasm and a CSP that still grants
+nothing.
+
+**One correction to the plan, and it is the difference between a stall and a loss.** The plan says
+an envelope that will not open must not advance the cursor past it. That is right for exactly one
+of the two ways it happens:
+
+- `envelope.epoch > group.epoch` — this device is **behind** a key rotation and has not been
+  handed the new key. Those ops become readable, so the cursor stays put.
+- `envelope.epoch < group.epoch`, or a failed AEAD — written before a rotation, or altered. No key
+  this device will ever hold opens it, so refusing to advance would stall the stream for the
+  thirty days the relay keeps a tail, for nothing. It is counted, written to `error_log` and
+  stepped over.
+
+---
+
+## Schema — user v29
+
+| Object | What it is |
+| --- | --- |
+| `sync_uid TEXT` + `idx_<table>_uid` on all eleven synced tables | a name every device agrees on |
+| `needs_review TEXT` on `deck_folders`, `wishlist_folders`, `collection_folders` | §7.4's second surfaced outcome had nowhere to go |
+| `sync_ops` | the op log: `tbl`, `uid`, `kind`, `fields`, `counters`, `parents`, the stamp, `pushed_at` |
+| `sync_clock` | one row: the hybrid logical clock, **seeded** |
+| `sync_state` | key/value: `relay_url`, `pull_cursor`, `last_sync_at`, the `applying` guard |
+| `sync_peers` | per-device watermarks — what makes a counter idempotent |
+| `error_log` rebuilt | `source` gains `'relay'`, which is a table rebuild because the vocabulary is inside a `CHECK` |
+
+**`ALTER TABLE … ADD COLUMN` refuses a non-constant `DEFAULT`** — verified against 3.53.0, which
+answers `Cannot add a column with non-constant default` — so the uid arrives as a plain nullable
+column and is backfilled by an `UPDATE`. A `CREATE TABLE` *would* take
+`DEFAULT (lower(hex(randomblob(16))))`, and that is exactly why it is not used: the column has to
+read the same in an upgraded file as in a fresh one, and
+`the_user_schema_is_byte_identical_to_what_the_ladder_builds` compares the two.
+
+**The rung spells its eleven `ALTER TABLE`s out and does not read `SYNCED_TABLES`.** A migration
+step is history the day it ships: a step that read the constant would try to alter a twelfth
+table that will not exist until v30, on every database that climbs through v29 afterwards.
+
+**`sync_clock` is seeded in the rung *and* in `USER_SEED_SQL`.** Every capture trigger joins it,
+and a join against an empty table produces no row — so a file that never got the seed records no
+ops at all, silently, which is the worst way for a sync to not happen. The rung reaches upgraded
+files; the seed reaches converted and fresh ones, and the browser has only ever had the second
+kind.
+
+The user side is **twenty-two tables and thirty-six indexes** now, up from eighteen and
+twenty-three.
+
+---
+
+## Measurements, 2026-08-28
+
+### Capture over a bulk import — release, 50 000 `collection_entries` rows in one transaction
+
+| | | |
+| --- | --- | --- |
+| no triggers at all | 317.3 ms | 1.00× |
+| triggers, unpaired — the uid mint alone | 708.5 ms | **2.23×**, 0 ops |
+| triggers, behind the apply guard | 483.3 ms | 1.52×, 0 ops |
+| triggers, paired | **1.340 s** | **4.22×**, 50 000 ops → 250 relay writes |
+
+**4.22× is above the plan's own stop-and-report threshold, and it is reported rather than worked
+around.** In absolute terms it is 1.34 s for fifty thousand rows, on the one operation spec §7.7
+names as the only one near a free-tier limit. The remedy the plan describes — run the importer
+inside `capture::suppressed` and seed its ops in one pass afterwards — is available and not taken
+here; the breakdown above is a `#[ignore]` test
+(`sync_engine::capture::tests::bulk_import_with_capture`) so the decision can be re-measured with
+one command. The row worth reading twice is the second: **an unpaired device**, which is every
+installation today, pays 2.23× for a feature it does not use.
+
+### The v29 rung over a real user file — debug
+
+`schema::tests::migrate_the_real_database_to_v29`, over a copy of the 788 406 272 B development
+database converted and then wound back to 28: **14.35 ms**, 1 069 synced rows, every one with a
+distinct uid.
+
+| Table | Rows |
+| --- | --- |
+| `collection_entries` | 275 |
+| `deck_cards` | 611 |
+| `deck_categories` | 55 |
+| `wishlist_entries` | 88 |
+| `deck_audit` | 28 |
+| `collection_folders` | 6 |
+| `decks` | 4 |
+| `deck_folders` · `wishlist_folders` | 1 each |
+| `deck_tags` · `muted_tags` | 0 |
+
+### The split, with the uid mint — debug
+
+`split::tests::the_real_database_converts_with_every_row_intact`: **264 ms**, a **1 523 712 B**
+user file beside a 787 075 072 B corpus, zero `foreign_key_check` violations. The user file was
+1 323 008 B before v29; the eleven uid columns and their eleven unique indexes are the ~200 KB
+difference, over 1 069 rows.
+
+---
+
+## The engine compiles for wasm, and nobody had tried
+
+Spec §2's premise is one dataset across three platforms, so the conflict engine has to be one
+implementation — and `wire` seals every batch with `sync_pair::crypto`, which makes a browser
+that cannot open an envelope a browser that cannot sync. PR 4 gated `AppState.pairing` off wasm
+and said in its own comment that the gate was temporary. This is the half of it that could be
+lifted.
+
+`crypto`, `invite` and `identity` are in `lib.rs`'s every-target column now; `pairing` stays
+gated, because it is `#[tauri::command]`s over `AppState` and is the desktop's IPC surface rather
+than a piece of the protocol. So is `sync_engine::commands`, for the same reason. Everything else
+in `sync_engine` — `hlc`, `capture`, `merge`, `apply`, `wire`, `client` — compiles there.
+
+**Two dependency edits were what it took, and neither is a workaround; each removes something the
+tree did not need.**
+
+- **`chacha20poly1305` gets `default-features = false`.** Its default set enables
+  `aead/getrandom`, which pulls `rand_core 0.6` and with it **`getrandom 0.2`** — the one major
+  in this tree that refuses `wasm32-unknown-unknown` outright, with a `compile_error!` pointing
+  at a `js` feature. Nothing here uses what it buys: `AeadCore::generate_nonce` is unreachable,
+  because `crypto::seal` draws its own 24 bytes.
+- **`getrandom` moves 0.3 → 0.4**, which is the edit its own comment already told the next reader
+  to make: `x25519-dalek 3.0.0` resolves **0.4.3**, so declaring 0.3 stood two majors in the tree
+  and switched a browser backend on in only one of them — the build failed inside the *other*.
+  No code changed.
+
+Plus `getrandom`'s `wasm_js` feature in the web target block. **A `.cargo/config.toml` carrying
+`--cfg getrandom_backend="wasm_js"` was written first and then deleted**: 0.3 needs that flag and
+0.4 does not, established by removing the file and watching the wasm build stay green. Worth
+recording, because the file would have been a trap — `scripts/build-wasm.mjs` runs cargo from the
+repository root and CI's wasm job runs it from `src-tauri`, and cargo reads its config by walking
+up from the **current** directory, not the manifest's.
+
+Verified with `cargo clippy --lib --target wasm32-unknown-unknown -- -D warnings`, exit 0, and
+`cargo tree --target wasm32-unknown-unknown -d` lists no duplicate `getrandom` at all. It needs
+clang on `PATH`; on this machine that is `C:\Program Files\LLVM\bin`.
+
+---
+
+## What is still owed
+
+- **The WebSocket fan-out**, with the CSP decision that comes with it. Until then §7.7's request
+  figure is the polled 1 440 rather than the ~150 an edit-driven relay would spend.
+- **A third device's tombstone against a third device's edit.** Add-wins reads this device's own
+  history and the incoming batch; two *other* devices' ops only meet if they arrive together. A
+  tombstone table would close it and is not built.
+- **A revoked device's rewrapped key over the relay.** §7.6's rotation is PR 6's and works; the
+  hop that hands the new key to the remaining devices is not built, which is why an envelope from
+  a newer epoch holds the pull cursor rather than being stepped over.
+- **The bulk-import cost.** 4.22× is measured and unaddressed; see above.
