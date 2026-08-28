@@ -8,12 +8,14 @@ import { HiddenTagsPanel } from "@/features/settings/HiddenTagsPanel";
 import { MarketplacePanel } from "@/features/settings/MarketplacePanel";
 import { SyncPanel } from "@/features/settings/SyncPanel";
 import { UpdatePanel } from "@/features/settings/UpdatePanel";
+import { WebStoragePanel, useWebStorage } from "@/features/settings/WebStoragePanel";
 import { useDangerZone, useLocalCache } from "@/features/settings/useDataReset";
 import { useHiddenTags } from "@/features/settings/useHiddenTags";
 import type { Update } from "@/lib/useUpdate";
 import { useErrorLog } from "@/lib/useErrorLog";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { useReleaseHistory } from "@/lib/useReleaseHistory";
+import { isWebTarget } from "@/pwa/target";
 
 /**
  * Settings.
@@ -62,6 +64,9 @@ export function SettingsPage({ update }: { update: Update }) {
   const cache = useLocalCache();
   const danger = useDangerZone();
   const hidden = useHiddenTags();
+  // Called unconditionally, `useLocalCache`'s shape, and inert on desktop: every read inside
+  // it is behind `isWebTarget()`, which is a build-time constant.
+  const webStorage = useWebStorage();
 
   return (
     <div className="mx-auto max-w-2xl space-y-8 py-2">
@@ -112,6 +117,14 @@ export function SettingsPage({ update }: { update: Update }) {
       {!isAndroid() && <BackupPanel />}
 
       <CachePanel cache={cache} />
+
+      {/* Web only: none of these rows means anything in a window that owns its own disk.
+          `isWebTarget()` is a build-time constant, so on desktop this subtree is not merely
+          hidden - nothing under it is ever constructed.
+
+          Beside the cache because these are the page's two panels about where the bytes
+          live, and this one throws nothing away either. */}
+      {isWebTarget() && <WebStoragePanel storage={webStorage} />}
 
       <section aria-labelledby="later-heading" className="space-y-2">
         <h2 id="later-heading" className="font-heading text-lg leading-none text-dim">

@@ -1,6 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
+import { captureInstallPrompt } from "./pwa/install";
 import { WebBoot } from "./web/WebBoot";
 import "./index.css";
 // Mana and set glyphs, as bundled icon fonts — no CDN, and the CSP has no remote source.
@@ -15,6 +16,11 @@ import "keyrune/css/keyrune.css";
 // missing `#root` should say so instead of failing inside React on a null container.
 const root = document.getElementById("root");
 if (!root) throw new Error("index.html is missing its #root element");
+
+// Before React, because `beforeinstallprompt` fires once and early and a page that has not
+// called `preventDefault()` on it by then has lost it for good — there is no API to ask again.
+// Inert on desktop.
+captureInstallPrompt(window);
 
 ReactDOM.createRoot(root).render(
   <React.StrictMode>
