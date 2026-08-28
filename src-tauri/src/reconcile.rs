@@ -91,7 +91,29 @@ pub fn user_data_is_empty(conn: &Connection) -> bool {
 ///
 /// One transaction for the whole pass: half-applied merges would leave rows pointing at
 /// ids that no longer describe what they own.
+///
+/// # It records no sync ops, and that is a correctness requirement rather than an economy
+///
+/// **Every device derives this pass for itself.** `card_migrations` is on the user side and is
+/// deliberately *not* synced, so each machine applies Scryfall's log against its own rows after
+/// its own ingest. Capturing the writes would mean both devices doing the fold **and** then
+/// receiving the other's: `fold_into_existing` sums the source row into the survivor, which is
+/// a counter delta, and a counter delta applied twice is a quantity that has doubled itself
+/// with nothing anywhere to say so.
+///
+/// So the whole pass runs behind [`crate::sync_engine::capture::Suppressed`], and the two
+/// devices converge because they compute the same answer rather than because they told each
+/// other. The rule generalises: **a write derived from the corpus must not be captured**, and
+/// this module and [`sweep_orphans`] are the only two that make one.
 pub fn apply(conn: &mut Connection, migrations: &[Migration]) -> rusqlite::Result<ReconcileStats> {
+    let mut guard = crate::sync_engine::capture::Suppressed::begin(conn);
+    apply_within(guard.conn(), migrations)
+}
+
+fn apply_within(
+    conn: &mut Connection,
+    migrations: &[Migration],
+) -> rusqlite::Result<ReconcileStats> {
     let mut stats = ReconcileStats::default();
     // Merge destinations resolve through the pass's own map, so a chain lands every row
     // on its FINAL id no matter how the log was ordered or dated. [`oldest_first`] still
@@ -632,7 +654,17 @@ fn flag_deleted(tx: &rusqlite::Transaction<'_>, m: &Migration) -> rusqlite::Resu
 /// Run after every ingest. `/migrations` explains the ids Scryfall changed *deliberately*;
 /// this asks the only question the user cares about — can this row still be shown? — and
 /// it needs no network at all.
+///
+/// **Uncaptured, for [`apply`]'s reason.** Whether a printing is in *this* device's card
+/// database is a fact about this device: a machine that has synced today and one that synced
+/// last week can honestly disagree, and each clears its own flag when its own corpus catches
+/// up. A flag that travelled would be one device telling another something it can check for
+/// itself and might be wrong about.
 pub fn sweep_orphans(conn: &Connection) -> rusqlite::Result<(usize, usize)> {
+    crate::sync_engine::capture::suppressed(conn, || sweep_orphans_within(conn))
+}
+
+fn sweep_orphans_within(conn: &Connection) -> rusqlite::Result<(usize, usize)> {
     const MISSING: &str =
         "This printing is not in the card database. It may have been removed by the last \
          card-data sync, or it may return with the next one.";
