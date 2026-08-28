@@ -18,6 +18,8 @@ import { WishlistPage } from "@/features/wishlist/WishlistPage";
 import { queryClient } from "@/lib/query";
 import { useAppStore } from "@/lib/store";
 import { useUpdate, type Update } from "@/lib/useUpdate";
+import { UpdateReadyBar } from "@/pwa/UpdateReadyBar";
+import { useServiceWorker } from "@/pwa/useServiceWorker";
 
 function ActiveView({ update }: { update: Update }) {
   const activeView = useAppStore((s) => s.activeView);
@@ -128,6 +130,11 @@ export default function App() {
   // and the Settings panel. One hook means one `update:progress` listener — two would be two
   // subscriptions racing to describe the same download.
   const update = useUpdate();
+  // The browser's update, not the portable swap's. One hook, mounted once, for `useUpdate`'s
+  // reason: two registrations would be two objects racing to describe one waiting worker.
+  // Inert on desktop — `useServiceWorker` returns without registering when `isWebTarget()` is
+  // false, so this costs a `useState` and nothing else in the shipped window.
+  const browserUpdate = useServiceWorker();
 
   return (
     <MotionConfig reducedMotion="user">
@@ -219,6 +226,17 @@ export default function App() {
               `QueryClientProvider` because it reads `card_printings` and writes through
               `deck_swap_printing`. */}
               <AllPrintingsDialog />
+              {/* A sibling of the shell for `CardZoomIndicator`'s reason: the bar is `fixed` at
+              `LAYER.popup`, a z-index competes only inside its own stacking context, and
+              every card surface in this app draws positioned, transformed rows. Nothing
+              between here and the root transforms.
+
+              Web-only in effect rather than in placement: `useServiceWorker` never registers
+              on desktop, so `ready` is permanently false there and this renders nothing. */}
+              <UpdateReadyBar
+                ready={browserUpdate.updateReady}
+                onApply={browserUpdate.applyUpdate}
+              />
             </ContextMenuProvider>
           </CardToDeckProvider>
         </TooltipProvider>
