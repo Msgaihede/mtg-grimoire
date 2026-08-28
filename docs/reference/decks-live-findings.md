@@ -1387,11 +1387,36 @@ like the fix not working — one measurement was taken that way and had to be th
 the one already written down one section up: stop `tauri dev`, delete `node_modules/.vite`,
 relaunch, and **`fetch` the module and grep the served text before believing any reading.**
 
-### Still not driven
+### Repeated in a packaged build — `tauri build -- --debug --no-bundle`, same day
 
-**The packaged build.** `tauri dev` sends no CSP at all — Vite serves the page and Tauri is out of
-the response path — so the shipped `style-src 'self'` is unfalsifiable here. What that would answer
-is whether the copied `@dnd-kit` rules in `index.css` still position the preview, and whether the
-**count chip** draws: its styles are inline `style` *attributes*, which `style-src-attr
-'unsafe-inline'` permits, and this pass is the first to put a second element on that distinction.
-It needs `npm run tauri build -- --debug --no-bundle` and a repeat of the first two gestures.
+`tauri dev` sends **no CSP at all** — Vite serves the page and Tauri is out of the response path —
+so the shipped `style-src 'self'` cannot be refuted there. The two gestures that depend on it were
+repeated in a portable debug binary served from `tauri.localhost`, with the bundle confirmed fresh
+(`assets/index-DF3Z48lv.js` against `ls dist/assets`) after touching `main.rs` to force the relink.
+
+- **The library's own sheets are still refused, and the copy still works.** `head style` counts
+  **3** while `document.styleSheets.length` is **1** — `StyleInjector`'s three elements are in the
+  DOM with no parsed sheet, exactly as
+  [frontend-design.md](frontend-design.md) describes. The drag preview nonetheless computes
+  `position: fixed`, `top: 426.5px`, `left: 473px`, `width: 210px`, `z-index: 2147483647` — and
+  those are the **same values** as the `--dnd-top` / `--dnd-left` the library writes on that
+  element as inline attributes. So the rules copied into `index.css` are the ones reading them.
+- **`<html>` carries `data-dragging` through the gesture and not after**, and the quick-zone bar
+  drew its four boxes.
+- **The count chip draws, which is the new half.** Four cards picked with a Shift-click range, one
+  of them dragged: `4 cards`, `position: fixed`, `z-index: 2147483647`, `pointer-events: none`, at
+  `(811, 483)` against a pointer at `(810, 466)` — the same `+12, +12`-from-the-previous-move
+  offset as in dev. Its colours resolved through `var()` to the app's own tokens rather than to the
+  hard-coded fallbacks: `oklch(0.16 0.01 270)` on the felt, `oklch(0.75 0.12 85)` for the text and
+  the border. So an element appended straight to `document.body` does inherit the palette, and
+  **the chip is the second element to prove the distinction the CSP work rests on** — a `style`
+  *attribute* is permitted by `style-src-attr 'unsafe-inline'` while an injected `<style>` element
+  is refused by `style-src 'self'`.
+
+**One trap this pass hit, and it is the live equivalent of the suite's `afterEach`.** A `pull`
+whose press lands on a card *covered* by another card can leave the manager's drag operation
+non-idle, and `handlePointerDown` then returns early for **every later press in that page** — so
+the next four gestures reported `data-dragging: false`, no quick-zone bar and no write, which reads
+exactly like the packaged build having no drags at all. The console was silent throughout. There is
+no `afterEach` in a live window; the cure is `location.reload()`, and the tell is that the very
+first gesture after a reload works.
