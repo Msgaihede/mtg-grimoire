@@ -3149,21 +3149,50 @@ break between releases), by building the smallest real thing and reading what ha
 reading the docs.
 
 **The section is titled for `@dnd-kit/dom` and was titled for `@dnd-kit/react` until 2026-08-28,
-which was wrong the day it was written**: nothing in `src/` imports the React package, every
+which was wrong the day it was written**: nothing in `src/` ever imported the React package, every
 answer below is about the DOM one, and §1 and §2 are the record of deciding not to use the hooks.
-`@dnd-kit/dom` and `@dnd-kit/abstract` are both declared exactly in `package.json` as of 3b; until
-then the module every drag in the app went through was an undeclared transitive of
-`@dnd-kit/react`.
 
-The dependency landed alongside `@atlaskit/pragmatic-drag-and-drop` and the two coexisted on
-**different elements** for one plan. **Since 3b (2026-08-28) nothing in `src/` imports
-pragmatic-dnd at all**, so the coexistence rule below is history rather than a constraint — and
-the reason it existed is worth keeping, because it is not the reason it looks like: putting both
-on one element is refused not by the registries but by `PointerSensor.handlePointerDown`, which
-binds a capture-phase `dragstart` listener that `preventDefault()`s the native drag whenever the
-press landed on something that is not itself a native draggable. In this app that is nearly every
-press — a card's name is a button and a tile's art is a button — so the pragmatic drag would have
-died on exactly the gestures a test written for either library would not be watching.
+**As of 3c (2026-08-28) the manifest declares exactly what the code imports and nothing else:**
+`@dnd-kit/abstract`, `@dnd-kit/collision` and `@dnd-kit/dom`, all three pinned at `0.5.0` with no
+caret. That is the end of a defect this repo hit once and should not hit twice — 3a declared
+`@dnd-kit/react` and wrote `dndManager.ts` against `@dnd-kit/dom`, so the module every drag in the
+app went through was an **undeclared transitive** of the wrapper, one `npm update` from resolving
+to something nothing pinned. 3b declared the two the code imports; 3c removed the wrapper, which
+was never imported at all.
+
+**Removing it gives up one signal, and this line is where that signal now lives.**
+`@dnd-kit/react` was the only package in this tree that declared a React peer dependency
+(`react` and `react-dom`, both `^18.0.0 || ^19.0.0`); `@dnd-kit/dom`, `@dnd-kit/abstract` and
+`@dnd-kit/collision` declare no peers at all. **Which React this drag stack has been proved
+against is therefore this repo's to record rather than the dependency graph's: React 19, on
+Windows, as of 2026-08-28.**
+
+**`@atlaskit/pragmatic-drag-and-drop` and its auto-scroller were uninstalled in 3c**, taking
+`bind-event-listener` and `raf-schd` with them — four packages, `npm`'s own count. 3b had already
+removed the last import; 3c removed the last call sites in the test harness and then the
+dependency. `src/lib/dndManager.test.ts` is the fence that keeps them out, and **it matches an
+import statement rather than a name**, on purpose: many files in this app still mention
+pragmatic-dnd in a doc comment as the record of why something is the way it is, and a sweep
+that matched the name would turn this project's memory of its own reasons into a red build.
+
+**The coexistence rule this section used to open with is history, and one sentence of it was
+wrong about the library that replaced it.** While the two libraries overlapped they were kept on
+**different elements**, and what actually refused both on one element was not either registry but
+`PointerSensor.handlePointerDown`, which binds a capture-phase `dragstart` listener that
+`preventDefault()`s the native drag whenever the press landed on something that is not itself a
+native draggable — nearly every press in this app, because a card's name is a button and a tile's
+art is a button.
+
+**What is *not* true of dnd-kit is that a second registration on one element replaces the first.**
+That was pragmatic-dnd's rule: it kept one `draggable()` per element in a `WeakMap`, and a second
+silently took the first's place. **dnd-kit keys its registry by entity id**, so two `Droppable`s
+on one element both register and both compete, and what separates them is `accepts()` —
+`computeCollisions` skips a droppable that refuses the source before it measures anything. Two
+folder cards and every deck pile in the app depend on that, and `TableView`'s rows depend on the
+draggable half of it: one row element carries a `Draggable` *and* a `Droppable` and both stand.
+Where two accepting targets do overlap, `collisionPriority` is what decides them; without one they
+are separated by distance, which is why an element with no measured rectangle in jsdom wins a drop
+the pointer never went near.
 
 The question the spike existed to answer: **`@dnd-kit/react` is provider-and-hooks shaped, and
 `lib/folderDrag.ts` is imperative** (`folderDraggable({ element, folder })` registers on a DOM

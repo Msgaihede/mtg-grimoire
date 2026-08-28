@@ -21,12 +21,9 @@
     "verify": "npm run build && npm run lint && npm run test:run && cargo test --manifest-path src-tauri/Cargo.toml"
   },
   "dependencies": {
-    "@atlaskit/pragmatic-drag-and-drop": "^2.0.2",
-    "@atlaskit/pragmatic-drag-and-drop-auto-scroll": "^3.0.0",
     "@dnd-kit/abstract": "0.5.0",
     "@dnd-kit/collision": "0.5.0",
     "@dnd-kit/dom": "0.5.0",
-    "@dnd-kit/react": "0.5.0",
     "@fontsource-variable/geist": "^5.3.0",
     "@fontsource-variable/geist-mono": "^5.3.0",
     "@fontsource/cinzel": "^5.3.0",

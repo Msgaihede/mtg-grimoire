@@ -4,6 +4,13 @@ import css from "@/index.css?raw";
 import { folderDraggable } from "@/lib/folderDrag";
 import { dndManager, DRAGGING_ATTRIBUTE } from "@/lib/dndManager";
 import { boxed, startPointerDrag } from "@/test-drag";
+/**
+ * The manifest as text, read through Vite rather than through `node:fs` — this project has
+ * no `@types/node` on purpose, and `src/lib/tokens.test.ts` reaches two levels up to
+ * `.storybook/preview.tsx?raw` the same way. A static import, which is what Vite's ambient
+ * `*?raw` declaration types; a dynamic one would be typed `any`.
+ */
+import manifest from "../../package.json?raw";
 
 /**
  * **The fence around the block at the foot of `src/index.css`.**
@@ -352,5 +359,85 @@ describe("the manager's sensors", () => {
     document.body.removeEventListener("keydown", listener);
     stop();
     element.remove();
+  });
+});
+
+
+/**
+ * Every source file in the app and in the workbench, as text. `?raw` through Vite rather than
+ * `node:fs`, for the reason given at the `manifest` import above; `src/lib/tokens.test.ts` runs
+ * the same sweep over the same glob.
+ *
+ * **Both roots, because the removed library had call sites in both.** Four story files each
+ * carried a copy of a `DataTransfer` shim until 3b, and `.storybook/` is outside a `/src/**`
+ * glob — so a sweep scoped to the app alone would have gone green over a workbench that had
+ * put the library back.
+ */
+const SOURCES = {
+  ...import.meta.glob<string>("/src/**/*.{ts,tsx}", {
+    query: "?raw",
+    import: "default",
+    eager: true,
+  }),
+  ...import.meta.glob<string>("/.storybook/**/*.{ts,tsx}", {
+    query: "?raw",
+    import: "default",
+    eager: true,
+  }),
+};
+
+/**
+ * **The banned thing is the import, not the name.** Files all over this app still mention
+ * `@atlas` + `kit/pragmatic-drag-and-drop` in a doc comment, and every one of those mentions is
+ * the record of why something is the way it is — why `DropIndicator` draws its own line rather
+ * than taking the hitbox package, why `folderDrag.ts`'s edge arithmetic is hand-rolled, why
+ * `dnd.ts` says that a second registration on one element used to replace the first and no longer
+ * does. A sweep that matched the bare name would make this project's memory of its own reasons a
+ * thing that fails the build. `src/lib/tokens.test.ts` learned that once already, when a class
+ * named in prose failed the token sweep.
+ */
+const PRAGMATIC_IMPORT = /(?:from|import)\s*\(?\s*["']@atlaskit\//;
+
+/**
+ * The banned name, assembled from two pieces.
+ *
+ * Spelled whole it would appear in this file as `from "@atlas` + `kit/` — which is exactly what
+ * {@link PRAGMATIC_IMPORT} matches, so the sweep below would report **itself** as an offender and
+ * the fence would be red on a tree with nothing wrong with it. `tokens.test.ts` splits its own
+ * banned class for the same shape of reason.
+ */
+const ATLAS = `@atlas${"kit"}`;
+
+describe("the drag library is the only drag library", () => {
+  it("imports nothing from @atlaskit anywhere in src", () => {
+    const offenders = Object.entries(SOURCES)
+      .filter(([, source]) => PRAGMATIC_IMPORT.test(source))
+      .map(([path]) => path);
+    expect(offenders, "files importing the removed drag library").toEqual([]);
+  });
+
+  /**
+   * The half a source sweep cannot see: a dependency can be back in the manifest with nothing
+   * importing it yet, which is how it comes back — one `npm install` that looked harmless.
+   */
+  it("declares no @atlaskit dependency", () => {
+    expect(manifest).not.toMatch(new RegExp(`"${ATLAS}/`));
+  });
+
+  /**
+   * The sweep proving it can see anything at all. Without this, a glob that silently matched no
+   * files — a moved test, a changed pattern — would pass both tests above forever.
+   */
+  it("is reading real source", () => {
+    expect(Object.keys(SOURCES).length).toBeGreaterThan(100);
+    expect(Object.keys(SOURCES).some((path) => path.startsWith("/.storybook/"))).toBe(true);
+    expect(
+      PRAGMATIC_IMPORT.test(
+        `import { draggable } from "${ATLAS}/pragmatic-drag-and-drop/element/adapter";`,
+      ),
+    ).toBe(true);
+    expect(
+      PRAGMATIC_IMPORT.test(` * \`${ATLAS}/pragmatic-drag-and-drop\` keeps one drop target per element.`),
+    ).toBe(false);
   });
 });
