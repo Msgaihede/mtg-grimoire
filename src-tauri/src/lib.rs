@@ -335,7 +335,18 @@ pub fn run() {
     //
     // Port 9223 (the plugin counts upward from it if it is busy), deliberately clear of the
     // three ports this repo hardcodes: 1420 Vite, 6006 Storybook, 9222 CDP.
-    #[cfg(debug_assertions)]
+    //
+    // **`desktop` as well as `debug_assertions`, and the second half is not decoration.**
+    // `tauri android dev` produces a *debug* build, so `debug_assertions` alone puts this
+    // socket on the phone. `127.0.0.1` is a much weaker fence there than it is here: a
+    // workstation's loopback is reachable by processes the reader installed deliberately,
+    // whereas a phone's is reachable by every app on it, and this one evaluates arbitrary
+    // JavaScript in a webview where `withGlobalTauri` has already put every command within
+    // one `invoke`. **Denying the three commands in `capabilities/mobile.json` does not
+    // cover this** — the listener is opened in Rust and the ACL is not in that path, so the
+    // capability closes the front door of a house whose wall is missing. This `cfg` is the
+    // wall.
+    #[cfg(all(debug_assertions, desktop))]
     let builder = builder.plugin(
         tauri_plugin_mcp_bridge::Builder::new()
             .bind_address("127.0.0.1")
@@ -914,6 +925,45 @@ mod tests {
     /// `docs/reference/tauri-mcp-bridge.md` has the working out. The likely way this
     /// regresses is someone debugging a bridge problem by reaching for `:default` — which
     /// would fix nothing, because a command the ACL never sees cannot be denied by it.
+    /// The other half of the bridge's fence, and the half a capability file cannot hold.
+    ///
+    /// `the_mcp_bridge_gets_three_permissions_and_never_its_default` above and
+    /// `the_mobile_capability_drops_every_verb_the_platform_has_no_answer_for` below both
+    /// assert **ACL** facts, and both would stay green while a debug APK listened on the
+    /// phone: the socket is opened by `Builder::build()` in Rust, and the ACL is not in that
+    /// path. So the thing to assert is the `cfg` itself.
+    ///
+    /// **Asserting on source text is ugly, and it is the honest option here.** A `cfg` is
+    /// resolved at compile time, so no runtime probe on this host can observe what an
+    /// Android build did with it; and the plugin compiles for `aarch64-linux-android`
+    /// perfectly well, so a green cross-compile proves nothing either. The regression this
+    /// guards is somebody widening the gate back to `debug_assertions` while chasing a
+    /// bridge problem — a one-token edit that no other test in this file can see.
+    #[test]
+    fn the_mcp_bridge_is_gated_on_desktop_and_not_only_on_a_debug_build() {
+        // Lines, not a byte offset: the needle would otherwise have to carry an escaped
+        // newline, and the first `find` in a file that also contains this very test is a
+        // trap — it would happily match the test's own text if the two ever swapped order.
+        let lines: Vec<&str> = include_str!("lib.rs").lines().collect();
+        let at = lines
+            .iter()
+            .position(|l| l.trim() == "tauri_plugin_mcp_bridge::Builder::new()")
+            .expect("the bridge registration moved; this test must follow it");
+
+        assert_eq!(
+            lines[at - 2].trim(),
+            "#[cfg(all(debug_assertions, desktop))]",
+            concat!(
+                "the MCP bridge must be gated on `all(debug_assertions, desktop)`. ",
+                "`tauri android dev` builds with `debug_assertions` on, so the weaker gate ",
+                "opens an unauthenticated JavaScript-evaluating socket on the phone's ",
+                "loopback, where every installed app can reach it. Denying the commands in ",
+                "`mobile.json` does not help: the listener is opened in Rust, not through ",
+                "the ACL.",
+            )
+        );
+    }
+
     #[test]
     fn the_mcp_bridge_gets_three_permissions_and_never_its_default() {
         let caps: serde_json::Value =
