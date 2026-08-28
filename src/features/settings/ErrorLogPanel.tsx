@@ -20,6 +20,10 @@ const SOURCE_LABEL: Record<ErrorSource, string> = {
   github_update: "App updates",
   database: "Database",
   image_store: "Image cache",
+  // Named for what the reader controls, never for how it is built: they set a relay URL in
+  // the Sync panel, and a push that did not land is that panel's failure rather than a
+  // Cloudflare one.
+  relay: "Sync",
 };
 
 /**

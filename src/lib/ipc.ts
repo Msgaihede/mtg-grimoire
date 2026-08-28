@@ -3257,7 +3257,12 @@ export interface UpdateProgressEvent {
  * arm on the Rust side is a type error here rather than a blank badge.
  */
 export type ErrorSource =
-  "scryfall_api" | "scryfall_image" | "github_update" | "database" | "image_store";
+  | "scryfall_api"
+  | "scryfall_image"
+  | "github_update"
+  | "database"
+  | "image_store"
+  | "relay";
 
 /** The shape of a failure. Mirrors `errors::Kind` and the `CHECK` on `error_log.kind`. */
 export type ErrorKind = "rate_limited" | "timeout" | "http" | "io" | "parse" | "other";

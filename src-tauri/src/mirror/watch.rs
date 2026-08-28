@@ -799,6 +799,10 @@ mod tests {
                 "oracle_taggings",
                 "oracle_tags",
                 "sets",
+                // The op log's clock (user schema v29). It describes a conversation rather
+                // than a collection, and it moves once per captured write — a surface here
+                // would render every mirrored file twice for one edit.
+                "sync_clock",
                 // Pairing's three (user schema v28). They map to nothing for the sharpest
                 // reason on this list: they hold this device's secret key, the group key and
                 // the roster, and a mirrored file that quoted any of them would write a key
@@ -809,6 +813,15 @@ mod tests {
                 "sync_group",
                 "sync_identity",
                 "sync_meta",
+                // Sync's other three (user schema v29). The op log is DERIVED from the very
+                // tables the mirror already watches, so a surface here would render every
+                // file twice for one write; the cursor table and the peer watermarks describe
+                // a conversation rather than a collection. `sync_state` and `sync_peers` are
+                // `WITHOUT ROWID` and could not reach the hook anyway, which is not a
+                // decision either.
+                "sync_ops",
+                "sync_peers",
+                "sync_state",
             ],
             "a table added to the schema has to be decided about here"
         );

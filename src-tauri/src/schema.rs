@@ -293,9 +293,11 @@ pub const LEGACY_SINGLE_FILE_VERSION: i64 = 26;
 ///
 /// 27 is the rung that *is* the split: a database carrying it has had its corpus taken out.
 /// 28 is the first rung above it — pairing's three tables, spec §7.5 — and it is the rung
-/// that turned [`migrate_user`] from a version check into a ladder. The user's ladder can
-/// never restart, because its rungs describe rows nothing else can produce.
-pub const USER_SCHEMA_VERSION: i64 = 28;
+/// that turned [`migrate_user`] from a version check into a ladder. 29 is sync's own: a
+/// `sync_uid` on every synced table, `needs_review` on the three folder tables, and the op
+/// log. The user's ladder can never restart, because its rungs describe rows nothing else
+/// can produce.
+pub const USER_SCHEMA_VERSION: i64 = 29;
 
 /// `corpus.db`'s version, on a number line of its own.
 ///
@@ -349,6 +351,10 @@ pub const TABLES: &[(&str, Side)] = &[
     // A decision a person made about a tag. `WITHOUT ROWID`, so the update hook cannot see it
     // — see `crate::mirror::watch::install_hook`.
     ("muted_tags", Side::User),
+    // The clock the capture triggers stamp from (user schema v29). One row, and it is the
+    // reader's in the only sense this list asks about: rebuilding it from zero would make
+    // every op this device writes next sort *before* ops the other devices already hold.
+    ("sync_clock", Side::User),
     // Pairing's three (user schema v28). Per-device secrets: this device's X25519 keypair,
     // the group key, and the roster. Nothing outside this app can produce any of them again
     // — losing them is losing the pairing — and **they must never themselves sync**, which
@@ -357,6 +363,19 @@ pub const TABLES: &[(&str, Side)] = &[
     ("sync_devices", Side::User),
     ("sync_group", Side::User),
     ("sync_identity", Side::User),
+    // The op log (user schema v29). Derived from the reader's own tables and yet emphatically
+    // not rebuildable: an op that has not been pushed exists in this file and nowhere else,
+    // and a corpus rebuild that emptied it would drop whatever the reader changed while
+    // offline.
+    ("sync_ops", Side::User),
+    // How far this device has consumed each peer's stream (user schema v29). **The one table
+    // here whose loss is silently expensive**: without the watermarks a reconnect replays ops
+    // this device already applied, and a counter that adds its delta twice is a collection
+    // that grows by itself.
+    ("sync_peers", Side::User),
+    // The relay URL, the pull cursor and the apply guard (user schema v29). The URL is
+    // something the reader typed, which settles this on its own.
+    ("sync_state", Side::User),
     ("wishlist_entries", Side::User),
     ("wishlist_folders", Side::User),
     // ---- rebuildable ----
@@ -395,6 +414,62 @@ pub const TABLES: &[(&str, Side)] = &[
 /// table, or a typo.
 pub fn side_of(table: &str) -> Option<Side> {
     TABLES.iter().find(|(n, _)| *n == table).map(|(_, s)| *s)
+}
+
+/// The tables a pairing group keeps in step — spec §7.2, corrected against this file.
+///
+/// **Eleven and not twelve.** The spec's list names `deck_allocations`, which schema v25
+/// dropped: which deck holds a card is now which folder its row sits in, so the work that table
+/// did is inside `collection_folders`, which is on this list. A table that does not exist cannot
+/// be synced, and the count moved rather than the intent.
+///
+/// **Sorted, and `sync_engine::capture::every_synced_table_is_on_the_census` holds it to the
+/// capture specs.** A new user table that nobody decides about is a table whose writes never
+/// reach the other devices — silently, and forever, which is [`crate::mirror::watch::surface_of`]'s
+/// hazard one module over and the reason that map has a census of its own.
+///
+/// **This constant is deliberately absent from the v29 rung**, which spells its eleven
+/// `ALTER TABLE`s out literally. A migration step is history the day it ships: a step that read
+/// this list would try to add `sync_uid` to a twelfth table that will not exist until v30, on
+/// every database that upgrades through v29 afterwards. It is the same rule
+/// [`CARDS_COLUMNS`] states and every rung from v4 on repeats.
+pub const SYNCED_TABLES: [&str; 11] = [
+    "collection_entries",
+    "collection_folders",
+    "deck_audit",
+    "deck_cards",
+    "deck_categories",
+    "deck_folders",
+    "deck_tags",
+    "decks",
+    "muted_tags",
+    "wishlist_entries",
+    "wishlist_folders",
+];
+
+/// Give every row of a synced table that has no `sync_uid` one, in `schema`.
+///
+/// **Three creation paths reach a user file and only one of them is the ladder**, which is why
+/// this is a function rather than three lines inside the v29 rung:
+///
+/// * an *upgraded* file climbs [`migrate_user`]'s v29 rung, which calls this;
+/// * a *converted* file is built by [`crate::split::extract_user_file`], which copies rows out
+///   of a legacy `mtg.db` that has no such column to copy — every row lands with a NULL uid and
+///   the ladder never runs, because `split::convert` stamps head;
+/// * a *fresh* file is [`create_user_schema`] plus [`USER_SEED_SQL`], which seeds one
+///   `collection_folders` row.
+///
+/// A NULL uid is not a cosmetic gap. `sync_ops.uid` is `NOT NULL`, so the first time the reader
+/// edited such a row on a paired device their **own write would fail** — the capture trigger
+/// mints on absence for the same reason, and this is the belt to that pair of braces.
+pub fn mint_missing_uids(conn: &Connection, schema: &str) -> rusqlite::Result<()> {
+    for table in SYNCED_TABLES {
+        conn.execute_batch(&format!(
+            "UPDATE {schema}.{table} SET sync_uid = lower(hex(randomblob(16)))
+              WHERE sync_uid IS NULL;"
+        ))?;
+    }
+    Ok(())
 }
 
 /// What makes two collection rows the *same* row, as one SQL fragment.
@@ -3174,7 +3249,7 @@ const COMBO_INDEXES_SQL: &str = "
 /// Public because `VACUUM` needs it. Anything that renumbers `cards`' rowids leaves this
 /// index pointing at the wrong rows, and the failure is silent — see
 /// [`crate::maintenance::convert_to_incremental`], which calls this unconditionally.
-/// The eighteen user tables and their twenty-three indexes, at [`USER_SCHEMA_VERSION`]'s
+/// The twenty-two user tables and their thirty-six indexes, at [`USER_SCHEMA_VERSION`]'s
 /// shape, with `{schema}` where the file goes.
 ///
 /// **Copied verbatim out of a migrated database's own `sqlite_master`, not retyped from the
@@ -3250,7 +3325,7 @@ CREATE TABLE {schema}.collection_entries (
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
              , folder_id INTEGER
-                     REFERENCES collection_folders(id) ON DELETE SET NULL);
+                     REFERENCES collection_folders(id) ON DELETE SET NULL, sync_uid TEXT);
 
 CREATE TABLE {schema}.wishlist_entries (
                 id INTEGER PRIMARY KEY,
@@ -3276,7 +3351,7 @@ CREATE TABLE {schema}.wishlist_entries (
                 needs_review TEXT,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL, folder_id INTEGER
-                    REFERENCES wishlist_folders(id) ON DELETE SET NULL,
+                    REFERENCES wishlist_folders(id) ON DELETE SET NULL, sync_uid TEXT,
                 -- A wish that names neither an oracle card nor a printing is a wish for
                 -- nothing, and would collide with every other such row on the grain.
                 CHECK (oracle_id IS NOT NULL OR card_id IS NOT NULL)
@@ -3310,7 +3385,7 @@ CREATE TABLE {schema}.decks (
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
              , folder_id INTEGER
-                REFERENCES deck_folders(id) ON DELETE SET NULL, notes TEXT, theory_enabled INTEGER NOT NULL DEFAULT 0, last_variant TEXT NOT NULL DEFAULT 'live', last_group_by TEXT NOT NULL DEFAULT 'category', last_sort_by TEXT NOT NULL DEFAULT 'alphabetical', separate_x_group INTEGER NOT NULL DEFAULT 0, default_category_id INTEGER NOT NULL DEFAULT 0, game_key TEXT NOT NULL DEFAULT 'any', bracket INTEGER NOT NULL DEFAULT 0);
+                REFERENCES deck_folders(id) ON DELETE SET NULL, notes TEXT, theory_enabled INTEGER NOT NULL DEFAULT 0, last_variant TEXT NOT NULL DEFAULT 'live', last_group_by TEXT NOT NULL DEFAULT 'category', last_sort_by TEXT NOT NULL DEFAULT 'alphabetical', separate_x_group INTEGER NOT NULL DEFAULT 0, default_category_id INTEGER NOT NULL DEFAULT 0, game_key TEXT NOT NULL DEFAULT 'any', bracket INTEGER NOT NULL DEFAULT 0, sync_uid TEXT);
 
 CREATE TABLE {schema}.app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
@@ -3324,7 +3399,7 @@ CREATE TABLE {schema}.deck_folders (
                 sort_order INTEGER NOT NULL,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
-             );
+             , sync_uid TEXT, needs_review TEXT);
 
 CREATE TABLE {schema}.deck_categories (
                 id INTEGER PRIMARY KEY,
@@ -3340,7 +3415,7 @@ CREATE TABLE {schema}.deck_categories (
                 sort_order INTEGER NOT NULL,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
-             , origin TEXT NOT NULL DEFAULT 'user');
+             , origin TEXT NOT NULL DEFAULT 'user', sync_uid TEXT);
 
 CREATE TABLE {schema}.deck_audit (
                 id INTEGER PRIMARY KEY,
@@ -3360,7 +3435,7 @@ CREATE TABLE {schema}.deck_audit (
                 payload TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(payload)),
                 -- Signed copies, for the day header's '+7 / -6' roll-up.
                 delta INTEGER NOT NULL DEFAULT 0
-             );
+             , sync_uid TEXT);
 
 CREATE TABLE {schema}."deck_cards" (
                 id INTEGER PRIMARY KEY,
@@ -3384,16 +3459,17 @@ CREATE TABLE {schema}."deck_cards" (
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
              , finish TEXT
-                CHECK (finish IS NULL OR finish IN ('foil','etched')));
+                CHECK (finish IS NULL OR finish IN ('foil','etched')), sync_uid TEXT);
 
-CREATE TABLE {schema}.error_log (
+CREATE TABLE {schema}."error_log" (
                 id INTEGER PRIMARY KEY,
                 -- Unix seconds, like every stamp in this schema.
                 first_at INTEGER NOT NULL,
                 last_at INTEGER NOT NULL,
                 -- Which of the app's dealings with the outside world this was.
                 source TEXT NOT NULL CHECK (source IN
-                    ('scryfall_api','scryfall_image','github_update','database','image_store')),
+                    ('scryfall_api','scryfall_image','github_update','database','image_store',
+                     'relay')),
                 -- The specific call: 'bulk_check', 'sets', 'migrations', 'image_fetch', …
                 -- Free text rather than a CHECK: a new call site must not need a migration
                 -- before it is allowed to report that it failed.
@@ -3431,7 +3507,7 @@ CREATE TABLE {schema}.muted_tags (
         -- The slug as it read when muted, so Settings can name the tag without a join
         -- against a taxonomy that may have been rebuilt since.
         slug TEXT NOT NULL,
-        muted_at INTEGER NOT NULL,
+        muted_at INTEGER NOT NULL, sync_uid TEXT,
         PRIMARY KEY (namespace, tag_id)
     ) WITHOUT ROWID;
 
@@ -3446,7 +3522,7 @@ CREATE TABLE {schema}.wishlist_folders (
                 sort_order INTEGER NOT NULL,
                 created_at INTEGER NOT NULL,
                 updated_at INTEGER NOT NULL
-             );
+             , sync_uid TEXT, needs_review TEXT);
 
 CREATE TABLE {schema}."deck_tags" (
             id INTEGER PRIMARY KEY,
@@ -3456,7 +3532,7 @@ CREATE TABLE {schema}."deck_tags" (
             color TEXT NOT NULL,
             created_at INTEGER NOT NULL,
             updated_at INTEGER NOT NULL
-         );
+         , sync_uid TEXT);
 
 CREATE TABLE {schema}.collection_folders (
                  id INTEGER PRIMARY KEY,
@@ -3467,7 +3543,7 @@ CREATE TABLE {schema}.collection_folders (
                  deck_id INTEGER REFERENCES decks(id) ON DELETE CASCADE,
                  sort_order INTEGER NOT NULL,
                  created_at INTEGER NOT NULL,
-                 updated_at INTEGER NOT NULL,
+                 updated_at INTEGER NOT NULL, sync_uid TEXT, needs_review TEXT,
                  CHECK ((kind = 'deck') = (deck_id IS NOT NULL))
              );
 
@@ -3515,6 +3591,51 @@ CREATE TABLE {schema}.sync_devices (
                  -- off and when, and so a rotation can be explained rather than merely
                  -- happening.
                  revoked_at INTEGER
+             ) WITHOUT ROWID;
+
+CREATE TABLE {schema}.sync_ops (
+                 -- Local insertion order, and the push cursor. Never sent: another device's
+                 -- ordering is its own, and the hybrid logical clock is what orders across them.
+                 seq INTEGER PRIMARY KEY,
+                 tbl TEXT NOT NULL,
+                 uid TEXT NOT NULL,
+                 -- `put` covers insert and update alike, because row existence is ADD-WINS
+                 -- (§7.3): a put that arrives after a delete resurrects the row, and having
+                 -- one verb for both is what makes that a rule rather than a special case.
+                 kind TEXT NOT NULL CHECK (kind IN ('put','del')),
+                 -- The scalar fields that CHANGED, and only those. Last-writer-wins is per
+                 -- FIELD (§7.3), so an op carrying every column would clobber a field it never
+                 -- touched — one device editing a note would undo another's price edit, which
+                 -- is the precise failure that row of the table exists to prevent.
+                 fields TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(fields)),
+                 -- Counter DELTAS, never values. Two devices each adding one copy must end at
+                 -- +2; a value ends at +1 and silently loses a card.
+                 counters TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(counters)),
+                 -- Foreign rows named by THEIR uid: folder, deck, category, tag. A local id
+                 -- means nothing on the far device.
+                 parents TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(parents)),
+                 hlc_ms INTEGER NOT NULL,
+                 hlc_ctr INTEGER NOT NULL,
+                 device_id TEXT NOT NULL,
+                 -- NULL until the relay has taken it. The push cursor is `MIN(seq) WHERE NULL`.
+                 pushed_at INTEGER
+             );
+
+CREATE TABLE {schema}.sync_clock (
+                 id INTEGER PRIMARY KEY CHECK (id = 1),
+                 ms INTEGER NOT NULL,
+                 ctr INTEGER NOT NULL
+             );
+
+CREATE TABLE {schema}.sync_state (
+                 key TEXT PRIMARY KEY,
+                 value TEXT NOT NULL
+             ) WITHOUT ROWID;
+
+CREATE TABLE {schema}.sync_peers (
+                 device_id TEXT PRIMARY KEY,
+                 last_ms INTEGER NOT NULL,
+                 last_ctr INTEGER NOT NULL
              ) WITHOUT ROWID;
 
 CREATE UNIQUE INDEX {schema}.idx_collection_grain ON collection_entries (
@@ -3579,9 +3700,38 @@ CREATE UNIQUE INDEX {schema}.idx_collection_folder_deck
 
 CREATE INDEX {schema}.idx_collection_folder
                  ON collection_entries (folder_id);
+
+CREATE UNIQUE INDEX {schema}.idx_collection_entries_uid
+                 ON collection_entries (sync_uid);
+
+CREATE UNIQUE INDEX {schema}.idx_collection_folders_uid
+                 ON collection_folders (sync_uid);
+
+CREATE UNIQUE INDEX {schema}.idx_deck_audit_uid ON deck_audit (sync_uid);
+
+CREATE UNIQUE INDEX {schema}.idx_deck_cards_uid ON deck_cards (sync_uid);
+
+CREATE UNIQUE INDEX {schema}.idx_deck_categories_uid ON deck_categories (sync_uid);
+
+CREATE UNIQUE INDEX {schema}.idx_deck_folders_uid ON deck_folders (sync_uid);
+
+CREATE UNIQUE INDEX {schema}.idx_deck_tags_uid ON deck_tags (sync_uid);
+
+CREATE UNIQUE INDEX {schema}.idx_decks_uid ON decks (sync_uid);
+
+CREATE UNIQUE INDEX {schema}.idx_muted_tags_uid ON muted_tags (sync_uid);
+
+CREATE UNIQUE INDEX {schema}.idx_wishlist_entries_uid ON wishlist_entries (sync_uid);
+
+CREATE UNIQUE INDEX {schema}.idx_wishlist_folders_uid ON wishlist_folders (sync_uid);
+
+CREATE INDEX {schema}.idx_sync_ops_unpushed
+                 ON sync_ops (seq) WHERE pushed_at IS NULL;
+
+CREATE INDEX {schema}.idx_sync_ops_row ON sync_ops (tbl, uid);
 "#;
 
-/// Create the eighteen user tables and their indexes in `schema`, at
+/// Create the twenty-two user tables and their indexes in `schema`, at
 /// [`USER_SCHEMA_VERSION`]'s shape.
 ///
 /// **One function, two callers, and that is deliberate**: [`crate::split::extract_user_file`]
@@ -4175,6 +4325,182 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
         tx.execute_batch("PRAGMA main.user_version = 28;")?;
         tx.commit()?;
     }
+
+    if v < 29 {
+        let tx = conn.unchecked_transaction()?;
+        // **A row needs a name every device agrees on, and a rowid is not one.** Two devices
+        // independently create a deck and both call it `id = 1`. `sync_uid` is 16 random bytes
+        // as hex, minted per row; what makes two devices' uids converge on one *logical* row is
+        // the applier's grain rule, not this column — see `crate::sync_engine::apply`.
+        //
+        // **A plain nullable column and then an UPDATE**, because `ALTER TABLE … ADD COLUMN`
+        // refuses a non-constant DEFAULT — SQLite's own restriction list, verified here on
+        // 2026-08-28 against 3.53.0, which answers `Cannot add a column with non-constant
+        // default` — and `lower(hex(randomblob(16)))` is about as non-constant as they come.
+        // A `CREATE TABLE` *would* take it, and that is exactly why it is not used: the column
+        // has to read the same in an upgraded file as in a fresh one, and
+        // `the_user_schema_is_byte_identical_to_what_the_ladder_builds` compares the two.
+        //
+        // **The eleven are spelled out and not read from [`SYNCED_TABLES`]**, [`CARDS_COLUMNS`]'
+        // rule: a step that read the constant would try to alter a twelfth table that does not
+        // exist yet, on every database that climbs through this rung after v30 adds one.
+        tx.execute_batch(
+            "ALTER TABLE collection_entries ADD COLUMN sync_uid TEXT;
+             ALTER TABLE collection_folders ADD COLUMN sync_uid TEXT;
+             ALTER TABLE deck_audit         ADD COLUMN sync_uid TEXT;
+             ALTER TABLE deck_cards         ADD COLUMN sync_uid TEXT;
+             ALTER TABLE deck_categories    ADD COLUMN sync_uid TEXT;
+             ALTER TABLE deck_folders       ADD COLUMN sync_uid TEXT;
+             ALTER TABLE deck_tags          ADD COLUMN sync_uid TEXT;
+             ALTER TABLE decks              ADD COLUMN sync_uid TEXT;
+             ALTER TABLE muted_tags         ADD COLUMN sync_uid TEXT;
+             ALTER TABLE wishlist_entries   ADD COLUMN sync_uid TEXT;
+             ALTER TABLE wishlist_folders   ADD COLUMN sync_uid TEXT;
+
+             -- §7.4's second surfaced outcome. `needs_review` is documented on the three entry
+             -- tables as 'a sentence here means the row needs the user's attention'; a folder
+             -- whose cycle was broken needs exactly that, and had nowhere to say it.
+             ALTER TABLE deck_folders       ADD COLUMN needs_review TEXT;
+             ALTER TABLE wishlist_folders   ADD COLUMN needs_review TEXT;
+             ALTER TABLE collection_folders ADD COLUMN needs_review TEXT;
+
+             UPDATE collection_entries SET sync_uid = lower(hex(randomblob(16)));
+             UPDATE collection_folders SET sync_uid = lower(hex(randomblob(16)));
+             UPDATE deck_audit         SET sync_uid = lower(hex(randomblob(16)));
+             UPDATE deck_cards         SET sync_uid = lower(hex(randomblob(16)));
+             UPDATE deck_categories    SET sync_uid = lower(hex(randomblob(16)));
+             UPDATE deck_folders       SET sync_uid = lower(hex(randomblob(16)));
+             UPDATE deck_tags          SET sync_uid = lower(hex(randomblob(16)));
+             UPDATE decks              SET sync_uid = lower(hex(randomblob(16)));
+             UPDATE muted_tags         SET sync_uid = lower(hex(randomblob(16)));
+             UPDATE wishlist_entries   SET sync_uid = lower(hex(randomblob(16)));
+             UPDATE wishlist_folders   SET sync_uid = lower(hex(randomblob(16)));
+
+             -- UNIQUE rather than plain: two rows sharing a uid is a merge that silently folds
+             -- two of the reader's rows into one, and it must fail at the write instead.
+             CREATE UNIQUE INDEX idx_collection_entries_uid
+                 ON collection_entries (sync_uid);
+             CREATE UNIQUE INDEX idx_collection_folders_uid
+                 ON collection_folders (sync_uid);
+             CREATE UNIQUE INDEX idx_deck_audit_uid ON deck_audit (sync_uid);
+             CREATE UNIQUE INDEX idx_deck_cards_uid ON deck_cards (sync_uid);
+             CREATE UNIQUE INDEX idx_deck_categories_uid ON deck_categories (sync_uid);
+             CREATE UNIQUE INDEX idx_deck_folders_uid ON deck_folders (sync_uid);
+             CREATE UNIQUE INDEX idx_deck_tags_uid ON deck_tags (sync_uid);
+             CREATE UNIQUE INDEX idx_decks_uid ON decks (sync_uid);
+             CREATE UNIQUE INDEX idx_muted_tags_uid ON muted_tags (sync_uid);
+             CREATE UNIQUE INDEX idx_wishlist_entries_uid ON wishlist_entries (sync_uid);
+             CREATE UNIQUE INDEX idx_wishlist_folders_uid ON wishlist_folders (sync_uid);
+
+             CREATE TABLE sync_ops (
+                 -- Local insertion order, and the push cursor. Never sent: another device's
+                 -- ordering is its own, and the hybrid logical clock is what orders across them.
+                 seq INTEGER PRIMARY KEY,
+                 tbl TEXT NOT NULL,
+                 uid TEXT NOT NULL,
+                 -- `put` covers insert and update alike, because row existence is ADD-WINS
+                 -- (§7.3): a put that arrives after a delete resurrects the row, and having
+                 -- one verb for both is what makes that a rule rather than a special case.
+                 kind TEXT NOT NULL CHECK (kind IN ('put','del')),
+                 -- The scalar fields that CHANGED, and only those. Last-writer-wins is per
+                 -- FIELD (§7.3), so an op carrying every column would clobber a field it never
+                 -- touched — one device editing a note would undo another's price edit, which
+                 -- is the precise failure that row of the table exists to prevent.
+                 fields TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(fields)),
+                 -- Counter DELTAS, never values. Two devices each adding one copy must end at
+                 -- +2; a value ends at +1 and silently loses a card.
+                 counters TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(counters)),
+                 -- Foreign rows named by THEIR uid: folder, deck, category, tag. A local id
+                 -- means nothing on the far device.
+                 parents TEXT NOT NULL DEFAULT '{}' CHECK (json_valid(parents)),
+                 hlc_ms INTEGER NOT NULL,
+                 hlc_ctr INTEGER NOT NULL,
+                 device_id TEXT NOT NULL,
+                 -- NULL until the relay has taken it. The push cursor is `MIN(seq) WHERE NULL`.
+                 pushed_at INTEGER
+             );
+             CREATE INDEX idx_sync_ops_unpushed
+                 ON sync_ops (seq) WHERE pushed_at IS NULL;
+             CREATE INDEX idx_sync_ops_row ON sync_ops (tbl, uid);
+
+             -- The hybrid logical clock, as one row. Physical millis, a logical counter, and
+             -- the device id (in `sync_identity`) as the deterministic tiebreak — §7.3, and
+             -- no server clock anywhere in it.
+             CREATE TABLE sync_clock (
+                 id INTEGER PRIMARY KEY CHECK (id = 1),
+                 ms INTEGER NOT NULL,
+                 ctr INTEGER NOT NULL
+             );
+
+             -- The relay URL, the pull cursor, the apply guard, and the last error. A key/value
+             -- table rather than columns because these four have nothing to do with each other.
+             CREATE TABLE sync_state (
+                 key TEXT PRIMARY KEY,
+                 value TEXT NOT NULL
+             ) WITHOUT ROWID;
+
+             -- How far this device has consumed each peer's stream. **The high-water mark is
+             -- what makes a counter idempotent**: an op replayed after a reconnect must add its
+             -- delta once, and comparing against this is the only thing standing between a
+             -- dropped connection and a collection that grows by itself.
+             CREATE TABLE sync_peers (
+                 device_id TEXT PRIMARY KEY,
+                 last_ms INTEGER NOT NULL,
+                 last_ctr INTEGER NOT NULL
+             ) WITHOUT ROWID;",
+        )?;
+
+        // **Seeded here and not lazily.** Every capture trigger joins this table, and a join
+        // against an empty table produces no row — so a missing seed is a device that records
+        // no ops at all, silently, which is the worst way for a sync to not happen.
+        tx.execute_batch("INSERT INTO sync_clock (id, ms, ctr) VALUES (1, 0, 0);")?;
+
+        // **The error log learns the relay, and it costs a rebuild** — `source` is inside a
+        // CHECK and SQLite has no `ALTER … CHECK`. 200 rows at most (`crate::errors::MAX_ROWS`),
+        // so the copy is cheap; what it is not is optional, since `Record<ErrorSource, string>`
+        // in `ErrorLogPanel.tsx` is total and a new Rust arm is a type error there by design.
+        //
+        // The `RENAME TO` is what leaves the quotes on the name in `sqlite_master`, which
+        // [`USER_SCHEMA_SQL`] then has to wear too — `deck_cards` and `deck_tags` wear a pair
+        // each for the same reason.
+        tx.execute_batch(
+            "CREATE TABLE error_log_v29 (
+                id INTEGER PRIMARY KEY,
+                -- Unix seconds, like every stamp in this schema.
+                first_at INTEGER NOT NULL,
+                last_at INTEGER NOT NULL,
+                -- Which of the app's dealings with the outside world this was.
+                source TEXT NOT NULL CHECK (source IN
+                    ('scryfall_api','scryfall_image','github_update','database','image_store',
+                     'relay')),
+                -- The specific call: 'bulk_check', 'sets', 'migrations', 'image_fetch', …
+                -- Free text rather than a CHECK: a new call site must not need a migration
+                -- before it is allowed to report that it failed.
+                operation TEXT NOT NULL,
+                -- The shape of the failure, which is what a reader filters on.
+                kind TEXT NOT NULL CHECK (kind IN
+                    ('rate_limited','timeout','http','io','parse','other')),
+                message TEXT NOT NULL,
+                -- The URL, card id or path. Nullable, outside the grain, most recent wins.
+                detail TEXT,
+                count INTEGER NOT NULL DEFAULT 1 CHECK (count > 0)
+             );
+             INSERT INTO error_log_v29
+                 (id, first_at, last_at, source, operation, kind, message, detail, count)
+                 SELECT id, first_at, last_at, source, operation, kind, message, detail, count
+                   FROM error_log;
+             DROP TABLE error_log;
+             ALTER TABLE error_log_v29 RENAME TO error_log;
+             CREATE UNIQUE INDEX IF NOT EXISTS idx_error_log_grain
+                ON error_log (source, operation, kind, message);
+             CREATE INDEX IF NOT EXISTS idx_error_log_recent ON error_log (last_at DESC);",
+        )?;
+
+        // Literal `29`, for the reason every step before it writes its own: this step is what
+        // *makes* a database version 29.
+        tx.execute_batch("PRAGMA main.user_version = 29;")?;
+        tx.commit()?;
+    }
     Ok(())
 }
 
@@ -4259,10 +4585,22 @@ fn corpus_is_readable(data_dir: &std::path::Path) -> bool {
 /// user file at all: there is no `mtg.db` in a browser for [`crate::split::convert`] to
 /// take apart. A database without this row is one where no deck can ever release a card,
 /// permanently, because nothing at head ever runs a migration.
+/// **It mints its own `sync_uid`, because nothing else will.** The v29 rung backfills rows that
+/// were already there and the capture trigger mints for rows written later; this row is written
+/// by neither, so without the column here it is the one row in a fresh database whose uid is
+/// NULL — and `sync_ops.uid` is `NOT NULL`, so the first edit to it on a paired device would
+/// fail the reader's own write.
+/// **The clock's one row is seeded here as well as in the v29 rung, and both are owed.** Every
+/// capture trigger joins `sync_clock`, and a join against an empty table produces no row — so a
+/// file that never got the seed records no ops at all, silently, which is the worst way for a
+/// sync to not happen. The rung reaches upgraded files; this reaches converted and fresh ones,
+/// and the browser has only ever had the second kind.
 const USER_SEED_SQL: &str = "
     INSERT INTO {schema}.collection_folders
-         (parent_id, name, kind, deck_id, sort_order, created_at, updated_at)
-     VALUES (NULL, 'Recently removed', 'removed', NULL, 0, unixepoch(), unixepoch());";
+         (parent_id, name, kind, deck_id, sort_order, created_at, updated_at, sync_uid)
+     VALUES (NULL, 'Recently removed', 'removed', NULL, 0, unixepoch(), unixepoch(),
+             lower(hex(randomblob(16))));
+    INSERT INTO {schema}.sync_clock (id, ms, ctr) VALUES (1, 0, 0);";
 
 /// An in-memory pair shaped exactly like the app's: `main` is the user file and a second,
 /// private in-memory database is attached as [`CORPUS`].
@@ -4871,8 +5209,8 @@ pub(crate) mod tests {
             )
             .unwrap();
         assert_eq!(
-            stray, 18,
-            "the user file holds the eighteen and nothing else"
+            stray, 22,
+            "the user file holds the twenty-two and nothing else"
         );
     }
 
@@ -5019,10 +5357,8 @@ pub(crate) mod tests {
 
         assert_eq!(
             want.len(),
-            43,
-            "eighteen tables, twenty-three indexes, and the two `sqlite_autoindex` rows a \
-             TEXT PRIMARY KEY brings with it — `sync_devices` is `WITHOUT ROWID`, so its own \
-             TEXT primary key is the table and brings no third"
+            60,
+            "twenty-two tables, thirty-six indexes, and the two `sqlite_autoindex` rows a \n             TEXT PRIMARY KEY brings with it — `sync_devices`, `sync_state` and \n             `sync_peers` are `WITHOUT ROWID`, so each one's TEXT primary key IS the \n             table and brings no index of its own"
         );
         for (w, g) in want.iter().zip(got.iter()) {
             assert_eq!(w, g, "{} {} differs from the ladder's", g.0, g.1);
@@ -5096,7 +5432,7 @@ pub(crate) mod tests {
     /// The user side, spelled out. A table moving between the two files is a data migration,
     /// never a diff nobody noticed.
     #[test]
-    fn the_user_side_is_the_eighteen_tables_no_feed_can_rebuild() {
+    fn the_user_side_is_the_twenty_two_tables_no_feed_can_rebuild() {
         let mut user: Vec<&str> = TABLES
             .iter()
             .filter(|(_, s)| *s == Side::User)
@@ -5119,9 +5455,13 @@ pub(crate) mod tests {
                 "decks",
                 "error_log",
                 "muted_tags",
+                "sync_clock",
                 "sync_devices",
                 "sync_group",
                 "sync_identity",
+                "sync_ops",
+                "sync_peers",
+                "sync_state",
                 "wishlist_entries",
                 "wishlist_folders",
             ]
@@ -5140,6 +5480,80 @@ pub(crate) mod tests {
          DROP TABLE IF EXISTS sync_group;
          DROP TABLE IF EXISTS sync_identity;";
 
+    /// And v29's uids, its op log and the error log's widened CHECK.
+    ///
+    /// **The longest rewind on this ladder, and every line of it is owed.** `ADD COLUMN` is not
+    /// idempotent ([`UNDO_V13`]'s loud reason), so a fixture that kept `sync_uid` dies at
+    /// `duplicate column name` on the way back up — a failure no real upgrade can produce. The
+    /// unique indexes have to go **first**, because `DROP COLUMN` refuses a column an index
+    /// names. The `error_log` half is rewound by rebuilding it narrow again: a fixture below
+    /// v29 that kept the widened CHECK would accept a `relay` row while claiming to be a
+    /// version that never had one.
+    ///
+    /// **It runs first, before [`UNDO_V28`]**, for that constant's stated reason — a rewind
+    /// walks the ladder backwards.
+    const UNDO_V29: &str = "DROP TABLE IF EXISTS sync_peers;
+         DROP TABLE IF EXISTS sync_state;
+         DROP TABLE IF EXISTS sync_clock;
+         DROP TABLE IF EXISTS sync_ops;
+         ALTER TABLE deck_folders DROP COLUMN needs_review;
+         ALTER TABLE wishlist_folders DROP COLUMN needs_review;
+         ALTER TABLE collection_folders DROP COLUMN needs_review;
+         DROP INDEX IF EXISTS idx_collection_entries_uid;
+         DROP INDEX IF EXISTS idx_collection_folders_uid;
+         DROP INDEX IF EXISTS idx_deck_audit_uid;
+         DROP INDEX IF EXISTS idx_deck_cards_uid;
+         DROP INDEX IF EXISTS idx_deck_categories_uid;
+         DROP INDEX IF EXISTS idx_deck_folders_uid;
+         DROP INDEX IF EXISTS idx_deck_tags_uid;
+         DROP INDEX IF EXISTS idx_decks_uid;
+         DROP INDEX IF EXISTS idx_muted_tags_uid;
+         DROP INDEX IF EXISTS idx_wishlist_entries_uid;
+         DROP INDEX IF EXISTS idx_wishlist_folders_uid;
+         ALTER TABLE collection_entries DROP COLUMN sync_uid;
+         ALTER TABLE collection_folders DROP COLUMN sync_uid;
+         ALTER TABLE deck_audit DROP COLUMN sync_uid;
+         ALTER TABLE deck_cards DROP COLUMN sync_uid;
+         ALTER TABLE deck_categories DROP COLUMN sync_uid;
+         ALTER TABLE deck_folders DROP COLUMN sync_uid;
+         ALTER TABLE deck_tags DROP COLUMN sync_uid;
+         ALTER TABLE decks DROP COLUMN sync_uid;
+         ALTER TABLE muted_tags DROP COLUMN sync_uid;
+         ALTER TABLE wishlist_entries DROP COLUMN sync_uid;
+         ALTER TABLE wishlist_folders DROP COLUMN sync_uid;
+         CREATE TABLE error_log_pre29 (
+             id INTEGER PRIMARY KEY,
+             first_at INTEGER NOT NULL,
+             last_at INTEGER NOT NULL,
+             source TEXT NOT NULL CHECK (source IN
+                 ('scryfall_api','scryfall_image','github_update','database','image_store')),
+             operation TEXT NOT NULL,
+             kind TEXT NOT NULL CHECK (kind IN
+                 ('rate_limited','timeout','http','io','parse','other')),
+             message TEXT NOT NULL,
+             detail TEXT,
+             count INTEGER NOT NULL DEFAULT 1 CHECK (count > 0)
+         );
+         INSERT INTO error_log_pre29
+             (id, first_at, last_at, source, operation, kind, message, detail, count)
+             SELECT id, first_at, last_at, source, operation, kind, message, detail, count
+               FROM error_log WHERE source <> 'relay';
+         DROP TABLE error_log;
+         ALTER TABLE error_log_pre29 RENAME TO error_log;
+         CREATE UNIQUE INDEX IF NOT EXISTS idx_error_log_grain
+             ON error_log (source, operation, kind, message);
+         CREATE INDEX IF NOT EXISTS idx_error_log_recent ON error_log (last_at DESC);";
+
+    /// A user file at 28 — the shape every machine that upgraded before sync landed carries,
+    /// and the only population the v29 rung is *for*.
+    fn user_file_at_28() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        create_user_schema(&conn, "main").unwrap();
+        conn.execute_batch(&format!("{UNDO_V29} PRAGMA main.user_version = 28;"))
+            .unwrap();
+        conn
+    }
+
     /// A user file at 27 — the shape [`crate::split::convert`] left on every machine that
     /// upgraded before pairing landed, and the only population the v28 rung is *for*.
     ///
@@ -5149,8 +5563,10 @@ pub(crate) mod tests {
     fn user_file_at_27() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
-        conn.execute_batch(&format!("{UNDO_V28} PRAGMA main.user_version = 27;"))
-            .unwrap();
+        conn.execute_batch(&format!(
+            "{UNDO_V29} {UNDO_V28} PRAGMA main.user_version = 27;"
+        ))
+        .unwrap();
         conn
     }
 
@@ -5271,6 +5687,315 @@ pub(crate) mod tests {
             .query_row("SELECT count(*) FROM sync_identity", [], |r| r.get(0))
             .unwrap();
         assert_eq!(identities, 0, "v28 creates the table and mints nothing");
+    }
+
+    /// The v28 fixture is a real v28 file and not head wearing a v28 label.
+    ///
+    /// `the_v27_fixture_carries_none_of_v28`'s argument, and sharper here: v29's DDL is
+    /// `ALTER TABLE … ADD COLUMN`, which is **not** idempotent — a fixture that kept
+    /// `sync_uid` would fail the rung outright rather than pass it vacuously. Both failures
+    /// are worth catching here, where the message names the fixture.
+    #[test]
+    fn the_v28_fixture_carries_none_of_v29() {
+        let conn = user_file_at_28();
+
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 28);
+        for t in SYNCED_TABLES {
+            let n: i64 = conn
+                .query_row(
+                    &format!("SELECT count(*) FROM pragma_table_info('{t}') WHERE name='sync_uid'"),
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(n, 0, "{t} must not carry sync_uid before the rung adds it");
+        }
+        for t in ["sync_ops", "sync_clock", "sync_state", "sync_peers"] {
+            let n: i64 = conn
+                .query_row(
+                    "SELECT count(*) FROM main.sqlite_master WHERE type='table' AND name = ?1",
+                    params![t],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(n, 0, "{t} must not exist before the rung that creates it");
+        }
+        // ...and pairing's three are still there, because rewinding too far would test the
+        // rung against a database no reader has.
+        let paired: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM main.sqlite_master
+                  WHERE type='table' AND name = 'sync_identity'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(paired, 1);
+        // The widened CHECK is rewound too, or a fixture below v29 would accept a row the
+        // version it claims could never hold.
+        let relay = conn.execute(
+            "INSERT INTO error_log (first_at,last_at,source,operation,kind,message)
+             VALUES (0,0,'relay','pull','timeout','no answer')",
+            [],
+        );
+        assert!(relay.is_err(), "v28 knows nothing about a relay");
+    }
+
+    /// Every synced table carries `sync_uid`, and every existing row got one that is unique.
+    #[test]
+    fn v29_gives_every_synced_row_a_unique_uid() {
+        let conn = user_file_at_28();
+        conn.execute_batch(
+            "INSERT INTO decks (name, format_key, created_at, updated_at)
+                  VALUES ('A', 'commander', unixepoch(), unixepoch()),
+                         ('B', 'commander', unixepoch(), unixepoch());
+             INSERT INTO collection_entries
+                  (card_id,set_code,collector_number,lang,finish,condition,quantity,
+                   created_at,updated_at)
+                  VALUES ('c1','lea','1','en','nonfoil','NM',1,unixepoch(),unixepoch()),
+                         ('c2','lea','2','en','foil','NM',1,unixepoch(),unixepoch());",
+        )
+        .unwrap();
+
+        migrate_user(&conn).unwrap();
+
+        for t in SYNCED_TABLES {
+            let n: i64 = conn
+                .query_row(
+                    &format!("SELECT count(*) FROM pragma_table_info('{t}') WHERE name='sync_uid'"),
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(n, 1, "{t} has no sync_uid");
+        }
+
+        let (rows, uids): (i64, i64) = conn
+            .query_row(
+                "SELECT count(*), count(DISTINCT sync_uid) FROM decks",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(rows, 2);
+        assert_eq!(uids, 2, "two rows must not share one uid");
+
+        let nulls: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM collection_entries WHERE sync_uid IS NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(nulls, 0, "the backfill must reach every existing row");
+    }
+
+    /// §7.4's second surfaced outcome is a broken folder cycle, and no folder table had
+    /// anywhere to say so.
+    #[test]
+    fn v29_gives_the_three_folder_tables_a_needs_review_column() {
+        let conn = memory_pair();
+        for t in ["deck_folders", "wishlist_folders", "collection_folders"] {
+            let n: i64 = conn
+                .query_row(
+                    &format!(
+                        "SELECT count(*) FROM pragma_table_info('{t}') WHERE name='needs_review'"
+                    ),
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(n, 1, "{t} cannot say a cycle was broken");
+        }
+    }
+
+    /// The op log, the clock and the two bookkeeping tables.
+    #[test]
+    fn v29_creates_the_op_log_and_its_clock() {
+        let conn = memory_pair();
+        for t in ["sync_ops", "sync_clock", "sync_state", "sync_peers"] {
+            let n: i64 = conn
+                .query_row(
+                    "SELECT count(*) FROM main.sqlite_master WHERE type='table' AND name = ?1",
+                    params![t],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(n, 1, "{t} is missing");
+        }
+        // The clock is seeded, because a trigger that joined an empty table would write no op
+        // at all — silently, which is the worst possible way for a sync to not happen.
+        let ticks: i64 = conn
+            .query_row("SELECT count(*) FROM sync_clock", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(ticks, 1);
+    }
+
+    /// ...and the ladder seeds it too, which is a second population and a second chance to
+    /// forget. A fresh file is [`create_user_schema`]; an upgraded one climbed the rung.
+    #[test]
+    fn the_v29_rung_seeds_the_clock_on_an_upgraded_file() {
+        let conn = user_file_at_28();
+        migrate_user(&conn).unwrap();
+        let (ticks, ms): (i64, i64) = conn
+            .query_row(
+                "SELECT count(*), coalesce(max(ms), -1) FROM sync_clock",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            ticks, 1,
+            "an upgraded file needs the seed as much as a fresh one"
+        );
+        assert_eq!(ms, 0);
+    }
+
+    /// **A fresh database has no row without a uid**, which is the seed's half of the rule the
+    /// rung's backfill and the capture trigger cover between them.
+    ///
+    /// One row is at stake today — `Recently removed`, seeded by [`USER_SEED_SQL`] — and it is
+    /// the sharpest possible case, because it is the folder every deck releases cards into. A
+    /// NULL there is a `sync_ops.uid` that is `NOT NULL` refusing the reader's own write.
+    #[test]
+    fn a_fresh_database_leaves_no_synced_row_without_a_uid() {
+        let conn = memory_pair();
+        for t in SYNCED_TABLES {
+            let nulls: i64 = conn
+                .query_row(
+                    &format!("SELECT count(*) FROM main.{t} WHERE sync_uid IS NULL"),
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(nulls, 0, "{t} holds a seeded row with no uid");
+        }
+        // ...and it is not vacuous: the seed really did write a row.
+        let folders: i64 = conn
+            .query_row("SELECT count(*) FROM collection_folders", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(folders, 1);
+    }
+
+    /// The error log can name the relay.
+    #[test]
+    fn v29_lets_the_error_log_name_the_relay() {
+        let conn = memory_pair();
+        conn.execute(
+            "INSERT INTO error_log (first_at,last_at,source,operation,kind,message)
+             VALUES (0,0,'relay','pull','timeout','no answer')",
+            [],
+        )
+        .expect("the CHECK must permit 'relay'");
+    }
+
+    /// A v28 file walks up keeping every row it had, and twice is the same as once.
+    #[test]
+    fn migrating_a_v28_user_file_keeps_its_rows_and_is_idempotent() {
+        let conn = user_file_at_28();
+        conn.execute(
+            "INSERT INTO decks (name, format_key, created_at, updated_at)
+             VALUES ('Keep me', 'commander', unixepoch(), unixepoch())",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO error_log (first_at,last_at,source,operation,kind,message)
+             VALUES (1,2,'scryfall_api','sets','http','404')",
+            [],
+        )
+        .unwrap();
+
+        migrate_user(&conn).unwrap();
+        // Twice, because a rung that is not idempotent breaks on the second launch and on
+        // nobody's machine before that. This one is `ALTER TABLE … ADD COLUMN` throughout,
+        // which is the least idempotent DDL on either ladder.
+        migrate_user(&conn).unwrap();
+
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, USER_SCHEMA_VERSION);
+        let decks: i64 = conn
+            .query_row("SELECT count(*) FROM decks", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(decks, 1, "the upgrade must not touch the reader's decks");
+        // The error log is REBUILT by this rung, so its rows are the ones most at risk.
+        let (errors, message): (i64, String) = conn
+            .query_row(
+                "SELECT count(*), coalesce(max(message), '') FROM error_log",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(errors, 1, "the rebuild must carry the log across");
+        assert_eq!(message, "404");
+    }
+
+    /// **The one that cannot be faked with a fixture.** A worktree is a fresh install, so every
+    /// test above backfills two rows and calls that unique. A backfill that is unique over two
+    /// rows and collides over eight thousand is exactly the bug a fixture cannot show.
+    ///
+    /// Point `MTG_SPLIT_FIXTURE` at a **copy** of a real `mtg.db` — the escape hatch
+    /// [`crate::split::tests::the_real_database_converts_with_every_row_intact`] already uses —
+    /// and this converts it, winds the user file back to 28 with [`UNDO_V29`], and climbs the
+    /// rung over the reader's own rows. **Winding back is the whole trick**: `split::convert`
+    /// stamps head, so a converted file never climbs anything and a test that only converted
+    /// would prove nothing about the rung.
+    ///
+    /// `cargo test --lib -- --ignored migrate_the_real_database --nocapture`
+    #[test]
+    #[ignore]
+    fn migrate_the_real_database_to_v29() {
+        let Ok(fixture) = std::env::var("MTG_SPLIT_FIXTURE") else {
+            eprintln!("set MTG_SPLIT_FIXTURE to a COPY of a real mtg.db to run this");
+            return;
+        };
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::copy(&fixture, dir.path().join(crate::db::LEGACY_DB)).unwrap();
+        crate::split::convert(dir.path()).unwrap();
+
+        let conn = crate::db::open_write(dir.path()).unwrap();
+        conn.execute_batch(&format!("{UNDO_V29} PRAGMA main.user_version = 28;"))
+            .unwrap();
+        let before: Vec<(String, i64)> = SYNCED_TABLES
+            .iter()
+            .map(|t| {
+                let n: i64 = conn
+                    .query_row(&format!("SELECT count(*) FROM main.{t}"), [], |r| r.get(0))
+                    .unwrap();
+                ((*t).to_owned(), n)
+            })
+            .collect();
+
+        let started = std::time::Instant::now();
+        migrate_user(&conn).unwrap();
+        let elapsed = started.elapsed();
+
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 29);
+        eprintln!("the v29 rung over a real user file took {elapsed:?}");
+        for (table, rows) in &before {
+            let (now, uids): (i64, i64) = conn
+                .query_row(
+                    &format!("SELECT count(*), count(DISTINCT sync_uid) FROM main.{table}"),
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap();
+            eprintln!("  {table}: {rows} rows before, {now} after, {uids} distinct uids");
+            assert_eq!(now, *rows, "{table} lost or gained a row across the rung");
+            assert_eq!(uids, now, "{table} has a NULL or a duplicate sync_uid");
+        }
+        let ticks: i64 = conn
+            .query_row("SELECT count(*) FROM sync_clock", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(ticks, 1);
     }
 
     /// No foreign key may cross the split. SQLite accepts the `CREATE TABLE` and fails only on
