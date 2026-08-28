@@ -267,7 +267,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         // The system file picker: choosing a custom deck cover (`dialog:allow-open`) and
         // naming an export's destination (`dialog:allow-save`, `export_write_file` writes
-        // there). Only those two verbs are granted in `capabilities/default.json` — message,
+        // there). Only those two verbs are granted in `capabilities/desktop.json` — message,
         // ask and confirm are unreachable from the webview however this is initialised. The
         // app's own questions are drawn in the page (`DeleteConfirm`, the settings dialog),
         // which is a deliberate choice and not an oversight: a native message box cannot be
@@ -320,7 +320,7 @@ pub fn run() {
     // `withGlobalTauri` puts `window.__TAURI__` in reach of that script, every command in the
     // handler below is one `invoke` away from anyone who can open the socket. The plugin's
     // default is for driving a phone across your LAN; this app is a single local user, so it
-    // takes the narrow bind for the same reason `capabilities/default.json` takes
+    // takes the narrow bind for the same reason `capabilities/desktop.json` takes
     // `dialog:allow-open` over `dialog:default`.
     //
     // Port 9223 (the plugin counts upward from it if it is busy), deliberately clear of the
@@ -897,7 +897,7 @@ mod tests {
     #[test]
     fn the_mcp_bridge_gets_three_permissions_and_never_its_default() {
         let caps: serde_json::Value =
-            serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
+            serde_json::from_str(include_str!("../capabilities/desktop.json")).unwrap();
         let granted: Vec<&str> = caps["permissions"]
             .as_array()
             .expect("the capability must list permissions")
@@ -938,7 +938,7 @@ mod tests {
     /// never a plugin's `:default`.
     #[test]
     fn the_capability_grants_two_new_narrow_permissions_and_no_filesystem() {
-        let caps = include_str!("../capabilities/default.json");
+        let caps = include_str!("../capabilities/desktop.json");
         assert!(caps.contains("\"dialog:allow-save\""));
         assert!(caps.contains("\"clipboard-manager:allow-write-text\""));
         // The whole reason `export_write_file` exists. See `export.rs`.
@@ -969,7 +969,7 @@ mod tests {
     #[test]
     fn the_title_bar_gets_four_window_verbs_and_the_overlay_two() {
         let caps: serde_json::Value =
-            serde_json::from_str(include_str!("../capabilities/default.json")).unwrap();
+            serde_json::from_str(include_str!("../capabilities/desktop.json")).unwrap();
         let granted: Vec<&str> = caps["permissions"]
             .as_array()
             .expect("the capability must list permissions")
@@ -1012,6 +1012,134 @@ mod tests {
         // that both were looked at. A plugin's default is a promise about *its* future, not
         // about this app's.
         assert!(!caps.to_string().contains("snap-layout:default"));
+    }
+
+    /// The desktop capability is what shipped as `default.json`, unchanged. Splitting the file
+    /// must not be a widening or a narrowing of what the shipped app can do — this is the
+    /// assertion that makes the split a refactor.
+    ///
+    /// `platforms` is a real field: `tauri-utils`' `acl::capability::Capability` declares
+    /// `pub platforms: Option<Vec<Target>>`, serialising as `"macOS"`, `"windows"`, `"linux"`,
+    /// `"android"`, `"iOS"`. Omitting it targets every platform, which is exactly why one file
+    /// could not stay one file.
+    #[test]
+    fn the_desktop_capability_is_the_permission_set_that_shipped() {
+        let cap: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/desktop.json")).unwrap();
+        let got: Vec<&str> = cap["permissions"]
+            .as_array()
+            .expect("the capability must list permissions")
+            .iter()
+            .map(|p| p.as_str().expect("every permission is a string"))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                "core:default",
+                "opener:default",
+                "dialog:allow-open",
+                "dialog:allow-save",
+                "clipboard-manager:allow-write-text",
+                "core:window:allow-minimize",
+                "core:window:allow-toggle-maximize",
+                "core:window:allow-close",
+                "core:window:allow-start-dragging",
+                "snap-layout:allow-update-snap-bounds",
+                "snap-layout:allow-detach-snap-bounds",
+                "mcp-bridge:allow-report-ipc-event",
+                "mcp-bridge:allow-request-script-injection",
+                "mcp-bridge:allow-script-result",
+            ]
+        );
+        assert_eq!(
+            cap["platforms"],
+            serde_json::json!(["windows", "linux", "macOS"])
+        );
+    }
+
+    /// Android's capability, and every absence in it is a decision.
+    ///
+    /// **The four window verbs are gone because three of them do not exist.** In tauri 2.11.5,
+    /// `minimize`, `toggle_maximize` and `start_dragging` are all `#[cfg(desktop)]`
+    /// (`tauri/src/window/plugin.rs`); only `close` is in the shared handler, and an app that
+    /// can close itself from a button no phone user expects is not a feature. `TitleBar` is
+    /// hidden on Android for the same reason — see `src/lib/platform.ts`.
+    ///
+    /// **Snap Layouts are gone** because there is no caption to park an overlay over.
+    ///
+    /// **The MCP bridge is gone** because it binds a WebSocket that authenticates nothing and
+    /// evaluates arbitrary JavaScript, and `tauri android dev` produces a *debug* build — so
+    /// `#[cfg(debug_assertions)]` puts that socket on a phone rather than on this
+    /// workstation's loopback. Denying the three commands is not the whole answer, because the
+    /// socket is opened in Rust and the ACL is not in that path; it is the half this file can
+    /// do. Android is driven over CDP instead (see the reference doc).
+    ///
+    /// **`opener` is narrowed from `:default` to two verbs.** `opener:default` is
+    /// `allow-open-url` + `allow-reveal-item-in-dir` + `allow-default-urls`, and revealing an
+    /// item in a directory is not a thing Android's opener supports — its own manifest records
+    /// Android as "partial — Only allows to open URLs via `open`". `allow-default-urls` stays:
+    /// it is what permits `https:`, `http:`, `mailto:` and `tel:`.
+    #[test]
+    fn the_mobile_capability_drops_every_verb_the_platform_has_no_answer_for() {
+        let cap: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/mobile.json")).unwrap();
+        let got: Vec<&str> = cap["permissions"]
+            .as_array()
+            .expect("the capability must list permissions")
+            .iter()
+            .map(|p| p.as_str().expect("every permission is a string"))
+            .collect();
+        assert_eq!(
+            got,
+            vec![
+                "core:default",
+                "opener:allow-open-url",
+                "opener:allow-default-urls",
+                "dialog:allow-open",
+                "dialog:allow-save",
+                "clipboard-manager:allow-write-text",
+            ]
+        );
+        assert_eq!(cap["platforms"], serde_json::json!(["android"]));
+
+        for denied in [
+            "core:window:allow-minimize",
+            "core:window:allow-toggle-maximize",
+            "core:window:allow-close",
+            "core:window:allow-start-dragging",
+            "snap-layout:allow-update-snap-bounds",
+            "snap-layout:allow-detach-snap-bounds",
+            "mcp-bridge:allow-report-ipc-event",
+            "mcp-bridge:allow-request-script-injection",
+            "mcp-bridge:allow-script-result",
+            "opener:default",
+        ] {
+            assert!(!got.contains(&denied), "{denied} must not reach Android");
+        }
+
+        // No `fs:` permission, on any platform, ever. Task 5 adds `tauri-plugin-fs` to the
+        // Android build and reaches it from **Rust**, where the ACL is not in the path. A
+        // grant here would be the page gaining a filesystem, which is the one thing this app
+        // has never given it.
+        assert!(
+            !got.iter().any(|p| p.starts_with("fs:")),
+            "no fs: permission is granted anywhere"
+        );
+    }
+
+    /// The two files are a split and not a rewrite: no permission may exist in one and be
+    /// unaccounted for in the other, and `default.json` must be gone rather than left behind
+    /// as a third file targeting every platform — which is what would silently hand Android
+    /// the window verbs back.
+    #[test]
+    fn the_capability_directory_is_exactly_the_two_platform_files() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("capabilities");
+        let mut names: Vec<String> = std::fs::read_dir(&dir)
+            .expect("capabilities/ must exist")
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names, vec!["desktop.json", "mobile.json"]);
     }
 
     /// Without `decorations: false` the app draws two title bars: Windows' and
