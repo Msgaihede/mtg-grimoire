@@ -566,16 +566,34 @@ Every remaining PR now has a task-level plan in `docs/superpowers/plans/`.
 | 1 | the feed pipeline takes a stream | `2026-08-27-feed-pipeline-takes-a-stream.md` | **done** — `feed-pipeline-stream` |
 | 2 | Boundary A, the core interface | `2026-08-27-boundary-a-the-core-interface.md` | **done** — `boundary-a-core` |
 | 3a | dnd-kit foundation + the folder tree | `2026-08-27-dnd-kit-3a-foundation-and-folder-tree.md` | **done** — `dnd-kit-3a` |
-| 3b | the six remaining drag domains | `2026-08-28-dnd-kit-3b-remaining-domains.md` | planned |
-| 3c | remove pragmatic-dnd, settle a11y | `2026-08-28-dnd-kit-3c-remove-pragmatic-dnd.md` | planned |
-| **3.5** | **the user database — split user data out of the corpus** | `2026-08-28-the-user-database.md` | planned |
-| 4 | the wasm core build | `2026-08-28-web-target-wasm-core.md` | planned |
-| 5 | the PWA shell | `2026-08-28-web-target-pwa-shell.md` | planned |
-| 6 | pairing | `2026-08-28-sync-pairing.md` | planned |
-| 7 | the relay and conflict engine | `2026-08-28-sync-relay-and-engine.md` | planned |
-| 8 | the Android target | `2026-08-28-android-target.md` | planned |
-| 9a | mobile layout: foundation + options | `2026-08-28-mobile-layout-9a-foundation-and-options.md` | planned |
+| 3b | the six remaining drag domains | `2026-08-28-dnd-kit-3b-remaining-domains.md` | **done** — #263 |
+| 3c | remove pragmatic-dnd, settle a11y | `2026-08-28-dnd-kit-3c-remove-pragmatic-dnd.md` | **partly** — #266 removed the library; Tasks 4–6 (what a drag is to a keyboard) wait on a decision, see below |
+| **3.5** | **the user database — split user data out of the corpus** | `2026-08-28-the-user-database.md` | **done** — #261 |
+| 4 | the wasm core build | `2026-08-28-web-target-wasm-core.md` | **done** — #265, with #267 fixing the first run |
+| 5 | the PWA shell | `2026-08-28-web-target-pwa-shell.md` | **done** — #268 |
+| 6 | pairing | `2026-08-28-sync-pairing.md` | **done** — #264 |
+| 7 | the relay and conflict engine | `2026-08-28-sync-relay-and-engine.md` | **done** — #269 |
+| 8 | the Android target | `2026-08-28-android-target.md` | **done** — #262, with #270 fixing the cross-compile |
+| 9a | mobile layout: foundation + options | `2026-08-28-mobile-layout-9a-foundation-and-options.md` | **planned, not started** — the only original PR still wholly outstanding |
 | 9b | implement the chosen layout | — | **deliberately unplanned** |
+
+**Updated 2026-08-29.** Everything above 9a has shipped, and the phase is done end to end: the
+app runs on Windows, in a browser and on an Android phone, two devices pair with no account, and
+a change made on one reaches the other through a Cloudflare Worker that can read none of it.
+
+**Three things came out of building it that are not in this table**, because they were found
+rather than planned:
+
+- **The pairing baseline** — a device joining a group receives nothing, because `sync_ops` holds
+  only what the capture triggers saw. Designed in
+  [2026-08-29-sync-baseline-design.md](2026-08-29-sync-baseline-design.md); corrects §7.7.
+- **Card images do not load on web at all.** `cardImageUrl` answers the Tauri `mtgimg://` scheme,
+  which no browser fetches, so PR 5's 256 MB image cache is correct and has nothing to intercept.
+  `docs/reference/pwa-shell.md` scopes the fix.
+- **What a drag is to a keyboard** — 3c measured it rather than assuming: nothing is
+  tab-reachable except the category grip, which was never a drag, and there are zero `aria-live`
+  elements in the app. 3c's Tasks 4–6 were deliberately not run, because the plan assumed one
+  sensor to harden and the measurement showed the question is larger than that.
 
 **9b has no plan on purpose.** §6.1 says the layout options come to Markus before anything is
 built; naming the components 9b would create requires a choice nobody has made, and writing them
