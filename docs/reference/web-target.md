@@ -107,7 +107,7 @@ would cost more than it buys, which is the same trade `combos::ingest_gz` alread
 | Figure | Value | Desktop / spike |
 | --- | --- | --- |
 | Rows ingested (completed run) | **117 606** | spike: 117 464 lines, 20-column subset |
-| Wall clock, click to app rendered | **15.2 s to 16.1 s** across six clean runs, sampled every 500 ms | spike: 10.4 s desktop, 36.5 s phone |
+| Wall clock, click to app rendered | **15.6 s to 16.3 s** across six clean runs, sampled every 500 ms | spike: 10.4 s desktop, 36.5 s phone |
 | Ingest rate, sampled at 250 ms | 0 → **88 000 rows in 10.8 s**, ~8 100 rows/s | — |
 | Runs that finished | **6 of 6** clean runs from a wiped profile (was 2 of 6) | spike: always |
 | wasm module | **2 642 182 B** (`mtg_grimoire_lib_bg.wasm`) | spike: ~2.2 MB |
@@ -118,8 +118,9 @@ would cost more than it buys, which is the same trade `combos::ingest_gz` alread
 
 The wall clock is a range across six runs rather than one number: it is dominated by the
 75 MB download from Scryfall, and the poll that decides "app rendered" runs every 500 ms, so
-each figure carries that much slack. It replaces the 11–21 s this table used to quote, which
-was taken across the flaky path and was not a figure.
+each figure carries that much slack. Six runs of the same fix an hour earlier read 15.2–16.1 s,
+which is the size of the noise. It replaces the 11–21 s this table used to quote, which was
+taken across the flaky path and was not a figure.
 
 **`navigator.storage.estimate()` is never consulted by the app and must not be.** The spike saw
 it report 647 MB and then 7 MB for the same 532.8 MB file. It may be *reported*; it is not a
