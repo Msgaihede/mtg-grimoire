@@ -187,6 +187,48 @@ fn base32_decode(text: &str) -> Result<Vec<u8>, InviteError> {
     Ok(out)
 }
 
+/// Base32 for a variable-length blob, over the invite's own alphabet.
+///
+/// No checksum and no grouping: these blobs are pasted rather than typed, and a bent one
+/// already fails at the AEAD with a sentence of its own. The length is carried by the
+/// encoding itself — the tail's zero padding is dropped by the decoder's bit accounting.
+pub fn blob_encode(bytes: &[u8]) -> String {
+    base32_encode(bytes)
+}
+
+/// The other half, tolerant of exactly what [`Invite::decode`] is tolerant of.
+///
+/// **It refuses a character outside the alphabet and nothing else.** There is no length to
+/// check — a blob is whatever length its step made it — and no checksum, so the only structural
+/// answer available here is "these are not base32 characters".
+pub fn blob_decode(text: &str) -> Result<Vec<u8>, InviteError> {
+    let cleaned: String = text
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| match c.to_ascii_uppercase() {
+            'I' | 'L' => '1',
+            'O' => '0',
+            other => other,
+        })
+        .collect();
+    let mut out = Vec::with_capacity(cleaned.len() * 5 / 8);
+    let mut acc: u32 = 0;
+    let mut bits = 0u32;
+    for c in cleaned.bytes() {
+        let v = ALPHABET
+            .iter()
+            .position(|a| *a == c)
+            .ok_or(InviteError::Alphabet)? as u32;
+        acc = (acc << 5) | v;
+        bits += 5;
+        if bits >= 8 {
+            bits -= 8;
+            out.push(((acc >> bits) & 0xff) as u8);
+        }
+    }
+    Ok(out)
+}
+
 /// A QR code as a grid of booleans — `true` is a dark module.
 ///
 /// **A fact, not a picture.** The webview draws it as an SVG, which is where a decision about
@@ -349,6 +391,27 @@ mod tests {
         assert!(m.width >= 21, "the smallest QR version is 21 modules");
         assert!(m.modules.iter().any(|d| *d), "no dark modules at all");
         assert!(m.modules.iter().any(|d| !*d), "no light modules at all");
+    }
+
+    /// The two blobs a reader carries by hand round-trip at every length, including the ones
+    /// where the tail's padding bits are the whole of the last character.
+    #[test]
+    fn a_blob_round_trips_at_every_length_the_protocol_produces() {
+        for n in 0..200usize {
+            let bytes: Vec<u8> = (0..n).map(|i| (i * 37 + 11) as u8).collect();
+            let text = blob_encode(&bytes);
+            assert_eq!(blob_decode(&text).unwrap(), bytes, "at length {n}");
+        }
+    }
+
+    /// A blob is pasted, so the separators and case a paste picks up are the reader's.
+    #[test]
+    fn a_blob_ignores_separators_and_case_and_refuses_junk() {
+        let bytes = [1u8, 2, 3, 250, 251, 252];
+        let text = blob_encode(&bytes);
+        let messy = format!(" {} \n", text.to_lowercase());
+        assert_eq!(blob_decode(&messy).unwrap(), bytes);
+        assert_eq!(blob_decode("U!!!"), Err(InviteError::Alphabet));
     }
 
     /// Two different invites must not draw the same picture.

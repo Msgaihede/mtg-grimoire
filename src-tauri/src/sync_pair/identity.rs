@@ -210,9 +210,21 @@ pub fn add_device(
     Ok(())
 }
 
+/// Rename a device on the roster — **and this device's own copy of its name, when that is who
+/// is being renamed.**
+///
+/// The second statement is not tidiness. `sync_identity.name` is the copy every pairing sends:
+/// [`create_group`] and [`join_group`] both file this device on the roster under it, and
+/// `pairing::accept` seals it into the blob the other device files this one by. Without this
+/// line a reader who renamed this device would have the rename silently undone by their next
+/// pairing, and the roster row on the *other* device would have been wrong from the start.
 pub fn rename_device(conn: &Connection, device_id: &str, name: &str) -> rusqlite::Result<()> {
     conn.execute(
         "UPDATE sync_devices SET name = ?2 WHERE device_id = ?1",
+        params![device_id, name],
+    )?;
+    conn.execute(
+        "UPDATE sync_identity SET name = ?2 WHERE id = 1 AND device_id = ?1",
         params![device_id, name],
     )?;
     Ok(())
@@ -486,6 +498,46 @@ mod tests {
         assert_eq!(list[0].name, "Desk");
         assert_eq!(list[0].device_id, me.device_id);
         assert_eq!(list[0].public_key, me.keypair.public);
+    }
+
+    /// Renaming **this** device changes the name every later pairing sends, and a pairing
+    /// after the rename does not put the old one back.
+    ///
+    /// The name lives in two rows — the roster's and this device's own — and only the second
+    /// is what `create_group`, `join_group` and `pairing::accept` read. A rename that moved
+    /// one of them would be undone by the next press of Pair, on the reader's own screen.
+    #[test]
+    fn renaming_this_device_survives_the_next_pairing() {
+        let conn = db();
+        let me = ensure(&conn).unwrap();
+        rename_device(&conn, &me.device_id, "Desk").unwrap();
+
+        assert_eq!(ensure(&conn).unwrap().name, "Desk");
+
+        let me = ensure(&conn).unwrap();
+        create_group(&conn, &me).unwrap();
+        assert_eq!(roster(&conn).unwrap()[0].name, "Desk");
+    }
+
+    /// Renaming somebody *else* leaves this device's own name alone.
+    #[test]
+    fn renaming_another_device_does_not_rename_this_one() {
+        let conn = db();
+        let me = ensure(&conn).unwrap();
+        create_group(&conn, &me).unwrap();
+        add_device(&conn, "deadbeef", &[9u8; 32], "Phone").unwrap();
+
+        rename_device(&conn, "deadbeef", "Kitchen").unwrap();
+        assert_eq!(ensure(&conn).unwrap().name, "This device");
+        assert_eq!(
+            roster(&conn)
+                .unwrap()
+                .into_iter()
+                .find(|d| d.device_id == "deadbeef")
+                .unwrap()
+                .name,
+            "Kitchen"
+        );
     }
 
     /// The roster is what the panel draws, and a key on a list is a key in a screenshot.

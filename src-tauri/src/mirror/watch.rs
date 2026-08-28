@@ -569,6 +569,7 @@ mod tests {
             mirror: Arc::new(Mask::default()),
             mirror_status: std::sync::Mutex::new(LastPass::default()),
             fence: std::sync::Arc::new(crate::db::CrossFileFence::new()),
+            pairing: std::sync::Mutex::new(None),
         }
     }
 
