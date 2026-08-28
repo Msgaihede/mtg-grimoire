@@ -509,7 +509,7 @@ mod tests {
     fn db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         conn.pragma_update(None, "foreign_keys", "ON").unwrap();
-        schema::migrate(&conn).unwrap();
+        schema::migrate_single_file(&conn).unwrap();
         conn
     }
 

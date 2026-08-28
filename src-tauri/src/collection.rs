@@ -1899,7 +1899,7 @@ mod tests {
 
     fn seeded() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        crate::schema::migrate_single_file(&conn).unwrap();
         conn.execute(
             "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
                 rarity,finishes,prices,raw)
@@ -2607,7 +2607,7 @@ mod tests {
         }
     }
 
-    /// Rows in `marketplace_prices` — schema v10's table, which `migrate` has already made.
+    /// Rows in `marketplace_prices` — schema v10's table, which `migrate_single_file` has already made.
     ///
     /// Written by hand rather than through `crate::marketplace_feed`, because what these tests
     /// are about is what a *query* does with a feed's rows and not how they got there.
@@ -3896,7 +3896,7 @@ mod tests {
         let conn = seeded();
         add_entry(&conn, &input("bolt-lea", "nonfoil", 1)).unwrap();
         add_entry(&conn, &input("bolt-jp", "foil", 1)).unwrap();
-        // External-content FTS with no triggers: rows added after `migrate` are invisible
+        // External-content FTS with no triggers: rows added after `migrate_single_file` are invisible
         // to the index until it is rebuilt.
         conn.execute_batch("INSERT INTO cards_fts(cards_fts) VALUES('rebuild');")
             .unwrap();
@@ -4041,7 +4041,7 @@ mod tests {
     /// Scryfall's euro keys do not. The same card, three different right answers.
     fn seeded_marketplaces() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        crate::schema::migrate_single_file(&conn).unwrap();
         for (id, prices) in [
             ("cheap-usd", r#"{"usd":"1.00","eur":"90.00"}"#),
             ("dear-usd", r#"{"usd":"50.00","eur":"2.00"}"#),

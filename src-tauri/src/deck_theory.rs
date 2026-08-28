@@ -909,7 +909,7 @@ mod tests {
     /// `the_diff_compares_printings_not_oracle_cards` turns on.
     fn seeded() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        crate::schema::migrate_single_file(&conn).unwrap();
         conn.execute_batch(
             r#"INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
                     rarity,mana_cost,cmc,type_line,prices,raw)

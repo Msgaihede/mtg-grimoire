@@ -513,7 +513,7 @@ mod tests {
 
     fn migrated_memory_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        schema::migrate(&conn).unwrap();
+        schema::migrate_single_file(&conn).unwrap();
         conn
     }
 
@@ -526,7 +526,7 @@ mod tests {
     fn state_at(dir: &Path) -> AppState {
         let path = dir.join("mtg.db");
         let conn = crate::db::open(&path).unwrap();
-        schema::migrate(&conn).unwrap();
+        schema::migrate_single_file(&conn).unwrap();
         let read = crate::db::open_read_only(&path).unwrap();
         AppState {
             db: std::sync::Mutex::new(conn),

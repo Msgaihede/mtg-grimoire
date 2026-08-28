@@ -94,7 +94,7 @@ use std::collections::HashMap;
 /// in its v1 `CREATE TABLE`, and the v2 step that is supposed to `ALTER TABLE cards ADD
 /// COLUMN` it would then fail with "duplicate column name" on every new machine while
 /// working perfectly on every upgraded one. Schema changes go in a **new** migration
-/// step in [`migrate`], never here.
+/// step in [`migrate_single_file`], never here.
 ///
 /// The staging clone does *not* read this — it derives its layout from the live table at
 /// runtime (see [`create_staging`]), so it stays correct no matter how many `ALTER`s
@@ -141,9 +141,9 @@ const CARDS_COLUMNS: &str = "
 /// Every index on `cards`, in one place.
 ///
 /// Load-bearing: [`swap_staging`] drops `cards` and its indexes on every sync and has to
-/// put them all back. When these statements were written out twice — once in [`migrate`],
+/// put them all back. When these statements were written out twice — once in [`migrate_single_file`],
 /// once in the swap — an index added to one of them silently disappeared at the next sync
-/// on every machine that had already migrated. `IF NOT EXISTS` so `migrate` can rerun.
+/// on every machine that had already migrated. `IF NOT EXISTS` so `migrate_single_file` can rerun.
 ///
 /// **This list describes the table at HEAD, so only the NEWEST migration step may replay
 /// it.** It names `legal_mask`, which the v10 step is what adds — so the v1 block that used
@@ -257,16 +257,121 @@ fn json_raw(col: &str) -> String {
     format!("CASE WHEN json_valid(CAST({col} AS TEXT)) = 1 THEN CAST({col} AS TEXT) END")
 }
 
-/// The head schema version — what [`migrate`] walks a database up to, and what
-/// `migrate_is_idempotent_and_creates_tables` pins. Named because three tests all have to
-/// mean the same number.
+/// The last shape of the database that was one file.
+///
+/// [`migrate_single_file`] climbs to exactly this and stops, and what
+/// `migrate_is_idempotent_and_creates_tables` pins. Named because a great many tests all
+/// have to mean the same number.
 ///
 /// **No migration step writes this constant.** Each step ends with the literal version it
 /// produces (`PRAGMA user_version = 3;` in the v3 step, and so on), because a step that
 /// wrote *head* would commit "fully migrated" before the steps after it had run — and
 /// would keep the version assertion passing while doing it. This constant is the thing
 /// tests compare against, not the thing steps write.
-pub const SCHEMA_VERSION: i64 = 26;
+///
+/// It is frozen: no rung of that ladder is ever edited again, for [`CARDS_COLUMNS`]'s
+/// reason — a migration step is history, and a step edited today changes what a *fresh*
+/// install created yesterday.
+pub const LEGACY_SINGLE_FILE_VERSION: i64 = 26;
+
+/// `user.db`'s version, continuing the number line the single file was on.
+///
+/// 27 is the rung that *is* the split: a database carrying it has had its corpus taken out.
+/// The user's ladder can never restart, because its rungs describe rows nothing else can
+/// produce.
+pub const USER_SCHEMA_VERSION: i64 = 27;
+
+/// `corpus.db`'s version, on a number line of its own.
+///
+/// Deliberately incomparable with [`USER_SCHEMA_VERSION`]: the two answer different questions.
+/// A user version is "what has been done to rows that exist nowhere else". A corpus version is
+/// "is this file's shape what this build expects", and a corpus rung is *allowed* to give up
+/// and rebuild, because what is behind it is a download. Sharing a scale would invite somebody
+/// to subtract them.
+pub const CORPUS_SCHEMA_VERSION: i64 = 1;
+
+/// Which of the two files a table lives in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Side {
+    /// The reader authored it. Nothing outside this app can produce it again, and losing it
+    /// is losing it.
+    User,
+    /// A feed or this app's own migration ladder can produce it again with no user input, for
+    /// the price of a download.
+    Corpus,
+}
+
+/// Every table in the schema and the file it belongs in.
+///
+/// **The question is "can this be produced again with no user input?", and it is not the same
+/// question as "does this sync"** — `deck_undo` does not sync and is unquestionably the
+/// reader's; `app_meta` splits per key for sync and does not split at all for storage.
+///
+/// Written as a list rather than a rule so that a table added by a later rung is a red test
+/// with an obvious remedy, rather than a table that quietly lands in whichever file its DDL
+/// was unqualified in. `every_table_is_on_exactly_one_side` is what keeps it honest.
+pub const TABLES: &[(&str, Side)] = &[
+    // ---- the reader's ----
+    ("app_meta", Side::User),
+    // Scryfall's rows, but the table's *job* is "which of these have I applied to my own
+    // collection". A corpus rebuild that emptied it would re-apply every fold and double
+    // quantities — `crate::reconcile::apply` says so at its `SELECT 1 FROM card_migrations`.
+    ("card_migrations", Side::User),
+    ("collection_entries", Side::User),
+    ("collection_folders", Side::User),
+    ("deck_audit", Side::User),
+    ("deck_cards", Side::User),
+    ("deck_categories", Side::User),
+    ("deck_folders", Side::User),
+    // One app-wide list keyed on `name_key` since v21 — no `deck_id`.
+    ("deck_tags", Side::User),
+    ("deck_undo", Side::User),
+    ("decks", Side::User),
+    // Per-device and never synced, but nothing rebuilds it either — and it is the record of
+    // *why* somebody might be about to throw the corpus away.
+    ("error_log", Side::User),
+    // A decision a person made about a tag. `WITHOUT ROWID`, so the update hook cannot see it
+    // — see `crate::mirror::watch::install_hook`.
+    ("muted_tags", Side::User),
+    ("wishlist_entries", Side::User),
+    ("wishlist_folders", Side::User),
+    // ---- rebuildable ----
+    ("art_tag_illustrations", Side::Corpus),
+    ("art_tag_meta", Side::Corpus),
+    ("art_tag_parents", Side::Corpus),
+    ("art_taggings", Side::Corpus),
+    ("art_tags", Side::Corpus),
+    ("cards", Side::Corpus),
+    // FTS5's own four shadow tables plus the virtual table. They must sit beside `cards`:
+    // an external-content index resolves `content='cards'` in *its own schema*.
+    ("cards_fts", Side::Corpus),
+    ("cards_fts_config", Side::Corpus),
+    ("cards_fts_data", Side::Corpus),
+    ("cards_fts_docsize", Side::Corpus),
+    ("cards_fts_idx", Side::Corpus),
+    ("combo_cards", Side::Corpus),
+    ("combo_meta", Side::Corpus),
+    ("combos", Side::Corpus),
+    // Seeded by the ladder rather than by a feed, which is a cheaper rebuild still. No user
+    // table declares a key to it — `decks.format_key` is a soft reference.
+    ("format_specs", Side::Corpus),
+    ("image_cache", Side::Corpus),
+    ("marketplace_feed_meta", Side::Corpus),
+    ("marketplace_prices", Side::Corpus),
+    ("oracle_tag_cards", Side::Corpus),
+    ("oracle_tag_meta", Side::Corpus),
+    ("oracle_tag_parents", Side::Corpus),
+    ("oracle_taggings", Side::Corpus),
+    ("oracle_tags", Side::Corpus),
+    ("sets", Side::Corpus),
+    ("sync_meta", Side::Corpus),
+];
+
+/// Which file `table` belongs in, or `None` for a name the schema does not create — a staging
+/// table, or a typo.
+pub fn side_of(table: &str) -> Option<Side> {
+    TABLES.iter().find(|(n, _)| *n == table).map(|(_, s)| *s)
+}
 
 /// What makes two collection rows the *same* row, as one SQL fragment.
 ///
@@ -727,7 +832,7 @@ const FORMAT_SPECS_SEED: &str = "INSERT OR REPLACE INTO format_specs
 /// fires exactly that action** — so the obvious build-swap-rename would untag every card in
 /// every deck and leave a perfectly-shaped empty answer behind it. The pragma cannot be turned
 /// off to dodge that: toggling `foreign_keys` is a documented no-op inside a transaction and
-/// `migrate` is always inside one. (The v8 step says the same sentence from the other side,
+/// `migrate_single_file` is always inside one. (The v8 step says the same sentence from the other side,
 /// where the table being dropped was the *child* and there was nothing to dodge.)
 ///
 /// So the labels are carried across the drop by hand — `deck_tags_carry` holds
@@ -878,7 +983,13 @@ fn backfill_oracle_slug_norm(tx: &Connection) -> rusqlite::Result<()> {
     Ok(())
 }
 
-pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
+/// The single-file ladder, frozen at [`LEGACY_SINGLE_FILE_VERSION`].
+///
+/// **Nothing calls this to prepare a running database any more.** It is reached from exactly
+/// two places: `crate::split::convert` brings a pre-split `mtg.db` up to 26 before taking it
+/// apart, and this file's own tests build old databases by hand to climb it. Its rungs are
+/// history.
+pub fn migrate_single_file(conn: &Connection) -> rusqlite::Result<()> {
     let v: i64 = conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
     if v < 1 {
         // One transaction for the whole migration, `user_version` bumped last: if any
@@ -889,7 +1000,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // The indexes are deliberately not here. [`CARDS_INDEXES`] describes the table at
         // head and names columns later steps add, so the newest step replays it and no
         // older one may — see the constant. A fresh install gets its indexes at v20, in the
-        // same `migrate` call as this.
+        // same `migrate_single_file` call as this.
         let tx = conn.unchecked_transaction()?;
         tx.execute_batch(&format!(
             "CREATE TABLE IF NOT EXISTS cards ({CARDS_COLUMNS});
@@ -978,10 +1089,10 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
             raw = json_raw("raw")
         ))?;
 
-        // Literal `3`, not `SCHEMA_VERSION`: this step is what makes a database version 3,
+        // Literal `3`, not `LEGACY_SINGLE_FILE_VERSION`: this step is what makes a database version 3,
         // and head is 5. Writing head here would commit "migrated" before the steps after
         // it had run, so a v4 or v5 that then failed would leave a database claiming a
-        // schema it does not have — with no way back, because `migrate` only ever walks
+        // schema it does not have — with no way back, because `migrate_single_file` only ever walks
         // upwards.
         tx.execute_batch("PRAGMA user_version = 3;")?;
         tx.commit()?;
@@ -1120,9 +1231,9 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         )?;
         // Literal `4`, for the same reason v3 writes a literal `3`: this step is what makes
         // a database version 4, and the step after it makes head 5. Writing
-        // `SCHEMA_VERSION` would commit "migrated" before that step had run — and it would
+        // `LEGACY_SINGLE_FILE_VERSION` would commit "migrated" before that step had run — and it would
         // also quietly defang `migrate_is_idempotent_and_creates_tables`, which pins
-        // `user_version == SCHEMA_VERSION` and would keep passing while the last step was
+        // `user_version == LEGACY_SINGLE_FILE_VERSION` and would keep passing while the last step was
         // never reached. **Every future step ends with its own literal.**
         tx.execute_batch("PRAGMA user_version = 4;")?;
         tx.commit()?;
@@ -1265,7 +1376,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // term the UPDATE rewrites all 116 590 — each carrying its ~2 KB `raw` blob — to
         // store NULL over NULL. Measured through `prepare_database` on a copy of the live
         // 547 MB database: **725 ms with it, 5.40 s without**, the same 1 510 rows filled
-        // either way, and `migrate` runs before there is a window to say anything in.
+        // either way, and `migrate_single_file` runs before there is a window to say anything in.
         // The remaining P/T arrive with the next sync, exactly as v3's `artist` did — the
         // ingest writes both columns from here on.
         tx.execute_batch(&format!(
@@ -1522,7 +1633,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
 
              -- `DROP TABLE deck_cards` fires `deck_cards`' own OUTBOUND foreign keys (there
              -- are none) under `PRAGMA foreign_keys=ON`, same as any other statement — but
-             -- that pragma is a documented no-op *inside a transaction*, and `migrate` always
+             -- that pragma is a documented no-op *inside a transaction*, and `migrate_single_file` always
              -- runs inside one. It must be left exactly as it already was; there is nothing
              -- to toggle here. The rename is what keeps `deck_cards_v8`'s row ids — copied
              -- verbatim above — as `deck_cards.id`, which is what lets `deck_allocations` and
@@ -2442,7 +2553,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // reasoning `the_v2_backfill_leaves_the_search_index_answering` pins.
         //
         // Literal `24`, for the reason every step before it writes its own: this step is what
-        // *makes* a database version 24, and [`SCHEMA_VERSION`] moves again at v25.
+        // *makes* a database version 24, and [`LEGACY_SINGLE_FILE_VERSION`] moves again at v25.
         tx.execute_batch("PRAGMA user_version = 24;")?;
         tx.commit()?;
     }
@@ -2629,7 +2740,7 @@ pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
         // reasoning `the_v2_backfill_leaves_the_search_index_answering` pins.
         //
         // Literal `25`, for the reason every step before it writes its own: this step is what
-        // *makes* a database version 25, and [`SCHEMA_VERSION`] moves again at v26.
+        // *makes* a database version 25, and [`LEGACY_SINGLE_FILE_VERSION`] moves again at v26.
         tx.execute_batch("PRAGMA user_version = 25;")?;
         tx.commit()?;
     }
@@ -3060,7 +3171,7 @@ pub fn create_fts(conn: &Connection) -> rusqlite::Result<()> {
 /// 304. See [`crate::maintenance::K_FTS_REBUILD_PENDING`]. It costs one `sync_meta` lookup
 /// on every launch that does not need it.
 ///
-/// **[`migrate`] is the only step here allowed to stop a launch.** A schema that cannot be
+/// **[`migrate_single_file`] is the only step here allowed to stop a launch.** A schema that cannot be
 /// brought to head means the database cannot be used at all. The other two mean something is
 /// *worse* rather than unusable — a rebuild that fails means search is wrong, a drop that
 /// fails means a few hundred megabytes stay parked — and both failures have the same likely
@@ -3097,7 +3208,7 @@ pub fn create_fts(conn: &Connection) -> rusqlite::Result<()> {
 /// does need a `VACUUM` runs after a sync instead, once per database: see
 /// [`crate::maintenance::convert_to_incremental`].
 pub fn prepare_database(conn: &Connection) -> rusqlite::Result<()> {
-    migrate(conn)?;
+    migrate_single_file(conn)?;
     if let Err(e) = crate::maintenance::rebuild_fts_if_pending(conn) {
         eprintln!(
             "the search index still owes a rebuild from an interrupted compaction, and it \
@@ -3194,7 +3305,7 @@ fn cards_column_defs(conn: &Connection) -> rusqlite::Result<String> {
 ///
 /// The whole swap — index drop, table swap, index rebuild — is one transaction, so it
 /// either happens or it doesn't. Anything less can leave the database with no search
-/// index, which `migrate()` will not repair once `user_version` is set. On failure the
+/// index, which `migrate_single_file()` will not repair once `user_version` is set. On failure the
 /// [`Transaction`] rolls back as it drops, leaving the connection ready for a retry.
 ///
 /// [`Transaction`]: rusqlite::Transaction
@@ -3540,11 +3651,108 @@ pub fn swap_combo_staging(conn: &Connection) -> rusqlite::Result<()> {
 pub(crate) mod tests {
     use super::*;
 
+    /// Every table a migrated database creates is on exactly one side, named here on purpose.
+    ///
+    /// The point is the *next* table: one added by a later rung without a line in [`TABLES`]
+    /// turns this red rather than landing in whichever file the DDL happened to be unqualified
+    /// in. `mirror::watch::every_table_in_the_schema_has_been_decided_about` is the same shape
+    /// for the same reason, and this is its storage twin.
+    #[test]
+    fn every_table_is_on_exactly_one_side() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate_single_file(&conn).unwrap();
+
+        let mut stmt = conn
+            .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+            .unwrap();
+        let live: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+
+        let named: Vec<&str> = TABLES.iter().map(|(n, _)| *n).collect();
+        let mut sorted = named.clone();
+        sorted.sort_unstable();
+        sorted.dedup();
+        assert_eq!(
+            sorted.len(),
+            named.len(),
+            "a table is named twice in TABLES"
+        );
+
+        let live_refs: Vec<&str> = live.iter().map(String::as_str).collect();
+        assert_eq!(
+            live_refs, sorted,
+            "TABLES and the migrated schema disagree; add the new table to TABLES on purpose"
+        );
+    }
+
+    /// The user side, spelled out. A table moving between the two files is a data migration,
+    /// never a diff nobody noticed.
+    #[test]
+    fn the_user_side_is_the_fifteen_tables_no_feed_can_rebuild() {
+        let mut user: Vec<&str> = TABLES
+            .iter()
+            .filter(|(_, s)| *s == Side::User)
+            .map(|(n, _)| *n)
+            .collect();
+        user.sort_unstable();
+        assert_eq!(
+            user,
+            [
+                "app_meta",
+                "card_migrations",
+                "collection_entries",
+                "collection_folders",
+                "deck_audit",
+                "deck_cards",
+                "deck_categories",
+                "deck_folders",
+                "deck_tags",
+                "deck_undo",
+                "decks",
+                "error_log",
+                "muted_tags",
+                "wishlist_entries",
+                "wishlist_folders",
+            ]
+        );
+    }
+
+    /// No foreign key may cross the split. SQLite accepts the `CREATE TABLE` and fails only on
+    /// the first `INSERT`, with `no such table: main.cards` — a trap that would ship.
+    #[test]
+    fn no_foreign_key_crosses_the_two_sides() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate_single_file(&conn).unwrap();
+
+        for (table, side) in TABLES {
+            let mut stmt = conn
+                .prepare(&format!("PRAGMA foreign_key_list({table})"))
+                .unwrap();
+            let targets: Vec<String> = stmt
+                .query_map([], |r| r.get::<_, String>(2))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            for target in targets {
+                let other = side_of(&target)
+                    .unwrap_or_else(|| panic!("{table} references unknown table {target}"));
+                assert_eq!(
+                    other, *side,
+                    "{table} ({side:?}) declares a foreign key to {target} ({other:?}); \
+                     SQLite cannot enforce one across attached databases"
+                );
+            }
+        }
+    }
+
     #[test]
     fn migrate_is_idempotent_and_creates_tables() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
-        migrate(&conn).unwrap(); // no error on rerun
+        migrate_single_file(&conn).unwrap();
+        migrate_single_file(&conn).unwrap(); // no error on rerun
         let n: i64 = conn
             .query_row(
                 "SELECT count(*) FROM sqlite_master WHERE name IN
@@ -3557,19 +3765,19 @@ pub(crate) mod tests {
             )
             .unwrap();
         assert_eq!(n, 14);
-        // v26's column, on the same fresh database: a rerun of `migrate` must not answer
+        // v26's column, on the same fresh database: a rerun of `migrate_single_file` must not answer
         // `duplicate column name`, which is the one way an `ALTER TABLE … ADD COLUMN` rung can
         // break the idempotence this test is named for.
         assert_eq!(has_column(&conn, "decks", "bracket"), 1);
 
-        // Without this the test would still pass while `migrate` re-ran its whole batch
+        // Without this the test would still pass while `migrate_single_file` re-ran its whole batch
         // every call (the CREATEs are all `IF NOT EXISTS`), silently rebuilding FTS each
         // time. The version bump is what makes the rerun a genuine no-op — so this tracks
         // the *current* head version, not the version that first created these tables.
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, SCHEMA_VERSION);
+        assert_eq!(version, LEGACY_SINGLE_FILE_VERSION);
     }
 
     /// The grain constants exist to be pasted into an `ON CONFLICT(…)` target verbatim,
@@ -3581,7 +3789,7 @@ pub(crate) mod tests {
     #[test]
     fn each_grain_constant_works_as_an_upsert_conflict_target() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
 
         let add = |qty: i64| {
             conn.execute(
@@ -3654,7 +3862,7 @@ pub(crate) mod tests {
     #[test]
     fn every_plain_grain_constant_names_the_index_the_head_schema_carries() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
 
         for (index, grain) in [
             ("idx_deck_categories_grain", DECK_CATEGORY_GRAIN),
@@ -3742,7 +3950,7 @@ pub(crate) mod tests {
     #[test]
     fn a_launch_survives_a_staging_drop_it_cannot_carry_out() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         conn.execute_batch("CREATE VIEW cards_staging AS SELECT 1 AS x;")
             .unwrap();
 
@@ -3768,7 +3976,7 @@ pub(crate) mod tests {
     #[test]
     fn the_collapse_index_exists_after_migrate_and_survives_a_swap() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
 
         let sql: String = conn
             .query_row(
@@ -3798,7 +4006,7 @@ pub(crate) mod tests {
     }
 
     /// A database that migrated before the collapse index existed must gain it, and running
-    /// `migrate` twice must be a no-op — every statement in [`CARDS_INDEXES`] is
+    /// `migrate_single_file` twice must be a no-op — every statement in [`CARDS_INDEXES`] is
     /// `IF NOT EXISTS`, which is what lets the newest step replay the whole list rather than
     /// naming the one index it changed.
     ///
@@ -3815,7 +4023,7 @@ pub(crate) mod tests {
     /// `cards` in its v1 shape and the three indexes v1 created — rather than a head
     /// database with `DROP INDEX` and `PRAGMA user_version = 6` behind it. Rewinding the
     /// pragma stopped being a stand-in for a v6 database the moment the v8 step joined the
-    /// ladder *below* this one: `migrate` reads `user_version` once and walks every step
+    /// ladder *below* this one: `migrate_single_file` reads `user_version` once and walks every step
     /// above it, so a rewind to 6 tells v8 to rebuild `decks` and `deck_cards` while they
     /// are already in their v8 shape, and the run dies on a duplicate `folder_id` column —
     /// a failure no real upgrade could produce. It is the same trap [`v6_deck_database`]'s
@@ -3835,8 +4043,8 @@ pub(crate) mod tests {
             "a v6 database has not got the collapse index yet"
         );
 
-        migrate(&conn).unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
 
         let n: i64 = conn
             .query_row(
@@ -3849,13 +4057,13 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, SCHEMA_VERSION);
+        assert_eq!(version, LEGACY_SINGLE_FILE_VERSION);
     }
 
     #[test]
     fn staging_swap_replaces_cards_and_fts_finds_new_rows() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         conn.execute("INSERT INTO cards (id, name, set_code, collector_number, lang, layout, raw) VALUES ('old','Old Card','abc','1','en','normal','{}')", []).unwrap();
         create_staging(&conn).unwrap();
         conn.execute("INSERT INTO cards_staging (id, name, set_code, collector_number, lang, layout, raw) VALUES ('new','Lightning Bolt','lea','161','en','normal','{}')", []).unwrap();
@@ -3912,7 +4120,7 @@ pub(crate) mod tests {
     fn user_rows_survive_the_swap_that_drops_cards() {
         let conn = Connection::open_in_memory().unwrap();
         conn.pragma_update(None, "foreign_keys", "ON").unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         conn.execute(
             "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,raw)
              VALUES ('bolt','Lightning Bolt','lea','161','en','normal','{}')",
@@ -3992,7 +4200,7 @@ pub(crate) mod tests {
     #[test]
     fn the_collection_grain_is_unique_including_the_nullable_parts() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         let add = |finish: &str, condition: &str, serial: Option<&str>| {
             conn.execute(
                 "INSERT INTO collection_entries
@@ -4086,7 +4294,7 @@ pub(crate) mod tests {
     #[test]
     fn the_finish_and_condition_enums_are_enforced_by_the_database() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         // A different card every time, so that the *only* thing that can reject a row is
         // the value under test. Held on one `card_id` the accepted values would collide
         // with each other on the grain — `nonfoil`/`NM` is the first finish *and* the
@@ -4132,7 +4340,7 @@ pub(crate) mod tests {
     #[test]
     fn a_wish_for_any_printing_and_one_for_a_printing_are_two_rows() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         let wish = |card_id: Option<&str>, finish: Option<&str>| {
             conn.execute(
                 "INSERT INTO wishlist_entries
@@ -4159,7 +4367,7 @@ pub(crate) mod tests {
     #[test]
     fn staging_takes_its_columns_from_the_live_table_not_from_the_v1_constant() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         conn.execute_batch("ALTER TABLE cards ADD COLUMN scryfall_uri TEXT;")
             .unwrap();
 
@@ -4192,7 +4400,7 @@ pub(crate) mod tests {
     #[test]
     fn the_indexes_on_cards_are_identical_before_and_after_a_swap() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         // The list also carries SQLite's implicit `sqlite_autoindex_cards_1` (`sql` NULL),
         // which is the PRIMARY KEY — so comparing the whole list across the swap proves
         // the derived staging clone kept the key too.
@@ -4250,7 +4458,7 @@ pub(crate) mod tests {
     #[test]
     fn failed_swap_rolls_back_and_leaves_connection_usable() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         conn.execute("INSERT INTO cards (id, name, set_code, collector_number, lang, layout, raw) VALUES ('old','Old Card','abc','1','en','normal','{}')", []).unwrap();
 
         assert!(
@@ -4286,12 +4494,12 @@ pub(crate) mod tests {
     }
 
     /// A database that stopped at version 1 — what every machine that ran Plan 1 has on
-    /// disk. Built from the frozen v1 constant rather than by calling `migrate`, because
-    /// `migrate` now runs straight through to head and there is no way back.
+    /// disk. Built from the frozen v1 constant rather than by calling `migrate_single_file`, because
+    /// `migrate_single_file` now runs straight through to head and there is no way back.
     ///
     /// No indexes, for the reason the v1 step creates none: [`CARDS_INDEXES`] describes the
     /// table at head and names columns a v1 table does not have. The v20 step replays the
-    /// list, so a database built here has its indexes by the time `migrate` returns —
+    /// list, so a database built here has its indexes by the time `migrate_single_file` returns —
     /// `every_version_ends_with_the_same_schema_as_a_fresh_install` is what asserts it.
     fn v1_database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
@@ -4320,13 +4528,13 @@ pub(crate) mod tests {
     #[test]
     fn migrate_reaches_the_head_version_and_adds_the_image_columns() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
-        migrate(&conn).unwrap(); // still idempotent
+        migrate_single_file(&conn).unwrap();
+        migrate_single_file(&conn).unwrap(); // still idempotent
 
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, SCHEMA_VERSION);
+        assert_eq!(version, LEGACY_SINGLE_FILE_VERSION);
 
         let columns: Vec<String> = table_info(&conn, "cards")
             .into_iter()
@@ -4368,7 +4576,7 @@ pub(crate) mod tests {
         );
         insert_raw(&conn, "none", "No Art At All", r#"{"object":"card"}"#);
 
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
 
         let top: String = conn
             .query_row("SELECT image_uris FROM cards WHERE id='top'", [], |r| {
@@ -4474,7 +4682,7 @@ pub(crate) mod tests {
         for (id, raw) in &cases {
             insert_raw(&conn, id, id, raw);
         }
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
 
         // Compared as parsed JSON, not as bytes: SQLite emits the four keys in
         // `IMAGE_VARIANTS` order (`{"thumb":…,"grid":…,"display":…,"art":…}`) and
@@ -4563,7 +4771,7 @@ pub(crate) mod tests {
             )
             .unwrap();
         }
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
 
         for (id, raw) in &cases {
             let backfilled: Option<String> = conn
@@ -4602,7 +4810,7 @@ pub(crate) mod tests {
         conn.execute_batch("INSERT INTO cards_fts(cards_fts) VALUES('rebuild');")
             .unwrap();
 
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
 
         let hits: i64 = conn
             .query_row(
@@ -4620,7 +4828,7 @@ pub(crate) mod tests {
     #[test]
     fn the_image_columns_survive_a_staging_swap() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         create_staging(&conn).unwrap();
         conn.execute(
             "INSERT INTO cards_staging
@@ -4661,7 +4869,7 @@ pub(crate) mod tests {
         .unwrap();
         insert_raw(&conn, "none", "No Credit", r#"{"object":"card"}"#);
 
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
 
         let artist = |id: &str| -> Option<String> {
             conn.query_row("SELECT artist FROM cards WHERE id = ?1", [id], |r| r.get(0))
@@ -4678,7 +4886,7 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, SCHEMA_VERSION);
+        assert_eq!(version, LEGACY_SINGLE_FILE_VERSION);
     }
 
     /// Same rule as v2: the step writes one new, unindexed column and renumbers no rowid,
@@ -4696,7 +4904,7 @@ pub(crate) mod tests {
         conn.execute_batch("INSERT INTO cards_fts(cards_fts) VALUES('rebuild');")
             .unwrap();
 
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
 
         let hits: i64 = conn
             .query_row(
@@ -4717,7 +4925,7 @@ pub(crate) mod tests {
     /// The whole ladder is walked, not just v3: every later step that reads `raw` is on
     /// the same hook, and this is the only test that puts a real gzip member in the column
     /// — fixture databases hold text `raw`, so an unguarded read passes everything else and
-    /// breaks only in the field. Reaching `SCHEMA_VERSION` is therefore half the assertion.
+    /// breaks only in the field. Reaching `LEGACY_SINGLE_FILE_VERSION` is therefore half the assertion.
     #[test]
     fn the_v3_backfill_steps_over_a_row_whose_raw_is_not_json() {
         let conn = v1_database();
@@ -4730,7 +4938,7 @@ pub(crate) mod tests {
         )
         .unwrap();
 
-        migrate(&conn).expect("a non-JSON `raw` must not fail the migration");
+        migrate_single_file(&conn).expect("a non-JSON `raw` must not fail the migration");
 
         let (artist, power, toughness): (Option<String>, Option<String>, Option<String>) = conn
             .query_row(
@@ -4746,7 +4954,7 @@ pub(crate) mod tests {
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(
-            version, SCHEMA_VERSION,
+            version, LEGACY_SINGLE_FILE_VERSION,
             "an unguarded read anywhere on the ladder stops the migration here"
         );
     }
@@ -4758,7 +4966,7 @@ pub(crate) mod tests {
     #[test]
     fn the_artist_column_survives_a_staging_swap() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         create_staging(&conn).unwrap();
         conn.execute(
             "INSERT INTO cards_staging
@@ -4781,7 +4989,7 @@ pub(crate) mod tests {
     #[test]
     fn a_swap_settles_a_rebuild_an_interrupted_compaction_owed() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         crate::sync::set_meta(&conn, crate::maintenance::K_FTS_REBUILD_PENDING, "1").unwrap();
         create_staging(&conn).unwrap();
         conn.execute("INSERT INTO cards_staging (id, name, set_code, collector_number, lang, layout, raw) VALUES ('new','Lightning Bolt','lea','161','en','normal','{}')", []).unwrap();
@@ -4808,7 +5016,7 @@ pub(crate) mod tests {
     fn image_cache_rows_survive_the_swap_that_drops_cards() {
         let conn = Connection::open_in_memory().unwrap();
         conn.pragma_update(None, "foreign_keys", "ON").unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         conn.execute(
             "INSERT INTO image_cache (card_id, face, variant, source_uri, bytes, fetched_at)
              VALUES ('bolt', 0, 'grid', 'https://cards.scryfall.io/grid/front/b/o/bolt.webp?17', 62000, 1800000000)",
@@ -4926,7 +5134,7 @@ pub(crate) mod tests {
     fn deleting_a_deck_cascades_its_cards_and_its_group_but_never_the_cards_in_it() {
         let conn = Connection::open_in_memory().unwrap();
         conn.pragma_update(None, "foreign_keys", "ON").unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         seed_card(&conn, "bolt", "lea", "161");
         let deck = deck(&conn, "Burn");
         let main = category(&conn, deck, "main", "Main deck");
@@ -4956,7 +5164,7 @@ pub(crate) mod tests {
 
         for (table, scope) in [
             ("deck_cards", "1"),
-            // Scoped, because `migrate` has already made the one `removed` folder and that one
+            // Scoped, because `migrate_single_file` has already made the one `removed` folder and that one
             // belongs to no deck — which is the point of the partial index it is under.
             ("collection_folders", "deck_id IS NOT NULL"),
         ] {
@@ -4993,7 +5201,7 @@ pub(crate) mod tests {
     fn removing_a_collection_entry_leaves_the_deck_wanting_the_card() {
         let conn = Connection::open_in_memory().unwrap();
         conn.pragma_update(None, "foreign_keys", "ON").unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         seed_card(&conn, "bolt", "lea", "161");
         let deck = deck(&conn, "Burn");
         let entry = entry(&conn, "bolt", 4);
@@ -5030,7 +5238,7 @@ pub(crate) mod tests {
     fn deck_rows_survive_the_swap_that_drops_cards() {
         let conn = Connection::open_in_memory().unwrap();
         conn.pragma_update(None, "foreign_keys", "ON").unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         seed_card(&conn, "bolt", "lea", "161");
         let deck = deck(&conn, "Burn");
         // The cover art is a printing too, and it is the other soft reference.
@@ -5100,7 +5308,7 @@ pub(crate) mod tests {
     #[test]
     fn the_deck_card_grain_folds_and_the_quantity_check_holds() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         seed_card(&conn, "bolt", "lea", "161");
         let d = deck(&conn, "Burn");
         let main = category(&conn, d, "main", "Main deck");
@@ -5162,7 +5370,7 @@ pub(crate) mod tests {
     fn the_v8_step_replaces_the_zone_with_a_category() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
 
         // `zone` is gone from the table entirely, and `category_id` is NOT NULL.
         let cols: Vec<(String, i64)> = conn
@@ -5184,7 +5392,7 @@ pub(crate) mod tests {
     /// The gap the second `deck_categories` insert in the v8 step closes: a deck that
     /// predates categories and has never held a card — no `deck_cards` row in any zone —
     /// is invisible to the first insert, which is driven entirely off `deck_cards`.
-    /// Without the second pass this deck would come out of `migrate` owning zero
+    /// Without the second pass this deck would come out of `migrate_single_file` owning zero
     /// categories, exactly as every deck made between v8 shipping and
     /// `deck_meta::ensure_predefined_categories` landing would have, not only the ones a
     /// human would call "legacy". Built on [`v6_deck_database`] the way
@@ -5202,7 +5410,7 @@ pub(crate) mod tests {
         let deck_id = conn.last_insert_rowid();
 
         conn.pragma_update(None, "foreign_keys", "ON").unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
 
         let mut stmt = conn
             .prepare(
@@ -5230,9 +5438,9 @@ pub(crate) mod tests {
 
     /// A database that stopped at version 6 — decks and their cards in the pre-category
     /// shape, which is what every machine that has synced since Plan 4 has on disk today.
-    /// Built by hand rather than by calling [`migrate`] and rewinding `PRAGMA user_version`
+    /// Built by hand rather than by calling [`migrate_single_file`] and rewinding `PRAGMA user_version`
     /// backward: rewinding the pragma would still leave `deck_cards` in its *v8* shape,
-    /// which is exactly the state this fixture must not be in — `migrate` never runs a step
+    /// which is exactly the state this fixture must not be in — `migrate_single_file` never runs a step
     /// twice, so a v8-shaped table with `user_version` forced back to 6 would hit the `if
     /// v < 8` block over a table it does not match and fail in a way no real upgrade ever
     /// could.
@@ -5258,7 +5466,7 @@ pub(crate) mod tests {
     /// for whatever that immediate check cannot see: a dangling reference this transaction's
     /// own writes never touch.
     ///
-    /// **`cards` is here for the v10 step, which also runs.** [`migrate`] reads
+    /// **`cards` is here for the v10 step, which also runs.** [`migrate_single_file`] reads
     /// `user_version` once and then walks *every* step above it, so a database that says 6
     /// runs v7, the v8 rebuild, v9's error log and v10 alike — and v10's body is
     /// `ALTER TABLE cards … / UPDATE cards … / DROP INDEX idx_cards_collapse`, a hard error
@@ -5281,7 +5489,7 @@ pub(crate) mod tests {
     /// database had. That the *finished* database carries all four, widened, is
     /// `every_version_ends_with_the_same_schema_as_a_fresh_install`'s to assert.
     ///
-    /// `migrate`'s `if v < 7`, `if v < 8`, `if v < 9` and `if v < 10` branches are the only
+    /// `migrate_single_file`'s `if v < 7`, `if v < 8`, `if v < 9` and `if v < 10` branches are the only
     /// four that can run once `user_version` already says 6, so nothing earlier is needed —
     /// the same reasoning `v1_database` uses further down the ladder.
     fn v6_deck_database() -> Connection {
@@ -5289,7 +5497,7 @@ pub(crate) mod tests {
         conn.execute_batch(&format!(
             "CREATE TABLE cards ({CARDS_COLUMNS});
              -- The five columns v2, v3 and v5 added to `cards`, replayed as literals
-             -- because `migrate` will not: it reads `user_version` once, sees 6, and skips
+             -- because `migrate_single_file` will not: it reads `user_version` once, sees 6, and skips
              -- every step below v7 — so a fixture that stopped at the frozen v1 shape would
              -- be a v1 `cards` wearing a v6 label, and would reach head missing five
              -- columns a real v6 database has had since long before it. That is precisely
@@ -5399,7 +5607,7 @@ pub(crate) mod tests {
              CREATE TABLE app_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 
              -- v5's own table, and it is here for the reason the five `cards` columns above
-             -- are: a real v6 database went through v5 and has it, `migrate` reads
+             -- are: a real v6 database went through v5 and has it, `migrate_single_file` reads
              -- `user_version` once and skips every step below v7, and **a step above this
              -- rung now writes to it** — v18 alters `format_specs` and re-seeds it. Without
              -- this the fixture is a pre-v5 database wearing a v6 label, and it reaches head
@@ -5427,7 +5635,7 @@ pub(crate) mod tests {
 
              -- v4's own table, here for exactly the reason `format_specs` above is, and it
              -- cost the same lesson: a real v6 database went through v4 and has a wishlist,
-             -- `migrate` reads `user_version` once and skips every step below v7, and **a
+             -- `migrate_single_file` reads `user_version` once and skips every step below v7, and **a
              -- step above this rung now writes to it** — v23 adds `folder_id` and rebuilds
              -- the grain index. Without this the fixture is a pre-v4 database wearing a v6
              -- label, and it reaches head with `no such table: wishlist_entries`, which no
@@ -5472,7 +5680,7 @@ pub(crate) mod tests {
     /// `foreign_keys=ON` — as every real launch runs it, `db::open` always sets it. This is
     /// what the test actually demonstrates: the migration completes with foreign keys
     /// enforced (which, measured by temporarily breaking the rebuild's `SELECT`, is already
-    /// what would refuse a dangling `category_id` — `migrate` itself fails outright rather
+    /// what would refuse a dangling `category_id` — `migrate_single_file` itself fails outright rather
     /// than committing one, before `PRAGMA foreign_key_check` below ever runs); every card
     /// keeps its quantity and its own `deck_cards.id` (which `deck_allocations` may
     /// separately be holding) and lands in a category whose `kind` is the zone it came from —
@@ -5481,7 +5689,7 @@ pub(crate) mod tests {
     /// can see, since the reference still resolves; with the Maybeboard alone coming out
     /// `is_active = 0`; no reference anywhere in the whole database is left dangling, on any
     /// table, including ones this test does not otherwise touch (`foreign_key_check`'s own
-    /// job once `migrate` has returned); and a pre-existing `deck_allocations` reservation is
+    /// job once `migrate_single_file` has returned); and a pre-existing `deck_allocations` reservation is
     /// still there and still resolves afterwards — proving the migration does not quietly
     /// clear a user's claims, not that the rebuild "cannot" disturb them, since that FK chain
     /// does not run through `deck_cards` at all.
@@ -5492,7 +5700,7 @@ pub(crate) mod tests {
     /// dropping `cat.deck_id` changes nothing and the deck-scoping half of the JOIN goes
     /// unchecked entirely. Measured with two decks: dropping that term matches each card
     /// against *both* decks' category of its kind, and since the rebuild copies `dc.id`
-    /// verbatim, `migrate` dies at "UNIQUE constraint failed: deck_cards_v8.id" — a hard
+    /// verbatim, `migrate_single_file` dies at "UNIQUE constraint failed: deck_cards_v8.id" — a hard
     /// failure where there had been none at all. The per-card `cat.deck_id` assertion below is
     /// the direct statement of the same rule, and is what would catch a future backfill that
     /// picked one wrong category rather than two.
@@ -5557,26 +5765,26 @@ pub(crate) mod tests {
         )
         .unwrap();
 
-        // The pragma every real launch runs under (`db::open`). Set before `migrate`, not
-        // inside it: `PRAGMA foreign_keys` is a no-op mid-transaction, and `migrate` opens
+        // The pragma every real launch runs under (`db::open`). Set before `migrate_single_file`, not
+        // inside it: `PRAGMA foreign_keys` is a no-op mid-transaction, and `migrate_single_file` opens
         // its own.
         conn.pragma_update(None, "foreign_keys", "ON").unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
 
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, SCHEMA_VERSION);
+        assert_eq!(version, LEGACY_SINGLE_FILE_VERSION);
 
         // A whole-database dangling-reference sweep, for less than it first looks like it
         // buys. Measured directly (temporarily changing the v8 rebuild's `SELECT`
         // to `cat.id + 100000` and running this test): a *dangling* `category_id` never
-        // reaches this line at all — `migrate(&conn).unwrap()` above already panics on
+        // reaches this line at all — `migrate_single_file(&conn).unwrap()` above already panics on
         // "FOREIGN KEY constraint failed", because every FK here is checked immediately
         // under `foreign_keys=ON`, and `INSERT INTO deck_cards_v8 … SELECT` fails outright
         // rather than committing a bad row. So this assertion is not what would catch that
-        // bug; the pragma being on before `migrate` runs already is. What this line still
-        // covers, and `migrate(&conn).unwrap()` does not: a dangling reference on a row this
+        // bug; the pragma being on before `migrate_single_file` runs already is. What this line still
+        // covers, and `migrate_single_file(&conn).unwrap()` does not: a dangling reference on a row this
         // transaction's own DML never touches — pre-existing corruption, or a future step
         // that writes through a path this one does not — on any FK, on any table, not only
         // the five cards this test names. (A *valid but wrong* reference — the backfill's
@@ -5597,7 +5805,7 @@ pub(crate) mod tests {
 
         // **The claim seeded above arrives at head as a placement, and this is the longest
         // route on the ladder to that conversion** — nineteen rungs, over a `decks` table and
-        // a `collection_entries` table built by hand rather than by [`migrate`]. It read the
+        // a `collection_entries` table built by hand rather than by [`migrate_single_file`]. It read the
         // allocation back off `deck_allocations` until v25 dropped that table; what it asks
         // now is the same question one level up: the user's four claimed copies are still four
         // copies, and they are in this deck's group.
@@ -5674,7 +5882,7 @@ pub(crate) mod tests {
         conn.execute_batch("INSERT INTO cards_fts(cards_fts) VALUES('rebuild');")
             .unwrap();
 
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
 
         let hits: i64 = conn
             .query_row(
@@ -5696,7 +5904,7 @@ pub(crate) mod tests {
     #[test]
     fn a_category_kind_is_one_of_the_five_and_predefined_names_round_trip() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         let d = deck(&conn, "Burn");
 
         let insert_kind = |kind: &str| {
@@ -5762,7 +5970,7 @@ pub(crate) mod tests {
     #[test]
     fn a_finish_is_one_of_the_three_on_every_table_that_checks_it() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
 
         let is_check_failure = |err: &rusqlite::Error| {
             matches!(err, rusqlite::Error::SqliteFailure(e, _)
@@ -5834,7 +6042,7 @@ pub(crate) mod tests {
     #[test]
     fn format_specs_is_seeded_with_all_25_formats_and_the_load_bearing_cells() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         let n: i64 = conn
             .query_row("SELECT count(*) FROM format_specs", [], |r| r.get(0))
             .unwrap();
@@ -6019,7 +6227,7 @@ pub(crate) mod tests {
         .unwrap();
         insert_raw(&conn, "land", "Forest", r#"{"object":"card"}"#);
 
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
 
         let pt = |id: &str| -> (Option<String>, Option<String>) {
             conn.query_row(
@@ -6053,7 +6261,7 @@ pub(crate) mod tests {
         conn.execute_batch("INSERT INTO cards_fts(cards_fts) VALUES('rebuild');")
             .unwrap();
 
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
 
         let hits: i64 = conn
             .query_row(
@@ -6069,7 +6277,7 @@ pub(crate) mod tests {
 
     /// Undo schema v12 over a head database: the three `decks` columns, and nothing else.
     ///
-    /// **Every rewound fixture below head owes this, not just the one testing v12.** `migrate`
+    /// **Every rewound fixture below head owes this, not just the one testing v12.** `migrate_single_file`
     /// reads `user_version` once and then walks *every* step above it, so a database that says
     /// 9 runs v10, v11 **and** v12 — and v12's `ALTER TABLE decks ADD COLUMN` over a table that
     /// already carries the column is a `duplicate column name` error no real upgrade could
@@ -6094,7 +6302,7 @@ pub(crate) mod tests {
     /// rule is worth stating in the general form, because the next step to join the ladder did
     /// owe a third ([`UNDO_V14`]): a step whose DDL is **not idempotent** — `ALTER TABLE … ADD
     /// COLUMN`, which answers `duplicate column name`, unlike v11's and v14's `CREATE TABLE IF
-    /// NOT EXISTS` — must come back out of every rewound fixture beneath it, because `migrate`
+    /// NOT EXISTS` — must come back out of every rewound fixture beneath it, because `migrate_single_file`
     /// reads `user_version` once and then replays *every* step above what it read. An
     /// **idempotent** step owes it for the quieter reason [`UNDO_V14`] states: not to keep the
     /// fixture migrating, but to keep it honest about which version it is.
@@ -6237,7 +6445,7 @@ pub(crate) mod tests {
     /// its own, applied here.
     ///
     /// **It restores the shape and not the rows, and nothing needs it to.** Every fixture is
-    /// `migrate`d into an empty in-memory database and rewound before anything is seeded, so
+    /// `migrate_single_file`d into an empty in-memory database and rewound before anything is seeded, so
     /// there has never been a tag in one at this moment. A rewind that tried to invent a
     /// `deck_id` for a row that has none would be inventing the very fact v21 deleted.
     ///
@@ -6333,7 +6541,7 @@ pub(crate) mod tests {
     /// another route.
     ///
     /// **The `ALTER` is the one statement that cannot be guarded**, and it is why this constant
-    /// is only ever spelled after a full [`migrate`]: `ADD COLUMN` has no `IF NOT EXISTS` and
+    /// is only ever spelled after a full [`migrate_single_file`]: `ADD COLUMN` has no `IF NOT EXISTS` and
     /// always appends, so `is_built` comes back at the *end* of `decks`. v25 drops it again on
     /// the way up, which is what keeps
     /// [`every_version_ends_with_the_same_schema_as_a_fresh_install`] comparing two tables that
@@ -6426,7 +6634,7 @@ pub(crate) mod tests {
     /// is exactly right: this is a v9 database, and a v9 database has it.
     ///
     /// **It rewinds to 9 and not one step further, and that is the trap
-    /// [`v6_deck_database`] exists for.** `migrate` reads `user_version` once and then walks
+    /// [`v6_deck_database`] exists for.** `migrate_single_file` reads `user_version` once and then walks
     /// *every* step above it, so a rewind to 7 over a head-shaped database would re-run v8's
     /// deck rebuild against tables already in their v8 shape and die on a duplicate column —
     /// a failure no real upgrade can produce. Undoing v10's two statements is the whole of
@@ -6443,7 +6651,7 @@ pub(crate) mod tests {
     /// database already has.
     fn v9_database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         conn.execute_batch(&format!(
             "DROP INDEX idx_cards_collapse;
              ALTER TABLE cards DROP COLUMN legal_mask;
@@ -6470,7 +6678,7 @@ pub(crate) mod tests {
     /// The fixture is a head database with the v10 step undone, so every way it can be wrong
     /// leaves it looking like head — and a head-shaped "v9" would sail through
     /// [`every_version_ends_with_the_same_schema_as_a_fresh_install`] **vacuously**, because
-    /// `migrate` would have nothing to do and the comparison would be a fresh install against
+    /// `migrate_single_file` would have nothing to do and the comparison would be a fresh install against
     /// itself. The literal `9` is the point: this fixture is pinned to the version below the
     /// [`CARDS_INDEXES`] replay, not to head minus one, and the two came apart when v11 landed.
     ///
@@ -6539,7 +6747,7 @@ pub(crate) mod tests {
         )
         .unwrap();
 
-        migrate(&conn).expect("a gzip `raw` must not fail the v10 step");
+        migrate_single_file(&conn).expect("a gzip `raw` must not fail the v10 step");
 
         let mask: i64 = conn
             .query_row("SELECT legal_mask FROM cards WHERE id='1'", [], |r| {
@@ -6573,7 +6781,7 @@ pub(crate) mod tests {
     #[test]
     fn a_card_can_never_carry_a_null_legal_mask() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
 
         conn.execute(
             "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,raw)
@@ -6614,7 +6822,7 @@ pub(crate) mod tests {
     fn the_v10_step_replaces_the_narrow_collapse_index_rather_than_skipping_it() {
         let conn = v9_database();
 
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
 
         let sql: String = conn
             .query_row(
@@ -6646,7 +6854,7 @@ pub(crate) mod tests {
     /// [`v13_database`] carries the "one step below head" claim now.
     fn v10_database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         conn.execute_batch(&format!(
             "DROP TABLE marketplace_prices;
              DROP TABLE marketplace_feed_meta;
@@ -6676,7 +6884,7 @@ pub(crate) mod tests {
     /// genuinely be watched running over.
     fn v11_database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         conn.execute_batch(&format!(
             "{UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V12} {UNDO_V13} {UNDO_V14} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} \
              {UNDO_V19} PRAGMA user_version = 11;"
@@ -6708,7 +6916,7 @@ pub(crate) mod tests {
             "and nor may v13's, which a rewind to 11 also has to undo"
         );
         // Nor v14's five tables. Their DDL is `CREATE TABLE IF NOT EXISTS`, so leaving them
-        // standing would cost `migrate` nothing and this fixture its name — which is the whole
+        // standing would cost `migrate_single_file` nothing and this fixture its name — which is the whole
         // reason [`UNDO_V14`] exists and is asserted here rather than assumed.
         assert_eq!(
             oracle_tag_table_count(&conn),
@@ -6750,7 +6958,7 @@ pub(crate) mod tests {
     /// [`v13_database`] carries that title now.
     fn v12_database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         conn.execute_batch(&format!(
             "{UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V13} {UNDO_V14} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} \
              {UNDO_V19} PRAGMA user_version = 12;"
@@ -6761,7 +6969,7 @@ pub(crate) mod tests {
 
     /// [`v12_database`] must really be **at** version 12, or the v13 step below is being tested
     /// against a database that already carries its column — which is a fresh install compared
-    /// against itself. A literal, not `SCHEMA_VERSION - 1`: this fixture is pinned to the
+    /// against itself. A literal, not `LEGACY_SINGLE_FILE_VERSION - 1`: this fixture is pinned to the
     /// version below the X group, and it stopped following the ladder when v14 landed.
     #[test]
     fn the_v12_fixture_really_sits_where_the_v13_step_can_run_over_it() {
@@ -6819,13 +7027,13 @@ pub(crate) mod tests {
         )
         .unwrap();
 
-        migrate(&conn).unwrap();
-        migrate(&conn).unwrap(); // idempotent
+        migrate_single_file(&conn).unwrap();
+        migrate_single_file(&conn).unwrap(); // idempotent
 
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, SCHEMA_VERSION);
+        assert_eq!(version, LEGACY_SINGLE_FILE_VERSION);
 
         let (notnull, default): (i64, Option<String>) = conn
             .query_row(
@@ -6892,8 +7100,8 @@ pub(crate) mod tests {
         // And v10's own column is standing, because this *is* a v10 database.
         assert!(card_columns(&conn).contains(&"legal_mask".to_owned()));
 
-        migrate(&conn).unwrap();
-        migrate(&conn).unwrap(); // idempotent
+        migrate_single_file(&conn).unwrap();
+        migrate_single_file(&conn).unwrap(); // idempotent
 
         conn.execute(
             "INSERT INTO marketplace_prices (marketplace, card_id, finish, price)
@@ -6936,7 +7144,7 @@ pub(crate) mod tests {
     #[test]
     fn marketplace_prices_survive_the_staging_swap() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         conn.execute_batch(
             "INSERT INTO marketplace_prices (marketplace, card_id, finish, price)
                 VALUES ('cardkingdom','bolt','nonfoil',0.35);
@@ -6973,7 +7181,7 @@ pub(crate) mod tests {
     #[test]
     fn a_price_for_a_card_the_corpus_does_not_have_is_storable() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         conn.pragma_update(None, "foreign_keys", "ON").unwrap();
 
         conn.execute(
@@ -7001,7 +7209,7 @@ pub(crate) mod tests {
     /// predates them reads the editor's own opening choices rather than a NULL, and a rerun is
     /// a no-op.
     ///
-    /// **The deck row is inserted before `migrate` runs**, which is the only way to test what
+    /// **The deck row is inserted before `migrate_single_file` runs**, which is the only way to test what
     /// this step is actually for: `DEFAULT` on an added column fills the rows that are already
     /// there, and a row written afterwards would be answering the DDL rather than the
     /// migration. A step that added the columns nullable, with the defaults living only in
@@ -7016,8 +7224,8 @@ pub(crate) mod tests {
         )
         .unwrap();
 
-        migrate(&conn).unwrap();
-        migrate(&conn).unwrap(); // idempotent
+        migrate_single_file(&conn).unwrap();
+        migrate_single_file(&conn).unwrap(); // idempotent
 
         let (variant, group_by, sort_by): (String, String, String) = conn
             .query_row(
@@ -7064,7 +7272,7 @@ pub(crate) mod tests {
     /// [`v15_database`] carries it now.
     fn v13_database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         conn.execute_batch(&format!(
             "{UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V14} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 13;"
         ))
@@ -7074,7 +7282,7 @@ pub(crate) mod tests {
 
     /// [`v13_database`] must really be **at** version 13, or the v14 step below is being tested
     /// against a database that already carries its tables — which is a fresh install compared
-    /// against itself. A literal, not `SCHEMA_VERSION - 1`: this fixture is pinned to the
+    /// against itself. A literal, not `LEGACY_SINGLE_FILE_VERSION - 1`: this fixture is pinned to the
     /// version below the oracle-tag tables, and it stopped following the ladder when v15 landed.
     #[test]
     fn the_v13_fixture_really_sits_where_the_v14_step_can_run_over_it() {
@@ -7141,13 +7349,13 @@ pub(crate) mod tests {
     fn the_v14_step_creates_the_oracle_tag_tables() {
         let conn = v13_database();
 
-        migrate(&conn).unwrap();
-        migrate(&conn).unwrap(); // idempotent
+        migrate_single_file(&conn).unwrap();
+        migrate_single_file(&conn).unwrap(); // idempotent
 
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, SCHEMA_VERSION);
+        assert_eq!(version, LEGACY_SINGLE_FILE_VERSION);
         assert_eq!(oracle_tag_table_count(&conn), 5, "all five arrive");
 
         conn.execute_batch(
@@ -7203,7 +7411,7 @@ pub(crate) mod tests {
     #[test]
     fn a_tagging_for_a_card_the_corpus_does_not_have_is_storable() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         conn.pragma_update(None, "foreign_keys", "ON").unwrap();
 
         conn.execute(
@@ -7226,7 +7434,7 @@ pub(crate) mod tests {
     #[test]
     fn oracle_tags_survive_the_staging_swap() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         conn.execute_batch(
             "INSERT INTO oracle_tags (slug,label,description) VALUES ('ramp','ramp',NULL);
              INSERT INTO oracle_tag_cards (oracle_id, slug) VALUES ('oid-1','ramp');
@@ -7266,7 +7474,7 @@ pub(crate) mod tests {
     #[test]
     fn the_oracle_tag_staging_tables_match_the_live_ones() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         create_oracle_tag_staging(&conn).unwrap();
 
         for (live, staging) in ORACLE_TAG_TABLES {
@@ -7287,7 +7495,7 @@ pub(crate) mod tests {
     #[test]
     fn the_oracle_tag_swap_replaces_rather_than_merges() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         conn.execute_batch(
             "INSERT INTO oracle_tags (slug,label,description) VALUES ('retired','retired',NULL);
              INSERT INTO oracle_tag_cards (oracle_id,slug) VALUES ('oid-1','retired');",
@@ -7362,7 +7570,7 @@ pub(crate) mod tests {
     /// category) took it, and [`v15_database`] carries it now.
     fn v14_database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         conn.execute_batch(&format!(
             "{UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V15} {UNDO_V16} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 14;"
         ))
@@ -7371,7 +7579,7 @@ pub(crate) mod tests {
     }
 
     /// [`v14_database`] must really be **at** version 14, or the v15 step below is being tested
-    /// against a database that already carries its column. A literal, not `SCHEMA_VERSION - 1`:
+    /// against a database that already carries its column. A literal, not `LEGACY_SINGLE_FILE_VERSION - 1`:
     /// this fixture is pinned to the version below `deck_categories.origin`, and it stopped
     /// following the ladder when v16 landed.
     #[test]
@@ -7441,13 +7649,13 @@ pub(crate) mod tests {
         let other = deck(&conn, "Other Deck");
         category(&conn, other, "side", "Removal");
 
-        migrate(&conn).unwrap();
-        migrate(&conn).unwrap(); // idempotent
+        migrate_single_file(&conn).unwrap();
+        migrate_single_file(&conn).unwrap(); // idempotent
 
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, SCHEMA_VERSION);
+        assert_eq!(version, LEGACY_SINGLE_FILE_VERSION);
 
         let (notnull, default): (i64, Option<String>) = conn
             .query_row(
@@ -7516,7 +7724,7 @@ pub(crate) mod tests {
     #[test]
     fn origin_carries_no_check_because_no_caller_supplies_it() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         let deck_id = deck(&conn, "Burn");
         let cat = category(&conn, deck_id, "main", "Ramp");
 
@@ -7537,7 +7745,7 @@ pub(crate) mod tests {
     /// down before it.
     fn v15_database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         conn.execute_batch(&format!(
             "{UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V16} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 15;"
         ))
@@ -7560,7 +7768,7 @@ pub(crate) mod tests {
     /// the record of which fixture the title belonged to.
     fn v16_database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         conn.execute_batch(&format!(
             "{UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 16;"
         ))
@@ -7573,12 +7781,12 @@ pub(crate) mod tests {
     /// Both CASCADEs are asserted here rather than read off the DDL, because a foreign key
     /// declared without `PRAGMA foreign_keys=ON` is a comment — and `seeded()`-style fixtures
     /// elsewhere in this crate deliberately do not set it, while `db::open` always does.
-    /// `Connection::open_in_memory` plus [`migrate`] is the pairing that has it on.
+    /// `Connection::open_in_memory` plus [`migrate_single_file`] is the pairing that has it on.
     #[test]
     fn the_undo_journal_cascades_from_its_history_row_and_its_deck() {
         let conn = Connection::open_in_memory().unwrap();
         conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         conn.execute_batch(
             r#"INSERT INTO decks (id, name, created_at, updated_at)
                    VALUES (1, 'Burn', unixepoch(), unixepoch());
@@ -7607,8 +7815,8 @@ pub(crate) mod tests {
     /// The rewind is honest: a database claiming 16 must not be carrying v17's table.
     ///
     /// [`UNDO_V17`]'s DDL is `CREATE TABLE IF NOT EXISTS`, so a forgotten rewind costs
-    /// `migrate` nothing and this fixture its name — which is exactly why the absence is
-    /// asserted rather than assumed. Reaching [`SCHEMA_VERSION`] afterwards is the other half.
+    /// `migrate_single_file` nothing and this fixture its name — which is exactly why the absence is
+    /// asserted rather than assumed. Reaching [`LEGACY_SINGLE_FILE_VERSION`] afterwards is the other half.
     #[test]
     fn the_v17_step_creates_the_undo_journal_over_a_v16_database() {
         let conn = v16_database();
@@ -7618,13 +7826,13 @@ pub(crate) mod tests {
             "a v16 database may not already carry v17's table"
         );
 
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
 
         assert_eq!(table_count(&conn, "deck_undo"), 1);
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, SCHEMA_VERSION);
+        assert_eq!(version, LEGACY_SINGLE_FILE_VERSION);
     }
 
     /// `sqlite_master` rows with this name — 0 or 1. A helper rather than an inline query
@@ -7665,7 +7873,7 @@ pub(crate) mod tests {
     /// all. It is the "one step below head" fixture now, the title [`v18_database`] held.
     fn v19_database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         conn.execute_batch(&format!(
             "{UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} PRAGMA user_version = 19;"
         ))
@@ -7682,7 +7890,7 @@ pub(crate) mod tests {
     /// touches one table and the only rung above it writes no shape at all.
     fn v20_database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         conn.execute_batch(&format!(
             "{UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} PRAGMA user_version = 20;"
         ))
@@ -7766,7 +7974,7 @@ pub(crate) mod tests {
         v20_card(&conn, control, "swords", small, 1);
         v20_card(&conn, burn, "llanowar", ramp, 2);
 
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
 
         let rows: Vec<(i64, String, String, String)> = conn
             .prepare("SELECT id, name, name_key, color FROM deck_tags ORDER BY name")
@@ -7837,7 +8045,7 @@ pub(crate) mod tests {
         v20_card(&conn, burn, "bolt", older, 3);
         v20_card(&conn, control, "swords", newer, 3);
 
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
 
         let (id, name): (i64, String) = conn
             .query_row("SELECT id, name FROM deck_tags", [], |r| {
@@ -7855,7 +8063,7 @@ pub(crate) mod tests {
         let burn = v20_deck(&conn, "Burn");
         v20_tag(&conn, burn, "Someday", "#d9b95c", 0);
 
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
 
         let names: Vec<String> = conn
             .prepare("SELECT name FROM deck_tags")
@@ -7885,7 +8093,7 @@ pub(crate) mod tests {
         )
         .unwrap();
 
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
 
         let undo: i64 = conn
             .query_row("SELECT count(*) FROM deck_undo", [], |r| r.get(0))
@@ -7907,11 +8115,11 @@ pub(crate) mod tests {
     #[test]
     fn v20_creates_the_art_tag_tables_and_the_illustration_index() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         let v: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, SCHEMA_VERSION);
+        assert_eq!(v, LEGACY_SINGLE_FILE_VERSION);
         for (live, _) in ART_TAG_TABLES {
             conn.query_row(
                 "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?1",
@@ -7935,7 +8143,7 @@ pub(crate) mod tests {
     #[test]
     fn the_art_closure_carries_a_weight_column() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         assert_eq!(has_column(&conn, "art_tag_illustrations", "weight"), 1);
     }
 
@@ -7945,7 +8153,7 @@ pub(crate) mod tests {
     #[test]
     fn the_illustration_index_survives_a_cards_swap() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         create_staging(&conn).unwrap();
         swap_staging(&conn).unwrap();
         conn.query_row(
@@ -7963,7 +8171,7 @@ pub(crate) mod tests {
     #[test]
     fn the_art_tag_staging_tables_match_the_live_ones() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         create_art_tag_staging(&conn).unwrap();
 
         for (live, staging) in ART_TAG_TABLES {
@@ -7987,7 +8195,7 @@ pub(crate) mod tests {
     #[test]
     fn dropping_the_art_staging_tables_leaves_the_live_ones_standing() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         create_art_tag_staging(&conn).unwrap();
         drop_art_tag_staging(&conn).unwrap();
 
@@ -8006,7 +8214,7 @@ pub(crate) mod tests {
     #[test]
     fn both_taxonomies_carry_a_normalised_slug_with_an_index_on_it() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         for table in ["art_tags", "oracle_tags"] {
             assert_eq!(has_column(&conn, table, "slug_norm"), 1, "{table}");
         }
@@ -8031,7 +8239,7 @@ pub(crate) mod tests {
     #[test]
     fn both_tag_closures_are_indexed_by_slug() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         for index in [
             "idx_art_tag_illustrations_slug",
             "idx_oracle_tag_cards_slug",
@@ -8058,7 +8266,7 @@ pub(crate) mod tests {
     #[test]
     fn the_tag_indexes_survive_an_oracle_tag_swap() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         create_oracle_tag_staging(&conn).unwrap();
         swap_oracle_tag_staging(&conn).unwrap();
         for index in ["idx_oracle_tags_norm", "idx_oracle_tag_cards_slug"] {
@@ -8072,7 +8280,7 @@ pub(crate) mod tests {
     }
 
     /// A database that is **already at v20** and lacks the closure indexes gains them on the
-    /// next `migrate`.
+    /// next `migrate_single_file`.
     ///
     /// **This is the one reachable state no other test covers**, and it is not hypothetical:
     /// every database that ran the v20 rung before `idx_art_tag_illustrations_slug` and
@@ -8080,7 +8288,7 @@ pub(crate) mod tests {
     /// reads 20, so the rung never fires again; the two `..._survive_a_*_tag_swap` tests around
     /// this one prove the *refresh* path, which is up to a week away and only runs at all if the
     /// reader has ever fetched a tag file. The
-    /// unconditional replay at the tail of [`migrate`] is the only thing that reaches these,
+    /// unconditional replay at the tail of [`migrate_single_file`] is the only thing that reaches these,
     /// and without it [`crate::tags::query`]'s correlated count is 531 seconds rather than
     /// 49 ms - a frozen window, measured 2026-08-20.
     ///
@@ -8090,21 +8298,24 @@ pub(crate) mod tests {
     #[test]
     fn a_v20_database_missing_the_closure_indexes_gains_them_on_the_next_migrate() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         conn.execute_batch(
             "DROP INDEX idx_art_tag_illustrations_slug;
              DROP INDEX idx_oracle_tag_cards_slug;",
         )
         .unwrap();
 
-        // The ladder is spent: `v < 20` is false, so nothing inside `migrate`'s blocks can run
+        // The ladder is spent: `v < 20` is false, so nothing inside `migrate_single_file`'s blocks can run
         // and only the unconditional tail is left to do this.
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, SCHEMA_VERSION, "the rung must already be spent");
+        assert_eq!(
+            version, LEGACY_SINGLE_FILE_VERSION,
+            "the rung must already be spent"
+        );
 
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
 
         for index in [
             "idx_art_tag_illustrations_slug",
@@ -8126,7 +8337,7 @@ pub(crate) mod tests {
     #[test]
     fn the_tag_indexes_survive_an_art_tag_swap() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         create_art_tag_staging(&conn).unwrap();
         swap_art_tag_staging(&conn).unwrap();
         for index in ["idx_art_tags_norm", "idx_art_tag_illustrations_slug"] {
@@ -8170,7 +8381,7 @@ pub(crate) mod tests {
             "a v19 database may not already carry v20's column"
         );
 
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
 
         let row: (String, String) = conn
             .query_row(
@@ -8205,7 +8416,7 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, SCHEMA_VERSION);
+        assert_eq!(version, LEGACY_SINGLE_FILE_VERSION);
     }
 
     // ---- v22: the normalised slug, recomputed rather than waited for ------------------
@@ -8230,7 +8441,7 @@ pub(crate) mod tests {
     /// under nor the one above it touches any of the three.
     fn v21_database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         conn.execute_batch(&format!(
             "{UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} PRAGMA user_version = 21;"
         ))
@@ -8270,7 +8481,7 @@ pub(crate) mod tests {
         )
         .unwrap();
 
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
 
         // Exact, prefix and substring — the three bands `tags::query` ranks by, so a backfill
         // that satisfied `LIKE '%…%'` by accident could not also answer the exact one.
@@ -8314,13 +8525,13 @@ pub(crate) mod tests {
              VALUES ('Spot-Removal', 'Spot Removal', NULL);",
         )
         .unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         conn.execute_batch("UPDATE oracle_tags SET slug_norm = 'written-by-the-ingest';")
             .unwrap();
 
         // The ladder is at head, so this is the idempotence pass rather than a second upgrade —
         // which is the case a reader actually gets, once per launch.
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
 
         let norm: String = conn
             .query_row(
@@ -8342,7 +8553,7 @@ pub(crate) mod tests {
     #[test]
     fn a_mute_survives_a_card_sync_and_a_taxonomy_rebuild() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         conn.execute(
             "INSERT INTO muted_tags (namespace, tag_id, slug, muted_at)
              VALUES ('art', 'uuid-1', 'dog', 1)",
@@ -8382,7 +8593,7 @@ pub(crate) mod tests {
     #[test]
     fn a_mute_is_one_row_per_namespace_and_tag_id() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         let mute = |namespace: &str, tag_id: &str, slug: &str| {
             conn.execute(
                 "INSERT INTO muted_tags (namespace, tag_id, slug, muted_at)
@@ -8438,12 +8649,12 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(folders, 0, "the v23 table must not be there yet");
 
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
 
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, SCHEMA_VERSION);
+        assert_eq!(version, LEGACY_SINGLE_FILE_VERSION);
         let folders: i64 = conn
             .query_row(
                 "SELECT count(*) FROM sqlite_master WHERE name = 'wishlist_folders'",
@@ -8463,11 +8674,11 @@ pub(crate) mod tests {
     #[test]
     fn migrate_creates_the_wishlist_folders_and_files_wishes_at_the_root() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, SCHEMA_VERSION);
+        assert_eq!(version, LEGACY_SINGLE_FILE_VERSION);
         // The table exists and nests.
         conn.execute_batch(
             "INSERT INTO wishlist_folders (id, parent_id, name, sort_order, created_at, updated_at)
@@ -8497,7 +8708,7 @@ pub(crate) mod tests {
     #[test]
     fn the_wishlist_grain_separates_two_folders() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         conn.execute_batch(
             "INSERT INTO wishlist_folders (id, parent_id, name, sort_order, created_at, updated_at)
              VALUES (1, NULL, 'Ordered', 0, 0, 0);",
@@ -8541,7 +8752,7 @@ pub(crate) mod tests {
     #[test]
     fn deleting_a_wishlist_folder_keeps_its_wishes_and_cascades_its_subfolders() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         conn.execute_batch(
             "PRAGMA foreign_keys = ON;
              INSERT INTO wishlist_folders (id, parent_id, name, sort_order, created_at, updated_at)
@@ -8577,7 +8788,7 @@ pub(crate) mod tests {
     ///
     /// So both indexes that name `folder_id` go, then the column, then the three-term index
     /// comes back: `DROP COLUMN`'s restriction is about indexes and nothing else here, and with
-    /// them gone SQLite takes it (measured 2026-08-22). What re-enters `migrate` is then a
+    /// them gone SQLite takes it (measured 2026-08-22). What re-enters `migrate_single_file` is then a
     /// database that has never heard of folders, holding a wish.
     ///
     /// The re-entry this used to be is not lost with it: **every fixture beneath head runs the
@@ -8596,7 +8807,7 @@ pub(crate) mod tests {
     #[test]
     fn migrating_a_v22_wishlist_files_every_existing_wish_at_the_root() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         conn.execute(
             "INSERT INTO wishlist_entries (oracle_id, name, quantity, created_at, updated_at)
              VALUES ('o1', 'Bolt', 3, 0, 0)",
@@ -8623,12 +8834,12 @@ pub(crate) mod tests {
             "the fixture is a real v22 database, not head wearing a v22 label"
         );
 
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
 
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, SCHEMA_VERSION);
+        assert_eq!(version, LEGACY_SINGLE_FILE_VERSION);
         let (qty, filed): (i64, Option<i64>) = conn
             .query_row(
                 "SELECT quantity, folder_id FROM wishlist_entries",
@@ -8675,7 +8886,7 @@ pub(crate) mod tests {
     /// The ten-column definition is a literal for [`v9_database`]'s reason — this is a
     /// description of history, and history does not change when [`COLLECTION_GRAIN`] does.
     fn schema_at_23(conn: &Connection) {
-        migrate(conn).unwrap();
+        migrate_single_file(conn).unwrap();
         conn.execute_batch(&format!(
             "DROP INDEX IF EXISTS idx_collection_folder;
              DROP INDEX IF EXISTS idx_collection_grain;
@@ -8700,11 +8911,11 @@ pub(crate) mod tests {
 
     /// [`v25_database`] must really sit one step below head, or the tests below it are a fresh
     /// install compared against itself. The next step added to the ladder renumbers this
-    /// fixture, and `SCHEMA_VERSION - 1` is the line that says so.
+    /// fixture, and `LEGACY_SINGLE_FILE_VERSION - 1` is the line that says so.
     ///
     /// **The fixture named here has changed twelve times** — v14's, then v15's, v16's, v17's,
     /// v18's, v19's, v20's, v21's, v22's, v23's, v24's, now v25's — and each move was this
-    /// assertion going red, which is the whole reason it is written against `SCHEMA_VERSION - 1`
+    /// assertion going red, which is the whole reason it is written against `LEGACY_SINGLE_FILE_VERSION - 1`
     /// rather than a number.
     ///
     /// **v26 puts this test the usual way round again.** v25 was the one rung that took things
@@ -8719,7 +8930,11 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, SCHEMA_VERSION - 1, "one step below head");
+        assert_eq!(
+            version,
+            LEGACY_SINGLE_FILE_VERSION - 1,
+            "one step below head"
+        );
         assert_eq!(
             has_column(&conn, "decks", "bracket"),
             0,
@@ -8731,12 +8946,12 @@ pub(crate) mod tests {
             "and none of v26's three tables may be standing yet"
         );
 
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
 
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, SCHEMA_VERSION);
+        assert_eq!(version, LEGACY_SINGLE_FILE_VERSION);
         assert_eq!(
             has_column(&conn, "decks", "bracket"),
             1,
@@ -8794,12 +9009,12 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(flag, 1, "and so must the row v25 deletes");
 
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
 
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, SCHEMA_VERSION);
+        assert_eq!(version, LEGACY_SINGLE_FILE_VERSION);
         let ledger: i64 = conn
             .query_row(
                 "SELECT count(*) FROM sqlite_master WHERE name = 'deck_allocations'",
@@ -8845,12 +9060,12 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(folders, 0, "the v24 table must not be there yet");
 
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
 
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, SCHEMA_VERSION);
+        assert_eq!(version, LEGACY_SINGLE_FILE_VERSION);
         let folders: i64 = conn
             .query_row(
                 "SELECT count(*) FROM sqlite_master WHERE name = 'collection_folders'",
@@ -8866,11 +9081,14 @@ pub(crate) mod tests {
     #[test]
     fn v24_adds_collection_folders_and_the_folder_term() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, SCHEMA_VERSION, "the rung must reach the constant");
+        assert_eq!(
+            version, LEGACY_SINGLE_FILE_VERSION,
+            "the rung must reach the constant"
+        );
 
         // The table exists with both partial indexes.
         let cols: Vec<String> = conn
@@ -8903,12 +9121,12 @@ pub(crate) mod tests {
     #[test]
     fn the_v24_rung_is_idempotent_over_an_already_upgraded_database() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
-        migrate(&conn).unwrap(); // the second pass must be a no-op, not `duplicate column name`
+        migrate_single_file(&conn).unwrap();
+        migrate_single_file(&conn).unwrap(); // the second pass must be a no-op, not `duplicate column name`
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, SCHEMA_VERSION);
+        assert_eq!(version, LEGACY_SINGLE_FILE_VERSION);
     }
 
     /// The eleventh term, exercised the way [`COLLECTION_GRAIN`]'s doc argues for it: the same
@@ -8920,7 +9138,7 @@ pub(crate) mod tests {
     #[test]
     fn the_folder_is_part_of_what_makes_two_collection_rows_the_same_row() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         conn.execute(
             "INSERT INTO collection_folders (name, kind, sort_order, created_at, updated_at)
              VALUES ('Binder', 'user', 0, 0, 0)",
@@ -8958,7 +9176,7 @@ pub(crate) mod tests {
             [],
         )
         .unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         let left: i64 = conn
             .query_row(
                 "SELECT count(*) FROM collection_entries WHERE card_id = 'gone'",
@@ -8993,7 +9211,7 @@ pub(crate) mod tests {
     /// tables that have both lost it, in the same order. A rewind that left the column standing
     /// would fail that test on ordinals, which is the failure it exists to catch.
     fn schema_at_24(conn: &Connection) {
-        migrate(conn).unwrap();
+        migrate_single_file(conn).unwrap();
         conn.execute_batch(&format!("{UNDO_V26} {UNDO_V25} PRAGMA user_version = 24;"))
             .unwrap();
     }
@@ -9016,7 +9234,7 @@ pub(crate) mod tests {
     /// quietly mislabel itself. [`UNDO_V14`]'s quieter failure is the one the three
     /// `DROP TABLE`s prevent.
     fn schema_at_25(conn: &Connection) {
-        migrate(conn).unwrap();
+        migrate_single_file(conn).unwrap();
         conn.execute_batch(&format!("{UNDO_V26} PRAGMA user_version = 25;"))
             .unwrap();
     }
@@ -9121,7 +9339,7 @@ pub(crate) mod tests {
         let entry = seed_entry(&conn, "bolt", 4, None);
         seed_allocation(&conn, deck, entry, 2);
 
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
 
         let folder: i64 = conn
             .query_row(
@@ -9160,7 +9378,7 @@ pub(crate) mod tests {
         let deck = seed_deck(&conn, "Mono-Red");
         let entry = seed_entry(&conn, "bolt", 2, None);
         seed_allocation(&conn, deck, entry, 2);
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         let loose: i64 = conn
             .query_row(
                 "SELECT count(*) FROM collection_entries WHERE folder_id IS NULL",
@@ -9185,7 +9403,7 @@ pub(crate) mod tests {
         let deck = seed_deck(&conn, "Mono-Red");
         let entry = seed_entry(&conn, "bolt", 1, None);
         seed_allocation(&conn, deck, entry, 3);
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         let total: i64 = conn
             .query_row("SELECT sum(quantity) FROM collection_entries", [], |r| {
                 r.get(0)
@@ -9213,7 +9431,7 @@ pub(crate) mod tests {
         let entry = seed_entry_traded(&conn, "bolt", 4, 3);
         seed_allocation(&conn, deck, entry, 2);
 
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
 
         let rows: Vec<(i64, i64)> = {
             let mut stmt = conn
@@ -9251,7 +9469,7 @@ pub(crate) mod tests {
         let deck = seed_deck(&conn, "Mono-Red");
         let entry = seed_entry_full(&conn, "bolt", 4, "LP", Some(450.0), Some("Card Kingdom"));
         seed_allocation(&conn, deck, entry, 1);
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         let (cond, price, source): (String, Option<f64>, Option<String>) = conn
             .query_row(
                 "SELECT e.condition, e.purchase_price, e.acquisition_source
@@ -9274,7 +9492,7 @@ pub(crate) mod tests {
         schema_at_24(&conn);
         seed_deck(&conn, "A");
         seed_deck(&conn, "B");
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         let removed: i64 = conn
             .query_row(
                 "SELECT count(*) FROM collection_folders WHERE kind = 'removed'",
@@ -9297,7 +9515,7 @@ pub(crate) mod tests {
     #[test]
     fn v25_drops_the_ledger_the_flag_and_the_built_column() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         // One name rather than a loop over one name — `clippy::single_element_loop`, and the
         // loop was only ever a place for the next table this rung takes to be added.
         let gone = "deck_allocations";
@@ -9346,7 +9564,7 @@ pub(crate) mod tests {
         seed_entry(&conn, "bolt", 4, Some(binder));
         seed_entry(&conn, "shock", 2, None);
 
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
 
         let group: i64 = conn
             .query_row(
@@ -9394,12 +9612,12 @@ pub(crate) mod tests {
         let deck_id = deck(&conn, "Atraxa");
         assert_eq!(has_column(&conn, "decks", "bracket"), 0);
 
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
 
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, SCHEMA_VERSION);
+        assert_eq!(version, LEGACY_SINGLE_FILE_VERSION);
         let bracket: i64 = conn
             .query_row("SELECT bracket FROM decks WHERE id = ?1", [deck_id], |r| {
                 r.get(0)
@@ -9423,7 +9641,7 @@ pub(crate) mod tests {
     #[test]
     fn a_deck_can_never_carry_a_null_bracket() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         let id = deck(&conn, "Atraxa");
         let err = conn
             .execute("UPDATE decks SET bracket = NULL WHERE id = ?1", [id])
@@ -9446,7 +9664,7 @@ pub(crate) mod tests {
     #[test]
     fn the_bracket_column_carries_no_check_because_rust_is_the_fence() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         let id = deck(&conn, "Atraxa");
         conn.execute("UPDATE decks SET bracket = 9 WHERE id = ?1", [id])
             .expect("the column itself takes any integer — the fence is deck::valid_bracket");
@@ -9480,7 +9698,7 @@ pub(crate) mod tests {
     #[test]
     fn the_combo_watermark_is_one_row_and_says_when_it_has_never_ingested() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
 
         conn.execute_batch(
             "INSERT INTO combo_meta (id, etag, stamp, fetched_at, checked_at)
@@ -9501,7 +9719,7 @@ pub(crate) mod tests {
         // green test measuring the wrong constraint. The mutation that survived it was
         // `checked_at INTEGER`, and this is the shape that kills it.
         let fresh = Connection::open_in_memory().unwrap();
-        migrate(&fresh).unwrap();
+        migrate_single_file(&fresh).unwrap();
         let no_stamp = fresh
             .execute_batch("INSERT INTO combo_meta (id, checked_at) VALUES (1, NULL);")
             .unwrap_err()
@@ -9524,7 +9742,7 @@ pub(crate) mod tests {
     #[test]
     fn the_combo_staging_tables_match_the_live_ones() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         create_combo_staging(&conn).unwrap();
 
         for (live, staging) in COMBO_TABLES {
@@ -9547,7 +9765,7 @@ pub(crate) mod tests {
     #[test]
     fn the_combo_indexes_survive_a_swap() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         create_combo_staging(&conn).unwrap();
         swap_combo_staging(&conn).unwrap();
         for index in ["idx_combo_cards_combo", "idx_combo_cards_oracle"] {
@@ -9572,7 +9790,7 @@ pub(crate) mod tests {
     #[test]
     fn the_swapped_combo_cards_still_reference_combos() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         create_combo_staging(&conn).unwrap();
         swap_combo_staging(&conn).unwrap();
 
@@ -9609,7 +9827,7 @@ pub(crate) mod tests {
     #[test]
     fn the_combo_swap_replaces_rather_than_merges() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         conn.execute_batch(
             "INSERT INTO combos (id,bracket_tag,card_count,template_count,identity,produces)
                 VALUES ('retired','C',2,0,'w','Nothing much');
@@ -9674,7 +9892,7 @@ pub(crate) mod tests {
     #[test]
     fn dropping_the_combo_staging_tables_leaves_the_live_ones_standing() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         create_combo_staging(&conn).unwrap();
         // A staged child row, so the drop is walked over a table the cascade could reach —
         // which is the ordering `drop_combo_staging`'s doc is about.
@@ -9702,7 +9920,7 @@ pub(crate) mod tests {
     #[test]
     fn creating_the_combo_staging_twice_starts_from_empty() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         create_combo_staging(&conn).unwrap();
         conn.execute_batch(
             "INSERT INTO combos_staging
@@ -9736,7 +9954,7 @@ pub(crate) mod tests {
     /// left here as the record of which fixture the title belonged to.
     fn v18_database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         conn.execute_batch(&format!(
             "{UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V19} PRAGMA user_version = 18;"
         ))
@@ -9776,7 +9994,7 @@ pub(crate) mod tests {
         let cat = category(&conn, deck_id, "main", "Main deck");
         deck_card(&conn, deck_id, "c1", cat, 2);
 
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
 
         assert_eq!(has_column(&conn, "deck_cards", "finish"), 1);
         let finish: Option<String> = conn
@@ -9802,7 +10020,7 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, SCHEMA_VERSION);
+        assert_eq!(version, LEGACY_SINGLE_FILE_VERSION);
     }
 
     /// [`v21_database`] carried this assertion while v22 was head, and it keeps the half of it
@@ -9824,7 +10042,7 @@ pub(crate) mod tests {
             .unwrap();
         assert_eq!(version, 21);
 
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
 
         let norm: String = conn
             .query_row(
@@ -9887,7 +10105,7 @@ pub(crate) mod tests {
     /// **It is the "one step below head" fixture now**, the title [`v16_database`] held.
     fn v17_database() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         conn.execute_batch(&format!(
             "{UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V21} {UNDO_V20} {UNDO_V18} {UNDO_V19} PRAGMA user_version = 17;"
         ))
@@ -9914,7 +10132,7 @@ pub(crate) mod tests {
             "a v17 database may not already carry v18's column"
         );
 
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
 
         let game: String = conn
             .query_row("SELECT game_key FROM decks WHERE id = 1", [], |r| r.get(0))
@@ -9934,7 +10152,7 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, SCHEMA_VERSION);
+        assert_eq!(version, LEGACY_SINGLE_FILE_VERSION);
     }
 
     /// One format's `games` cell.
@@ -9961,7 +10179,7 @@ pub(crate) mod tests {
     #[test]
     fn a_format_spec_games_cell_holds_only_scryfall_game_words() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
 
         let mut stmt = conn
             .prepare("SELECT key, games FROM format_specs ORDER BY sort_order")
@@ -10014,10 +10232,10 @@ pub(crate) mod tests {
                       sort_order";
         // Head, through the ladder: v5 writes the frozen copy and v18 replaces it.
         let head = Connection::open_in_memory().unwrap();
-        migrate(&head).unwrap();
+        migrate_single_file(&head).unwrap();
         // And v5's statement on its own, into a table of the same shape.
         let old = Connection::open_in_memory().unwrap();
-        migrate(&old).unwrap();
+        migrate_single_file(&old).unwrap();
         old.execute_batch("DELETE FROM format_specs;").unwrap();
         old.execute_batch(FORMAT_SPECS_SEED_V5).unwrap();
 
@@ -10062,13 +10280,13 @@ pub(crate) mod tests {
         let conn = v15_database();
         let old = deck(&conn, "Old Deck");
 
-        migrate(&conn).unwrap();
-        migrate(&conn).unwrap(); // idempotent
+        migrate_single_file(&conn).unwrap();
+        migrate_single_file(&conn).unwrap(); // idempotent
 
         let version: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, SCHEMA_VERSION);
+        assert_eq!(version, LEGACY_SINGLE_FILE_VERSION);
 
         let (notnull, default): (i64, Option<String>) = conn
             .query_row(
@@ -10103,7 +10321,7 @@ pub(crate) mod tests {
     #[test]
     fn the_default_category_is_a_sentinel_rather_than_a_foreign_key() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
         let deck_id = deck(&conn, "Burn");
 
@@ -10115,7 +10333,7 @@ pub(crate) mod tests {
     }
 
     /// The ladder ends where the constant says it does. Written as a literal so that
-    /// bumping [`SCHEMA_VERSION`] without adding the step that produces it — or adding a
+    /// bumping [`LEGACY_SINGLE_FILE_VERSION`] without adding the step that produces it — or adding a
     /// step and forgetting the constant — fails here rather than in the field.
     ///
     /// **This literal is also what catches two branches numbering the same rung.** v12, v13 and
@@ -10125,12 +10343,12 @@ pub(crate) mod tests {
     #[test]
     fn the_schema_version_is_twenty_six() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         let v: i64 = conn
             .query_row("PRAGMA user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(v, SCHEMA_VERSION);
-        assert_eq!(SCHEMA_VERSION, 26);
+        assert_eq!(v, LEGACY_SINGLE_FILE_VERSION);
+        assert_eq!(LEGACY_SINGLE_FILE_VERSION, 26);
     }
 
     /// The v19 grain widens rather than the row changing meaning: a foil copy and a regular
@@ -10146,7 +10364,7 @@ pub(crate) mod tests {
     #[test]
     fn a_foil_row_and_a_regular_row_of_one_printing_are_two_rows_that_fold_apart() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         let deck_id = deck(&conn, "Foils");
         let cat = category(&conn, deck_id, "main", "Main deck");
 
@@ -10196,7 +10414,7 @@ pub(crate) mod tests {
     #[test]
     fn the_deck_card_finish_column_refuses_nonfoil() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         let deck_id = deck(&conn, "Foils");
         let cat = category(&conn, deck_id, "main", "Main deck");
 
@@ -10229,7 +10447,7 @@ pub(crate) mod tests {
     #[test]
     fn a_deck_row_that_names_no_finish_is_the_regular_copy() {
         let conn = Connection::open_in_memory().unwrap();
-        migrate(&conn).unwrap();
+        migrate_single_file(&conn).unwrap();
         let deck_id = deck(&conn, "Old");
         let cat = category(&conn, deck_id, "main", "Main deck");
         deck_card(&conn, deck_id, "c1", cat, 2);
@@ -10241,7 +10459,7 @@ pub(crate) mod tests {
     }
 
     /// **Every route to head must arrive at the same schema.** A fresh install runs the whole
-    /// ladder in one `migrate`; an upgrade enters it partway and runs only the steps above
+    /// ladder in one `migrate_single_file`; an upgrade enters it partway and runs only the steps above
     /// where it stopped. Those two are the same claim only while every step's DDL is
     /// reachable from below it — and a merge that slides a step in *underneath* the one
     /// replaying [`CARDS_INDEXES`] is exactly the event that can break it, because the list
@@ -10280,7 +10498,7 @@ pub(crate) mod tests {
     #[test]
     fn every_version_ends_with_the_same_schema_as_a_fresh_install() {
         let fresh = Connection::open_in_memory().unwrap();
-        migrate(&fresh).unwrap();
+        migrate_single_file(&fresh).unwrap();
         let want_cols = card_columns(&fresh);
         let want_indexes = indexes_on_cards(&fresh);
         // `decks` has an `ALTER` ladder of its own now (v8's three columns, v12's three, v13's
@@ -10346,12 +10564,16 @@ pub(crate) mod tests {
             // ordinally for, and the one thing a column added by an `ALTER` can get wrong.
             ("v25", v25_database()),
         ] {
-            migrate(&conn).unwrap_or_else(|e| panic!("{name} must migrate to head: {e}"));
+            migrate_single_file(&conn)
+                .unwrap_or_else(|e| panic!("{name} must migrate to head: {e}"));
 
             let version: i64 = conn
                 .query_row("PRAGMA user_version", [], |r| r.get(0))
                 .unwrap();
-            assert_eq!(version, SCHEMA_VERSION, "{name} must reach head");
+            assert_eq!(
+                version, LEGACY_SINGLE_FILE_VERSION,
+                "{name} must reach head"
+            );
             assert_eq!(
                 card_columns(&conn),
                 want_cols,

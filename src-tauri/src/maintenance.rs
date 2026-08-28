@@ -1,7 +1,7 @@
 //! Database maintenance: the one-time `auto_vacuum` conversion, and the page return after
 //! every sync.
 //!
-//! Deliberately **not** part of `schema::migrate`. `migrate` runs before the window
+//! Deliberately **not** part of `schema::migrate`. `migrate_single_file` runs before the window
 //! exists, and a `VACUUM` on the measured 2.02 GB live database rewrites the whole file —
 //! minutes of an unresponsive splash on the USB stick this app is meant to run from.
 //! Compaction is therefore an *operation*, with a phase on the sync progress channel, and
@@ -120,7 +120,7 @@ pub fn rebuild_fts_if_pending(conn: &Connection) -> rusqlite::Result<bool> {
 /// Measured on a copy of the live database (2.02 GB, 116 568 cards, a 998 MB freelist):
 /// **22–37 s** over four runs, leaving a 1.02 GB file with 499 free pages, and an FTS index
 /// that answers for all 116 568 rows with no wrong hits. This is why it is a phase on the
-/// sync channel and not a step in `migrate`.
+/// sync channel and not a step in `migrate_single_file`.
 pub fn convert_to_incremental(conn: &Connection) -> rusqlite::Result<()> {
     crate::sync::set_meta(conn, K_FTS_REBUILD_PENDING, "1")?;
     if let Err(e) = vacuum_into_incremental(conn) {
@@ -291,7 +291,7 @@ mod tests {
         conn.pragma_update(None, "journal_mode", "WAL").unwrap();
         conn.pragma_update(None, "auto_vacuum", "INCREMENTAL")
             .unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        crate::schema::migrate_single_file(&conn).unwrap();
         conn
     }
 
@@ -728,10 +728,10 @@ mod tests {
         let dir = scratch("repairfails");
         let path = dir.join("mtg.db");
         let conn = crate::db::open(&path).unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        crate::schema::migrate_single_file(&conn).unwrap();
         crate::sync::set_meta(&conn, K_FTS_REBUILD_PENDING, "1").unwrap();
         // A rebuild needs the table it indexes. Without `cards` there is no way to do the
-        // work, and `migrate` will not put it back — this database is already at head.
+        // work, and `migrate_single_file` will not put it back — this database is already at head.
         conn.execute_batch("DROP TABLE cards_fts; DROP TABLE cards;")
             .unwrap();
 
@@ -780,7 +780,7 @@ mod tests {
     fn a_database_this_app_creates_never_needs_converting() {
         let dir = scratch("fresh");
         let conn = crate::db::open(&dir.join("mtg.db")).unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        crate::schema::migrate_single_file(&conn).unwrap();
 
         assert!(!needs_conversion(&conn));
 

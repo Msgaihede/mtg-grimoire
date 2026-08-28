@@ -799,7 +799,7 @@ mod tests {
     /// copy to own, and a double-faced card, which is the shape `faces` has to survive.
     fn seeded() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        crate::schema::migrate_single_file(&conn).unwrap();
         let rows = [
             ("p1", "o1", "lea", "161", "1993-08-05", "art-a"),
             ("p2", "o1", "2ed", "162", "1993-12-01", "art-a"),
@@ -1550,7 +1550,7 @@ mod tests {
     /// involved in, so seeding printings here would only make the failures harder to read.
     fn meta_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        crate::schema::migrate_single_file(&conn).unwrap();
         conn
     }
 
@@ -1658,7 +1658,7 @@ mod tests {
     /// One card row with a real `image_uris` blob, for [`card_image_uri_inner`]'s tests.
     fn fixture_with_image_uris(id: &str, image_uris_json: &str) -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        crate::schema::migrate_single_file(&conn).unwrap();
         conn.execute(
             "INSERT INTO cards (id, name, set_code, collector_number, lang, layout, image_uris, raw)
              VALUES (?1, 'Test Card', 'tst', '1', 'en', 'normal', ?2, '{}')",
@@ -1672,7 +1672,7 @@ mod tests {
     /// present key holding JSON `null`.
     fn fixture_with_no_image_uris(id: &str) -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        crate::schema::migrate_single_file(&conn).unwrap();
         conn.execute(
             "INSERT INTO cards (id, name, set_code, collector_number, lang, layout, raw)
              VALUES (?1, 'Test Card', 'tst', '1', 'en', 'normal', '{}')",
@@ -1737,7 +1737,7 @@ mod tests {
     /// place (`card_row::webp_uris`).
     fn fixture_with_faces(id: &str, top: Option<&str>, face_json: &str) -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        crate::schema::migrate_single_file(&conn).unwrap();
         conn.execute(
             "INSERT INTO cards (id, name, set_code, collector_number, lang, layout,
                                 image_uris, face_image_uris, raw)
@@ -1883,7 +1883,7 @@ mod tests {
     /// illustrated all three cards.
     fn seeded_meld() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        crate::schema::migrate_single_file(&conn).unwrap();
         let art = Some("Clint Cearley");
 
         // Bruna's list, in Scryfall's order: the result first, then itself, then its

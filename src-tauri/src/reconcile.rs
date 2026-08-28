@@ -683,7 +683,7 @@ mod tests {
 
     fn seeded() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        crate::schema::migrate_single_file(&conn).unwrap();
         conn.execute(
             "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,raw)
              VALUES ('new-id','o1','Lightning Bolt','2ed','162','en','normal','{}')",

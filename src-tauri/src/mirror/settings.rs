@@ -334,7 +334,7 @@ mod tests {
 
     fn migrated_memory_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        schema::migrate(&conn).unwrap();
+        schema::migrate_single_file(&conn).unwrap();
         conn
     }
 

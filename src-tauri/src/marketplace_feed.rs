@@ -1163,7 +1163,7 @@ mod tests {
 
     fn mem_db() -> Mutex<Connection> {
         let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        crate::schema::migrate_single_file(&conn).unwrap();
         Mutex::new(conn)
     }
 
@@ -1691,7 +1691,7 @@ mod tests {
     #[test]
     fn a_never_fetched_feed_reports_itself_as_never_fetched_and_stale() {
         let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        crate::schema::migrate_single_file(&conn).unwrap();
 
         let status = read_status(&conn, &CardKingdom, 1_800_000_000);
         assert_eq!(

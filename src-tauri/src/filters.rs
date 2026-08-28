@@ -979,7 +979,7 @@ mod tests {
     #[rustfmt::skip]
     fn corpus_with_art_tags() -> rusqlite::Connection {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        crate::schema::migrate_single_file(&conn).unwrap();
         let cards = [
             ("card-a",        Some("illus-a"),        "oracle-a"),
             ("card-b",        Some("illus-b"),        "oracle-b"),

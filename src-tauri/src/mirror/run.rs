@@ -768,7 +768,7 @@ mod tests {
     /// it. Everything else goes in through the app's own write commands.
     fn seeded_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        crate::schema::migrate_single_file(&conn).unwrap();
         for (id, oracle, name, set, num) in [
             ("bolt-lea", "o1", "Lightning Bolt", "lea", "161"),
             ("sol-lea", "o2", "Sol Ring", "lea", "263"),

@@ -1069,7 +1069,7 @@ mod tests {
     /// [`crate::db::open`] sets the same pragma for every connection the app hands out.
     fn open() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        crate::schema::migrate_single_file(&conn).unwrap();
         conn.pragma_update(None, "foreign_keys", "ON").unwrap();
         conn
     }

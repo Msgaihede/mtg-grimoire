@@ -1539,7 +1539,7 @@ mod tests {
     /// that have no image anywhere, and one of the eight that have something worse.
     fn seeded() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        crate::schema::migrate_single_file(&conn).unwrap();
         conn.execute(
             "INSERT INTO cards (id, name, set_code, collector_number, lang, layout, image_uris, raw)
              VALUES ('0000419b-0bba-4488-8f7a-6194544ce91d','Bolt','lea','161','en','normal',
@@ -2048,7 +2048,7 @@ mod tests {
 
             let db = dir.join("mtg.db");
             let write = crate::db::open(&db).unwrap();
-            crate::schema::migrate(&write).unwrap();
+            crate::schema::migrate_single_file(&write).unwrap();
             let read = crate::db::open_read_only(&db).unwrap();
 
             Fixture {

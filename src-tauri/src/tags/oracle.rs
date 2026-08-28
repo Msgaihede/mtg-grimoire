@@ -774,7 +774,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let conn = crate::db::open(&dir.join("mtg.db")).unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        crate::schema::migrate_single_file(&conn).unwrap();
         let db = Mutex::new(conn);
 
         // Ten batches of taggings and as many again of closure rows, so the run has plenty
@@ -1006,7 +1006,7 @@ mod tests {
     #[test]
     fn the_printing_lookup_is_searched_not_scanned() {
         let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        crate::schema::migrate_single_file(&conn).unwrap();
 
         let sql = BY_PRINTING_ID.replace("{holes}", "?,?");
         let plan: Vec<String> = conn

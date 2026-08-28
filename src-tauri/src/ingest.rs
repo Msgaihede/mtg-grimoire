@@ -355,7 +355,7 @@ mod tests {
     /// write mutex, not a bare connection.
     fn mem_db() -> Mutex<Connection> {
         let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        crate::schema::migrate_single_file(&conn).unwrap();
         Mutex::new(conn)
     }
 
@@ -817,7 +817,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let conn = crate::db::open(&dir.join("mtg.db")).unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        crate::schema::migrate_single_file(&conn).unwrap();
         let db = std::sync::Mutex::new(conn);
 
         // Eight batches' worth. Only the seven release points *after* the first batch

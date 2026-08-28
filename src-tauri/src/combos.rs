@@ -1520,7 +1520,7 @@ mod tests {
 
     fn mem_db() -> Mutex<Connection> {
         let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        crate::schema::migrate_single_file(&conn).unwrap();
         Mutex::new(conn)
     }
 
@@ -2221,7 +2221,7 @@ mod tests {
     #[test]
     fn a_never_ingested_database_reports_itself_as_never_and_stale() {
         let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        crate::schema::migrate_single_file(&conn).unwrap();
 
         assert_eq!(
             read_status(&conn, 1_800_000_000),
@@ -2590,7 +2590,7 @@ mod tests {
         // test exists to take is what the feed costs a reader on disk.
         let db_path = dir.join("combos.db");
         let db = Mutex::new(Connection::open(&db_path).unwrap());
-        crate::schema::migrate(&db.lock().unwrap()).unwrap();
+        crate::schema::migrate_single_file(&db.lock().unwrap()).unwrap();
 
         let parsing = std::time::Instant::now();
         let ingested =

@@ -373,7 +373,7 @@ pub(crate) mod fixtures {
     /// `fill_legal_mask` for its own fixtures.
     pub(crate) fn seeded() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        crate::schema::migrate_single_file(&conn).unwrap();
         seed(&conn);
         conn
     }
@@ -429,7 +429,7 @@ pub(crate) mod fixtures {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("mtg.db");
         let conn = crate::db::open(&path).unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        crate::schema::migrate_single_file(&conn).unwrap();
         seed(&conn);
         let read = crate::db::open_read_only(&path).unwrap();
         std::sync::Arc::new(crate::sync::AppState {

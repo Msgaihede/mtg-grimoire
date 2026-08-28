@@ -107,7 +107,7 @@ mod tests {
     /// torn down with the connection, so no later measurement is made a fiction by them.
     fn db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        schema::migrate(&conn).unwrap();
+        schema::migrate_single_file(&conn).unwrap();
         conn.execute_batch(
             "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
                                 rarity,finishes,prices,raw)

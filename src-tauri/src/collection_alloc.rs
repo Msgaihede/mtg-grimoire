@@ -819,7 +819,7 @@ mod tests {
     /// CASCADEs, and both are per-connection settings an in-memory database starts without.
     fn open() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        crate::schema::migrate_single_file(&conn).unwrap();
         conn.pragma_update(None, "foreign_keys", "ON").unwrap();
         conn
     }

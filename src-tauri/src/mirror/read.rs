@@ -301,7 +301,7 @@ mod tests {
     /// this crate never produces and a test about nothing.
     fn seeded() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        crate::schema::migrate_single_file(&conn).unwrap();
         for (id, oracle, name, set, num) in [
             ("bolt-lea", "o1", "Lightning Bolt", "lea", "161"),
             ("sol-lea", "o2", "Sol Ring", "lea", "263"),

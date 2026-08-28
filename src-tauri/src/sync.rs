@@ -827,8 +827,8 @@ async fn reclaim_freed_pages(state: &Arc<AppState>, app: &tauri::AppHandle) {
 /// Convert this database to incremental auto-vacuum, once, ever — and pay off any rebuild
 /// an interrupted conversion left owing.
 ///
-/// Runs here rather than in `migrate` because it is minutes of work on a large file and
-/// `migrate` runs before there is a window to say so in. Runs *after* the sync rather than
+/// Runs here rather than in `migrate_single_file` because it is minutes of work on a large file and
+/// `migrate_single_file` runs before there is a window to say so in. Runs *after* the sync rather than
 /// before it because a sync is the one moment the user has already been told the app is
 /// busy with the database — and because compacting a file that is about to be rewritten
 /// would be work done twice.
@@ -1206,7 +1206,7 @@ mod tests {
 
     fn db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        schema::migrate(&conn).unwrap();
+        schema::migrate_single_file(&conn).unwrap();
         conn
     }
 
@@ -1220,7 +1220,7 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("mtg.db");
         let conn = crate::db::open(&path).unwrap();
-        schema::migrate(&conn).unwrap();
+        schema::migrate_single_file(&conn).unwrap();
         let read = crate::db::open_read_only(&path).unwrap();
         (
             AppState {

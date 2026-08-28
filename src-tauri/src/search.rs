@@ -1180,7 +1180,7 @@ mod tests {
     #[rustfmt::skip]
     fn seeded() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        crate::schema::migrate_single_file(&conn).unwrap();
         let rows = [
             ("1","Lightning Bolt","lea","161","Instant","R","R","common", 400.5, r#"{"vintage":"restricted","modern":"legal","standard":"not_legal"}"#, 1),
             ("2","Lightning Helix","rav","213","Instant","RW","RW","uncommon", 1.5, r#"{"modern":"legal"}"#, 1),
@@ -1968,7 +1968,7 @@ mod tests {
     /// they reason about, so [`seeded`]'s three cards would only be noise to filter back out.
     fn bare() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        crate::schema::migrate_single_file(&conn).unwrap();
         conn
     }
 
@@ -2346,7 +2346,7 @@ mod tests {
     #[test]
     fn printings_with_no_oracle_id_are_each_their_own_card() {
         let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        crate::schema::migrate_single_file(&conn).unwrap();
         for (id, name) in [("n1", "Alpha"), ("n2", "Beta")] {
             conn.execute(
                 "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,is_paper,raw)
@@ -2947,7 +2947,7 @@ mod tests {
         let path = dir.join("mtg.db");
 
         let write = crate::db::open(&path).unwrap();
-        crate::schema::migrate(&write).unwrap();
+        crate::schema::migrate_single_file(&write).unwrap();
         write.execute("INSERT INTO cards (id,name,set_code,collector_number,lang,layout,is_paper,raw) VALUES ('1','Lightning Bolt','lea','161','en','normal',1,'{}')", []).unwrap();
         let read = crate::db::open_read_only(&path).unwrap();
 
@@ -3376,7 +3376,7 @@ mod tests {
     #[rustfmt::skip]
     fn seeded_costs() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        crate::schema::migrate_single_file(&conn).unwrap();
         // The printed cost rides along with `cmc` because the two are separate claims and the
         // X chip reads the first while the value chips read the second — a fixture carrying
         // only `cmc` can prove nothing about a filter that never looks at it. `Jinnie Fay`
@@ -4033,7 +4033,7 @@ mod tests {
     /// and priced by Mana Pool, which publishes an etched column.
     fn seeded_marketplaces() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        crate::schema::migrate_single_file(&conn).unwrap();
         let lines = [
             priced_line(
                 "a",
@@ -4146,7 +4146,7 @@ mod tests {
     #[test]
     fn the_rarity_chips_or_within_and_leave_the_unoffered_rarities_alone() {
         let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        crate::schema::migrate_single_file(&conn).unwrap();
         for (id, name, rarity) in [
             ("1", "Common Card", "common"),
             ("2", "Rare Card", "rare"),
@@ -4284,7 +4284,7 @@ mod tests {
     #[test]
     fn a_collapsed_range_spans_the_printings_that_marketplace_prices() {
         let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        crate::schema::migrate_single_file(&conn).unwrap();
         let lines = [
             priced_line(
                 "s1",
@@ -4512,7 +4512,7 @@ mod tests {
     #[rustfmt::skip]
     fn fixture_with_cards(rows: &[(&str, &str, &str, &str, &str)]) -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        crate::schema::migrate_single_file(&conn).unwrap();
         for (id, oracle_id, name, set_code, collector_number) in rows {
             conn.execute(
                 "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,is_paper,search_text,raw)
@@ -4640,7 +4640,7 @@ mod tests {
     #[rustfmt::skip]
     fn fixture_with_tags() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        crate::schema::migrate_single_file(&conn).unwrap();
         let rows = [
             ("bolt-strong", "o-bolt",  "Lightning Bolt",  Some("illus-strong")),
             ("bolt-weak",   "o-bolt",  "Lightning Bolt",  Some("illus-weak")),

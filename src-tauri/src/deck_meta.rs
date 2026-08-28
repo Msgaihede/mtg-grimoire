@@ -2179,7 +2179,7 @@ mod tests {
 
     fn conn() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        crate::schema::migrate_single_file(&conn).unwrap();
         conn
     }
 

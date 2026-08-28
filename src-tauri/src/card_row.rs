@@ -683,7 +683,7 @@ mod tests {
     #[test]
     fn raw_is_stored_as_a_blob_and_reads_back_byte_for_byte() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        crate::schema::migrate_single_file(&conn).unwrap();
         let line = r#"{"object":"card","id":"x","name":"Lightning Bolt","lang":"en","layout":"normal","set":"lea","collector_number":"161","artist":"Christopher Rush"}"#;
         let row = CardRow::from_json_line(&serde_json::from_str(line).unwrap(), line).unwrap();
         conn.execute(
