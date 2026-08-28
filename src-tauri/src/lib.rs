@@ -33,6 +33,7 @@ pub mod reset;
 pub mod schema;
 pub mod scryfall;
 pub mod search;
+pub mod slug;
 pub mod sorting;
 pub mod split;
 pub mod sync;

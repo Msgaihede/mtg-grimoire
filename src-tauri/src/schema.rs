@@ -969,7 +969,7 @@ fn globalise_tags(tx: &Connection) -> rusqlite::Result<()> {
 /// Give every carried-over `oracle_tags` row the normalised slug the search matches on.
 /// The v22 step; issue #180, and that step's comment holds the argument.
 ///
-/// **In Rust and through [`crate::tags::normalize`], for the reason that function's own doc
+/// **In Rust and through [`crate::slug::normalize`], for the reason that function's own doc
 /// states: there is one copy of this rule, deliberately.** The ingest writes `slug_norm` with
 /// it and `tags::query` compares a typed needle against the column it wrote, so a second
 /// normalisation spelled here in SQL would leave both halves perfectly self-consistent, the
@@ -993,7 +993,7 @@ fn backfill_oracle_slug_norm(tx: &Connection) -> rusqlite::Result<()> {
 
     let mut stmt = tx.prepare("UPDATE oracle_tags SET slug_norm = ?2 WHERE slug = ?1")?;
     for slug in &slugs {
-        stmt.execute(params![slug, crate::tags::normalize(slug)])?;
+        stmt.execute(params![slug, crate::slug::normalize(slug)])?;
     }
     Ok(())
 }
