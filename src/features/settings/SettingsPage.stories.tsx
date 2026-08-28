@@ -104,9 +104,14 @@ const meta = {
           "and nothing else. Combos sits directly under Prices because it is the same kind of " +
           "thing — an optional bulk feed from a third party that the app works entirely " +
           "without. See `Settings/CombosPanel` for the four states it draws.\n\n" +
+          "**Sync is two halves in one panel** and the second one is new: pairing says who is " +
+          "in the group, and the relay under it says how their changes reach each other — an " +
+          "address the reader runs themselves, what is waiting to go, and one press that makes " +
+          "a round trip. `Needs review` sits directly beneath it, because the rows it lists are " +
+          "what a sync asks of a person.\n\n" +
           "The blurb this view used to be is now a section of it. What is genuinely still " +
-          "missing — the data folder, sync behaviour, import and export — says so under its " +
-          "own dim heading rather than standing in for a panel that exists.",
+          "missing — the data folder and import — says so under its own dim heading rather " +
+          "than standing in for a panel that exists.",
       },
     },
   },

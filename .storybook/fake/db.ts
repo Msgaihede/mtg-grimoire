@@ -164,8 +164,11 @@ import type {
   Printing,
   QrMatrix,
   PrintingTags,
+  RelayOutcome,
+  RelayStatus,
   ReleaseInfo,
   ReleaseNote,
+  ReviewRow,
   SearchRequest,
   SearchSortKey,
   SetSummary,
@@ -322,6 +325,8 @@ export interface FakeWishlistFolder {
   parentId: number | null;
   name: string;
   sortOrder: number;
+  /** User schema v29's column — see {@link FakeDeckFolder.needsReview}. */
+  needsReview?: string | null;
 }
 
 /**
@@ -359,6 +364,8 @@ export interface FakeCollectionFolder {
    *  pair, so the two can never be read apart. */
   deckId: number | null;
   sortOrder: number;
+  /** User schema v29's column — see {@link FakeDeckFolder.needsReview}. */
+  needsReview?: string | null;
 }
 
 /**
@@ -487,6 +494,18 @@ export interface FakeDeckFolder {
   parentId: number | null;
   name: string;
   sortOrder: number;
+  /**
+   * A sentence the reader is owed about this folder, or nothing — user schema v29's column, and
+   * §7.4's *second* surfaced outcome: a folder move on another device that would have put this
+   * folder inside itself, undone by returning it to the top level.
+   *
+   * **Optional here where the three card tables' is required**, and the difference is what a
+   * missing property means. Those three carry a sentence in a seed and their builders all pass
+   * one; a folder row that says nothing is every folder row in every seed, and fifteen literals
+   * spelling `needsReview: null` to say so would be fifteen chances to write the wrong thing.
+   * A `SELECT` reads NULL either way.
+   */
+  needsReview?: string | null;
 }
 
 /**
@@ -1212,7 +1231,36 @@ export interface FakeDb {
    * are one feature answered by one command in one round trip.
    */
   pairing: FakePairing;
+  /**
+   * The relay — the address, what is waiting on it, and how the last round trip went.
+   *
+   * One object rather than four fields, {@link FakeDb.mirror}'s and {@link FakeDb.pairing}'s
+   * grouping and their reason: one feature answered by one command in one round trip.
+   */
+  relay: FakeRelay;
   fault: Fault | null;
+}
+
+/**
+ * `sync_state`'s relay rows and the two figures the Sync panel draws beside them.
+ *
+ * **There is no relay in this workbench and this object does not pretend there is.** The fake
+ * has no network, no envelope and no `sync_ops` table, so {@link pending} is a number a story
+ * sets rather than a count of rows — and `sync_now` moves it to zero rather than encrypting
+ * anything. What the fake models faithfully is what the panel is drawn against: an empty
+ * address meaning sync is *off*, a `null` outcome meaning there was nothing to do, and an error
+ * that survives a later success because the log is the record.
+ */
+export interface FakeRelay {
+  /** `sync_state.relay_url`. **Empty is off**, and it is what every world starts in. */
+  url: string;
+  /** Ops written and not yet handed over. A stored number here — see above. */
+  pending: number;
+  /** `sync_state.last_sync_at`, unix seconds, or `null` for a device that never finished one. */
+  lastSyncAt: number | null;
+  /** The newest `error_log` row whose source is `relay`. **Not cleared by a later success**,
+   *  which is the crate's rule and the one thing about this field worth modelling. */
+  lastError: string | null;
 }
 
 /** One row of `marketplace_prices`: what one feed quotes for one printing in one finish. */
@@ -1662,6 +1710,10 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
       devices: [],
       pending: null,
     },
+    // **Sync off, which is what every installation is in until a reader types an address.**
+    // There is no relay address in this repository and there must never be one: it is the
+    // reader's own server. A story that wants the syncing states passes its own.
+    relay: { url: "", pending: 0, lastSyncAt: null, lastError: null },
     fault: null,
     ...init,
   };
@@ -11988,7 +12040,229 @@ export function writeHandlers(db: FakeDb) {
       row.revokedAt = Math.floor(Date.now() / 1000);
       db.pairing.group = { ...db.pairing.group, epoch: db.pairing.group.epoch + 1 };
     },
+
+    /**
+     * `sync_engine::commands::sync_relay_status` — the address, what is waiting, and
+     * what wants looking at.
+     *
+     * **A read that lives in `writeHandlers`, and the placement is the point.** It touches
+     * nothing; it is here because the shipped command takes `sync::with_write` to count
+     * unpushed rows of `sync_ops`, so it really does answer `BUSY` while a sync holds the
+     * connection — which `ipc.ts` says in as many words, and which is the only way the
+     * panel's *could not be read* line is ever drawn. That makes it the opposite call from
+     * {@link readHandlers.sync_pairing_status}, whose crate-side write (`identity::ensure`
+     * minting a row) has no counterpart here at all: there the divergence removes a refusal
+     * this fake could not honestly produce, and here it would remove one it can.
+     */
+    sync_relay_status: (): RelayStatus => {
+      refuseIfBusy(db);
+      return relayStatus(db);
+    },
+
+    /**
+     * `sync_engine::commands::sync_review_list` — every row carrying a sentence, from
+     * all six tables that can hold one.
+     *
+     * Here for the reason above it, arrived at from the other side: the crate reads six tables
+     * through `sync::with_write`, which is its single-writer path, so a running sync refuses
+     * it. This one walks six arrays and refuses for no other reason than that.
+     */
+    sync_review_list: (): ReviewRow[] => {
+      refuseIfBusy(db);
+      return reviewRows(db);
+    },
+
+    /**
+     * `sync_relay_set_url` - point this device at a relay, or at none.
+     *
+     * **The refusal is the crate's own sentence and it is reachable by typing**, which is why
+     * it is a handler branch rather than a fault: an address pasted without its scheme is the
+     * commonest thing that goes wrong here, and the crate's sentence says what to do about it
+     * where "invalid URL" would not. The empty string is always accepted, because it is how
+     * sync is switched off.
+     *
+     * The trailing-slash trim is the crate's too, and it is what makes the field snap back to
+     * a normalised address after a save rather than showing what was typed.
+     */
+    sync_relay_set_url: (args: { url: string }): RelayStatus => {
+      refuseIfBusy(db);
+      const trimmed = args.url.trim().replace(/\/+$/, "");
+      if (trimmed !== "" && !/^https?:\/\//.test(trimmed)) throw refuse(RELAY_SCHEME);
+      db.relay.url = trimmed;
+      return relayStatus(db);
+    },
+
+    /**
+     * `sync_now` - one round trip.
+     *
+     * **`null` is the answer with nothing to do, and it is not a failure** - no relay address,
+     * or no pairing group. That is the state every world here starts in, and the panel's
+     * sentence about it is the one this handler exists to make reachable.
+     *
+     * There is no network, so a trip that *can* run reports what the pile it just cleared would
+     * have produced: everything waiting is sent, nothing comes back, and the stamp moves. A
+     * story that wants the two surfaced outcomes seeds the rows rather than asking this to
+     * invent them - `needsReview` is that world, and a sentence appearing because a button was
+     * pressed would be the one thing about this feature a fake must not make up.
+     */
+    sync_now: (): RelayOutcome | null => {
+      refuseIfBusy(db);
+      if (db.relay.url === "" || db.pairing.group === null) return null;
+      const pushed = db.relay.pending;
+      db.relay.pending = 0;
+      db.relay.lastSyncAt = Math.floor(Date.now() / 1000);
+      return {
+        pushed,
+        pulled: 0,
+        unreadable: 0,
+        applied: 0,
+        resurrected: 0,
+        cyclesBroken: 0,
+        skipped: 0,
+        deferred: 0,
+      };
+    },
+
+    /**
+     * `sync_review_clear` - "Looks fine": drop one row's sentence, and answer what is left.
+     *
+     * **It puts an op on the pile**, which is not decoration: clearing is a write like any
+     * other, so it is captured and travels, and a row one device has looked at stops asking on
+     * the others too. The Sync panel's *waiting* line moving by one after a press is the whole
+     * of what makes that visible in the workbench.
+     *
+     * The row is looked up before anything is touched, exactly as the crate checks its table
+     * name against the census - there because the name is interpolated into SQL, here because a
+     * handler that silently matched nothing would look identical to one that worked.
+     */
+    sync_review_clear: (args: { table: string; uid: string }): ReviewRow[] => {
+      refuseIfBusy(db);
+      const row = reviewRows(db).find((r) => r.table === args.table && r.uid === args.uid);
+      if (row === undefined) throw refuse(REVIEW_NOT_FOUND);
+      clearReview(db, args.table, args.uid);
+      db.relay.pending += 1;
+      return reviewRows(db);
+    },
   } satisfies Record<string, CommandHandler>;
+}
+
+/* ------------------------------------------------------------------ review queue ------- */
+
+/**
+ * What the Sync panel draws about the relay - the one builder the read and the write share.
+ *
+ * Shared rather than re-spelled because `sync_relay_set_url` answers a whole status, exactly as
+ * the crate's does: a save that returned nothing would leave the panel re-reading a value it
+ * had just written, and two constructions of one DTO is how a field comes to be right in one of
+ * them.
+ */
+function relayStatus(db: FakeDb): RelayStatus {
+  return {
+    relayUrl: db.relay.url,
+    paired: db.pairing.group !== null,
+    pending: db.relay.pending,
+    lastSyncAt: db.relay.lastSyncAt,
+    lastError: db.relay.lastError,
+    reviewCount: reviewRows(db).length,
+  };
+}
+
+/** The crate's own sentence for an address with no scheme on it. */
+const RELAY_SCHEME =
+  "A relay address has to start with https:// (or http:// for one on this machine).";
+
+/**
+ * The crate's sentence for a table that is not on its census.
+ *
+ * Reached here by a `(table, uid)` pair naming no row - a second press on something already
+ * cleared - which is a state the panel cannot produce, because the command answers the rows
+ * that are left and the list redraws from that answer.
+ */
+const REVIEW_NOT_FOUND = "That is not a table with anything to review.";
+
+/**
+ * A row's `sync_uid`, which this fake does not store.
+ *
+ * **The crate addresses a review row by `sync_uid` and never by rowid**, because a rowid means
+ * nothing on the other machine - so the fake has to hand the panel *something* stable and
+ * opaque, and a rowid dressed as a uid is the honest minimum. What matters is the property the
+ * panel depends on: the pair `(table, uid)` names one row and survives a re-read.
+ */
+const reviewUid = (table: string, id: number): string => `${table}:${id}`;
+
+/**
+ * Every row carrying a sentence, from all six tables that can hold one.
+ *
+ * The order is `sync_engine::commands::REVIEWABLE`'s, because the panel groups on it and the
+ * crate returns its rows table by table in exactly that sequence.
+ *
+ * **`collection_entries` is the one with no name of its own** - it is a printing rather than a
+ * card - so it borrows one from the corpus and falls back to what is printed on the card, which
+ * is the same `coalesce` the crate writes and the reason those columns are denormalised in the
+ * first place: an orphan is a row whose printing has left, and there is nothing left to re-read.
+ */
+function reviewRows(db: FakeDb): ReviewRow[] {
+  const out: ReviewRow[] = [];
+  for (const e of db.collectionEntries) {
+    if (e.needsReview === null) continue;
+    const named = db.cards.find((c) => c.id === e.cardId)?.name;
+    out.push({
+      table: "collection_entries",
+      uid: reviewUid("collection_entries", e.id),
+      title: named ?? `${e.setCode} ${e.collectorNumber}`,
+      sentence: e.needsReview,
+    });
+  }
+  for (const dc of db.deckCards) {
+    if (dc.needsReview === null) continue;
+    out.push({
+      table: "deck_cards",
+      uid: reviewUid("deck_cards", dc.id),
+      title: dc.name,
+      sentence: dc.needsReview,
+    });
+  }
+  for (const w of db.wishlistEntries) {
+    if (w.needsReview === null) continue;
+    out.push({
+      table: "wishlist_entries",
+      uid: reviewUid("wishlist_entries", w.id),
+      title: w.name ?? "",
+      sentence: w.needsReview,
+    });
+  }
+  const folders: [string, { id: number; name: string; needsReview?: string | null }[]][] = [
+    ["collection_folders", db.collectionFolders],
+    ["deck_folders", db.deckFolders],
+    ["wishlist_folders", db.wishlistFolders],
+  ];
+  for (const [table, rows] of folders) {
+    for (const f of rows) {
+      const sentence = f.needsReview ?? null;
+      if (sentence === null) continue;
+      out.push({ table, uid: reviewUid(table, f.id), title: f.name, sentence });
+    }
+  }
+  return out;
+}
+
+/** Drop one row's sentence, wherever it lives. */
+function clearReview(db: FakeDb, table: string, uid: string): void {
+  const rows: { id: number; needsReview?: string | null }[] =
+    table === "collection_entries"
+      ? db.collectionEntries
+      : table === "deck_cards"
+        ? db.deckCards
+        : table === "wishlist_entries"
+          ? db.wishlistEntries
+          : table === "collection_folders"
+            ? db.collectionFolders
+            : table === "deck_folders"
+              ? db.deckFolders
+              : db.wishlistFolders;
+  for (const row of rows) {
+    if (reviewUid(table, row.id) === uid) row.needsReview = null;
+  }
 }
 
 /* ------------------------------------------------------------------ pairing helpers ---- */

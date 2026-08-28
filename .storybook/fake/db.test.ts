@@ -5559,7 +5559,15 @@ describe("the busy fault", () => {
     // writes the three tables user schema v28 created. The eighth handler the feature ships,
     // `sync_pairing_cancel`, joined `unlocked` instead — the fourth distinct reason on
     // that list, and the cleanest: it touches no connection at all.
-    expect(names).toHaveLength(80);
+    // The relay then added **five**, 80 -> 85, and two of them are *reads*. Every one of
+    // the five takes `sync::with_write` in the crate: `sync_relay_set_url`, `sync_now` and
+    // `sync_review_clear` because they write, and `sync_relay_status` and `sync_review_list`
+    // because that is the crate's single-writer path — the status counts unpushed rows of
+    // `sync_ops` on the write connection, and `ipc.ts` says so at the call site. So both sit in
+    // `writeHandlers` here, which is the opposite call from `sync_pairing_status` one feature
+    // over and for the opposite reason: that command's crate-side write has no counterpart in
+    // this fake, and these two's refusal does.
+    expect(names).toHaveLength(85);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,

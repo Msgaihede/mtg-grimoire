@@ -70,3 +70,26 @@ export const combosForCardsKey = (sortedCardIds: readonly string[]): QueryKey =>
   "forCards",
   sortedCardIds,
 ];
+
+/**
+ * The relay's own state — `ipc.syncRelayStatus`.
+ *
+ * **Here rather than in `SyncPanel`, because two panels move it and only one reads it.** The
+ * Sync panel draws the address, what is waiting and when the last round trip finished; the
+ * Needs-review panel never draws any of that, and yet every press of *Looks fine* changes two
+ * of the three — clearing a sentence is a captured write, so it puts a new op on the pile and
+ * drops `reviewCount` by one. A key one panel declared and the other imported would be the
+ * combo feed's near-miss with the names swapped, and `COMBOS_KEY`'s paragraph above is the
+ * whole argument.
+ *
+ * `["sync", …]` is already `SyncPanel`'s `PAIRING_KEY` prefix, so the bare root invalidates
+ * the pairing, the relay and the review queue at once — which is exactly what a completed
+ * round trip has changed.
+ */
+export const SYNC_KEY: QueryKey = ["sync"];
+
+/** The relay address, what is waiting, and the last round trip — `ipc.syncRelayStatus`. */
+export const RELAY_KEY: QueryKey = ["sync", "relay"];
+
+/** Every row carrying a sentence for the reader — `ipc.syncReviewList`. */
+export const REVIEW_KEY: QueryKey = ["sync", "review"];

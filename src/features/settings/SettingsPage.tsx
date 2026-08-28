@@ -6,6 +6,7 @@ import { DangerZonePanel } from "@/features/settings/DangerZonePanel";
 import { ErrorLogPanel } from "@/features/settings/ErrorLogPanel";
 import { HiddenTagsPanel } from "@/features/settings/HiddenTagsPanel";
 import { MarketplacePanel } from "@/features/settings/MarketplacePanel";
+import { ReviewPanel } from "@/features/settings/ReviewPanel";
 import { SyncPanel } from "@/features/settings/SyncPanel";
 import { UpdatePanel } from "@/features/settings/UpdatePanel";
 import { useDangerZone, useLocalCache } from "@/features/settings/useDataReset";
@@ -91,6 +92,18 @@ export function SettingsPage({ update }: { update: Update }) {
           reason exactly: nothing else in the window reads `sync_pairing_status`. */}
       <SyncPanel />
 
+      {/* **Directly under Sync, because it is what sync asks of a reader.** The rows here are
+          the two outcomes §7.4 surfaces — a row another device deleted while this one was still
+          editing it, a folder move that would have made a loop — plus every printing the card
+          reconciler flagged long before a relay existed. One column, one queue.
+
+          Still in the group that throws nothing away, and that is a judgement rather than an
+          oversight: *Looks fine* deletes a sentence and touches no card, no deck and no copy.
+          What it must stay above is the error log, because a reader who has just synced is
+          looking for this and not for a fault list. It reaches the backend itself —
+          `BackupPanel`'s rule, and `SyncPanel`'s reason directly above it. */}
+      <ReviewPanel />
+
       <ErrorLogPanel log={log} />
 
       {/* Still in the group that throws nothing away, and beside the cache because the two are
@@ -119,10 +132,13 @@ export function SettingsPage({ update }: { update: Update }) {
         </h2>
         {/* Export left this list when the mirror landed — the panel above writes every deck,
             the collection and the wishlist in all seven formats, continuously, which is more
-            than this line ever promised. Import is still the dialog's alone. */}
-        <p className="text-sm text-dim">
-          Data folder, sync behaviour and import. Coming in a later plan.
-        </p>
+            than this line ever promised. Import is still the dialog's alone.
+
+            Sync behaviour left it when the relay landed: an address, what is waiting and a
+            press that makes a round trip are on this page now, in the Sync panel above. A
+            "coming later" line for something a reader can scroll up and use is the kind of rot
+            neither CI job can see. */}
+        <p className="text-sm text-dim">Data folder and import. Coming in a later plan.</p>
       </section>
 
       {/* **Last on the page, under the blurb about what is still missing, and deliberately so.**
