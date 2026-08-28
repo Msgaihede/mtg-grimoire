@@ -19,23 +19,88 @@ const JOURNAL_SIZE_LIMIT: i64 = 64 * 1024 * 1024;
 /// is). Without it those surface as an instant `SQLITE_BUSY` in the middle of a search.
 const BUSY_TIMEOUT: Duration = Duration::from_millis(5_000);
 
+/// The reader's own database. `main` on every connection this module hands out.
+pub const USER_DB: &str = "user.db";
+
+/// The rebuildable half. Attached, never `main` — and the reason is that you cannot
+/// `DETACH main`. Discarding a corrupt corpus has to be four statements and 5 ms, not a
+/// process-wide reopen with two live connections in the way.
+pub const CORPUS_DB: &str = "corpus.db";
+
+/// What the one file was called before schema 27. Only `crate::split` names it.
+pub const LEGACY_DB: &str = "mtg.db";
+
+/// The schema name the corpus is attached under. Spelled once, so a query cannot be
+/// half-qualified against a name somebody typed differently.
+pub const CORPUS: &str = "corpus";
+
+/// Apply the four file-level pragmas to one schema.
+///
+/// **`auto_vacuum` first, before any statement writes a page**, and that ordering is
+/// load-bearing on both schemas for the same reason: once `journal_mode=WAL` has
+/// materialised the file, `auto_vacuum` is a no-op that only a full `VACUUM` can apply.
+/// Measured live while planning: WAL first leaves a brand-new database on `auto_vacuum = 0`
+/// through every reopen, and a freshly-attached file opens on `delete` and `auto_vacuum = 0`
+/// exactly the same way. Incremental rather than full: the return of freed pages is then
+/// something the app asks for after a swap, not something SQLite pays for on every commit.
+///
+/// `schema` is `None` for `main` and `Some(CORPUS)` for the attached half. `foreign_keys`
+/// and `busy_timeout` are **not** here: both are per-connection and take no schema.
+fn configure(conn: &Connection, schema: Option<&str>) -> rusqlite::Result<()> {
+    conn.pragma_update(schema, "auto_vacuum", "INCREMENTAL")?;
+    conn.pragma_update(schema, "journal_mode", "WAL")?;
+    conn.pragma_update(schema, "synchronous", "NORMAL")?;
+    conn.pragma_update(schema, "journal_size_limit", JOURNAL_SIZE_LIMIT)?;
+    Ok(())
+}
+
 /// Open (or create) the SQLite database at `path` with the app's standard PRAGMAs:
 /// incremental auto-vacuum, WAL journalling, `synchronous = NORMAL`, foreign-key
 /// enforcement, a bounded WAL file and a busy timeout.
+///
+/// One file, and the app no longer opens one — [`open_write`] is what `init_state` calls.
+/// This stays because `crate::split::convert` needs a plain handle on a single legacy file,
+/// and because the pragma set has exactly one definition either way.
 pub fn open(path: &Path) -> rusqlite::Result<Connection> {
     let conn = Connection::open(path)?;
-    // FIRST, before any statement writes a page. On a database that does not exist yet
-    // this is free and permanent; once `journal_mode=WAL` has materialised the file it is
-    // a no-op that only a full `VACUUM` can apply (measured live while planning: WAL
-    // first leaves a brand-new database on `auto_vacuum = 0` through every reopen).
-    // Incremental rather than full: the return of freed pages is then something the app
-    // asks for after a swap, not something SQLite pays for on every commit.
-    conn.pragma_update(None, "auto_vacuum", "INCREMENTAL")?;
-    conn.pragma_update(None, "journal_mode", "WAL")?;
-    conn.pragma_update(None, "synchronous", "NORMAL")?;
+    configure(&conn, None)?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
-    conn.pragma_update(None, "journal_size_limit", JOURNAL_SIZE_LIMIT)?;
     conn.busy_timeout(BUSY_TIMEOUT)?;
+    Ok(conn)
+}
+
+/// Attach `<data_dir>/corpus.db` as [`CORPUS`] and give it the same pragmas as `main`.
+///
+/// **An attached file inherits neither `journal_size_limit` nor `synchronous`** — measured
+/// against the real 788 MB database, which came up on `-1` and `2` against `main`'s
+/// `67108864` and `1`. The corpus is the half that writes an 857 MB journal during an
+/// ingest, so a ceiling that does not reach it is a ceiling on nothing.
+///
+/// The path is bound as a parameter; the schema name cannot be, which is why [`CORPUS`] is
+/// interpolated. Creating the file if it is absent is deliberate and is the corpus's whole
+/// character: a missing corpus is a rebuild, not an error.
+pub fn attach_corpus(conn: &Connection, data_dir: &Path) -> rusqlite::Result<()> {
+    let path = data_dir.join(CORPUS_DB);
+    conn.execute(
+        &format!("ATTACH DATABASE ?1 AS {CORPUS}"),
+        [path.to_string_lossy().as_ref()],
+    )?;
+    configure(conn, Some(CORPUS))
+}
+
+/// The one write connection: `user.db` as `main`, `corpus.db` attached.
+///
+/// The user file is `main` because you cannot `DETACH main`: discarding a corrupt corpus
+/// has to be a `DETACH`, a delete and an `ATTACH`, not a process-wide reopen with two live
+/// connections in the way. Its two smaller reasons point the same way — the file
+/// `Connection::open` names is the one whose absence is a failure the app has a message for,
+/// and `PRAGMA user_version` unqualified means `main`.
+pub fn open_write(data_dir: &Path) -> rusqlite::Result<Connection> {
+    let conn = Connection::open(data_dir.join(USER_DB))?;
+    configure(&conn, None)?;
+    conn.pragma_update(None, "foreign_keys", "ON")?;
+    conn.busy_timeout(BUSY_TIMEOUT)?;
+    attach_corpus(&conn, data_dir)?;
     Ok(conn)
 }
 
@@ -59,6 +124,28 @@ pub fn open_read_only(path: &Path) -> rusqlite::Result<Connection> {
     // a read-only connection may not change them anyway.
     conn.pragma_update(None, "foreign_keys", "ON")?;
     conn.busy_timeout(BUSY_TIMEOUT)?;
+    Ok(conn)
+}
+
+/// A **read-only** handle over the same pair [`open_write`] opens.
+///
+/// Nothing is configured here, on either schema: those pragmas are properties of a file,
+/// set by [`open_write`], and a read-only connection may not change them anyway. `ATTACH`
+/// on a `SQLITE_OPEN_READ_ONLY` handle succeeds and the attached database is read-only too
+/// — measured, a write to it answers `SQLITE_READONLY`, which is the guarantee this handle
+/// exists for extended across both files.
+pub fn open_read(data_dir: &Path) -> rusqlite::Result<Connection> {
+    let conn = Connection::open_with_flags(
+        data_dir.join(USER_DB),
+        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    conn.pragma_update(None, "foreign_keys", "ON")?;
+    conn.busy_timeout(BUSY_TIMEOUT)?;
+    let path = data_dir.join(CORPUS_DB);
+    conn.execute(
+        &format!("ATTACH DATABASE ?1 AS {CORPUS}"),
+        [path.to_string_lossy().as_ref()],
+    )?;
     Ok(conn)
 }
 
@@ -334,6 +421,172 @@ mod tests {
             "the read connection must not be able to write"
         );
         assert_eq!(busy, BUSY_TIMEOUT.as_millis() as i64);
+    }
+
+    /// The four pragmas `db::open` sets are properties of a *file*, and an attached file
+    /// inherits none of the two that matter. Measured against the real 788 MB database:
+    /// `corpus.journal_size_limit` read -1 where main read 67108864, and `corpus.synchronous`
+    /// read 2 (FULL) where main read 1 (NORMAL). The corpus is the file that writes an 857 MB
+    /// journal during an ingest, so losing the ceiling loses it on the only file that needs it.
+    #[test]
+    fn an_attached_corpus_gets_the_same_pragmas_as_main() {
+        let dir = scratch("pair");
+
+        let conn = open_write(&dir).unwrap();
+
+        let main_mode: String = conn
+            .query_row("PRAGMA main.journal_mode", [], |r| r.get(0))
+            .unwrap();
+        let corpus_mode: String = conn
+            .query_row("PRAGMA corpus.journal_mode", [], |r| r.get(0))
+            .unwrap();
+        let corpus_limit: i64 = conn
+            .query_row("PRAGMA corpus.journal_size_limit", [], |r| r.get(0))
+            .unwrap();
+        let corpus_sync: i64 = conn
+            .query_row("PRAGMA corpus.synchronous", [], |r| r.get(0))
+            .unwrap();
+        let corpus_vacuum: i64 = conn
+            .query_row("PRAGMA corpus.auto_vacuum", [], |r| r.get(0))
+            .unwrap();
+        let fk: i64 = conn
+            .query_row("PRAGMA foreign_keys", [], |r| r.get(0))
+            .unwrap();
+
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(main_mode.to_lowercase(), "wal");
+        assert_eq!(
+            corpus_mode.to_lowercase(),
+            "wal",
+            "the corpus must be WAL too"
+        );
+        assert_eq!(
+            corpus_limit, JOURNAL_SIZE_LIMIT,
+            "the WAL ceiling must reach the corpus"
+        );
+        assert_eq!(corpus_sync, 1, "the corpus must be synchronous = NORMAL");
+        assert_eq!(
+            corpus_vacuum, 2,
+            "auto_vacuum must be set before WAL materialises the file"
+        );
+        assert_eq!(fk, 1, "foreign_keys is per-connection, not per-schema");
+    }
+
+    /// Both files exist afterwards, and they are two files. `ATTACH` on a path that does not
+    /// exist creates it silently, which is the right failure for a rebuildable corpus and would
+    /// be the wrong one for a collection — which is why the user file is the one `open` names.
+    #[test]
+    fn open_write_creates_both_files_and_they_are_distinct() {
+        let dir = scratch("pair-files");
+
+        let conn = open_write(&dir).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE t (v TEXT);
+             CREATE TABLE corpus.u (v TEXT);
+             INSERT INTO t VALUES ('user');
+             INSERT INTO u VALUES ('corpus');",
+        )
+        .unwrap();
+        let unqualified: String = conn.query_row("SELECT v FROM u", [], |r| r.get(0)).unwrap();
+        conn.query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))
+            .unwrap();
+        drop(conn);
+
+        let user_there = dir.join(USER_DB).is_file();
+        let corpus_there = dir.join(CORPUS_DB).is_file();
+        let user_len = std::fs::metadata(dir.join(USER_DB)).unwrap().len();
+        let corpus_len = std::fs::metadata(dir.join(CORPUS_DB)).unwrap().len();
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(user_there && corpus_there);
+        assert!(user_len > 0 && corpus_len > 0);
+        // Fact 1: an unqualified name resolves into the attached database.
+        assert_eq!(unqualified, "corpus");
+    }
+
+    /// The read handle sees both files and can write to neither. It is what every search uses,
+    /// and a handle that *could* write is a handle that can stall the ingest it exists to run
+    /// alongside — `open_read_only`'s reason, now doubled.
+    #[test]
+    fn the_read_handle_sees_both_files_and_writes_to_neither() {
+        let dir = scratch("pair-read");
+        let w = open_write(&dir).unwrap();
+        w.execute_batch(
+            "CREATE TABLE t (v TEXT); INSERT INTO t VALUES ('user');
+             CREATE TABLE corpus.u (v TEXT); INSERT INTO u VALUES ('corpus');",
+        )
+        .unwrap();
+
+        let r = open_read(&dir).unwrap();
+        let user: String = r
+            .query_row("SELECT v FROM t", [], |row| row.get(0))
+            .unwrap();
+        let corpus: String = r
+            .query_row("SELECT v FROM u", [], |row| row.get(0))
+            .unwrap();
+        let write_user = r.execute("INSERT INTO t VALUES ('nope')", []);
+        let write_corpus = r.execute("INSERT INTO u VALUES ('nope')", []);
+
+        drop(r);
+        drop(w);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(user, "user");
+        assert_eq!(corpus, "corpus");
+        assert!(
+            write_user.is_err(),
+            "the read handle must not write the user file"
+        );
+        assert!(
+            write_corpus.is_err(),
+            "the read handle must not write the corpus either"
+        );
+    }
+
+    /// The exit checkpoint still empties both journals. `PRAGMA wal_checkpoint` with no schema
+    /// name checkpoints every attached database — measured, both `-wal` files at 0 bytes — so
+    /// `checkpoint_truncate` needs no change and this is what says so.
+    #[test]
+    fn a_truncating_checkpoint_empties_both_journals() {
+        let dir = scratch("pair-checkpoint");
+        let conn = open_write(&dir).unwrap();
+        conn.execute_batch("CREATE TABLE t (v TEXT); CREATE TABLE corpus.u (v TEXT);")
+            .unwrap();
+        for i in 0..2000 {
+            conn.execute("INSERT INTO t VALUES (?1)", [format!("row {i}")])
+                .unwrap();
+            conn.execute("INSERT INTO u VALUES (?1)", [format!("row {i}")])
+                .unwrap();
+        }
+        let before_user = std::fs::metadata(dir.join("user.db-wal"))
+            .map(|m| m.len())
+            .unwrap_or(0);
+        let before_corpus = std::fs::metadata(dir.join("corpus.db-wal"))
+            .map(|m| m.len())
+            .unwrap_or(0);
+
+        checkpoint_truncate(&conn).unwrap();
+
+        let after_user = std::fs::metadata(dir.join("user.db-wal"))
+            .map(|m| m.len())
+            .unwrap_or(0);
+        let after_corpus = std::fs::metadata(dir.join("corpus.db-wal"))
+            .map(|m| m.len())
+            .unwrap_or(0);
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert!(
+            before_user > 0 && before_corpus > 0,
+            "both should have had a WAL to truncate"
+        );
+        assert_eq!(after_user, 0);
+        assert_eq!(
+            after_corpus, 0,
+            "an unqualified checkpoint must reach the attached file"
+        );
     }
 
     /// What the exit handler buys: without a truncating checkpoint the `-wal` file
