@@ -96,6 +96,13 @@ hkdf = "0.12"
 # with `--cfg getrandom_backend="wasm_js"` in a `.cargo/config.toml`; **0.4 needs no build flag**,
 # which was established by deleting the file and watching the wasm build stay green.
 getrandom = "0.4"
+# The sealed envelope as a JSON string. **base64url and not hex**: the relay stores ciphertext
+# as TEXT in a Durable Object, and hex would be twice the bytes over the wire and against the
+# 2 MB per-row cap where base64 is four thirds; URL-safe so the blob can be a path segment
+# later without anything having to escape it. `default-features = false` drops `std`, which is
+# what makes it compile for wasm alongside everything else in this block; `alloc` is the whole
+# API `Engine::encode`/`decode` needs.
+base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 # The invite as a picture. This app renders the matrix itself in the webview — see
 # `sync_pair::invite::qr_matrix` — so the crate's own `image` and `svg` renderers are dead
 # weight and `default-features = false` drops them. Building the matrix is the fact; drawing it
