@@ -27,7 +27,8 @@ Platforms: **Desktop** (Tauri/Windows, today's app) · **Web** (Vite + wasm core
 | FTS5 search | ✅ | ✅ | ✅ | `ENABLE_FTS5` confirmed in the wasm build. |
 | Faceting (`CardIndex`) | ✅ | ✅ | ✅ | In-memory Rust bitsets, no VFS involved. Greying, sink-not-hide, fail-open and `Skip`/`mana_x` semantics all carry unchanged. |
 | Tag search syntax | ✅ | ✅ | ✅ | Depends only on the tagger tables being present. |
-| Printings, card detail, zoom | ✅ | ✅ | ✅ | |
+| Printings, card detail | ✅ | ✅ | ✅ | |
+| Card zoom (the 16-stop ladder) | ✅ | ❓ | ❓ | ⚠️ **`useCardZoomGesture` listens for `wheel`+`ctrlKey`. A touchscreen pinch is not a wheel event**, and no other control steps the ladder — so it is unreachable on touch today. Needs a gesture, planned in mobile-layout 9a. |
 | Collapsed / uncollapsed browse | ✅ | ❓ | ✅ | **Not yet measured on the real corpus in wasm.** See open question 1. |
 
 ## 2. Optional feeds
@@ -234,7 +235,8 @@ platform a touch-capable drag, so the phone layout question is about *shape*, no
    on a phone undoing something done on a desktop an hour ago is a surprise rather than a
    feature, and it would make undo a distributed-consensus problem for no gain.
 
-   **The synced set is therefore 12 tables** — the same count as the brief's list but not the
+   **The synced set is therefore 11 tables** (`deck_allocations` was dropped by schema v25 and
+   this list wrongly carried it until 2026-08-28) — the same count as the brief's list but not the
    same list, since `deck_tags` joins as `deck_undo` leaves. That is `collection_entries`, `collection_folders`, `decks`, `deck_cards`,
-   `deck_categories`, `deck_folders`, `deck_allocations`, `deck_audit`, `deck_tags`,
+   `deck_categories`, `deck_folders`, `deck_audit`, `deck_tags`,
    `wishlist_entries`, `wishlist_folders`, `muted_tags`, and the preference subset of `app_meta`.

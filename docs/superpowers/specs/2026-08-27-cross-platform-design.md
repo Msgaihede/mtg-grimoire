@@ -43,7 +43,7 @@ ships as an installable PWA.
 | A second browser tab is refused, with an explanation | [§5.2](#52-one-connection-one-tab) |
 | The mirror stays desktop-only | [§6.3](#63-what-compiles-where) |
 | `deck_audit` syncs; `deck_undo` does not | [§7.2](#72-what-syncs) |
-| Drag-and-drop moves to `@dnd-kit/react` everywhere | [§6.4](#64-drag-and-drop) |
+| Drag-and-drop moves to dnd-kit (`@dnd-kit/dom`) everywhere | [§6.4](#64-drag-and-drop) |
 | Mana Pool is unavailable on web (CORS) | [§5.3](#53-the-corpus-and-the-optional-feeds) |
 | One SQLite Durable Object, no R2 | [§7.7](#77-the-relay) |
 | Compact on ack, keep 30 days | [§7.7](#77-the-relay) |
@@ -284,15 +284,41 @@ same goldens.
 
 | Module | Desktop | Web | Android |
 | --- | --- | --- | --- |
-| `src-tauri/src/mirror/` | ✅ | ⛔ | ⛔ |
-| `src-tauri/src/transfer/` (Rust writer) | ✅ | ⛔ | ⛔ |
-| `src-tauri/src/update.rs` (portable swap) | ✅ | ⛔ | ⛔ |
+| `src-tauri/src/mirror/` | ✅ | 🟡 not run | 🟡 not run |
+| `src-tauri/src/transfer/` (Rust writer) | ✅ | 🟡 not run | 🟡 not run |
+| `src-tauri/src/update.rs` (portable swap) | ✅ | 🟡 not run | 🟡 not run |
 | `src-tauri/src/window.rs`, snap layouts | ✅ | ⛔ | ⛔ |
+| `tauri-plugin-single-instance` | ✅ | ⛔ | ⛔ **hard compile error** |
 | everything else | ✅ | ✅ | ✅ |
+
+> ⚠️ **Corrected 2026-08-28: three of these cannot be *compiled out*, only *not run*.** The
+> distinction was wrong in the first draft and it changes the work.
+>
+> - **`AppState` names mirror's types** — `pub mirror: Arc<mirror::watch::Mask>` and
+>   `pub mirror_status: Mutex<mirror::watch::LastPass>` (`sync.rs:110`, `:116`). A `cfg` that
+>   removed the module would take `AppState` with it.
+> - **`update.rs` owns `get_app_meta` and `set_app_meta`** (`:291`, `:302`) — two generic settings
+>   helpers with **ten calling modules**: `card`, `deck`, `flatten`, `lib`, `listview`,
+>   `marketplace`, `mirror/settings`, `mirror/watch`, `nav`, `sync`. Nothing about them is
+>   updater-specific; they live there by accident of history.
+>
+>   **So the tidy fix is a small refactor, not a `cfg`:** move those two helpers out of
+>   `update.rs` into `db.rs`, and `update.rs` becomes genuinely removable. Worth doing in the
+>   Android PR, where the cost of not doing it is felt.
+>
+> - **`tauri-plugin-single-instance` is a different case and a harder one.** On Android the crate
+>   is `#![cfg(not(any(target_os = "android", target_os = "ios")))]` — an *empty* crate — so
+>   `lib.rs`'s `.plugin(init(…))` does not degrade to a no-op, it **fails to compile**. So does
+>   `window.rs`: `Window::center()` is `#[cfg(desktop)]`, as are three of `TitleBar`'s four
+>   verbs (`minimize`, `toggle_maximize`, `start_dragging`; only `close` is shared).
 
 ### 6.4 Drag-and-drop
 
-**Moves to `@dnd-kit/react` on every platform.** `pragmatic-drag-and-drop` is built on native
+**Moves to dnd-kit on every platform.** ⚠️ **The package is `@dnd-kit/dom`, not
+`@dnd-kit/react` — corrected 2026-08-28.** The imperative `DragDropManager` / `Draggable` /
+`Droppable` API the migration actually uses lives in `@dnd-kit/dom`; `@dnd-kit/react` is the
+hooks wrapper and `src/` imports it nowhere. Both are pinned at 0.5.0.
+`pragmatic-drag-and-drop` is built on native
 HTML5 DnD, which has no touch implementation and never will. Measured 2026-08-27:
 `@dnd-kit/core` has the proven API and 24.4 M weekly downloads but has not shipped since
 2024-12-05; `@dnd-kit/react` 0.5.0 is the actively developed successor with explicit React 19
@@ -318,17 +344,26 @@ reconnect. The relay stores and forwards ciphertext and can decrypt nothing.
 
 ### 7.2 What syncs
 
-**Twelve tables**, plus a preference subset of `app_meta`. That is the same *count* as the
+**Eleven tables**, plus a preference subset of `app_meta`. That is the same *count* as the
 brief's list and not the same *list* — one table leaves and one joins, which is precisely why
 it is easy to write down as thirteen:
 
 `collection_entries` · `collection_folders` · `decks` · `deck_cards` · `deck_categories` ·
-`deck_folders` · `deck_allocations` · `deck_audit` · `deck_tags` · `wishlist_entries` ·
+`deck_folders` · `deck_audit` · `deck_tags` · `wishlist_entries` ·
 `wishlist_folders` · `muted_tags`
 
 **Corrections to the brief's list**, both found by reading the schema:
 
-- **`deck_tags` was miscategorised as derived.** It is `(id, deck_id, name, color, created_at,
+- ⚠️ **`deck_allocations` does not exist. Corrected 2026-08-28.** Schema v25 dropped it —
+  `DROP TABLE deck_allocations;` at `schema.rs:2624` — and the work it did moved into
+  `collection_folders`, which is already on the list. The brief named it and this spec inherited
+  it without checking. **`schema.rs` is a migration ladder, so a `CREATE TABLE` grep returns an
+  earlier rung as readily as head**; read `pragma table_info` off a live database instead.
+- **`deck_tags` was miscategorised as derived.** ⚠️ **Its shape here was also wrong, corrected
+  2026-08-28**: v21 rebuilt it as ONE APP-WIDE LIST, `(id, name, name_key, color, created_at,
+  updated_at)` — no `deck_id`, uniquely keyed on `name_key`. That is load-bearing for sync: two
+  devices typing "Ramp" must converge on one row or the apply hits a constraint failure. The old
+  `(id, deck_id, name, color, created_at,
   updated_at)` — a label a person typed and coloured. It syncs.
 - **`deck_undo` does not sync.** `deck_audit` is the record of what happened to a deck and belongs
   to it on every device; `deck_undo` is one editing session's state, and Ctrl+Z on a phone undoing
@@ -368,6 +403,12 @@ the user's attention". Reused rather than reinvented:
 
 - a row edited on one device and deleted on another → resurrected, `needs_review` set
 - a folder cycle broken → the folder lands at root, `needs_review` set
+
+> ⚠️ **Corrected 2026-08-28: the column is not where this assumed.** `needs_review` is on
+> `collection_entries`, `wishlist_entries` **and** `deck_cards` — three tables, not the two named
+> above — and on **no folder table at all**. So the second outcome has no mechanism today: adding
+> `needs_review` to `collection_folders`, `wishlist_folders` and `deck_folders` is a schema rung
+> the sync PR must carry.
 
 ### 7.5 Pairing
 
@@ -469,25 +510,34 @@ the web target ships.
 
 ## 10. PR sequence
 
-**Phase 1 — three PRs, genuinely parallel** (different trees, no shared files):
+**Updated 2026-08-28.** The dnd migration split into 3a/3b/3c once its real size was measured
+(21 production modules, 13 test files, seven drag domains), so Phase 1 is five PRs and not three.
+Every remaining PR now has a task-level plan in `docs/superpowers/plans/`.
 
-1. `feat(core)`: the platform I/O traits — §4, native implementations only, desktop behaviour
-   unchanged. Carries the combo push-parser rewrite and gzip sniffing. **The largest PR here.**
-2. `refactor(ipc)`: Boundary A — §3, the interface plus the Tauri implementation.
-3. `refactor(decks)`: `@dnd-kit/react` migration — §6.4, desktop-first, every shipped drag
-   re-verified.
+| # | PR | Plan | State |
+| --- | --- | --- | --- |
+| 1 | the feed pipeline takes a stream | `2026-08-27-feed-pipeline-takes-a-stream.md` | **done** — `feed-pipeline-stream` |
+| 2 | Boundary A, the core interface | `2026-08-27-boundary-a-the-core-interface.md` | **done** — `boundary-a-core` |
+| 3a | dnd-kit foundation + the folder tree | `2026-08-27-dnd-kit-3a-foundation-and-folder-tree.md` | **done** — `dnd-kit-3a` |
+| 3b | the six remaining drag domains | `2026-08-28-dnd-kit-3b-remaining-domains.md` | planned |
+| 3c | remove pragmatic-dnd, settle a11y | `2026-08-28-dnd-kit-3c-remove-pragmatic-dnd.md` | planned |
+| 4 | the wasm core build | `2026-08-28-web-target-wasm-core.md` | planned |
+| 5 | the PWA shell | `2026-08-28-web-target-pwa-shell.md` | planned |
+| 6 | pairing | `2026-08-28-sync-pairing.md` | planned |
+| 7 | the relay and conflict engine | `2026-08-28-sync-relay-and-engine.md` | planned |
+| 8 | the Android target | `2026-08-28-android-target.md` | planned |
+| 9a | mobile layout: foundation + options | `2026-08-28-mobile-layout-9a-foundation-and-options.md` | planned |
+| 9b | implement the chosen layout | — | **deliberately unplanned** |
 
-**Phase 2 — the web target:** 4. the wasm core build (browser I/O impls, the DB Worker, the
-one-tab guard). 5. the PWA shell (manifest, service worker, update flow, the evicted-corpus state).
+**9b has no plan on purpose.** §6.1 says the layout options come to Markus before anything is
+built; naming the components 9b would create requires a choice nobody has made, and writing them
+now would be placeholders. 9a produces the options and the design-independent foundation; 9b gets
+planned once a direction is chosen.
 
-**Phase 3 — sync, which can run alongside Phase 2** — they share no files: 6. pairing (§7.5).
-7. the relay and conflict engine (§7.3, §7.7).
-
-**Phase 4 — Android:** 8. the Tauri mobile target. Needs the SDK and NDK installed.
-
-**Phase 5 — mobile layout:** 9. after `frontend-design` options are approved.
-
-Each phase gets its own implementation plan, written at its turn.
+**What can run in parallel:** 3b and 4 touch different trees and are independent. 6 and 7 are
+sequential with each other but independent of 2 and 5 — sync shares no files with the web target,
+which shortens the critical path considerably. 3c waits on 3b; 9a waits on nothing but is most
+useful after 3b, since it can then assume touch-capable dragging.
 
 ## 11. Open
 
