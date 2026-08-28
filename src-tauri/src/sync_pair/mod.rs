@@ -13,4 +13,5 @@
 //! crosses is either a public key or a sealed blob.
 
 pub mod crypto;
+pub mod identity;
 pub mod invite;
