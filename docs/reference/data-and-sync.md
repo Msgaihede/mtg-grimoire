@@ -3,9 +3,13 @@
 Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every figure keeps the date and the build it was taken on.
 
 - Data dir is `<exe dir>/data`, falling back to `%APPDATA%/com.mtggrimoire.app/data`.
-  **Under `tauri dev` the exe is `src-tauri/target/debug/`, so the database is
-  `src-tauri/target/debug/data/mtg.db`** — not `src-tauri/data/`. Delete that `data/`
-  folder to force a clean first-run sync. All three locations are gitignored.
+  **Under `tauri dev` the exe is `src-tauri/target/debug/`, so the databases are
+  `src-tauri/target/debug/data/user.db` and `corpus.db`** — not `src-tauri/data/`, and
+  **not one file since schema 27**: the reader's fifteen tables are `main` and the
+  rebuildable twenty-five are `ATTACH`ed as `corpus`. A folder still holding a single
+  `mtg.db` is converted at the next launch by `split::convert`, which never touches that
+  file until the new one is safely renamed into place. Delete that `data/` folder to force
+  a clean first-run sync. All three locations are gitignored.
   **The fallback's folder name is the Tauri `identifier`, and the rename changed it** —
   `com.mtgcollection.tracker` → `com.mtggrimoire.app`. A machine that ran the v0.2.0
   _installer_ still has the old folder and its database; nothing migrates it, deliberately
@@ -433,7 +437,10 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   been its only statement that was not about folders. **v25 sweeps it**, in the same
   `execute_batch` that drops `deck_allocations` and `decks.is_built`, because that rung is what
   answers the question the switch was asking — the decks *are* where the cards are now.
-- **Schema is v26**, and `schema::SCHEMA_VERSION` is the answer — this line read **v18** for two
+- **The single-file ladder is frozen at v26**, and `schema::LEGACY_SINGLE_FILE_VERSION` is the
+  answer; schema 27 splits the file in two and the halves number themselves separately
+  (`USER_SCHEMA_VERSION` 27 on the reader's file, `CORPUS_SCHEMA_VERSION` 1 on the rebuildable
+  one). This line read **v18** for two
   whole rungs, because a prose-only edit routes to neither CI job and nothing goes red when a
   ladder entry rots.
   **v25 makes the collection's folders the physical ledger of where every card sits.** It inserts
@@ -757,7 +764,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   population no upgrade fixture can stand in for.
   **"Head minus one" is a title that moves between fixtures, not a fixture that is renamed.**
   `schema::tests::the_head_minus_one_fixture_really_sits_one_step_below_head` asserts
-  `SCHEMA_VERSION - 1` so the claim and the constant cannot drift apart, and each new step hands
+  `LEGACY_SINGLE_FILE_VERSION - 1` so the claim and the constant cannot drift apart, and each new step hands
   the title on rather than renumbering the holder: v12 handed it to a new **`v11_database`**, v13
   to a new **`v12_database`**, v14 to **`v13_database`**, v15 to **`v14_database`**, v16 to
   **`v15_database`**, v17 to **`v16_database`**, v18 to **`v17_database`**, v19 to
@@ -830,7 +837,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   the title, and its second half is back to asking what head-minus-one **lacks**, which v23 gave
   it something to be again (`wishlist_folders`). It has since moved on to `v23_database`, and
   what that one lacks is `collection_folders` — the assertion is written against
-  `SCHEMA_VERSION - 1` precisely so the title travels without anybody renumbering a fixture.
+  `LEGACY_SINGLE_FILE_VERSION - 1` precisely so the title travels without anybody renumbering a
+  fixture.
   **`UNDO_V23` is deliberately a partial rewind**, and the half it cannot do is the half worth
   knowing: it drops `wishlist_folders` and `idx_wishlist_folder` and leaves
   `wishlist_entries.folder_id` standing, because SQLite refuses `DROP COLUMN` on a column an
