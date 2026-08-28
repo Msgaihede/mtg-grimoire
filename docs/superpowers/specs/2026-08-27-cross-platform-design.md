@@ -521,6 +521,7 @@ Every remaining PR now has a task-level plan in `docs/superpowers/plans/`.
 | 3a | dnd-kit foundation + the folder tree | `2026-08-27-dnd-kit-3a-foundation-and-folder-tree.md` | **done** — `dnd-kit-3a` |
 | 3b | the six remaining drag domains | `2026-08-28-dnd-kit-3b-remaining-domains.md` | planned |
 | 3c | remove pragmatic-dnd, settle a11y | `2026-08-28-dnd-kit-3c-remove-pragmatic-dnd.md` | planned |
+| **3.5** | **the user database — split user data out of the corpus** | `2026-08-28-the-user-database.md` | planned |
 | 4 | the wasm core build | `2026-08-28-web-target-wasm-core.md` | planned |
 | 5 | the PWA shell | `2026-08-28-web-target-pwa-shell.md` | planned |
 | 6 | pairing | `2026-08-28-sync-pairing.md` | planned |
@@ -533,6 +534,21 @@ Every remaining PR now has a task-level plan in `docs/superpowers/plans/`.
 built; naming the components 9b would create requires a choice nobody has made, and writing them
 now would be placeholders. 9a produces the options and the design-independent foundation; 9b gets
 planned once a direction is chosen.
+
+**PR 3.5 was added 2026-08-28 and must land before PR 4.** `mtg.db` holds the derived corpus and
+the user's own data in one file, so an OPFS eviction on the web target takes the collection with
+the corpus, and "rebuild the corpus" is destructive on every platform. Splitting them is cheap —
+SQLite resolves unqualified table names into an ATTACHed database, so none of the ~136 commands
+changes — and the conversion measured 294 ms on a byte copy of the real 788 MB database, producing
+a 1.3 MB `user.db` beside a 787 MB `corpus.db`.
+
+It goes before PR 4 rather than after because PR 4 builds the OPFS storage story, and building it
+against a single file means building the eviction hazard in and then unpicking it.
+
+> ⚠️ **It also corrects this spec.** `card_migrations` is listed above as derived; it is not.
+> `reconcile::apply` writes it in the same transaction as it repoints the user's rows, and under
+> WAL a transaction spanning two attached files is **not atomic** — so `card_migrations` has to
+> live on the user side or a re-poll can grow the collection on its own.
 
 **What can run in parallel:** 3b and 4 touch different trees and are independent. 6 and 7 are
 sequential with each other but independent of 2 and 5 — sync shares no files with the web target,
