@@ -101,6 +101,12 @@ const load = once(async (): Promise<Glue> => {
 
 const send = (message: FromWorker) => self.postMessage(message);
 
+/** The one `open`, memoised on the first call — the answer included. See `case "open"`. */
+let opening: Promise<Opened> | undefined;
+function open(wasm: Glue, directory: string): Promise<Opened> {
+  return (opening ??= wasm.open(directory).then((json) => JSON.parse(json) as Opened));
+}
+
 self.addEventListener("message", (e: MessageEvent<ToWorker>) => {
   void handle(e.data);
 });
@@ -110,8 +116,15 @@ async function handle(message: ToWorker): Promise<void> {
     const wasm = await load();
     switch (message.kind) {
       case "open": {
-        const opened = JSON.parse(await wasm.open(message.directory)) as Opened;
-        send({ kind: "opened", opened });
+        // Memoised too, and this one is hygiene rather than a fix: removing it and letting
+        // StrictMode's two effects each open the database was run as a mutation on
+        // 2026-08-28 and **survived**, three clean first runs of three. `sqlite-wasm-vfs`
+        // registers its pool by VFS name and hands the second caller the one already
+        // registered, so a second open does not make a second pool. What it does make is a
+        // second `Connection`, a second run of every migration, and a second build of the
+        // facet index over all 117 606 rows — none of which a Worker that owns exactly one
+        // database has any use for. One open, one answer, and the refusal is an answer.
+        send({ kind: "opened", opened: await open(wasm, message.directory) });
         return;
       }
       case "call": {

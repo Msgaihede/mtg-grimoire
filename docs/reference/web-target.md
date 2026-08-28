@@ -55,6 +55,8 @@ the real 43-column one, `raw` included**.
 > **The fix is `once()` in `src/workers/db.ts`** — memoise the promise, not the result.
 > Measured after it, on the same harness: **6 clean runs from a wiped browser profile, 6
 > completed**, 117 606 rows each, one `WebAssembly.Memory` per Worker each time.
+>
+> It also fixed the one-tab guard, which had the same single cause. See below.
 
 ---
 
@@ -155,42 +157,54 @@ as it being wrong would have been.
    attaches, reads and writes perfectly well. It is gone because a Worker is *one thread*, so a
    second connection could never be used concurrently, and under the rollback journal it would
    contend at the file level rather than sail past on a WAL snapshot.
-3. **A second tab is supposed to be refused — and currently is not.** See below.
+3. **A second tab is refused**, with a sentence rather than a stack trace. See below.
 4. **The `User-Agent` is the browser's.** It is a forbidden header for `fetch`, so this build is
    not identified to Scryfall the way the desktop is. That is a real UA rather than an absent
    one, which is what Scryfall's rule is about, but it is not ours — and the desktop's
    rate-limit pacing and 429 penalty do not exist here at all. Both are owed with the sync port.
 
-## ⚠️ The one-tab guard does not fire
+## The one-tab guard fires, and the premise was never the problem
 
-Spec §5.2 settled that the first tab wins and the second gets a sentence. `wire::Opened::from_open_error`
-classifies the browser's refusal correctly and is unit-tested against the real message. **What is
-not true is the premise: a second document is not reliably refused.**
+Spec §5.2 settled that the first tab wins and the second gets a sentence. It does, since
+2026-08-28. `wire::Opened::from_open_error` and `AlreadyOpen.tsx` were correct all along —
+what was missing was the refusal ever reaching them, and the cause was the *same single bug*
+as the memory failure above.
 
-Measured 2026-08-28, two tabs of `http://localhost:5173/` driven individually by CDP target id
-(the two share a URL, so `scripts/cdp.mjs` — which takes the first `type: page` — cannot tell
-them apart):
-
-- **Both tabs rendered the first-run page**, neither showed `AlreadyOpen`.
-- **Both answered `sync_status`** with `dataDir: "OPFS:/mtg-grimoire"`, so both had a live
-  database on the same pool.
-- Tried at `OPFS_INITIAL_CAPACITY` of **64 and of 12** — no difference, so the pool's file
-  count is not the variable.
-
-Probe 6 saw the opposite on the same machine an hour earlier: a second document there failed at
-`install_opfs_pool` with
+**`opfs-sahpool` does refuse a second document, and that is measured rather than assumed.**
+With one tab open on an installed pool, a throwaway Worker in that same page that walks
+`mtg-grimoire/.opaque` and calls `createSyncAccessHandle()` on every entry gets
+**0 of 64 locked, 64 of 64 refused**, each with
 
 ```text
-CreateSyncAccessHandle(JsValue(NoModificationAllowedError: Failed to execute
-'createSyncAccessHandle' on 'FileSystemFileHandle': Access Handles cannot be created if there
-is another open Access Handle or Writable stream associated with the same file.))
+NoModificationAllowedError: Failed to execute 'createSyncAccessHandle' on
+'FileSystemFileHandle': Access Handles cannot be created if there is another open Access
+Handle or Writable stream associated with the same file.
 ```
 
-The difference between the two has **not** been isolated. The probe's first tab had written
-tables and rows before the second opened; the app's had an empty database. Until this is
-understood, **two tabs can share one database**, which is precisely the failure §5.2 wanted
-designed out. `AlreadyOpen.tsx` and its tests are correct and ready; what is missing is the
-refusal that is supposed to trigger them.
+Exclusivity is global rather than per-document, which is why a probe in the *first* tab can
+count what that tab is holding.
+
+**What the second tab was really doing before the fix, and it was worse than sharing.** Its
+Worker also ran two wasm instances. The browser refused the pool exactly as it was supposed
+to, but the refused instance's `async fn` was being resumed through the *other* instance's
+linear memory, so `install_opfs_pool` came back `Ok` from a call the browser had denied.
+`db::open_pooled_pair` then opened `user.db` on whatever VFS was still the default — which is
+`rsqlite_vfs::memvfs`, installed by `sqlite3_os_init` — and the page got a private in-memory
+database while reporting `dataDir: "OPFS:/mtg-grimoire"`, a string the Rust side formats from
+its argument and which proves nothing about the medium.
+
+The measurement that settles it: tab 1 ingests the full corpus, then tab 2 opens.
+
+| | Before (2249a50) | After |
+| --- | --- | --- |
+| tab 1 `sync_status.cardCount` | 117 606 | 117 606 |
+| tab 2's page | the first-run "Build the card database" screen | **"MTG Grimoire is already open"** |
+| tab 2 `sync_status` | `cardCount: 0`, `dataDir: OPFS:/mtg-grimoire` | `Error: the database is not open yet` |
+| files in `.opaque` | 64 | 64 |
+
+Sixty-four files throughout, with tab 1 holding every one of them: tab 2's database was never
+in the pool, because a second pool would have had to preallocate sixty-four more. The two tabs
+were not sharing one database — the second had silently been given a different, empty one.
 
 ## What is not built yet
 
@@ -270,7 +284,6 @@ desktop bundle and therefore out of the portable exe. Verified: `npm run build` 
 
 ## What is owed
 
-- **The one-tab guard's premise.**
 - **Whether `OPFS_TEMP_STORE` and an `OPFS_INITIAL_CAPACITY` of 64 are still needed.** Both
   were added against the failure at the top of this page, and both moved its threshold — which
   is what a change to the allocation *layout* does to a corrupted heap, and is not evidence

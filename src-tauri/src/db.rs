@@ -451,7 +451,16 @@ const OPFS_TEMP_STORE: &str = "FILE";
 /// **This call is the one-tab guard's trigger, and that was measured rather than assumed.**
 /// A second document of the same origin fails *here* — not at [`open_pooled_pair`] — with
 /// `CreateSyncAccessHandle(JsValue(NoModificationAllowedError: …))`. The first tab holds every
-/// handle in the pool, so the second never gets as far as naming a database.
+/// handle in the pool, so the second never gets as far as naming a database. Counted directly
+/// on 2026-08-28 from a throwaway Worker in the holding tab: **0 of 64 files lockable, 64 of 64
+/// refused**, exclusivity being global rather than per-document.
+///
+/// **A refusal here is only as good as the caller's control flow.** Until `src/workers/db.ts`
+/// stopped instantiating the module twice, the refused instance was resumed through the other
+/// instance's memory and this function returned `Ok` from a call the browser had denied —
+/// after which [`open_pooled_pair`] opened `user.db` on whatever VFS was still the default,
+/// which is the in-memory one `sqlite3_os_init` installs. The second tab got a private empty
+/// database and said `dataDir: "OPFS:/mtg-grimoire"` about it.
 ///
 /// **Cross-origin isolation is not required.** The same page was served with and without
 /// `Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy: require-corp`

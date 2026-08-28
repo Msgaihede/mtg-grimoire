@@ -58,6 +58,12 @@ fn err(message: impl std::fmt::Display) -> String {
 /// access handles and is refused with `NoModificationAllowedError` before it ever names a
 /// database. That is not retried and not queued: spec §5.2 settled that the first tab wins
 /// and the second says so.
+///
+/// **This must be called once per Worker, and `src/workers/db.ts` is what guarantees it.**
+/// Nothing here is idempotent: a second call installs a second pool and replaces [`STATE`],
+/// and until 2026-08-28 the Worker made that call twice — along with instantiating this whole
+/// module twice, which is what corrupted the heap and cost two first runs in three. The dedup
+/// lives on the TypeScript side because that is where the messages arrive.
 #[wasm_bindgen]
 pub async fn open(directory: String) -> String {
     console_error_panic_hook::set_once();
