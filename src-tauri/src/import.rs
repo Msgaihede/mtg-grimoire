@@ -1267,8 +1267,7 @@ mod tests {
     /// a name whose quotes sit in the *middle*, as Henzie's do, cannot pin that behaviour, and
     /// why one that merely ends in a quote cannot either.
     fn seeded() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        let conn = crate::schema::memory_pair();
         conn.execute_batch(
             r#"INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,released_at,
                     is_paper,layout,rarity,mana_cost,cmc,type_line,oracle_text,colors,

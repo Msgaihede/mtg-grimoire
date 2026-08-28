@@ -504,13 +504,9 @@ pub async fn cache_clear(state: tauri::State<'_, Arc<AppState>>) -> Result<Cache
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schema;
 
     fn db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
-        schema::migrate(&conn).unwrap();
-        conn
+        crate::schema::memory_pair()
     }
 
     /// One owned card, one deck, and the card **filed in that deck's group** — which is how a

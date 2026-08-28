@@ -35,6 +35,7 @@ pub mod schema;
 pub mod scryfall;
 pub mod search;
 pub mod sorting;
+pub mod split;
 pub mod sync;
 pub mod tags;
 pub mod transfer;
@@ -566,8 +567,12 @@ pub fn run() {
                 //
                 // The guard is bound rather than left a temporary so it is released before
                 // `spawn`, which is the lifetime it had before the block existed.
+                //
+                // The third argument is the cross-file fence, which arrived with the
+                // user/corpus split: the hook has to be able to tell the mirror which of the
+                // two databases a write landed in.
                 let conn = db::lock_blocking(&state.db);
-                mirror::watch::install_hook(&conn, state.mirror.clone());
+                mirror::watch::install_hook(&conn, state.mirror.clone(), state.fence.clone());
                 drop(conn);
 
                 // Then the thread. Detached and never fatal, exactly like the facet warm-up
@@ -766,21 +771,35 @@ fn init_state(app: &tauri::App) -> Result<AppState, String> {
     // one beside the executable is never probed.
     let data_dir = paths::data_dir_for(exe_dir.as_deref(), &app_data, cfg!(desktop));
 
-    let db_path = data_dir.join("mtg.db");
-    let conn = db::open(&db_path).map_err(|e| data_dir_error(portable.as_deref(), &fallback, e))?;
+    // **Before any connection the app keeps.** A folder holding a single pre-27 `mtg.db` is
+    // taken apart here, and a `corpus.db` that will not open at all is deleted here — both
+    // are file operations, and a file the app is holding open is a file it cannot replace.
+    schema::prepare_data_dir(&data_dir).map_err(|e| {
+        format!(
+            "MTG Grimoire could not prepare its data folder at {}: {e}\n\
+             The collection file may be from a newer version of the app, or damaged. \
+             Moving it aside will let the app start from empty.",
+            data_dir.display()
+        )
+    })?;
+    let user_path = data_dir.join(db::USER_DB);
+    let conn =
+        db::open_write(&data_dir).map_err(|e| data_dir_error(portable.as_deref(), &fallback, e))?;
     schema::prepare_database(&conn).map_err(|e| {
         format!(
             "MTG Grimoire could not prepare its database at {}: {e}\n\
              The file may be from a newer version of the app, or damaged. Moving it \
              aside will let the app rebuild it from Scryfall.",
-            db_path.display()
+            user_path.display()
         )
     })?;
     // Opened after `prepare_database`, and only after: a read-only connection to a file
     // that has no tables yet would be a handle that can never be made useful. Same error
-    // message as the write connection — if this fails, the folder is the reason.
-    let conn_read = db::open_read_only(&db_path)
-        .map_err(|e| data_dir_error(portable.as_deref(), &fallback, e))?;
+    // message as the write connection — if this fails, the folder is the reason. It attaches
+    // the corpus too: every search reads `cards` and `collection_entries` in one statement,
+    // and a handle that saw only one file would report an empty collection rather than fail.
+    let conn_read =
+        db::open_read(&data_dir).map_err(|e| data_dir_error(portable.as_deref(), &fallback, e))?;
 
     // Built before the struct, because `data_dir` is moved into it.
     let images = images::Cache::new(data_dir.join("images"));
@@ -815,6 +834,9 @@ fn init_state(app: &tauri::App) -> Result<AppState, String> {
         // `Dirty::ALL` regardless.
         mirror: Arc::new(mirror::watch::Mask::default()),
         mirror_status: Mutex::new(mirror::watch::LastPass::default()),
+        // The mask's twin, and hooked up in the same call for the same reason: SQLite allows
+        // one update hook per connection, so the fence has to ride in the mirror's.
+        fence: Arc::new(db::CrossFileFence::new()),
     })
 }
 

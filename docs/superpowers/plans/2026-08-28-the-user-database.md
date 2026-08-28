@@ -239,7 +239,7 @@ true.
 > the old constant — they are assertions about the frozen ladder, which is exactly what the new
 > name says.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Add to `schema.rs`'s test module. It fails now because `TABLES` does not exist.
 
@@ -340,13 +340,13 @@ fn no_foreign_key_crosses_the_two_sides() {
 }
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `cd src-tauri && cargo test schema::tests::every_table_is_on_exactly_one_side 2>&1 | tail -5`
 Expected: a compile error — `cannot find value TABLES in this scope`. A compile error *is* the red
 here; there is no version of this that runs and passes.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Add near the top of `schema.rs`, beside `SCHEMA_VERSION`:
 
@@ -474,14 +474,14 @@ Update `prepare_database` (`schema.rs:3099`) to call `migrate_single_file`, and 
 `assert_eq!(version, SCHEMA_VERSION)` assertions in `schema.rs`'s tests to
 `LEGACY_SINGLE_FILE_VERSION` and delete `SCHEMA_VERSION`.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `cd src-tauri && cargo test schema:: 2>&1 | tail -8`
 Expected: every pre-existing schema test still passes, plus the three new ones. **Report the number
 of tests the filter selected** — a filter that matches nothing exits 0 and "expected PASS" would
 prove nothing.
 
-- [ ] **Step 5: Mutate to prove the registry bites**
+- [x] **Step 5: Mutate to prove the registry bites**
 
 Delete the `("muted_tags", Side::User)` line. `every_table_is_on_exactly_one_side` must FAIL on the
 list comparison. Then put it back and change it to `Side::Corpus`;
@@ -490,7 +490,7 @@ list comparison. Then put it back and change it to `Side::Corpus`;
 `no_foreign_key_crosses_the_two_sides` must FAIL naming `cards`. Revert all three. **If any
 mutation survives, STOP and report** — a registry that cannot go red is a comment.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 cd src-tauri && cargo fmt && cargo clippy --all-targets -- -D warnings && cd ..
@@ -536,7 +536,7 @@ card_migrations is too - a corpus rebuild that emptied it would re-apply every f
 > measured, an `INSERT` into it answered `SQLITE_READONLY`. Setting `journal_mode` on it would
 > fail, and it must not: this is the handle every search uses.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```rust
 /// The four pragmas `db::open` sets are properties of a *file*, and an attached file
@@ -667,12 +667,12 @@ fn a_truncating_checkpoint_empties_both_journals() {
 }
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `cd src-tauri && cargo test db::tests 2>&1 | tail -5`
 Expected: `cannot find function open_write in this scope`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `db.rs`:
 
@@ -764,14 +764,14 @@ pub fn open_read(data_dir: &Path) -> rusqlite::Result<Connection> {
 Rewrite `db::open`'s body to `configure(&conn, None)` plus `foreign_keys` and `busy_timeout`, so
 there is one definition of the four pragmas rather than two.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `cd src-tauri && cargo test db:: 2>&1 | tail -8`
 Expected: the four new tests plus the six existing ones. If `an_attached_corpus_gets_the_same_pragmas_as_main`
 reports `corpus_mode = "delete"`, `attach_corpus` set `journal_mode` before the file existed —
 check that `ATTACH` ran first.
 
-- [ ] **Step 5: Mutate to prove each pragma is individually asserted**
+- [x] **Step 5: Mutate to prove each pragma is individually asserted**
 
 Delete the `journal_size_limit` line from `configure`;
 `an_attached_corpus_gets_the_same_pragmas_as_main` must FAIL on `corpus_limit`. Restore it and
@@ -781,7 +781,7 @@ with `0`. Restore, and make `open_read` use `Connection::open` instead of
 `write_corpus`. **If the ordering mutation survives, STOP and report** — it means the file already
 existed when the test ran and the scratch directory is not being cleaned.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 cd src-tauri && cargo fmt && cargo clippy --all-targets -- -D warnings && cd ..
@@ -829,7 +829,7 @@ can apply the mode. Nothing calls open_write yet."
 > point below leaves either the untouched original or a finished pair, never a half-emptied
 > original beside no copy.
 
-- [ ] **Step 1: Declare the module and write the failing test**
+- [x] **Step 1: Declare the module and write the failing test**
 
 Add `pub mod split;` to `lib.rs`, create `src-tauri/src/split.rs` containing only this test module,
 and confirm the count moves before writing any implementation.
@@ -1059,13 +1059,13 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `cd src-tauri && cargo test split:: 2>&1 | tail -6`
 Expected: compile errors for `State`, `state_of`, `convert`, `extract_user_file`, `PART`. **If it
 prints `running 0 tests`, `lib.rs` does not name the module** — fix that before going on.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `schema.rs`, add the head-shaped user DDL as **one literal used by both callers**, which is the
 inverse of `ORACLE_TAG_STAGING_SQL`'s rule and correct for the same reason: those two must be
@@ -1316,7 +1316,7 @@ fn reclaim(conn: &Connection) {
 }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `cd src-tauri && cargo test split:: 2>&1 | tail -10`, then the real-database run:
 
@@ -1331,7 +1331,7 @@ Expected: six passes, and the real-database run printing a conversion time in th
 milliseconds and a user file around 1.3 MB. **Never point `MTG_SPLIT_FIXTURE` at the user's own
 database** — it is copied *from*, never converted in place, and the copy is what the test deletes.
 
-- [ ] **Step 5: Mutate to prove the state machine and the copy both bite**
+- [x] **Step 5: Mutate to prove the state machine and the copy both bite**
 
 Change `state_of`'s `(true, true)` arm to `State::Split`;
 `a_half_converted_folder_finishes_instead_of_opening_without_a_corpus` must FAIL. Restore it, and
@@ -1343,7 +1343,7 @@ the real-database test must FAIL on the row-count comparison. Restore, and move 
 survives, STOP and report** — it means no test reaches `HalfConverted` and the crash case is
 untested.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 cd src-tauri && cargo fmt && cargo clippy --all-targets -- -D warnings && cd ..
@@ -1402,7 +1402,7 @@ ends up in the wrong file.
 > schema-qualified pragma pointed at the wrong file is silent. `cards_column_defs` already refuses
 > an empty answer — keep that guard, it is now load-bearing twice over.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `schema.rs`:
 
@@ -1554,7 +1554,7 @@ fn a_destroyed_corpus_costs_a_resync_and_nothing_else() {
 }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `cd src-tauri && cargo test a_full_sync_leaves_every_table 2>&1 | tail -8`
 Expected: `cannot find function memory_pair`. Then, once `memory_pair` exists but nothing is
@@ -1562,7 +1562,7 @@ qualified, the same test must fail listing `cards`, `cards_fts` and the staging 
 the user file. **Get that second red before qualifying anything** — it is the only proof the test
 can see the problem it exists for.
 
-- [ ] **Step 3: Implement, in this order**
+- [x] **Step 3: Implement, in this order**
 
 **(a) The test helper, first, because everything else depends on it.** In `schema.rs`:
 
@@ -1671,7 +1671,7 @@ across 39 files today, of which **102 are in `schema.rs`** and belong to the fro
 files** become `crate::schema::memory_pair()`. **Report the exact number you changed and the exact
 number you left**, and say why for any you left.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 ```bash
 cd src-tauri && cargo test 2>&1 | tail -20
@@ -1691,7 +1691,7 @@ or if any search measurement in [`data-and-sync.md`](../../reference/data-and-sy
 cross-file joins measured 0.62–2.67 ms during planning and nothing suggests a regression, but that
 was five queries and this is the whole app.
 
-- [ ] **Step 5: Mutate to prove the side assertion is what is holding this together**
+- [x] **Step 5: Mutate to prove the side assertion is what is holding this together**
 
 Unqualify `create_staging`'s `CREATE TABLE` back to `cards_staging`;
 `a_full_sync_leaves_every_table_on_its_own_side` must FAIL reporting a `%_staging` table in the
@@ -1704,7 +1704,7 @@ FAIL on `after`. Restore, and make `memory_pair` return a plain `open_in_memory`
 (g) did not happen and most of the suite is still testing a single file. **STOP and report the
 count either way.**
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 cd src-tauri && cargo fmt && cargo clippy --all-targets -- -D warnings && cd ..
@@ -1751,7 +1751,7 @@ where that becomes an assertion instead of a placement.
 - Consumes: `schema::{memory_pair, side_of, Side}`.
 - Produces: nothing new.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```rust
 /// `apply` opens one transaction over the reader's rows *and* the ledger of what has been
@@ -1807,14 +1807,14 @@ fn apply_writes_only_the_user_file() {
 }
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Temporarily move `card_migrations` to `Side::Corpus` in `TABLES` and to the corpus half of
 `create_corpus_schema`. Run: `cd src-tauri && cargo test reconcile::tests::apply_writes_only 2>&1 | tail -5`
 Expected: FAIL with `3` — `main | corpus`. **That red is the point of this task**: it is the bug
 that would have shipped, reproduced. Then revert the temporary move.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 No SQL changes — the placement is already right. Rewrite `reconcile.rs`'s module doc, which
 currently explains why `card_migrations` records what has been applied without saying which file it
@@ -1832,19 +1832,19 @@ lives in:
 //! together.
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `cd src-tauri && cargo test reconcile:: 2>&1 | tail -6`
 Expected: every pre-existing reconcile test plus the new one. Report the selected count.
 
-- [ ] **Step 5: Mutate to prove the hook can see a corpus write from here**
+- [x] **Step 5: Mutate to prove the hook can see a corpus write from here**
 
 Add `tx.execute("INSERT OR REPLACE INTO sets (code, name) VALUES ('zzz','probe')", [])?;` inside
 `apply`'s loop. `apply_writes_only_the_user_file` must FAIL with `3`. Remove it. **If it passes
 with the corpus write in place, the update hook is not installed on that connection** — STOP and
 report, because Task 6's fence rests on the same mechanism.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 cd src-tauri && cargo fmt && cargo clippy --all-targets -- -D warnings && cd ..
@@ -1896,7 +1896,7 @@ apply to touch corpus.sets turns it red."
 > `prepare_cached` statement re-executed does not re-authorize (measured: one callback across two
 > executions). It cannot attribute a write to a transaction, which is the whole question here.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 In `mirror/watch.rs`:
 
@@ -1990,12 +1990,12 @@ the failure this repo keeps naming:
         // twenty-five corpus tables it was written to cover.
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `cd src-tauri && cargo test mirror::watch::tests 2>&1 | tail -8`
 Expected: `cannot find type CrossFileFence`, and `install_hook` taking two arguments.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `db.rs`:
 
@@ -2109,14 +2109,14 @@ Update `surface_of`'s doc: the `None` arm's list of tables is unchanged, but say
 also reports a schema name and that the map ignores it deliberately, because a table name is
 unique across both files by the registry.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `cd src-tauri && cargo test mirror:: 2>&1 | tail -10`, then the whole suite. **A green suite
 with the fence armed is itself the measurement**: every test that drives a real write path now
 proves it did not cross the files. **Report whether anything tripped it** — if something did, that
 is a finding, not a test to adjust.
 
-- [ ] **Step 5: Mutate to prove all three hooks are wired**
+- [x] **Step 5: Mutate to prove all three hooks are wired**
 
 Make `note` always record `MAIN`; `the_fence_trips_on_a_transaction_that_writes_both_files` must
 FAIL. Restore, and delete the `rollback_hook` install;
@@ -2126,7 +2126,7 @@ FAIL on the `ignored` list — **if it still passes, the corpus tables were neve
 the test has been vacuous since the split**, which is a finding to report rather than a mutation
 that failed.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 cd src-tauri && cargo fmt && cargo clippy --all-targets -- -D warnings && cd ..

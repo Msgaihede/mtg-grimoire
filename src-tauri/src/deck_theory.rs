@@ -908,8 +908,7 @@ mod tests {
     /// Two printings of one oracle card, plus a second card — the second printing is what
     /// `the_diff_compares_printings_not_oracle_cards` turns on.
     fn seeded() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        let conn = crate::schema::memory_pair();
         conn.execute_batch(
             r#"INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
                     rarity,mana_cost,cmc,type_line,prices,raw)
