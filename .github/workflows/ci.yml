@@ -327,7 +327,18 @@ jobs:
     # with clang, which is the same compiler on every host. A Windows leg would prove the
     # same thing more slowly. **Note that no measured figure in this repo has ever come off
     # a Linux build** — this job is a compile gate, not a source of numbers.
-    runs-on: ubuntu-22.04
+    #
+    # **24.04 for the clang version, and 22.04 genuinely does not work.** `sqlite-wasm-rs`'s
+    # `shim/wasm-shim.h` declares `[[noreturn]] void rust_sqlite_wasm_abort();` — C23
+    # attribute syntax, which clang accepts in C mode by default only from **18**. Ubuntu
+    # 22.04's `apt-get install clang` gives **14**, which rejects it with four
+    # `expected expression` errors inside a `cargo:warning=` stream, so the real cause is
+    # buried in build-script output and the visible failure is `cc-rs: command did not
+    # execute successfully`. 24.04 ships clang 18.
+    #
+    # The trap worth naming: `apt-get install clang` reads as correct and pins nothing. This
+    # job was written and reviewed on a machine with clang 22, where it passes.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
 
@@ -341,7 +352,16 @@ jobs:
       # sqlite-wasm-rs compiles SQLite's C with `cc` targeting wasm32. There is no way
       # around this and no way to cache past it.
       - name: Install clang
-        run: sudo apt-get update && sudo apt-get install -y clang
+        run: |
+          sudo apt-get update && sudo apt-get install -y clang
+          # Printed, and checked, because the failure this guards is four errors deep in a
+          # build script's warning stream. 18 is the floor for C23 `[[noreturn]]`.
+          clang --version
+          major=$(clang --version | sed -n 's/.*clang version \([0-9]*\).*/\1/p' | head -1)
+          if [ "$major" -lt 18 ]; then
+            echo "clang $major is too old: sqlite-wasm-rs's shim needs C23 attributes (clang 18+)" >&2
+            exit 1
+          fi
 
       - uses: dtolnay/rust-toolchain@stable
         with:
