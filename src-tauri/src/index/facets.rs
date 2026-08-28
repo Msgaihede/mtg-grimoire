@@ -23,6 +23,7 @@ use crate::search::SearchRequest;
 use crate::sync::{lock_db_read, AppState};
 use serde::Serialize;
 use std::collections::BTreeMap;
+#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 #[derive(Debug, Default, Serialize)]
@@ -853,6 +854,7 @@ pub fn run_facets(state: &AppState, req: &SearchRequest) -> Result<FacetResponse
 /// runs inline on the IPC thread, and the FTS half of this is blocking SQLite work. It reads
 /// through `db_read` like every other read, so a text facet during a sync is not stuck behind
 /// the ingest.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn facet_cards(
     state: tauri::State<'_, Arc<AppState>>,

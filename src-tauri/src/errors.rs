@@ -100,6 +100,7 @@ impl Kind {
 
 /// Classify a Scryfall failure, so the several call sites that report one agree on what it
 /// was rather than each deciding for themselves.
+#[cfg(not(target_family = "wasm"))]
 pub fn kind_of(err: &crate::scryfall::ScryfallError) -> Kind {
     use crate::scryfall::ScryfallError as E;
     match err {

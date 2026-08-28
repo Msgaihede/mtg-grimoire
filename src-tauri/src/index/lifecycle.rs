@@ -156,6 +156,7 @@ pub fn build_now(state: &AppState) -> Result<(), String> {
 ///
 /// The handle is returned so a test can join it; the three production call sites drop it and
 /// let the thread run detached. A failure is logged and nothing else — see the module docs.
+#[cfg(not(target_family = "wasm"))]
 pub fn spawn_build(state: &Arc<AppState>) -> std::thread::JoinHandle<()> {
     clear(state);
     let state = state.clone();

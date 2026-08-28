@@ -18,7 +18,48 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+# ── Every target ─────────────────────────────────────────────────────────────────
+# What is here compiles for `wasm32-unknown-unknown` as well as for the desktop and Android
+# builds. `src/lib.rs`'s module map is the other half of this split and the two must agree:
+# a module in its "Every target" column may only reach crates named in this table.
 [dependencies]
+# What makes two tag names the same name. `deck_tags` is one global list since schema v21 and
+# its uniqueness grain is a **key** rather than the word itself: NFC, then Unicode lowercase,
+# then NFC again - so "Cafe" spelled with a precomposed e-acute, with a combining accent, and
+# in capitals is one label rather than three rows a reader cannot tell apart. SQLite cannot
+# answer this on its own: `COLLATE NOCASE` is ASCII-only and the bundled build carries no
+# normalisation at all, which is why the key is computed here and stored. Two small tables and
+# no dependencies of its own.
+unicode-normalization = "0.1"
+flate2 = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+# rustls, never native-tls (no OpenSSL/schannel dependency in a portable build), and
+# deliberately NO `gzip` feature: Scryfall bulk data is a real .gz *file*, not a
+# Content-Encoding, so transparent decompression would corrupt the download.
+#
+# Spike-verified 2026-08-27: this exact line, `default-features = false` and all, compiles
+# clean for wasm32 — the wasm backend is `fetch` and ignores the TLS feature — and
+# `bytes_stream()` is available there because `stream` is on.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+futures-util = "0.3"
+
+# ── Desktop and Android ──────────────────────────────────────────────────────────
+# Everything here is either impossible in a browser or pointless there. `bundled` is
+# libsqlite3-sys compiling sqlite3.c with the host compiler, which is right on Windows and
+# impossible in a webview; `tokio`'s `fs` has no browser counterpart; `zip`, `image` and
+# `sha2` serve the portable updater and the cover-image encoder, both desktop-only by
+# spec §6.3.
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
+# `hooks` is what the plain-text mirror watches through: an `update_hook` on the one write
+# connection sees every insert, update and delete with the table's name, so no command has to
+# remember to tell the mirror anything and none added later can forget to. Verified in the
+# vendored manifest on 2026-08-25: `hooks = []` pulls in **no additional crates**, and the
+# `Cargo.lock` diff for this change is therefore **empty** — a lockfile records resolved versions
+# and dependency edges, never feature selections, so an empty diff is the evidence rather than a
+# missing one.
+rusqlite = { version = "0.40", features = ["bundled", "hooks"] }
 tauri = { version = "2", features = [] }
 tauri-plugin-opener = "2"
 # The system file picker. The webview cannot name a file on disk on its own, and the commands
@@ -48,10 +89,15 @@ tauri-plugin-single-instance = "2"
 # would have replaced those buttons and needed a CSP loosened for its stylesheet.
 #
 # **A plain dependency rather than `[target.'cfg(windows)'.dependencies]`, for the reason the
-# mcp-bridge paragraph above gives**: `tauri-build` discovers a plugin's ACL permissions
+# mcp-bridge paragraph below gives**: `tauri-build` discovers a plugin's ACL permissions
 # through the dependency graph, so target-gating it would leave `capabilities/default.json`'s
 # two `snap-layout:` entries unresolvable on the Linux half of the CI matrix. The crate ships a
 # dummy implementation for every non-Windows target and compiles to nothing there.
+#
+# **`cfg(not(target_family = "wasm"))` is not that target-gate and does not reintroduce its
+# problem**, because `build.rs` returns early for a wasm `TARGET` and never asks
+# `tauri_build::build()` to resolve an ACL there at all. Every target that still runs
+# `tauri_build` — Windows, Linux, Android — sees this line.
 tauri-plugin-snap-layout = "1"
 # The other half of the Tauri MCP server in `.mcp.json`. That package is only ever a *client*:
 # it dials a WebSocket this plugin opens inside the running app, so without the plugin nothing
@@ -62,37 +108,12 @@ tauri-plugin-snap-layout = "1"
 # release profile would leave `capabilities/default.json`'s `mcp-bridge:` entries unresolvable
 # and fail the build that needs them least.
 tauri-plugin-mcp-bridge = "0.12"
-# `hooks` is what the plain-text mirror watches through: an `update_hook` on the one write
-# connection sees every insert, update and delete with the table's name, so no command has to
-# remember to tell the mirror anything and none added later can forget to. Verified in the
-# vendored manifest on 2026-08-25: `hooks = []` pulls in **no additional crates**, and the
-# `Cargo.lock` diff for this change is therefore **empty** — a lockfile records resolved versions
-# and dependency edges, never feature selections, so an empty diff is the evidence rather than a
-# missing one.
-rusqlite = { version = "0.40", features = ["bundled", "hooks"] }
-# What makes two tag names the same name. `deck_tags` is one global list since schema v21 and
-# its uniqueness grain is a **key** rather than the word itself: NFC, then Unicode lowercase,
-# then NFC again - so "Cafe" spelled with a precomposed e-acute, with a combining accent, and
-# in capitals is one label rather than three rows a reader cannot tell apart. SQLite cannot
-# answer this on its own: `COLLATE NOCASE` is ASCII-only and the bundled build carries no
-# normalisation at all, which is why the key is computed here and stored. Two small tables and
-# no dependencies of its own.
-unicode-normalization = "0.1"
-flate2 = "1"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-thiserror = "2"
-# rustls, never native-tls (no OpenSSL/schannel dependency in a portable build), and
-# deliberately NO `gzip` feature: Scryfall bulk data is a real .gz *file*, not a
-# Content-Encoding, so transparent decompression would corrupt the download.
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 # `rt` is not optional: tokio::fs runs every operation through spawn_blocking, which
 # needs a runtime handle. It reaches us through tauri's tokio today, but this crate
 # must not depend on another crate's feature selection to compile.
 # `sync` is the semaphore that caps concurrent image fetches; `time` is the sleep the
 # image cache's pacer and its 429 penalty are made of.
 tokio = { version = "1", features = ["fs", "io-util", "rt", "sync", "time"] }
-futures-util = "0.3"
 # The updater's integrity check. Every GitHub release asset carries a `digest`
 # (`sha256:…`, measured live 2026-08-09 on all five), which is what stands in for the
 # minisign signature a hand-written updater gives up.
@@ -114,6 +135,34 @@ image = { version = "0.25", default-features = false, features = [
     "webp",
 ] }
 
+# ── Web ──────────────────────────────────────────────────────────────────────────
+# ⚠️ NEVER add `default-features = false` to this rusqlite line. `ffi-sqlite-wasm-rs` — the
+# FFI backend that makes wasm work at all — is in rusqlite's DEFAULT feature set, and
+# switching it off fails the build with `unresolved import libsqlite3_sys`, which reads
+# exactly like "wasm is unsupported" and is the opposite of the truth. It cost the spike a
+# build; see the research doc's Assumption 1.
+#
+# `hooks` and not `bundled`: `hooks` was asserted live in a browser (probe 1 —
+# `update_hook` fired three times for three writes), and `bundled` is a host C compile.
+# SQLite here is 3.53.0 with FTS5, DBSTAT, COLUMN_METADATA and PREUPDATE_HOOK.
+[target.'cfg(target_family = "wasm")'.dependencies]
+rusqlite = { version = "0.40", features = ["hooks"] }
+# The OPFS VFS. Same author as the FFI crate rusqlite already depends on, and both sit on
+# `rsqlite-vfs 0.1`, so the versions align without pinning. Its README marks all three of
+# its VFSes "No COOP/COEP requirements", and that was tested rather than quoted.
+sqlite-wasm-vfs = "0.2"
+# Pinned to the patch, because `wasm-bindgen-cli` must match the crate EXACTLY and a
+# mismatch is a runtime failure with an unhelpful message. `scripts/build-wasm.mjs`
+# re-checks the pair before every build.
+wasm-bindgen = "=0.2.127"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+console_error_panic_hook = "0.1"
+
+[target.'cfg(target_family = "wasm")'.dependencies.web-sys]
+version = "0.3"
+features = ["Navigator", "StorageManager", "WorkerGlobalScope", "WorkerNavigator", "console"]
+
 # Waiting for the process an update replaced to actually terminate, which is the one thing
 # std cannot express: there is no portable "is this PID alive". `0.61` is already in the
 # tree via tauri/tao, so this adds no build. Two functions, hence two features.
@@ -127,4 +176,3 @@ windows-sys = { version = "0.61", features = [
 httpmock = "0.8"
 tokio = { version = "1", features = ["macros", "rt"] }
 tempfile = "3"
-

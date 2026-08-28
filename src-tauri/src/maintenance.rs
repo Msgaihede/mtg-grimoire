@@ -9,6 +9,7 @@
 
 use crate::db::CORPUS;
 use rusqlite::Connection;
+#[cfg(not(target_family = "wasm"))]
 use std::sync::Mutex;
 
 /// `sync_meta` key: the search index is owed a rebuild, and nothing may assume otherwise.
@@ -181,6 +182,7 @@ pub const RECLAIM_CHUNK_PAGES: i64 = 2_000;
 /// See the loop for why a released mutex is not an available one. Five milliseconds is the
 /// gap at which a waiter reliably wins; it costs ~0.65 s over a full 130-chunk run, which is
 /// 8 % of a reclaim that only happens after a sync the user is already watching.
+#[cfg(not(target_family = "wasm"))]
 const RECLAIM_YIELD: std::time::Duration = std::time::Duration::from_millis(5);
 
 /// Hand the pages a swap freed back to the filesystem, a chunk at a time.
@@ -221,6 +223,7 @@ const RECLAIM_YIELD: std::time::Duration = std::time::Duration::from_millis(5);
 ///
 /// `progress` is called once at entry with `(0, total)` and once per chunk, ending on
 /// `(total, total)` however the loop leaves — a phase that stops short still has to stop.
+#[cfg(not(target_family = "wasm"))]
 pub fn reclaim_freed_pages(
     db: &Mutex<Connection>,
     progress: &mut dyn FnMut(i64, i64),
