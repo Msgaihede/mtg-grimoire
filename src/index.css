@@ -1,3 +1,11 @@
+/* `dnd-kit`'s cascade layer, declared here rather than where its rules are written, because a
+   layer takes its priority from where it is first *named* and this one has to be named before
+   Tailwind's. See the block at the foot of this file for what is in it and why any of it is
+   here at all; the whole of the reason it must come first is that the rules inside it reset a
+   dragged element's box, and a layer sorted after Tailwind's utilities would win against them.
+   A layer statement is one of the two things CSS allows above `@import`. */
+@layer dnd-kit;
+
 /* `source(none)` plus the two explicit sources below, because Tailwind's automatic
    detection scans the *whole repository* — and this repository keeps its plans, specs and
    carryover notes in tracked Markdown that quotes component source. The scanner cannot tell
@@ -343,4 +351,132 @@
 
 body {
   @apply bg-bg text-text antialiased;
+}
+
+/* ---------------------------------------------------------------------------------------
+   @dnd-kit's own drag rules, copied out of the library because the shipped CSP will not let
+   the library install them itself. Everything below is the library's, verbatim; nothing here
+   is a design decision, and none of it may be tuned.
+
+   **The library injects these at runtime and the packaged app refuses them.**
+   `@dnd-kit/dom`'s `StyleInjector` builds a `<style>` element, sets its `textContent` and
+   prepends it to `<head>` the moment a drag begins. The shipped policy in
+   `src-tauri/tauri.conf.json` is `style-src 'self'`, which is exactly what an inline
+   stylesheet is not — measured in a built app on 2026-08-27, all twelve of the sheets it
+   injected during one folder drag came back with a null `sheet`, i.e. parsed by nobody, and a
+   `<style>` created at runtime in that window still reports `sheet === null` (re-checked
+   2026-08-28). `style-src-attr 'unsafe-inline'` does not cover them: that directive governs the
+   `style=` attribute and nothing else.
+
+   **It cannot be switched off, and it is not one of the plugins `dndManager.ts` filters.**
+   `StyleInjector` is a `CorePlugin`: `DragDropManager`'s constructor prepends it to the
+   plugin list ahead of whatever a caller passes, and the registry's setter skips past a
+   `CorePlugin` rather than unregistering it. Its documented escape is a CSP nonce, which
+   Tauri cannot supply — its policy is a static string in a config file and a nonce has to be
+   per response.
+
+   **So the rules come from the app's own bundled stylesheet instead, which `'self'` allows.**
+   The library goes on publishing `--dnd-*` as inline style *attributes*, which
+   `style-src-attr 'unsafe-inline'` already permits, so the custom properties still arrive;
+   what was missing was anything to read them. Without these rules the drag preview computes
+   `position: absolute` at `top: 0; left: 0` and sits in the window's top-left corner while
+   `--dnd-top: 344px` and `--dnd-left: 456px` are on the element with nothing reading them — so
+   the defect is a preview that does not follow the pointer rather than a broken gesture. The
+   drop still lands and still survives a reload.
+
+   **Two of them are scoped and the rest are the library's selectors unchanged.** `Cursor` and
+   `PreventSelection` register plain `*` rules, which the library can only do because it adds
+   and removes them around a single drag. A permanent copy of a grabbing cursor on `*` would
+   put a closed hand over the whole app forever, so those two — and only those two — hang off
+   `html[data-dragging]`, a mark `lib/dndManager.ts` sets between the library's own `dragstart`
+   and `dragend`. Their declarations are untouched.
+
+   **That fence was `:root:has([data-dnd-dragging])` for one commit, and it cost a shipped
+   test.** jsdom resolves style by matching every loaded rule against every element, and a rule
+   whose *subject* is `*` and whose ancestor part holds `:has()` turns each of those matches into
+   a scan of the whole document. Measured 2026-08-28 over a 400-element tree with a mutation
+   between reads — what a `userEvent` gesture produces — **4.1s with the attribute, 18.6s with the
+   `:has()`**; in the suite, `DeckEditor.stories.tsx > SwapFolds` went from 3.5s to just over the
+   15s test timeout, a play that never drags anything. A browser has no such problem, so this is
+   a jsdom cost paid for a browser convenience, and not worth it. An unrelated `:has()` is fine
+   and costs nothing measurable: it is the broad subject that is expensive.
+
+   **`lib/dndManager.test.ts` is what keeps this honest.** It starts a real drag in jsdom —
+   where nothing is blocked — captures the stylesheets the library injects, and fails unless
+   every selector and declaration in them is also here. An upgrade that changes one rule is a
+   red build rather than a preview that silently stops working in the packaged exe alone.
+   --------------------------------------------------------------------------------------- */
+
+:is(:root,:host) [data-dnd-dragging] {
+  position: fixed !important;
+  pointer-events: none !important;
+  touch-action: none;
+  z-index: calc(infinity);
+  will-change: translate;
+  top: var(--dnd-top, 0px) !important;
+  left: var(--dnd-left, 0px) !important;
+  right: unset !important;
+  bottom: unset !important;
+  width: var(--dnd-width, auto);
+  max-width: var(--dnd-width, auto);
+  height: var(--dnd-height, auto);
+  max-height: var(--dnd-height, auto);
+  transform: var(--dnd-transform, none) !important;
+  transition: var(--dnd-transition) !important;
+}
+
+:is(:root,:host) [data-dnd-placeholder] {
+  transition: none;
+}
+
+:is(:root,:host) [data-dnd-placeholder='hidden'] {
+  visibility: hidden;
+}
+
+[data-dnd-dragging] * {
+  pointer-events: none !important;
+}
+
+[data-dnd-dragging]:not([data-dnd-dropping]) {
+  translate: var(--dnd-translate) !important;
+}
+
+[data-dnd-dragging][style*='--dnd-scale'] {
+  scale: var(--dnd-scale) !important;
+  transform-origin: var(--dnd-transform-origin) !important;
+}
+
+@layer dnd-kit {
+  :where([data-dnd-dragging][popover]) {
+    overflow: visible;
+    background: unset;
+    border: unset;
+    margin: unset;
+    padding: unset;
+    color: inherit;
+
+    &:is(input, button) {
+      border: revert;
+      background: revert;
+    }
+  }
+}
+
+[data-dnd-dragging]::backdrop,
+[data-dnd-overlay]:not([data-dnd-dragging]) {
+  display: none;
+  visibility: hidden;
+}
+
+/* The library writes this one as a bare `*`, and registers it only for the length of a drag.
+   The fence is this copy's alone; the declaration is the library's. */
+html[data-dragging] * {
+  cursor: grabbing !important;
+}
+
+/* Likewise. Two rules rather than one merged block, so each still reads as the plugin it came
+   from — `Cursor` above, `PreventSelection` here. */
+html[data-dragging] * {
+  user-select: none !important;
+  -webkit-user-select: none !important;
 }

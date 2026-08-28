@@ -17,7 +17,7 @@ import type {
 import { MARKETPLACES } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
 import { folderDraggable, type FolderDrag } from "@/lib/folderDrag";
-import { dragOnto, startDrag } from "@/test-drag";
+import { dragOnto, startDrag, startPointerDrag } from "@/test-drag";
 import { openDropdown, pickOption } from "@/test-dropdown";
 
 const wishlistList = vi.hoisted(() => vi.fn());
@@ -317,33 +317,45 @@ const cardSources = (container: HTMLElement): HTMLElement[] =>
 /**
  * A folder card by name, and the inner box its **folder** drop target is registered on.
  *
- * Two boxes rather than one because the drag library keeps a single element drop target per
- * element and the wish drag already owns the `<li>` — `WishFolderCard` carries the whole reason.
- * A drag aimed at the card's face finds the inner one by walking up, exactly as a pointer does,
- * which is why {@link folderFace} is what these tests drop on.
+ * Two boxes rather than one because the wish drag already owns the `<li>` and pragmatic-dnd keeps
+ * a single element drop target per element — `WishFolderCard` carries the whole reason, and it
+ * survives the folder drag moving to `@dnd-kit/dom`, because the two libraries must not be put on
+ * one element either. {@link folderSlot} is the inner box, and it is what a folder drag is
+ * measured against and aimed at.
  */
 const folderCard = (name: string): HTMLElement =>
   screen.getByRole("button", { name: new RegExp(`^${name} folder`) }).closest("li")!;
-const folderFace = (name: string): HTMLElement =>
-  screen.getByRole("button", { name: new RegExp(`^${name} folder`) });
 const folderSlot = (name: string): HTMLElement =>
   folderCard(name).firstElementChild as HTMLElement;
 
 /**
- * Three boxes, each placed so that the one coordinate `test-drag` sends — `clientX` 8 — falls in a
- * different zone of a folder card laid out **horizontally**.
+ * One box and three landings, because dnd-kit hit-tests by **coordinate** and jsdom measures every
+ * rectangle as zero.
  *
  * jsdom has no layout engine, so every real `getBoundingClientRect` is four zeroes and
- * `folderEdge` answers `inside` for all of them: an edge-dependent test has to state the box.
+ * `folderEdge` answers `inside` for all of them: an edge-dependent test has to state the box, and
+ * a pointer-driven library needs the pointer to be somewhere real as well. The card is read along
+ * the **horizontal** axis, since the wall lays its drawers out as a grid; `EDGE_ZONE` is a
+ * quarter, so a tenth in from either end is unambiguously beside and the middle is unambiguously
+ * inside. `CollectionPage.test.tsx`'s arrangement, for its reason.
  */
-const AT_START = new DOMRect(0, 0, 100, 100);
-const AT_MIDDLE = new DOMRect(-50, -50, 100, 100);
-const AT_END = new DOMRect(-85, -85, 100, 100);
+const SOURCE_BOX = new DOMRect(0, 0, 100, 100);
+const CARD_BOX = new DOMRect(400, 400, 100, 100);
+const AT_START = { x: 0.1 };
+const AT_MIDDLE = { x: 0.5 };
+const AT_END = { x: 0.9 };
 
-/** Slide a folder card under the stationary pointer. */
-const stand = (name: string, at: DOMRect) => {
-  folderSlot(name).getBoundingClientRect = () => at;
+/** Give a folder card's drop target somewhere to be. */
+const stand = (name: string) => {
+  folderSlot(name).getBoundingClientRect = () => CARD_BOX;
 };
+
+/** Pick a folder card up. dnd-kit reads the press coordinate off the source's own box, so a
+ *  source with no box presses the origin — and the drag then starts nowhere near the wall. */
+async function holdCard(name: string) {
+  folderCard(name).getBoundingClientRect = () => SOURCE_BOX;
+  return startPointerDrag(folderCard(name));
+}
 
 /**
  * jsdom lays nothing out, so the virtualiser measures a scroller of zero height and renders
@@ -2324,10 +2336,10 @@ describe("rearranging the wishlist's cabinet", () => {
   it("files a drawer inside the one it is dropped on the middle of", async () => {
     wrap(<WishlistPage />);
     await wall();
-    stand("Ordered", AT_MIDDLE);
+    stand("Ordered");
 
-    const held = await startDrag(folderCard("Someday"));
-    await held.over(folderFace("Ordered"));
+    const held = await holdCard("Someday");
+    await held.over(folderSlot("Ordered"), AT_MIDDLE);
     await held.drop();
 
     // `Ordered`'s own child, then the folder that just arrived: `inside` says which drawer and
@@ -2338,10 +2350,10 @@ describe("rearranging the wishlist's cabinet", () => {
   it("places a drawer before the one it is dropped on the leading edge of", async () => {
     wrap(<WishlistPage />);
     await wall();
-    stand("Ordered", AT_START);
+    stand("Ordered");
 
-    const held = await startDrag(folderCard("Someday"));
-    await held.over(folderFace("Ordered"));
+    const held = await holdCard("Someday");
+    await held.over(folderSlot("Ordered"), AT_START);
     await held.drop();
 
     // The root level, re-ordered — `null` is the destination parent and a real place rather than
@@ -2360,10 +2372,10 @@ describe("rearranging the wishlist's cabinet", () => {
   it("draws no line and writes nothing for a drop that would change nothing", async () => {
     wrap(<WishlistPage />);
     await wall();
-    stand("Ordered", AT_END);
+    stand("Ordered");
 
-    const held = await startDrag(folderCard("Someday"));
-    await held.over(folderFace("Ordered"));
+    const held = await holdCard("Someday");
+    await held.over(folderSlot("Ordered"), AT_END);
     expect(folderCard("Ordered").querySelector("[data-folder-drop-line]")).toBeNull();
 
     await held.drop();
@@ -2377,9 +2389,11 @@ describe("rearranging the wishlist's cabinet", () => {
     await wall();
 
     for (const at of [AT_START, AT_MIDDLE, AT_END]) {
-      stand("Someday", at);
-      const held = await startDrag(folderCard("Someday"));
-      await held.over(folderFace("Someday"));
+      // The card is both ends of this gesture, so it keeps the box it was picked up from rather
+      // than being moved out from under the pointer: the drop target measured is the inner slot.
+      folderSlot("Someday").getBoundingClientRect = () => SOURCE_BOX;
+      const held = await holdCard("Someday");
+      await held.over(folderSlot("Someday"), at);
       await held.drop();
     }
     expect(wishlistFolderReorder).not.toHaveBeenCalled();
@@ -2406,6 +2420,7 @@ describe("rearranging the wishlist's cabinet", () => {
 
     const source = document.createElement("div");
     source.textContent = "the parent";
+    source.getBoundingClientRect = () => SOURCE_BOX;
     container.append(source);
     const stop = folderDraggable({
       element: source,
@@ -2421,10 +2436,10 @@ describe("rearranging the wishlist's cabinet", () => {
     // parent under its own child, and `before`/`after Backordered` file it into `Ordered`, which
     // is itself.
     for (const at of [AT_START, AT_MIDDLE, AT_END]) {
-      stand("Backordered", at);
-      const held = await startDrag(source);
+      stand("Backordered");
+      const held = await startPointerDrag(source);
       expect(folderCard("Backordered").classList.contains("ring-2")).toBe(false);
-      await held.over(folderFace("Backordered"));
+      await held.over(folderSlot("Backordered"), at);
       await held.drop();
     }
     stop();

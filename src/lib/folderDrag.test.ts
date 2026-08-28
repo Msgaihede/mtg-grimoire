@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { StrictMode, useEffect } from "react";
 import { act, renderHook } from "@testing-library/react";
-import { monitorForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import { dragData, readDragData } from "@/features/decks/dnd";
-import { startDrag } from "@/test-drag";
+import { startPointerDrag } from "@/test-drag";
+import { dndManager } from "@/lib/dndManager";
 import {
   folderDragData,
   folderDraggable,
@@ -185,15 +186,52 @@ describe("folderEdge", () => {
 });
 
 /** Everything hand-built into `document.body` for a test, undone after it — `cleanup` only knows
- *  about what Testing Library rendered, and a `draggable` left in the library's registry outlives
+ *  about what Testing Library rendered, and a `Draggable` left in the manager's registry outlives
  *  the test that made it. */
 const undo: (() => void)[] = [];
 afterEach(() => {
   while (undo.length) undo.pop()!();
 });
 
+/**
+ * A box, because dnd-kit hit-tests by coordinate and jsdom measures everything as zero.
+ *
+ * This is the whole difference between these tests and the ones they replaced. Under
+ * pragmatic-dnd the harness sent one fixed coordinate and a test slid the *element* under a
+ * stationary pointer; here the pointer really travels, so a folder is placed where it can be
+ * arrived at and a test says which part of it to let go over.
+ */
+function boxed(element: HTMLElement, top: number, height = 40): HTMLElement {
+  element.getBoundingClientRect = () =>
+    ({
+      x: 0,
+      y: top,
+      top,
+      left: 0,
+      right: 200,
+      bottom: top + height,
+      width: 200,
+      height,
+      toJSON: () => ({}),
+    }) as DOMRect;
+  return element;
+}
+
+/** Far enough from the source that the gesture is unambiguous, and the same box for every test
+ *  so the three landings below are always the same three coordinates. */
+const TARGET_TOP = 200;
+/** A second target, for the tests that need two folders answering differently at once. */
+const OTHER_TOP = 400;
+
+/** The three landings, as fractions of a folder's own box — the vocabulary `folderEdge` is a
+ *  function of. `EDGE_ZONE` is a quarter, so a tenth in from either end is unambiguously beside
+ *  and the middle is unambiguously inside. */
+const BEFORE = { y: 0.1 };
+const INSIDE = { y: 0.5 };
+const AFTER = { y: 0.9 };
+
 function mountSource(folder: () => FolderDrag): HTMLElement {
-  const element = document.createElement("div");
+  const element = boxed(document.createElement("div"), 0);
   element.textContent = "a folder";
   document.body.append(element);
   const stop = folderDraggable({ element, folder });
@@ -207,14 +245,16 @@ function mountSource(folder: () => FolderDrag): HTMLElement {
 describe("folderDraggable", () => {
   /** A callback rather than a value, so a folder renamed or re-filed since it mounted carries
    *  what it is now — which is what lets its current parent refuse a nest that moves nothing. */
-  it("carries the folder as it is at dragstart, not as it was at mount", async () => {
+  it("carries the folder as it is at the press, not as it was at mount", async () => {
     let folder: FolderDrag = { ...FOLDER };
     const source = mountSource(() => folder);
     folder = { ...FOLDER, name: "Standard decks", parentId: 2 };
 
     const carried: Record<string, unknown>[] = [];
-    const stop = monitorForElements({ onDragStart: ({ source: from }) => carried.push(from.data) });
-    const held = await startDrag(source);
+    const stop = dndManager.monitor.addEventListener("dragstart", ({ operation }) => {
+      if (operation.source) carried.push(operation.source.data);
+    });
+    const held = await startPointerDrag(source);
     await held.cancel();
     stop();
 
@@ -224,11 +264,17 @@ describe("folderDraggable", () => {
   });
 
   /**
-   * **A press on the folder's own menu is a press on the menu.** `composedDraggable`'s
-   * capture-phase guard, reached from this module rather than copied into it: Chromium starts a
-   * drag from the nearest draggable *ancestor* of whatever was pressed, so without it a press on
-   * the `⋯` that travels five pixels files the folder somewhere instead of opening the menu. The
-   * press and the drag land on two different elements here, exactly as the platform sends them.
+   * **A press on the folder's own menu is a press on the menu.** The guard is dnd-kit's
+   * `preventActivation` now rather than a capture-phase `mousedown` listener, configured once in
+   * `lib/dndManager.ts` with this app's own `NOT_A_DRAG` — but the failure it prevents is
+   * unchanged: a drag starts from the nearest draggable *ancestor* of whatever was pressed, so
+   * without it a press on the `⋯` that travels five pixels files the folder somewhere instead of
+   * opening the menu. The press and the drag land on two different elements here, exactly as the
+   * platform sends them.
+   *
+   * **It is also the one behaviour where the library's default is wrong for this app**, which is
+   * why the configuration exists at all: dnd-kit refuses *every* `button`, and a folder card's
+   * own name is a button.
    */
   it("does not start a drag from a press on the folder's own control", async () => {
     const source = mountSource(() => FOLDER);
@@ -236,26 +282,32 @@ describe("folderDraggable", () => {
     menu.setAttribute("data-no-drag", "");
     source.append(menu);
 
-    const refused = await startDrag(source, { pressOn: menu });
+    const refused = await startPointerDrag(source, { pressOn: menu });
     expect(refused.started).toBe(false);
     await refused.cancel();
 
     // And the folder itself still is draggable: the guard is about a control's press, not about
     // the folder.
-    const again = await startDrag(source);
+    const again = await startPointerDrag(source);
     expect(again.started).toBe(true);
     await again.cancel();
   });
-});
 
-/**
- * Three boxes, each placed so that the one coordinate `test-drag` sends — `clientX`/`clientY` 8 —
- * falls in a different zone of it. Moving the box under a stationary pointer is the same relative
- * move as moving the pointer over a still box, and it is the only one a jsdom drag can make.
- */
-const AT_START = new DOMRect(0, 0, 100, 100);
-const AT_MIDDLE = new DOMRect(-50, -50, 100, 100);
-const AT_END = new DOMRect(-85, -85, 100, 100);
+  /** The name a folder card's own button carries is how a reader picks the card up, so the
+   *  library's own default — refuse every `button` — would have made every folder in the app
+   *  undraggable. This is the assertion that would go red if `dndManager` ever stopped
+   *  overriding it. */
+  it("still starts from a press on a button the folder has not marked", async () => {
+    const source = mountSource(() => FOLDER);
+    const name = document.createElement("button");
+    name.textContent = "Standard";
+    source.append(name);
+
+    const held = await startPointerDrag(source, { pressOn: name });
+    expect(held.started).toBe(true);
+    await held.cancel();
+  });
+});
 
 interface TargetProps {
   scope: FolderScope;
@@ -264,14 +316,9 @@ interface TargetProps {
   onDrop: (drag: FolderDrag, edge: FolderEdge) => void;
 }
 
-function mountTarget({
-  rect = AT_START,
-  ...props
-}: Partial<TargetProps> & { rect?: DOMRect } = {}) {
-  const element = document.createElement("div");
+function mountTarget({ top = TARGET_TOP, ...props }: Partial<TargetProps> & { top?: number } = {}) {
+  const element = boxed(document.createElement("div"), top);
   document.body.append(element);
-  let box = rect;
-  element.getBoundingClientRect = () => box;
   undo.push(() => element.remove());
 
   const initialProps: TargetProps = {
@@ -291,10 +338,6 @@ function mountTarget({
     get state() {
       return view.result.current;
     },
-    /** Slide the folder under the pointer — see the three boxes above. */
-    moveTo(next: DOMRect) {
-      box = next;
-    },
     /** A refetch re-rendering the page in the middle of a drag. */
     rerender(next: Partial<TargetProps>) {
       current = { ...current, ...next };
@@ -306,8 +349,8 @@ function mountTarget({
 describe("useFolderDropTarget", () => {
   it("arms every target that would take the folder, and no others", async () => {
     const takes = mountTarget();
-    const refuses = mountTarget({ canDrop: () => false });
-    const held = await startDrag(mountSource(() => FOLDER));
+    const refuses = mountTarget({ top: OTHER_TOP, canDrop: () => false });
+    const held = await startPointerDrag(mountSource(() => FOLDER));
 
     expect(takes.state.armed).toBe(true);
     expect(refuses.state.armed).toBe(false);
@@ -324,72 +367,68 @@ describe("useFolderDropTarget", () => {
    */
   it("arms on the strength of one landing, with the other two refused", async () => {
     const target = mountTarget({ canDrop: (_drag, edge) => edge === "before" });
-    const held = await startDrag(mountSource(() => FOLDER));
+    const held = await startPointerDrag(mountSource(() => FOLDER));
 
     expect(target.state.armed).toBe(true);
     await held.cancel();
   });
 
   it("reports the landing the pointer is over, and nothing before it arrives", async () => {
-    const target = mountTarget({ rect: AT_START });
-    const held = await startDrag(mountSource(() => FOLDER));
+    const target = mountTarget();
+    const held = await startPointerDrag(mountSource(() => FOLDER));
     expect(target.state.edge).toBeNull();
 
-    await held.over(target.element);
+    await held.over(target.element, BEFORE);
     expect(target.state.edge).toBe("before");
     await held.cancel();
   });
 
   /**
    * **The whole gesture is that one folder means three things at three heights**, so a mark that
-   * only answered on entry would be a mark that is right once per folder. Only `onDrag` can see
-   * the second move: the library fires `onDragEnter` from `onDropTargetChange`, and that is
-   * dispatched *only when the drop-target hierarchy changes* — a second `dragover` on the same
-   * element changes nothing, which is exactly what makes this test able to tell the two apart.
+   * only answered on entry would be a mark that is right once per folder. `dragover` fires only
+   * when the operation's *target* changes — three moves within one folder change nothing about
+   * which folder it is — so only `dragmove` can see the second and third of these.
    */
   it("follows the pointer within one folder rather than answering once on entry", async () => {
-    const target = mountTarget({ rect: AT_START });
-    const held = await startDrag(mountSource(() => FOLDER));
+    const target = mountTarget();
+    const held = await startPointerDrag(mountSource(() => FOLDER));
 
-    await held.over(target.element);
+    await held.over(target.element, BEFORE);
     expect(target.state.edge).toBe("before");
 
-    target.moveTo(AT_MIDDLE);
-    await held.over(target.element);
+    await held.over(target.element, INSIDE);
     expect(target.state.edge).toBe("inside");
 
-    target.moveTo(AT_END);
-    await held.over(target.element);
+    await held.over(target.element, AFTER);
     expect(target.state.edge).toBe("after");
     await held.cancel();
   });
 
   /**
-   * A target stays in the library's hierarchy over the part of itself it refuses — deliberately,
-   * because a `canDrop` that answered `false` there would take the element out of the drag
+   * A target stays a collision candidate over the part of itself it refuses — deliberately,
+   * because an `accept` that answered `false` there would take the element out of the drag
    * altogether and freeze the reported edge at whatever it last was. `edge` is where the refusal
    * shows instead, as `null`: no mark, and therefore no promise of a write that will not happen.
    */
   it("reports no landing over a part of the folder that would refuse", async () => {
-    const target = mountTarget({ rect: AT_MIDDLE, canDrop: (_drag, edge) => edge !== "inside" });
-    const held = await startDrag(mountSource(() => FOLDER));
+    const target = mountTarget({ canDrop: (_drag, edge) => edge !== "inside" });
+    const held = await startPointerDrag(mountSource(() => FOLDER));
     expect(target.state.armed).toBe(true);
 
-    await held.over(target.element);
+    await held.over(target.element, INSIDE);
     expect(target.state.edge).toBeNull();
 
-    target.moveTo(AT_START);
-    await held.over(target.element);
+    await held.over(target.element, BEFORE);
     expect(target.state.edge).toBe("before");
     await held.cancel();
   });
 
   it("hands the page the folder and where it landed", async () => {
     const onDrop = vi.fn();
-    const target = mountTarget({ rect: AT_END, onDrop });
-    const held = await startDrag(mountSource(() => FOLDER));
+    const target = mountTarget({ onDrop });
+    const held = await startPointerDrag(mountSource(() => FOLDER));
 
-    await held.over(target.element);
+    await held.over(target.element, AFTER);
     await held.drop();
 
     expect(onDrop).toHaveBeenCalledTimes(1);
@@ -398,19 +437,19 @@ describe("useFolderDropTarget", () => {
 
   /**
    * **`canDrop` is asked again on the drop**, which is what the hook's comment claims and what
-   * nothing else here can see: the library never delivers a drop to a target that refused at
-   * `dragover`, so every other refusal test in this file passes whether the second question is
-   * asked or not. A policy that changes its mind mid-drag is the only way to reach the line — and
-   * it is not a contrivance, because the two questions can be a second apart with a refetch
-   * between them, and only the second one writes.
+   * nothing else here can see: a target that refused while the pointer was over it is not the
+   * operation's target by the time the reader lets go, so every other refusal test in this file
+   * passes whether the second question is asked or not. A policy that changes its mind mid-drag
+   * is the only way to reach the line — and it is not a contrivance, because the two questions
+   * can be a second apart with a refetch between them, and only the second one writes.
    */
   it("asks again at the drop, and refuses a folder it has stopped taking", async () => {
     let takes = true;
     const onDrop = vi.fn();
-    const target = mountTarget({ rect: AT_START, canDrop: () => takes, onDrop });
-    const held = await startDrag(mountSource(() => FOLDER));
+    const target = mountTarget({ canDrop: () => takes, onDrop });
+    const held = await startPointerDrag(mountSource(() => FOLDER));
 
-    await held.over(target.element);
+    await held.over(target.element, BEFORE);
     expect(target.state.edge).toBe("before");
 
     takes = false;
@@ -427,10 +466,10 @@ describe("useFolderDropTarget", () => {
   it("acts on the newest onDrop, not the one it registered with", async () => {
     const registered = vi.fn();
     const newest = vi.fn();
-    const target = mountTarget({ rect: AT_START, onDrop: registered });
-    const held = await startDrag(mountSource(() => FOLDER));
+    const target = mountTarget({ onDrop: registered });
+    const held = await startPointerDrag(mountSource(() => FOLDER));
 
-    await held.over(target.element);
+    await held.over(target.element, BEFORE);
     target.rerender({ onDrop: newest });
     await held.drop();
 
@@ -445,41 +484,120 @@ describe("useFolderDropTarget", () => {
    */
   it("is blind to a folder from another cabinet", async () => {
     const onDrop = vi.fn();
-    const target = mountTarget({ scope: "collection", rect: AT_START, onDrop });
-    const held = await startDrag(mountSource(() => FOLDER));
+    const target = mountTarget({ scope: "collection", onDrop });
+    const held = await startPointerDrag(mountSource(() => FOLDER));
 
     expect(target.state.armed).toBe(false);
-    await held.over(target.element);
+    await held.over(target.element, BEFORE);
     expect(target.state.edge).toBeNull();
 
     await held.drop();
     expect(onDrop).not.toHaveBeenCalled();
   });
 
-  /** Escape, or a drop on nothing: the platform ends both the same way, so both marks stand down
-   *  without this hearing a keypress. */
+  /** Escape, or a drop on nothing: the library ends both the same way, so both marks stand down
+   *  without this hearing a keypress of its own. */
   it("stands both marks down when the drag is cancelled", async () => {
-    const target = mountTarget({ rect: AT_START });
-    const held = await startDrag(mountSource(() => FOLDER));
+    const target = mountTarget();
+    const held = await startPointerDrag(mountSource(() => FOLDER));
 
-    await held.over(target.element);
+    await held.over(target.element, BEFORE);
     expect(target.state).toEqual({ armed: true, edge: "before" });
 
     await held.cancel();
     expect(target.state).toEqual({ armed: false, edge: null });
   });
 
+  /** A cancelled drag writes nothing. Escape while the pointer is squarely over a folder that
+   *  would have taken it is the one gesture that can tell "stood the mark down" apart from
+   *  "stood the mark down and filed the folder anyway". */
+  it("files nothing when the drag is cancelled over a willing target", async () => {
+    const onDrop = vi.fn();
+    const target = mountTarget({ onDrop });
+    const held = await startPointerDrag(mountSource(() => FOLDER));
+
+    await held.over(target.element, BEFORE);
+    await held.cancel();
+
+    expect(onDrop).not.toHaveBeenCalled();
+  });
+
   /** Leaving a folder without letting go clears its mark and leaves it armed: the folder is still
    *  in the air and every eligible target still says so. */
   it("clears the landing when the pointer leaves, and stays armed", async () => {
-    const target = mountTarget({ rect: AT_START });
-    const held = await startDrag(mountSource(() => FOLDER));
+    const target = mountTarget();
+    const held = await startPointerDrag(mountSource(() => FOLDER));
 
-    await held.over(target.element);
+    await held.over(target.element, BEFORE);
     expect(target.state.edge).toBe("before");
 
     await held.leave();
     expect(target.state).toEqual({ armed: true, edge: null });
     await held.cancel();
+  });
+});
+
+/**
+ * **The registry leak `React.StrictMode` causes, and the reason it needs a test of its own.**
+ *
+ * dnd-kit's `Entity` constructor ends with `queueMicrotask(this.register)` while `destroy()`
+ * unregisters synchronously — so an entity built and destroyed in the same tick unregisters
+ * *first* and is registered afterwards by the microtask, with nothing holding a reference to
+ * undo it. StrictMode does exactly that on every mount in development: run the effect, clean it
+ * up, run it again. The orphan is the one from the **first** run, whose listeners are gone, and
+ * collision detection is perfectly happy to pick it as the operation's target — at which point
+ * the live hook compares it against its own droppable, sees a different object, and returns.
+ * The row rings, the mark comes up, and the drop silently writes nothing.
+ *
+ * Found in the running window and not by any of the tests above, because neither `render` nor
+ * `renderHook` wraps anything in StrictMode by default: every test mounts each effect once, so
+ * every registration is the live one. These two ask for it explicitly, and they are the only
+ * things in the suite that would go red if `register: false` were dropped from either call site.
+ */
+describe("registering with the manager", () => {
+  /**
+   * **The count has to be taken a tick late, and that is the whole trap.** The orphan is
+   * registered by a *microtask* queued in a constructor, so immediately after the render both of
+   * these read 1 whether the leak is there or not — a pair of assertions that would pass against
+   * the very bug they exist for. Measured: 1 straight after `renderHook`, 2 after a macrotask.
+   */
+  const settled = () => new Promise((resolve) => setTimeout(resolve, 0));
+
+  const mine = (element: Element, kind: "draggables" | "droppables") =>
+    [...dndManager.registry[kind]].filter((entity) => entity.element === element);
+
+  it("leaves one drop target per element, through StrictMode's double mount", async () => {
+    const element = boxed(document.createElement("div"), TARGET_TOP);
+    document.body.append(element);
+    undo.push(() => element.remove());
+    const ref = { current: element as HTMLElement | null };
+
+    renderHook(
+      () =>
+        useFolderDropTarget({
+          ref,
+          scope: "deck",
+          axis: "vertical",
+          canDrop: () => true,
+          onDrop: () => {},
+        }),
+      { wrapper: StrictMode },
+    );
+
+    await settled();
+    expect(mine(element, "droppables")).toHaveLength(1);
+  });
+
+  it("leaves one drag source per element, through StrictMode's double mount", async () => {
+    const element = boxed(document.createElement("div"), 0);
+    document.body.append(element);
+    undo.push(() => element.remove());
+
+    renderHook(() => useEffect(() => folderDraggable({ element, folder: () => FOLDER }), []), {
+      wrapper: StrictMode,
+    });
+
+    await settled();
+    expect(mine(element, "draggables")).toHaveLength(1);
   });
 });

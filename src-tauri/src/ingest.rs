@@ -18,9 +18,7 @@
 //! in. See [`IngestError::Empty`].
 
 use crate::{card_row::CardRow, schema};
-use flate2::read::GzDecoder;
 use rusqlite::{params, Connection};
-use std::io::{BufRead, BufReader};
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -89,52 +87,95 @@ pub fn ingest_gz(
     gz_path: &Path,
     progress: &mut dyn FnMut(u64),
 ) -> Result<IngestStats, IngestError> {
+    use std::io::Read as _;
+
     // Opened before the database is touched: a missing or unreadable path must not
     // cost the caller the staging table it was about to fill.
-    let file = std::fs::File::open(gz_path)?;
+    let mut file = std::fs::File::open(gz_path)?;
+    let chunks = std::iter::from_fn(move || {
+        let mut buf = vec![0u8; 64 * 1024];
+        match file.read(&mut buf) {
+            Ok(0) => None,
+            Ok(n) => {
+                buf.truncate(n);
+                Some(Ok(buf))
+            }
+            Err(e) => Some(Err(e)),
+        }
+    });
+    ingest_stream(db, chunks, progress)
+}
+
+/// Ingest from a stream of byte chunks - gzipped or not, the decoder decides.
+///
+/// The platform-neutral entry point: desktop feeds it a file and the browser feeds it
+/// `fetch`. Peak memory is one chunk plus one batch, exactly as the file version was.
+pub fn ingest_stream(
+    db: &Mutex<Connection>,
+    chunks: impl Iterator<Item = std::io::Result<Vec<u8>>>,
+    progress: &mut dyn FnMut(u64),
+) -> Result<IngestStats, IngestError> {
     {
         let conn = crate::db::lock_blocking(db);
         schema::create_staging(&conn)?;
     }
-    let reader = BufReader::new(GzDecoder::new(file));
     let mut stats = IngestStats {
         inserted: 0,
         skipped: 0,
     };
     let mut batch: Vec<CardRow> = Vec::with_capacity(BATCH as usize);
+    let mut decoder = crate::feed::frame::Decoder::new();
+    let mut lines = crate::feed::frame::Lines::new();
+    let mut decoded: Vec<u8> = Vec::new();
 
-    for line in reader.lines() {
-        let line = line?;
-        // Parsing happens with the lock *not* held — it is the expensive half of the
-        // loop, and the whole point of chunking is that the connection is free during it.
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(&line) else {
+    // Parsing happens with the lock *not* held - it is the expensive half of the loop,
+    // and the whole point of chunking is that the connection is free during it.
+    let take_line = |line: &[u8], stats: &mut IngestStats, batch: &mut Vec<CardRow>| {
+        if line.is_empty() {
+            return;
+        }
+        let Ok(text) = std::str::from_utf8(line) else {
             stats.skipped += 1;
-            continue;
+            return;
         };
-        // `line` is borrowed: since v3 the row's `raw` is a gzip buffer of its own, so
-        // there is nothing left here to hand over.
-        let Some(row) = CardRow::from_json_line(&v, &line) else {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(text) else {
             stats.skipped += 1;
-            continue;
+            return;
+        };
+        let Some(row) = CardRow::from_json_line(&v, text) else {
+            stats.skipped += 1;
+            return;
         };
         batch.push(row);
-        if batch.len() as u64 >= BATCH {
-            // Counted from the batch, exactly as the tail flush below does, rather than
-            // from `BATCH` — the count must not depend on the condition above having
-            // tripped at precisely the batch size. Before the write, because it clears.
-            stats.inserted += batch.len() as u64;
-            write_batch(db, &mut batch)?;
-            progress(stats.inserted);
-        }
+    };
+
+    for chunk in chunks {
+        let chunk = chunk?;
+        decoded.clear();
+        decoder.push(&chunk, &mut decoded)?;
+        lines.push(&decoded, |line| take_line(line, &mut stats, &mut batch));
+        flush_full_batches(db, &mut stats, &mut batch, progress)?;
     }
+    // The decompressor holds a tail back until `finish` - measured at ~15 KB, roughly
+    // 88 card lines, on the 2001-line fixture. So the batch boundary has to be checked
+    // again HERE and not only inside the loop above: without this, a file small enough
+    // to arrive in one chunk delivers its last batch's worth of lines after the loop has
+    // ended, and the per-batch progress call for them never fires. That is exactly what
+    // `progress_fires_every_batch_and_once_at_the_end` caught.
+    decoded.clear();
+    decoder.finish(&mut decoded)?;
+    lines.push(&decoded, |line| take_line(line, &mut stats, &mut batch));
+    lines.finish(|line| take_line(line, &mut stats, &mut batch));
+    flush_full_batches(db, &mut stats, &mut batch, progress)?;
+
     if !batch.is_empty() {
         stats.inserted += batch.len() as u64;
         write_batch(db, &mut batch)?;
     }
 
-    // Nothing parsed as a card: the download is bad, not the collection. Swapping
-    // here would trade a working card database for an empty one, so refuse — and
-    // drop the empty staging table rather than leave it lying around.
+    // Nothing parsed as a card: the download is bad, not the collection. Swapping here
+    // would trade a working card database for an empty one, so refuse - and drop the
+    // empty staging table rather than leave it lying around.
     if stats.inserted == 0 {
         let conn = crate::db::lock_blocking(db);
         conn.execute_batch("DROP TABLE IF EXISTS cards_staging")?;
@@ -143,12 +184,40 @@ pub fn ingest_gz(
         });
     }
 
+    // The swap is the last thing and belongs to whichever entry point ran the ingest, so it
+    // moves here verbatim from `ingest_gz` - both callers need it, and a stream that filled
+    // staging and never swapped would leave the reader's `cards` table untouched while
+    // reporting success.
     {
         let conn = crate::db::lock_blocking(db);
         schema::swap_staging(&conn)?;
     }
     progress(stats.inserted);
     Ok(stats)
+}
+
+/// Write out every whole [`BATCH`] sitting in `batch`, reporting progress after each.
+///
+/// Called from two places on purpose: once per chunk, and once more after the decoder's
+/// `finish` releases its held-back tail. The tail is why the second call exists - a file
+/// that arrives in a single chunk yields its last ~64 KB only at `finish`, and those lines
+/// belong to a batch that would otherwise be written by the unconditional tail flush with
+/// no progress callback of its own.
+fn flush_full_batches(
+    db: &Mutex<Connection>,
+    stats: &mut IngestStats,
+    batch: &mut Vec<CardRow>,
+    progress: &mut dyn FnMut(u64),
+) -> Result<(), IngestError> {
+    while batch.len() as u64 >= BATCH {
+        // Counted from the batch, exactly as the tail flush does, rather than from
+        // `BATCH` - and taken before the write, because the write clears.
+        let mut head: Vec<CardRow> = batch.drain(..BATCH as usize).collect();
+        stats.inserted += head.len() as u64;
+        write_batch(db, &mut head)?;
+        progress(stats.inserted);
+    }
+    Ok(())
 }
 
 /// Commit one batch of parsed rows into `cards_staging`, then let go of the connection.
@@ -802,5 +871,41 @@ mod tests {
         let stats = ingest_gz(&db, &p, &mut |_| {}).unwrap();
         assert_eq!(stats.inserted, 1);
         assert_eq!(stats.skipped, 2);
+    }
+
+    /// The new entry point must produce exactly what the file-shaped one does.
+    #[test]
+    fn ingest_stream_matches_ingest_gz_row_for_row() {
+        let lines: Vec<String> = (0..50).map(card_line).collect();
+        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let path = gz_fixture(&refs);
+        let bytes = std::fs::read(&path).unwrap();
+
+        let db_a = mem_db();
+        let a = ingest_gz(&db_a, &path, &mut |_| {}).unwrap();
+
+        let db_b = mem_db();
+        let chunks = bytes.chunks(64).map(|c| Ok(c.to_vec())).collect::<Vec<_>>();
+        let b = ingest_stream(&db_b, chunks.into_iter(), &mut |_| {}).unwrap();
+
+        assert_eq!(a.inserted, b.inserted);
+        assert_eq!(a.skipped, b.skipped);
+        assert_eq!(b.inserted, 50);
+    }
+
+    /// The browser case: fetch already decompressed the body, so the same content arrives
+    /// plain. It must ingest identically.
+    #[test]
+    fn ingest_stream_accepts_already_decompressed_bytes() {
+        let lines: Vec<String> = (0..30).map(card_line).collect();
+        let mut plain = Vec::new();
+        for l in &lines {
+            plain.extend_from_slice(l.as_bytes());
+            plain.push(b'\n');
+        }
+        let db = mem_db();
+        let chunks = plain.chunks(31).map(|c| Ok(c.to_vec())).collect::<Vec<_>>();
+        let stats = ingest_stream(&db, chunks.into_iter(), &mut |_| {}).unwrap();
+        assert_eq!(stats.inserted, 30);
     }
 }

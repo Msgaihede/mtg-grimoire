@@ -103,3 +103,90 @@ document.elementsFromPoint ??= () => [];
 // behaviour. `??=`, so a jsdom that grows a real implementation is used instead of this.
 Element.prototype.setPointerCapture ??= () => {};
 Element.prototype.releasePointerCapture ??= () => {};
+
+// The four globals `@dnd-kit/dom` needs and jsdom does not have. Each of them throws *outside*
+// a test's stack — an unhandled error that fails the run without failing an assertion — so they
+// read as the library being broken rather than as the environment being thin. `??=` throughout,
+// so a jsdom that grows a real implementation is preferred to any of these. The whole reading,
+// including the fifth thing no shim fixes, is in `docs/reference/frontend-design.md`.
+//
+// dnd-kit's `PositionObserver` constructs one of these per element it tracks during a drag.
+globalThis.IntersectionObserver ??= class {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+  takeRecords() {
+    return [];
+  }
+} as unknown as typeof IntersectionObserver;
+
+// The **singular** one, which is a different method from the `elementsFromPoint` above: that is
+// pragmatic-dnd's auto-scroller asking what is under the pointer, this is dnd-kit's `Scroller`
+// asking which single element is.
+document.elementFromPoint ??= () => null;
+
+// jsdom implements no WAAPI. dnd-kit's `DOMRectangle` force-finishes running animations before
+// it measures — so this one is on the path to every rectangle, not only to the drag preview —
+// and its `Feedback` plugin animates that preview.
+document.getAnimations ??= () => [];
+Element.prototype.getAnimations ??= () => [];
+Element.prototype.animate ??= (() => ({
+  finish() {},
+  cancel() {},
+  play() {},
+  pause() {},
+  addEventListener() {},
+  removeEventListener() {},
+  finished: Promise.resolve(),
+  effect: null,
+})) as unknown as typeof Element.prototype.animate;
+
+// `Feedback` asks this about `prefers-reduced-motion`. Answering `false` is the honest default
+// for a suite: `MotionGlobalConfig.skipAnimations` above is how this project takes motion out of
+// a test, and it does it without lying to a component about the reader's setting.
+window.matchMedia ??= ((query: string) => ({
+  matches: false,
+  media: query,
+  onchange: null,
+  addEventListener() {},
+  removeEventListener() {},
+  addListener() {},
+  removeListener() {},
+  dispatchEvent: () => false,
+})) as unknown as typeof window.matchMedia;
+
+/**
+ * **Every element is a clipping ancestor in jsdom, and that is what makes every dnd-kit drop
+ * target invisible.**
+ *
+ * dnd-kit clamps an element's visible rectangle against each ancestor whose `isOverflowVisible`
+ * is false, and that predicate reads
+ * `overflow === "visible" && overflowX === "visible" && overflowY === "visible"`. **jsdom answers
+ * the empty string for all three, on every element** — it implements no cascade for the property
+ * and loads no stylesheet — so every ancestor counts as clipping, each one's own
+ * `getBoundingClientRect()` is `0×0`, and a target a test has carefully measured comes back with
+ * zero area. A zero-area element is invisible, an invisible droppable never gets a shape, and a
+ * droppable with no shape can never be collided with — while its registration is correct, its
+ * `accepts()` answers true, and `operation.target` is `null` on every single frame. It reads
+ * exactly like a drop target that does not work.
+ *
+ * `visible` is the CSS initial value and is what a real browser reports for a plain `<div>`, so
+ * this is jsdom being incomplete rather than jsdom disagreeing. Only the empty answer is
+ * replaced; anything that really set the property keeps what it set.
+ *
+ * **What it costs is worth naming: no test can see a clipping ancestor.** That is not a loss,
+ * because jsdom applies no stylesheet — a `overflow-y-auto` class computes to the empty string
+ * here just like everything else — so the alternative was not "the suite models clipping" but
+ * "the suite models it wrongly, as clipping everywhere". Whether a real scroller cuts a drop
+ * target off stays the live pass's to prove, alongside every other question about layout.
+ */
+const computedStyle = window.getComputedStyle.bind(window);
+window.getComputedStyle = ((element: Element, pseudo?: string | null) => {
+  const styles = computedStyle(element, pseudo);
+  for (const property of ["overflow", "overflowX", "overflowY"] as const) {
+    if (styles[property] === "") {
+      Object.defineProperty(styles, property, { value: "visible", configurable: true });
+    }
+  }
+  return styles;
+}) as typeof window.getComputedStyle;
