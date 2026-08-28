@@ -113,9 +113,9 @@ Copied from the repo's `CLAUDE.md`, `src-tauri/CLAUDE.md` and the spec; every ta
 
 > **Why a whole module for six lines.** `schema.rs` is on the wasm side of the map and `tags/` is not — `tags/mod.rs` opens with `use crate::sync::AppState; use flate2::read::GzDecoder; … use tauri::Emitter;` and carries four command-bearing submodules and a feed download. One pure ASCII fold is not a reason to drag any of that across. It is also, on its own terms, the right home: the fold is what makes two spellings of a name the *same key*, which is a fact about a slug rather than about Scryfall's taxonomy.
 
-- [ ] **Step 1: Create the module, declare it, and write the test in one step**
+- [ ] **Step 1: Create the test module, declare it, and delete the old copy — all in one step**
 
-Create `src-tauri/src/slug.rs`:
+Create `src-tauri/src/slug.rs` with its module doc and its tests, and **no implementation**:
 
 ```rust
 //! Folding a name to the key two spellings of it share.
@@ -124,23 +124,6 @@ Create `src-tauri/src/slug.rs`:
 //! because `tags` does not compile for `wasm32-unknown-unknown` — it opens with
 //! `use tauri::Emitter` and owns two feed downloads — while [`crate::schema`], its one
 //! caller outside that module, must.
-
-/// A tag name reduced to what Scryfall matches on: lowercase, every non-alphanumeric
-/// removed.
-///
-/// **One copy, deliberately.** The ingest writes it into `slug_norm` and the search
-/// compares a typed needle against that column; if the two ever normalised differently the
-/// search would match nothing and no test would fail, because each half would still be
-/// self-consistent.
-///
-/// Verified live 2026-08-20 — `otag:"spot removal"`, `otag:spot-removal`, `otag:spotremoval`
-/// and `otag:SPOT-REMOVAL` all return exactly 4,907 cards.
-pub fn normalize(s: &str) -> String {
-    s.chars()
-        .filter(|c| c.is_ascii_alphanumeric())
-        .map(|c| c.to_ascii_lowercase())
-        .collect()
-}
 
 #[cfg(test)]
 mod tests {
@@ -181,20 +164,43 @@ mod tests {
 
 In `src-tauri/src/lib.rs`, add `pub mod slug;` in alphabetical position among the existing `pub mod` declarations — between `pub mod search;` and `pub mod sorting;`.
 
-> ⚠️ **The declaration goes in NOW, not in a later step.** Phase 1's plan put a module declaration after its first failing-test step, cargo reported `running 0 tests … ok` and exited 0, and the task had no first failure at all. A red that cannot be produced is not a red.
+Then, in the same step, **delete `pub fn normalize` and its doc comment from `src-tauri/src/tags/mod.rs`** and delete the `every_spelling_of_a_tag_name_normalises_to_one_key` test from that file's test module — it has moved above. Put nothing in their place yet.
+
+> ⚠️ **All three edits belong in this step, and the module declaration especially.** Phase 1's plan put a module declaration after its first failing-test step, cargo reported `running 0 tests … ok` and exited 0, and the task had no first failure at all. A red that cannot be produced is not a red. Deleting the old copy now is the other half of the same rule: with `tags::normalize` still present, `slug.rs`'s re-export test would pass against the function it is supposed to be replacing, which is a green that proves nothing.
 
 - [ ] **Step 2: Run the test to verify it fails**
 
 Run: `cd src-tauri && cargo test slug:: 2>&1 | tail -20`
 
-Expected: **2 tests run, and `the_tags_re_export_is_this_function` FAILS** to compile — `crate::tags::normalize` still resolves to `tags`' own copy, so it compiles, but there is now a *duplicate*. The precise expected first red is: `every_spelling_of_a_tag_name_normalises_to_one_key` passes and the re-export test passes **against the old copy**, which is a green that proves nothing.
+Expected: **compile errors**, from two directions at once —
 
-To get a real red, run it in this order instead: **do Step 3 first for the deletion only**, then this. Concretely — delete `normalize` from `tags/mod.rs` **without** adding the re-export, then run:
+- ``cannot find function `normalize` in this scope`` in `slug.rs`'s own tests, because the implementation is not there yet;
+- ``cannot find function `normalize` in module `crate::tags` `` from `schema.rs:876`, `tags/query.rs` and `tags/muted.rs`, because the old copy is gone and nothing has replaced it.
 
-Run: `cd src-tauri && cargo test slug:: 2>&1 | tail -20`
-Expected: **compile error** — ``cannot find function `normalize` in module `crate::tags` `` (and the same error from `tags/query.rs` and `tags/muted.rs`). That is the honest first red: the callers are broken and the re-export is what fixes them.
+That is the honest first red: the new home is empty and every caller is broken.
 
 - [ ] **Step 3: Write the minimal implementation**
+
+Add to `src-tauri/src/slug.rs`, above its test module:
+
+```rust
+/// A tag name reduced to what Scryfall matches on: lowercase, every non-alphanumeric
+/// removed.
+///
+/// **One copy, deliberately.** The ingest writes it into `slug_norm` and the search
+/// compares a typed needle against that column; if the two ever normalised differently the
+/// search would match nothing and no test would fail, because each half would still be
+/// self-consistent.
+///
+/// Verified live 2026-08-20 — `otag:"spot removal"`, `otag:spot-removal`, `otag:spotremoval`
+/// and `otag:SPOT-REMOVAL` all return exactly 4,907 cards.
+pub fn normalize(s: &str) -> String {
+    s.chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .map(|c| c.to_ascii_lowercase())
+        .collect()
+}
+```
 
 In `src-tauri/src/tags/mod.rs`, at the point where `normalize` used to be (just after `fn staging`), put:
 
@@ -207,7 +213,7 @@ In `src-tauri/src/tags/mod.rs`, at the point where `normalize` used to be (just 
 pub use crate::slug::normalize;
 ```
 
-Delete the `every_spelling_of_a_tag_name_normalises_to_one_key` test from `tags/mod.rs`'s test module — it now lives in `slug.rs`. Leave `the_closure_keeps_the_strongest_weight_of_the_taggings_it_descends_from` and everything else alone; `stronger` and `WEIGHTS` stay in `tags`, because they are Scryfall's weighting vocabulary rather than a key.
+`stronger` and `WEIGHTS` stay in `tags`, and `the_closure_keeps_the_strongest_weight_of_the_taggings_it_descends_from` stays with them: those are Scryfall's weighting vocabulary rather than a key, and nothing outside `tags/` reads them in code.
 
 In `src-tauri/src/schema.rs`, change line 876 from `crate::tags::normalize(slug)` to `crate::slug::normalize(slug)`, and update the doc comment four lines above it that says "through [`crate::tags::normalize`]" to say "through [`crate::slug::normalize`]".
 
@@ -3294,3 +3300,761 @@ is no way to fill a corpus, and a browse over an empty database measures nothing
 Nothing asks navigator.storage.estimate(). It reported 647 MB during a fill and 7 MB after a
 restart against the same 532.8 MB file, and it must never gate an ingest."
 ```
+
+---
+
+### Task 9: The wasm build, the web bundle, and the CI job that gates them
+
+**Files:**
+- Create: `scripts/build-wasm.mjs`
+- Create: `vite.web.config.ts`
+- Modify: `package.json` — three scripts
+- Modify: `.gitignore` — two generated directories
+- Modify: `.github/workflows/ci.yml` — a `wasm` output, a `wasm` job, and `ci-ok`
+- Modify: `.github/CLAUDE.md` — the router table gains a column
+
+**Interfaces:**
+- Consumes: the crate from Tasks 1–6, the frontend from Tasks 7–8.
+- Produces: `npm run build:wasm`, `npm run web:dev`, `npm run web:build`.
+
+> **clang is now a build requirement, permanently.** `sqlite-wasm-rs` compiles SQLite's C
+> amalgamation with `cc` targeting wasm32, and MSVC cannot emit wasm. Spec §9 names this as
+> the toolchain cost of shipping the web target; this is the task that pays it.
+
+> **`wasm-bindgen-cli` must match the `wasm-bindgen` crate exactly.** A mismatch is not a
+> build error — it is a runtime failure inside the generated glue, with a message about an
+> import that does not exist. So the version is pinned in `Cargo.toml` with `=`, pinned again
+> in the build script, and the script refuses to run when the two disagree or when the
+> installed CLI is a third number.
+
+- [ ] **Step 1: Write the build script**
+
+Create `scripts/build-wasm.mjs`:
+
+```js
+#!/usr/bin/env node
+// Build the Rust core for the browser: cargo, then wasm-bindgen, then the assets the web
+// bundle serves them from.
+//
+// Two prerequisites this script checks rather than assumes, because both fail in ways that
+// do not name themselves:
+//
+//   * `wasm-bindgen-cli` must match the `wasm-bindgen` crate EXACTLY. A mismatch compiles
+//     and links fine and then fails at run time inside the generated glue, complaining about
+//     an import nobody wrote. So the version is pinned in three places and checked here.
+//   * clang must be on PATH. `sqlite-wasm-rs` compiles SQLite's C amalgamation with `cc` for
+//     wasm32 and MSVC cannot emit wasm; without clang the failure is a `cc` error a hundred
+//     lines into a build log.
+//
+// Output lands in `web/public/`, which is gitignored in full: everything there is generated,
+// including the favicon copy, so that the DESKTOP bundle never carries a 2 MB wasm module it
+// has no use for.
+import { spawnSync } from "node:child_process";
+import { copyFileSync, mkdirSync, readFileSync, rmSync } from "node:fs";
+import { join } from "node:path";
+
+/** Kept in step with `wasm-bindgen = "=0.2.127"` in `src-tauri/Cargo.toml`. */
+const PINNED = "0.2.127";
+const OUT = join("web", "public", "wasm");
+
+function run(command, args, options = {}) {
+  const result = spawnSync(command, args, { stdio: "inherit", shell: false, ...options });
+  if (result.error) {
+    console.error(`could not run \`${command}\`: ${result.error.message}`);
+    process.exit(1);
+  }
+  if (result.status !== 0) process.exit(result.status ?? 1);
+}
+
+function capture(command, args) {
+  const result = spawnSync(command, args, { encoding: "utf8", shell: false });
+  if (result.error || result.status !== 0) return undefined;
+  return result.stdout.trim();
+}
+
+// --- the two prerequisites -------------------------------------------------------------
+const manifest = readFileSync(join("src-tauri", "Cargo.toml"), "utf8");
+if (!manifest.includes(`wasm-bindgen = "=${PINNED}"`)) {
+  console.error(
+    `src-tauri/Cargo.toml does not pin wasm-bindgen to =${PINNED}.\n` +
+      "The crate and this script must name the same version, and the pin must keep its `=`:\n" +
+      "a caret would let cargo resolve a newer crate than the installed CLI can generate for.",
+  );
+  process.exit(1);
+}
+
+const cli = capture("wasm-bindgen", ["--version"]);
+if (cli === undefined) {
+  console.error(
+    "wasm-bindgen is not on PATH. Install the matching CLI:\n" +
+      `  cargo install wasm-bindgen-cli --version ${PINNED} --locked`,
+  );
+  process.exit(1);
+}
+if (!cli.endsWith(PINNED)) {
+  console.error(
+    `wasm-bindgen-cli is \`${cli}\` and the crate is pinned to ${PINNED}.\n` +
+      "These must match exactly. A mismatch is not a build error - it fails at run time\n" +
+      "inside the generated glue, complaining about an import nobody wrote.\n" +
+      `  cargo install wasm-bindgen-cli --version ${PINNED} --locked --force`,
+  );
+  process.exit(1);
+}
+
+if (capture("clang", ["--version"]) === undefined) {
+  console.error(
+    "clang is not on PATH, and sqlite-wasm-rs compiles SQLite's C amalgamation with `cc`\n" +
+      "targeting wasm32 - which MSVC cannot do. Install LLVM and put its bin directory on\n" +
+      "PATH (on Windows that is usually C:\\Program Files\\LLVM\\bin).",
+  );
+  process.exit(1);
+}
+
+// --- build -----------------------------------------------------------------------------
+run("cargo", [
+  "build",
+  "--manifest-path",
+  join("src-tauri", "Cargo.toml"),
+  "--target",
+  "wasm32-unknown-unknown",
+  "--release",
+  "--lib",
+  "--locked",
+]);
+
+rmSync(OUT, { recursive: true, force: true });
+mkdirSync(OUT, { recursive: true });
+run("wasm-bindgen", [
+  "--target",
+  "web",
+  "--out-dir",
+  OUT,
+  // No `.d.ts`: `src/workers/db.ts` declares the four functions it calls by hand, and
+  // tsconfig's `include` is `src` alone - a generated declaration outside it would be typed
+  // by nothing and would break the desktop build on a checkout that never ran this script.
+  "--no-typescript",
+  join("src-tauri", "target", "wasm32-unknown-unknown", "release", "mtg_grimoire_lib.wasm"),
+]);
+
+// The web bundle's `publicDir` is `web/public`, so it does not get the repo's `public/`.
+// `index.html` links the favicon by absolute path, and copying it here keeps that one
+// `index.html` serving both builds.
+copyFileSync(join("public", "mtg-grimoire-mark.svg"), join("web", "public", "mtg-grimoire-mark.svg"));
+
+console.log(`wasm core built into ${OUT}`);
+```
+
+- [ ] **Step 2: Write the web build config and the scripts**
+
+Create `vite.web.config.ts`:
+
+```ts
+import { defineConfig, mergeConfig } from "vite";
+import base from "./vite.config";
+
+/**
+ * The web target's build. Everything the desktop build does, plus three differences.
+ *
+ * **One `index.html` and one `main.tsx` serve both**, which is why this is a merge rather
+ * than a second project: the only thing that differs at the entry point is `__CORE__`, and
+ * the branch it selects folds away in each bundle.
+ *
+ * `publicDir` points at a directory that is **generated in full** — `scripts/build-wasm.mjs`
+ * writes the wasm module there and copies the favicon in beside it. That is what keeps a
+ * 2 MB wasm module out of the desktop bundle, and therefore out of the portable exe, on a
+ * machine where someone has run the wasm build.
+ *
+ * Port 5173 is Vite's own default and the one the spike served its probes on. It is not
+ * 1420: that is `tauri dev`'s, it is hardcoded in tracked files, and the two must be able to
+ * run at once.
+ */
+export default mergeConfig(
+  base,
+  defineConfig({
+    publicDir: "web/public",
+    define: { __CORE__: JSON.stringify("web") },
+    build: { outDir: "dist-web", emptyOutDir: true },
+    server: { port: 5173, strictPort: true },
+  }),
+);
+```
+
+> **Do not add `vite.web.config.ts` to `tsconfig.node.json`.** That file's own comment
+> explains why its `include` is `vite.config.ts` alone: `composite: true` makes every listed
+> file an output of a referenced project, and the root `tsconfig.json` includes `src` — a
+> file in both produces `TS6305` and fails `npm run build` on a clean checkout. It took
+> `main`'s CI red twice already.
+
+Add to `package.json`'s `scripts`:
+
+```json
+    "build:wasm": "node scripts/build-wasm.mjs",
+    "web:dev": "vite --config vite.web.config.ts",
+    "web:build": "tsc && vite build --config vite.web.config.ts",
+```
+
+Add to `.gitignore`, after the `dist/` line:
+
+```
+# The web target's bundle, and the directory it is served from. `web/public/` is generated in
+# FULL by `scripts/build-wasm.mjs` - the wasm module, its glue, and a copy of the favicon -
+# which is what keeps a 2 MB wasm module out of the desktop bundle and therefore out of the
+# portable exe.
+dist-web/
+web/public/
+```
+
+- [ ] **Step 3: Run it, and confirm the whole chain works**
+
+```bash
+npm run build:wasm
+ls -la web/public/wasm
+npm run web:build
+ls -la dist-web
+```
+
+Expected: `web/public/wasm/mtg_grimoire_lib.js` and `mtg_grimoire_lib_bg.wasm` (the spike measured 2.2 MB before `wasm-opt`, with reqwest, flate2 and serde in it), and a `dist-web/index.html`.
+
+Then confirm the desktop bundle is unaffected: `npm run build && ls dist` — no `wasm/` directory in `dist/`.
+
+- [ ] **Step 4: Add the CI job**
+
+In `.github/workflows/ci.yml`:
+
+**a.** Add `wasm` to the `changes` job's `outputs`:
+
+```yaml
+      wasm: ${{ steps.classify.outputs.wasm }}
+```
+
+**b.** In the classify script, initialise it beside the others (`wasm=false`, and `wasm=true` in the "no usable base commit" arm), and add these `case` arms. **Order matters — `case` is first-match-wins**, so each of these must sit *above* the broader arm it narrows:
+
+```bash
+              # This file. A change to the gate re-runs the whole gate.
+              .github/workflows/ci.yml)
+                frontend=true
+                rust=true
+                powershell=true
+                wasm=true
+                ;;
+
+              # The wasm build's own inputs, and nothing else's. Above `scripts/*` and
+              # `src/*` because both of those match more broadly and would run the wrong
+              # jobs first.
+              scripts/build-wasm.mjs|vite.web.config.ts)
+                frontend=true
+                wasm=true
+                ;;
+              src/workers/*|src/web/*|src/lib/core/*)
+                frontend=true
+                wasm=true
+                ;;
+```
+
+and extend the existing `src-tauri/*` and `package.json` arms:
+
+```bash
+              # Rust. Every change here can break the wasm build too - the crate is one
+              # crate with two targets, and a `use tauri::` added to a module on the wasm
+              # side of `lib.rs`'s map compiles on desktop and fails there.
+              src-tauri/*)
+                rust=true
+                wasm=true
+                ;;
+```
+
+```bash
+              package.json|package-lock.json|components.json|.prettierrc)
+                frontend=true
+                wasm=true
+                ;;
+```
+
+and the fail-safe:
+
+```bash
+              *)
+                frontend=true
+                rust=true
+                wasm=true
+                ;;
+```
+
+Add `| wasm | \`$wasm\` |` to the step summary table, and `echo "wasm=$wasm" >> "$GITHUB_OUTPUT"`.
+
+**c.** Add the job, after `rust`:
+
+```yaml
+  wasm:
+    name: wasm
+    needs: changes
+    if: needs.changes.outputs.wasm == 'true'
+    # Linux only, and not as a preference: this compiles SQLite's C amalgamation to wasm32
+    # with clang, which is the same compiler on every host. A Windows leg would prove the
+    # same thing more slowly. **Note that no measured figure in this repo has ever come off
+    # a Linux build** — this job is a compile gate, not a source of numbers.
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # sqlite-wasm-rs compiles SQLite's C with `cc` targeting wasm32. There is no way
+      # around this and no way to cache past it.
+      - name: Install clang
+        run: sudo apt-get update && sudo apt-get install -y clang
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          # Its own key: this target's artifacts share nothing with the host build's, and a
+          # shared cache would thrash between the two jobs.
+          key: wasm
+
+      # Pinned, and `--locked`. The CLI must match the `wasm-bindgen` crate EXACTLY;
+      # `scripts/build-wasm.mjs` re-checks that pair and refuses if they have drifted.
+      - name: Install wasm-bindgen-cli
+        run: cargo install wasm-bindgen-cli --version 0.2.127 --locked
+
+      # No `dist/` stub here, unlike the `rust` job: `build.rs` returns early for a wasm
+      # TARGET, so `tauri_build` — which is what demands `frontendDist` — never runs.
+      - name: Build the wasm core
+        run: npm run build:wasm
+
+      - name: cargo clippy (wasm)
+        working-directory: src-tauri
+        run: cargo clippy --lib --locked --target wasm32-unknown-unknown -- -D warnings
+
+      - name: Build the web bundle
+        run: npm run web:build
+```
+
+**d.** Add it to `ci-ok`:
+
+```yaml
+    needs: [changes, frontend, rust, powershell, wasm]
+```
+
+```yaml
+          WASM: ${{ needs.wasm.result }}
+```
+
+```yaml
+          for result in "$FRONTEND" "$RUST" "$POWERSHELL" "$WASM"; do
+```
+
+and add `$WASM` to the `echo` line at the top of the step.
+
+> **`ci-ok` is the one protected check.** A job that is not in that loop is a job whose
+> failure the gate ignores — which is exactly what "a required check that never reports"
+> looks like from a PR. The loop and the `needs:` list must both name it.
+
+**e.** In `.github/CLAUDE.md`, add `wasm` to the router's job table and to any list of jobs
+`ci-ok` aggregates. **Re-count anything the file states as a number** — a prose-only edit
+routes to neither build job, so nothing goes red when that list rots.
+
+- [ ] **Step 5: Mutate to prove the gates bite**
+
+Three mutations, all local — no push needed.
+
+1. In `scripts/build-wasm.mjs`, change `PINNED` to `"0.2.126"`. Run `npm run build:wasm`.
+   Expected: it refuses **before** running cargo, naming both versions and the
+   `cargo install … --force` line. Revert.
+2. Temporarily rename `clang` out of PATH (`PATH=/usr/bin npm run build:wasm` on Linux, or
+   drop the LLVM entry on Windows). Expected: the clang message, again before cargo runs.
+   Revert.
+3. In `src-tauri/src/search.rs`, temporarily add `use tauri::Manager;` at the top of the
+   file. Run `npm run verify` — **green**, because the desktop build has `tauri`. Then run
+   `cd src-tauri && cargo clippy --lib --target wasm32-unknown-unknown -- -D warnings` —
+   **red**, `unresolved import tauri`. Revert.
+
+**Mutation 3 is the whole reason this job exists**, and it should be reported in the task's
+notes either way: it is the demonstration that a fully green `npm run verify` can ship a
+broken web target, which is the same shape as `cargo fmt` and `clippy` already being outside
+`verify`.
+
+- [ ] **Step 6: Commit**
+
+```bash
+npm run verify > /tmp/verify.log 2>&1; grep -E "Test Files|Tests |test result" /tmp/verify.log
+git add scripts/build-wasm.mjs vite.web.config.ts package.json package-lock.json .gitignore .github/
+git commit -m "chore(ci): build the wasm core, and gate it
+
+clang is now a permanent build requirement - sqlite-wasm-rs compiles SQLite's C amalgamation
+with cc targeting wasm32, and MSVC cannot emit wasm. wasm-bindgen-cli must match the crate
+exactly, and a mismatch is NOT a build error: it fails at run time inside the generated glue
+complaining about an import nobody wrote. So the version is pinned with = in Cargo.toml,
+pinned again in the build script, and the script refuses when the two disagree.
+
+The web bundle is a merge of the desktop config with three differences, so one index.html and
+one main.tsx serve both. Its publicDir is generated in full - the wasm module, its glue, and
+a copy of the favicon - which is what keeps 2 MB of wasm out of the portable exe on a machine
+where someone has run the wasm build.
+
+A fully green npm run verify can ship a broken web target: a `use tauri::` added to a module
+on the wasm side of lib.rs's map compiles on desktop and fails there. That is what this job
+catches, and it is in ci-ok's loop because a job outside it is a job whose failure the gate
+ignores."
+```
+
+---
+
+### Task 10: Drive it in a real browser, measure it, and write down what it cost
+
+**Files:**
+- Create: `docs/reference/web-target.md`
+- Modify: `docs/reference/data-and-sync.md` — the desktop baseline, re-measured
+- Modify: `CLAUDE.md` — the reference-doc table
+- Modify: `src-tauri/CLAUDE.md` — the module map's rule
+- Modify: `docs/superpowers/research/2026-08-27-wasm-core-spike.md` — one sentence, to past tense
+- Delete: `spike/` — 28 tracked files
+
+**Interfaces:**
+- Consumes: everything above.
+- Produces: numbers, and a document that holds them.
+
+> **Spec §9 fixes the method**: headless Chrome over CDP against the dev server. The spike's
+> `serve.mjs` + `drive.mjs` proved the shape, and this repo already owns the better tool —
+> `scripts/cdp.mjs` reads `CDP_PORT` from the environment, so it drives a browser on 9333
+> exactly as it drives the app's WebView2 on 9222.
+
+> **Traps that have each cost a session, and all of them apply here.** DevTools steals the
+> page target — `cdp.mjs` takes the first `type: page`, so put `location.href` in every
+> payload or drive by URL. Clicking and reading in one `eval` answers about the frame before
+> React re-rendered; split it in two. A cold pointer makes `click` a no-op that still prints
+> "clicked"; `hover --rest 200` first. Every binding inside an `eval` needs an IIFE — the
+> scope is shared across invocations and a top-level `const` outlives its command.
+
+> **Nothing in this task may be reported from a build that is not the one under test.** Put
+> `location.href` and the wasm module's byte size in the first payload and keep them in the
+> notes.
+
+- [ ] **Step 1: Start the pieces**
+
+Two shells. In the first:
+
+```powershell
+npm run build:wasm
+npm run web:dev
+```
+
+In the second, a headless browser on **9333** — not 9223, and not 9222, which is the app's:
+
+```powershell
+& "C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe" `
+  --headless=new --remote-debugging-port=9333 --disable-sync `
+  --user-data-dir="$env:TEMP\mtg-web-cdp" "http://localhost:5173"
+```
+
+`--disable-sync` is not optional: without it Edge opens a sync-promo tab that becomes the
+first `type: page` target and every probe answers about it.
+
+Then, in a third:
+
+```powershell
+$env:CDP_PORT = "9333"
+node scripts/cdp.mjs eval "(() => ({ href: location.href, root: document.getElementById('root')?.childElementCount }))()"
+```
+
+Expected: `href` is `http://localhost:5173/` and `root` is at least 1. If `root` is 0 the
+page rendered nothing — read the console (`node scripts/cdp.mjs console out.jsonl`) before
+anything else, because a wasm trap surfaces there and nowhere in the DOM.
+
+- [ ] **Step 2: Measure the first run**
+
+Press the first-run button and time the ingest from inside the page:
+
+```powershell
+node scripts/cdp.mjs hover "button" --rest 200
+node scripts/cdp.mjs text "Build it now"
+node scripts/cdp.mjs eval "(() => { globalThis.__t0 = performance.now(); return 'armed'; })()"
+```
+
+Poll until the app renders, then take the wall clock:
+
+```powershell
+node scripts/cdp.mjs eval "(() => ({ href: location.href, elapsed: Math.round(performance.now() - globalThis.__t0), body: document.body.innerText.slice(0, 120) }))()"
+```
+
+Record, in `docs/reference/web-target.md`:
+
+| Figure | Where it comes from |
+| --- | --- |
+| wall clock for the first run | the `elapsed` above |
+| rows inserted / skipped | the `corpus-done` message, read from `cdp.mjs console` |
+| resulting database size | `PRAGMA page_count * page_size`, through a routed `sync_status` follow-up or a temporary console log |
+| the wasm module's byte size | `ls -la web/public/wasm` |
+| the journal SQLite chose | the `opened` message's `journal` — **expected `delete`** |
+
+**Compare against the spike's 10.4 s desktop**, and say plainly that the spike wrote a
+**20-column subset** of the 43-column row this now writes, with `raw` absent there and present
+here. A slower number is the expected finding, not a regression — but it must be *named* as
+one rather than presented beside the spike's as though they measured the same thing.
+
+- [ ] **Step 3: Measure the two query shapes the spec asked for**
+
+Spec §8 sets the web budget at **no interaction over 250 ms at p95**, and names the collapsed
+browse as "the one number not yet taken in wasm" — 131.8 ms end-to-end on desktop today.
+
+```powershell
+node scripts/cdp.mjs eval "(async () => { const { core } = await import('/src/lib/core/index.ts'); const t = performance.now(); const r = await core.call('search_cards', { req: {} }); return { href: location.href, ms: Math.round(performance.now() - t), total: r.total }; })()"
+```
+
+and the facet pass, which rides the in-memory index rather than SQLite:
+
+```powershell
+node scripts/cdp.mjs eval "(async () => { const { core } = await import('/src/lib/core/index.ts'); const t = performance.now(); const f = await core.call('facet_cards', { req: {} }); return { href: location.href, ms: Math.round(performance.now() - t), ready: f.ready }; })()"
+```
+
+Take **five** of each and record the median and the worst, not one sample. Then re-run both
+with `{ req: { text: "dragon" } }`.
+
+> **`facets::compute` is 1.8 ms unfiltered on desktop and reads an in-memory Rust structure
+> of bitsets and ordinal arrays** — it never touches SQLite, so spec §8 predicts it ports as
+> ordinary Rust. If the browser figure is not in the same order of magnitude, that prediction
+> was wrong and it is the most interesting thing in this PR. Say so.
+
+- [ ] **Step 4: Drive the two-tab case, and find out which call fails**
+
+Open a second tab at the same URL and read both:
+
+```powershell
+node scripts/cdp.mjs eval "(() => { globalThis.open('http://localhost:5173/', '_blank'); return 'opened'; })()"
+```
+
+Then list the targets (`curl http://127.0.0.1:9333/json/list`) and drive the *second* one.
+
+Record two things:
+
+1. **What the reader sees.** The second document must show "MTG Grimoire is already open",
+   and the first must still work — run a `search_cards` in tab one afterwards and say so.
+2. **Which call actually failed.** The spike quoted the `NoModificationAllowedError` message
+   but did not isolate whether it comes from `install_opfs_pool` or from `open_pooled`.
+   `Opened::from_open_error` handles both by matching the error *name*, so the guard is
+   correct either way — but the answer belongs in the doc, because the next person to touch
+   that path will want it. Read it from `cdp.mjs console`.
+
+Then close the second tab, reload the first, and confirm it still opens: a guard that leaves
+the pool wedged after a refused second tab is worse than no guard.
+
+- [ ] **Step 5: Drive the combo feed, and assert the peak buffer**
+
+The one feed whose browser behaviour genuinely differs — `fetch` has already gunzipped it,
+and `feed::frame::Decoder` has to notice from the bytes.
+
+```powershell
+node scripts/cdp.mjs eval "(async () => { const w = new Worker('/src/workers/db.ts', { type: 'module' }); return 'not this way'; })()"
+```
+
+That is **not** how to do it — the Worker is already running and owns the connection. Instead,
+call `ingest_combos` through the existing Worker by adding a temporary `ToWorker` case, or
+drive it from a throwaway page. Whichever route is taken, record:
+
+- wall clock, against the spike's **12.6 s** desktop
+- variants seen / kept / skipped, against **111 148 / 105 516 / 5 632**
+- **`peakBuffer`**, against **2.01 MB**
+
+⚠️ **The peak buffer is the assertion that matters and a row count cannot replace it.** The
+spike's first framer found 63 elements in 610 MB and grew to 609.82 MB without erroring. If
+`peakBuffer` is anywhere near the document's own size, stop: the framer has desynchronised
+and the row counts are fiction whatever they say.
+
+If reaching `ingest_combos` needs more scaffolding than a temporary case, **say so in the doc
+and leave it unmeasured rather than half-measured** — an honest "not measured, here is why" is
+worth more than a number taken through a path the app does not have.
+
+- [ ] **Step 6: Re-measure the desktop baseline**
+
+Spec §8: *"Desktop must not regress. Every PR touching search, faceting or sync re-measures
+the table in `data-and-sync.md` and shows both columns, with the build named."* This PR
+touched the ingest (Task 4) and the index build (Task 3), so that is owed.
+
+Run the app the way `running-the-app` says, take the same measurements
+`docs/reference/data-and-sync.md` already records, and put the new column beside the old one
+with the date and **debug or release named** — the same measurement can differ by ~8×.
+
+- [ ] **Step 7: Write the reference doc, and prune the spike**
+
+Create `docs/reference/web-target.md` holding, in this order:
+
+1. **What the web target is** — one Worker, one connection, a rollback journal, no COOP/COEP.
+2. **The module map** — the two columns from this plan's preamble, and the sentence that four
+   of the exclusions are permanent and the rest are "not yet".
+3. **Every measurement from Steps 2–5**, with the machine, the browser version and the build
+   named, and the spike's figures beside them where they are comparable — with the 20-column
+   caveat stated each time.
+4. **The four differences from desktop a reader could notice**: no WAL; a search queues behind
+   an ingest and behind an index build because there is one connection; a second tab is
+   refused; and the `User-Agent` is the browser's rather than the app's, so this build is not
+   identified to Scryfall the way the desktop is.
+5. **What is not built yet** — the other 132 commands, the image cache, the price feeds
+   (and that **Mana Pool is unavailable on web at all**, per spec §5.3, because it sends no
+   `Access-Control-Allow-Origin`), the PWA shell, sync.
+6. **The toolchain** — `rustup target add wasm32-unknown-unknown`, clang, the pinned
+   `wasm-bindgen-cli`, and the three npm scripts.
+
+Add a row to the reference-doc table in the root `CLAUDE.md`:
+
+```markdown
+| [web-target.md](docs/reference/web-target.md) | The browser build — the module map, the single connection and what it costs, the measured first run, and the four ways web differs from desktop |
+```
+
+Add to `src-tauri/CLAUDE.md`, in whatever section governs modules:
+
+```markdown
+- **`src-tauri/src/lib.rs` is the module map, and the split in it is binding.** A module in
+  the "Every target" column must compile for `wasm32-unknown-unknown`, which means no
+  `tauri::`, no `tokio::fs`, no `std::thread`, and **no `SystemTime::now()` or
+  `Instant::now()` — both panic there**. `npm run verify` cannot see any of this; the `wasm`
+  CI job is what does. See [web-target.md](../docs/reference/web-target.md).
+```
+
+Finally, delete the spike:
+
+```bash
+git rm -r spike/
+```
+
+Its four probes are now shipped code — probe 1 as the manifest, probe 2 as `db::install_opfs_pool`,
+probe 3 as `web::glue::ingest_cards`, probe 4 as `feed::frame::Elements` (PR 1) and
+`combos::StreamRead`. In
+`docs/superpowers/research/2026-08-27-wasm-core-spike.md`, change *"Throwaway code lives on
+the `spike-wasm-core` branch under `spike/`"* to say that it **lived** there and was removed
+when this PR landed, naming where each probe went. The research doc's measurements stay
+exactly as they are — they are dated evidence, not a status.
+
+- [ ] **Step 8: Mutate the harness to prove the pass can fail**
+
+A measurement pass that cannot report a failure is a pass that will report success on a broken
+build. Two mutations.
+
+1. Point `BULK_DESCRIPTOR_URL` at `https://api.scryfall.com/bulk-data/does-not-exist`, reload,
+   and press the build button. Expected: the page shows the failure text under `role="alert"`
+   within seconds — **not** a spinner that never ends. Revert.
+2. Delete `web/public/wasm/mtg_grimoire_lib_bg.wasm` and reload. Expected: "The card database
+   would not open" with a message, not a blank page. Restore with `npm run build:wasm`.
+
+**Stop and report either one that hangs or blanks instead**, and fix it before the commit: a
+web build whose failure mode is a blank page is worse than one that does not build.
+
+- [ ] **Step 9: Commit**
+
+```bash
+cd src-tauri && cargo fmt && cargo clippy --all-targets -- -D warnings && cd ..
+npm run verify > /tmp/verify.log 2>&1; grep -E "Test Files|Tests |test result" /tmp/verify.log
+npm run build:wasm && npm run web:build
+git add docs/ CLAUDE.md src-tauri/CLAUDE.md
+git rm -r spike/
+git commit -m "docs(web): what the browser build costs, measured
+
+Every figure taken on the build named in the doc, driven over CDP against the real page. The
+spike's numbers sit beside them where they are comparable, each time with the caveat that the
+spike wrote a 20-column subset of the row this writes in full.
+
+Four differences a reader could notice, written down rather than discovered: no WAL, so
+durability differs; one connection, so a search queues behind an ingest and behind an index
+build; a second tab is refused with a sentence; and the User-Agent is the browser's, because
+it is a forbidden header for fetch - this build is not identified to Scryfall the way the
+desktop is.
+
+spike/ is deleted. Its four probes are shipped code now: probe1 the manifest, probe2
+db::install_opfs_pool, probe3 web::glue::ingest_cards, probe4 feed::frame::Elements and
+combos::StreamRead. The research doc keeps every measurement - those are dated evidence
+rather than a status - and says where each probe went."
+```
+
+---
+
+## Self-Review
+
+**Spec coverage.** §5.1 the manifest split and SQLite in the browser (Task 2), §5.1's "no WAL,
+and anything assuming it must be gated" (Task 3), §5.2 one connection and the one-tab guard
+(Tasks 2, 3, 5, 8), §5.3's on-device corpus and the measured `compressed_size` prompt
+(Tasks 6, 8), §5.4's "never gate on `storage.estimate()`" (Task 8), §4's Boundary B for the
+one piece the browser actually needs (Task 4), §3's second `Core` implementation (Task 7), §8's
+two unmeasured query shapes and the desktop-baseline obligation (Task 10), §9's verification
+method and the clang requirement (Tasks 9, 10).
+
+**Deliberately not covered**, each with its reason in the preamble: the other 132 commands and
+their modules; the image cache (Cache Storage is a rewrite, not a port); `scryfall::Client`'s
+pacing, penalty and resumable download; the PWA shell (**PR 5**); sync (**Phase 3**); mobile
+layout (**Phase 5**); COOP/COEP (measured unnecessary and must not be added).
+
+**Placeholders.** None. Every step carries the code it needs; no step says "similar to Task N".
+The one place a range is given rather than a value is Task 10's expected timings, where the
+value is the thing being measured.
+
+**Every symbol was checked against the real file.** The ones that were wrong before checking,
+and would have cost an execution session:
+
+- **`ingest_stream` takes a synchronous `Iterator`.** The spec's §4.3 reads as though a stream
+  is a stream; it is not, and a browser cannot produce a blocking one. Task 4 exists entirely
+  because of this check.
+- **`index::lifecycle::build_now` opens a connection of its own**, at
+  `data_dir.join("mtg.db")`, and its doc explains at length why that is right. On the OPFS
+  pool it is a third handle and fails. Found by reading the function, not the spec. Task 3.
+- **`db::lock_for` calls `Instant::now()` before the `try_lock`**, so it panics on wasm even
+  with `Duration::ZERO` — which its own doc describes as the no-sleep path. Task 3.
+- **`CardIndex` has no `len()`.** `capacity` is the doc count and `set_codes` the set
+  vocabulary; both are public fields. Task 3's test asserts on those.
+- **`IngestError::Empty` is a struct variant**, `Empty { skipped: u64 }`, not a unit one.
+- **`combos::Ingested`'s fields are `combos`, `cards`, `skipped`, `seen`** — checked because
+  Task 6 serialises all four.
+- **`combos::store` takes `fetched_at: i64` as a parameter**, which is what lets the wasm
+  caller avoid `SystemTime::now()` — a call that **panics** on `wasm32-unknown-unknown`.
+- **`crate::index::fixtures::state_with_seeded_cards(name)` is real**, is `pub(crate)`, returns
+  `Arc<AppState>`, seeds four printings into a **file** database, and its own doc requires the
+  name to be unique **crate-wide**. Tasks 3 and 5 use it and both name their directory.
+- **`tags::normalize` has exactly one code caller outside `tags/`** — `schema.rs:876` — which
+  is what makes Task 1 six lines rather than a module port.
+- **`facet_cards`, not `facets`**, is the command name (`index/facets.rs:857`).
+- **`build.rs` cannot ask `cfg!(target_family)`** — it compiles for the host. `TARGET` is the
+  question, and `tauri_build` resolving plugin ACLs through the dependency graph is why it
+  matters. Task 2.
+- **`#[tauri::command(async)]` exists** in five files beside the plain form, so any sweep must
+  match the prefix rather than the exact string.
+
+**Every task can go red, and every red was checked for reachability.** The order trap Phase 1
+walked into — a module declaration after the first failing-test step, producing
+`running 0 tests … ok` and exit 0 — is avoided in Tasks 1 and 5 by declaring the module in the
+same step as the test, and each of those steps says so. Tasks 2, 6 and 9 have build-shaped reds
+rather than test-shaped ones, and each names the exact error text expected. Task 6 Step 4
+records the *opposite* result honestly: deleting a `#[wasm_bindgen]` attribute compiles clean,
+which no compiler can catch and which is precisely why Task 10 exists.
+
+**Every task has a mutation step that breaks its subject and asserts red**, with STOP-and-report
+if it survives. Twenty-two mutations across ten tasks. The three that matter most:
+
+- Task 2's `default-features = false`, which reproduces the spike's misleading
+  `unresolved import libsqlite3_sys` on purpose.
+- Task 4's deleted second `flush_full_batches`, which reproduces a defect that has **already
+  shipped once** in this repo.
+- Task 9's `use tauri::Manager;` added to `search.rs`, which is green under a full
+  `npm run verify` and red only in the new CI job — the demonstration that this job is
+  load-bearing rather than ceremonial.
+
+**Type consistency across tasks.** `StreamIngest::begin/push/finish` is defined in Task 4 and
+called with those exact signatures in Task 6. `StreamRead::new/push/finish/peak_buffer` the
+same. `wire::{Request, Response, Opened}` is defined in Task 5, serialised in Task 6, and
+mirrored by hand in `src/workers/protocol.ts` in Task 7 — with the `kind` strings asserted on
+the Rust side by Task 5's tests and on the TypeScript side by Task 7's. `route::call(&AppState,
+&str, &Value)` is defined and tested in Task 5 and called once, in Task 6. `Core` is not
+changed at all; `BrowserCore` extends it with the two methods that are not command calls, and
+Task 8 is the only consumer of those.
+
+**What the spec says that the shipped code contradicts** — all four are in the preamble and
+each is handled by a task rather than a note: the synchronous chunk iterator, the second
+connection in `AppState`, `Instant::now()` in the lock helper, and `schema`'s dependency on
+`tags`. A fifth, found while writing Task 3: `build_now`'s own read-only connection. None of
+these is a fault in PR 1 or PR 2 — every one of them is correct on the target those PRs were
+written for.
