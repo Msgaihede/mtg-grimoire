@@ -275,6 +275,48 @@ it("draws the window's own caption, because Windows no longer does", () => {
 });
 
 /**
+ * And the other direction, which is the half a suite running under jsdom cannot see by
+ * accident: on Android the caption must not be drawn at all.
+ *
+ * Three of its four buttons are commands tauri declares `#[cfg(desktop)]` and does not ship
+ * there — `minimize`, `toggle_maximize` and `start_dragging` — and `capabilities/mobile.json`
+ * grants none of the four. The fourth would close the app from a control no phone user is
+ * looking for, on a platform where the OS already owns the frame.
+ *
+ * The user agent is redefined rather than a prop passed, because `isAndroid()` reads
+ * `navigator.userAgent` by default and the default is the thing worth testing. `configurable`
+ * so the restore below actually takes.
+ */
+it("draws no window caption on Android", () => {
+  const real = Object.getOwnPropertyDescriptor(
+    Object.getPrototypeOf(navigator),
+    "userAgent",
+  );
+  Object.defineProperty(navigator, "userAgent", {
+    value:
+      "Mozilla/5.0 (Linux; Android 16; CPH2581) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151 Mobile Safari/537.36",
+    configurable: true,
+  });
+  try {
+    render(
+      <AppShell update={noUpdate}>
+        <div>content</div>
+      </AppShell>,
+    );
+
+    expect(screen.queryByRole("button", { name: /minimi[sz]e/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /maximi[sz]e/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^close$/i })).not.toBeInTheDocument();
+    // The shell itself still mounted, so this is the caption being absent rather than the
+    // render having thrown.
+    expect(screen.getByText("content")).toBeInTheDocument();
+  } finally {
+    delete (navigator as unknown as Record<string, unknown>).userAgent;
+    if (real) Object.defineProperty(Object.getPrototypeOf(navigator), "userAgent", real);
+  }
+});
+
+/**
  * **`main` is the app's one scroller, and `relative` on it is a whole second scrollbar.**
  *
  * `overflow` clips a descendant only when the scroller sits between it and that descendant's
