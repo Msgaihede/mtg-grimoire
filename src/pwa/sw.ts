@@ -19,6 +19,19 @@
  * results with and without COOP/COEP, so cross-origin isolation is not required and re-attaching
  * it on a cached navigation would break every cross-origin subresource for nothing.
  */
+import {
+  IMAGE_CACHE,
+  LEDGER_KEY,
+  admit,
+  evictions,
+  forget,
+  measuredSize,
+  parseLedger,
+  serializeLedger,
+  touch,
+  withCap,
+  type Ledger,
+} from "./imageLedger";
 import { routeFor, shellCacheName, staleShellCaches } from "./swCore";
 
 const sw = self as unknown as ServiceWorkerGlobalScope;
@@ -77,16 +90,73 @@ sw.addEventListener("fetch", (event) => {
     return;
   }
 
-  // route === "image" — filled in by the image-cache task. Until then the image route falls
-  // through to the network exactly as a passthrough would, which is the shipped desktop
-  // behaviour.
+  event.respondWith(image(event.request));
 });
 
+/** Read the ledger out of the image cache. Every rule about it is in `imageLedger.ts`. */
+async function readLedger(cache: Cache): Promise<Ledger> {
+  const stored = await cache.match(LEDGER_KEY);
+  return parseLedger(stored ? await stored.text() : null);
+}
+
+/** Write it back. The one `Response` this file constructs, and the reason the rest is data. */
+async function writeLedger(cache: Cache, ledger: Ledger): Promise<void> {
+  await cache.put(LEDGER_KEY, new Response(serializeLedger(ledger)));
+}
+
+/** Delete what the ledger says to, and take those bytes off the count in the same step. */
+async function sweep(cache: Cache, ledger: Ledger): Promise<Ledger> {
+  const gone = evictions(ledger);
+  await Promise.all(gone.map((url) => cache.delete(url)));
+  return forget(ledger, gone);
+}
+
+/**
+ * Card art: cache first, then the network, then an eviction pass.
+ *
+ * A miss costs one fetch and one ledger write; a hit costs a ledger write of one timestamp,
+ * which is what makes the eviction order about *use* rather than about arrival. A failure
+ * anywhere here answers with the network's response rather than throwing — a broken picture on
+ * one tile beats a rejected `respondWith`, which is a broken picture on all of them.
+ */
+async function image(request: Request): Promise<Response> {
+  const cache = await caches.open(IMAGE_CACHE);
+  const hit = await cache.match(request);
+  if (hit) {
+    await writeLedger(cache, touch(await readLedger(cache), request.url, Date.now()));
+    return hit;
+  }
+
+  const response = await fetch(request);
+  // An `<img>` fetch is `no-cors`, so a perfectly good response is opaque: `ok` is false and
+  // `status` is 0. Only a real HTTP failure is refused here, which is a `status` above zero.
+  if (response.status >= 400) return response;
+
+  const copy = response.clone();
+  const bytes = measuredSize((await copy.clone().blob()).size);
+  await cache.put(request, copy);
+  const ledger = admit(await readLedger(cache), request.url, bytes, Date.now());
+  await writeLedger(cache, await sweep(cache, ledger));
+  return response;
+}
+
 sw.addEventListener("message", (event) => {
-  const data = event.data as { type?: string } | null;
+  const data = event.data as { type?: string; bytes?: number } | null;
   if (data?.type === "SKIP_WAITING") {
     // The reader pressed the bar. This is the only call to it in the file.
     void sw.skipWaiting();
+    return;
+  }
+  if (data?.type === "SET_IMAGE_CAP") {
+    // The eviction pass runs immediately, so a reader who lowers the cap sees the space come
+    // back rather than waiting for the next card they happen to look at.
+    event.waitUntil(
+      (async () => {
+        const cache = await caches.open(IMAGE_CACHE);
+        const next = withCap(await readLedger(cache), Number(data.bytes));
+        await writeLedger(cache, await sweep(cache, next));
+      })(),
+    );
     return;
   }
   if (data?.type === "VERSION") {

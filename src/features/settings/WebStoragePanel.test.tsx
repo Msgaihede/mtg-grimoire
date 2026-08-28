@@ -1,10 +1,8 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import {
-  WebStoragePanel,
-  type WebStorageView,
-} from "@/features/settings/WebStoragePanel";
+import { WebStoragePanel, type WebStorageView } from "@/features/settings/WebStoragePanel";
+import { DEFAULT_CAP_BYTES, MAX_CAP_BYTES } from "@/pwa/imageLedger";
 
 function view(over: Partial<WebStorageView> = {}): WebStorageView {
   return {
@@ -13,6 +11,9 @@ function view(over: Partial<WebStorageView> = {}): WebStorageView {
     persistence: null,
     persisted: null,
     estimate: null,
+    imageCap: DEFAULT_CAP_BYTES,
+    imageBytes: null,
+    onImageCap: vi.fn(),
     ...over,
   };
 }
@@ -90,5 +91,38 @@ describe("the storage row", () => {
   it("says the browser reported nothing rather than printing a zero", () => {
     render(<WebStoragePanel storage={view()} />);
     expect(screen.getByText(/has not reported an estimate/)).toBeInTheDocument();
+  });
+});
+
+/**
+ * Spec §5.4: 256 MB by default, reader-adjustable to 1 GB. From the live cache — 519 MB over
+ * 7 929 files — that is ~3 900 cards against ~15 000.
+ */
+describe("the image cache row", () => {
+  it("says nothing has been cached rather than printing a zero", () => {
+    render(<WebStoragePanel storage={view()} />);
+    expect(screen.getByText(/Nothing has been cached yet/)).toBeInTheDocument();
+  });
+
+  it("prints what the ledger says is there", () => {
+    render(<WebStoragePanel storage={view({ imageBytes: 190_000_000 })} />);
+    expect(screen.getByText(/190\.0 MB cached/)).toBeInTheDocument();
+  });
+
+  it("opens on the cap in force", () => {
+    render(<WebStoragePanel storage={view({ imageCap: MAX_CAP_BYTES })} />);
+    expect(
+      screen.getByRole("button", { name: /Card pictures kept on this device/ }),
+    ).toHaveTextContent("1 GB");
+  });
+
+  it("hands the new ceiling back in bytes", async () => {
+    const onImageCap = vi.fn();
+    render(<WebStoragePanel storage={view({ imageCap: DEFAULT_CAP_BYTES, onImageCap })} />);
+    await userEvent.click(
+      screen.getByRole("button", { name: /Card pictures kept on this device/ }),
+    );
+    await userEvent.click(screen.getByRole("option", { name: /1 GB/ }));
+    expect(onImageCap).toHaveBeenCalledWith(MAX_CAP_BYTES);
   });
 });

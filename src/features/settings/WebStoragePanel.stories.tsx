@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, within } from "storybook/test";
+import { DEFAULT_CAP_BYTES, MAX_CAP_BYTES } from "@/pwa/imageLedger";
 import { WebStoragePanel, type WebStorageView } from "./WebStoragePanel";
 
 function view(over: Partial<WebStorageView> = {}): WebStorageView {
@@ -9,6 +10,9 @@ function view(over: Partial<WebStorageView> = {}): WebStorageView {
     persistence: null,
     persisted: null,
     estimate: null,
+    imageCap: DEFAULT_CAP_BYTES,
+    imageBytes: null,
+    onImageCap: fn(),
     ...over,
   };
 }
@@ -106,5 +110,34 @@ export const TheEstimateIsWrong: Story = {
     const canvas = within(canvasElement);
     await expect(canvas.getByText(/estimates 7\.0 MB in use/)).toBeInTheDocument();
     await expect(canvas.getByRole("button", { name: /Install app/ })).toBeEnabled();
+  },
+};
+
+/**
+ * The one row on this panel whose number is a measurement rather than a guess: the ledger's
+ * own running total, kept by the service worker as it caches each file. That is what makes it
+ * the row with a control beside it — the estimate above gates nothing and this can be acted on.
+ *
+ * Desktop is uncapped and draws no such row. The difference is the filesystem's: a folder on
+ * disk is the reader's to manage and Cache Storage is not.
+ */
+export const ImagesNearTheCap: Story = {
+  args: {
+    storage: view({
+      install: "installed",
+      persisted: true,
+      imageCap: DEFAULT_CAP_BYTES,
+      imageBytes: 251_000_000,
+      estimate: { usage: 790_000_000, quota: 10_887_000_000 },
+    }),
+  },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.getByText(/251\.0 MB cached/)).toBeInTheDocument();
+    await userEvent.click(
+      canvas.getByRole("button", { name: /Card pictures kept on this device/ }),
+    );
+    await userEvent.click(within(document.body).getByRole("option", { name: /1 GB/ }));
+    await expect(args.storage.onImageCap).toHaveBeenCalledWith(MAX_CAP_BYTES);
   },
 };

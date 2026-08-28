@@ -1,5 +1,14 @@
 import { useCallback, useEffect, useState, type JSX } from "react";
 import { Download } from "lucide-react";
+import { Dropdown } from "@/components/Dropdown/Dropdown";
+import type { DropdownOption } from "@/components/Dropdown/types";
+import {
+  DEFAULT_CAP_BYTES,
+  IMAGE_CACHE,
+  LEDGER_KEY,
+  MAX_CAP_BYTES,
+  parseLedger,
+} from "@/pwa/imageLedger";
 import { installState, promptInstall, type InstallState } from "@/pwa/install";
 import { readPersistence, type PersistenceRecord } from "@/pwa/persistence";
 import { isWebTarget } from "@/pwa/target";
@@ -26,7 +35,25 @@ export interface WebStorageView {
   persisted: boolean | null;
   /** `navigator.storage.estimate()`, or `null`. **Printed and nothing else.** */
   estimate: StorageEstimateView | null;
+  /** The image cache's ceiling, in bytes. One of {@link CAP_OPTIONS}. */
+  imageCap: number;
+  /** What the ledger says is in the image cache, or `null` when it has not been read. */
+  imageBytes: number | null;
+  /** Move the ceiling. The worker evicts down to it immediately. */
+  onImageCap: (bytes: number) => void;
 }
+
+/**
+ * The three ceilings a reader is offered, from spec §5.4's "256 MB, reader-adjustable to 1 GB".
+ *
+ * The middle rung is this file's own: two options is a switch rather than a setting, and the
+ * gap from 3 900 cards to 15 000 is wide enough that somebody wants to stand in it.
+ */
+export const CAP_OPTIONS: DropdownOption[] = [
+  { value: String(DEFAULT_CAP_BYTES), label: "256 MB (about 3,900 cards)" },
+  { value: String(512 * 1_000_000), label: "512 MB (about 7,800 cards)" },
+  { value: String(MAX_CAP_BYTES), label: "1 GB (about 15,000 cards)" },
+];
 
 /**
  * The three browser facts the panel shows, gathered in one place.
@@ -40,6 +67,8 @@ export function useWebStorage(): WebStorageView {
   const [install, setInstall] = useState<InstallState>(installState);
   const [persisted, setPersisted] = useState<boolean | null>(null);
   const [estimate, setEstimate] = useState<StorageEstimateView | null>(null);
+  const [imageCap, setImageCap] = useState(DEFAULT_CAP_BYTES);
+  const [imageBytes, setImageBytes] = useState<number | null>(null);
 
   useEffect(() => {
     if (!isWebTarget()) return;
@@ -55,6 +84,23 @@ export function useWebStorage(): WebStorageView {
     void storage?.persisted?.().then((p) => live && setPersisted(p));
     void storage?.estimate?.().then((e) => live && setEstimate(e));
 
+    // The ledger is the only thing that knows what is in the image cache; the worker keeps it
+    // and this reads it. A cache that has never been opened parses to an empty ledger at the
+    // default cap, which is the right answer rather than a failure.
+    void caches
+      .open(IMAGE_CACHE)
+      .then((cache) => cache.match(LEDGER_KEY))
+      .then(async (stored) => parseLedger(stored ? await stored.text() : null))
+      .then((ledger) => {
+        if (!live) return;
+        setImageCap(ledger.cap);
+        setImageBytes(ledger.bytes);
+      })
+      .catch(() => {
+        // No Cache Storage at all (a private window in some browsers). The row shows the
+        // default and the picker still works — the worker is what enforces it.
+      });
+
     return () => {
       live = false;
       window.removeEventListener("beforeinstallprompt", sync);
@@ -66,12 +112,22 @@ export function useWebStorage(): WebStorageView {
     void promptInstall().then(() => setInstall(installState()));
   }, []);
 
+  const onImageCap = useCallback((bytes: number) => {
+    setImageCap(bytes);
+    // The worker is what enforces it, and it is the only thing that can: the page has no
+    // business deleting entries out from under a `fetch` handler that is reading the ledger.
+    navigator.serviceWorker?.controller?.postMessage({ type: "SET_IMAGE_CAP", bytes });
+  }, []);
+
   return {
     install,
     onInstall,
     persistence: isWebTarget() ? readPersistence(localStorage) : null,
     persisted,
     estimate,
+    imageCap,
+    imageBytes,
+    onImageCap,
   };
 }
 
@@ -92,6 +148,7 @@ export function useWebStorage(): WebStorageView {
  */
 export function WebStoragePanel({ storage }: { storage: WebStorageView }): JSX.Element {
   const { install, onInstall, persistence, persisted, estimate } = storage;
+  const { imageCap, imageBytes, onImageCap } = storage;
 
   return (
     <SettingsSection id="web-storage" title="This browser">
@@ -127,6 +184,31 @@ export function WebStoragePanel({ storage }: { storage: WebStorageView }): JSX.E
             : `The browser estimates ${formatBytes(estimate.usage)} in use.`}{" "}
           Browsers report this loosely; it is not a measurement of your database.
         </p>
+      </div>
+
+      {/* **The one number on this panel that is a measurement rather than a guess.** It is the
+          ledger's own running total, kept by the service worker as it caches each file — so
+          unlike the estimate above it can be acted on, and it is the row that has a control
+          beside it. Desktop is uncapped and has no row of its own; that difference is the
+          filesystem's. */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0 space-y-1">
+          <label htmlFor="image-cap" className="block text-sm text-text">
+            Card pictures kept on this device
+          </label>
+          <p className="text-sm text-dim">
+            {imageBytes === null
+              ? "Nothing has been cached yet."
+              : `${formatBytes(imageBytes)} cached. The oldest are removed first when the limit is reached.`}
+          </p>
+        </div>
+        <Dropdown
+          id="image-cap"
+          label="Card pictures kept on this device"
+          value={String(imageCap)}
+          onChange={(value) => onImageCap(Number(value))}
+          options={CAP_OPTIONS}
+        />
       </div>
     </SettingsSection>
   );
