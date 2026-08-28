@@ -292,9 +292,10 @@ pub const LEGACY_SINGLE_FILE_VERSION: i64 = 26;
 /// `user.db`'s version, continuing the number line the single file was on.
 ///
 /// 27 is the rung that *is* the split: a database carrying it has had its corpus taken out.
-/// The user's ladder can never restart, because its rungs describe rows nothing else can
-/// produce.
-pub const USER_SCHEMA_VERSION: i64 = 27;
+/// 28 is the first rung above it — pairing's three tables, spec §7.5 — and it is the rung
+/// that turned [`migrate_user`] from a version check into a ladder. The user's ladder can
+/// never restart, because its rungs describe rows nothing else can produce.
+pub const USER_SCHEMA_VERSION: i64 = 28;
 
 /// `corpus.db`'s version, on a number line of its own.
 ///
@@ -348,6 +349,14 @@ pub const TABLES: &[(&str, Side)] = &[
     // A decision a person made about a tag. `WITHOUT ROWID`, so the update hook cannot see it
     // — see `crate::mirror::watch::install_hook`.
     ("muted_tags", Side::User),
+    // Pairing's three (user schema v28). Per-device secrets: this device's X25519 keypair,
+    // the group key, and the roster. Nothing outside this app can produce any of them again
+    // — losing them is losing the pairing — and **they must never themselves sync**, which
+    // is a different question this list does not answer. `mirror::watch::surface_of` answers
+    // that one, with `None`.
+    ("sync_devices", Side::User),
+    ("sync_group", Side::User),
+    ("sync_identity", Side::User),
     ("wishlist_entries", Side::User),
     ("wishlist_folders", Side::User),
     // ---- rebuildable ----
@@ -3165,7 +3174,7 @@ const COMBO_INDEXES_SQL: &str = "
 /// Public because `VACUUM` needs it. Anything that renumbers `cards`' rowids leaves this
 /// index pointing at the wrong rows, and the failure is silent — see
 /// [`crate::maintenance::convert_to_incremental`], which calls this unconditionally.
-/// The fifteen user tables and their twenty-three indexes, at [`USER_SCHEMA_VERSION`]'s
+/// The eighteen user tables and their twenty-three indexes, at [`USER_SCHEMA_VERSION`]'s
 /// shape, with `{schema}` where the file goes.
 ///
 /// **Copied verbatim out of a migrated database's own `sqlite_master`, not retyped from the
@@ -3462,6 +3471,52 @@ CREATE TABLE {schema}.collection_folders (
                  CHECK ((kind = 'deck') = (deck_id IS NOT NULL))
              );
 
+CREATE TABLE {schema}.sync_identity (
+                 -- One row, forever. A second identity on one device is the bug where sync
+                 -- silently forks, so the database refuses it rather than the code
+                 -- remembering to. `id = 1` is the constant, not an autoincrement.
+                 id INTEGER PRIMARY KEY CHECK (id = 1),
+                 -- 16 random bytes as lowercase hex. The deterministic tiebreak in the
+                 -- hybrid logical clock (spec 7.3) is an ordering over these, so it has to
+                 -- be an opaque fixed-width string and never a name a reader can change.
+                 device_id TEXT NOT NULL,
+                 -- X25519, 32 bytes each, stored raw. There is no OS keystore for a portable
+                 -- exe a reader copies onto a stick, so copying the data folder copies the
+                 -- identity - a property of the app rather than a hole in this table.
+                 secret_key BLOB NOT NULL,
+                 public_key BLOB NOT NULL,
+                 -- What the other devices call this one, and the only field here a reader
+                 -- edits.
+                 name TEXT NOT NULL,
+                 created_at INTEGER NOT NULL
+             );
+
+CREATE TABLE {schema}.sync_group (
+                 id INTEGER PRIMARY KEY CHECK (id = 1),
+                 -- 16 random bytes as hex, minted by whichever device paired first. Stable
+                 -- across every key rotation, which is exactly why it is not derived from a
+                 -- key: revocation replaces the key and must not replace the group.
+                 group_id TEXT NOT NULL,
+                 -- Bumped by every revocation. A device holding an older epoch cannot read
+                 -- anything written after the rotation, which is the whole of spec 7.6.
+                 epoch INTEGER NOT NULL DEFAULT 0,
+                 -- 32 bytes. Never leaves the paired devices.
+                 group_key BLOB NOT NULL,
+                 joined_at INTEGER NOT NULL
+             );
+
+CREATE TABLE {schema}.sync_devices (
+                 device_id TEXT PRIMARY KEY,
+                 public_key BLOB NOT NULL,
+                 name TEXT NOT NULL,
+                 added_at INTEGER NOT NULL,
+                 -- NULL is the normal state. A stamp here means this device was removed: the
+                 -- row is kept rather than deleted so the roster can still say who was taken
+                 -- off and when, and so a rotation can be explained rather than merely
+                 -- happening.
+                 revoked_at INTEGER
+             ) WITHOUT ROWID;
+
 CREATE UNIQUE INDEX {schema}.idx_collection_grain ON collection_entries (
                  card_id, finish, condition, lang, altered, signed, proxy, misprint,
                  coalesce(serial_number, ''), coalesce(grading, ''), coalesce(folder_id, 0)
@@ -3526,7 +3581,7 @@ CREATE INDEX {schema}.idx_collection_folder
                  ON collection_entries (folder_id);
 "#;
 
-/// Create the fifteen user tables and their indexes in `schema`, at
+/// Create the eighteen user tables and their indexes in `schema`, at
 /// [`USER_SCHEMA_VERSION`]'s shape.
 ///
 /// **One function, two callers, and that is deliberate**: [`crate::split::extract_user_file`]
@@ -3988,12 +4043,19 @@ pub fn prepare_database(conn: &Connection) -> rusqlite::Result<()> {
 
 /// Bring `main` — the reader's own file — to [`USER_SCHEMA_VERSION`].
 ///
-/// **There is nothing to do yet and that is the honest state of it.** Every user file reaches
-/// this already at 27, because [`crate::split::convert`] is what makes one and it stamps that
-/// version; the first rung above 27 goes here, and it may never restart or give up, because
-/// its rows exist nowhere else.
+/// **It is a ladder now.** It was a version check and nothing else until v28, because every
+/// user file reached it already at 27: [`crate::split::convert`] is what makes one and it
+/// stamps head. A rung here may never restart or give up, because its rows exist nowhere else.
 ///
-/// What it does do is refuse a file from the future. `PRAGMA user_version` unqualified means
+/// **A rung here goes at the bottom and takes the next free number**, exactly as
+/// [`migrate_single_file`]'s did — and the number line is the same one, continued, so 28 is the
+/// rung after the split rather than a fresh start. **Every rung is also owed a line in
+/// [`USER_SCHEMA_SQL`]**, which is what a *converted* file is built from and never climbs to
+/// get; `the_user_schema_is_byte_identical_to_what_the_ladder_builds` is the fence that turns
+/// one written in only one of the two places into a red build rather than into a fresh install
+/// that quietly disagrees with every upgraded one.
+///
+/// What it also does is refuse a file from the future. `PRAGMA user_version` unqualified means
 /// `main`, which is one of the three smaller reasons the *user* file is the one
 /// `Connection::open` names: the version that gates compatibility is the one an unqualified
 /// read returns.
@@ -4007,6 +4069,74 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
                  {USER_SCHEMA_VERSION}. It is from a newer version of MTG Grimoire."
             )),
         ));
+    }
+
+    if v < 28 {
+        let tx = conn.unchecked_transaction()?;
+        // **Pairing, and the three things a paired device has to remember**: who it is, which
+        // group it is in, and who else is in that group. Spec §7.5.
+        //
+        // Three tables rather than three `app_meta` rows, and the difference is what a bad
+        // value costs. Every key in `app_meta` is a *preference* — `update.rs`'s `get_app_meta`
+        // swallows a read error and every caller falls back on a default, which is right for a
+        // zoom level and catastrophic for a secret key: a corrupt row would read as "not
+        // paired" and the app would cheerfully offer to pair again while the reader's other
+        // device kept encrypting to a key this one had just forgotten.
+        //
+        // **Spelled out literally**, [`CARDS_COLUMNS`]' rule and the one every rung from v4 on
+        // repeats: a migration step is history the day it ships, and a step that interpolated
+        // a constant would silently rewrite what a *fresh* install created yesterday. The
+        // twin of this DDL in [`USER_SCHEMA_SQL`] is a second literal for the same reason, and
+        // the two are held together by a test rather than by a substitution.
+        tx.execute_batch(
+            "CREATE TABLE IF NOT EXISTS sync_identity (
+                 -- One row, forever. A second identity on one device is the bug where sync
+                 -- silently forks, so the database refuses it rather than the code
+                 -- remembering to. `id = 1` is the constant, not an autoincrement.
+                 id INTEGER PRIMARY KEY CHECK (id = 1),
+                 -- 16 random bytes as lowercase hex. The deterministic tiebreak in the
+                 -- hybrid logical clock (spec 7.3) is an ordering over these, so it has to
+                 -- be an opaque fixed-width string and never a name a reader can change.
+                 device_id TEXT NOT NULL,
+                 -- X25519, 32 bytes each, stored raw. There is no OS keystore for a portable
+                 -- exe a reader copies onto a stick, so copying the data folder copies the
+                 -- identity - a property of the app rather than a hole in this table.
+                 secret_key BLOB NOT NULL,
+                 public_key BLOB NOT NULL,
+                 -- What the other devices call this one, and the only field here a reader
+                 -- edits.
+                 name TEXT NOT NULL,
+                 created_at INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS sync_group (
+                 id INTEGER PRIMARY KEY CHECK (id = 1),
+                 -- 16 random bytes as hex, minted by whichever device paired first. Stable
+                 -- across every key rotation, which is exactly why it is not derived from a
+                 -- key: revocation replaces the key and must not replace the group.
+                 group_id TEXT NOT NULL,
+                 -- Bumped by every revocation. A device holding an older epoch cannot read
+                 -- anything written after the rotation, which is the whole of spec 7.6.
+                 epoch INTEGER NOT NULL DEFAULT 0,
+                 -- 32 bytes. Never leaves the paired devices.
+                 group_key BLOB NOT NULL,
+                 joined_at INTEGER NOT NULL
+             );
+             CREATE TABLE IF NOT EXISTS sync_devices (
+                 device_id TEXT PRIMARY KEY,
+                 public_key BLOB NOT NULL,
+                 name TEXT NOT NULL,
+                 added_at INTEGER NOT NULL,
+                 -- NULL is the normal state. A stamp here means this device was removed: the
+                 -- row is kept rather than deleted so the roster can still say who was taken
+                 -- off and when, and so a rotation can be explained rather than merely
+                 -- happening.
+                 revoked_at INTEGER
+             ) WITHOUT ROWID;",
+        )?;
+        // Literal `28`, for the reason every step before it writes its own: this step is what
+        // *makes* a database version 28.
+        tx.execute_batch("PRAGMA main.user_version = 28;")?;
+        tx.commit()?;
     }
     Ok(())
 }
@@ -4639,8 +4769,8 @@ pub(crate) mod tests {
             )
             .unwrap();
         assert_eq!(
-            stray, 15,
-            "the user file holds the fifteen and nothing else"
+            stray, 18,
+            "the user file holds the eighteen and nothing else"
         );
     }
 
@@ -4744,6 +4874,14 @@ pub(crate) mod tests {
     /// dropped in transcription, a `CHECK` reflowed, an `ALTER TABLE` tail tidied into the
     /// column list — none of those would fail a query, and every one of them is a
     /// database that quietly disagrees with the one every other install has.
+    ///
+    /// **"The ladder" is both of them since v28**, and that is what the `migrate_user` call
+    /// below is. The single-file ladder stops at [`LEGACY_SINGLE_FILE_VERSION`] and every user
+    /// rung above it lives in [`migrate_user`], so the shape an *upgraded* file ends at is the
+    /// two walked in order — while the shape a *converted* or fresh one gets is
+    /// [`USER_SCHEMA_SQL`] alone, which never climbs anything. Those are the two populations
+    /// this compares, and a rung written into only one of the two places is exactly what it
+    /// exists to catch.
     #[test]
     fn the_user_schema_is_byte_identical_to_what_the_ladder_builds() {
         let dump = |conn: &Connection| -> Vec<(String, String, String)> {
@@ -4770,6 +4908,7 @@ pub(crate) mod tests {
 
         let ladder = Connection::open_in_memory().unwrap();
         migrate_single_file(&ladder).unwrap();
+        migrate_user(&ladder).unwrap();
         let want = dump(&ladder);
 
         let head = Connection::open_in_memory().unwrap();
@@ -4778,9 +4917,10 @@ pub(crate) mod tests {
 
         assert_eq!(
             want.len(),
-            40,
-            "fifteen tables, twenty-three indexes, and the two `sqlite_autoindex` rows a \
-             TEXT PRIMARY KEY brings with it"
+            43,
+            "eighteen tables, twenty-three indexes, and the two `sqlite_autoindex` rows a \
+             TEXT PRIMARY KEY brings with it — `sync_devices` is `WITHOUT ROWID`, so its own \
+             TEXT primary key is the table and brings no third"
         );
         for (w, g) in want.iter().zip(got.iter()) {
             assert_eq!(w, g, "{} {} differs from the ladder's", g.0, g.1);
@@ -4821,6 +4961,9 @@ pub(crate) mod tests {
     fn every_table_is_on_exactly_one_side() {
         let conn = Connection::open_in_memory().unwrap();
         migrate_single_file(&conn).unwrap();
+        // The user rungs above the frozen ladder, so "the migrated schema" means every table
+        // at head rather than every table as of the split.
+        migrate_user(&conn).unwrap();
 
         let mut stmt = conn
             .prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
@@ -4851,7 +4994,7 @@ pub(crate) mod tests {
     /// The user side, spelled out. A table moving between the two files is a data migration,
     /// never a diff nobody noticed.
     #[test]
-    fn the_user_side_is_the_fifteen_tables_no_feed_can_rebuild() {
+    fn the_user_side_is_the_eighteen_tables_no_feed_can_rebuild() {
         let mut user: Vec<&str> = TABLES
             .iter()
             .filter(|(_, s)| *s == Side::User)
@@ -4874,10 +5017,158 @@ pub(crate) mod tests {
                 "decks",
                 "error_log",
                 "muted_tags",
+                "sync_devices",
+                "sync_group",
+                "sync_identity",
                 "wishlist_entries",
                 "wishlist_folders",
             ]
         );
+    }
+
+    /// v28's rewind, and it is owed for [`UNDO_V14`]'s quiet reason rather than
+    /// [`UNDO_V13`]'s loud one: the rung's DDL is `CREATE TABLE IF NOT EXISTS` throughout, so
+    /// a fixture that kept these three would migrate perfectly happily while claiming a
+    /// version that never had them — green, and lying about what it tests.
+    ///
+    /// **No index needs a line of its own.** `sync_devices` is `WITHOUT ROWID` and the other
+    /// two hold one row each; the rung creates no `CREATE INDEX` at all, so there is nothing a
+    /// `DROP TABLE` does not already take.
+    const UNDO_V28: &str = "DROP TABLE IF EXISTS sync_devices;
+         DROP TABLE IF EXISTS sync_group;
+         DROP TABLE IF EXISTS sync_identity;";
+
+    /// A user file at 27 — the shape [`crate::split::convert`] left on every machine that
+    /// upgraded before pairing landed, and the only population the v28 rung is *for*.
+    ///
+    /// Rewound from head rather than written out a second time, which is [`schema_at_25`]'s
+    /// device on the other ladder: a hand-typed "v27" would be whatever somebody remembered,
+    /// and the difference between remembered and real is the whole of what this tests.
+    fn user_file_at_27() -> Connection {
+        let conn = Connection::open_in_memory().unwrap();
+        create_user_schema(&conn, "main").unwrap();
+        conn.execute_batch(&format!("{UNDO_V28} PRAGMA main.user_version = 27;"))
+            .unwrap();
+        conn
+    }
+
+    /// The fixture is a real v27 file and not head wearing a v27 label.
+    ///
+    /// **This is the test that makes the two below mean anything**, and without it they are
+    /// the failure this repo has shipped before: v28's DDL is `CREATE TABLE IF NOT EXISTS`
+    /// throughout, so a `user_file_at_27` that forgot to rewind would hand `migrate_user`
+    /// three tables that already exist, the rung would run as three no-ops, and every
+    /// assertion below would pass while testing nothing at all.
+    #[test]
+    fn the_v27_fixture_carries_none_of_v28() {
+        let conn = user_file_at_27();
+
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, 27);
+        for t in ["sync_identity", "sync_group", "sync_devices"] {
+            let n: i64 = conn
+                .query_row(
+                    "SELECT count(*) FROM main.sqlite_master
+                      WHERE type = 'table' AND name = ?1",
+                    params![t],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(n, 0, "{t} must not exist before the rung that creates it");
+        }
+        // And it is a real user file otherwise — a fixture that rewound too far would test
+        // the rung against a database no reader has.
+        let decks: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM main.sqlite_master
+                  WHERE type = 'table' AND name = 'decks'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(decks, 1);
+    }
+
+    /// The three tables v28 creates, with the shapes the pairing code reads — and the
+    /// single-row fence, which is the database's rather than the caller's.
+    #[test]
+    fn v28_creates_the_three_pairing_tables() {
+        let conn = user_file_at_27();
+        migrate_user(&conn).unwrap();
+
+        for t in ["sync_identity", "sync_group", "sync_devices"] {
+            let n: i64 = conn
+                .query_row(
+                    "SELECT count(*) FROM main.sqlite_master
+                      WHERE type = 'table' AND name = ?1",
+                    params![t],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(n, 1, "{t} is missing");
+        }
+
+        conn.execute(
+            "INSERT INTO sync_identity (id, device_id, secret_key, public_key, name, created_at)
+             VALUES (1, 'a', x'00', x'01', 'This device', 0)",
+            [],
+        )
+        .unwrap();
+        let second = conn.execute(
+            "INSERT INTO sync_identity (id, device_id, secret_key, public_key, name, created_at)
+             VALUES (2, 'b', x'00', x'01', 'Another', 0)",
+            [],
+        );
+        assert!(second.is_err(), "a second identity row must be refused");
+
+        conn.execute(
+            "INSERT INTO sync_group (id, group_id, epoch, group_key, joined_at)
+             VALUES (1, 'g', 0, x'02', 0)",
+            [],
+        )
+        .unwrap();
+        let second_group = conn.execute(
+            "INSERT INTO sync_group (id, group_id, epoch, group_key, joined_at)
+             VALUES (2, 'h', 0, x'02', 0)",
+            [],
+        );
+        assert!(second_group.is_err(), "a second group row must be refused");
+    }
+
+    /// A v27 user file walks up, keeps everything it had, and is handed no identity.
+    ///
+    /// The second half is the one worth asserting: **v28 creates the tables and mints
+    /// nothing.** A rung that minted a keypair would give every upgrading machine an identity
+    /// it never asked for, in a migration that cannot report what it did.
+    #[test]
+    fn migrating_a_v27_user_file_adds_the_pairing_tables_and_nothing_else() {
+        let conn = user_file_at_27();
+        conn.execute(
+            "INSERT INTO decks (name, format_key, created_at, updated_at)
+             VALUES ('Keep me', 'commander', unixepoch(), unixepoch())",
+            [],
+        )
+        .unwrap();
+
+        migrate_user(&conn).unwrap();
+        // Twice, because a rung that is not idempotent breaks on the second launch and on
+        // nobody's machine before that.
+        migrate_user(&conn).unwrap();
+
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, USER_SCHEMA_VERSION);
+        let decks: i64 = conn
+            .query_row("SELECT count(*) FROM decks", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(decks, 1, "the upgrade must not touch the reader's decks");
+        let identities: i64 = conn
+            .query_row("SELECT count(*) FROM sync_identity", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(identities, 0, "v28 creates the table and mints nothing");
     }
 
     /// No foreign key may cross the split. SQLite accepts the `CREATE TABLE` and fails only on
@@ -4886,6 +5177,10 @@ pub(crate) mod tests {
     fn no_foreign_key_crosses_the_two_sides() {
         let conn = Connection::open_in_memory().unwrap();
         migrate_single_file(&conn).unwrap();
+        // Without this the user rungs' tables do not exist here, and
+        // `PRAGMA foreign_key_list` on a table that is not there is an empty result rather
+        // than an error — so every table above the split would pass vacuously.
+        migrate_user(&conn).unwrap();
 
         for (table, side) in TABLES {
             let mut stmt = conn

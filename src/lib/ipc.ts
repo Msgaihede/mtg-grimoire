@@ -32,6 +32,9 @@
  * `MirrorStatus`                                 — `src-tauri/src/mirror/settings.rs`
  * `PassReport`                                   — `src-tauri/src/mirror/run.rs`
  * `TagTerms`                                     — `src-tauri/src/filters.rs`
+ * `PairingStatus`/`PairingOffer`/`PairingHandshake`/
+ * `PairingSealedKey`/`QrMatrix`/`PairedDevice`     — `src-tauri/src/sync_pair/pairing.rs`,
+ *                                                  `.../identity.rs`, `.../invite.rs`
  *
  * **Seven settings carry no struct at all.** Each is one `app_meta` row: two answered as a bare
  * string — `getMarketplace`/`setMarketplace` (`src-tauri/src/marketplace.rs`) and
@@ -3858,6 +3861,59 @@ export interface MirrorStatus {
   lastError: string | null;
 }
 
+/**
+ * A QR code as a grid, row-major, `width * width` long. `true` is a dark module.
+ *
+ * **A fact rather than a picture, which is why it crosses the boundary in this shape.** Rust
+ * answers what the encoder produced; this side decides the colour, the module size and the
+ * quiet zone, because all three are questions about a screen.
+ */
+export interface QrMatrix {
+  width: number;
+  modules: boolean[];
+}
+
+/** One device on the pairing roster. The public key is deliberately not sent. */
+export interface PairedDevice {
+  deviceId: string;
+  name: string;
+  addedAt: number;
+  /** A stamp means this device was removed. The row is kept so the panel can say when. */
+  revokedAt: number | null;
+}
+
+/** What Settings draws when no pairing is in flight. `groupId` is null on an unpaired device. */
+export interface PairingStatus {
+  deviceId: string;
+  deviceName: string;
+  groupId: string | null;
+  epoch: number | null;
+  devices: PairedDevice[];
+}
+
+/** The invite, in both forms. */
+export interface PairingOffer {
+  code: string;
+  qr: QrMatrix;
+}
+
+/**
+ * The six digits to compare, and the blob to carry back.
+ *
+ * `response` is empty on the offering device — A has nothing further to hand B until Confirm.
+ * **The digits are what the reader compares and the whole of what defeats a man in the middle**
+ * (spec §7.5 step 3), so the panel must never auto-advance past them.
+ */
+export interface PairingHandshake {
+  sas: string;
+  response: string;
+}
+
+/** The wrapped group key, for the reader to carry to the joining device. */
+export interface PairingSealedKey {
+  sealedKey: string;
+}
+
 export const ipc = {
   searchCards: (req: SearchRequest) => invoke<SearchResponse>("search_cards", { req }),
   /**
@@ -5348,6 +5404,49 @@ export const ipc = {
    * by hand read as unchanged, which is the one state this command exists to get out of.
    */
   mirrorRebuild: () => invoke<PassReport>("mirror_rebuild"),
+  /**
+   * This device, the group it is in, and the roster — the pairing panel's only read.
+   *
+   * A **write** path at the far end despite the name: a database that has never paired has no
+   * identity row, and reading the panel is what mints one. So it answers `BUSY` while a sync
+   * holds the write connection, like every other write here.
+   */
+  syncPairingStatus: () => invoke<PairingStatus>("sync_pairing_status"),
+  /** Start offering a pairing. Replaces any offer already in flight. */
+  syncPairingBegin: () => invoke<PairingOffer>("sync_pairing_begin"),
+  /** Read an offer on the joining device. Answers the six digits and a blob to carry back. */
+  syncPairingAccept: (code: string) => invoke<PairingHandshake>("sync_pairing_accept", { code }),
+  /** Read the joiner's blob on the offering device. Answers the same six digits. */
+  syncPairingRespond: (response: string) =>
+    invoke<PairingHandshake>("sync_pairing_respond", { response }),
+  /**
+   * The reader says the digits matched. Answers the sealed group key.
+   *
+   * **Nothing may call this on the reader's behalf.** The comparison is the whole of §7.5
+   * step 3, and a panel that pressed it once the digits arrived would have no
+   * man-in-the-middle defence at all while looking completely normal.
+   */
+  syncPairingConfirm: () => invoke<PairingSealedKey>("sync_pairing_confirm"),
+  /** The joining device unwraps the key and is in the group. */
+  syncPairingComplete: (sealedKey: string) => invoke<void>("sync_pairing_complete", { sealedKey }),
+  /** Throw away whatever is in flight. The code that was on screen stops working. */
+  syncPairingCancel: () => invoke<void>("sync_pairing_cancel"),
+  /**
+   * Rename a device on the roster.
+   *
+   * Renaming **this** device also changes the name every later pairing sends, which is what
+   * stops the next press of Pair putting the old one back.
+   */
+  syncDeviceRename: (deviceId: string, name: string) =>
+    invoke<void>("sync_device_rename", { deviceId, name }),
+  /**
+   * Remove a device and rotate the group key.
+   *
+   * **The rotation is the removal** — see §7.6. What it cannot do is reach the removed device:
+   * whatever that device already synced, it keeps, and no server can take it back. The panel
+   * says so in those words rather than implying a lost phone has been cleaned.
+   */
+  syncDeviceRevoke: (deviceId: string) => invoke<void>("sync_device_revoke", { deviceId }),
 };
 
 /**

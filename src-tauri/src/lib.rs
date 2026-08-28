@@ -37,6 +37,7 @@ pub mod search;
 pub mod sorting;
 pub mod split;
 pub mod sync;
+pub mod sync_pair;
 pub mod tags;
 pub mod transfer;
 pub mod update;
@@ -514,7 +515,18 @@ pub fn run() {
             mirror::settings::mirror_status,
             mirror::settings::mirror_set_enabled,
             mirror::settings::mirror_set_root,
-            mirror::settings::mirror_rebuild
+            mirror::settings::mirror_rebuild,
+            // Pairing (spec §7.5 and §7.6). Eight presses and no more: the panel's read, the
+            // five steps of the handshake, and the two things a roster row can be told.
+            sync_pair::pairing::sync_pairing_status,
+            sync_pair::pairing::sync_pairing_begin,
+            sync_pair::pairing::sync_pairing_accept,
+            sync_pair::pairing::sync_pairing_respond,
+            sync_pair::pairing::sync_pairing_confirm,
+            sync_pair::pairing::sync_pairing_complete,
+            sync_pair::pairing::sync_pairing_cancel,
+            sync_pair::pairing::sync_device_rename,
+            sync_pair::pairing::sync_device_revoke
         ])
         .setup(|app| {
             // First, and before anything that can fail: the window is created **hidden**
@@ -837,6 +849,7 @@ fn init_state(app: &tauri::App) -> Result<AppState, String> {
         // The mask's twin, and hooked up in the same call for the same reason: SQLite allows
         // one update hook per connection, so the fence has to ride in the mirror's.
         fence: Arc::new(db::CrossFileFence::new()),
+        pairing: Mutex::new(None),
     })
 }
 

@@ -121,6 +121,17 @@ pub struct AppState {
     /// hook — SQLite allows one per connection. See [`crate::db::CrossFileFence`], which also
     /// names what it cannot see.
     pub fence: Arc<crate::db::CrossFileFence>,
+    /// A pairing in flight, if there is one.
+    ///
+    /// **In memory rather than in the database, deliberately**, and it is the same argument
+    /// [`AppState::mirror_status`] makes one field up: an offer that survived a restart would
+    /// be an invite a reader printed last month still being accepted today. It outlives the
+    /// webview, which is what a reader who opens Settings twice needs, and dies with the
+    /// process, which is what makes the pairing token one-time in fact.
+    ///
+    /// It holds the derived pair key, which is the other reason it is here and not in SQLite:
+    /// nothing this side of a completed pairing has any business surviving a crash.
+    pub pairing: Mutex<Option<crate::sync_pair::pairing::Pending>>,
 }
 
 /// Result of a sync run. `updated_at` is `Some` only when `updated` is true, so a
@@ -1260,6 +1271,7 @@ mod tests {
                 // what an `AppState` looks like before the first pass.
                 mirror,
                 mirror_status: std::sync::Mutex::new(crate::mirror::watch::LastPass::default()),
+                pairing: std::sync::Mutex::new(None),
                 fence,
             },
             dir,
