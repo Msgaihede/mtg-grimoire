@@ -1,5 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react";
-import { dropTargetForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
+import { useRef, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   Heart,
@@ -22,8 +21,10 @@ import { TitleBar } from "@/components/TitleBar";
 import { CabinetFiling, Cards } from "@/components/icons";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { useSidebarDrops, type SidebarDrop } from "@/components/useSidebarDrops";
+import { isAndroid } from "@/lib/platform";
 import { useCardToDeckRefusal } from "@/features/card/cardMenu";
-import { readDragGroup } from "@/features/decks/dnd";
+import { readCards } from "@/features/decks/dnd";
+import { useDndDropTarget } from "@/lib/dndTarget";
 import {
   ACTIVITY_DELAY_MS,
   marketplaceFeedActivity,
@@ -246,7 +247,16 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
           now by `LAYER.caption` in `TitleBar` itself, where the rung carries the argument; the
           claim lives here because this is where the row is placed, and `layers.test.ts` is
           what holds the two together. */}
-      <TitleBar />
+      {/* **Not on Android, and it is three of its four buttons that decide it.** In tauri
+          2.11.5 `minimize`, `toggle_maximize` and `start_dragging` are all `#[cfg(desktop)]`
+          (`tauri/src/window/plugin.rs`) — they are not commands there at all — and
+          `capabilities/mobile.json` grants none of the four. The fourth, `close`, exists and
+          would kill the app from a button no phone user is looking for. The OS owns the frame
+          there, and `lib.rs` does not even compile `window.rs` for it.
+
+          The argument above about `LAYER.caption` still governs, on the platforms that draw
+          the row. */}
+      {!isAndroid() && <TitleBar />}
 
       <div className="flex min-h-0 flex-1">
         {/* **`w-52` is 208px and it is pinned, which is the one part of this shell that got
@@ -503,42 +513,31 @@ function NavItem({
 }) {
   const ref = useRef<HTMLButtonElement>(null);
   const tip = useTooltip();
+  // **Every card the drag is carrying** (issue #214) — `readCards`, which answers with one
+  // payload for an ordinary drag, several for a multi-select one, and `null` for a drag this app
+  // did not put in the air. The entry's own rule is asked once for the whole gesture: both
+  // entries take every kind of card payload, so "may this land here" has never been a per-card
+  // question.
+  //
+  // No `getData`: what a drop writes is decided by the entry, and the entry is already here. An
+  // entry that cannot take a card never accepts one — so `over` is only ever true for a drop that
+  // will happen. `useDndDropTarget` reads `canDrop` and `onDrop` through a ref of its own, which
+  // is what keeps the registration standing while the shell re-renders mid-drag: the shell
+  // re-renders the moment a card is picked up — that is what raises the ring — and a drop target
+  // that unregisters mid-drag is a drop that never arrives.
+  //
+  // The three entries a card cannot land on (`drop === null`) register a droppable too and refuse
+  // every payload, which costs a registry entry and nothing else: `computeCollisions` skips a
+  // droppable whose `accepts()` is false before it measures it.
   /** The card is over *this* entry: which one of the ringed pair is about to take it. */
-  const [over, setOver] = useState(false);
-  // What the target answers, kept current without the registration depending on it. The shell
-  // re-renders the moment a card is picked up — that is what raises the ring — and a drop
-  // target that unregisters mid-drag is a drop that never arrives.
-  const latest = useRef(drop);
-  useEffect(() => {
-    latest.current = drop;
+  const { over } = useDndDropTarget({
+    ref,
+    read: readCards,
+    canDrop: () => drop?.eligible === true,
+    onDrop: (payloads) => {
+      for (const payload of payloads) drop?.onDrop(payload);
+    },
   });
-
-  // Registered once, for the life of the entry: whether an entry is a target at all is fixed
-  // (Decks and Wishlist are, always), while *what it accepts* is asked at drag time and read
-  // off the ref above.
-  useEffect(() => {
-    const element = ref.current;
-    if (!element || latest.current === null) return;
-    // **Every card the drag is carrying** (issue #214) — `readDragGroup`, which answers with one
-    // payload for an ordinary drag and several for a multi-select one. The entry's own rule is
-    // unchanged and is still asked once for the whole gesture: both entries take every kind of
-    // card payload, so "may this land here" has never been a per-card question.
-    const taken = (data: Record<string, unknown>) =>
-      latest.current?.eligible === true ? readDragGroup(data) : [];
-    return dropTargetForElements({
-      element,
-      // No `getData`: what a drop writes is decided by the entry, and the entry is already
-      // here. A payload this app did not put in the air, or an entry that cannot take one,
-      // never enters — so `over` below is only ever true for a drop that will happen.
-      canDrop: ({ source }) => taken(source.data).length > 0,
-      onDragEnter: () => setOver(true),
-      onDragLeave: () => setOver(false),
-      onDrop: ({ source }) => {
-        setOver(false);
-        for (const payload of taken(source.data)) latest.current?.onDrop(payload);
-      },
-    });
-  }, []);
 
   const eligible = drop !== null && dragging && drop.eligible;
   const inert = drop !== null && dragging && !drop.eligible;

@@ -6,7 +6,6 @@ import {
   useRef,
   useState,
 } from "react";
-import { autoScrollForElements } from "@atlaskit/pragmatic-drag-and-drop-auto-scroll/element";
 import { useQuery } from "@tanstack/react-query";
 import {
   ChevronLeft,
@@ -2576,23 +2575,20 @@ export function DeckEditor({ deckId }: { deckId: number }) {
   // What is left in this file is `applyDrop`, which is what a drop *writes* — one place a drag
   // becomes a command, for all three of them.
 
-  // A pile can be off the bottom of the window while a card is in the air over it — the stack's
-  // piles wrap down rather than running off the right-hand edge, and the grid runs down too, so
-  // every view here is taller than the window before it is wider. This scrolls when the drag
-  // nears an edge: the one motion in here, and the platform's own idea of a drag rather than the
-  // app's.
+  // **The auto-scroller is the manager's now, and this file registers nothing for it.**
+  // `defaultPreset.plugins` in `@dnd-kit/dom` is
+  // `[Accessibility, AutoScroller, Cursor, Feedback, PreventSelection]`, and `lib/dndManager.ts`
+  // filters out only `Accessibility` — so the scroller has been installed for the whole window
+  // since 3a, walking real scrollable ancestors and scrolling within 20% of one's edge.
   //
-  // **Registered on the page rather than on the view** (changed 2026-08-14, with the growing
-  // desk). It used to be `viewRef`, which was then the scroller; three of the four views have no
-  // scroller now, and the box that has to move to bring a pile — or the remove tray under the
-  // deck — under the pointer is the editor's own. The table is the exception in both shapes and
-  // is unchanged by the move: its scroller is `VirtualTable`'s, one element further in than
-  // either of these, so neither registration ever reached it.
-  useEffect(() => {
-    const element = editorRef.current;
-    if (!element) return;
-    return autoScrollForElements({ element });
-  }, [hasRow]);
+  // What that replaces is a `pragmatic-drag-and-drop-auto-scroll` registration on **this page's
+  // own element** (`editorRef`), moved there on 2026-08-14 with the growing desk: three of the
+  // four views have no scroller of their own, so the box that has to move to bring a pile — or
+  // the remove tray under the deck — under the pointer is the editor's. The scroller the library
+  // now finds is `AppShell`'s `main`, which is the one scroller left in this view since
+  // 2026-08-24 and is the ancestor the old registration was reaching for through the page. The
+  // table's own `VirtualTable` scroller was never registered and now *is* a candidate, which is
+  // a behaviour change no jsdom test can see: it measures rectangles.
 
   /** The deck's new name, once {@link DeckNameField} has decided there is one. The field holds
    *  the draft and refuses a blank or an unchanged name, so there is nothing to re-check here —

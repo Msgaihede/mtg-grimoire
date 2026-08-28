@@ -1,5 +1,6 @@
-import { Accessibility, DragDropManager, KeyboardSensor, PointerSensor } from "@dnd-kit/dom";
+import { Accessibility, DragDropManager, Draggable, Droppable, PointerSensor } from "@dnd-kit/dom";
 import { NOT_A_DRAG } from "@/features/decks/dnd";
+import { installCardCountPreview } from "@/lib/dragPreview";
 
 /**
  * The app's one `@dnd-kit/dom` manager, and the reason there is no `DragDropProvider` anywhere.
@@ -27,15 +28,10 @@ import { NOT_A_DRAG } from "@/features/decks/dnd";
  * does not hand back a null manager — it silently joins a *second* singleton, invisible to
  * everything registered here. A hook used that way would look wired and drag nothing.
  *
- * **The sensor is configured once, here, because the exclusion is an app-wide rule.**
- * `PointerSensor`'s own default `preventActivation` refuses a press that lands on an
- * `input, select, textarea, button, a[href]` or `[contenteditable]` — nearly this app's rule, and
- * wrong in the one place it matters: a card's own name **is** a button (it is the keyboard's way
- * into the card), and a search tile's art is a button covering nearly all of it, so the library's
- * default would make both undraggable. {@link NOT_A_DRAG} is the app's answer to the same
- * question and has been since the stepper bug of 2026-08-05 — a control marks itself. This is the
- * capture-phase `mousedown` guard in `features/decks/dnd.ts` said once to the library instead of
- * once per draggable.
+ * **The sensors are configured once, here, because both decisions are app-wide.** The press
+ * exclusion is `features/decks/dnd.ts`'s capture-phase `mousedown` guard said once to the library
+ * instead of once per draggable, and the absent `KeyboardSensor` is the other half; both are
+ * argued at the `sensors` list below.
  *
  * **One thing this cannot configure away, and the answer to it is in the stylesheet rather than
  * here.** `StyleInjector` is a `CorePlugin`, cannot be removed from the plugin list, and installs
@@ -70,19 +66,52 @@ export const dndManager = new DragDropManager({
    *
    * What is given up is the plugin's announcements and its screen-reader instructions — which
    * this app has never had, because `@atlaskit/pragmatic-drag-and-drop` ships none either, so
-   * nothing regresses. `KeyboardSensor` is a *sensor* and stays: dragging a folder from the
-   * keyboard is unaffected. A future pass that wants spoken drag feedback should write it against
+   * nothing regresses. A future pass that wants spoken drag feedback should write it against
    * this app's own markup rather than turn this back on.
    */
   plugins: (defaults) => defaults.filter((plugin) => plugin !== Accessibility),
+  /**
+   * **The pointer, and nothing else. `KeyboardSensor` is deliberately not in this list, and it
+   * was until the card payload moved.**
+   *
+   * That sensor binds a bubble-phase `keydown` to `source.handle ?? source.element` and answers
+   * `Space` and `Enter` by starting a drag — `handleStart` calls `preventDefault()` **and**
+   * `stopImmediatePropagation()`, so nothing else in the window hears the press. Its default
+   * `preventActivation` is `event.target !== target`, which keeps it off a press that landed on a
+   * *child*; what it cannot help with is a draggable that is **itself** a control the reader
+   * presses Enter on. Until 3b that was only a folder card and a tree row, neither of which is
+   * focusable; from the moment `composedDraggable` became a dnd-kit `Draggable` it is **every
+   * card in the app** — a deck row in the table, a line in the text view, a search tile, a
+   * collection row, a wish. `views.test.tsx`'s "opens the card on Enter with a menu wired beside
+   * it" went red on two views at once, which is Enter no longer opening a card.
+   *
+   * **Removing it restores exact parity rather than giving something up.** Every drag in this app
+   * was a native HTML5 drag until 3a, and a native drag is a pointer gesture — Chromium starts
+   * none from the keyboard — so there has never been a keyboard drag here to lose. What the app
+   * *has* is a click path beside every drag (a card's `Move to`, the toolbar's quick add, a
+   * folder's `⋯` menu), which is the affordance a caret actually uses.
+   *
+   * A keyboard drag worth having needs instructions, announcements and a way out, which is
+   * `Accessibility`'s subject above and 3c's to settle — written against this app's own markup
+   * rather than turned back on here. `dndManager.test.ts` holds the fence.
+   */
   sensors: [
+    /**
+     * **The sensor is configured once, here, because the exclusion is an app-wide rule.**
+     * `PointerSensor`'s own default `preventActivation` refuses a press that lands on an
+     * `input, select, textarea, button, a[href]` or `[contenteditable]` — nearly this app's rule,
+     * and wrong in the one place it matters: a card's own name **is** a button (it is the
+     * keyboard's way into the card), and a search tile's art is a button covering nearly all of
+     * it, so the library's default would make both undraggable. {@link NOT_A_DRAG} is the app's
+     * answer to the same question and has been since the stepper bug of 2026-08-05 — a control
+     * marks itself.
+     */
     PointerSensor.configure({
       preventActivation: (event) => {
         const { target } = event;
         return target instanceof Element && target.closest(NOT_A_DRAG) !== null;
       },
     }),
-    KeyboardSensor,
   ],
 });
 
@@ -133,6 +162,59 @@ dndManager.monitor.addEventListener("dragend", () => {
   document.documentElement.removeAttribute(DRAGGING_ATTRIBUTE);
 });
 
+/**
+ * What a source would carry, read as its drag begins — the record, not the reader.
+ *
+ * **`beforedragstart` and not the press or the registration, and the timing is a measured bug in
+ * both other spellings.** A record is a callback because a row renumbered, renamed or re-filed
+ * since it mounted has to travel as it is now; but a card wall's record is
+ * `dragData(payload(), rest())`, and `rest` goes through `useCardSelection.dragsAll`, which
+ * **throws the picked set away** when the drag starts outside it. Asked at registration, a
+ * re-render of the wall cleared the reader's selection; asked at every `pointerdown`, a plain
+ * click on an unpicked tile cleared it before the click that was meant to extend it — measured in
+ * `CardGrid.test.tsx`, where a Ctrl-click after a plain one came back holding one card instead of
+ * two. `@atlaskit/pragmatic-drag-and-drop` asked for the record at `dragstart` and nowhere else,
+ * and this is that timing kept.
+ *
+ * **One listener for the whole window rather than one per source.** A wall draws hundreds of
+ * tiles, and a monitor subscription each would be hundreds of callbacks run on every drag to find
+ * the one that matters. The `WeakMap` is keyed on the entity and holds no source alive past its
+ * own `destroy()`; the returned function is what a caller's teardown runs.
+ *
+ * It lives here rather than in `lib/dndTarget.ts` because a module-level `dndManager.monitor`
+ * subscription has to be in the module that *makes* the manager: `dndManager` imports
+ * `features/decks/dnd.ts` for `NOT_A_DRAG`, which imports `dndTarget.ts`, so at the moment that
+ * file's body runs this module is still half-evaluated and `dndManager` is `undefined`.
+ */
+const payloads = new WeakMap<object, () => Record<string, unknown>>();
+
+export function carryAtDragStart(
+  source: object,
+  read: () => Record<string, unknown>,
+): () => void {
+  payloads.set(source, read);
+  return () => {
+    payloads.delete(source);
+  };
+}
+
+dndManager.monitor.addEventListener("beforedragstart", ({ operation }) => {
+  const { source } = operation;
+  const read = source ? payloads.get(source) : undefined;
+  // `snapshot()` hands the *live* entity through rather than a copy of its record, so setting it
+  // here is what every later reader — `accept`, `dragstart`, the drop — sees.
+  if (source && read) source.data = read();
+});
+
+/**
+ * The multi-card count chip, armed for the life of the window.
+ *
+ * Here rather than in `dragPreview.ts`'s own module scope because that module must not import
+ * this one — it takes the manager as an argument precisely so the dependency runs one way and a
+ * test can install a chip against a manager of its own.
+ */
+installCardCountPreview(dndManager);
+
 let nextId = 0;
 
 /**
@@ -147,4 +229,34 @@ let nextId = 0;
 export function dndId(prefix: string): string {
   nextId += 1;
   return `${prefix}-${nextId}`;
+}
+
+/**
+ * Register an entity **now**, rather than on the microtask dnd-kit would have used.
+ *
+ * **This is a leak fix, and only the running window could have found it.** `Entity`'s
+ * constructor ends with `if (manager && register) queueMicrotask(this.register)`, while
+ * `destroy()` unregisters synchronously — so an entity constructed and destroyed **in the same
+ * tick** unregisters first and is then registered by the microtask, with nothing left holding a
+ * reference to undo it. It stays in the manager's registry for the life of the page.
+ *
+ * `React.StrictMode` does exactly that, on every mount, in development: it runs an effect,
+ * cleans it up, and runs it again. Measured in the shipped dev window 2026-08-27 — four folders
+ * on screen, **eleven** droppables registered, every visible row carrying two. And a second
+ * registration is not harmless here, because the surviving orphan is the one from the *first*
+ * effect run, whose monitor listeners were cleaned up: collision detection picked the orphan as
+ * `operation.target`, the live hook compared it against its own droppable, saw a different
+ * object and returned. **The mark came up, the row rang, and the drop silently did nothing.**
+ *
+ * Nothing in the suite could see it: `render` and `renderHook` do not wrap in `StrictMode`, so
+ * every test mounts each effect exactly once and every registration is the live one.
+ *
+ * It lives here rather than in `folderDrag.ts`, where it was written, because four more modules
+ * need it — a second copy is a second place for the leak to come back.
+ *
+ * `register: false` at the call sites is the other half — without it the constructor still
+ * queues its own registration and this would merely add a second.
+ */
+export function registerNow(entity: Draggable | Droppable): void {
+  entity.register();
 }

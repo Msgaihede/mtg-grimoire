@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { DND_SOURCE_ATTR } from "@/lib/dndTarget";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 import { useAppStore, type SearchView } from "@/lib/store";
@@ -296,14 +297,17 @@ export const CardMode: Story = {
     // each other's exact opposite, and a reader finding the old sentence in the history should
     // see which one won and why.
     //
-    // The card art inside each tile is `draggable={false}` by `CardImage`'s default — that is
-    // what stops the picture stealing the gesture from the tile around it — so no `<img>` is
-    // matched either way.
+    // **The mark is `DND_SOURCE_ATTR` and no longer `draggable="true"`**, which is not a rename
+    // for tidiness: `@dnd-kit/dom`'s `PointerSensor` stands down for a press on a *native* HTML5
+    // draggable and lets the platform have the gesture, so writing that attribute back would turn
+    // every drag in the app off while this assertion went on passing. The card art inside each
+    // tile is still `draggable={false}` by `CardImage`'s default — that is what stops the picture
+    // stealing the gesture from the tile around it.
     //
     // Spread rather than the raw `NodeList`, which has no `.filter`.
     const tiles = [...canvasElement.querySelectorAll("[data-grid-index]")];
     await expect(tiles.length).toBeGreaterThan(0);
-    await expect(tiles.filter((tile) => tile.getAttribute("draggable") === "true")).toHaveLength(
+    await expect(tiles.filter((tile) => tile.hasAttribute(DND_SOURCE_ATTR))).toHaveLength(
       tiles.length,
     );
   },

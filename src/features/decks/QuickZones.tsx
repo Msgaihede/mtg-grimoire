@@ -1,8 +1,5 @@
-import { useCallback, useEffect, useRef, useState, type FormEvent, type ReactElement } from "react";
-import {
-  dropTargetForElements,
-  monitorForElements,
-} from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
+import { useEffect, useRef, useState, type FormEvent, type ReactElement } from "react";
+import { useDndDragging, useDndDropTarget, useDndTargetRef } from "@/lib/dndTarget";
 import { FolderPlus, MoveRight, Plus, Wand2, type LucideIcon } from "lucide-react";
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import type { DeckCategory } from "@/lib/ipc";
@@ -130,19 +127,7 @@ export function QuickZones({
    * drawn from *and* what decides which of them can take it, so the bar never offers a
    * destination that would refuse the card once it got there.
    */
-  const [dragging, setDragging] = useState<DragPayload | null>(null);
-
-  useEffect(
-    () =>
-      monitorForElements({
-        canMonitor: ({ source }) => readDragData(source.data) !== null,
-        onDragStart: ({ source }) => setDragging(readDragData(source.data)),
-        // Dropped or cancelled: the platform ends both the same way, so the bar goes without
-        // this component hearing an Escape.
-        onDrop: () => setDragging(null),
-      }),
-    [],
-  );
+  const dragging = useDndDragging(readDragData);
 
   if (!dragging) return null;
 
@@ -363,35 +348,36 @@ interface Zone {
  * state nothing to say. The whole change is therefore in the neutral half of the palette: value
  * and size carry "there is a target here", and gold still carries "this one".
  *
- * **Registered once, on mount, which is inside the drag** — a drop target added mid-drag is
- * picked up on the next `dragover`, which is the whole reason a surface that only exists during a
- * drag can be dropped on at all (the remove tray's effect says the same). So the two handlers are
- * latched in a ref rather than taken as dependencies: they are rebuilt on every render of the
- * bar, and a registration that tore itself down and back up under the reader's pointer is exactly
- * what this arrangement avoids.
+ * **Registered once, on mount, which is inside the drag** — a drop target added mid-drag enters
+ * the next collision pass, which is the whole reason a surface that only exists during a drag can
+ * be dropped on at all (the remove tray says the same). `useDndDropTarget` reads its two handlers
+ * through a ref of its own, so they are rebuilt on every render of the bar without the
+ * registration tearing itself down and back up under the reader's pointer.
+ *
+ * **It is an `overlay`, and that is not decoration.** dnd-kit resolves overlapping targets by
+ * geometry and consults no z-index at all, so this short bar drawn over a tall pile does not
+ * reliably win the pointer — `LAYER.dragTray` decides what is painted and nothing about what is
+ * hit. `useDndDropTarget`'s `overlay` is the pair that says it: highest priority so the bar beats
+ * the pile when the pointer is on it, and a pointer-only detector so it produces no collision at
+ * all when the pointer is not — without the second half a 293px card dropped anywhere in the top
+ * third of the desk overlapped the 74px bar by *shape* and the bar took it, which is the defect
+ * the live pass of 2026-08-28 found.
  */
 function QuickZone({ label, icon: Icon, takes, accepts, drop }: Zone): ReactElement {
-  const [over, setOver] = useState(false);
-  const latest = useRef({ accepts, drop });
-  useEffect(() => {
-    latest.current = { accepts, drop };
-  });
-
   // Named `attach` rather than `ref` for `useCategoryDrop`'s reason: React's ref lint reads a
   // hook result called `ref` as a ref object. It is a callback the caller hands to `ref=`.
-  const attach = useCallback((element: HTMLElement | null) => {
-    if (!element) return;
-    return dropTargetForElements({
-      element,
-      canDrop: ({ source }) => latest.current.accepts(source.data),
-      onDragEnter: () => setOver(true),
-      onDragLeave: () => setOver(false),
-      onDrop: ({ source }) => {
-        setOver(false);
-        latest.current.drop(source.data);
-      },
-    });
-  }, []);
+  const { ref, attach } = useDndTargetRef();
+  const { over } = useDndDropTarget({
+    ref,
+    // The zone's own two questions are `accepts` and `drop`, which both take the raw record —
+    // this zone reads a *group* of cards through `dropWrites` and a `DropTarget`, so there is no
+    // narrower payload for the primitive to hand back. `accepts` is therefore the whole of the
+    // read and `canDrop` has nothing left to ask.
+    read: (data) => (accepts(data) ? data : null),
+    canDrop: () => true,
+    onDrop: (data) => drop(data),
+    overlay: true,
+  });
 
   return (
     <div

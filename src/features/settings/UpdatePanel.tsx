@@ -72,6 +72,19 @@ export function UpdatePanel({
 }) {
   const { status, progress, busy, action, error } = update;
   const release = status?.available ?? null;
+  /**
+   * The Play Store installed this app and the store is what replaces it, so every control on
+   * this panel is about something the app cannot do.
+   *
+   * **Read off `installKind` rather than off `isAndroid()`**, and the difference is the point:
+   * the backend already answered this question — `Updater::new` calls
+   * `install_kind_for(cfg!(mobile), …)` before it touches the disk — and asking the user agent
+   * here would be a second, independent answer to one question, free to disagree. It is also
+   * deliberately not `other`: that one means "we could not tell, here is the release page", and
+   * this app's release page offers a Windows exe and an NSIS installer, which is a worse answer
+   * on a phone than no answer at all.
+   */
+  const managed = status?.installKind === "managed";
 
   return (
     <SettingsSection id="updates" title="Updates">
@@ -113,19 +126,26 @@ export function UpdatePanel({
             <p className="text-xs text-dim">{formatChecked(status?.lastCheckAt ?? null)}</p>
           </div>
         </div>
-        <button
-          type="button"
-          onClick={update.check}
-          disabled={busy}
-          aria-busy={busy || undefined}
-          className={cn(BUTTON, "border-border hover:bg-bg disabled:hover:bg-transparent")}
-        >
-          <RefreshCw className="size-4" aria-hidden="true" />
-          Check now
-        </button>
+        {!managed && (
+          <button
+            type="button"
+            onClick={update.check}
+            disabled={busy}
+            aria-busy={busy || undefined}
+            className={cn(BUTTON, "border-border hover:bg-bg disabled:hover:bg-transparent")}
+          >
+            <RefreshCw className="size-4" aria-hidden="true" />
+            Check now
+          </button>
+        )}
       </div>
 
-      {release ? (
+      {managed ? (
+        <p className="border-t border-border pt-4 text-sm text-dim">
+          <span className="text-text">Updates arrive through Google Play.</span> This build
+          cannot replace itself, and there is nothing to check for here.
+        </p>
+      ) : release ? (
         <div className="space-y-3 border-t border-border pt-4">
           <div>
             <p className="text-sm text-text">
@@ -188,7 +208,11 @@ export function UpdatePanel({
         </p>
       )}
 
-      <VersionHistory history={history} currentVersion={status?.currentVersion} />
+      {/* Hidden with the rest of it: the list is populated by the very check that is not run
+          here, so on a managed install it is an empty accordion promising nothing. */}
+      {!managed && (
+        <VersionHistory history={history} currentVersion={status?.currentVersion} />
+      )}
 
       {/* A refusal from GitHub or from the swap itself, in the app's red. */}
       <PanelAlert tone="problem">{error}</PanelAlert>
