@@ -1547,10 +1547,17 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("mtgtest-update-{name}"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("mtg.db");
-        let conn = crate::db::open(&path).unwrap();
-        crate::schema::migrate(&conn).unwrap();
-        let read = crate::db::open_read_only(&path).unwrap();
+        crate::split::convert(&dir).unwrap();
+        let conn = crate::db::open_write(&dir).unwrap();
+        let read = crate::db::open_read(&dir).unwrap();
+        // **Hooked up, so what these fixtures drive runs with the cross-file fence
+        // armed.** `crate::sync::with_write`'s `debug_assert` reads it, so a command
+        // that committed to both files fails its own test rather than printing a line
+        // nobody reads. The mask rides along because SQLite allows one update hook per
+        // connection, and nothing here looks at it.
+        let mirror = std::sync::Arc::new(crate::mirror::watch::Mask::default());
+        let fence = std::sync::Arc::new(crate::db::CrossFileFence::new());
+        crate::mirror::watch::install_hook(&conn, mirror.clone(), fence.clone());
         (
             Arc::new(AppState {
                 db: Mutex::new(conn),
@@ -1562,8 +1569,9 @@ mod tests {
                 index: std::sync::RwLock::default(),
                 // The mirror is never started in these tests; a clean mask and an empty record are
                 // what an `AppState` looks like before the first pass.
-                mirror: std::sync::Arc::new(crate::mirror::watch::Mask::default()),
+                mirror,
                 mirror_status: std::sync::Mutex::new(crate::mirror::watch::LastPass::default()),
+                fence,
             }),
             dir,
         )
@@ -1820,8 +1828,7 @@ mod tests {
 
     #[test]
     fn app_meta_round_trips_and_a_missing_key_reads_as_none() {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        let conn = crate::schema::memory_pair();
 
         assert!(get_app_meta(&conn, K_LAST_CHECK_AT).is_none());
         set_app_meta(&conn, K_LAST_CHECK_AT, "1800000000").unwrap();
@@ -1843,8 +1850,7 @@ mod tests {
     /// before any network call has been made in this session.
     #[test]
     fn the_cached_release_survives_a_round_trip_through_app_meta() {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        let conn = crate::schema::memory_pair();
         let release = parse_release(&live_payload()).unwrap();
 
         set_app_meta(

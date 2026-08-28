@@ -327,8 +327,7 @@ mod tests {
     /// Two printings of one card and one of another — enough for a swap (two printings, one
     /// oracle card) and for a move that has somewhere to go.
     fn seeded() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        let conn = crate::schema::memory_pair();
         conn.execute_batch(
             r#"INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
                     rarity,mana_cost,cmc,type_line,prices,raw)

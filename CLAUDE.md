@@ -142,8 +142,11 @@ number to compare against.
   the suite could not. Drive the real window over CDP —
   [live-ui-verification.md](docs/reference/live-ui-verification.md) is the contract, and it
   documents traps that have each cost a session.
-- **Under `tauri dev` the database is `src-tauri/target/debug/data/mtg.db`** — not
-  `src-tauri/data/`. Delete that `data/` folder to force a clean first-run sync.
+- **Under `tauri dev` the databases are `src-tauri/target/debug/data/user.db` and
+  `corpus.db`** — not `src-tauri/data/`, and not one file: schema 27 split the reader's
+  own tables out of the rebuildable ones. A folder still holding `mtg.db` is converted at
+  the next launch. Delete that `data/` folder to force a clean first-run sync; deleting
+  `corpus.db` alone costs a resync and nothing else, which is what the split is for.
 - **A built app embeds `dist/` at compile time, so a frontend-only edit does not reach a
   `tauri build` binary.** Vite writes a new bundle, cargo then sees no Rust source change and
   leaves the old bundle inside the old exe — exiting 0. `touch src-tauri/src/main.rs` first, and

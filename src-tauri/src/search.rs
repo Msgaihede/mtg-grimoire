@@ -1179,8 +1179,7 @@ mod tests {
     /// two-colour card, and a digital-only one with a non-Latin name.
     #[rustfmt::skip]
     fn seeded() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        let conn = crate::schema::memory_pair();
         let rows = [
             ("1","Lightning Bolt","lea","161","Instant","R","R","common", 400.5, r#"{"vintage":"restricted","modern":"legal","standard":"not_legal"}"#, 1),
             ("2","Lightning Helix","rav","213","Instant","RW","RW","uncommon", 1.5, r#"{"modern":"legal"}"#, 1),
@@ -1967,9 +1966,7 @@ mod tests {
     /// An empty database with the schema on it — the collapse fixtures below seed every row
     /// they reason about, so [`seeded`]'s three cards would only be noise to filter back out.
     fn bare() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
-        conn
+        crate::schema::memory_pair()
     }
 
     /// The id of the printing that represents `name` in a collapsed browse of `conn`.
@@ -2345,8 +2342,7 @@ mod tests {
     /// and [`COLLAPSE_KEY`]'s `coalesce` is what it pins.
     #[test]
     fn printings_with_no_oracle_id_are_each_their_own_card() {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        let conn = crate::schema::memory_pair();
         for (id, name) in [("n1", "Alpha"), ("n2", "Beta")] {
             conn.execute(
                 "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,is_paper,raw)
@@ -2944,13 +2940,20 @@ mod tests {
         let dir = std::env::temp_dir().join("mtgtest-search-concurrent");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("mtg.db");
+        crate::split::convert(&dir).unwrap();
 
-        let write = crate::db::open(&path).unwrap();
-        crate::schema::migrate(&write).unwrap();
+        let write = crate::db::open_write(&dir).unwrap();
         write.execute("INSERT INTO cards (id,name,set_code,collector_number,lang,layout,is_paper,raw) VALUES ('1','Lightning Bolt','lea','161','en','normal',1,'{}')", []).unwrap();
-        let read = crate::db::open_read_only(&path).unwrap();
+        let read = crate::db::open_read(&dir).unwrap();
 
+        // **Hooked up, so what these fixtures drive runs with the cross-file fence
+        // armed.** `crate::sync::with_write`'s `debug_assert` reads it, so a command
+        // that committed to both files fails its own test rather than printing a line
+        // nobody reads. The mask rides along because SQLite allows one update hook per
+        // connection, and nothing here looks at it.
+        let mirror = std::sync::Arc::new(crate::mirror::watch::Mask::default());
+        let fence = std::sync::Arc::new(crate::db::CrossFileFence::new());
+        crate::mirror::watch::install_hook(&write, mirror.clone(), fence.clone());
         let state = Arc::new(AppState {
             db: Mutex::new(write),
             db_read: Mutex::new(read),
@@ -2961,8 +2964,9 @@ mod tests {
             index: std::sync::RwLock::default(),
             // The mirror is never started in these tests; a clean mask and an empty record are
             // what an `AppState` looks like before the first pass.
-            mirror: std::sync::Arc::new(crate::mirror::watch::Mask::default()),
+            mirror,
             mirror_status: std::sync::Mutex::new(crate::mirror::watch::LastPass::default()),
+            fence,
         });
 
         // Stands in for the ingest, which holds this exact lock for the length of a sync.
@@ -3375,8 +3379,7 @@ mod tests {
     /// at all.
     #[rustfmt::skip]
     fn seeded_costs() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        let conn = crate::schema::memory_pair();
         // The printed cost rides along with `cmc` because the two are separate claims and the
         // X chip reads the first while the value chips read the second — a fixture carrying
         // only `cmc` can prove nothing about a filter that never looks at it. `Jinnie Fay`
@@ -4032,8 +4035,7 @@ mod tests {
     /// — priced on TCGplayer, unpriced on Cardmarket, **missing from Card Kingdom's feed**,
     /// and priced by Mana Pool, which publishes an etched column.
     fn seeded_marketplaces() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        let conn = crate::schema::memory_pair();
         let lines = [
             priced_line(
                 "a",
@@ -4145,8 +4147,7 @@ mod tests {
     /// is the same answer they get from a search that names none.
     #[test]
     fn the_rarity_chips_or_within_and_leave_the_unoffered_rarities_alone() {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        let conn = crate::schema::memory_pair();
         for (id, name, rarity) in [
             ("1", "Common Card", "common"),
             ("2", "Rare Card", "rare"),
@@ -4283,8 +4284,7 @@ mod tests {
     /// feed does not list it either.
     #[test]
     fn a_collapsed_range_spans_the_printings_that_marketplace_prices() {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        let conn = crate::schema::memory_pair();
         let lines = [
             priced_line(
                 "s1",
@@ -4511,8 +4511,7 @@ mod tests {
     /// printings that share one.
     #[rustfmt::skip]
     fn fixture_with_cards(rows: &[(&str, &str, &str, &str, &str)]) -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        let conn = crate::schema::memory_pair();
         for (id, oracle_id, name, set_code, collector_number) in rows {
             conn.execute(
                 "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,is_paper,search_text,raw)
@@ -4639,8 +4638,7 @@ mod tests {
     /// printings (measured 2026-08-20 against the dev database).
     #[rustfmt::skip]
     fn fixture_with_tags() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        let conn = crate::schema::memory_pair();
         let rows = [
             ("bolt-strong", "o-bolt",  "Lightning Bolt",  Some("illus-strong")),
             ("bolt-weak",   "o-bolt",  "Lightning Bolt",  Some("illus-weak")),

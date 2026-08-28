@@ -132,12 +132,9 @@ pub async fn set_nav_collapsed(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::schema;
 
     fn db() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        schema::migrate(&conn).unwrap();
-        conn
+        crate::schema::memory_pair()
     }
 
     /// The setting outlives the process, so the only thing that matters about it is that what went
