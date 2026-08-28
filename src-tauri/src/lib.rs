@@ -575,6 +575,10 @@ pub fn run() {
             // deleted earlier still, by `await_predecessor`; this is the path that finally
             // clears one whose successor never got that far.)
             let exe = std::env::current_exe().unwrap_or_default();
+            // Desktop only: what it deletes is a staged `.new`/`.old` beside the executable,
+            // and on Android that directory is the app's own native-library folder — nothing
+            // ever stages anything there, and `current_exe()` may name a read-only mount.
+            #[cfg(desktop)]
             update::clean_up(&exe);
 
             // Decided once here — `Updater::new` probes whether it can write beside the exe
@@ -653,6 +657,12 @@ pub fn run() {
             // result is written to `app_meta`, so the ribbon reads it without an event —
             // which also means nothing is lost if this finishes before the webview is
             // listening, the trap `sync:progress` has to work around.
+            //
+            // **Desktop only.** On Android the store is what notices a new release, and asking
+            // GitHub would spend a request and an `app_meta` row to learn something the app
+            // cannot act on — `Updater::new` has already answered `InstallKind::Managed`
+            // there, so every asset is refused and every button is hidden.
+            #[cfg(desktop)]
             tauri::async_runtime::spawn(async move {
                 if let Err(e) = update::check(&state, &updater, false).await {
                     eprintln!("update check failed: {e}");

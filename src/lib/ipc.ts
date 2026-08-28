@@ -3167,8 +3167,15 @@ export interface ReconciledEvent {
  * new release and is offered the release page, never an in-app install. Nobody has ever run
  * a Linux build of this app, and an MSI major upgrade is unverified; guessing at either is
  * how a user ends up with two copies.
+ *
+ * `managed` is Android: the Play Store installed this app and the store is what replaces it.
+ * It is deliberately **not** `other` — `other` means "we could not tell, here is the release
+ * page", and this app's release page offers a Windows exe and an NSIS installer, which is a
+ * worse answer on a phone than no answer. `managed` means something else installs this app,
+ * which is true, is typed, and makes this union exhaustive so `UpdatePanel` cannot forget the
+ * case.
  */
-export type InstallKind = "portable" | "nsis" | "other";
+export type InstallKind = "portable" | "nsis" | "managed" | "other";
 
 /** One downloadable file on a GitHub release. Mirrors `update::Asset`. */
 export interface UpdateAsset {

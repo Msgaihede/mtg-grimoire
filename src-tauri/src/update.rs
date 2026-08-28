@@ -109,6 +109,12 @@ pub enum InstallKind {
     Portable,
     /// An NSIS install. Updates by handing off to the downloaded setup.
     Nsis,
+    /// Something else installs this app and this app does not update itself: the Play Store on
+    /// Android. **Not [`InstallKind::Other`]**, which means "we could not tell, here is the
+    /// release page" — and a release page offering a Windows exe and an NSIS installer to
+    /// someone holding a phone is worse than saying nothing. This one has an answer and it is
+    /// "the store has it".
+    Managed,
     /// An MSI install, a Linux build, or anything unrecognised. Gets the release page and
     /// nothing else — see the module docs.
     Other,
@@ -247,7 +253,7 @@ impl Drop for BusyGuard<'_> {
 
 impl Updater {
     pub fn new(api_base: String, exe: PathBuf) -> Updater {
-        let kind = exe.parent().map_or(InstallKind::Other, detect_install_kind);
+        let kind = install_kind_for(cfg!(mobile), exe.parent());
         let http = reqwest::Client::builder()
             // The same UA the Scryfall client carries, and for the same reason: GitHub
             // requires one, and this one already names the app, its version and its repo
@@ -390,6 +396,25 @@ fn dir_is_writable(dir: &Path) -> bool {
     ok
 }
 
+/// How this build is installed, with the **platform question asked first**.
+///
+/// `mobile` is `cfg!(mobile)` at the one call site. It is a parameter rather than a `cfg`
+/// inside the body so both branches compile and are tested on every platform — the same
+/// reasoning as [`crate::paths::data_dir_for`], and for the same reason: the Android arm is the
+/// one nothing on this machine ever runs.
+///
+/// Asking first is the whole point. [`detect_install_kind`] probes by *writing a file* beside
+/// the executable, and on Android that directory is the app's own native-library folder or a
+/// read-only `/system/bin`. The answer would mean nothing either way — nothing on a phone can
+/// replace the running binary except the store that installed it — so the probe is not merely
+/// useless there, it is a write into a directory the OS replaces wholesale on the next install.
+pub fn install_kind_for(mobile: bool, exe_dir: Option<&Path>) -> InstallKind {
+    if mobile {
+        return InstallKind::Managed;
+    }
+    exe_dir.map_or(InstallKind::Other, detect_install_kind)
+}
+
 pub fn detect_install_kind(exe_dir: &Path) -> InstallKind {
     classify(
         cfg!(windows),
@@ -403,7 +428,9 @@ pub fn pick_asset(assets: &[Asset], kind: InstallKind) -> Option<&Asset> {
     let suffix = match kind {
         InstallKind::Portable => PORTABLE_SUFFIX,
         InstallKind::Nsis => NSIS_SUFFIX,
-        InstallKind::Other => return None,
+        // Neither can download anything, for opposite reasons: `Other` because nothing here
+        // knows what would install it, `Managed` because something else already does.
+        InstallKind::Managed | InstallKind::Other => return None,
     };
     assets
         .iter()
@@ -812,7 +839,7 @@ async fn download_inner(
                 version: release.version.clone(),
             }
         }
-        InstallKind::Other => {
+        InstallKind::Managed | InstallKind::Other => {
             let _ = std::fs::remove_file(&part);
             return Err("this kind of install cannot be updated from inside the app.".into());
         }
@@ -962,7 +989,11 @@ pub fn apply(updater: &Arc<Updater>, app: &tauri::AppHandle) -> Result<(), Strin
                 .spawn()
                 .map_err(|e| format!("could not start the installer: {e}"))?;
         }
-        InstallKind::Other => {
+        // Unreachable in practice — nothing can be staged for either, because `pick_asset`
+        // refuses them and `download` refuses them again. Kept as a refusal rather than an
+        // `unreachable!()` for the reason this module refuses everything else in words: a
+        // panic in the updater takes the window with it.
+        InstallKind::Managed | InstallKind::Other => {
             return Err("this kind of install cannot be updated from inside the app.".into())
         }
     }
@@ -1308,6 +1339,62 @@ mod tests {
         );
     }
 
+    /// Android's install kind is decided by the platform, not by probing the disk.
+    ///
+    /// The probe `detect_install_kind` runs — creating `.mtg-grimoire-write-probe` beside the
+    /// executable — would be attempted in the app's own native-library directory or under
+    /// `/system/bin`, and its answer would mean nothing either way: nothing on a phone can
+    /// replace the running binary except the store that installed it. So the platform question
+    /// is asked **first**, before the disk is touched at all, and this asserts both halves —
+    /// the answer, and the absence of the probe.
+    #[test]
+    fn a_managed_install_is_decided_by_the_platform_and_not_by_a_probe() {
+        let dir = std::env::temp_dir().join("mtgtest-update-managed");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let managed = install_kind_for(true, Some(dir.as_path()));
+        // Read between the two calls: the desktop one below is *supposed* to probe, so a check
+        // taken at the end of the test could never fail.
+        let probed = dir.join(".mtg-grimoire-write-probe").exists();
+
+        // The desktop arm is unchanged — it is still `detect_install_kind`, on a writable
+        // directory with no uninstaller beside it.
+        let desktop = install_kind_for(false, Some(dir.as_path()));
+        let expected = detect_install_kind(dir.as_path());
+        let _ = std::fs::remove_dir_all(&dir);
+
+        assert_eq!(managed, InstallKind::Managed);
+        assert_eq!(desktop, expected);
+        assert!(
+            !probed,
+            "the managed branch must not write a probe file beside the executable"
+        );
+    }
+
+    /// No executable directory at all is still `Other` on desktop, which is the arm
+    /// `Updater::new` already had and which must survive the platform question being asked
+    /// first.
+    #[test]
+    fn no_executable_directory_is_still_other_on_desktop() {
+        assert_eq!(install_kind_for(false, None), InstallKind::Other);
+        assert_eq!(install_kind_for(true, None), InstallKind::Managed);
+    }
+
+    /// `Managed` can download nothing. `pick_asset` must refuse before it ever matches a
+    /// filename — a release's `-setup.exe` is not an answer to a phone, and neither is the
+    /// portable zip.
+    #[test]
+    fn a_managed_install_picks_no_asset() {
+        let release = parse_release(&live_payload()).unwrap();
+
+        assert!(pick_asset(&release.assets, InstallKind::Managed).is_none());
+        // And the two that DO pick still do — this is the assertion that makes the addition a
+        // widening rather than a change.
+        assert!(pick_asset(&release.assets, InstallKind::Portable).is_some());
+        assert!(pick_asset(&release.assets, InstallKind::Nsis).is_some());
+    }
+
     #[test]
     fn the_install_kind_is_decided_by_an_uninstaller_and_a_writable_folder() {
         assert_eq!(classify(true, true, true), InstallKind::Nsis);
@@ -1517,10 +1604,13 @@ mod tests {
         let progress = serde_json::to_value(UpdateProgress { done: 5, total: 10 }).unwrap();
         assert_eq!(progress, serde_json::json!({"done": 5, "total": 10}));
 
-        // The three install kinds are a closed union on the other side too.
+        // The four install kinds are a closed union on the other side too. `src/lib/ipc.ts`
+        // mirrors this by hand, and a rename here with no rename there is a status the panel
+        // renders as no branch at all.
         for (kind, name) in [
             (InstallKind::Portable, "portable"),
             (InstallKind::Nsis, "nsis"),
+            (InstallKind::Managed, "managed"),
             (InstallKind::Other, "other"),
         ] {
             assert_eq!(serde_json::to_value(kind).unwrap(), name);
