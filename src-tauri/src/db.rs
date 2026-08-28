@@ -418,19 +418,27 @@ pub const OPFS_VFS_NAME: &str = "opfs-sahpool";
 /// every index in `CARDS_INDEXES`, and rebuilds an external-content FTS index — and with
 /// [`OPFS_TEMP_STORE`] set to `FILE` every temporary b-tree behind those is a pool file too.
 ///
-/// At **12** the first run died 16 s in with `memory access out of bounds`, before a single
-/// 2 000-row batch had reported, and the page sat on "0 cards" forever. At **64** the same run
-/// reaches 117 606 cards and renders the app. This is a ceiling on *concurrent* files rather
-/// than a reservation — the pool grows lazily — so headroom here is close to free and running
-/// out of it is not survivable.
+/// **64 is headroom that has never been justified by a measurement, and the story it used to
+/// carry was wrong.** It was raised from 12 because at 12 the first run died 16 s in with
+/// `memory access out of bounds`, and at 64 it sometimes reached the end — which looked like a
+/// cure and was not: that failure was a corrupted heap (two wasm instances in one Worker, see
+/// [`crate::web::glue::open`] and `docs/reference/web-target.md`), and changing how many files
+/// the pool preallocates only changed where the allocations landed. The real fix is in
+/// `src/workers/db.ts`. Whether 12 would do now has **not** been re-measured, and this was left
+/// at 64 deliberately rather than churned: the pool preallocates its files at install and
+/// running out of slots mid-ingest is not survivable, so that is an experiment to run on
+/// purpose.
 #[cfg(target_family = "wasm")]
 const OPFS_INITIAL_CAPACITY: u32 = 64;
 
 /// Where SQLite builds the sort trees behind `CREATE INDEX` and an FTS rebuild.
 ///
 /// Named rather than inline because it is half of one decision with
-/// [`OPFS_INITIAL_CAPACITY`]: sending these to the VFS is what stops the ingest exhausting
-/// wasm's linear memory, and it is what makes the pool need the file slots.
+/// [`OPFS_INITIAL_CAPACITY`]: it is what makes the pool need the file slots. **It is also, like
+/// that constant, unproven** — it was added against a failure since root-caused to something
+/// else entirely, and has not been re-measured against a build that instantiates the wasm
+/// module once. Peak linear memory over a whole first run is 148–172 MB, which is not a number
+/// under pressure.
 #[cfg(target_family = "wasm")]
 const OPFS_TEMP_STORE: &str = "FILE";
 
@@ -443,7 +451,16 @@ const OPFS_TEMP_STORE: &str = "FILE";
 /// **This call is the one-tab guard's trigger, and that was measured rather than assumed.**
 /// A second document of the same origin fails *here* — not at [`open_pooled_pair`] — with
 /// `CreateSyncAccessHandle(JsValue(NoModificationAllowedError: …))`. The first tab holds every
-/// handle in the pool, so the second never gets as far as naming a database.
+/// handle in the pool, so the second never gets as far as naming a database. Counted directly
+/// on 2026-08-28 from a throwaway Worker in the holding tab: **0 of 64 files lockable, 64 of 64
+/// refused**, exclusivity being global rather than per-document.
+///
+/// **A refusal here is only as good as the caller's control flow.** Until `src/workers/db.ts`
+/// stopped instantiating the module twice, the refused instance was resumed through the other
+/// instance's memory and this function returned `Ok` from a call the browser had denied —
+/// after which [`open_pooled_pair`] opened `user.db` on whatever VFS was still the default,
+/// which is the in-memory one `sqlite3_os_init` installs. The second tab got a private empty
+/// database and said `dataDir: "OPFS:/mtg-grimoire"` about it.
 ///
 /// **Cross-origin isolation is not required.** The same page was served with and without
 /// `Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy: require-corp`
@@ -487,13 +504,15 @@ pub fn open_pooled_pair() -> rusqlite::Result<(Connection, Journal, Journal)> {
     let user = apply_pragmas(&conn, None)?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
     conn.busy_timeout(BUSY_TIMEOUT)?;
-    // **Temporary b-trees go to the VFS, not to linear memory, and this is what makes the
-    // first run finish at all.** On `wasm32-unknown-unknown` SQLite's default `temp_store` is
-    // memory, and the staging swap's index replay and FTS rebuild build their sort trees
-    // there: measured 2026-08-28, the ingest reached 116 000 rows and then panicked in
-    // `dlmalloc` — an allocator that cannot grow linear memory any further — leaving the page
-    // on a frozen count. With this line the same run completes and the app renders. The cost
-    // is pool files, which is why [`OPFS_INITIAL_CAPACITY`] is what it is.
+    // Temporary b-trees go to the VFS rather than to linear memory. On
+    // `wasm32-unknown-unknown` SQLite's default `temp_store` is memory, and the staging swap's
+    // index replay and FTS rebuild build their sort trees there.
+    //
+    // **This used to be described as what makes the first run finish, and that was a
+    // misreading.** The ingest's `dlmalloc` panic was heap corruption, not an allocator out of
+    // room — see [`OPFS_TEMP_STORE`] — and this line only moved its threshold. It is kept
+    // because sorting 117 606 rows outside linear memory is defensible on its own; it is not
+    // kept because it was proved necessary.
     //
     // Per-connection and web-only: desktop has a real filesystem and its own default is
     // already right there.

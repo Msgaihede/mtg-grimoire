@@ -56,16 +56,56 @@ let glue: Glue | undefined;
 const GLUE_URL = new URL("/wasm/mtg_grimoire_lib.js", self.location.origin).href;
 const WASM_URL = new URL("/wasm/mtg_grimoire_lib_bg.wasm", self.location.origin).href;
 
-async function load(): Promise<Glue> {
-  if (!glue) {
-    const mod = (await import(/* @vite-ignore */ GLUE_URL)) as Glue;
-    await mod.default({ module_or_path: WASM_URL });
-    glue = mod;
-  }
-  return glue;
+/**
+ * Run `make` at most once, **including for callers that arrive while the first one is still
+ * awaiting**.
+ *
+ * The distinction is the whole point, and getting it wrong is what broke the first run.
+ * A guard that reads a variable the work only sets at the *end* is not a guard at all in a
+ * message loop: two `postMessage`s that land in the same turn both find it unset, and both
+ * do the work. Memoising the promise is what makes the second caller wait for the first
+ * rather than race it.
+ */
+export function once<T>(make: () => Promise<T>): () => Promise<T> {
+  let started: Promise<T> | undefined;
+  return () => (started ??= make());
 }
 
+/**
+ * Load the glue and instantiate the wasm module. Once per Worker, and that is load-bearing.
+ *
+ * **Two concurrent calls used to make two `WebAssembly.Memory`s, and that is what killed
+ * every failing first run.** `wasm-bindgen`'s own re-entry guard is `if (wasm !== undefined)
+ * return wasm`, read synchronously on entry — and `wasm` is assigned only after the
+ * instantiate resolves, so two overlapping calls both sail past it and both instantiate.
+ * The glue then holds *one* `wasm` binding pointing at the second instance while every
+ * callback the first one registered — each `JsFuture`'s `then`, every `Closure` — is still
+ * dispatched through it. Those carry pointers into a linear memory that is no longer the one
+ * being indexed.
+ *
+ * Measured 2026-08-28 in the Worker: `distinctMemories=2`, then
+ * `Error: closure invoked recursively or after being dropped` about 40 ms later, then a
+ * `dealloc` of a chunk that was never allocated — `panicked at dlmalloc.rs:1201:
+ * assertion failed: psize >= size + min_overhead`, which is dlmalloc checking a free
+ * against its own header rather than running out of anything. The trap took the Worker with
+ * it and the page sat on a frozen card count. `<React.StrictMode>` is what sent the two
+ * messages (it invokes `WebBoot`'s effect twice), but any two calls arriving before the
+ * module has finished loading would do it.
+ */
+const load = once(async (): Promise<Glue> => {
+  const mod = (await import(/* @vite-ignore */ GLUE_URL)) as Glue;
+  await mod.default({ module_or_path: WASM_URL });
+  glue = mod;
+  return mod;
+});
+
 const send = (message: FromWorker) => self.postMessage(message);
+
+/** The one `open`, memoised on the first call — the answer included. See `case "open"`. */
+let opening: Promise<Opened> | undefined;
+function open(wasm: Glue, directory: string): Promise<Opened> {
+  return (opening ??= wasm.open(directory).then((json) => JSON.parse(json) as Opened));
+}
 
 self.addEventListener("message", (e: MessageEvent<ToWorker>) => {
   void handle(e.data);
@@ -76,8 +116,15 @@ async function handle(message: ToWorker): Promise<void> {
     const wasm = await load();
     switch (message.kind) {
       case "open": {
-        const opened = JSON.parse(await wasm.open(message.directory)) as Opened;
-        send({ kind: "opened", opened });
+        // Memoised too, and this one is hygiene rather than a fix: removing it and letting
+        // StrictMode's two effects each open the database was run as a mutation on
+        // 2026-08-28 and **survived**, three clean first runs of three. `sqlite-wasm-vfs`
+        // registers its pool by VFS name and hands the second caller the one already
+        // registered, so a second open does not make a second pool. What it does make is a
+        // second `Connection`, a second run of every migration, and a second build of the
+        // facet index over all 117 606 rows — none of which a Worker that owns exactly one
+        // database has any use for. One open, one answer, and the refusal is an answer.
+        send({ kind: "opened", opened: await open(wasm, message.directory) });
         return;
       }
       case "call": {
