@@ -1,8 +1,6 @@
-import { useEffect, useRef, useState, type ReactElement } from "react";
-import {
-  dropTargetForElements,
-  monitorForElements,
-} from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
+import { type ReactElement } from "react";
+import { CollisionPriority } from "@dnd-kit/abstract";
+import { useDndDragging, useDndDropTarget, useDndTargetRef } from "@/lib/dndTarget";
 import { Trash2 } from "lucide-react";
 import type { DeckVariant } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
@@ -11,8 +9,8 @@ import { pricesAsOf } from "@/lib/prices";
 import { cn } from "@/lib/utils";
 import {
   dropWrites,
+  readCards,
   readDragData,
-  readDragGroup,
   type DeckWrite,
   type DragPayload,
 } from "./dnd";
@@ -128,55 +126,38 @@ export function PriceStrip({
    * exists: the tray is drawn from it, and a card being dragged *in* from the search panel has
    * nothing to remove.
    */
-  const [dragging, setDragging] = useState<DragPayload | null>(null);
-  /** Whether the card being dragged is over the tray, so the tray can say what letting go
-   *  would do. */
-  const [overTray, setOverTray] = useState(false);
-  const trayRef = useRef<HTMLDivElement>(null);
+  const dragging = useDndDragging((data) => {
+    // Narrowed to the deck's **own** cards: a tile dragged in from the panel is not something
+    // the tray can take, and a hook that answered for it would re-render this strip — and, when
+    // this lived in the editor, the panel and the very tile the reader has hold of — mid-drag.
+    const card = readDragData(data);
+    return card?.kind === "deck-card" ? card : null;
+  });
 
-  // What is being dragged out of the deck, for as long as it is. `canMonitor` narrows this to
-  // the deck's own cards: a tile dragged in from the panel is not something the tray can take,
-  // and a monitor that answered for it would re-render this strip — and, when this lived in the
-  // editor, the panel and the very tile the reader has hold of — in the middle of the drag.
-  useEffect(
-    () =>
-      monitorForElements({
-        canMonitor: ({ source }) => readDragData(source.data)?.kind === "deck-card",
-        onDragStart: ({ source }) => setDragging(readDragData(source.data)),
-        // Dropped, or cancelled with Escape: the platform's own way out of a drag ends in the
-        // same event, so the tray goes away either way without this view hearing a keypress.
-        onDrop: () => {
-          setDragging(null);
-          setOverTray(false);
-        },
-      }),
-    [],
-  );
-
-  // The tray, while it exists. Registered from an effect that re-runs when it mounts, because
-  // it only exists during a drag — a drop target added mid-drag is picked up on the next
-  // `dragover`, which is how a tray that appears on `dragstart` can be dropped on at all.
-  const trayShown = dragging !== null;
-  useEffect(() => {
-    const element = trayRef.current;
-    if (!element) return;
-    const writesFor = (data: Record<string, unknown>) =>
-      dropWrites(readDragGroup(data), { kind: "remove" });
-    return dropTargetForElements({
-      element,
-      canDrop: ({ source }) => writesFor(source.data).length > 0,
-      onDragEnter: () => setOverTray(true),
-      onDragLeave: () => setOverTray(false),
-      onDrop: ({ source }) => {
-        setOverTray(false);
-        // Every deck row the drag was carrying. A group holding a card from another wall drops
-        // the four this tray *can* take and passes over the rest — `dropWrites`' rule, and the
-        // reason `canDrop` above asks for one rather than for all.
-        const writes = writesFor(source.data);
-        if (writes.length > 0) onRemove(writes);
-      },
-    });
-  }, [trayShown, onRemove]);
+  // The tray, while it exists. It is drawn only during a drag, so its element arrives *after*
+  // this component mounted — {@link useDndTargetRef} is what makes that a registration rather
+  // than an effect that ran against `null` and never ran again. A droppable registered mid-drag
+  // enters the next collision pass, which is how a tray that appears on `dragstart` can be
+  // dropped on at all.
+  //
+  // **`collisionPriority` for `QuickZones`' reason**: this tray is drawn *over* the strip at the
+  // foot of the deck, and dnd-kit ranks overlapping targets by distance to a droppable's centre
+  // with no regard for what is painted on top.
+  const { ref: trayRef, attach: attachTray } = useDndTargetRef();
+  const writesFor = (payloads: DragPayload[]) => dropWrites(payloads, { kind: "remove" });
+  const { over: overTray } = useDndDropTarget({
+    ref: trayRef,
+    read: readCards,
+    canDrop: (payloads) => writesFor(payloads).length > 0,
+    onDrop: (payloads) => {
+      // Every deck row the drag was carrying. A group holding a card from another wall drops
+      // the four this tray *can* take and passes over the rest — `dropWrites`' rule, and the
+      // reason `canDrop` above asks for one rather than for all.
+      const writes = writesFor(payloads);
+      if (writes.length > 0) onRemove(writes);
+    },
+    collisionPriority: CollisionPriority.Highest,
+  });
 
   return (
     /* **`sticky bottom-0` while a card is in the air, and only then** (2026-08-14). The deck
@@ -216,7 +197,7 @@ export function PriceStrip({
         // make, and the click path it shortcuts — the stepper's zero — is the one a screen
         // reader is given.
         <div
-          ref={trayRef}
+          ref={attachTray}
           aria-hidden="true"
           className={cn(
             "absolute inset-x-0 -top-3 bottom-0 flex items-center justify-center gap-1.5",

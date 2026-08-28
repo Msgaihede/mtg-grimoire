@@ -20,9 +20,9 @@
  * — and the command needs the deck's whole list. See {@link useCategoryReorderDrop}'s note on
  * addressing a move by **ids**.
  */
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useState } from "react";
 import { PointerActivationConstraints, PointerSensor } from "@dnd-kit/dom";
-import { dndDraggable, useDndDropTarget } from "@/lib/dndTarget";
+import { dndDraggable, useDndDropTarget, useDndTargetRef } from "@/lib/dndTarget";
 
 /**
  * The mark that says a drag is a category being moved, and nothing else.
@@ -97,13 +97,11 @@ export function useCategoryReorderDrop(
 ) {
   const enabled = categoryId !== null && onMove !== undefined;
 
-  // **The element is state rather than a `useRef`, and that is not a workaround.**
-  // `useDndDropTarget` reads `ref.current` once, in an effect keyed on the ref *object*, so a
-  // hook whose element arrives through a callback has to hand it a new object when it arrives —
-  // and hand it another if React ever swaps the element under it, which a plain ref would hide.
-  // It costs one extra render at mount, which is when there is nothing to re-render.
-  const [element, setElement] = useState<HTMLElement | null>(null);
-  const ref = useMemo(() => ({ current: element }), [element]);
+  // `attach` rather than `ref` — React's ref lint reads a hook result called `ref` as a ref
+  // object and flags every read beside it as a ref access during render. `useCategoryDrop`
+  // carries the same name for the same reason, and {@link useDndTargetRef} carries why the
+  // element has to be state rather than a plain ref.
+  const { ref, attach } = useDndTargetRef();
 
   // The same question twice — "a pile is in the air and it is not this one" — asked once for the
   // ring and once for the write. A pile dragged over itself lights nothing.
@@ -118,14 +116,6 @@ export function useCategoryReorderDrop(
     [categoryId, onMove],
   );
   const { armed, over } = useDndDropTarget({ ref, read: readCategoryDrag, canDrop, onDrop });
-
-  // `attach` rather than `ref` — React's ref lint reads a hook result called `ref` as a ref
-  // object and flags every read beside it as a ref access during render. `useCategoryDrop`
-  // carries the same name for the same reason.
-  const attach = useCallback((el: HTMLElement | null) => {
-    setElement(el);
-    return () => setElement(null);
-  }, []);
 
   return { attach, over: over && enabled, eligible: armed && enabled };
 }

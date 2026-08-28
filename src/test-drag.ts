@@ -5,7 +5,15 @@ import { afterEach } from "vitest";
 /**
  * A native HTML5 drag, driven from a test.
  *
- * **Why this is possible at all.** jsdom implements no drag-and-drop: there is no
+ * **Nothing calls any of this any more, and it is kept for exactly one more plan.** Every drag in
+ * the app is `@dnd-kit/dom`'s since 3b, so `startDrag`, `dragOnto` and `fireDragEvent` have zero
+ * call sites — `grep` says so — and the two `package.json` lines that keep
+ * `@atlaskit/pragmatic-drag-and-drop` installed are what still make this file compile. 3c takes
+ * the dependency and this half of the harness out together; taking it out here would be a
+ * `package.json` change inside a commit about drag payloads. What is live below is
+ * {@link startPointerDrag}, {@link pointerDrag}, {@link boxed} and {@link recordDrags}.
+ *
+ * **Why this was possible at all.** jsdom implements no drag-and-drop: there is no
  * `DragEvent`, no `DataTransfer`, and every rectangle it measures is zero. The usual
  * conclusion — that a drag can only be verified in a real window — is wrong for the library
  * this app drags with. `@atlaskit/pragmatic-drag-and-drop` hit-tests with `event.target` and
@@ -218,6 +226,22 @@ export async function dragOnto(source: Element, target: Element): Promise<void> 
  */
 
 /**
+ * Every record a drag puts in the air, for a test that is about what a source **carries** rather
+ * than about where it lands.
+ *
+ * The replacement for `monitorForElements({ onDragStart })`, which nine suites used for exactly
+ * this. `dndManager` is a module singleton with one monitor, so a test that leaves this up leaks
+ * a listener into the rest of the file — hence the `stop`, which every caller must run.
+ */
+export function recordDrags(): { records: Record<string, unknown>[]; stop: () => void } {
+  const records: Record<string, unknown>[] = [];
+  const stop = dndManager.monitor.addEventListener("dragstart", ({ operation }) => {
+    if (operation.source) records.push(operation.source.data);
+  });
+  return { records, stop };
+}
+
+/**
  * Give an element a box.
  *
  * **jsdom has no layout engine, so every `getBoundingClientRect` in the suite is four zeroes** —
@@ -310,9 +334,25 @@ function fire(type: string, at: { x: number; y: number }, target: EventTarget): 
  * and never the drop.
  */
 async function settle(): Promise<void> {
-  await frame();
-  dndManager.collisionObserver.forceUpdate();
-  await frame();
+  // **Twice, because the operation's target follows the collisions one hop behind.** The
+  // observer's own reaction disables it, calls `setDropTarget`, and re-enables it on the promise
+  // that resolves — so the pass that *changes* which droppable is first is not the pass that
+  // moves the target onto it. Measured on the quick-zone-over-a-pile case: after one pass the
+  // collisions were `[zone, pile]` and `operation.target` was still the pile.
+  for (let pass = 0; pass < 2; pass++) {
+    await frame();
+    // **Re-measure every target before the collision pass**, because jsdom cannot.
+    // `Droppable`'s shape comes from a `PositionObserver` the library creates the moment a drag
+    // starts and that element accepts the payload; the observer measures once and then waits for
+    // a callback jsdom never delivers. That is fine for a target boxed before the gesture — the
+    // one measurement is right — and silently wrong for one that appears **during** it: the
+    // quick-zone bar and the remove tray are both drawn on `dragstart`, so their first and only
+    // measurement is taken while their rect is still four zeroes, and they could never be
+    // collided with afterwards.
+    for (const droppable of dndManager.registry.droppables) droppable.refreshShape();
+    dndManager.collisionObserver.forceUpdate();
+    await frame();
+  }
 }
 
 /**

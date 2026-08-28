@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
 import { Draggable, Droppable } from "@dnd-kit/dom";
-import { dndId, dndManager, registerNow } from "@/lib/dndManager";
+import { carryAtDragStart, dndId, dndManager, registerNow } from "@/lib/dndManager";
 
 /**
  * The drop-target effect this app writes eight times, written once.
@@ -123,6 +123,36 @@ export function useDndDropTarget<T>({
 }
 
 /**
+ * An element that arrives through a **callback ref**, in the shape {@link useDndDropTarget} reads.
+ *
+ * **Why a target cannot always just hand over a `useRef`.** That hook reads `ref.current` once, in
+ * an effect keyed on the ref *object* — which is right for a target whose element is rendered by
+ * the same component, because React attaches refs during the commit and effects run after it. It
+ * is wrong for the three targets whose element does not exist at mount: a hook that hands its
+ * caller an `attach` callback (`useCategoryDrop`, `useCategoryReorderDrop`), a box drawn only for
+ * the length of a drag (the remove tray), and any element React swaps out under a live
+ * registration. In all three the effect would have run against `null` and never run again.
+ *
+ * So the element is **state**: a new object identity when it arrives, which is what re-runs the
+ * effect. It costs one extra render at mount, which is when there is nothing to re-render.
+ *
+ * `attach` returns a cleanup, which React 19 calls **instead of** invoking the callback with
+ * `null` — so a caller chaining it with another registration chains the cleanups too.
+ */
+export function useDndTargetRef(): {
+  ref: RefObject<HTMLElement | null>;
+  attach: (element: HTMLElement | null) => () => void;
+} {
+  const [element, setElement] = useState<HTMLElement | null>(null);
+  const ref = useMemo(() => ({ current: element }), [element]);
+  const attach = useCallback((next: HTMLElement | null) => {
+    setElement(next);
+    return () => setElement(null);
+  }, []);
+  return { ref, attach };
+}
+
+/**
  * What is in the air anywhere in the window, as this feature reads it — or `null`.
  *
  * The **payload** rather than a bare boolean, because every caller needs it: the sidebar draws a
@@ -156,15 +186,38 @@ export function useDndDragging<T>(read: (data: Record<string, unknown>) => T | n
 }
 
 /**
+ * The mark a registered drag source carries, so a test, a story or a live probe can find one.
+ *
+ * **It replaces `draggable="true"`, which is what pragmatic-dnd set and what a dozen selectors in
+ * this repo read — and it may not be spelled that way.** `PointerSensor.handlePointerDown`
+ * computes `isNativeDraggable` from exactly that attribute and **stands down** for a press on one,
+ * leaving the gesture to the platform's own HTML5 drag; writing it back would turn every drag in
+ * the app off while every one of those selectors went on passing.
+ *
+ * It is set on registration and removed on teardown, so it says "this element is a live drag
+ * source" rather than "somebody once registered here" — which is the whole of what the old
+ * attribute meant and the reason a test can tell a wall that drags from one that does not.
+ */
+export const DND_SOURCE_ATTR = "data-dnd-source";
+
+/**
  * An element that can be picked up, carrying whatever record its caller writes.
  *
- * **`folderDraggable`'s body with the folder taken out**, and every decision in it is that
- * function's, kept: the record is read at the **press** rather than at registration, so a row
- * renumbered, renamed or re-filed since it mounted carries what it is now; dnd-kit's `data` is a
- * settable accessor rather than a callback the library calls, so the refresh hangs off a
- * capture-phase `pointerdown` on the element, which is the phase a control that stops the press
- * from propagating cannot hide from; and a press always precedes a drag, so there is no gesture
- * this can miss.
+ * **`folderDraggable`'s body with the folder taken out**, and one decision changed: the record is
+ * read **as the drag begins**, not at registration and not at the press. A row renumbered,
+ * renamed or re-filed since it mounted therefore carries what it is now — which is the whole
+ * reason `data` is a callback — and dnd-kit's `data` is a settable accessor rather than something
+ * the library asks for, so `dndManager.ts`'s `carryAtDragStart` sets it from one `beforedragstart`
+ * listener for the whole window.
+ *
+ * **`beforedragstart` and not `pointerdown`, and the difference is a measured bug.** `data` is not
+ * always a pure read: a card wall's is `dragData(payload(), rest())`, and `rest` goes through
+ * `useCardSelection.dragsAll`, which **throws the picked set away** when the drag starts outside
+ * it. Refreshed on every press, a plain click on an unpicked tile cleared the reader's selection
+ * *before* the click that was meant to extend it — measured in `CardGrid.test.tsx`, where a
+ * Ctrl-click after a plain one came back holding one card instead of two. Refreshed at
+ * registration it was worse: a re-render of the wall did it. `pdnd` asked for the record at
+ * `dragstart` and nowhere else, and this is that timing, kept.
  *
  * **There is no `canDrag` and no `mousedown` guard here, and that is a removal rather than an
  * omission.** `lib/dndManager.ts` configures `PointerSensor.preventActivation` with the app's own
@@ -197,7 +250,8 @@ export function dndDraggable({
     {
       id: dndId("drag"),
       element,
-      data: data(),
+      // Empty until the drag begins — see above. Never the record a drag carries.
+      data: {},
       // `register: false` and a registration of our own — see {@link registerNow}.
       register: false,
       ...(handle === undefined ? {} : { handle }),
@@ -206,12 +260,11 @@ export function dndDraggable({
     dndManager,
   );
   registerNow(draggable);
-  const refresh = () => {
-    draggable.data = data();
-  };
-  element.addEventListener("pointerdown", refresh, true);
+  const forget = carryAtDragStart(draggable, data);
+  element.setAttribute(DND_SOURCE_ATTR, "");
   return () => {
-    element.removeEventListener("pointerdown", refresh, true);
+    forget();
+    element.removeAttribute(DND_SOURCE_ATTR);
     draggable.destroy();
   };
 }

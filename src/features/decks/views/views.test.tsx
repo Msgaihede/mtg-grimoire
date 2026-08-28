@@ -19,7 +19,7 @@ import { MARKETPLACES, type Marketplace } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
 import { dndManager } from "@/lib/dndManager";
-import { boxed, dragOnto, startPointerDrag } from "@/test-drag";
+import { boxed, pointerDrag, startPointerDrag } from "@/test-drag";
 import { card } from "../validation/fixtures";
 import type { ValidationIssue } from "../validation/types";
 import { stackCardWidth, stackLiftRoom } from "../CardStack";
@@ -43,6 +43,26 @@ import {
 } from "./StackView";
 import { TableView } from "./TableView";
 import { TextView } from "./TextView";
+
+/**
+ * A card carried from wherever it sits into a pile, as a real pointer gesture.
+ *
+ * **Both ends need a box.** jsdom has no layout engine, so every `getBoundingClientRect` is four
+ * zeroes, and dnd-kit hit-tests by coordinate — a source with no box is pressed at the origin and
+ * a target with no box can never be collided with, both silently. The pile is boxed well clear of
+ * the card so the pointer really travels between two distinct places.
+ *
+ * The pile's `<section>` is the target: it carries the card drop (`useCategoryDrop`), while the
+ * reorder wrapper nested inside it carries the category drop. Both are dnd-kit `Droppable`s on
+ * overlapping boxes now, and what keeps them apart is `accepts()` — `readCards` refuses a category
+ * payload and `readCategoryDrag` refuses a card's — asked by `computeCollisions` before either is
+ * measured.
+ */
+async function cardOnto(source: HTMLElement, pile: HTMLElement): Promise<void> {
+  boxed(source, 0);
+  boxed(pile, 200, 80);
+  await pointerDrag(source, pile);
+}
 
 /**
  * jsdom lays nothing out, so `@tanstack/react-virtual` computes an empty window and the table
@@ -731,7 +751,7 @@ describe.each(VIEWS)("$name editing", ({ render: renderView }) => {
       `[${DECK_CARD_ATTR}="${deckCardSlot(RAMP.id, "c-Sol Ring", null)}"]`,
     )!;
 
-    await dragOnto(marked.closest("li") ?? marked, target);
+    await cardOnto(marked.closest("li") ?? marked, target);
 
     // A list of one, because a drop carries every card it was picked up with (issue #214) and an
     // ordinary drag carries one. The array is the shape, not the count.
@@ -1720,7 +1740,7 @@ describe("StackView command zone", () => {
     expect(target).not.toBeNull();
     const marked = control(RAMP.id, "Sol Ring")!;
 
-    await dragOnto(marked.closest("li") ?? marked, target!);
+    await cardOnto(marked.closest("li") ?? marked, target!);
 
     expect(drop).toHaveBeenCalledWith([
       {
@@ -2270,7 +2290,7 @@ describe.each(COLUMN_VIEWS)(
         `[${DECK_CARD_ATTR}="${deckCardSlot(RAMP.id, "c-Sol Ring", null)}"]`,
       )!;
 
-      await dragOnto(marked.closest("li") ?? marked, target!);
+      await cardOnto(marked.closest("li") ?? marked, target!);
 
       expect(drop).toHaveBeenCalledWith([
         {
@@ -3179,14 +3199,15 @@ describe("StackView reordering", () => {
   });
 
   /**
-   * **The card drop the reorder target sits inside still works**, and this is the regression the
-   * wrapper element could cause and nothing else would catch.
+   * **The card drop the reorder target sits inside still works**, and this is the regression two
+   * overlapping droppables could cause and nothing else would catch.
    *
-   * A card let go over a pile hits that wrapper first — it is an ancestor of every card in the
-   * column — and is refused by its `canDrop`; pdnd then walks to `element.parentElement`, which is
-   * the `<section>` that has taken card drops all along. Dropping **on the card** rather than on
-   * the section is the whole point of the case: aimed at the section, the wrapper is never in the
-   * chain and a broken `canDrop` would pass.
+   * The wrapper is an ancestor of every card in the column and takes the same rectangle as the
+   * section around it, so a pointer aimed at the pile is inside both. Under pragmatic-dnd the
+   * wrapper refused the card in `canDrop` and the library then walked to `element.parentElement`;
+   * under dnd-kit there is no walk — `computeCollisions` **skips** a droppable whose `accepts()`
+   * is false before it measures it, so the section is the only candidate left. Disjoint `accept`s
+   * are the whole mechanism, and this is the case that says so.
    */
   it("still lets a card be dropped into a pile through the reorder target", async () => {
     const drop = vi.fn();
@@ -3195,9 +3216,13 @@ describe("StackView reordering", () => {
     const marked = document.querySelector<HTMLElement>(
       `[${DECK_CARD_ATTR}="${deckCardSlot(RAMP.id, "c-Sol Ring", null)}"]`,
     )!;
-    const intoDraw = document.getElementById(`group-cat-${DRAW.id}`)!;
+    // The pile's whole `<section>`, and every wrapper inside it given the same rect — which is
+    // what puts the reorder target in the collision pass beside the card target rather than
+    // leaving it out of it, so the refusal above is exercised rather than assumed.
+    const intoDraw = boxPile(pile("Draw"), 200);
 
-    await dragOnto(marked.closest("li") ?? marked, intoDraw);
+    boxed(marked.closest("li") ?? marked, 0);
+    await pointerDrag(marked.closest("li") ?? marked, intoDraw);
 
     // The whole write, spelled as the sibling case above spells it: this is a claim that the
     // card drop is **untouched** by the reorder target sitting inside its section, so a field

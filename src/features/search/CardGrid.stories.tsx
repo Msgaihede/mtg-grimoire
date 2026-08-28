@@ -1,4 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
+import { DND_SOURCE_ATTR } from "@/lib/dndTarget";
 import { expect, fireEvent, fn, userEvent, within } from "storybook/test";
 import { GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
 import { OwnedBadge } from "@/components/OwnedBadge";
@@ -419,7 +420,7 @@ export const Draggable: Story = {
     // The **root** carries it, not the art: the whole tile is the handle. Asserted through
     // `closest` from the button rather than on `tile` directly, so this still holds if the
     // registration ever moves to a wrapper.
-    await expect(within(tile).getByRole("button").closest('[draggable="true"]')).not.toBeNull();
+    await expect(within(tile).getByRole("button").closest(`[${DND_SOURCE_ATTR}]`)).not.toBeNull();
   },
 };
 
@@ -443,7 +444,7 @@ export const Draggable: Story = {
 export const NotDraggable: Story = {
   play: async ({ canvasElement }) => {
     const tile = tileFor(canvasElement, "LEA · 161");
-    await expect(within(tile).getByRole("button").closest('[draggable="true"]')).toBeNull();
+    await expect(within(tile).getByRole("button").closest(`[${DND_SOURCE_ATTR}]`)).toBeNull();
     // The art still says `draggable="false"` — that one is the component's own, unconditional,
     // and unrelated to whether the tile is a source. Named here so the assertion above is
     // understood as "no registration", not "nothing in this tile mentions dragging".

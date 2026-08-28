@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { DND_SOURCE_ATTR } from "@/lib/dndTarget";
 import userEvent from "@testing-library/user-event";
 import type { UserEvent } from "@testing-library/user-event";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -24,7 +25,7 @@ import {
   TooltipProvider,
 } from "@/components/tooltip/TooltipProvider";
 import { fromDeckCard } from "@/features/transfer/TransferCard";
-import { dragOnto, startDrag } from "@/test-drag";
+import { boxed, pointerDrag, startPointerDrag } from "@/test-drag";
 import { openDropdown, pickOption } from "@/test-dropdown";
 import {
   CARD_BODY_ATTR,
@@ -3724,10 +3725,30 @@ describe("DeckEditor drag and drop", () => {
    */
   const TRAY_TEXT = /remove(\s.*)? from deck/i;
 
-  /** A card in the deck, from the name it shows. The `<li>` is the drag handle — the whole
-   *  card is. */
+  /**
+   * A card in the deck, from the name it shows, **with a box**. The `<li>` is the drag handle —
+   * the whole card is.
+   *
+   * jsdom has no layout engine, so every `getBoundingClientRect` is four zeroes and dnd-kit
+   * hit-tests by coordinate: a source with no box is pressed at the origin, which is wherever the
+   * last boxed thing happens to be. The card sits at the top and every target below it.
+   */
   const card_ = (name: string) =>
-    screen.getByRole("button", { name: new RegExp(`^${name}`) }).closest("li")!;
+    boxed(screen.getByRole("button", { name: new RegExp(`^${name}`) }).closest("li")!, 0);
+
+  /** A pile, boxed clear of the card above it, so a drop really arrives somewhere else. */
+  const boxedGroup = (name: string) => boxed(group(name), 300, 80);
+
+  /** One box in the bar. Addressed by its attribute rather than by its text: the bar is
+   *  `aria-hidden` and `Sideboard` is also a heading on the desk behind it. */
+  const zone = (label: string) =>
+    document.querySelector<HTMLElement>(`[${QUICK_ZONE_ATTR}="${label}"]`)!;
+
+  /** One quick zone or the remove tray, boxed where the bar and the tray really are: the zones
+   *  ride the top of the editor and the tray the foot of it, so neither can be mistaken for a
+   *  pile in between. Boxed at the moment it is asked for, because both are drawn only while a
+   *  card is in the air. */
+  const boxedZone = (label: string) => boxed(zone(label), 100, 60);
 
   /** One result in the panel, for the drags that start there. The getter opens the panel first,
    *  because it starts shut and a tile that is not drawn is not a drag source. */
@@ -3736,7 +3757,7 @@ describe("DeckEditor drag and drop", () => {
     return async () => {
       await openSearchPanel();
       const art = await screen.findByRole("button", { name });
-      return art.closest('[draggable="true"]')!;
+      return art.closest<HTMLElement>(`[${DND_SOURCE_ATTR}]`)!;
     };
   }
 
@@ -3755,7 +3776,7 @@ describe("DeckEditor drag and drop", () => {
     await open();
     await openSearchPanel();
 
-    await dragOnto(await tile(), group("Main deck"));
+    await pointerDrag(boxed(await tile(), 0), boxedGroup("Main deck"));
 
     expect(deckAddCard).toHaveBeenCalledWith(4, "s-Goblin Guide", MAIN, null, "live", null, 1);
     expect(deckUpdate).not.toHaveBeenCalled();
@@ -3770,7 +3791,7 @@ describe("DeckEditor drag and drop", () => {
   it("moves a card into the group it was dropped on, and hands the caret to it", async () => {
     await open();
 
-    await dragOnto(card_("Lightning Bolt"), group("Sideboard"));
+    await pointerDrag(card_("Lightning Bolt"), boxedGroup("Sideboard"));
 
     await waitFor(() =>
       expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, SIDE, null, "live", null),
@@ -3786,8 +3807,8 @@ describe("DeckEditor drag and drop", () => {
     await open();
     expect(screen.queryByText(TRAY_TEXT)).not.toBeInTheDocument();
 
-    const held = await startDrag(card_("Lightning Bolt"));
-    const tray = screen.getByText("Remove from deck");
+    const held = await startPointerDrag(card_("Lightning Bolt"));
+    const tray = boxed(screen.getByText("Remove from deck"), 500, 40);
     await held.over(tray);
     expect(screen.getByText("Remove Lightning Bolt from deck")).toBeInTheDocument();
     await held.drop();
@@ -3807,29 +3828,32 @@ describe("DeckEditor drag and drop", () => {
     const tile = panelHolds("Goblin Guide");
     await open();
 
-    const held = await startDrag(await tile());
+    const held = await startPointerDrag(boxed(await tile(), 0));
     expect(screen.queryByText(TRAY_TEXT)).not.toBeInTheDocument();
 
     await held.cancel();
   });
 
   /**
-   * **A cancelled drag is not a press of Escape as far as this app is concerned.**
+   * **Escape ends the drag and spends nothing else, and that reverses what this case used to
+   * pin.**
    *
-   * The platform cancels a drag itself — in Chromium the keypress goes to the drag operation
-   * and the page is told by a `dragend`, which is what takes the tray down here. jsdom has no
-   * drag to cancel, so what this pins is the app's half of that contract: while a card is in
-   * the air the editor registers no layer of its own, so an Escape that reaches the window
-   * arrives with nothing consumed above the floor and the card detail pane behind this view
-   * still closes on its own press. An editor that treated a drag as a dismissible layer would
-   * eat that press and leave a card pinned open.
+   * It asserted that the press fell through to the editor's `"navigation"` floor and closed the
+   * deck, on the reasoning that the editor registers no dismissible layer while a card is in the
+   * air — which is still true, and was never the whole story. Its own comment said the other
+   * half: *"in Chromium the keypress goes to the drag operation"*, and it only read the other way
+   * because **jsdom had no drag to cancel**. A native HTML5 drag is the platform's, and the page
+   * hears about the cancel as a `dragend`.
    *
-   * **Capture, so the drag is the only thing being asked about.** A dismissible drag would be an
-   * `"inner"` layer and would consume in capture; the editor's `"navigation"` floor is a bubble
-   * rung and has not run when this probe fires. The deck closing is the other half — nothing
-   * outranking the floor took it either.
+   * `@dnd-kit/dom` cancels its own drag from a document-level listener, so jsdom now behaves the
+   * way the shipped window always did: the press ends the gesture, the tray goes, nothing is
+   * written, and the deck the reader is looking at stays open. A second press closes it.
+   *
+   * **Capture, so what the app sees is what is being asked about.** The probe is a window
+   * capture listener, which runs before the sensor's, so `defaultPrevented` is false there — the
+   * press arrives unspent and is consumed further down.
    */
-  it("takes the tray away on the drag's own end, without spending the app's Escape", async () => {
+  it("takes the tray away on the drag's own Escape, and leaves the deck open", async () => {
     await open();
     const heard: boolean[] = [];
     const listen = (e: KeyboardEvent) => {
@@ -3837,15 +3861,16 @@ describe("DeckEditor drag and drop", () => {
     };
     window.addEventListener("keydown", listen, true);
 
-    const held = await startDrag(card_("Lightning Bolt"));
+    const held = await startPointerDrag(card_("Lightning Bolt"));
     expect(screen.getByText("Remove from deck")).toBeInTheDocument();
     await userEvent.keyboard("{Escape}");
     expect(heard).toEqual([false]);
-    expect(useAppStore.getState().openDeckId).toBeNull();
+    // The drag took the press, so the view behind it is untouched.
+    expect(useAppStore.getState().openDeckId).toBe(4);
 
     await held.cancel();
 
-    expect(screen.queryByText(TRAY_TEXT)).not.toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText(TRAY_TEXT)).not.toBeInTheDocument());
     expect(deckSetCardQuantity).not.toHaveBeenCalled();
     expect(deckToCollection).not.toHaveBeenCalled();
     expect(deckMoveCard).not.toHaveBeenCalled();
@@ -3860,10 +3885,6 @@ describe("DeckEditor drag and drop", () => {
    * them do, and that the two-step New category really makes a pile and then files into it.
    */
   describe("quick zones", () => {
-    /** One box in the bar. Addressed by its attribute rather than by its text: the bar is
-     *  `aria-hidden` and `Sideboard` is also a heading on the desk behind it. */
-    const zone = (label: string) =>
-      document.querySelector<HTMLElement>(`[${QUICK_ZONE_ATTR}="${label}"]`)!;
 
     /**
      * **They answer for a card dragged *in*, which is exactly what the remove tray does not** —
@@ -3875,11 +3896,11 @@ describe("DeckEditor drag and drop", () => {
       const tile = panelHolds("Goblin Guide");
       await open();
 
-      const held = await startDrag(await tile());
+      const held = await startPointerDrag(boxed(await tile(), 0));
       expect(zone("Auto")).toBeInTheDocument();
       // The tray is not: there is nothing in this deck to take out.
       expect(screen.queryByText(TRAY_TEXT)).not.toBeInTheDocument();
-      await held.over(zone("Auto"));
+      await held.over(boxedZone("Auto"));
       await held.drop();
 
       await waitFor(() =>
@@ -3903,8 +3924,8 @@ describe("DeckEditor drag and drop", () => {
     it("moves a deck card into the sideboard from the quick zone", async () => {
       await open();
 
-      const held = await startDrag(card_("Lightning Bolt"));
-      await held.over(zone("Sideboard"));
+      const held = await startPointerDrag(card_("Lightning Bolt"));
+      await held.over(boxedZone("Sideboard"));
       await held.drop();
 
       await waitFor(() =>
@@ -3928,8 +3949,8 @@ describe("DeckEditor drag and drop", () => {
       ]);
       await open();
 
-      const held = await startDrag(card_("Lightning Bolt"));
-      await held.over(zone("Auto"));
+      const held = await startPointerDrag(card_("Lightning Bolt"));
+      await held.over(boxedZone("Auto"));
       await held.drop();
 
       await waitFor(() =>
@@ -3960,8 +3981,8 @@ describe("DeckEditor drag and drop", () => {
       );
       await open();
 
-      const held = await startDrag(card_("Lightning Bolt"));
-      await held.over(zone("Auto"));
+      const held = await startPointerDrag(card_("Lightning Bolt"));
+      await held.over(boxedZone("Auto"));
       await held.drop();
 
       // By its text, not by its role: the quick-add field keeps a `role="status"` mounted for
@@ -3981,8 +4002,8 @@ describe("DeckEditor drag and drop", () => {
       const tile = panelHolds("Goblin Guide");
       await open();
 
-      const held = await startDrag(await tile());
-      await held.over(zone("New category"));
+      const held = await startPointerDrag(boxed(await tile(), 0));
+      await held.over(boxedZone("New category"));
       await held.drop();
 
       const field = await screen.findByLabelText("New category name");
@@ -4010,8 +4031,8 @@ describe("DeckEditor drag and drop", () => {
       deckCategoryCreate.mockRejectedValue("a category called Removal already exists");
       await open();
 
-      const held = await startDrag(await tile());
-      await held.over(zone("New category"));
+      const held = await startPointerDrag(boxed(await tile(), 0));
+      await held.over(boxedZone("New category"));
       await held.drop();
 
       await userEvent.type(await screen.findByLabelText("New category name"), "Removal");
@@ -5483,7 +5504,7 @@ describe("DeckEditor multi-select", () => {
   /** The two cards the default fixture puts in the main deck, as the `<li>` each view makes a
    *  drag handle of. */
   const row = (name: string) =>
-    screen.getByRole("button", { name: new RegExp(`^${name}`) }).closest("li")!;
+    boxed(screen.getByRole("button", { name: new RegExp(`^${name}`) }).closest("li")!, 0);
   const marked = () => document.querySelectorAll(`[${SELECTED_ATTR}]`);
 
   /**
@@ -5561,7 +5582,7 @@ describe("DeckEditor multi-select", () => {
     await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
     await pressWith("Bear", { ctrl: true });
 
-    await dragOnto(row("Lightning Bolt"), group("Sideboard"));
+    await pointerDrag(row("Lightning Bolt"), boxed(group("Sideboard"), 300, 80));
 
     await waitFor(() => expect(deckMoveCard).toHaveBeenCalledTimes(2));
     expect(deckMoveCard).toHaveBeenCalledWith(
@@ -5594,7 +5615,7 @@ describe("DeckEditor multi-select", () => {
     await userEvent.click(screen.getByRole("button", { name: /^Lightning Bolt/ }));
     await pressWith("Bear", { ctrl: true });
 
-    await dragOnto(row("Ponder"), group("Sideboard"));
+    await pointerDrag(row("Ponder"), boxed(group("Sideboard"), 300, 80));
 
     await waitFor(() => expect(deckMoveCard).toHaveBeenCalledTimes(1));
     expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Ponder", MAIN, SIDE, null, "live", null);

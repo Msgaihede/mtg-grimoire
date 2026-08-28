@@ -126,7 +126,7 @@ import type { Update } from "@/lib/useUpdate";
 import { cardDraggable, type DragPayload } from "@/features/decks/dnd";
 import { queryClient } from "@/lib/query";
 import { useAppStore } from "@/lib/store";
-import { startDrag } from "@/test-drag";
+import { boxed, startPointerDrag } from "@/test-drag";
 
 /**
  * The shell's update state, in its resting position: nothing found, nothing running.
@@ -789,6 +789,10 @@ describe("the sidebar's drop targets", () => {
     useEffect(() => {
       const element = ref.current;
       if (!element) return;
+      // A box of its own at the top of the viewport, clear of every entry below. dnd-kit
+      // hit-tests by coordinate and jsdom measures every rect as four zeroes, so a source with
+      // no box is pressed at the origin — which is wherever anything else unmeasured also is.
+      boxed(element, 0);
       return cardDraggable({ element, payload: () => payload });
     }, [payload]);
     return <div ref={ref}>a card</div>;
@@ -801,7 +805,7 @@ describe("the sidebar's drop targets", () => {
         <CardSource payload={payload} />
       </AppShell>,
     );
-    return startDrag(screen.getByText("a card"));
+    return startPointerDrag(screen.getByText("a card"));
   }
 
   /**
@@ -825,6 +829,26 @@ describe("the sidebar's drop targets", () => {
   const addedToDeck = (deckId: number) => [deckId, "c-bolt", null, "Instant", "live", null, 1];
 
   const entry = (label: string) => screen.getByRole("button", { name: label });
+
+  /**
+   * Where each entry's box sits, and the two that matter are 100px apart on purpose.
+   *
+   * **jsdom lays nothing out and dnd-kit hit-tests by coordinate**, so an entry with no
+   * `getBoundingClientRect` of its own can never be collided with — and the failure is silent:
+   * the droppable is registered, it accepts the payload, and the drag's target is `null` on every
+   * frame. Several cases below turn on *which* of the ringed pair the pointer is over, and
+   * dnd-kit's default collision test asks about the dragged element's own translated box as well
+   * as the pointer, so the strips are far enough apart that a card centred on one cannot reach
+   * across to the other.
+   */
+  const ENTRY_TOP = { Decks: 200, Wishlist: 300 };
+
+  /** An entry, with a box a pointer can be aimed at. Boxed at the moment it is asked for, so a
+   *  rail that has collapsed since the render is measured as it is now. The two names are a
+   *  type rather than a string, because a label with no strip would be boxed at `undefined` —
+   *  which jsdom accepts and no assertion here would notice. */
+  const boxedEntry = (label: keyof typeof ENTRY_TOP) => boxed(entry(label), ENTRY_TOP[label]);
+
   /** The entry's own live region — the line under its button, where a drop reports. */
   const report = (label: string) =>
     within(entry(label).parentElement as HTMLElement).getByRole("status");
@@ -862,15 +886,28 @@ describe("the sidebar's drop targets", () => {
     expect(entry("Wishlist")).not.toHaveClass("ring-accent");
   });
 
-  /** Which of the ringed pair is about to take the card. Drawn from the drop target's own
-   *  enter and leave, because `:hover` does not update while the pointer is holding something. */
+  /** Which of the ringed pair is about to take the card. Drawn from the drag's own collision
+   *  answer rather than from `:hover`, so the mark is a fact about where the *card* is rather
+   *  than about a pointer that may be over a preview element instead. */
   it("marks the entry the card is actually over, and unmarks it on the way out", async () => {
+    // **A deck open, so the pair really is a pair.** With none, Decks refuses every payload and
+    // Wishlist is the only target in the collision set at all — which makes "the entry the card
+    // is *actually* over" a claim about a set of one, true wherever the pointer happens to be.
+    // Measured 2026-08-28 by taking the boxes away: with both entries live, a card carried to
+    // Wishlist is taken by **Decks** — the mark lands there and so does the write. jsdom measures
+    // every rect as four zeroes, so two degenerate boxes at the origin both contain the pointer
+    // and document order decides. That is the silent failure `boxedEntry` exists for, and until
+    // this case opened a deck it was the only one in the block that could have seen it.
+    openDeck(7, "Burn");
     const held = await pickUp();
-    const wishlist = entry("Wishlist");
+    const wishlist = boxedEntry("Wishlist");
 
     await held.over(wishlist);
     expect(wishlist).toHaveClass(DROP_OVER);
+    expect(boxedEntry("Decks")).not.toHaveClass(DROP_OVER);
 
+    // `leave()` carries the card to a point no target occupies, which is the gesture this is
+    // about: the reader has moved off the entry without letting go.
     await held.leave();
     expect(wishlist).not.toHaveClass(DROP_OVER);
     await held.cancel();
@@ -887,7 +924,7 @@ describe("the sidebar's drop targets", () => {
       typeLine: "Instant",
     });
 
-    await held.over(entry("Decks"));
+    await held.over(boxedEntry("Decks"));
     await held.drop();
 
     await waitFor(() => expect(deckAddCard).toHaveBeenCalledWith(...addedToDeck(7)));
@@ -895,7 +932,7 @@ describe("the sidebar's drop targets", () => {
 
   it("leaves Decks inert while no deck is open, and says why", async () => {
     const held = await pickUp();
-    const decks = entry("Decks");
+    const decks = boxedEntry("Decks");
 
     expect(decks).not.toHaveClass("ring-accent");
     expect(decks).toHaveAttribute("title", "Open a deck to drop cards into it");
@@ -915,7 +952,7 @@ describe("the sidebar's drop targets", () => {
     // with its sentence already in it announces nothing.
     expect(report("Wishlist")).toBeEmptyDOMElement();
 
-    await held.over(entry("Wishlist"));
+    await held.over(boxedEntry("Wishlist"));
     await held.drop();
 
     await waitFor(() => expect(report("Wishlist")).toHaveTextContent("Added to wishlist."));
@@ -941,7 +978,7 @@ describe("the sidebar's drop targets", () => {
       fromCategoryId: 1,
     });
 
-    await held.over(entry("Wishlist"));
+    await held.over(boxedEntry("Wishlist"));
     await held.drop();
 
     await waitFor(() =>
@@ -953,7 +990,7 @@ describe("the sidebar's drop targets", () => {
     openDeck(7, "Burn");
     const held = await pickUp();
 
-    await held.over(entry("Decks"));
+    await held.over(boxedEntry("Decks"));
     await held.drop();
 
     await waitFor(() => expect(report("Decks")).toHaveTextContent("Added to Burn."));
@@ -981,7 +1018,7 @@ describe("the sidebar's drop targets", () => {
       fromCategoryId: 2,
     });
 
-    await held.over(entry("Decks"));
+    await held.over(boxedEntry("Decks"));
     await held.drop();
 
     await waitFor(() =>
@@ -998,7 +1035,7 @@ describe("the sidebar's drop targets", () => {
     deckAddCard.mockRejectedValue("That deck is not there any more.");
     const held = await pickUp();
 
-    await held.over(entry("Decks"));
+    await held.over(boxedEntry("Decks"));
     await held.drop();
 
     await waitFor(() =>
@@ -1009,11 +1046,11 @@ describe("the sidebar's drop targets", () => {
 
   it("clears the line when the next card is picked up", async () => {
     const held = await pickUp();
-    await held.over(entry("Wishlist"));
+    await held.over(boxedEntry("Wishlist"));
     await held.drop();
     await waitFor(() => expect(report("Wishlist")).toHaveTextContent("Added to wishlist."));
 
-    const again = await startDrag(screen.getByText("a card"));
+    const again = await startPointerDrag(screen.getByText("a card"));
 
     expect(report("Wishlist")).toBeEmptyDOMElement();
     await again.cancel();
@@ -1025,7 +1062,7 @@ describe("the sidebar's drop targets", () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       const held = await pickUp();
-      await held.over(entry("Wishlist"));
+      await held.over(boxedEntry("Wishlist"));
       await held.drop();
       await act(async () => {});
       expect(report("Wishlist")).toHaveTextContent("Added to wishlist.");
@@ -1044,12 +1081,12 @@ describe("the sidebar's drop targets", () => {
    *  and the sum is the backend's arithmetic rather than a number this hook keeps. */
   it("sends a second identical drop as a second write", async () => {
     const held = await pickUp();
-    await held.over(entry("Wishlist"));
+    await held.over(boxedEntry("Wishlist"));
     await held.drop();
     await waitFor(() => expect(report("Wishlist")).toHaveTextContent("Added to wishlist."));
 
-    const again = await startDrag(screen.getByText("a card"));
-    await again.over(entry("Wishlist"));
+    const again = await startPointerDrag(screen.getByText("a card"));
+    await again.over(boxedEntry("Wishlist"));
     await again.drop();
 
     await waitFor(() => expect(wishlistAdd).toHaveBeenCalledTimes(2));
@@ -1075,7 +1112,7 @@ describe("the sidebar's drop targets", () => {
     const held = await pickUp();
     await screen.findByRole("button", { name: "Expand sidebar" });
 
-    await held.over(entry("Wishlist"));
+    await held.over(boxedEntry("Wishlist"));
     await held.drop();
 
     await waitFor(() => expect(report("Wishlist")).toHaveTextContent("Added to wishlist."));

@@ -1,9 +1,9 @@
 import { StrictMode, useState } from "react";
+import { DND_SOURCE_ATTR } from "@/lib/dndTarget";
 import { act, cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { monitorForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import { readDragData } from "@/features/decks/dnd";
 import type {
   CardDetail,
@@ -17,7 +17,7 @@ import type { MarketplaceId } from "@/lib/marketplace";
 // Type-only, so it is erased before the `vi.mock` below runs — the store's *value* import stays
 // under the mock with `CardDetailPane`'s, where the hoisting order needs it.
 import type { PaneDeckContext } from "@/lib/store";
-import { startDrag } from "@/test-drag";
+import { boxed, recordDrags, startPointerDrag } from "@/test-drag";
 import { pickOption } from "@/test-dropdown";
 
 const detail: CardDetail = {
@@ -1136,7 +1136,7 @@ describe("CardDetailPane", () => {
    * Two rows, two payloads: the id is the row's own and the name is the card's, because a
    * `Printing` has no name of its own and every row of this list is the same card. A
    * registration that closed over the pane's card instead would drag ISD 51 from every row,
-   * which is the failure the `draggable="true"` attribute cannot see.
+   * which is the failure the mark a live source wears (`DND_SOURCE_ATTR`) cannot see.
    */
   it("carries each printing off its own row", async () => {
     cardDetail.mockResolvedValue(detail);
@@ -1149,18 +1149,26 @@ describe("CardDetailPane", () => {
     // "ISD · 51" belongs to the card's own heading above the list.
     await screen.findByText(/2ED · 162/);
 
-    const rows = [...container.querySelectorAll('[draggable="true"]')];
+    const rows = [...container.querySelectorAll<HTMLElement>(`[${DND_SOURCE_ATTR}]`)];
     expect(rows).toHaveLength(2);
 
-    const carried: Record<string, unknown>[] = [];
-    const stop = monitorForElements({ onDragStart: ({ source }) => carried.push(source.data) });
+    // A box each, clear of one another: jsdom measures every rect as four zeroes and dnd-kit
+    // presses by coordinate, so two unboxed rows are the same point and the second drag would
+    // start on whichever of them the manager happened to hit.
+    rows.forEach((row, index) => boxed(row, index * 60));
+
+    const drags = recordDrags();
     for (const row of rows) {
-      const held = await startDrag(row);
+      const held = await startPointerDrag(row);
+      // Asked while the drag is still up: `started` is a live reading of the manager's operation
+      // rather than a remembered one, so after a cancel it is false for every drag there has
+      // been.
+      expect(held.started).toBe(true);
       await held.cancel();
     }
-    stop();
+    drags.stop();
 
-    expect(carried.map(readDragData)).toEqual([
+    expect(drags.records.map(readDragData)).toEqual([
       // The **card's** type line on both rows, not the printing's: a `Printing` carries none,
       // and which pile a card belongs in is a fact about the card rather than about the piece of
       // cardboard it was picked up from.
@@ -1709,9 +1717,9 @@ describe("the printings list, opened from a deck row", () => {
    * off the list, which is spec §1's fourth drag source. So the two have to stay told apart in
    * both directions: a press that travels five pixels carries the card away, and one that does
    * not is the swap. What keeps a *control* inside the row out of it is its own `data-no-drag`
-   * mark, because Chromium starts a drag from the nearest draggable **ancestor** of whatever
-   * was pressed — without which a press on the quick-add would carry a printing off instead of
-   * opening the popup, and the click would never be delivered at all.
+   * mark, because dnd-kit binds its pointer listener to the drag **source**, so a press anywhere
+   * inside the row is a press on the row — without the mark a press on the quick-add would carry
+   * a printing off instead of opening the popup, and the click would never be delivered at all.
    */
   it("reads a plain press on the row as a click, and still drags from it", async () => {
     cardDetail.mockResolvedValue(detail);
@@ -1719,17 +1727,20 @@ describe("the printings list, opened from a deck row", () => {
     fromDeckRow();
 
     wrap("p1");
-    const row = rowOf(await screen.findByRole("button", { name: /^Use this printing/ }));
+    // Boxed, because dnd-kit presses by coordinate and jsdom measures every rect as zero.
+    const row = boxed(rowOf(await screen.findByRole("button", { name: /^Use this printing/ })), 0);
 
     // The quick-add owns its own press: nothing is picked up from it.
-    const refused = await startDrag(row, {
+    const refused = await startPointerDrag(row, {
       pressOn: within(row).getByRole("button", { name: /^Add / }),
     });
     expect(refused.started).toBe(false);
     await refused.cancel();
 
-    // The row itself still is a drag source — the guard is a control's press, not a row's.
-    const held = await startDrag(row);
+    // The row itself still is a drag source — the guard is a control's press, not a row's. Asked
+    // while the drag is still up: `started` is a live reading of the manager's operation rather
+    // than a remembered one, so after a cancel it is false for every drag there has been.
+    const held = await startPointerDrag(row);
     expect(held.started).toBe(true);
     await held.cancel();
     expect(deckSwapPrinting).not.toHaveBeenCalled();

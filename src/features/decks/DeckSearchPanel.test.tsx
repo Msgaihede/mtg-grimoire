@@ -1,8 +1,8 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { DND_SOURCE_ATTR } from "@/lib/dndTarget";
 import userEvent from "@testing-library/user-event";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { monitorForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import {
   TOOLTIP_OPEN_MS,
   TOOLTIP_PANEL_ID,
@@ -12,7 +12,7 @@ import type { FormatFilterOption } from "@/features/search/useCardSearch";
 import type { CardSummary, CollectionRow, DeckCategory, SearchResponse } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
-import { startDrag } from "@/test-drag";
+import { boxed, recordDrags, startPointerDrag } from "@/test-drag";
 import { pickOption } from "@/test-dropdown";
 import { readDragData } from "./dnd";
 
@@ -659,7 +659,7 @@ describe("DeckSearchPanel", () => {
    * The registration is the half that can go wrong silently — a wall builds its own tiles, so
    * the panel reaches them through one callback ref, and a callback that closed over the wrong
    * card would drag a card the reader is not touching. So this asks the drag itself rather
-   * than the `draggable="true"` attribute: pick the tile up, and read what the library was
+   * than the attribute a registered source wears: pick the tile up, and read what the library was
    * handed. Where the card *lands* is the group's business (`views/views.test.tsx`) and the
    * whole gesture is the editor's (`DeckEditor.test.tsx`).
    */
@@ -667,17 +667,18 @@ describe("DeckSearchPanel", () => {
     const { container } = await openPanel();
     const art = await screen.findByRole("button", { name: "Lightning Bolt" });
 
-    const tiles = [...container.querySelectorAll('[draggable="true"]')];
+    const tiles = [...container.querySelectorAll(`[${DND_SOURCE_ATTR}]`)];
     expect(tiles).toHaveLength(1);
     expect(tiles[0]).toContainElement(art);
 
-    const carried: Record<string, unknown>[] = [];
-    const stop = monitorForElements({ onDragStart: ({ source }) => carried.push(source.data) });
-    const held = await startDrag(tiles[0]);
+    const drags = recordDrags();
+    // A box, because dnd-kit hit-tests by coordinate and jsdom measures every rect as zero.
+    const held = await startPointerDrag(boxed(tiles[0] as HTMLElement, 0));
+    expect(held.started).toBe(true);
     await held.cancel();
-    stop();
+    drags.stop();
 
-    expect(carried.map(readDragData)).toEqual([
+    expect(drags.records.map(readDragData)).toEqual([
       // The type line rides along even though every drop target *inside* the editor names its
       // own category: a tile can also be let go on the sidebar's Decks entry, which names none.
       { kind: "search-card", cardId: BOLT.id, name: BOLT.name, typeLine: BOLT.typeLine },
@@ -695,14 +696,16 @@ describe("DeckSearchPanel", () => {
   it("does not drag a tile when the press landed on its Add button", async () => {
     const { container } = await openPanel();
     const add = await screen.findByRole("button", { name: "Add Lightning Bolt to Main deck" });
-    const tile = container.querySelector('[draggable="true"]')!;
+    const tile = container.querySelector(`[${DND_SOURCE_ATTR}]`)!;
 
-    const held = await startDrag(tile, { pressOn: add });
+    const held = await startPointerDrag(boxed(tile as HTMLElement, 0), { pressOn: add });
     expect(held.started).toBe(false);
     await held.cancel();
 
     const art = screen.getByRole("button", { name: "Lightning Bolt" });
-    const again = await startDrag(tile, { pressOn: art });
+    const again = await startPointerDrag(boxed(tile as HTMLElement, 0), { pressOn: art });
+    // Asked while the drag is still up: `started` is a live reading of the manager's operation
+    // rather than a remembered one, so after a cancel it is false for every drag there has been.
     expect(again.started).toBe(true);
     await again.cancel();
   });
@@ -821,7 +824,7 @@ describe("DeckSearchPanel", () => {
 
     const marks = screen.getAllByLabelText("Game changer");
     expect(marks).toHaveLength(1);
-    const tiles = [...container.querySelectorAll('[draggable="true"]')];
+    const tiles = [...container.querySelectorAll(`[${DND_SOURCE_ATTR}]`)];
     expect(tiles).toHaveLength(2);
     const crownedTile = tiles.find((tile) => tile.contains(crowned))!;
     expect(crownedTile).toContainElement(marks[0]);

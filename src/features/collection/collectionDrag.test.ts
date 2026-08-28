@@ -1,7 +1,6 @@
-import { monitorForElements } from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
 import { describe, expect, it } from "vitest";
 import { dragData, readDragData } from "@/features/decks/dnd";
-import { startDrag } from "@/test-drag";
+import { boxed, recordDrags, startPointerDrag } from "@/test-drag";
 import {
   collectionDragData,
   collectionTileDragData,
@@ -167,25 +166,25 @@ describe("collectionTileDraggable", () => {
    * entry. Both callbacks are read at `dragstart`, which is what the `tile: () => …` shape is for.
    */
   it("puts the card and the tile in the store, under their own keys", async () => {
-    const element = document.createElement("div");
+    // A box, because dnd-kit hit-tests by coordinate and jsdom measures every rect as zero —
+    // a source with no box has nowhere to be pressed.
+    const element = boxed(document.createElement("div"), 0);
     document.body.append(element);
-    const seen: Record<string, unknown>[] = [];
-    const unmonitor = monitorForElements({
-      onDragStart: ({ source }) => void seen.push(source.data),
-    });
+    const drags = recordDrags();
     const stop = collectionTileDraggable({
       element,
       tile: () => TILE,
       card: () => CARD,
     });
 
-    const held = await startDrag(element);
+    const held = await startPointerDrag(element);
     expect(held.started).toBe(true);
     await held.cancel();
     stop();
-    unmonitor();
+    drags.stop();
     element.remove();
 
+    const seen = drags.records;
     expect(seen).toHaveLength(1);
     expect(readDragData(seen[0])).toEqual(CARD);
     expect(readCollectionTileDrag(seen[0])).toEqual(TILE);

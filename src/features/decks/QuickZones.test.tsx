@@ -3,19 +3,20 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeckCategory } from "@/lib/ipc";
-import { startDrag } from "@/test-drag";
+import { boxed, startPointerDrag } from "@/test-drag";
+import { useCategoryDrop } from "./cardControl";
 import { cardDraggable, type DeckWrite, type DragPayload } from "./dnd";
 import { QUICK_ZONE_ATTR, QuickCategoryDialog, QuickZones } from "./QuickZones";
 
 /**
  * The bar of drop targets that appears while a card is in the air.
  *
- * **Driven over the drag library's own code path** — `src/test-drag.ts` says why jsdom can carry
- * real `dragstart`/`dragenter`/`drop` events and lists what it cannot (the platform's drag
- * preview, pointer hit-testing, auto-scroll and Escape). What is *not* reachable from here and
- * is therefore the live pass's to prove is the whole of the layout claim: that the bar costs no
- * height when it appears, that it sits over the editor's own header rather than over a pile, and
- * that `sticky top-0` keeps it on screen down a long deck. jsdom lays nothing out.
+ * **Driven over the drag library's own code path** — `src/test-drag.ts` says how a real press,
+ * real pointer moves and a real release reach `@dnd-kit/dom`, and what that costs: jsdom lays
+ * nothing out, so every source and every target here is given a box by hand. What is *not*
+ * reachable from here and is therefore the live pass's to prove is the whole of the layout claim:
+ * that the bar costs no height when it appears, that it sits over the editor's own header rather
+ * than over a pile, and that `sticky top-0` keeps it on screen down a long deck.
  *
  * `dropWrite`'s answers are `dnd.test.ts`'s, exhaustively and without a DOM. What is asserted
  * here is that this surface asks it and carries the answer.
@@ -69,6 +70,10 @@ function Source({ payload }: { payload: DragPayload }) {
   useEffect(() => {
     const element = ref.current;
     if (!element) return;
+    // A box of its own, well clear of the bar's: dnd-kit hit-tests by coordinate and jsdom
+    // measures every rect as zero, so a source with no box is pressed at the origin — which is
+    // inside whatever else has been given a rect there.
+    boxed(element, 0);
     return cardDraggable({ element, payload: () => payload });
   }, [payload]);
   return <div ref={ref}>the card</div>;
@@ -84,14 +89,19 @@ function mount(payload: DragPayload) {
       <QuickZones categories={CATEGORIES} onDrop={onDrop} onNewCategory={onNewCategory} />
     </>,
   );
-  return () => startDrag(screen.getByText("the card"));
+  return () => startPointerDrag(screen.getByText("the card"));
 }
 
 /** One box, by the label it draws. The bar is `aria-hidden` and two of its four labels are also
  *  headings on the desk behind it, which is what {@link QUICK_ZONE_ATTR} is for. */
 function zone(label: string): HTMLElement {
-  const found = document.querySelector<HTMLElement>(`[${QUICK_ZONE_ATTR}="${label}"]`);
-  expect(found).not.toBeNull();
+  // **Every zone gets a box, and they are stacked so that no two overlap.** The bar only exists
+  // during a drag, so this is where they can first be measured — and a target with no rect is
+  // one dnd-kit can never collide with, silently.
+  const all = [...document.querySelectorAll<HTMLElement>(`[${QUICK_ZONE_ATTR}]`)];
+  all.forEach((element, index) => boxed(element, 100 + index * 60));
+  const found = all.find((element) => element.getAttribute(QUICK_ZONE_ATTR) === label);
+  expect(found).not.toBeUndefined();
   return found!;
 }
 
@@ -257,10 +267,55 @@ describe("QuickZones", () => {
       </>,
     );
 
-    const held = await startDrag(screen.getByText("the card"));
+    const held = await startPointerDrag(screen.getByText("the card"));
     expect(zones()).toEqual(["Auto", "New category", "Maybeboard", "On the bench"]);
 
     await held.cancel();
+  });
+});
+
+/**
+ * **The bar is drawn on top of the deck and dnd-kit does not care**, which is the one habit
+ * pragmatic-dnd left behind and the reason every zone carries a `collisionPriority`.
+ *
+ * That library hit-tested with `event.target` and walked up with `Element.closest`, so a sticky
+ * bar painted over a pile won simply by being on top. dnd-kit's default detector is
+ * `pointerIntersection`, which scores a hit as `1 / distance` from a droppable's **centre** and
+ * consults no z-index at all — so a short bar over a tall pile loses the pointer to the pile
+ * whenever the pile's middle happens to be nearer.
+ *
+ * The boxes below are chosen so that it does: the pile is 200px tall with its centre at y 200 and
+ * the zone is 40px with its centre at y 170, and the pointer sits at y 188 — 12px from the pile's
+ * centre and 18 from the zone's. Without the priority the pile takes the drop; with it the zone
+ * does, which is what a reader aiming at a box drawn over the deck means.
+ */
+describe("a zone drawn over a pile", () => {
+  /** A pile, as the desk draws one: the other target a card in the air can land on. */
+  function Pile({ onDrop: onPile }: { onDrop: (writes: DeckWrite[]) => void }) {
+    const { attach } = useCategoryDrop(MAIN, onPile);
+    return <div ref={attach} data-pile="" />;
+  }
+
+  it("takes the drop from the pile underneath it", async () => {
+    const onPile = vi.fn<(writes: DeckWrite[]) => void>();
+    render(
+      <>
+        <Source payload={TILE} />
+        <Pile onDrop={onPile} />
+        <QuickZones categories={CATEGORIES} onDrop={onDrop} onNewCategory={onNewCategory} />
+      </>,
+    );
+
+    const held = await startPointerDrag(screen.getByText("the card"));
+    // Boxed here rather than through `zone()`, because this case is about two rectangles that
+    // deliberately overlap and the helper stacks them clear of each other.
+    boxed(document.querySelector<HTMLElement>("[data-pile]")!, 100, 200);
+    boxed(document.querySelector<HTMLElement>(`[${QUICK_ZONE_ATTR}="Sideboard"]`)!, 150, 40);
+    await held.moveTo(100, 188);
+    await held.drop();
+
+    expect(onDrop).toHaveBeenCalledWith([{ write: "add", cardId: "c-bolt", categoryId: SIDE }]);
+    expect(onPile).not.toHaveBeenCalled();
   });
 });
 
