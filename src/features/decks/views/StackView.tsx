@@ -1091,15 +1091,21 @@ function StackGroup({
           reorder wrapper below because it is absolutely positioned against *this* section. */}
       {(over || reorderOver) && <DropIndicator />}
       {/* **The whole pile is where a dragged pile may be let go, and this wrapper is how.**
-          pdnd allows one drop target per element and the `<section>` is already the card one,
-          so this is a second element rather than a second registration — and it is an
-          **ancestor** of everything in the pile rather than an overlay over it, which is what
-          makes it free in both directions. A *card* drag hits it, is refused by `canDrop`, and
-          pdnd walks up to `element.parentElement` — this section — exactly as it did before this
-          wrapper existed. A *category* drag is accepted anywhere inside the pile, so the target
-          is the column a reader is aiming at rather than the 34px of heading they grabbed it by.
-          A plain block child of a block section: it draws nothing, measures nothing, and
-          `useFlowRowSpan` still reads the section. */}
+          It is an **ancestor** of everything in the pile rather than an overlay over it, so a
+          category drag is accepted anywhere inside the column the reader is aiming at rather
+          than only on the 34px of heading they grabbed it by. A plain block child of a block
+          section: it draws nothing, measures nothing, and `useFlowRowSpan` still reads the
+          section.
+
+          **The reason it is a second element is no longer the registry.** pragmatic-dnd kept one
+          drop target per element in a `WeakMap` and a second `set` silently replaced the first,
+          so the `<section>` being the card target left nowhere for this one; `@dnd-kit/dom` keys
+          its registry by entity id and two `Droppable`s on one element both register and both
+          compete. What keeps them apart now is `accepts()`, which `computeCollisions` asks
+          before it measures anything — `readDragGroup` refuses a category and `readCategoryDrag`
+          refuses a card. The box stays because it is the right *geometry*: this wraps the whole
+          pile, where the section adds its own 6px rim, and because every test and story here
+          addresses the two by element. */}
       <div ref={attachReorder}>
         {/* **The heading is the drag source and the grip only says where the press may start.**
             What travels under the pointer is then the pile's name and its two numbers rather than

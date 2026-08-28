@@ -20,12 +20,9 @@
  * — and the command needs the deck's whole list. See {@link useCategoryReorderDrop}'s note on
  * addressing a move by **ids**.
  */
-import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  dropTargetForElements,
-  draggable,
-  monitorForElements,
-} from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
+import { useCallback, useMemo, useState } from "react";
+import { PointerActivationConstraints, PointerSensor } from "@dnd-kit/dom";
+import { dndDraggable, useDndDropTarget } from "@/lib/dndTarget";
 
 /**
  * The mark that says a drag is a category being moved, and nothing else.
@@ -88,75 +85,68 @@ export function movedTo(ids: readonly number[], id: number, to: number): number[
  * kept because it is also what the arrow keys mean: one step further along is the same move,
  * and an edge-detection hitbox would be a second, quietly different answer for the mouse.
  *
- * **A monitor per pile**, for `useCategoryDrop`'s reason: pdnd asks it at `dragstart` and at
- * `drop` and never per pointer move, and one monitor at the top of the view would have to drill
- * the flag down through the group component anyway. `canMonitor` refuses every card drag, so
- * dragging a card through the deck costs this nothing at all — no `dragstart`, no re-render.
+ * **`armed` is raised on every eligible pile at `dragstart` and not only on the one under the
+ * pointer**, which is `useDndDropTarget`'s own rule and the reason this hook is that primitive
+ * plus two questions. It costs nothing when a *card* is in the air: `readCategoryDrag` refuses a
+ * card payload, so `accept` is false, the pile is skipped before it is measured, and both flags
+ * stay down.
  */
 export function useCategoryReorderDrop(
   categoryId: number | null,
   onMove?: (categoryId: number, targetId: number) => void,
 ) {
-  const [over, setOver] = useState(false);
-  const [eligible, setEligible] = useState(false);
   const enabled = categoryId !== null && onMove !== undefined;
 
-  useEffect(() => {
-    if (categoryId === null || !onMove) return;
-    return monitorForElements({
-      // The same question `canDrop` asks below, so "eligible" means this pile really would take
-      // *this* drag — a pile dragged over itself lights nothing.
-      canMonitor: ({ source }) => {
-        const dragged = readCategoryDrag(source.data);
-        return dragged !== null && dragged !== categoryId;
-      },
-      onDragStart: () => setEligible(true),
-      // Fires for a cancelled drag as well as a completed one, so the ring stands down on
-      // Escape without this hearing a keypress.
-      onDrop: () => {
-        setEligible(false);
-        setOver(false);
-      },
-    });
-  }, [categoryId, onMove]);
+  // **The element is state rather than a `useRef`, and that is not a workaround.**
+  // `useDndDropTarget` reads `ref.current` once, in an effect keyed on the ref *object*, so a
+  // hook whose element arrives through a callback has to hand it a new object when it arrives —
+  // and hand it another if React ever swaps the element under it, which a plain ref would hide.
+  // It costs one extra render at mount, which is when there is nothing to re-render.
+  const [element, setElement] = useState<HTMLElement | null>(null);
+  const ref = useMemo(() => ({ current: element }), [element]);
+
+  // The same question twice — "a pile is in the air and it is not this one" — asked once for the
+  // ring and once for the write. A pile dragged over itself lights nothing.
+  const canDrop = useCallback(
+    (dragged: number) => categoryId !== null && dragged !== categoryId,
+    [categoryId],
+  );
+  const onDrop = useCallback(
+    (dragged: number) => {
+      if (categoryId !== null) onMove?.(dragged, categoryId);
+    },
+    [categoryId, onMove],
+  );
+  const { armed, over } = useDndDropTarget({ ref, read: readCategoryDrag, canDrop, onDrop });
 
   // `attach` rather than `ref` — React's ref lint reads a hook result called `ref` as a ref
   // object and flags every read beside it as a ref access during render. `useCategoryDrop`
   // carries the same name for the same reason.
-  const attach = useCallback(
-    (element: HTMLElement | null) => {
-      if (!element || categoryId === null || !onMove) return;
-      return dropTargetForElements({
-        element,
-        // Asked twice, like every drop target here: once so a drop that would mean nothing
-        // never lights up, and again on the drop itself, because the two questions can be a
-        // second apart and only the second one writes.
-        canDrop: ({ source }) => {
-          const dragged = readCategoryDrag(source.data);
-          return dragged !== null && dragged !== categoryId;
-        },
-        onDragEnter: () => setOver(true),
-        onDragLeave: () => setOver(false),
-        onDrop: ({ source }) => {
-          setOver(false);
-          const dragged = readCategoryDrag(source.data);
-          if (dragged !== null && dragged !== categoryId) onMove(dragged, categoryId);
-        },
-      });
-    },
-    [categoryId, onMove],
-  );
+  const attach = useCallback((el: HTMLElement | null) => {
+    setElement(el);
+    return () => setElement(null);
+  }, []);
 
-  return { attach, over: over && enabled, eligible: eligible && enabled };
+  return { attach, over: over && enabled, eligible: armed && enabled };
 }
 
 /**
  * A pile as something that can be picked up: **the heading is the drag source and the grip
  * inside it is the only place a press may start**.
  *
- * `CategoriesDialog`'s arrangement exactly — a `mousedown` remembered in the **capture** phase,
- * so a control that stops the press cannot hide it from this, and `canDrag` reading the flag at
- * `dragstart`, which is handed the pointer's *coordinates* rather than what it pressed.
+ * **The grip is the library's own `handle` now, and the hand-rolled guard is gone.** It used to be
+ * a `mousedown` remembered in the **capture** phase with `canDrag` reading the flag at
+ * `dragstart` — because pragmatic-dnd handed `canDrag` the pointer's *coordinates* rather than
+ * what was pressed. `@dnd-kit/dom`'s `PointerSensor` binds its listener to
+ * `source.handle ?? source.element`, so a handle is a narrower *listener* rather than a check run
+ * after the fact, and a press outside it never reaches the sensor at all.
+ *
+ * **It comes with a change nobody asked for, and {@link useCategoryDragSource} puts it back.**
+ * `PointerSensor`'s default `activationConstraints` returns `undefined` for a mouse press where
+ * `source.handle === target || source.handle.contains(target)` — no distance and no delay — so the
+ * drag would begin on `pointerdown` and a plain click on the grip would be a zero-pixel reorder.
+ * The 5px distance below is what the gesture has cost since it shipped, and it is dnd-kit's own
+ * default everywhere a handle is *not* declared.
  *
  * **The reason is the drag preview, and it is a choice rather than a constraint.** Registering the
  * grip `<button>` itself works — measured in the shipped window on 2026-08-17, a pdnd `draggable`
@@ -171,7 +161,8 @@ export function useCategoryReorderDrop(
  * refusing a form control. It was not: the pile being aimed at was **scrolled out of the editor's
  * own scroller**, so the coordinates `getBoundingClientRect` answered with landed on `<main>` and
  * the press never reached the grip. `elementFromPoint` at the rect's centre is the cheap check,
- * and a CDP drag pass owes it before concluding anything about a source.)
+ * and a CDP drag pass owes it before concluding anything about a source. It was a claim about a
+ * *native* drag; nothing in this app starts one any more, and a live pass drives a real press.)
  *
  * **The heading rather than the whole section**, which is the one place this parts company with
  * the dialog: a pile is 300–1 500px tall, so dragging the section would hand back the preview
@@ -183,35 +174,47 @@ export function useCategoryReorderDrop(
  * every re-render of the deck — including the ones a drag it started is causing.
  */
 export function useCategoryDragSource(id: number | null) {
-  const handleRef = useRef<HTMLElement | null>(null);
+  // **The grip is state rather than a ref, so nothing here depends on which of two sibling ref
+  // callbacks React runs first.** Both surfaces put the grip *inside* the heading, so the child's
+  // ref does run first — but `attachSource` cannot register a handle-less draggable and be
+  // corrected later, because a source with no declared handle drags from anywhere in the heading,
+  // the pile's own name button included. Keying `attachSource` on the handle makes React re-run it
+  // the moment the grip arrives.
+  const [handle, setHandle] = useState<HTMLElement | null>(null);
 
   const attachHandle = useCallback((element: HTMLElement | null) => {
-    handleRef.current = element;
-    return () => {
-      handleRef.current = null;
-    };
+    setHandle(element);
+    return () => setHandle(null);
   }, []);
 
   const attachSource = useCallback(
     (element: HTMLElement | null) => {
-      if (!element || id === null) return;
-      let fromHandle = false;
-      const press = (event: Event) => {
-        fromHandle =
-          event.target instanceof Node && handleRef.current?.contains(event.target) === true;
-      };
-      element.addEventListener("mousedown", press, true);
-      const stop = draggable({
+      if (!element || id === null || !handle) return;
+      return dndDraggable({
         element,
-        canDrag: () => fromHandle,
-        getInitialData: () => categoryDragData(id),
+        handle,
+        data: () => categoryDragData(id),
+        // **Put the threshold back.** dnd-kit's default `activationConstraints` returns
+        // `undefined` for a mouse press inside a declared handle — no distance, no delay — so a
+        // plain click on the grip would become a zero-pixel reorder. 5px is what the gesture has
+        // cost since it shipped, and it is dnd-kit's own default everywhere a handle is *not*
+        // declared, so this is the library's number rather than a new one.
+        //
+        // **A per-source `sensors` list replaces the manager's rather than extending it**
+        // (`Draggable`'s effect reads `this.sensors ?? [...manager.sensors]`), so this source
+        // carries no `KeyboardSensor` — which is the answer to the collision this gesture would
+        // otherwise have had. The grip is the whole keyboard reorder: its arrow keys write a real
+        // move, and `KeyboardSensor` binds *its* keydown listener to `source.handle ?? element`,
+        // which from here on is that exact button. Space would have started a library drag on the
+        // one control in this app that already answers arrow keys itself.
+        sensors: [
+          PointerSensor.configure({
+            activationConstraints: [new PointerActivationConstraints.Distance({ value: 5 })],
+          }),
+        ],
       });
-      return () => {
-        element.removeEventListener("mousedown", press, true);
-        stop();
-      };
     },
-    [id],
+    [id, handle],
   );
 
   return { attachSource, attachHandle };

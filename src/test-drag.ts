@@ -217,6 +217,34 @@ export async function dragOnto(source: Element, target: Element): Promise<void> 
  * can schedule — is in `docs/reference/frontend-design.md`.
  */
 
+/**
+ * Give an element a box.
+ *
+ * **jsdom has no layout engine, so every `getBoundingClientRect` in the suite is four zeroes** —
+ * and dnd-kit hit-tests by coordinate. A source with no box has nowhere to be pressed and a target
+ * with no box can never be collided with, and both failures are silent: the registration is
+ * correct, the droppable accepts the payload, and `operation.target` is `null` on every frame.
+ *
+ * The x axis is fixed at 0–200 because no gesture in this app's tests is about horizontal
+ * position; `top` and `height` are what a caller varies, so two boxes can be made to overlap or to
+ * sit clear of each other.
+ */
+export function boxed<T extends Element>(element: T, top: number, height = 40): T {
+  element.getBoundingClientRect = () =>
+    ({
+      x: 0,
+      y: top,
+      top,
+      left: 0,
+      right: 200,
+      bottom: top + height,
+      width: 200,
+      height,
+      toJSON: () => ({}),
+    }) as DOMRect;
+  return element;
+}
+
 /** A pointer drag in flight: what a test can do while it is holding the folder. */
 export interface PointerHeld {
   /** Whether the gesture actually became a drag. `false` after a press the sensor refused —
@@ -303,10 +331,16 @@ async function settle(): Promise<void> {
  * The gesture crosses dnd-kit's 5px distance constraint on the first move, which is why no test
  * here has to run a timer: the *other* default constraint is a 200ms delay, and either one alone
  * activates the drag.
+ *
+ * **`move: false` presses and does not move**, for the one kind of test that is about the
+ * *threshold* rather than about a drag that has already started — a source that declares a handle
+ * has to put dnd-kit's activation constraints back by hand, and the only way to see that it did is
+ * to press and look before travelling. Every other caller wants a gesture that is under way, which
+ * is why the two moves are the default and are made by omission.
  */
 export async function startPointerDrag(
   from: HTMLElement,
-  { pressOn = from }: { pressOn?: Element } = {},
+  { pressOn = from, move: travel = true }: { pressOn?: Element; move?: boolean } = {},
 ): Promise<PointerHeld> {
   await frame();
   const start = centre(from);
@@ -316,8 +350,10 @@ export async function startPointerDrag(
   // Two moves before anything is asserted: the first crosses the activation threshold, and
   // `dragOperation.position.current` lags one move behind because the sensor batches through its
   // own scheduler — so a gesture read after a single move is read one move early.
-  await move(start.x, start.y + 8);
-  await move(start.x, start.y + 16);
+  if (travel) {
+    await move(start.x, start.y + 8);
+    await move(start.x, start.y + 16);
+  }
 
   async function move(x: number, y: number): Promise<void> {
     at = { x, y };
