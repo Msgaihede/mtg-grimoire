@@ -4175,6 +4175,15 @@ fn create_fts_in(conn: &Connection, schema: &str) -> rusqlite::Result<()> {
 pub fn prepare_database(conn: &Connection) -> rusqlite::Result<()> {
     migrate_user(conn)?;
     migrate_corpus(conn)?;
+    // **Fatal, like the two migrations above and unlike the two repairs below.** A device whose
+    // capture triggers are missing goes on working perfectly and records nothing, so its edits
+    // reach no other device — silently, for as long as it is used. There is no message this
+    // could degrade into that a reader would act on.
+    //
+    // Here rather than in `db::open_write` because this is the one door all three targets go
+    // through: the browser's pair is opened by `db::open_pooled_pair` and migrated by
+    // `web::glue`, which calls exactly this function.
+    crate::sync_engine::capture::install(conn)?;
     if let Err(e) = crate::maintenance::rebuild_fts_if_pending(conn) {
         eprintln!(
             "the search index still owes a rebuild from an interrupted compaction, and it \

@@ -23,4 +23,5 @@
 //! which the wasm build already has; `wire` needs [`crate::sync_pair::crypto`], which is why
 //! that module's five crates moved into `Cargo.toml`'s every-target block.
 
+pub mod capture;
 pub mod hlc;
