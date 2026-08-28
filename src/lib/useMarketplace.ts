@@ -8,6 +8,7 @@ import {
   type QueryClient,
 } from "@tanstack/react-query";
 import { ipc, ipcError, type FeedProgressEvent, type MarketplaceFeedStatus } from "@/lib/ipc";
+import { useFeedDownload } from "@/pwa/FeedDownloadProvider";
 import {
   DEFAULT_MARKETPLACE,
   FEED_MARKETPLACES,
@@ -298,6 +299,7 @@ export function useMarketplace() {
    * was. A failure invalidates nothing, because a failed fetch leaves the previous rows in
    * place and the pages showing them are still right.
    */
+  const askFirst = useFeedDownload();
   const refresh = useMutation({
     mutationKey: FEED_REFRESH_KEY,
     mutationFn: (id: MarketplaceId) => ipc.marketplaceFeedRefresh(id),
@@ -352,7 +354,10 @@ export function useMarketplace() {
      *  when it has no feed at all). The one thing a price surface would ever ask for. */
     feed: feeds.find((f) => f.marketplace.id === chosen.id) ?? null,
     /** Fetch one feed now. Refused by the backend for a marketplace that has none. */
-    refresh: (id: MarketplaceId) => refresh.mutate(id),
+    // Always named as the Card Kingdom feed, and on the web target that is the only one it
+    // can be: spec 5.3 disables Mana Pool there outright (no Access-Control-Allow-Origin),
+    // and on desktop the guard is a pass-through that never draws a dialog to name anything.
+    refresh: (id: MarketplaceId) => askFirst("card-kingdom", () => refresh.mutate(id)),
     /**
      * Which feed is being fetched right now, or `null`.
      *
