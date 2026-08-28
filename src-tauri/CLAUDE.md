@@ -38,7 +38,7 @@ both plus the frontend.
   columns does not (schema v2; `the_v2_backfill_leaves_the_search_index_answering` is the
   proof).
 - **The data folder holds two databases, and which one is `main` is the whole design**
-  (schema 27). `data/user.db` is the reader's — the fifteen tables in `schema::TABLES` marked
+  (schema 27). `data/user.db` is the reader's — the eighteen tables in `schema::TABLES` marked
   `Side::User`, which nothing outside this app can produce again — and it is what
   `Connection::open` names. `data/corpus.db` is everything a feed or this app's own ladder can
   rebuild, and it is **`ATTACH`ed as `corpus`**, because *you cannot `DETACH main`*: discarding
@@ -107,9 +107,17 @@ both plus the frontend.
   never runs it again. **It happened three times, not twice**: the oracle-tag step was a third
   branch numbering itself 12 against that same head of 11, and it is **v14**. Three collisions on
   one rung in one day is the ladder's own argument — take the next free number when you land, and
-  never reuse one. The single-file ladder is frozen at **v26** — `schema::migrate_single_file`
+  never reuse one. **A user rung above the split goes in `schema::migrate_user` and is owed a
+  line in `USER_SCHEMA_SQL` as well**, because that literal is what a *converted* or fresh
+  file is built from and it never climbs anything —
+  `the_user_schema_is_byte_identical_to_what_the_ladder_builds` is the fence, and it compares
+  `migrate_single_file` **plus `migrate_user`** against `create_user_schema` byte for byte. A
+  rung written into only one of the two places is a fresh install that quietly disagrees with
+  every upgraded one, and a fresh worktree is a fresh install, so nothing else here can see it.
+  The single-file ladder is frozen at **v26** — `schema::migrate_single_file`
   climbs to `schema::LEGACY_SINGLE_FILE_VERSION` and stops, and the two files carry their own
-  numbers from there (`USER_SCHEMA_VERSION` 27, `CORPUS_SCHEMA_VERSION` 1, deliberately
+  numbers from there (`USER_SCHEMA_VERSION` **28** since pairing's three tables landed,
+  `CORPUS_SCHEMA_VERSION` 1, deliberately
   incomparable). This line read **v25** while that was head, and
   [the ladder's history](../docs/reference/data-and-sync.md) is the story. (This line read
   **v18** for two whole rungs, then **v20** for two more, then **v23** for one and **v24** for
@@ -671,6 +679,58 @@ with the measurements: [text-mirror.md](../docs/reference/text-mirror.md).
   `data/`.** The default root is `data_dir/export`, so a test that forgets to set `mirror_root`
   inside its tempdir writes into the developer's own mirror.
 
+## Hard rules — pairing
+
+`sync_pair/` joins two devices into one group with no account and no server-side identity —
+spec §7.5 and §7.6. Four layers and nine commands; the whole record, with the arithmetic behind
+the 105-character code and the crate pins, is [sync.md](../docs/reference/sync.md).
+
+- **The six-digit comparison is not optional and there is no path around it.** `crypto::sas` is
+  computed over the *derived* key and both public keys **in role order**, so a relay that
+  substituted its own key moves both halves of the transcript and the two codes disagree — which
+  is the entire security argument. There is no auto-accept, no skip flag and no "trust this
+  device": `confirm` is a press, the panel's button carries `aria-disabled` until the digits
+  exist *and* its handler refuses, and the joining side does not reveal the blob it carries back
+  until the reader has said the numbers agree.
+- **`sync_identity`, `sync_group` and `sync_devices` never sync.** They are this device's
+  secrets. They are `None` in `watch::surface_of` for the sharpest reason on that list: a
+  mirrored file quoting any of them would write a key into a folder the reader syncs with
+  Dropbox. PR 7's synced-table list must not name them either.
+- **No key crosses the IPC boundary.** `identity::Device.public_key` is `#[serde(skip)]` — a key
+  on a list of devices is a key in a screenshot — and every field of `pairing::Pending` is
+  private and none is `Serialize`. What crosses is the six digits, as a **string**, and two
+  sealed blobs.
+- **Every random byte comes from the OS CSPRNG**, through `crypto::random_bytes` and
+  `x25519-dalek`'s own `getrandom` feature — in the tests as well as in the app. A seeded
+  helper sharing a code path with production would make the whole module pass while the shipped
+  build minted predictable keys.
+- **`identity::ensure` mints on absence and never on a mismatch.** A restored `user.db` is the
+  device it was. Re-minting on anything that looked wrong turns a restore into a silent fork,
+  where two machines both believe they are the same device and both write under that id.
+- **Revocation rotates the key in the same transaction that marks the row.** Marking the row
+  alone produces an app that says a device is gone while that device can still read every op
+  written afterwards. Three refusals guard it — this device cannot revoke itself, an id nobody on
+  the roster answers to rotates nothing, and a device already in a group may only rejoin the one
+  it is in — and every one of them is a sentence rather than a constraint failure.
+- **There is no bare "rotate the key" command, and that is a decision rather than an omission.**
+  `rotate_key` was written, tested and deleted before this shipped: with no relay, a rotation
+  A performs cannot reach B, so one with nobody removed would silently lock the group out of
+  itself. Revocation keeps its rotation because there the lock-out is the point.
+- **The pending offer lives in `AppState.pairing` and never in SQLite.** An offer that survived
+  a restart would be an invite a reader printed last month still being accepted today; it
+  outlives the webview, which is what a reader who opens Settings twice needs, and dies with the
+  process, which is what makes the token one-time in fact. It holds the derived pair key, which
+  is the second reason it is not a table.
+- **Both hand-carried blobs put one public field in the clear ahead of the sealed remainder**, and
+  each is bound to its seal: the joiner's key is repeated inside the sealed bytes and compared,
+  and the initiator's device id is the AEAD's associated data. Each side needs that value to
+  derive the key that opens the rest, and both are public by construction.
+- **`chacha20poly1305` is pinned at 0.10 and not 0.11**, and the reason is `cargo tree -d`: 0.11
+  moves RustCrypto's array types to `hybrid-array`, which stands a second array stack beside the
+  `generic-array 0.14` that `sha2 0.10` already puts in this tree.
+- **This PR makes no network request of any kind**, so it adds no `errors::Source` — that CHECK
+  is closed and PR 7 is what owes a rung on it.
+
 ## Hard rules — decks (storage side)
 
 Full detail, with the measurements and the traps behind each rule, is in
@@ -1115,4 +1175,5 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
 | [commander-brackets.md](../docs/reference/commander-brackets.md) | `combos.rs` and the v26 rung — the feed measured end to end, what is kept and what is skipped, the match query, and `decks.bracket` |
 | [wishlist-folders.md](../docs/reference/wishlist-folders.md) | The wishlist's cabinet (v23) — the four-term grain, the merge rule, the root-add duplicate |
 | [collection-folders.md](../docs/reference/collection-folders.md) | The collection's cabinet (v24–v25) — the eleventh grain term, the deck groups and `Recently removed`, the conversion that made them, what a zero quantity now costs |
+| [sync.md](../docs/reference/sync.md) | `sync_pair/` and user schema v28 — the protocol step by step, why the typed code is 105 characters, what the six digits do and do not defend, where the keys live, and what revocation cannot do |
 | [text-mirror.md](../docs/reference/text-mirror.md) | `mirror/` — the layout, the dirty map, why the pruner reads a manifest instead of guessing, what a pass costs measured, and the bugs still open |
