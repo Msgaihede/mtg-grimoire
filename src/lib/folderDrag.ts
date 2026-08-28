@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
 import { Draggable, Droppable, type DragEndEvent } from "@dnd-kit/dom";
-import { dndId, dndManager } from "@/lib/dndManager";
+import { dndId, dndManager, registerNow } from "@/lib/dndManager";
 
 /**
  * The gesture that rearranges a filing cabinet: a folder dropped on another folder's **middle**
@@ -98,33 +98,6 @@ export function readFolderDrag(
 
 function isFolderId(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value > 0;
-}
-
-/**
- * Register an entity **now**, rather than on the microtask dnd-kit would have used.
- *
- * **This is a leak fix, and only the running window could have found it.** `Entity`'s
- * constructor ends with `if (manager && register) queueMicrotask(this.register)`, while
- * `destroy()` unregisters synchronously — so an entity constructed and destroyed **in the same
- * tick** unregisters first and is then registered by the microtask, with nothing left holding a
- * reference to undo it. It stays in the manager's registry for the life of the page.
- *
- * `React.StrictMode` does exactly that, on every mount, in development: it runs an effect,
- * cleans it up, and runs it again. Measured in the shipped dev window 2026-08-27 — four folders
- * on screen, **eleven** droppables registered, every visible row carrying two. And a second
- * registration is not harmless here, because the surviving orphan is the one from the *first*
- * effect run, whose monitor listeners were cleaned up: collision detection picked the orphan as
- * `operation.target`, the live hook compared it against its own droppable, saw a different
- * object and returned. **The mark came up, the row rang, and the drop silently did nothing.**
- *
- * Nothing in the suite could see it: `render` and `renderHook` do not wrap in `StrictMode`, so
- * every test mounts each effect exactly once and every registration is the live one.
- *
- * `register: false` at the call sites is the other half — without it the constructor still
- * queues its own registration and this would merely add a second.
- */
-function registerNow(entity: Draggable | Droppable): void {
-  entity.register();
 }
 
 /**
