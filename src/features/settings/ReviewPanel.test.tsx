@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ReviewRow } from "@/lib/ipc";
+import type { ReviewRow, ReviewTable } from "@/lib/ipc";
 
 const syncReviewList = vi.hoisted(() => vi.fn());
 const syncReviewClear = vi.hoisted(() => vi.fn());
@@ -159,14 +159,22 @@ describe("groupByTable", () => {
   /** All six tables the crate's `REVIEWABLE` census names, each with a name a person would
    *  recognise, in the order the crate returns them. */
   it("names every table the backend can send a row from", () => {
-    const rows = [
+    // Typed as `ReviewTable[]` and not `string[]`, which is the point of the union: a seventh
+    // table the crate grows is a type error in this literal as well as in `TABLE_LABEL`.
+    const tables: ReviewTable[] = [
       "collection_entries",
       "deck_cards",
       "wishlist_entries",
       "collection_folders",
       "deck_folders",
       "wishlist_folders",
-    ].map((table, i) => ({ table, uid: `${table}:${i}`, title: "x", sentence: "y" }));
+    ];
+    const rows = tables.map((table, i) => ({
+      table,
+      uid: `${table}:${i}`,
+      title: "x",
+      sentence: "y",
+    }));
 
     expect(groupByTable(rows).map((g) => g.label)).toEqual([
       "The collection",
@@ -190,9 +198,20 @@ describe("groupByTable", () => {
   /**
    * A seventh table is drift, not a crash — and a row filed under a raw table name would be the
    * one thing this panel promises never to draw.
+   *
+   * **The cast is the point rather than a shortcut.** `ReviewTable` is closed, so a seventh
+   * table is a type error in `TABLE_LABEL` and in every literal that builds a row — which is the
+   * fence, and which is why this state cannot be written honestly. What it cannot fence is a row
+   * arriving at run time from a build that knows one more table than this page does, and that is
+   * what is asserted here.
    */
   it("still files a row from a table this build has no name for", () => {
-    const stray = { table: "muted_tags", uid: "muted_tags:1", title: "Ramp", sentence: "s" };
+    const stray = {
+      table: "muted_tags",
+      uid: "muted_tags:1",
+      title: "Ramp",
+      sentence: "s",
+    } as unknown as ReviewRow;
     const groups = groupByTable([...ROWS, stray]);
 
     const last = groups[groups.length - 1];

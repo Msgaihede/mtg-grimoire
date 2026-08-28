@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, CircleCheck } from "lucide-react";
 import type { JSX } from "react";
-import { ipc, ipcError, type ReviewRow } from "@/lib/ipc";
+import { ipc, ipcError, type ReviewRow, type ReviewTable } from "@/lib/ipc";
 import { RELAY_KEY, REVIEW_KEY } from "@/lib/query";
 import { cn } from "@/lib/utils";
 import { BUTTON } from "./controls";
@@ -20,14 +20,24 @@ import { PanelAlert, SettingsSection } from "./panelChrome";
  * before folders, because a card is the thing a reader came here about and a folder is where
  * it sits.
  */
-const TABLE_LABEL: readonly (readonly [table: string, label: string])[] = [
-  ["collection_entries", "The collection"],
-  ["deck_cards", "Decks"],
-  ["wishlist_entries", "The wishlist"],
-  ["collection_folders", "Collection folders"],
-  ["deck_folders", "Deck folders"],
-  ["wishlist_folders", "Wishlist folders"],
-];
+/**
+ * **Total over `ReviewTable`, which is what makes a seventh table a red build.** A `Record` of a
+ * closed union is `ErrorSource`/`SOURCE_LABEL`'s shape one panel over, and it is the only fence
+ * available on this side: a list of tuples would compile perfectly happily with five of six.
+ *
+ * Declaration order is drawing order — `Object.keys` on string keys answers insertion order --
+ * so the one literal carries both facts and they cannot come apart.
+ */
+const TABLE_LABEL: Record<ReviewTable, string> = {
+  collection_entries: "The collection",
+  deck_cards: "Decks",
+  wishlist_entries: "The wishlist",
+  collection_folders: "Collection folders",
+  deck_folders: "Deck folders",
+  wishlist_folders: "Wishlist folders",
+};
+
+const TABLE_ORDER = Object.keys(TABLE_LABEL) as ReviewTable[];
 
 /**
  * What a table this build has no name for is filed under.
@@ -49,12 +59,14 @@ const UNNAMED_TABLE = "Elsewhere";
 export function groupByTable(
   rows: readonly ReviewRow[],
 ): { table: string; label: string; rows: ReviewRow[] }[] {
-  const known = new Set(TABLE_LABEL.map(([table]) => table));
-  const groups = TABLE_LABEL.map(([table, label]) => ({
-    table,
-    label,
-    rows: rows.filter((r) => r.table === table),
-  }));
+  const known = new Set<string>(TABLE_ORDER);
+  const groups: { table: string; label: string; rows: ReviewRow[] }[] = TABLE_ORDER.map(
+    (table) => ({
+      table,
+      label: TABLE_LABEL[table],
+      rows: rows.filter((r) => r.table === table),
+    }),
+  );
   const strays = rows.filter((r) => !known.has(r.table));
   if (strays.length > 0) {
     groups.push({ table: "", label: UNNAMED_TABLE, rows: strays });
@@ -138,7 +150,7 @@ export function ReviewPanel(): JSX.Element {
   const rows: ReviewRow[] | null = read.data ?? null;
 
   const clear = useMutation({
-    mutationFn: ({ table, uid }: { table: string; uid: string }) =>
+    mutationFn: ({ table, uid }: { table: ReviewTable; uid: string }) =>
       ipc.syncReviewClear(table, uid),
     // **The command answers what is left, so there is nothing to refetch.** That is the whole
     // reason it answers a list rather than nothing: a second read would race the write on the

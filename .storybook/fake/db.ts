@@ -169,6 +169,7 @@ import type {
   ReleaseInfo,
   ReleaseNote,
   ReviewRow,
+  ReviewTable,
   SearchRequest,
   SearchSortKey,
   SetSummary,
@@ -12231,7 +12232,7 @@ function reviewRows(db: FakeDb): ReviewRow[] {
       sentence: w.needsReview,
     });
   }
-  const folders: [string, { id: number; name: string; needsReview?: string | null }[]][] = [
+  const folders: [ReviewTable, { id: number; name: string; needsReview?: string | null }[]][] = [
     ["collection_folders", db.collectionFolders],
     ["deck_folders", db.deckFolders],
     ["wishlist_folders", db.wishlistFolders],

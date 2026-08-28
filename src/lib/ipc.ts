@@ -3962,6 +3962,23 @@ export interface RelayOutcome {
 }
 
 /**
+ * The six tables that can hold a `needs_review` sentence.
+ *
+ * A closed union, like {@link ErrorSource} and for the same reason: `Record<ReviewTable, string>`
+ * in `ReviewPanel.tsx` is total, so a seventh table added on the Rust side is a **type error**
+ * here rather than a heading nobody wrote. The crate's own
+ * `no_table_with_the_column_is_missing_from_the_list` catches a table the *crate* forgot; this
+ * catches one the crate remembered and the page did not.
+ */
+export type ReviewTable =
+  | "collection_entries"
+  | "deck_cards"
+  | "wishlist_entries"
+  | "collection_folders"
+  | "deck_folders"
+  | "wishlist_folders";
+
+/**
  * One row asking to be looked at — spec §7.4's two surfaced outcomes, plus whatever the
  * reconciler has already written about a printing that left Scryfall.
  *
@@ -3971,7 +3988,7 @@ export interface RelayOutcome {
  */
 export interface ReviewRow {
   /** Which table it is in. The panel groups by this and clearing needs it. */
-  table: string;
+  table: ReviewTable;
   /** The row's `sync_uid`, never a rowid — a rowid means nothing on the other device. */
   uid: string;
   title: string;
@@ -5525,7 +5542,7 @@ export const ipc = {
    * looked at stops asking on the others too, which is why the sentence is on the row rather
    * than in a notification.
    */
-  syncReviewClear: (table: string, uid: string) =>
+  syncReviewClear: (table: ReviewTable, uid: string) =>
     invoke<ReviewRow[]>("sync_review_clear", { table, uid }),
   /**
    * Rename a device on the roster.
