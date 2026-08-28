@@ -156,8 +156,13 @@ import type {
   MoveOutcome,
   MutedTag,
   OracleTagStatus,
+  PairingHandshake,
+  PairingOffer,
+  PairingSealedKey,
+  PairingStatus,
   PassReport,
   Printing,
+  QrMatrix,
   PrintingTags,
   ReleaseInfo,
   ReleaseNote,
@@ -801,6 +806,18 @@ export interface FakeUpdate {
  * and still shows every number it showed before. What is lost is a folder of text files, and
  * what says so is one sentence in one panel.
  *
+ * **`pairingReadError`** is the one refusal in pairing a reader cannot produce by typing, which
+ * is the whole reason it is a fault. Every other way that flow can fail is a *shape*: a code of
+ * the wrong length, a character outside Crockford's alphabet, a step pressed out of order —
+ * all reachable from the keyboard, all raised by the handler itself. What is left is the blob
+ * the joining device carries back failing to open, which in the crate is an AEAD refusing to
+ * authenticate: nothing a person types produces a *well-formed* blob that will not decrypt. So
+ * this fault sits on `sync_pairing_respond` and nowhere else.
+ *
+ * **Being paired is not here, and that is `combosMissing`'s argument the other way up**: it is not
+ * something that has gone wrong with a world, it is where a reader arrives after two presses. It
+ * is the `paired` **seed** in `seeds.ts`.
+ *
  * **`syncing`** is a card update in flight, and it exists for exactly one command:
  * `cache_clear` refuses outright while one is running, because `data/tmp/` is where the corpus
  * download puts 77 MB that the ingest then reads back. It is **not** `busy` — that fault is the
@@ -827,7 +844,8 @@ export type Fault =
   | "imageUrisMissing"
   | "exportWriteError"
   | "mirrorRootUnwritable"
-  | "combosFetchError";
+  | "combosFetchError"
+  | "pairingReadError";
 
 /**
  * What the picture cache costs, as the Settings page's one button sees it.
@@ -872,6 +890,68 @@ export interface FakeMirror {
   lastRunAt: number | null;
   lastReport: PassReport | null;
   lastError: string | null;
+}
+
+/**
+ * One row of `sync_devices` — a device the group has, or had.
+ *
+ * The public key is **not here**, and its absence is the model rather than a shortcut: the
+ * crate marks that column `#[serde(skip)]`, so nothing on this side of the boundary has ever
+ * seen one. A fake that stored a key would teach a reader a DTO the app does not have.
+ */
+export interface FakePairedDevice {
+  deviceId: string;
+  name: string;
+  addedAt: number;
+  /** A stamp means this device was removed. The row is **kept**, so the roster can still say
+   *  who was taken off and when — §7.6, and the reason it is not a delete. */
+  revokedAt: number | null;
+}
+
+/**
+ * A pairing in flight, on whichever side of it this world is playing.
+ *
+ * **Not a table**, exactly as it is not one in the crate: it lives in `AppState` there and in
+ * this object here, because an offer that survived a restart would be an invite a reader
+ * printed last month still being accepted today.
+ */
+export interface FakePending {
+  /** `true` on the device that showed the code. */
+  initiator: boolean;
+  /** The six digits, once both sides know each other's key. `null` on an offer nobody has
+   *  answered yet, which is the state the panel's *Codes match* button is disabled in. */
+  sas: string | null;
+  /** What the joining device will carry back. Empty on the offering side. */
+  response: string;
+  /** Set by `sync_pairing_confirm`, so a spent offer cannot serve a second joiner. */
+  spent: boolean;
+}
+
+/**
+ * Pairing's three tables and the offer in flight — `sync_identity`, `sync_group`,
+ * `sync_devices` and `AppState.pairing`.
+ *
+ * **There is no cryptography here and this file does not pretend there is.** The workbench has
+ * no X25519, no HKDF and no QR encoder, so the six digits are derived from the code with a
+ * plain hash and the matrix below is a *picture of the right shape rather than a readable
+ * code*. What the fake models faithfully is the part a panel is drawn against: two blobs
+ * carried by hand, one number both readers compare, and a roster that keeps a removed device on
+ * it. Every refusal these handlers raise is one the crate raises, in its own words.
+ *
+ * **The identity is minted here rather than on first read**, which is the one place this
+ * diverges from `identity::ensure`: that function writes a row the first time anything asks,
+ * and a story wants a stable device id it can assert against.
+ */
+export interface FakePairing {
+  /** `sync_identity.device_id` — 16 bytes as lowercase hex, so 32 characters. */
+  deviceId: string;
+  /** `sync_identity.name`, and the copy every pairing sends. `sync_device_rename` moves this
+   *  one **and** the roster row, which is what stops the next pairing putting the old name back. */
+  deviceName: string;
+  /** `sync_group`, or `null` for a device in no group. */
+  group: { groupId: string; epoch: number } | null;
+  devices: FakePairedDevice[];
+  pending: FakePending | null;
 }
 
 export interface FakeDb {
@@ -1125,6 +1205,13 @@ export interface FakeDb {
    * thing that draws them.
    */
   mirror: FakeMirror;
+  /**
+   * Pairing — this device, the group it is in, who else is in it, and any offer on screen.
+   *
+   * One object rather than four fields, {@link FakeDb.mirror}'s grouping and its reason: they
+   * are one feature answered by one command in one round trip.
+   */
+  pairing: FakePairing;
   fault: Fault | null;
 }
 
@@ -1565,6 +1652,16 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // now is what a story presses to leave it. `mirrorRootUnwritable` is the one world that
     // opens with a pass already behind it, because that fault *is* a pass having failed.
     mirror: { enabled: true, root: null, lastRunAt: null, lastReport: null, lastError: null },
+    // **Unpaired, which is what every install is until somebody presses Pair.** The device id
+    // is fixed rather than random so a story can assert against it — this is the one place the
+    // fake diverges from `identity::ensure`, which mints on first read.
+    pairing: {
+      deviceId: "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+      deviceName: "This device",
+      group: null,
+      devices: [],
+      pending: null,
+    },
     fault: null,
     ...init,
   };
@@ -6091,6 +6188,23 @@ export function readHandlers(db: FakeDb) {
      * A read, so it answers through every second of a sync — it takes `db_read` in the crate,
      * where the two writes beside it take the write connection.
      */
+    /**
+     * `sync_pair::pairing::sync_pairing_status` — this device, its group and the roster.
+     *
+     * **A read here and a *write* in the crate**, and the difference is worth knowing rather
+     * than hiding: `identity::ensure` mints an identity row the first time anything asks, so
+     * the shipped command takes the write connection and can answer `BUSY`. This fake mints
+     * its identity in {@link makeDb} instead, because a story wants a device id it can assert
+     * against — so there is nothing to refuse and it sits with the reads.
+     */
+    sync_pairing_status: (): PairingStatus => ({
+      deviceId: db.pairing.deviceId,
+      deviceName: db.pairing.deviceName,
+      groupId: db.pairing.group?.groupId ?? null,
+      epoch: db.pairing.group?.epoch ?? null,
+      devices: db.pairing.devices.map((d) => ({ ...d })),
+    }),
+
     mirror_status: (): MirrorStatus => ({
       enabled: db.mirror.enabled,
       root: mirrorRoot(db),
@@ -11734,7 +11848,240 @@ export function writeHandlers(db: FakeDb) {
       db.mirror.lastError = null;
       return report;
     },
+
+    /**
+     * `sync_pairing_begin` — start offering a pairing.
+     *
+     * A second press replaces the first, which is what a reader who pressed the button twice
+     * means. The code is 105 characters because the payload forces it: a 16-byte group id, a
+     * 32-byte X25519 public key and a 16-byte token, at five bits a character, plus a
+     * two-character checksum.
+     */
+    sync_pairing_begin: (): PairingOffer => {
+      refuseIfBusy(db);
+      const code = fakeInviteCode(db.pairing.deviceId, db.pairing.devices.length);
+      db.pairing.pending = { initiator: true, sas: null, response: "", spent: false };
+      return { code, qr: fakeQrMatrix(code) };
+    },
+
+    /**
+     * `sync_pairing_accept` — the joining device reads the offered code.
+     *
+     * **The three refusals are the crate's own, in its words**, and they are reachable by
+     * typing rather than by a fault: a code of the wrong length is half a paste, a character
+     * outside Crockford's alphabet is something else entirely, and neither is a typo. The
+     * checksum itself is not modelled — there is no real one to compute — so a well-shaped
+     * code is accepted, which is the one place a story is kinder than the app.
+     */
+    sync_pairing_accept: (args: { code: string }): PairingHandshake => {
+      refuseIfBusy(db);
+      const cleaned = args.code.replace(/[^0-9A-Za-z]/g, "").toUpperCase();
+      if (cleaned.length !== 105) throw refuse(PAIRING_CODE_LENGTH);
+      if (!/^[0-9ABCDEFGHJKMNPQRSTVWXYZILO]+$/.test(cleaned)) throw refuse(PAIRING_CODE_ALPHABET);
+      const sas = fakeSas(cleaned);
+      db.pairing.pending = {
+        initiator: false,
+        sas,
+        response: fakeBlob(cleaned + db.pairing.deviceId),
+        spent: false,
+      };
+      return { sas, response: db.pairing.pending.response };
+    },
+
+    /**
+     * `sync_pairing_respond` — the offering device reads what the joiner sent back.
+     *
+     * The `pairingReadError` fault lands here on purpose: this is the step whose failure a
+     * reader cannot produce by typing, because a bent blob fails at the AEAD rather than at any
+     * shape check. It is the one sentence in this feature that only a fault can show.
+     */
+    sync_pairing_respond: (args: { response: string }): PairingHandshake => {
+      refuseIfBusy(db);
+      const pending = db.pairing.pending;
+      if (pending === null || !pending.initiator) throw refuse(PAIRING_NOTHING_IN_FLIGHT);
+      if (pending.spent) throw refuse(PAIRING_ALREADY_USED);
+      if (db.fault === "pairingReadError") throw refuse(PAIRING_UNREADABLE);
+      pending.sas = fakeSas(args.response.replace(/[^0-9A-Za-z]/g, "").toUpperCase());
+      return { sas: pending.sas, response: "" };
+    },
+
+    /**
+     * `sync_pairing_confirm` — the reader says the six digits matched.
+     *
+     * **This is the only place a group is created**, which is what makes a cancelled pairing
+     * leave nothing behind: `begin` mints a group id it does not write, and only a confirmed
+     * comparison turns it into a row.
+     */
+    sync_pairing_confirm: (): PairingSealedKey => {
+      refuseIfBusy(db);
+      const pending = db.pairing.pending;
+      if (pending === null || !pending.initiator) throw refuse(PAIRING_NOTHING_IN_FLIGHT);
+      if (pending.spent) throw refuse(PAIRING_ALREADY_USED);
+      if (pending.sas === null) throw refuse(PAIRING_NO_ANSWER_YET);
+
+      const now = Math.floor(Date.now() / 1000);
+      if (db.pairing.group === null) {
+        db.pairing.group = { groupId: "0f1e2d3c4b5a69788796a5b4c3d2e1f0", epoch: 0 };
+        db.pairing.devices = [
+          { deviceId: db.pairing.deviceId, name: db.pairing.deviceName, addedAt: now, revokedAt: null },
+        ];
+      }
+      const joined = `b0${String(db.pairing.devices.length).padStart(2, "0")}`.padEnd(32, "f");
+      db.pairing.devices = [
+        ...db.pairing.devices.filter((d) => d.deviceId !== joined),
+        { deviceId: joined, name: "Paired device", addedAt: now, revokedAt: null },
+      ];
+      pending.spent = true;
+      return { sealedKey: fakeBlob(db.pairing.group.groupId + joined) };
+    },
+
+    /** `sync_pairing_complete` — the joining device unwraps the key it was handed. */
+    sync_pairing_complete: (args: { sealedKey: string }): void => {
+      refuseIfBusy(db);
+      const pending = db.pairing.pending;
+      if (pending === null || pending.initiator) throw refuse(PAIRING_NOT_READ_YET);
+      const cleaned = args.sealedKey.replace(/[^0-9A-Za-z]/g, "");
+      if (cleaned.length < 32) throw refuse(PAIRING_UNREADABLE);
+
+      const now = Math.floor(Date.now() / 1000);
+      db.pairing.group = { groupId: "0f1e2d3c4b5a69788796a5b4c3d2e1f0", epoch: 0 };
+      db.pairing.devices = [
+        { deviceId: db.pairing.deviceId, name: db.pairing.deviceName, addedAt: now, revokedAt: null },
+        { deviceId: "b000ffffffffffffffffffffffffffff", name: "Paired device", addedAt: now, revokedAt: null },
+      ];
+      db.pairing.pending = null;
+    },
+
+    /** `sync_pairing_cancel` — throw the offer away. The code on screen stops working. */
+    sync_pairing_cancel: (): void => {
+      db.pairing.pending = null;
+    },
+
+    /**
+     * `sync_device_rename` — rename a device on the roster.
+     *
+     * **It moves two rows when the id is this device's**, exactly as the crate does:
+     * `sync_identity.name` is the copy every pairing sends, so a rename that touched only the
+     * roster would be undone by the next press of Pair.
+     */
+    sync_device_rename: (args: { deviceId: string; name: string }): void => {
+      refuseIfBusy(db);
+      db.pairing.devices = db.pairing.devices.map((d) =>
+        d.deviceId === args.deviceId ? { ...d, name: args.name } : d,
+      );
+      if (args.deviceId === db.pairing.deviceId) db.pairing.deviceName = args.name;
+    },
+
+    /**
+     * `sync_device_revoke` — take a device off the group and rotate the key.
+     *
+     * **The rotation is the removal**, so the epoch moves in the same breath as the stamp. The
+     * row is kept rather than deleted, and the two refusals are the crate's: this device cannot
+     * remove itself, and an id nobody on the roster answers to rotates nothing.
+     */
+    sync_device_revoke: (args: { deviceId: string }): void => {
+      refuseIfBusy(db);
+      if (args.deviceId === db.pairing.deviceId) throw refuse(PAIRING_CANNOT_REMOVE_SELF);
+      if (db.pairing.group === null) throw refuse(PAIRING_NOT_IN_A_GROUP);
+      const row = db.pairing.devices.find((d) => d.deviceId === args.deviceId);
+      if (row === undefined) throw refuse(PAIRING_NOT_ON_THE_ROSTER);
+      row.revokedAt = Math.floor(Date.now() / 1000);
+      db.pairing.group = { ...db.pairing.group, epoch: db.pairing.group.epoch + 1 };
+    },
   } satisfies Record<string, CommandHandler>;
+}
+
+/* ------------------------------------------------------------------ pairing helpers ---- */
+
+/** `invite::InviteError`'s two reachable sentences, and the four `pairing.rs` refusals. */
+const PAIRING_CODE_LENGTH = "that is not a full pairing code — it should be 105 characters";
+const PAIRING_CODE_ALPHABET = "that does not look like a pairing code";
+const PAIRING_UNREADABLE =
+  "that pairing message could not be read — it is for another device, or it was altered";
+const PAIRING_NOTHING_IN_FLIGHT = "There is no pairing in progress.";
+const PAIRING_ALREADY_USED = "That pairing code has already been used.";
+const PAIRING_NO_ANSWER_YET = "The other device has not answered yet.";
+const PAIRING_NOT_READ_YET = "This device has not read a pairing code yet.";
+const PAIRING_CANNOT_REMOVE_SELF = "This device cannot remove itself. Use Leave group instead.";
+const PAIRING_NOT_IN_A_GROUP = "This device is not in a pairing group.";
+const PAIRING_NOT_ON_THE_ROSTER = "That device is not in this pairing group.";
+
+/** Crockford base32, as `sync_pair::invite` spells it. No `I`, `L`, `O` or `U`. */
+const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+/** A cheap, stable 32-bit hash. Not a KDF and nothing here pretends otherwise — see
+ *  {@link FakePairing}: the workbench has no cryptography, and every value below is derived so
+ *  that a story's play function can assert an exact string. */
+function fakeHash(text: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i += 1) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return h >>> 0;
+}
+
+/** 105 Crockford characters in groups of five, which is the shape `Invite::encode` produces. */
+function fakeInviteCode(seedText: string, nonce: number): string {
+  let h = fakeHash(`${seedText}:${nonce}`);
+  let body = "";
+  while (body.length < 105) {
+    h = Math.imul(h ^ body.length, 0x01000193) >>> 0;
+    body += CROCKFORD[h % 32];
+  }
+  return (body.match(/.{1,5}/g) ?? []).join("-");
+}
+
+/** A blob of the shape the two hand-carried steps produce: base32, ungrouped, no checksum. */
+function fakeBlob(seedText: string): string {
+  let h = fakeHash(seedText);
+  let out = "";
+  while (out.length < 176) {
+    h = Math.imul(h ^ out.length, 0x01000193) >>> 0;
+    out += CROCKFORD[h % 32];
+  }
+  return out;
+}
+
+/** Six digits, zero-padded. `042913` and `42913` are the same number and not the same code. */
+function fakeSas(seedText: string): string {
+  return String(fakeHash(seedText) % 1_000_000).padStart(6, "0");
+}
+
+/**
+ * A 21×21 grid of booleans, with the three finder patterns drawn in the corners.
+ *
+ * **It is a picture of a QR code and not a readable one**, and that is stated here rather than
+ * left to be discovered: the workbench has no encoder, and what a story is checking is the
+ * layout around the code — its size, its white ground, the row it shares with the typed form.
+ * The finders are drawn because without them the panel's own drawing bug would be invisible: a
+ * matrix that came back row-major and was drawn column-major is a symmetric mess either way
+ * until something in it has a corner.
+ */
+function fakeQrMatrix(code: string): QrMatrix {
+  const width = 21;
+  const modules: boolean[] = [];
+  const finder = (x: number, y: number): boolean | null => {
+    for (const [ox, oy] of [
+      [0, 0],
+      [width - 7, 0],
+      [0, width - 7],
+    ]) {
+      const dx = x - ox;
+      const dy = y - oy;
+      if (dx < 0 || dy < 0 || dx > 6 || dy > 6) continue;
+      const ring = Math.max(Math.abs(dx - 3), Math.abs(dy - 3));
+      return ring !== 2;
+    }
+    return null;
+  };
+  for (let y = 0; y < width; y += 1) {
+    for (let x = 0; x < width; x += 1) {
+      const inFinder = finder(x, y);
+      modules.push(inFinder ?? fakeHash(`${code}:${x}:${y}`) % 2 === 0);
+    }
+  }
+  return { width, modules };
 }
 
 /* --------------------------------------------------------------- the three plugins ---- */

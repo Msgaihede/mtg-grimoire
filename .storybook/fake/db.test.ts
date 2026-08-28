@@ -5307,6 +5307,14 @@ describe("the busy fault", () => {
       // not to the database. Its two neighbours (`mirror_set_enabled`, `mirror_set_root`) take
       // `sync::with_write` and are in the loop below with everything else.
       "mirror_rebuild",
+      // The eleventh, and the first that touches **no connection of any kind**: pairing's
+      // cancel clears `AppState.pairing`, a mutex of its own that has nothing to do with
+      // the database, so there is no `BUSY` for it to answer. Its seven neighbours all take
+      // `sync::with_write` and are in the loop below — `sync_pairing_status` included,
+      // which is a *write* in the crate because `identity::ensure` mints a row on first
+      // read, and sits in `readHandlers` here only because this fake mints its identity in
+      // `makeDb`.
+      "sync_pairing_cancel",
     ];
     const args: Record<string, unknown> = {
       id: 1,
@@ -5546,7 +5554,12 @@ describe("the busy fault", () => {
     // **folder** ids rather than category ids — which the record above does not need to know,
     // because every one of them reaches `refuseIfBusy` before it looks at an argument.
     const names = Object.keys(w).filter((n) => !unlocked.includes(n));
-    expect(names).toHaveLength(73);
+    // Pairing then added **seven**, 73 -> 80: begin, accept, respond, confirm, complete,
+    // rename and revoke all take `sync::with_write`, because every one of them reads or
+    // writes the three tables user schema v28 created. The eighth handler the feature ships,
+    // `sync_pairing_cancel`, joined `unlocked` instead — the fourth distinct reason on
+    // that list, and the cleanest: it touches no connection at all.
+    expect(names).toHaveLength(80);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,

@@ -28,19 +28,20 @@ deliberately**: no screenshots are stored.
   three different things on three DTOs. A fake that stored DTOs would make all three agree, and
   teach a reader a model the app does not have.
 - **Seeds and faults are state, not response stubs**: `parameters: { fake: { seed, fault } }`.
-  **Six** seeds (`empty`/`starter`/`needsReview`/`large`/`bracketMismatch`/`combosMissing`),
-  **nineteen** faults
+  **Seven** seeds
+  (`empty`/`starter`/`needsReview`/`large`/`bracketMismatch`/`combosMissing`/`paired`),
+  **twenty** faults
   (`busy`/`syncing`/`syncError`/`imageFailures`/`gone`/`indexCold`/`deckMeta`/`updateAvailable`/
   `updateError`/`errorLog`/`feedFetchError`/`oracleTagsMissing`/`oracleTagsFetchError`/
   `artTagsMissing`/`artTagsFetchError`/`imageUrisMissing`/`exportWriteError`/
-  `mirrorRootUnwritable`/`combosFetchError`); saying
+  `mirrorRootUnwritable`/`combosFetchError`/`pairingReadError`); saying
   nothing gets `starter` with no fault. A
   fault is set on the _world_, so a story shows what the **app** does with a refusal rather than
   what one mocked call returns. **`syncing` is `busy`'s neighbour and reaches exactly one
   command**: `cache_clear` refuses outright while a card update is in flight, because
   `data/tmp/` is where the corpus download puts 77 MB the ingest then reads back — and it is
   checked *before* the write connection is asked for, which is why it is not `busy`.
-  **Four of the nineteen are not failures at all** — `indexCold` is
+  **Four of the twenty are not failures at all** — `indexCold` is
   the search index mid-build; `oracleTagsMissing` is the Oracle tag taxonomy having never
   been ingested, which is every install's first launch and the state the type-line fallback
   exists for; `artTagsMissing` is the same thing one dataset over, where the honest floor is a
@@ -59,6 +60,12 @@ deliberately**: no screenshots are stored.
   nothing pressed, and `mirror_rebuild` refuses so that pressing the button cannot clear the
   error by succeeding into a folder that is not there. Nothing else about the world changes —
   no database write ever waits on a mirror write.
+  **`paired` is a seed and `pairingReadError` is a fault, and the split is `combosMissing`'s
+  read from both ends.** Being paired is not something that has gone wrong with a world — it is
+  where a reader arrives after two presses, and the only state the roster, a removed row and the
+  key version are reachable from. What *is* a fault is the one refusal in that flow a reader
+  cannot produce by typing: every other way it fails is a shape the handler raises itself, and
+  what is left is the blob the joining device carries back failing to open.
   **Re-count this list when you add one** — it said "four" for three faults' worth of drift, and
   then "eight" while `errorLog` had been in the union for a whole feature, because a prose-only
   edit routes to neither CI job and nothing goes red.

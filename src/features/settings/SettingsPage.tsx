@@ -5,6 +5,7 @@ import { DangerZonePanel } from "@/features/settings/DangerZonePanel";
 import { ErrorLogPanel } from "@/features/settings/ErrorLogPanel";
 import { HiddenTagsPanel } from "@/features/settings/HiddenTagsPanel";
 import { MarketplacePanel } from "@/features/settings/MarketplacePanel";
+import { SyncPanel } from "@/features/settings/SyncPanel";
 import { UpdatePanel } from "@/features/settings/UpdatePanel";
 import { useDangerZone, useLocalCache } from "@/features/settings/useDataReset";
 import { useHiddenTags } from "@/features/settings/useHiddenTags";
@@ -80,6 +81,14 @@ export function SettingsPage({ update }: { update: Update }) {
           the shorter the scroll from the top of the page to that list, the fewer of them give up
           on the way. Everything below is either a report or a deletion. */}
       <HiddenTagsPanel hidden={hidden} />
+
+      {/* **Still in the group that throws nothing away**, which is the page's one ordering rule,
+          and below the undo above it because that one is what a reader arrives here looking for.
+          Removing a device is the sharpest press on this panel and it is not a clear: the copies,
+          the decks and the wishlist are untouched, and what changes is which other machine can
+          read what comes next. It reaches the backend itself — `BackupPanel`'s rule, and its
+          reason exactly: nothing else in the window reads `sync_pairing_status`. */}
+      <SyncPanel />
 
       <ErrorLogPanel log={log} />
 

@@ -53,7 +53,7 @@ const DEFAULT_NAME: &str = "This device";
 /// What [`revoke_device`] says when it is pointed at this very device.
 const CANNOT_REMOVE_SELF: &str = "This device cannot remove itself. Use Leave group instead.";
 
-/// What both rotations say on a device that is in no group.
+/// What [`revoke_device`] says on a device that is in no group.
 const NOT_IN_A_GROUP: &str = "This device is not in a pairing group.";
 
 /// What [`revoke_device`] says when the id names nobody on the roster.
@@ -272,20 +272,6 @@ pub fn revoke_device(conn: &Connection, device_id: &str) -> Result<Group, String
     Ok(rotated)
 }
 
-/// Rotate the key without removing anybody — the press behind "Rotate key now".
-pub fn rotate_key(conn: &Connection) -> Result<Group, String> {
-    let Some(current) = group(conn).map_err(|e| e.to_string())? else {
-        return Err(NOT_IN_A_GROUP.to_owned());
-    };
-    let rotated = Group {
-        group_id: current.group_id,
-        epoch: current.epoch + 1,
-        group_key: crypto::random_bytes::<32>(),
-    };
-    write_group(conn, &rotated).map_err(|e| e.to_string())?;
-    Ok(rotated)
-}
-
 fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
@@ -435,34 +421,12 @@ mod tests {
         assert_eq!(group(&conn).unwrap().unwrap(), before);
     }
 
-    /// Rotating without removing anybody is its own press, and it moves the same two things.
-    #[test]
-    fn rotating_the_key_bumps_the_epoch_and_keeps_the_roster() {
-        let conn = db();
-        let me = ensure(&conn).unwrap();
-        create_group(&conn, &me).unwrap();
-        add_device(&conn, "deadbeef", &[9u8; 32], "Phone").unwrap();
-
-        let before = group(&conn).unwrap().unwrap();
-        let after = rotate_key(&conn).unwrap();
-
-        assert_eq!(after.group_id, before.group_id);
-        assert_eq!(after.epoch, before.epoch + 1);
-        assert_ne!(after.group_key, before.group_key);
-        assert_eq!(roster(&conn).unwrap().len(), 2);
-        assert!(roster(&conn)
-            .unwrap()
-            .iter()
-            .all(|d| d.revoked_at.is_none()));
-    }
-
-    /// Neither press means anything on a device that is in no group, and both say so rather
+    /// Removing a device means nothing on a device that is in no group, and it says so rather
     /// than minting one.
     #[test]
-    fn an_unpaired_device_can_neither_rotate_nor_revoke() {
+    fn an_unpaired_device_cannot_revoke() {
         let conn = db();
         ensure(&conn).unwrap();
-        assert!(rotate_key(&conn).is_err());
         assert!(revoke_device(&conn, "deadbeef").is_err());
         assert!(group(&conn).unwrap().is_none());
     }
