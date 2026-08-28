@@ -77,13 +77,29 @@
  * a priced list is the answer, one {@link FinishPrices} triple in it. There is no twin field to
  * pick between and no fallback across marketplaces — see `@/lib/marketplace`.
  */
-import { invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { core } from "@/lib/core";
 import type { Condition } from "./conditions";
 import type { Finish } from "./finish";
 import type { MarketplaceId } from "./marketplace";
 import type { ImageVariant } from "./images";
 import type { SortSpec } from "./sort";
+
+/**
+ * What a subscription hands back: call it to stop listening.
+ *
+ * This app's own type now, rather than the one Tauri exported. It is **synchronous** because
+ * {@link Core} is — a React cleanup cannot await, and a component can unmount before the
+ * transport has finished subscribing, so the handle has to be callable immediately and still
+ * take effect later. `core/tauri.ts` is where that is arranged.
+ */
+export type Unlisten = () => void;
+
+/**
+ * The ~136 methods below are written as `invoke("name", { args })` and stay that way.
+ * Only where the call goes has changed — {@link core} decides that, per build.
+ */
+const invoke = <T,>(command: string, args?: Record<string, unknown>): Promise<T> =>
+  core.call<T>(command, args);
 
 /**
  * The search's sortable columns. Mirrors `SEARCH_SORTS` in `src-tauri/src/search.rs`; a key
@@ -4806,8 +4822,8 @@ export const ipc = {
   /** `force` skips the 24 h throttle. Rejects if a sync is already running. */
   syncRun: (force: boolean) => invoke<SyncOutcome>("sync_run", { force }),
   syncStatus: () => invoke<SyncStatus>("sync_status"),
-  onSyncProgress: (cb: (e: SyncProgressEvent) => void): Promise<UnlistenFn> =>
-    listen<SyncProgressEvent>("sync:progress", (evt) => cb(evt.payload)),
+  onSyncProgress: (cb: (e: SyncProgressEvent) => void): Unlisten =>
+    core.listen<SyncProgressEvent>("sync:progress", cb),
   /** What is already known about a newer release. Reads `app_meta`; makes no network call. */
   /**
    * The error log, newest first. Repeats are folded, so a row's `count` is how many times
@@ -4867,11 +4883,11 @@ export const ipc = {
   updateApply: () => invoke<void>("update_apply"),
   /** Open the release on github.com — what an install kind that cannot update itself gets. */
   updateOpenReleasePage: () => invoke<void>("update_open_release_page"),
-  onUpdateProgress: (cb: (e: UpdateProgressEvent) => void): Promise<UnlistenFn> =>
-    listen<UpdateProgressEvent>("update:progress", (evt) => cb(evt.payload)),
+  onUpdateProgress: (cb: (e: UpdateProgressEvent) => void): Unlisten =>
+    core.listen<UpdateProgressEvent>("update:progress", cb),
   /** A reconcile pass that moved user rows. See {@link ReconciledEvent}. */
-  onCollectionReconciled: (cb: (e: ReconciledEvent) => void): Promise<UnlistenFn> =>
-    listen<ReconciledEvent>("collection:reconciled", (evt) => cb(evt.payload)),
+  onCollectionReconciled: (cb: (e: ReconciledEvent) => void): Unlisten =>
+    core.listen<ReconciledEvent>("collection:reconciled", cb),
   /**
    * The marketplace whose prices the app quotes, as a stored id.
    *
@@ -5053,8 +5069,8 @@ export const ipc = {
    * **Subscribe once**, like both of those: every extra call is another `listen` registration
    * for the life of the app. `useMarketplaceProgress` is that one caller.
    */
-  onMarketplaceProgress: (cb: (e: FeedProgressEvent) => void): Promise<UnlistenFn> =>
-    listen<FeedProgressEvent>("marketplace:progress", (evt) => cb(evt.payload)),
+  onMarketplaceProgress: (cb: (e: FeedProgressEvent) => void): Unlisten =>
+    core.listen<FeedProgressEvent>("marketplace:progress", cb),
   /**
    * The Oracle tags for a set of **printings** — the read every categorising call site makes.
    *
@@ -5100,8 +5116,8 @@ export const ipc = {
    * and the startup refresh can begin before this window has one, so
    * {@link ipc.oracleTagsStatus} is the reliable half of the pair.
    */
-  onOracleTagProgress: (cb: (e: OracleTagProgressEvent) => void): Promise<UnlistenFn> =>
-    listen<OracleTagProgressEvent>("oracle-tags:progress", (evt) => cb(evt.payload)),
+  onOracleTagProgress: (cb: (e: OracleTagProgressEvent) => void): Unlisten =>
+    core.listen<OracleTagProgressEvent>("oracle-tags:progress", cb),
   /**
    * The **art** taxonomy's freshness — {@link ipc.oracleTagsStatus} one dataset over, and safe
    * before the first refresh for the same reason: a database with no meta row answers every
@@ -5130,8 +5146,8 @@ export const ipc = {
    * webview registered a listener and the startup refresh can begin before this window has one,
    * so {@link ipc.artTagsStatus} is the reliable half of the pair.
    */
-  onArtTagProgress: (cb: (e: ArtTagProgressEvent) => void): Promise<UnlistenFn> =>
-    listen<ArtTagProgressEvent>("art-tags:progress", (evt) => cb(evt.payload)),
+  onArtTagProgress: (cb: (e: ArtTagProgressEvent) => void): Unlisten =>
+    core.listen<ArtTagProgressEvent>("art-tags:progress", cb),
   /**
    * Type-ahead over the tag taxonomies — the Tags page's search box.
    *
@@ -5271,8 +5287,8 @@ export const ipc = {
    * registration for the life of the app. Tauri drops events emitted before the webview
    * registered a listener, so {@link ipc.combosStatus} is the reliable half of the pair.
    */
-  onCombosProgress: (cb: (e: ComboProgress) => void): Promise<UnlistenFn> =>
-    listen<ComboProgress>("combos:progress", (evt) => cb(evt.payload)),
+  onCombosProgress: (cb: (e: ComboProgress) => void): Unlisten =>
+    core.listen<ComboProgress>("combos:progress", cb),
   /**
    * The Scryfall CDN URL for one printing at one size, or `null`.
    *

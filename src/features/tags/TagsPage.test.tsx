@@ -41,7 +41,7 @@ const oracleTagsStatus = vi.hoisted(() => vi.fn());
  *
  * The page subscribes to it so a finished ingest takes the notice down without a reload, and the
  * only way to drive that is to hold the callback the page handed over. A bare
- * `mockResolvedValue(() => {})` would leave the subscription unregistered from the test's point
+ * `mockReturnValue(() => {})` would leave the subscription unregistered from the test's point
  * of view and the heal untestable.
  */
 const onArtTagProgress = vi.hoisted(() => vi.fn());
@@ -98,10 +98,10 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     onArtTagProgress,
     syncStatus,
     syncRun: vi.fn(),
-    onSyncProgress: vi.fn().mockResolvedValue(() => {}),
-    onCollectionReconciled: vi.fn().mockResolvedValue(() => {}),
-    onMarketplaceProgress: vi.fn().mockResolvedValue(() => {}),
-    onOracleTagProgress: vi.fn().mockResolvedValue(() => {}),
+    onSyncProgress: vi.fn().mockReturnValue(() => {}),
+    onCollectionReconciled: vi.fn().mockReturnValue(() => {}),
+    onMarketplaceProgress: vi.fn().mockReturnValue(() => {}),
+    onOracleTagProgress: vi.fn().mockReturnValue(() => {}),
     marketplaceFeedStatus: vi.fn().mockResolvedValue([]),
     deckAddCard,
     deckGet,
@@ -392,7 +392,7 @@ beforeEach(() => {
   artProgress = null;
   onArtTagProgress.mockReset().mockImplementation((cb: (e: TagProgressEvent) => void) => {
     artProgress = cb;
-    return Promise.resolve(() => {});
+    return () => {};
   });
   // **The shell-mounted tests share the app's module-level client**, whose `staleTime` is 30 s —
   // so without this the second of them reads the first's cached search page instead of calling

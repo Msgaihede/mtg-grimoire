@@ -7,7 +7,6 @@ import {
   useQueryClient,
   type QueryClient,
 } from "@tanstack/react-query";
-import type { UnlistenFn } from "@tauri-apps/api/event";
 import { ipc, ipcError, type FeedProgressEvent, type MarketplaceFeedStatus } from "@/lib/ipc";
 import {
   DEFAULT_MARKETPLACE,
@@ -154,29 +153,18 @@ function invalidatePricedQueries(queryClient: QueryClient): void {
 export function useMarketplaceProgress(): void {
   const queryClient = useQueryClient();
 
-  useEffect(() => {
-    let cancelled = false;
-    let stop: UnlistenFn | undefined;
-    ipc
-      .onMarketplaceProgress((event) => {
+  // The unmount race and the registration that fails outside a Tauri window (a plain
+  // `vite dev`, a story) belong to `lib/core/tauri.ts` now. Losing the fast path is not worth
+  // taking the app down for: `marketplaceFeedStatus` is the reliable half of the pair and
+  // still answers.
+  useEffect(
+    () =>
+      ipc.onMarketplaceProgress((event) => {
         queryClient.setQueryData(MARKETPLACE_PROGRESS_KEY, event);
         if (event.phase === "done") invalidatePricedQueries(queryClient);
-      })
-      .then((unlisten) => {
-        // `listen` resolves a tick later than the unmount can happen, so the handle has to be
-        // dropped here too — otherwise it outlives the component for the app's lifetime.
-        if (cancelled) unlisten();
-        else stop = unlisten;
-      })
-      // Registering a listener fails outside a Tauri window (a plain `vite dev`, a story).
-      // Losing the fast path is not worth taking the app down for: `marketplaceFeedStatus` is
-      // the reliable half of the pair and still answers.
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-      stop?.();
-    };
-  }, [queryClient]);
+      }),
+    [queryClient],
+  );
 }
 
 /**

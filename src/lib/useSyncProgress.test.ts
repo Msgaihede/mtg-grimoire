@@ -39,11 +39,12 @@ beforeEach(() => {
   unlisten.mockClear();
   onSyncProgress.mockReset().mockImplementation((cb: (e: SyncProgressEvent) => void) => {
     emit = (e) => act(() => cb(e));
-    return Promise.resolve(unlisten);
+    return unlisten;
   });
 });
 
-/** The listener is registered asynchronously; nothing can be emitted before it lands. */
+/** Registration is synchronous now that it goes through `@/lib/core`, but the mount that
+ *  triggers it is not — this waits for the effect to have run. */
 const listening = () => vi.waitFor(() => expect(onSyncProgress).toHaveBeenCalled());
 
 it("holds the latest event and nothing before one arrives", async () => {
@@ -79,32 +80,24 @@ it("stops listening when it unmounts", async () => {
   expect(unlisten).toHaveBeenCalled();
 });
 
-/**
- * `listen` resolves a tick later than an unmount can happen, so the handle has to be
- * dropped on arrival too — otherwise it outlives the component for the app's lifetime.
+/*
+ * There is no "drops a handle that arrives after the unmount" test here any more. That race —
+ * the transport resolving a tick after the component is gone — stopped being this hook's to
+ * lose when `ipc.onSyncProgress` became synchronous. It now belongs to the one place that can
+ * still see it, and is asserted there: `src/lib/core/core.test.ts`, "returns a synchronous
+ * unsubscribe that survives being called before listen resolves".
  */
-it("drops a handle that arrives after the unmount", async () => {
-  let land!: (fn: () => void) => void;
-  onSyncProgress.mockReturnValue(
-    new Promise<() => void>((resolve) => {
-      land = resolve;
-    }),
-  );
-  const { unmount } = renderHook(() => useSyncProgress());
-  await listening();
 
-  unmount();
-  await act(async () => land(unlisten));
-
-  expect(unlisten).toHaveBeenCalled();
-});
 
 /**
- * Outside a Tauri window (a plain `vite dev`) the registration rejects. Losing the fast
- * path for progress is not worth taking the app down for — the status poll still answers.
+ * Outside a Tauri window (a plain `vite dev`) the registration never lands. It no longer
+ * *rejects* at this hook — `lib/core/tauri.ts` swallows that, because a synchronous subscribe
+ * leaves a caller nothing to attach a `.catch` to — so what the hook sees is simply an event
+ * that never arrives. Losing the fast path for progress is not worth taking the app down for;
+ * the status poll still answers. The swallow itself is asserted in `core.test.ts`.
  */
 it("survives a registration that never succeeds", async () => {
-  onSyncProgress.mockRejectedValue(new Error("not a tauri window"));
+  onSyncProgress.mockReturnValue(() => {});
 
   const { result } = renderHook(() => useSyncProgress());
   await listening();

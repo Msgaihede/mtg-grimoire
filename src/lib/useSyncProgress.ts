@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import type { UnlistenFn } from "@tauri-apps/api/event";
 import { ipc, type SyncPhase, type SyncProgressEvent } from "@/lib/ipc";
 
 /** What each phase is called on screen — the label under the bar and on the mana line. */
@@ -37,27 +36,13 @@ export const PHASE_LABEL: Record<SyncPhase, string> = {
 export function useSyncProgress(): SyncProgressEvent | null {
   const [progress, setProgress] = useState<SyncProgressEvent | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    let stop: UnlistenFn | undefined;
-    ipc
-      .onSyncProgress(setProgress)
-      .then((unlisten) => {
-        // `listen` resolves a tick later than the unmount can happen, so the handle has
-        // to be dropped here too — otherwise it outlives the component for the app's
-        // lifetime.
-        if (cancelled) unlisten();
-        else stop = unlisten;
-      })
-      // Registering the listener fails outside a Tauri window (a plain `vite dev`, say).
-      // Losing the fast path for progress is not worth taking the app down for: the
-      // status poll still answers, and it is the reliable half of the pair.
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-      stop?.();
-    };
-  }, []);
+  // One line, because `ipc.onSyncProgress` is synchronous and hands over the payload rather
+  // than an envelope. Both of the things this effect used to do for itself belong to
+  // `lib/core/tauri.ts` now: dropping a handle that lands after the unmount, and swallowing
+  // the registration that fails outside a Tauri window (a plain `vite dev`, say). Losing the
+  // fast path for progress was never worth taking the app down for — the status poll still
+  // answers, and it is the reliable half of the pair.
+  useEffect(() => ipc.onSyncProgress(setProgress), []);
 
   return progress;
 }

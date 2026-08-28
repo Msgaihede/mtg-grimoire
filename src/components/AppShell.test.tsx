@@ -212,10 +212,10 @@ beforeEach(() => {
   invalidate.mockClear();
   syncStatus.mockReset().mockResolvedValue(status());
   syncRun.mockReset().mockResolvedValue({ updated: false, cardCount: 116_568, updatedAt: null });
-  onSyncProgress.mockReset().mockResolvedValue(() => {});
-  onCollectionReconciled.mockReset().mockResolvedValue(() => {});
-  onMarketplaceProgress.mockReset().mockResolvedValue(() => {});
-  onOracleTagProgress.mockReset().mockResolvedValue(() => {});
+  onSyncProgress.mockReset().mockReturnValue(() => {});
+  onCollectionReconciled.mockReset().mockReturnValue(() => {});
+  onMarketplaceProgress.mockReset().mockReturnValue(() => {});
+  onOracleTagProgress.mockReset().mockReturnValue(() => {});
   deckAddCard.mockReset().mockResolvedValue({ id: 1, quantity: 1, removed: false });
   wishlistAdd.mockReset().mockResolvedValue({ id: 1, quantity: 1, removed: false });
   deckGet.mockReset().mockResolvedValue(null);
@@ -355,7 +355,7 @@ describe("the status line", () => {
     let emit: ((e: SyncProgressEvent) => void) | undefined;
     onSyncProgress.mockImplementation((cb: (e: SyncProgressEvent) => void) => {
       emit = cb;
-      return Promise.resolve(() => {});
+      return () => {};
     });
     syncStatus.mockResolvedValue(status({ syncing: true }));
 
@@ -380,7 +380,7 @@ describe("the status line", () => {
     let emit: ((e: SyncProgressEvent) => void) | undefined;
     onSyncProgress.mockImplementation((cb: (e: SyncProgressEvent) => void) => {
       emit = cb;
-      return Promise.resolve(() => {});
+      return () => {};
     });
     syncStatus.mockResolvedValue(status({ syncing: true }));
 

@@ -76,11 +76,12 @@ beforeEach(() => {
   oracleTagsStatus.mockReset().mockResolvedValue(NEVER);
   onOracleTagProgress.mockReset().mockImplementation((cb: (e: OracleTagProgressEvent) => void) => {
     emit = (e) => act(() => cb(e));
-    return Promise.resolve(unlisten);
+    return unlisten;
   });
 });
 
-/** The listener is registered asynchronously; nothing can be emitted before it lands. */
+/** Registration is synchronous now that it goes through `@/lib/core`, but the mount that
+ *  triggers it is not — this waits for the effect to have run. */
 const listening = () => vi.waitFor(() => expect(onOracleTagProgress).toHaveBeenCalled());
 
 /**
@@ -256,34 +257,22 @@ it("stops listening when it unmounts", async () => {
   expect(unlisten).toHaveBeenCalled();
 });
 
-/**
- * `listen` resolves a tick later than an unmount can happen, so the handle has to be dropped on
- * arrival too — otherwise it outlives the component for the app's lifetime.
+/*
+ * No "drops a handle that arrives after the unmount" test here either — see the note in
+ * `useSyncProgress.test.ts`. The race moved to `src/lib/core/core.test.ts` along with the
+ * subscribe itself.
  */
-it("drops a handle that arrives after the unmount", async () => {
-  let land!: (fn: () => void) => void;
-  onOracleTagProgress.mockReturnValue(
-    new Promise<() => void>((resolve) => {
-      land = resolve;
-    }),
-  );
-  const { unmount } = renderHook(() => useOracleTagProgress(), { wrapper });
-  await listening();
 
-  unmount();
-  await act(async () => land(unlisten));
-
-  expect(unlisten).toHaveBeenCalled();
-});
 
 /**
- * Outside a Tauri window (a plain `vite dev`, a story) the registration rejects, and losing the
- * fast path costs less here than anywhere else in the app: the status read still answers, and a
- * taxonomy that never arrives costs categories filed by card type rather than by what a card
- * does. Nothing about this may take the app down.
+ * Outside a Tauri window (a plain `vite dev`, a story) the registration never lands —
+ * `lib/core/tauri.ts` swallows it — and losing the fast path costs less here than anywhere
+ * else in the app: the status read still answers, and a taxonomy that never arrives costs
+ * categories filed by card type rather than by what a card does. Nothing about this may take
+ * the app down.
  */
 it("survives a registration that never succeeds", async () => {
-  onOracleTagProgress.mockRejectedValue(new Error("not a tauri window"));
+  onOracleTagProgress.mockReturnValue(() => {});
 
   const { result } = renderHook(() => useOracleTagProgress(), { wrapper });
   await listening();

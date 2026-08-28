@@ -1,5 +1,4 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { UnlistenFn } from "@tauri-apps/api/event";
 import { Download, RefreshCw } from "lucide-react";
 import { useEffect, useState, type JSX } from "react";
 import { count } from "@/lib/counts";
@@ -278,11 +277,13 @@ export function CombosPanel(): JSX.Element {
   const read = useQuery({ queryKey: COMBOS_STATUS_KEY, queryFn: () => ipc.combosStatus() });
   const status = read.data ?? null;
 
-  useEffect(() => {
-    let cancelled = false;
-    let stop: UnlistenFn | undefined;
-    ipc
-      .onCombosProgress((event) => {
+  // The unmount race and the registration that fails outside a Tauri window (a plain
+  // `vite dev`, a story with no fake) belong to `lib/core/tauri.ts` now. Losing the fast path
+  // is not worth taking the page down for: the status read still answers, and a refresh still
+  // finishes.
+  useEffect(
+    () =>
+      ipc.onCombosProgress((event) => {
         setProgress(event);
         // **Both terminal phases, not just `done`.** A failed refresh leaves the previous rows
         // exactly where they were, so there is nothing new to *count* — but `checkedAt` moved,
@@ -290,22 +291,9 @@ export function CombosPanel(): JSX.Element {
         if (event.phase === "done" || event.phase === "error") {
           void client.invalidateQueries({ queryKey: COMBOS_KEY });
         }
-      })
-      .then((unlisten) => {
-        // `listen` resolves a tick later than the unmount can happen, so the handle has to be
-        // dropped here too — otherwise it outlives the panel for the app's lifetime.
-        if (cancelled) unlisten();
-        else stop = unlisten;
-      })
-      // Registering a listener fails outside a Tauri window (a plain `vite dev`, a story with
-      // no fake). Losing the fast path is not worth taking the page down for: the status read
-      // still answers, and a refresh still finishes.
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-      stop?.();
-    };
-  }, [client]);
+      }),
+    [client],
+  );
 
   /**
    * **`force: true`, and it is a decision rather than the default.**

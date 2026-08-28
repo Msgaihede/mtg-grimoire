@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import type { UnlistenFn } from "@tauri-apps/api/event";
 import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
 import { FilterBar } from "@/features/search/FilterBar";
 import { HIDDEN_TAGS_KEY } from "@/features/settings/useHiddenTags";
@@ -89,11 +88,13 @@ function useArtTagStatus(): ArtTagStatus | null {
         query.state.data?.refreshing === true ? TAG_REFRESH_POLL_MS : false,
     }).data ?? null;
 
-  useEffect(() => {
-    let cancelled = false;
-    let stop: UnlistenFn | undefined;
-    ipc
-      .onArtTagProgress((event) => {
+  // The unmount race and the registration that fails outside a Tauri window (a plain
+  // `vite dev`, a story) belong to `lib/core/tauri.ts` now. Losing the fast path is not worth
+  // taking the page down for: the status read still answers, and the poll above still covers a
+  // refresh that is in flight.
+  useEffect(
+    () =>
+      ipc.onArtTagProgress((event) => {
         // Both terminal phases, not just `done`. A failed refresh leaves the previous taxonomy
         // exactly where it was — so there is nothing new to read — but `refreshing` is still
         // true on the status this window last read, and only a refetch takes it down.
@@ -101,22 +102,9 @@ function useArtTagStatus(): ArtTagStatus | null {
         void queryClient.invalidateQueries({ queryKey: ART_TAGS_KEY });
         void queryClient.invalidateQueries({ queryKey: ["tag-children"] });
         void queryClient.invalidateQueries({ queryKey: ["tag-search"] });
-      })
-      .then((unlisten) => {
-        // `listen` resolves a tick later than the unmount can happen, so the handle has to be
-        // dropped here too — otherwise it outlives the page for the app's lifetime.
-        if (cancelled) unlisten();
-        else stop = unlisten;
-      })
-      // Registering a listener fails outside a Tauri window (a plain `vite dev`, a story).
-      // Losing the fast path is not worth taking the page down for: the status read still
-      // answers, and the poll above still covers a refresh that is in flight.
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-      stop?.();
-    };
-  }, [queryClient]);
+      }),
+    [queryClient],
+  );
 
   return status;
 }

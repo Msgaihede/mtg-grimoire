@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import type { UnlistenFn } from "@tauri-apps/api/event";
 import {
   ipc,
   type OracleTagPhase,
@@ -113,11 +112,13 @@ export function useOracleTagProgress(): OracleTagRefresh {
       refetchInterval: (query) => (query.state.data?.refreshing === true ? 1500 : false),
     }).data ?? null;
 
-  useEffect(() => {
-    let cancelled = false;
-    let stop: UnlistenFn | undefined;
-    ipc
-      .onOracleTagProgress((event) => {
+  // The unmount race and the registration that fails outside a Tauri window (a plain
+  // `vite dev`, a story) belong to `lib/core/tauri.ts` now. Losing the fast path costs less
+  // here than anywhere else in the app: the status read still answers, and a taxonomy that
+  // never arrives costs categories filed by card type rather than by what a card does.
+  useEffect(
+    () =>
+      ipc.onOracleTagProgress((event) => {
         setProgress(event);
         // Both terminal phases, not just `done`. A failed refresh leaves the previous taxonomy
         // exactly where it was — so there is nothing new to read — but `refreshing` is still
@@ -136,23 +137,9 @@ export function useOracleTagProgress(): OracleTagRefresh {
           void queryClient.invalidateQueries({ queryKey: ["tag-children"] });
           void queryClient.invalidateQueries({ queryKey: ["tag-search"] });
         }
-      })
-      .then((unlisten) => {
-        // `listen` resolves a tick later than the unmount can happen, so the handle has to be
-        // dropped here too — otherwise it outlives the component for the app's lifetime.
-        if (cancelled) unlisten();
-        else stop = unlisten;
-      })
-      // Registering a listener fails outside a Tauri window (a plain `vite dev`, a story).
-      // Losing the fast path is not worth taking the app down for, and it costs less here than
-      // anywhere else in the app: the status read still answers, and a taxonomy that never
-      // arrives costs categories filed by card type rather than by what a card does.
-      .catch(() => {});
-    return () => {
-      cancelled = true;
-      stop?.();
-    };
-  }, [queryClient]);
+      }),
+    [queryClient],
+  );
 
   return {
     status,
