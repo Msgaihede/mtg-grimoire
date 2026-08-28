@@ -407,8 +407,26 @@ applier resolves by grain first, uid second, with a `min(uid)` tiebreak.**
 | `deck_tags` | `name_key` |
 | `muted_tags` | `namespace, tag_id` |
 
-`decks`, `deck_folders`, `collection_folders`, `wishlist_folders` and `deck_audit` have no grain
-and are uid-only.
+`decks`, `deck_folders`, `wishlist_folders` and `deck_audit` have no grain and are uid-only.
+
+**A table can have more than one grain, and three of them are PARTIAL indexes** — which the
+plan's table misses entirely, and one of them matters from the first minute a group exists:
+
+| Index | Grain | Why it fires |
+| --- | --- | --- |
+| `idx_collection_folder_removed` | `kind = ? AND kind = 'removed'` | **every database seeds its own `Recently removed`**, so two paired devices hold that row under two uids the moment they meet |
+| `idx_collection_folder_deck` | `deck_id = ? AND deck_id IS NOT NULL` | one group per deck; two readers each pressing Clear collection rebuild one each |
+| `idx_deck_categories_kind` | `deck_id = ? AND kind = ? AND kind <> 'main'` | a deck has one Sideboard, one Commander, one Companion and one Maybeboard, and a renamed one slips past the `(deck_id, name)` grain |
+
+A partial index needs no new machinery: its own `WHERE` folds into the predicate, so
+`kind = ? AND kind = 'removed'` matches the one holding area when the incoming row is one and
+matches nothing when it is not. Dropping that second term makes every device's "Binder" and
+every device's "Trades" one folder, because both are `kind = 'user'` — which is what
+`two_user_folders_are_not_folded_by_the_partial_grain` is for.
+
+Without the first of the three, the failure is not a crash: the insert hits the index, the
+group's savepoint rolls back, and each device quietly keeps its own holding area **forever**
+while every count still reads one.
 
 **A sparse update op cannot describe a grain and does not need to** — the row it edits is found
 by uid. An *insert* op carries every field, which is what makes the grain rule work at all.

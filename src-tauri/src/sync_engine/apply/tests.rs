@@ -918,6 +918,195 @@ fn a_whole_deck_crosses_intact() {
     assert_eq!((card.as_str(), pile.as_str()), ("Sol Ring", "Ramp"));
 }
 
+/// **"Clear collection" crosses, and it is the sharpest ordering case there is.**
+///
+/// `reset::clear_collection` deletes every folder and immediately rebuilds `Recently removed`
+/// and one group per deck — and `idx_collection_folder_removed` is `UNIQUE (kind) WHERE kind =
+/// 'removed'`, so the far device must apply the delete **before** the insert or the whole thing
+/// is a constraint failure. Groups are ordered by their earliest stamp within a table, which is
+/// what makes that true; this is the test that would notice if it stopped being.
+#[test]
+fn clearing_the_collection_crosses_without_two_holding_areas() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let (mut ma, _) = (0, 0);
+    a.execute(
+        "INSERT INTO decks (name, format_key, created_at, updated_at)
+         VALUES ('Atraxa', 'commander', unixepoch(), unixepoch())",
+        [],
+    )
+    .unwrap();
+    // Both devices already have a seeded `Recently removed` — under two different uids,
+    // because each database minted its own. That is the state a pairing group is in from the
+    // moment it exists, and it is the whole reason this table needs a grain.
+    a.execute(
+        "INSERT INTO collection_folders
+            (parent_id, name, kind, deck_id, sort_order, created_at, updated_at)
+         VALUES (NULL, 'Atraxa', 'deck', 1, 0, unixepoch(), unixepoch()),
+                (NULL, 'Binder', 'user', NULL, 1, unixepoch(), unixepoch())",
+        [],
+    )
+    .unwrap();
+    add_copy(&a);
+    let report = apply(&b, &since(&a, &mut ma)).unwrap();
+    assert_eq!(report.deferred, 0);
+    let (ua, ub): (String, String) = (
+        a.query_row(
+            "SELECT sync_uid FROM collection_folders WHERE kind = 'removed'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap(),
+        b.query_row(
+            "SELECT sync_uid FROM collection_folders WHERE kind = 'removed'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap(),
+    );
+    assert_ne!(ua, ub, "two seeds, two uids — that is the premise");
+
+    let cleared = crate::reset::clear_collection(&a).unwrap();
+    assert_eq!(cleared.entries, 1);
+
+    let report = apply(&b, &since(&a, &mut ma)).unwrap();
+    assert_eq!(
+        report.deferred, 0,
+        "a folder rebuild must not stall the stream"
+    );
+
+    let (removed, groups): (i64, i64) = b
+        .query_row(
+            "SELECT (SELECT count(*) FROM collection_folders WHERE kind = 'removed'),
+                    (SELECT count(*) FROM collection_folders WHERE kind = 'deck')",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(removed, 1, "two holding areas is what the index forbids");
+    assert_eq!(groups, 1, "one group per deck, and the deck survived");
+    let entries: i64 = b
+        .query_row("SELECT count(*) FROM collection_entries", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(entries, 0, "the clear must cross");
+}
+
+/// **A deck's group folder converges on the second grain**, `idx_collection_folder_deck`.
+///
+/// It fires when both devices built one for the same deck independently, which is what two
+/// readers each pressing "Clear collection" produces: the rebuild makes one group per deck, and
+/// the two mint different uids.
+#[test]
+fn two_devices_rebuilding_a_deck_group_end_with_one() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let (mut ma, mut mb) = (0, 0);
+    a.execute(
+        "INSERT INTO decks (name, format_key, created_at, updated_at)
+         VALUES ('Atraxa', 'commander', unixepoch(), unixepoch())",
+        [],
+    )
+    .unwrap();
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    let _ = since(&b, &mut mb);
+
+    // Both readers clear their collection, so both rebuild a group for that deck.
+    crate::reset::clear_collection(&a).unwrap();
+    crate::reset::clear_collection(&b).unwrap();
+    let (ga, gb): (String, String) = (
+        a.query_row(
+            "SELECT sync_uid FROM collection_folders WHERE kind = 'deck'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap(),
+        b.query_row(
+            "SELECT sync_uid FROM collection_folders WHERE kind = 'deck'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap(),
+    );
+    assert_ne!(ga, gb, "two rebuilds, two uids — that is the premise");
+
+    let rb = apply(&b, &since(&a, &mut ma)).unwrap();
+    let ra = apply(&a, &since(&b, &mut mb)).unwrap();
+    // **Deferred is the shape of the failure this grain prevents**, not a crash: without it the
+    // insert hits `idx_collection_folder_deck`, the savepoint rolls back, and each device
+    // quietly keeps its own group forever while the counts still read 1.
+    assert_eq!((ra.deferred, rb.deferred), (0, 0));
+
+    for (who, c) in [("a", &a), ("b", &b)] {
+        let groups: i64 = c
+            .query_row(
+                "SELECT count(*) FROM collection_folders WHERE kind = 'deck'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(groups, 1, "{who} has two groups for one deck");
+        let removed: i64 = c
+            .query_row(
+                "SELECT count(*) FROM collection_folders WHERE kind = 'removed'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(removed, 1, "{who} has two holding areas");
+    }
+
+    // ...and they agree on WHICH group it is, which is what convergence means and what a
+    // count of one cannot say.
+    let uid = |c: &Connection| -> String {
+        c.query_row(
+            "SELECT sync_uid FROM collection_folders WHERE kind = 'deck'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+    };
+    assert_eq!(uid(&a), uid(&b), "the two devices kept separate groups");
+}
+
+/// **...and an ordinary folder is NOT folded by that grain.** `idx_collection_folder_removed`
+/// is partial — `UNIQUE (kind) WHERE kind = 'removed'` — so a predicate that matched on
+/// `kind` alone would decide that every device's "Binder" and every device's "Trades" are one
+/// folder, because both are `kind = 'user'`. Two folders the reader made are two folders.
+#[test]
+fn two_user_folders_are_not_folded_by_the_partial_grain() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    a.execute(
+        "INSERT INTO collection_folders
+            (parent_id, name, kind, deck_id, sort_order, created_at, updated_at)
+         VALUES (NULL, 'Binder', 'user', NULL, 1, unixepoch(), unixepoch())",
+        [],
+    )
+    .unwrap();
+    b.execute(
+        "INSERT INTO collection_folders
+            (parent_id, name, kind, deck_id, sort_order, created_at, updated_at)
+         VALUES (NULL, 'Trades', 'user', NULL, 1, unixepoch(), unixepoch())",
+        [],
+    )
+    .unwrap();
+    apply(&b, &outbox(&a)).unwrap();
+    apply(&a, &outbox(&b)).unwrap();
+
+    for (who, c) in [("a", &a), ("b", &b)] {
+        let mut stmt = c
+            .prepare("SELECT name FROM collection_folders WHERE kind = 'user' ORDER BY name")
+            .unwrap();
+        let names: Vec<String> = stmt
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            names,
+            vec!["Binder", "Trades"],
+            "{who} folded two folders into one"
+        );
+    }
+}
+
 /// The watermark moves to the last op applied, so the next pull asks for less.
 #[test]
 fn the_watermark_follows_what_was_applied() {

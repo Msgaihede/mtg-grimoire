@@ -104,10 +104,28 @@ enum Source {
 /// **A minted uid alone cannot be a row's identity**, and the counter rule is what proves it:
 /// two devices each adding one copy of the same printing mint two uids, and inserting both is
 /// two rows at +1 rather than one row at +2 — plus a violation of `idx_collection_grain`.
-/// **A grain alone cannot either**: `decks`, the three folder tables and `deck_audit` have no
-/// unique index, so two devices' folders named "Binder" are two folders and must stay two.
+/// **A grain alone cannot either**: `decks`, `deck_folders`, `wishlist_folders` and
+/// `deck_audit` have no unique index, so two devices' folders named "Binder" are two folders
+/// and must stay two.
+///
+/// # A table can have more than one, and three of them are PARTIAL
+///
+/// The plan this was built from lists one grain per table and calls `collection_folders`
+/// uid-only. It has **two**, and both are partial unique indexes rather than the ordinary kind:
+/// `idx_collection_folder_removed` is `UNIQUE (kind) WHERE kind = 'removed'` and
+/// `idx_collection_folder_deck` is `UNIQUE (deck_id) WHERE deck_id IS NOT NULL`. Every database
+/// seeds its own `Recently removed` folder, so **two paired devices hold that row under two
+/// uids from the moment they meet** — and a uid-only rule would try to insert a second one and
+/// fail the index forever. `deck_categories` has a second as well:
+/// `idx_deck_categories_kind`, `UNIQUE (deck_id, kind) WHERE kind <> 'main'`.
+///
+/// A partial index needs no new machinery, because the `WHERE` clause can be written into the
+/// predicate: `kind = ? AND kind = 'removed'` matches the one holding area when the incoming row
+/// is one and matches nothing when it is not. The grains are tried in order and the first hit
+/// wins.
 struct Grain {
-    /// The `WHERE` clause, one `?` per source, matching the table's own UNIQUE index verbatim.
+    /// The `WHERE` clause, one `?` per source, matching the table's own UNIQUE index verbatim
+    /// — **including a partial index's own `WHERE`**, folded into the predicate.
     predicate: &'static str,
     sources: &'static [Source],
 }
@@ -134,7 +152,7 @@ struct Meta {
     /// matters for a batch that mixes two devices' streams, and for the first pull a new device
     /// makes.
     order: u8,
-    grain: Option<Grain>,
+    grains: &'static [Grain],
     counters: &'static [(&'static str, Floor)],
     /// `created_at` / `updated_at`. `deck_audit` and `muted_tags` carry their own stamp
     /// (`at`, `muted_at`) as an ordinary field and have neither column.
@@ -150,7 +168,7 @@ const META: [Meta; 11] = [
     Meta {
         table: "deck_folders",
         order: 0,
-        grain: None,
+        grains: &[],
         counters: &[],
         timestamps: true,
         needs_review: true,
@@ -159,7 +177,7 @@ const META: [Meta; 11] = [
     Meta {
         table: "decks",
         order: 1,
-        grain: None,
+        grains: &[],
         counters: &[],
         timestamps: true,
         needs_review: false,
@@ -168,10 +186,19 @@ const META: [Meta; 11] = [
     Meta {
         table: "deck_categories",
         order: 2,
-        grain: Some(Grain {
-            predicate: "deck_id = ? AND name = ?",
-            sources: &[Source::Parent("deck"), Source::Field("name")],
-        }),
+        grains: &[
+            Grain {
+                predicate: "deck_id = ? AND name = ?",
+                sources: &[Source::Parent("deck"), Source::Field("name")],
+            },
+            // `idx_deck_categories_kind`, and the `WHERE kind <> 'main'` is in the predicate:
+            // a deck has one Sideboard, one Commander, one Companion and one Maybeboard, and a
+            // renamed one would slip past the grain above.
+            Grain {
+                predicate: "deck_id = ? AND kind = ? AND kind <> 'main'",
+                sources: &[Source::Parent("deck"), Source::Field("kind")],
+            },
+        ],
         counters: &[],
         timestamps: true,
         needs_review: false,
@@ -180,10 +207,10 @@ const META: [Meta; 11] = [
     Meta {
         table: "deck_tags",
         order: 3,
-        grain: Some(Grain {
+        grains: &[Grain {
             predicate: "name_key = ?",
             sources: &[Source::Field("name_key")],
-        }),
+        }],
         counters: &[],
         timestamps: true,
         needs_review: false,
@@ -192,7 +219,7 @@ const META: [Meta; 11] = [
     Meta {
         table: "deck_cards",
         order: 4,
-        grain: Some(Grain {
+        grains: &[Grain {
             predicate: "deck_id = ? AND variant = ? AND category_id = ? AND card_id = ? \
                         AND coalesce(finish, '') = coalesce(?, '')",
             sources: &[
@@ -202,7 +229,7 @@ const META: [Meta; 11] = [
                 Source::Field("card_id"),
                 Source::Field("finish"),
             ],
-        }),
+        }],
         counters: &[("quantity", Floor::DeleteAtZero)],
         timestamps: true,
         needs_review: true,
@@ -211,7 +238,7 @@ const META: [Meta; 11] = [
     Meta {
         table: "deck_audit",
         order: 5,
-        grain: None,
+        grains: &[],
         counters: &[],
         timestamps: false,
         needs_review: false,
@@ -220,7 +247,20 @@ const META: [Meta; 11] = [
     Meta {
         table: "collection_folders",
         order: 6,
-        grain: None,
+        // **Two partial unique indexes, and the plan called this table uid-only.** Every
+        // database seeds its own `Recently removed`, so two paired devices hold that row under
+        // two uids from the moment they meet; and a deck's group folder is one per deck, made
+        // by whichever device created the deck.
+        grains: &[
+            Grain {
+                predicate: "kind = ? AND kind = 'removed'",
+                sources: &[Source::Field("kind")],
+            },
+            Grain {
+                predicate: "deck_id = ? AND deck_id IS NOT NULL",
+                sources: &[Source::Parent("deck")],
+            },
+        ],
         counters: &[],
         timestamps: true,
         needs_review: true,
@@ -229,7 +269,7 @@ const META: [Meta; 11] = [
     Meta {
         table: "collection_entries",
         order: 7,
-        grain: Some(Grain {
+        grains: &[Grain {
             predicate: "card_id = ? AND finish = ? AND condition = ? AND lang = ? \
                         AND altered = ? AND signed = ? AND proxy = ? AND misprint = ? \
                         AND coalesce(serial_number, '') = coalesce(?, '') \
@@ -248,7 +288,7 @@ const META: [Meta; 11] = [
                 Source::Field("grading"),
                 Source::Parent("folder"),
             ],
-        }),
+        }],
         counters: &[
             ("quantity", Floor::Clamp),
             ("tradelist_quantity", Floor::Clamp),
@@ -260,7 +300,7 @@ const META: [Meta; 11] = [
     Meta {
         table: "wishlist_folders",
         order: 8,
-        grain: None,
+        grains: &[],
         counters: &[],
         timestamps: true,
         needs_review: true,
@@ -269,7 +309,7 @@ const META: [Meta; 11] = [
     Meta {
         table: "wishlist_entries",
         order: 9,
-        grain: Some(Grain {
+        grains: &[Grain {
             predicate: "coalesce(oracle_id, '') = coalesce(?, '') \
                         AND coalesce(card_id, '') = coalesce(?, '') \
                         AND coalesce(preferred_finish, '') = coalesce(?, '') \
@@ -280,7 +320,7 @@ const META: [Meta; 11] = [
                 Source::Field("preferred_finish"),
                 Source::Parent("folder"),
             ],
-        }),
+        }],
         counters: &[("quantity", Floor::DeleteAtZero)],
         timestamps: true,
         needs_review: true,
@@ -289,10 +329,10 @@ const META: [Meta; 11] = [
     Meta {
         table: "muted_tags",
         order: 10,
-        grain: Some(Grain {
+        grains: &[Grain {
             predicate: "namespace = ? AND tag_id = ?",
             sources: &[Source::Field("namespace"), Source::Field("tag_id")],
-        }),
+        }],
         counters: &[],
         timestamps: false,
         needs_review: false,
@@ -566,7 +606,7 @@ fn find_row(
     parents: &BTreeMap<&'static str, Sql>,
 ) -> Result<Found, String> {
     let op_uid = g.ops[0].uid.clone();
-    if let Some(grain) = &meta.grain {
+    for grain in meta.grains {
         if let Some(values) = grain_values(grain, g, parents) {
             let found: Option<String> = conn
                 .query_row(
