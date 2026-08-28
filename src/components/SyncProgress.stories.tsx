@@ -26,6 +26,9 @@ const meta = {
     error: null,
     busy: true,
     onRetry: fn(),
+    // Desktop's only answer, and the default for every story but `Evicted`: a file on disk
+    // does not vanish while the app around it stays.
+    reason: "never-built",
   },
   decorators: [
     // The overlay is `fixed inset-0`, so on the docs page nine of them would stack over the
@@ -357,5 +360,33 @@ export const EverySyncButTheFirst: Story = {
   },
   play: async ({ canvasElement }) => {
     await expect(canvasElement.firstElementChild).toBeEmptyDOMElement();
+  },
+};
+
+/**
+ * The web target's other way of reaching this screen, and the whole reason `reason` exists.
+ *
+ * The shell lives in Cache Storage and the corpus in OPFS, and browsers evict the two
+ * independently — so a reader who has used this app for a month can open it to an empty
+ * database with the app itself perfectly intact. Telling them "setting up your card database"
+ * would be a lie about what happened to a month of syncing.
+ *
+ * Everything else on the screen is deliberately identical: the mark, the mana line, the Retry
+ * button. There is no card data and the way out is the same download; what differs is the
+ * explanation the reader is owed.
+ *
+ * **The sentence stops short of promising their collection is safe**, and that is not an
+ * oversight: `collection_entries` and `decks` live in the same SQLite file as `cards`, so an
+ * OPFS eviction takes those too. The promise becomes true when sync exists (PR 7) and not
+ * before.
+ */
+export const Evicted: Story = {
+  args: { busy: false, reason: "evicted" },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.getByRole("heading", { name: "Your card data was cleared" })).toBeVisible();
+    await expect(canvas.getByText(/removed the card database to free up space/)).toBeInTheDocument();
+    // The way out is unchanged — this is the same screen, not a second one.
+    await expect(canvas.getByRole("button", { name: "Retry download" })).toBeEnabled();
   },
 };
