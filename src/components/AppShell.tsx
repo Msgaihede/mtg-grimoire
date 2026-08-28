@@ -233,7 +233,26 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
     // below it. `min-h-0` on the row underneath is what lets it shrink past its content —
     // without it the row keeps `min-height: auto`, the sidebar and `main` size to their content
     // instead of to the window, and the whole shell scrolls the document.
-    <div className="flex h-screen flex-col overflow-hidden bg-bg text-text">
+    // `h-dvh`, not `h-screen`: `100vh` on a mobile browser is the **large** viewport — the height
+    // the page would have if the URL bar were hidden — so an `h-screen` shell puts its own bottom
+    // row under browser chrome. `100dvh` is the visible height and tracks the bar. On desktop and
+    // in WebView2 the two are identical, so this costs the shipped window nothing.
+    <div
+      className="flex h-dvh flex-col overflow-hidden bg-bg text-text"
+      // Three of the four insets, as an inline style rather than as arbitrary-value classes:
+      // Tailwind scans for whole class names and a mistyped arbitrary value emits *nothing*,
+      // silently, with the suite and the type-checker both green. An inline style is what a
+      // computed length is spelled as here, exactly as a column template is.
+      //
+      // Bottom is deliberately absent. Nothing is anchored to the window's bottom edge in this
+      // build, and padding the shell there would inset a scroller against an indicator that is
+      // not over it. `--safe-b` is published for whatever 9b puts down there.
+      style={{
+        paddingTop: "var(--safe-t)",
+        paddingLeft: "var(--safe-l)",
+        paddingRight: "var(--safe-r)",
+      }}
+    >
       {/* The window's caption, drawn by the app because `tauri.conf.json` sets
           `decorations: false`. Outside `min-h-0`: it is chrome belonging to the *window*
           rather than to the app, which is why it sits above the sidebar rather than beside it,

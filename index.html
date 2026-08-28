@@ -10,7 +10,12 @@
          same-origin under `http://localhost:1420` in dev and under the Tauri asset origin in
          a built app, so no CSP change was needed to point at it. -->
     <link rel="icon" type="image/svg+xml" href="/mtg-grimoire-mark.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- `viewport-fit=cover` is what makes `env(safe-area-inset-*)` resolve to anything but
+         `0px`, so it and `src/index.css`'s four `--safe-*` properties are one change: the meta
+         alone puts the page *under* the notch and the gesture bar, and the properties alone are
+         dead code. `AppShell.test.tsx` asserts this attribute against this file's own text,
+         because no render can reach it. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>MTG Grimoire</title>
   </head>
 
