@@ -1314,4 +1314,53 @@ mod tests {
             "the one permission is INTERNET: {asked:?}"
         );
     }
+
+    /// **`android:allowBackup` is `false`, and the regression this guards is the attribute's
+    /// *absence*** — an unset `allowBackup` defaults to **true**, which is the state the
+    /// generated template shipped in. So there is nothing to see in a diff: the failure is a
+    /// line that is not there.
+    ///
+    /// Android Auto Backup would copy the app's data directory into the reader's Google Drive.
+    /// **This app's design is that no server holds anything it can read** — no account, no
+    /// signup, end-to-end encryption for the sync that does exist — and uploading somebody's
+    /// collection, their decks and what they paid for each card, without them ever choosing it,
+    /// contradicts that. The ~500 MB corpus against Auto Backup's 25 MB quota is the *second*
+    /// reason and the weaker one: it is repaired by excluding the corpus and backing up the
+    /// user tables, which is the same privacy failure with a smaller payload.
+    ///
+    /// **The assertion reads the value out of the `<application>` open tag, and that is the
+    /// whole point of it.** A `manifest.contains("allowBackup=\"false\"")` could not tell the
+    /// attribute's absence from its presence, because the comment standing above the element in
+    /// the manifest quotes it verbatim — deleting the attribute would leave that test green.
+    /// Scoping to the tag fails on the deletion *and* on the sneakier mutation, a flip to
+    /// `"true"`. Both were run.
+    ///
+    /// `include_str!` for `the_android_manifest_asks_for_the_internet_and_nothing_else`'s
+    /// reason: `gen/android/` is committed and `android init` is not re-run, so this file is a
+    /// source file — and a re-init that silently restored the template's manifest, dropping the
+    /// attribute with it, is exactly what turns red here.
+    #[test]
+    fn the_android_application_refuses_auto_backup() {
+        let manifest = include_str!("../gen/android/app/src/main/AndroidManifest.xml");
+        let open = manifest
+            .find("<application")
+            .expect("the manifest declares an <application> element");
+        let rest = &manifest[open..];
+        let tag = &rest[..rest.find('>').expect("the <application> tag is closed")];
+
+        let value = tag
+            .split_whitespace()
+            .find_map(|attr| attr.strip_prefix("android:allowBackup="))
+            .unwrap_or_else(|| {
+                panic!(
+                    "<application> must set android:allowBackup — unset defaults to true, and \
+                     Android Auto Backup would upload the reader's collection to Google Drive: \
+                     {tag}"
+                )
+            });
+        assert_eq!(
+            value, "\"false\"",
+            "android:allowBackup must be exactly \"false\": {tag}"
+        );
+    }
 }

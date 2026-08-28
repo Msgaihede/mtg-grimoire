@@ -192,7 +192,10 @@ re-run, so editing `tauri.conf.json` alone changes nothing about the APK — sil
 that reads the config still green. Verified by mutation: with the Gradle at 24 and the config at
 26, the config assertion passes and only
 `the_generated_gradle_carries_the_floor_the_config_asked_for` goes red. **Changing either field
-means re-running `npx tauri android init` and reviewing the diff.**
+means re-running `npx tauri android init` and reviewing the diff.** Read that diff
+carefully rather than accepting it: the manifest below now carries a hand-edit
+(`android:allowBackup="false"`) that a re-init reverts, and it is the only file in
+`gen/android/` that does.
 
 `versionCode` is left unset; Tauri derives it as `major*1000000 + minor*1000 + patch`.
 
@@ -205,6 +208,23 @@ adds Android TV support (`LEANBACK_LAUNCHER`, `android.software.leanback` non-re
 `usesCleartextTraffic` is a manifest placeholder: `false` in `defaultConfig`, **`true` in the
 debug build type**, which is what lets `adb reverse` serve the dev server over
 `http://localhost:1420`.
+
+**`android:allowBackup="false"` is the one hand-edit the manifest carries, and it is a privacy
+decision before it is a quota one.** The template leaves the attribute unset, which defaults to
+**true**: Android Auto Backup would copy the app's data directory — the collection, the decks,
+what each card cost — into the reader's Google Drive without them choosing it, and this app's
+design is that no server holds anything it can read. The ~500 MB corpus against Auto Backup's
+25 MB quota is the second reason and the weaker one, because it is repaired by excluding the
+corpus and backing up the user tables — the same privacy failure with a smaller payload. That
+ordering is written into the manifest's own comment for the same reason it is written here.
+
+`the_android_application_refuses_auto_backup` pins it, and it reads the value out of the
+`<application>` open tag rather than searching the file: the comment above the element quotes
+`android:allowBackup="false"` verbatim, so a substring test could not tell the attribute's
+absence from its presence. Both mutations were run — deleting the attribute and flipping it to
+`"true"` — and both go red. It is also the first thing in this file that a re-run of
+`npx tauri android init` would silently drop, which is what makes the test worth more than the
+attribute.
 
 ## 7. Driving the phone
 
@@ -284,7 +304,6 @@ one question are free to disagree.
 | **The JDK**, and therefore the APK, the device run and every number | §2 — Markus's call |
 | **Does the MCP bridge open a socket on the phone?** It is registered under `#[cfg(debug_assertions)]` and `tauri android dev` is a debug build. `capabilities/mobile.json` denies its three commands, but the **socket** is opened in Rust, where the ACL is not in the path. It binds `127.0.0.1`, so the exposure is the phone's own loopback rather than the network — reachable by any other app on the device. **If it listens, it needs a `#[cfg(desktop)]` on the registration.** | unverified; needs the APK |
 | **Does `RunEvent::Exit` ever fire?** `checkpoint_on_exit` folds the WAL back on the way out, and `tauri::RunEvent` has no `Paused` or `Suspended` variant — a phone kills processes rather than exiting them. `db.rs` sets `journal_size_limit` to 64 MB, so the designed floor is 64 MB of `-wal`, not the 857 MB an unbounded ingest journal would leave. A `-wal` larger than 64 MB would be a finding. | unverified; needs the APK |
-| **`android:allowBackup` is unset and therefore true.** Android's Auto Backup would try to back up the app's data directory, which holds a ~500 MB corpus against a 25 MB cloud quota. The corpus is a rebuildable cache and almost certainly wants excluding. | not in this PR's scope; found reading the generated manifest |
 | The three pickers against a real ContentResolver | needs the APK — this is the one seam whose Rust has never touched the thing it is written against |
 | **16 KB page sizes.** NDK r27 supports them behind a linker flag; r28 makes them the default. Play requires 16 KB support for apps targeting Android 15+. Not blocking here, but it is a Play-release question. | with the release story |
 | The Play release — a developer account, an upload keystore, a `signingConfig`, whether `release.yml` learns to build an AAB, and a privacy policy | none of it an agent's work |
