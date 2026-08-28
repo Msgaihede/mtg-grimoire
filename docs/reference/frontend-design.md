@@ -3764,11 +3764,26 @@ the page would have if the URL bar were hidden. An `h-screen` shell therefore re
 bottom of what the reader can see and puts its own last row under browser chrome. `h-dvh` is
 `100dvh`, the visible height, and it tracks the bar as it hides and returns. On desktop and in
 WebView2 there is no bar and the two are the same number, which is why this costs the shipped
-window nothing — **and that last clause is the half still owed a measurement**: the CDP reading in
-the running window (`document.querySelector('#root > div')`'s height against
-`documentElement.clientHeight`, taken in **one** `eval` because a rect and a viewport width taken
-minutes apart can be at two different sizes) was not taken on this pass, because the app lock was
-held elsewhere. It is the first thing to do when the window is next driven.
+window nothing — **and that clause was then measured rather than believed.** Driven in the shipped
+WebView2 (`npm run tauri dev`, debug build, 2026-08-29), in **one** `eval` because a rect and a
+viewport height taken minutes apart can be at two different sizes:
+
+```
+{ href: "http://localhost:1420/",
+  cls: "flex h-dvh flex-col overflow-hidden bg-bg text-text",
+  h: 1080, top: 0, inner: 1080, client: 1080,
+  padTop: "0px", padLeft: "0px", padRight: "0px" }
+```
+
+The shell's height is `documentElement.clientHeight` exactly, which is what it was under
+`h-screen`: **desktop did not move.** `href` is in the payload deliberately — `cdp.mjs` takes the
+first `type: page` target and DevTools, if open, is one, so a probe can silently answer about the
+wrong DOM.
+
+**The three inset paddings resolving to `0px` is the second half of that reading**, and it is the
+one that could not be got from a test: it shows `env(safe-area-inset-*)` parsing and falling back
+rather than invalidating the declaration, on a desktop window where all four are zero. The block
+costs the shipped app nothing, measured.
 
 **`viewport-fit=cover` and the four `--safe-*` properties are one change, because either half
 alone is worse than neither.** `env(safe-area-inset-*)` resolves to `0px` in every context until
@@ -4177,3 +4192,67 @@ without being asked for — it arrives dressed as a measurement, it is argued fr
 the time anybody notices it is a constraint rather than a finding. The rows are what a reader with
 no hover and no wheel loses, and the third column is what the tree offers **today**, not what it
 ought to offer.
+
+---
+
+## The phone frame, driven: the rail decides whether the wall can ever be two columns
+
+**Measured 2026-08-29 in the shipped WebView2** (`npm run tauri dev`, debug build, `mobile-layout`
+worktree), at `cdp.mjs size 390 844`. This is the reading the wall's design round argues from, and
+it found a coupling between two rounds that the 9a plan does not have.
+
+> ⚠️ **`cdp.mjs size` hardcodes `mobile: false`**, so this is a narrow *desktop* — no URL bar, no
+> `visualViewport` behaviour, no coarse pointer. It measures **width arithmetic**, which is
+> exactly what is wanted here, and it measures nothing about touch. WebView2 also **ignores
+> `clearDeviceMetricsOverride`**, so the window was put back with an explicit `size 1280 800`.
+
+### The three widths a 390px window actually leaves
+
+`main` is `p-5`, so it takes 40px off whatever the rail leaves. The rail's own width is
+`useNavCollapsed`'s persisted state, and **nothing collapses it automatically at any width** — a
+390px window opens with the full 208px rail unless the reader has collapsed it before.
+
+| Rail | `nav` | `main` content | `columnsFor` @170 | @160 | @135 |
+| --- | --- | --- | --- | --- | --- |
+| Expanded — **today's default** | 208 | **142** | 1 | 1 | 1 |
+| Collapsed (`useNavCollapsed`) | 68 | **282** | 1 | **1** | 2 |
+| Gone entirely | — | 350 | 1 | **2** | 2 |
+
+The first two rows were driven; the third is `columnsFor`'s arithmetic on the width a missing rail
+leaves. `columnsFor` is `max(1, floor((width + 12) / (tile + 12)))` (`CardGrid.tsx:180`).
+
+**At 142px the tile is narrower than one whole tile**, so `tileWidthFor`'s cap — its only
+arithmetic, and it covers exactly this case — draws the card at 142 rather than 170, and
+`sideGutterFor` returns 0. That is the state a phone opens in today.
+
+### The coupling, which is the finding
+
+**A 160px tile does not buy a second column while the rail is there.** At 282px of content,
+`columnsFor(282, 160)` is still **1**; the tile has to come down to **135px** before a 390px phone
+draws two columns with a 68px rail beside them. Without the rail, 160 is enough and so is anything
+up to 169.
+
+So the wall's round and the chrome's round are not independent, and the option matrix is smaller
+than it looks: **a phone tile width only delivers two columns if the rail is gone** — a bottom bar
+or a drawer — **not if the collapsed rail is kept.** Keeping the rail and wanting two columns costs
+a 135px tile, which is a 21% shrink on the chin's type rather than the 6% a 160px tile costs.
+
+### The vertical, on the same pass
+
+At 390×844 in WebView2: `TitleBar` **34**, ribbon + `ManaLine` **58** (56 + the 2px line, exactly
+as the plan states), `main` **752** of which **712** is content after `p-5`'s 20 top and bottom.
+
+**On web and Android the 34 comes back and roughly 144 goes away** — parity §5 says the browser and
+the OS own the frame, so `TitleBar` is absent, while a mobile browser's chrome takes the visible
+viewport to roughly 700. That leaves about **602px** of `main` content before the filter bar
+spends anything, and the bar's two or three lines at 36–40 take it to roughly **500** — one 170px
+tile plus its chin, and a sliver of the next row. The plan's vertical budget holds as written.
+
+### What this pass could not measure, and why
+
+**The wall was empty.** A worktree is a fresh install and its `corpus.db` has never synced, so
+`main li` returned zero tiles and no drawn tile width could be read. Every figure above is a
+measurement of *boxes* — `nav`, `main`, their padding — plus `columnsFor` evaluated against the
+measured content width in the same `eval`. That is the honest scope of it: the geometry is
+measured, the tile counts are arithmetic over a measured width, and **no card was on screen**. To
+read real tiles here, copy the main checkout's whole `data` folder into the worktree first.
