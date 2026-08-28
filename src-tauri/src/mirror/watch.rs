@@ -569,6 +569,7 @@ mod tests {
             mirror: Arc::new(Mask::default()),
             mirror_status: std::sync::Mutex::new(LastPass::default()),
             fence: std::sync::Arc::new(crate::db::CrossFileFence::new()),
+            pairing: std::sync::Mutex::new(None),
         }
     }
 
@@ -798,6 +799,15 @@ mod tests {
                 "oracle_taggings",
                 "oracle_tags",
                 "sets",
+                // Pairing's three (user schema v28). They map to nothing for the sharpest
+                // reason on this list: they hold this device's secret key, the group key and
+                // the roster, and a mirrored file that quoted any of them would write a key
+                // into a folder the reader syncs with Dropbox. `sync_devices` could not reach
+                // the hook anyway — it is `WITHOUT ROWID`, like `muted_tags` — but the other
+                // two can, and "the hook cannot see it" is not a decision.
+                "sync_devices",
+                "sync_group",
+                "sync_identity",
                 "sync_meta",
             ],
             "a table added to the schema has to be decided about here"

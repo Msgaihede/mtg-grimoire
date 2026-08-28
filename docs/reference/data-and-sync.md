@@ -5,7 +5,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
 - Data dir is `<exe dir>/data`, falling back to `%APPDATA%/com.mtggrimoire.app/data`.
   **Under `tauri dev` the exe is `src-tauri/target/debug/`, so the databases are
   `src-tauri/target/debug/data/user.db` and `corpus.db`** — not `src-tauri/data/`, and
-  **not one file since schema 27**: the reader's fifteen tables are `main` and the
+  **not one file since schema 27**: the reader's eighteen tables are `main` and the
   rebuildable twenty-five are `ATTACH`ed as `corpus`. A folder still holding a single
   `mtg.db` is converted at the next launch by `split::convert`, which never touches that
   file until the new one is safely renamed into place. Delete that `data/` folder to force
@@ -439,10 +439,23 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   answers the question the switch was asking — the decks *are* where the cards are now.
 - **The single-file ladder is frozen at v26**, and `schema::LEGACY_SINGLE_FILE_VERSION` is the
   answer; schema 27 splits the file in two and the halves number themselves separately
-  (`USER_SCHEMA_VERSION` 27 on the reader's file, `CORPUS_SCHEMA_VERSION` 1 on the rebuildable
-  one). This line read **v18** for two
+  (`USER_SCHEMA_VERSION` **28** on the reader's file, `CORPUS_SCHEMA_VERSION` 1 on the
+  rebuildable one). This line read **v18** for two
   whole rungs, because a prose-only edit routes to neither CI job and nothing goes red when a
   ladder entry rots.
+  **v28 is the first rung above the split, and it is what turned `migrate_user` from a version
+  check into a ladder.** It creates pairing's three tables — `sync_identity`, `sync_group`,
+  `sync_devices` — and mints nothing: an upgrading machine gets the tables and no identity,
+  because a migration that handed every reader a keypair could not report what it had done.
+  Two things a rung here owes that a rung on the frozen ladder does not: a line in
+  `USER_SCHEMA_SQL`, which is what a converted or fresh file is built from and never climbs
+  anything, held to the rung by
+  `the_user_schema_is_byte_identical_to_what_the_ladder_builds`; and a thought about
+  `split::extract_user_file`, which copies the user tables out of a pre-27 `mtg.db` and now
+  **skips one the legacy file never had**. That could not happen before v28 — the frozen
+  ladder and the head shape were the same fifteen tables — and left alone it would have
+  failed every upgrade from a pre-27 folder with `cannot split: 'sync_identity' has no
+  columns in common`. The whole record is [sync.md](sync.md).
   **v25 makes the collection's folders the physical ledger of where every card sits.** It inserts
   the single `Recently removed` folder and one `deck` folder per deck (**archived decks
   included** — archiving is a flag and an archived deck still holds its cards), converts every
