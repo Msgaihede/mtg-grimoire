@@ -6005,6 +6005,34 @@ pub(crate) mod tests {
             .query_row("SELECT count(*) FROM sync_clock", [], |r| r.get(0))
             .unwrap();
         assert_eq!(ticks, 1);
+
+        // **The rest of the launch, over the same real file.** `prepare_database` is what
+        // installs the capture triggers, and thirty-one `CREATE TRIGGER`s against a database
+        // with the reader's own tables in it is the step no fixture exercises. Then one write,
+        // to prove the triggers fire on a real row rather than merely existing.
+        prepare_database(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO decks (name, format_key, created_at, updated_at)
+             VALUES ('After the rung', 'commander', unixepoch(), unixepoch())",
+            [],
+        )
+        .unwrap();
+        let (uid, ops): (Option<String>, i64) = conn
+            .query_row(
+                "SELECT (SELECT sync_uid FROM decks WHERE name = 'After the rung'),
+                        (SELECT count(*) FROM sync_ops)",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert!(
+            uid.is_some(),
+            "the capture trigger did not mint on a real file"
+        );
+        assert_eq!(
+            ops, 0,
+            "an unpaired device records nothing, and this database has never paired"
+        );
     }
 
     /// No foreign key may cross the split. SQLite accepts the `CREATE TABLE` and fails only on
