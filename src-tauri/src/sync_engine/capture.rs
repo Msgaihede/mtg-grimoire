@@ -52,8 +52,9 @@ pub struct Spec {
     pub fields: &'static [&'static str],
     /// Counter fields — ops carry `NEW - OLD`, never the value.
     pub counters: &'static [&'static str],
-    /// `(json key, local column, parent table)`. The parent's `sync_uid` is what travels.
-    pub parents: &'static [(&'static str, &'static str, &'static str)],
+    /// The foreign rows this one names. The parent's `sync_uid` is what travels, because a
+    /// local id means nothing on the far device.
+    pub parents: &'static [Parent],
     /// `true` for `deck_audit` alone: spec §7.3 makes it union/append-only, and it is also the
     /// one synced table a CASCADE empties — deleting a deck takes its audit rows with it, and a
     /// DELETE trigger would emit thousands of delete-ops for rows the far device's own CASCADE
@@ -63,13 +64,41 @@ pub struct Spec {
     pub append_only: bool,
 }
 
+/// One foreign row a synced row names.
+pub struct Parent {
+    /// The key it travels under, inside the op's `parents` object.
+    pub key: &'static str,
+    /// The local column holding the foreign row's id.
+    pub col: &'static str,
+    /// The table that id is in. Its `sync_uid` is what the op carries.
+    pub table: &'static str,
+    /// What the column holds when the op says "nobody".
+    pub absent: Absent,
+    /// **A soft parent is fixed up after the batch rather than deferring the row**, and there
+    /// is exactly one: `decks.default_category_id`. `decks` and `deck_categories` name each
+    /// other — a category belongs to a deck, and a deck names a default category — so no
+    /// order of tables can resolve both in one pass. Deferring the deck would deadlock the
+    /// pair; writing the deck and settling its default afterwards does not.
+    pub soft: bool,
+}
+
+/// What a local column holds when the op names no parent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Absent {
+    /// The ordinary case: a nullable foreign key, and NULL is the root.
+    Null,
+    /// `decks.default_category_id` alone. It is `NOT NULL DEFAULT 0` with `0` meaning Auto
+    /// (`crate::deck::AUTO_CATEGORY`), so "nobody" is a zero and a NULL would fail the column.
+    Zero,
+}
+
 impl Spec {
     /// Every column an op about this table reads or writes, in one list — what the
     /// `AFTER UPDATE OF` clause names and what the change guard compares.
     fn watched(&self) -> Vec<&'static str> {
         let mut cols: Vec<&'static str> = self.fields.to_vec();
         cols.extend_from_slice(self.counters);
-        cols.extend(self.parents.iter().map(|(_, col, _)| *col));
+        cols.extend(self.parents.iter().map(|p| p.col));
         cols
     }
 }
@@ -102,7 +131,13 @@ pub const TABLES: [Spec; 11] = [
             "needs_review",
         ],
         counters: &["quantity", "tradelist_quantity"],
-        parents: &[("folder", "folder_id", "collection_folders")],
+        parents: &[Parent {
+            key: "folder",
+            col: "folder_id",
+            table: "collection_folders",
+            absent: Absent::Null,
+            soft: false,
+        }],
         append_only: false,
     },
     Spec {
@@ -111,8 +146,20 @@ pub const TABLES: [Spec; 11] = [
         fields: &["name", "kind", "sort_order", "needs_review"],
         counters: &[],
         parents: &[
-            ("parent", "parent_id", "collection_folders"),
-            ("deck", "deck_id", "decks"),
+            Parent {
+                key: "parent",
+                col: "parent_id",
+                table: "collection_folders",
+                absent: Absent::Null,
+                soft: false,
+            },
+            Parent {
+                key: "deck",
+                col: "deck_id",
+                table: "decks",
+                absent: Absent::Null,
+                soft: false,
+            },
         ],
         append_only: false,
     },
@@ -129,7 +176,13 @@ pub const TABLES: [Spec; 11] = [
             "delta",
         ],
         counters: &[],
-        parents: &[("deck", "deck_id", "decks")],
+        parents: &[Parent {
+            key: "deck",
+            col: "deck_id",
+            table: "decks",
+            absent: Absent::Null,
+            soft: false,
+        }],
         append_only: true,
     },
     Spec {
@@ -147,9 +200,27 @@ pub const TABLES: [Spec; 11] = [
         ],
         counters: &["quantity"],
         parents: &[
-            ("deck", "deck_id", "decks"),
-            ("category", "category_id", "deck_categories"),
-            ("tag", "tag_id", "deck_tags"),
+            Parent {
+                key: "deck",
+                col: "deck_id",
+                table: "decks",
+                absent: Absent::Null,
+                soft: false,
+            },
+            Parent {
+                key: "category",
+                col: "category_id",
+                table: "deck_categories",
+                absent: Absent::Null,
+                soft: false,
+            },
+            Parent {
+                key: "tag",
+                col: "tag_id",
+                table: "deck_tags",
+                absent: Absent::Null,
+                soft: false,
+            },
         ],
         append_only: false,
     },
@@ -158,7 +229,13 @@ pub const TABLES: [Spec; 11] = [
         keys: &["id"],
         fields: &["name", "kind", "is_active", "sort_order", "origin"],
         counters: &[],
-        parents: &[("deck", "deck_id", "decks")],
+        parents: &[Parent {
+            key: "deck",
+            col: "deck_id",
+            table: "decks",
+            absent: Absent::Null,
+            soft: false,
+        }],
         append_only: false,
     },
     Spec {
@@ -166,7 +243,13 @@ pub const TABLES: [Spec; 11] = [
         keys: &["id"],
         fields: &["name", "sort_order", "needs_review"],
         counters: &[],
-        parents: &[("parent", "parent_id", "deck_folders")],
+        parents: &[Parent {
+            key: "parent",
+            col: "parent_id",
+            table: "deck_folders",
+            absent: Absent::Null,
+            soft: false,
+        }],
         append_only: false,
     },
     Spec {
@@ -195,23 +278,42 @@ pub const TABLES: [Spec; 11] = [
             "last_group_by",
             "last_sort_by",
             "separate_x_group",
-            // **A local row id in a plain INTEGER column with a `0` sentinel**
-            // (`crate::deck::AUTO_CATEGORY`), and not a declared foreign key. It is a *field*
-            // rather than a parent because a `0` has to survive as a `0`, which a parent-uid
-            // lookup would turn into a NULL. [`super::apply`] translates it through the
-            // category's uid on the way in, which is the half a parent entry would have given
-            // for free and the half a plain field cannot.
-            "default_category_id",
             "bracket",
         ],
         counters: &[],
-        parents: &[("folder", "folder_id", "deck_folders")],
+        parents: &[
+            Parent {
+                key: "folder",
+                col: "folder_id",
+                table: "deck_folders",
+                absent: Absent::Null,
+                soft: false,
+            },
+            // **A local row id in a plain INTEGER column with a `0` sentinel**
+            // (`crate::deck::AUTO_CATEGORY`), and not a declared foreign key — but a *parent*
+            // all the same, and the plan this was built from had it as a field. A field would
+            // carry the **originating device's** category id, and nothing at the far end can
+            // turn one of those into anything: the id names a row in a database this device has
+            // never seen. What travels is the category's uid, and `Absent::Zero` is what keeps
+            // an Auto deck reading as Auto rather than failing a NOT NULL column.
+            Parent {
+                key: "default_category",
+                col: "default_category_id",
+                table: "deck_categories",
+                absent: Absent::Zero,
+                soft: true,
+            },
+        ],
         append_only: false,
     },
     Spec {
         table: "muted_tags",
         keys: &["namespace", "tag_id"],
-        fields: &["slug", "muted_at"],
+        // **The primary key is on the field list, and it is the only table where that is so.**
+        // Everywhere else the key is a rowid the far device assigns itself; here it is
+        // `(namespace, tag_id)`, both `NOT NULL`, and an op that did not carry them would be an
+        // op the far device cannot turn into a row at all.
+        fields: &["namespace", "tag_id", "slug", "muted_at"],
         counters: &[],
         parents: &[],
         append_only: false,
@@ -231,7 +333,13 @@ pub const TABLES: [Spec; 11] = [
             "needs_review",
         ],
         counters: &["quantity"],
-        parents: &[("folder", "folder_id", "wishlist_folders")],
+        parents: &[Parent {
+            key: "folder",
+            col: "folder_id",
+            table: "wishlist_folders",
+            absent: Absent::Null,
+            soft: false,
+        }],
         append_only: false,
     },
     Spec {
@@ -239,7 +347,13 @@ pub const TABLES: [Spec; 11] = [
         keys: &["id"],
         fields: &["name", "sort_order", "needs_review"],
         counters: &[],
-        parents: &[("parent", "parent_id", "wishlist_folders")],
+        parents: &[Parent {
+            key: "parent",
+            col: "parent_id",
+            table: "wishlist_folders",
+            absent: Absent::Null,
+            soft: false,
+        }],
         append_only: false,
     },
 ];
@@ -361,15 +475,36 @@ fn sparse_object(rows: impl Iterator<Item = (String, String, String)>) -> String
 ///
 /// A `NULL` local id is a row at the root, which is a real value rather than an absence —
 /// `json_set` stores it as a JSON null and [`super::merge`] reads it back as `Some(None)`.
-fn parents(spec: &Spec, row: &str) -> String {
+///
+/// **Complete on an insert and sparse on an update, for `changed_fields`' reason.** A note edit
+/// that shipped the row's current folder as well would win last-writer-wins against a
+/// concurrent *move* carrying an earlier stamp — the move would be silently undone by an edit
+/// that had nothing to do with it, which is the whole failure per-field LWW exists to prevent,
+/// one column type over. The plan this was built from emitted the full object both times.
+fn all_parents(spec: &Spec) -> String {
     let mut expr = "json_object()".to_owned();
-    for (key, col, parent) in spec.parents {
+    for p in spec.parents {
         expr = format!(
-            "json_set({expr}, '$.{key}', \
-             (SELECT sync_uid FROM {parent} WHERE id = {row}.{col}))"
+            "json_set({expr}, '$.{key}', (SELECT sync_uid FROM {table} WHERE id = NEW.{col}))",
+            key = p.key,
+            table = p.table,
+            col = p.col
         );
     }
     expr
+}
+
+fn changed_parents(spec: &Spec) -> String {
+    sparse_object(spec.parents.iter().map(|p| {
+        (
+            p.key.to_string(),
+            format!(
+                "(SELECT sync_uid FROM {} WHERE id = NEW.{})",
+                p.table, p.col
+            ),
+            format!("NEW.{col} IS NOT OLD.{col}", col = p.col),
+        )
+    }))
 }
 
 /// `NEW.a IS NOT OLD.a OR …` over every watched column — the semantic half of the update
@@ -427,7 +562,7 @@ fn insert_trigger(spec: &Spec) -> String {
         "put",
         &all_fields(spec),
         &counter_object(spec, None),
-        &parents(spec, "NEW"),
+        &all_parents(spec),
     );
     format!(
         "DROP TRIGGER IF EXISTS sync_ins_{t};
@@ -460,7 +595,7 @@ fn update_trigger(spec: &Spec) -> String {
         "put",
         &changed_fields(spec),
         &counter_object(spec, Some("OLD")),
-        &parents(spec, "NEW"),
+        &changed_parents(spec),
     );
     format!(
         "DROP TRIGGER IF EXISTS sync_upd_{t};
@@ -842,6 +977,141 @@ mod tests {
             "the root is a value, not an absence: {}",
             rows[1]
         );
+    }
+
+    /// **An edit that is not a move does not ship the row's parents.** A note edit carrying
+    /// the row's current folder would win last-writer-wins against a concurrent *move* with an
+    /// earlier stamp, and the move would be silently undone by an edit that had nothing to do
+    /// with it -- per-field LWW's whole argument, one column type over.
+    #[test]
+    fn an_edit_that_is_not_a_move_ships_no_parent() {
+        let conn = db();
+        conn.execute(
+            "INSERT INTO deck_folders (name, sort_order, created_at, updated_at)
+             VALUES ('Binder', 0, unixepoch(), unixepoch())",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO decks (name, format_key, folder_id, created_at, updated_at)
+             VALUES ('A', 'commander', 1, unixepoch(), unixepoch())",
+            [],
+        )
+        .unwrap();
+        conn.execute("DELETE FROM sync_ops", []).unwrap();
+
+        conn.execute("UPDATE decks SET notes = 'hello'", [])
+            .unwrap();
+        let parents: String = conn
+            .query_row("SELECT parents FROM sync_ops", [], |r| r.get(0))
+            .unwrap();
+        let parents: serde_json::Value = serde_json::from_str(&parents).unwrap();
+        assert!(
+            parents.get("folder").is_none(),
+            "a note edit must not restate the folder: {parents}"
+        );
+
+        // ...and a move ships exactly the parent that moved.
+        conn.execute("DELETE FROM sync_ops", []).unwrap();
+        conn.execute("UPDATE decks SET folder_id = NULL", [])
+            .unwrap();
+        let parents: String = conn
+            .query_row("SELECT parents FROM sync_ops", [], |r| r.get(0))
+            .unwrap();
+        let parents: serde_json::Value = serde_json::from_str(&parents).unwrap();
+        assert!(parents.get("folder").is_some(), "a move must travel");
+        assert!(parents["folder"].is_null(), "the root is a value");
+    }
+
+    /// `decks.default_category_id` travels as the **category's uid**, and Auto travels as a
+    /// null. A field would have carried the originating device's row id, which names a row in
+    /// a database the far device has never seen.
+    #[test]
+    fn the_default_category_travels_as_a_uid_and_auto_as_a_null() {
+        let conn = db();
+        conn.execute(
+            "INSERT INTO decks (name, format_key, created_at, updated_at)
+             VALUES ('A', 'commander', unixepoch(), unixepoch())",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO deck_categories
+                (deck_id, name, kind, is_active, sort_order, created_at, updated_at)
+             VALUES (1, 'Ramp', 'main', 1, 0, unixepoch(), unixepoch())",
+            [],
+        )
+        .unwrap();
+        let cat_uid: String = conn
+            .query_row("SELECT sync_uid FROM deck_categories", [], |r| r.get(0))
+            .unwrap();
+        conn.execute("DELETE FROM sync_ops", []).unwrap();
+        conn.execute("UPDATE decks SET default_category_id = 1", [])
+            .unwrap();
+
+        let parents: String = conn
+            .query_row(
+                "SELECT parents FROM sync_ops WHERE tbl = 'decks'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let parents: serde_json::Value = serde_json::from_str(&parents).unwrap();
+        assert_eq!(parents["default_category"], serde_json::json!(cat_uid));
+
+        // ...and back to Auto, which is a `0` locally and a null on the wire.
+        conn.execute("DELETE FROM sync_ops", []).unwrap();
+        conn.execute("UPDATE decks SET default_category_id = 0", [])
+            .unwrap();
+        let parents: String = conn
+            .query_row(
+                "SELECT parents FROM sync_ops WHERE tbl = 'decks'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        let parents: serde_json::Value = serde_json::from_str(&parents).unwrap();
+        assert!(parents.get("default_category").is_some());
+        assert!(parents["default_category"].is_null());
+        // And it is not on the field list any more, so no raw id travels.
+        let fields: String = conn
+            .query_row("SELECT fields FROM sync_ops WHERE tbl = 'decks'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert!(
+            !fields.contains("default_category_id"),
+            "a foreign device's row id must not travel: {fields}"
+        );
+    }
+
+    /// **One statement touching five rows is five stamps.** [`super::merge::fold`] keys its
+    /// dedupe on the stamp, so two ops sharing one would be silently folded into one -- a
+    /// whole row's change lost, from a `UPDATE … WHERE` nobody would think to suspect.
+    #[test]
+    fn a_multi_row_update_gets_one_stamp_per_row() {
+        let conn = db();
+        for i in 0..5 {
+            conn.execute(
+                "INSERT INTO decks (name, format_key, created_at, updated_at)
+                 VALUES (?1, 'commander', unixepoch(), unixepoch())",
+                rusqlite::params![format!("d{i}")],
+            )
+            .unwrap();
+        }
+        conn.execute("DELETE FROM sync_ops", []).unwrap();
+        conn.execute("UPDATE decks SET notes = 'swept'", [])
+            .unwrap();
+
+        let (rows, stamps): (i64, i64) = conn
+            .query_row(
+                "SELECT count(*), count(DISTINCT hlc_ms || ':' || hlc_ctr) FROM sync_ops",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(rows, 5);
+        assert_eq!(stamps, 5, "five rows in one statement need five stamps");
     }
 
     /// The clock actually advances, and two ops never share a stamp.
