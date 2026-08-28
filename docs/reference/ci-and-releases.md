@@ -6,7 +6,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   router (below), a `frontend`
   job (`npm run build`/`lint`/`test:run`), a `rust` matrix over `windows-latest` +
   `ubuntu-22.04` (`cargo fmt --check` on Linux only, `clippy -D warnings` and `cargo test`
-  on both, everything `--locked`), and a `powershell` job (below).
+  on both, everything `--locked`), a **`wasm`** job (below) and a `powershell` job (below).
   **`ci-ok` is the one protected check** — branch protection
   pins names by string and a matrix job's name embeds its matrix values, so the aggregator is
   what has teeth and the matrix underneath stays free. `enforce_admins` is **false**: a red PR
@@ -18,12 +18,35 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `src-tauri/**` → `rust`; `src/**`, `public/**`, `index.html`, the lockfiles and the
   frontend's configs, plus **`scripts/` because `eslint .` lints it** (its ignore list is
   `dist/`, `src-tauri/`, `node_modules/` and nothing else) → `frontend`;
-  `*.ps1`/`*.psm1`/`*.psd1` → `powershell`; `ci.yml` itself → **all three**;
-  prose and editor/release bookkeeping → neither; and **anything unrecognised → both**
-  build jobs.
+  `src/workers/**`, `src/web/**`, `src/lib/core/**`, `scripts/build-wasm.mjs` and
+  `vite.web.config.ts` → `frontend` **and `wasm`**, and `src-tauri/**` → `rust` **and
+  `wasm`** as well;
+  `*.ps1`/`*.psm1`/`*.psd1` → `powershell`; `ci.yml` itself → **all four**;
+  prose and editor/release bookkeeping → neither; and **anything unrecognised → every**
+  build job.
   That last arm is the fail-safe that makes the lists safe to be wrong in the cheap
   direction — a new root config file or a new top-level directory gets full CI until someone
   narrows it deliberately. Only the "neither" arm can wrongly skip work, so it stays small.
+- **The `wasm` job compiles the crate for `wasm32-unknown-unknown`, and it exists because a
+  fully green `npm run verify` can ship a broken web target.** The crate is one crate with two
+  targets: a `use tauri::` added to a module on the wasm side of `lib.rs`'s module map compiles
+  on desktop, passes every test, and fails only there. That is the same shape as `cargo fmt`
+  and `clippy` already being outside `verify`, and it is why `src-tauri/*` routes here as well
+  as to `rust`.
+  Linux-only, and not as a preference — this compiles SQLite's C amalgamation to wasm32 with
+  clang, which is the same compiler on every host, so a Windows leg would prove the same thing
+  more slowly. **No measured figure in this repo has ever come off a Linux build**; this job is
+  a compile gate, not a source of numbers. It installs clang and a `wasm-bindgen-cli` **pinned
+  to the `wasm-bindgen` crate's exact version** (a mismatch is not a build error — it fails at
+  run time inside the generated glue, complaining about an import nobody wrote), and it needs
+  **no `dist/` stub** unlike the `rust` job, because `build.rs` returns before
+  `tauri_build::build()` runs for a wasm `TARGET`. Removing that early return was measured: the
+  build panics with ``missing `cargo:dev` instruction``, because `tauri` itself is target-gated
+  off this build and its build script never emitted the metadata `tauri_build` reads back.
+  Its `npm run build:wasm` step greps the generated glue for every `#[wasm_bindgen]` entry
+  point the Worker imports, which is **the one check no compiler can make**: deleting that
+  attribute was run as a mutation on 2026-08-28 and compiled clean with no error and no
+  warning, because the function stays `pub` in a `pub mod`.
 - **The `powershell` job runs `.claude/skills/running-the-app/lock.test.ps1` on
   `windows-latest`, and its routing arm has two constraints that are not stylistic.**
   It must sit **above** `src-tauri/*` and `scripts/*` in the `case`, which is first-match-wins:

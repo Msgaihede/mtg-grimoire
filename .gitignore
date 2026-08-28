@@ -1,5 +1,12 @@
 node_modules/
 dist/
+
+# The web target's bundle, and the directory it is served from. `web/public/` is generated in
+# FULL by `scripts/build-wasm.mjs` - the wasm module, its glue, and a copy of the favicon -
+# which is what keeps a 2 MB wasm module out of the desktop bundle and therefore out of the
+# portable exe.
+dist-web/
+web/public/
 storybook-static/
 # `tsconfig.node.json` is `composite`, so anything that builds it as a *project* — `tsc -b`,
 # or an editor's TS server doing the same — drops a `.tsbuildinfo` beside it. `npm run build`
