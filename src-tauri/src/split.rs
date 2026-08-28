@@ -103,7 +103,7 @@ fn finish(data_dir: &Path) -> Result<(), String> {
         // **Outside the transaction, and that is not a style choice**: `PRAGMA foreign_keys`
         // is documented as a no-op while one is open, so the same statement one line lower
         // would leave the drops running with enforcement on and say nothing about it. OFF
-        // for the drop and only the drop: the fifteen go in reverse dependency order, but
+        // for the drop and only the drop: they go in reverse dependency order, but
         // `deck_cards → deck_categories` and friends make any order a violation for the
         // duration of a batch, and this batch ends with none of them present.
         conn.pragma_update(None, "foreign_keys", "OFF")
@@ -140,7 +140,7 @@ fn finish(data_dir: &Path) -> Result<(), String> {
     std::fs::rename(data_dir.join(LEGACY_DB), data_dir.join(CORPUS_DB)).map_err(|e| e.to_string())
 }
 
-/// Build `user.db.part` beside the legacy file and copy the fifteen tables into it.
+/// Build `user.db.part` beside the legacy file and copy the reader's tables into it.
 ///
 /// Attached rather than opened separately so the copy is `INSERT … SELECT` inside one
 /// transaction on one connection — and the transaction is honest here where it would not be
@@ -164,7 +164,15 @@ pub fn extract_user_file(conn: &Connection, data_dir: &Path) -> rusqlite::Result
     let tx = conn.unchecked_transaction()?;
     schema::create_user_schema(&tx, SCRATCH)?;
     for (table, _) in schema::TABLES.iter().filter(|(_, s)| *s == Side::User) {
-        let columns = shared_columns(&tx, table)?;
+        // **A user table the legacy file never had is nothing to copy, and user schema v28 is
+        // the rung that made that a real state.** [`schema::migrate_single_file`] is frozen at
+        // [`schema::LEGACY_SINGLE_FILE_VERSION`], so every user rung above it describes a
+        // table that exists in the destination and in no source this function will ever see —
+        // pairing's three first. The empty table the destination already has is the right
+        // answer: a database being converted has never been paired.
+        let Some(columns) = shared_columns(&tx, table)? else {
+            continue;
+        };
         tx.execute_batch(&format!(
             "INSERT INTO {SCRATCH}.{table} ({columns}) SELECT {columns} FROM main.{table}"
         ))?;
@@ -183,22 +191,29 @@ pub fn extract_user_file(conn: &Connection, data_dir: &Path) -> rusqlite::Result
     conn.execute_batch(&format!("DETACH DATABASE {SCRATCH}"))
 }
 
-/// The columns both copies of `table` have, in the destination's order.
+/// The columns both copies of `table` have, in the destination's order, or `None` when the
+/// source has no such table at all.
 ///
 /// A `SELECT *` would be one line and would break the first time a user rung adds a column:
 /// the destination is at head and the source is at [`schema::LEGACY_SINGLE_FILE_VERSION`],
-/// which are the same shape today and are not required to stay that way.
+/// and since user schema v28 they are **not** the same shape.
 ///
 /// **`PRAGMA main.table_info` on a table that does not exist is an empty result, not an
-/// error** — measured — so an empty answer here is a real failure mode and is refused rather
-/// than turned into `INSERT INTO t () SELECT`.
-fn shared_columns(conn: &Connection, table: &str) -> rusqlite::Result<String> {
+/// error** — measured. That is why the two answers are told apart here rather than collapsed:
+/// a source with no such table is `None` and the caller skips it, which is what a rung above
+/// the frozen ladder looks like from down here; a source that *has* the table and shares no
+/// column with the destination is still a refusal, because that is a schema nobody meant and
+/// `INSERT INTO t () SELECT` is not a sentence.
+fn shared_columns(conn: &Connection, table: &str) -> rusqlite::Result<Option<String>> {
     let read = |schema: &str| -> rusqlite::Result<Vec<String>> {
         let mut stmt = conn.prepare(&format!("PRAGMA {schema}.table_info({table})"))?;
         let names = stmt.query_map([], |r| r.get::<_, String>(1))?.collect();
         names
     };
     let source = read("main")?;
+    if source.is_empty() {
+        return Ok(None);
+    }
     let dest = read(SCRATCH)?;
     let shared: Vec<String> = dest
         .into_iter()
@@ -211,7 +226,7 @@ fn shared_columns(conn: &Connection, table: &str) -> rusqlite::Result<String> {
             Some(format!("cannot split: `{table}` has no columns in common")),
         ));
     }
-    Ok(shared.join(", "))
+    Ok(Some(shared.join(", ")))
 }
 
 /// Hand the freed pages back, a chunk at a time. Best-effort: a corpus that is larger than
@@ -286,16 +301,38 @@ mod tests {
     }
 
     /// One row count per user table, read through whichever schema `schema` names.
+    ///
+    /// **A table the schema does not hold counts zero**, and that is a reading rather than a
+    /// dodge: since user schema v28 the destination is at head while the source is frozen at
+    /// [`schema::LEGACY_SINGLE_FILE_VERSION`], so a table a later user rung created exists on
+    /// one side only — and it holds no rows on either. The question this answers is how many
+    /// rows there are, which is exactly what "keeps every user row" is about. It still catches
+    /// a conversion that *invented* rows in such a table, because the count afterwards would
+    /// not be zero; that the table exists at all is asserted directly by the caller's
+    /// `sqlite_master` loop.
     fn user_counts(conn: &Connection, schema: &str) -> Vec<(String, i64)> {
         crate::schema::TABLES
             .iter()
             .filter(|(_, s)| *s == Side::User)
             .map(|(t, _)| {
-                let n: i64 = conn
-                    .query_row(&format!("SELECT count(*) FROM {schema}.{t}"), [], |r| {
+                let here: i64 = conn
+                    .query_row(
+                        &format!(
+                            "SELECT count(*) FROM {schema}.sqlite_master
+                              WHERE type='table' AND name=?1"
+                        ),
+                        [t],
+                        |r| r.get(0),
+                    )
+                    .unwrap();
+                let n: i64 = if here == 0 {
+                    0
+                } else {
+                    conn.query_row(&format!("SELECT count(*) FROM {schema}.{t}"), [], |r| {
                         r.get(0)
                     })
-                    .unwrap();
+                    .unwrap()
+                };
                 ((*t).to_owned(), n)
             })
             .collect()
