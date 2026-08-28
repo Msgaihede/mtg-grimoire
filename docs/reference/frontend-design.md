@@ -3141,3 +3141,278 @@ the one of the three that did not move.
 three hosts is exactly the half no suite can see, and it is Task 14 of
 [the plan](../superpowers/plans/2026-08-26-card-chin-and-exact-prices.md). The class assertions
 above pin a string rather than a pixel and do not retire it.
+
+## Drag and drop: what `@dnd-kit/react` 0.5.0 actually requires
+
+Measured 2026-08-27 against `@dnd-kit/react` **0.5.0** (pinned exactly, no caret — it is pre-1.0
+and its API can break between releases), by building the smallest real thing and reading what
+happened rather than reading the docs. The dependency landed alongside
+`@atlaskit/pragmatic-drag-and-drop`; the two coexist on **different elements**, which is safe, and
+putting both on one element is not — a second registration silently replaces the first.
+
+The question the spike existed to answer: **`@dnd-kit/react` is provider-and-hooks shaped, and
+`lib/folderDrag.ts` is imperative** (`folderDraggable({ element, folder })` registers on a DOM
+element and returns a cleanup; `useFolderDropTarget({ ref, … })` takes a ref). Whether dnd-kit can
+be driven that way decides whether the folder drag's call sites change at all — fifteen of them,
+counted the same day.
+
+**The headline: it can. `folderDrag.ts` keeps the exported shape it has today, and only its
+internals change.** Every answer below is what makes that true.
+
+### 1. Does `DragDropProvider` have to wrap the tree?
+
+**No, and the way it does not is a trap.** `@dnd-kit/react`'s context is created with a
+module-level `var defaultManager = new DragDropManager()` as its **default value**, so a
+`useDraggable` rendered with no provider anywhere above it does not throw and does not hand back a
+null manager — it silently joins a process-wide singleton shared with every other unparented
+draggable in the window. A missing provider is therefore not a loud failure but a shared-state
+one.
+
+More usefully: the provider is **not the only way to get a manager**. `@dnd-kit/dom` exports the
+`DragDropManager` class itself, and a manager constructed by hand is a complete drag system —
+sensors, plugins, collision detection and all. `new DragDropManager()` resolves the default preset
+(`ScrollListener`, `Scroller`, `StyleInjector`, `Accessibility`, `AutoScroller`, `Cursor`,
+`Feedback`, `PreventSelection`, with `PointerSensor` and `KeyboardSensor`), so the imperative path
+is not a reduced one.
+
+### 2. Are the hooks the only entry point?
+
+**No. `@dnd-kit/dom` is a non-hook registration API, and it is the whole of what the migration
+needs.** `new Draggable({ id, element, data }, manager)` and
+`new Droppable({ id, element, data }, manager)` register a plain DOM element with a manager, and
+`entity.destroy()` unregisters it — which is exactly `folderDraggable`'s
+`(args) => () => void` contract and exactly `useFolderDropTarget`'s effect-cleanup contract. The
+hooks in `@dnd-kit/react` are a thin wrapper over these same classes; `useDraggable().draggable`
+hands back the very instance.
+
+Two mechanics that are not obvious and cost a probe each:
+
+- **Registration is queued on a microtask, not done in the constructor.** `Entity`'s constructor
+  ends with `if (manager && register) queueMicrotask(this.register)`, so a registry read on the
+  line after `new Draggable(…)` reports **zero** entities. That reads exactly like "imperative
+  registration does not work", and is not.
+- **`data` is a settable accessor, not constructor-only.** Assigning `entity.data = {…}` after
+  construction is supported, and the new record is what a drop handler receives — which is how
+  `folderDrag.ts`'s "read the folder at drag start, not at registration" survives the move. It is
+  the guarantee `composedDraggable`'s `data: () => …` callback gives today, reached a different
+  way.
+
+**dnd-kit also ships its own version of the capture-phase `mousedown` guard.** `PointerSensor`'s
+default `preventActivation` refuses to start a drag when the press lands on an
+`input, select, textarea, button, a[href]` or `[contenteditable]` that is not the draggable's own
+element or handle — `getInteractiveElement` is a single `closest()` over that selector list. That
+is the same failure `features/decks/dnd.ts`'s guard was written for: the `⋯` menu on a folder
+card, the rename field in a tree row, answered by the library rather than by us. It is a
+*default*, overridable per source, so it is a thing to verify rather than a thing to assume.
+
+### 3. Can the `ref` a hook returns be handed to an element the component does not own?
+
+**Yes.** `useDraggable` returns
+`{ draggable, isDragging, isDropping, isDragSource, handleRef, ref }`, and `ref` is a plain
+`(element: Element | null) => void` callback — calling it with a pre-existing, unrelated element
+puts the draggable on that element (`api.draggable.element === thatElement`, measured).
+`useDraggable`'s **input** also takes `element` directly, as a value or a ref. So even the hook
+path never requires the component to own the element. This is what makes the question academic:
+the imperative path in §2 is better, but the hook path would not have forced the call sites to
+change either.
+
+### 4. What does a drop handler receive — ids, or arbitrary data?
+
+**Arbitrary data, on both ends, and it survives the round trip.** A `dragend` event is
+`{ nativeEvent, operation, canceled, suspend }`, and `operation` is
+`{ source, target, activatorEvent, transform, shape, position, status, canceled }`. `source` and
+`target` are the `Draggable` and `Droppable` **entities**, so `operation.source.data` and
+`operation.target.data` are the records registered — or later assigned — at each end. Measured: a
+source registered with `{folderId: 7, …}` and reassigned to `{folderId: 9, name: "Renamed"}`
+before the gesture arrived at the handler as `{folderId: 9, name: "Renamed"}`, alongside the
+target's own record.
+
+**So `folderDragData` and `readFolderDrag` survive unchanged.** They are a mark under a key and a
+field-by-field read of an untyped record, and dnd-kit's `data` is the same untyped record
+pragmatic-dnd's store was. `canceled` is a first-class field on the same event, which is what
+`armed` needs in order to stand down on Escape as well as on drop.
+
+### What jsdom cannot do on its own, and the six things that fix it
+
+Worth as much as the four answers above, because the test harness rests on it. `src/test-drag.ts`
+opens by explaining that a native HTML5 drag is testable *because* pragmatic-dnd hit-tests with
+`event.target` and `Element.closest`. **dnd-kit hit-tests by coordinate against measured
+rectangles**, and jsdom measures every rectangle as zero — so a pointer drag driven in the suite
+fails in five distinct places, each of which reads like the library being broken. In the order
+they are hit:
+
+1. **`IntersectionObserver` is not defined.** dnd-kit's `PositionObserver` constructs one per
+   tracked element. It is thrown outside every test's stack, so it fails the run without failing
+   an assertion.
+2. **`document.elementFromPoint` is missing.** `test-setup.ts` already shims the *plural*
+   `elementsFromPoint` for pragmatic-dnd's auto-scroller; dnd-kit's `Scroller` asks the singular.
+3. **`document.getAnimations` and `Element.prototype.animate` are missing.** `DOMRectangle`
+   force-finishes running animations before it measures, and the `Feedback` plugin animates the
+   drag preview.
+4. **`window.matchMedia` is missing.** `Feedback` asks it about `prefers-reduced-motion`.
+5. **Every ancestor clamps the visible rectangle, and in jsdom that clamp is to nothing.**
+   `getVisibleBoundingRectangle` walks up from the element intersecting with any ancestor whose
+   `isOverflowVisible` is false — and that predicate is
+   `overflow === "visible" && overflowX === "visible" && overflowY === "visible"`, while jsdom's
+   computed `overflow` on `<body>` is the **empty string**. So `<body>` counts as a clipping
+   ancestor, its `getBoundingClientRect()` is `0×0`, and the visible rect of a target stubbed at
+   `y 200–240` comes back `{top: 200, right: 0, bottom: 0, width: 0, height: 0}`. A zero-area
+   element is invisible, an invisible droppable never gets a `shape`, and a droppable with no
+   shape can never be collided with. **This is the one that reads as "the drop target simply does
+   not work"**: registration is correct, `accepts()` answers true, the element is right, and the
+   target is `null` on every frame. Giving `document.body` a viewport-sized
+   `getBoundingClientRect` unblocks it — and every ancestor between the target and the body needs
+   one too.
+6. **Collisions are recomputed by a reactive effect the `Feedback` plugin drives, and jsdom
+   cannot drive it.** With the five shims above in place a full gesture runs —
+   `beforedragstart`, `dragstart`, `dragmove` per move, `dragend` with `canceled: false` — the
+   droppable has a correct shape, and
+   `droppable.shape.containsPoint(operation.position.current)` is **true** at the release point,
+   while `operation.target` stays `null` and `collision` fires exactly twice, at the start and at
+   the end. One call to `manager.collisionObserver.forceUpdate()` before the release resolves it
+   immediately: the target is found and the `dragend` handler receives both records. A jsdom
+   pointer-drag helper must therefore force that update; the alternative is a green test that
+   proves the gesture and not the drop.
+
+Two smaller measurements from the same pass, both of which change how a helper has to be written:
+
+- **`dragOperation.position.current` lags one `pointermove` behind.** The sensor batches through
+  its own scheduler, so a drag that stops the instant it arrives has never been over the target as
+  far as dnd-kit is concerned. A helper ends with a repeated move at the destination and a frame
+  before `pointerup`.
+- **The default activation constraints are `Delay(200ms, 10px tolerance)` *or* `Distance(5px)`**
+  for a mouse press that is not on a declared handle, and no constraint at all for a press
+  *inside* a handle. Synthetic `pointermove`s cross the 5px distance with no waiting, which is why
+  the gesture activates in a test that runs no timers.
+
+### The shipped CSP blocks a plugin dnd-kit cannot be told not to load — and the rules moved into `index.css`
+
+Found 2026-08-27, reading the library rather than the app. **`@dnd-kit/dom` positions its drag
+preview from a runtime-injected `<style>` element, and this app's shipped `style-src 'self'`
+blocks exactly that** — the failure mode `motion.md` already documents for
+`AnimatePresence mode="popLayout"` and `animateView()`, arriving from a second direction.
+
+The mechanism, precisely. `StyleInjector` is in the manager's plugin list, and it is a
+**`CorePlugin`** — `DragDropManager`'s constructor prepends `[ScrollListener, Scroller,
+StyleInjector, …]` ahead of whatever a caller passes, and `PluginRegistry`'s setter explicitly
+`continue`s past anything whose prototype is a `CorePlugin` rather than unregistering it. So it
+cannot be removed through the `plugins` customizable. Its `injectStyleElement` does
+`root.createElement("style")`, sets `textContent`, and prepends the element to `<head>` — an
+inline stylesheet, which `style-src 'self'` refuses and which `style-src-attr 'unsafe-inline'`
+does **not** cover, because that directive governs `style=` attributes and nothing else.
+
+Three plugins register rules through it, and they are not equally cosmetic:
+
+- **`Feedback`** — the drag preview. Its rules are what give the overlay
+  `position: fixed`, `pointer-events: none`, `z-index: calc(infinity)` and, critically, its
+  `top`/`left`/`width` read from `--dnd-*` custom properties — **`--dnd-`, not `--dnd-kit-`**,
+  which this paragraph said until the rules were read off a running drag. The plugin sets those
+  custom properties inline (allowed by `style-src-attr`); the **rules that read them** are what is
+  blocked. Without the rules the preview is a clone left at the window's top-left corner rather
+  than under the pointer. **It is a visual defect and not a broken drop**, which this paragraph
+  also had wrong: driven in a built debug app on 2026-08-27 the folder still landed where it was
+  dropped and the move survived a reload, with every injected sheet reporting a null
+  `styleSheet`.
+- **`Cursor`** — `* { cursor: grabbing !important; }`. Cosmetic.
+- **`PreventSelection`** — `* { user-select: none !important; }`. A drag that selects text as it
+  travels.
+
+**Every environment this repo can test in is on the permissive side of the difference.**
+`tauri.conf.json`'s `devCsp` is `style-src 'self' 'unsafe-inline'`, Storybook and Vite serve no
+CSP at all, and jsdom enforces none — so `tauri dev`, the workbench and the whole suite are green
+on this, and only the packaged exe breaks. **A live CDP pass under `tauri dev` cannot see it
+either**, which is worth stating plainly because that is the pass this app reaches for when a
+suite cannot answer: the only witness is a `tauri build` portable copy.
+
+`StyleInjector` takes a `nonce` option, which is the documented escape and needs a CSP nonce this
+app does not have — Tauri's `csp` is a static string in `tauri.conf.json`, and a nonce has to be
+per-response. That left three ways out: widen the shipped `style-src` (a real regression, and the
+reason the two CSPs differ at all), thread a nonce (a Tauri-side change), or copy the rules into a
+stylesheet the policy already trusts.
+
+**The third is what shipped, and it costs the CSP nothing.** The rules are static CSS; served from
+the app's own bundle they are `'self'`, which `style-src` already allows. The library goes on
+publishing `--dnd-top`, `--dnd-left`, `--dnd-translate` and the rest as inline style *attributes*,
+which `style-src-attr 'unsafe-inline'` permits and which were never the blocked half — so the
+values still arrive and now something reads them. `StyleInjector` is left to go on injecting
+sheets nobody parses. Nothing about the manager, the plugin list or the policy changed.
+
+Three things about the copy are worth knowing before touching it.
+
+- **The cascade layer has to be *named* before Tailwind's.** `CSS_RULES` puts its popover resets
+  in `@layer dnd-kit`, and the library gets away with it because its sheet is **prepended** to
+  `<head>`, so that layer sorts first and therefore loses to everything. A layer takes its
+  priority from where it is first named, and the block itself sits at the foot of `index.css` —
+  after the `@import` that names `theme`, `base`, `components` and `utilities`. Built both ways
+  against tailwindcss 4.3.x on 2026-08-28: with a bare `@layer dnd-kit;` statement above the
+  import, `dist/assets/index-*.css` orders the layers `properties, dnd-kit, theme, base,
+  components, utilities`; without it, `dnd-kit` lands **last**, the highest priority in the sheet,
+  and its `background: unset` / `border: unset` then beat the utility classes the dragged clone is
+  drawn with. That is the preview broken a second way by the fix for the first.
+- **Two rules are fenced and the rest are verbatim.** `Cursor` and `PreventSelection` register
+  bare `*` rules, which is only safe because the library adds and removes them around one
+  gesture. Copied as-is into a stylesheet that is always loaded they would put a closed hand and
+  an unselectable page over the whole app forever, so both hang off `html[data-dragging]`, a mark
+  `lib/dndManager.ts` sets between the library's own `dragstart` and `dragend`. Their
+  declarations are untouched. The mark comes off when the reader lets go rather than when the
+  drop animation ends, because the status signal the library itself reads lives in
+  `@dnd-kit/state`, a transitive dependency this app does not declare.
+- **That fence was `:root:has([data-dnd-dragging])` for one commit, and it broke a story play in
+  a feature that does not drag.** It is correct CSS and free in a browser, which is what made it
+  the obvious first spelling. jsdom resolves style by matching every loaded rule against every
+  element, and a rule whose **subject** is broad and whose ancestor part holds `:has()` turns
+  each of those matches into a scan of the whole document — O(n²) over the page. Measured
+  2026-08-28 over a 400-element tree with a DOM mutation between reads, which is what a
+  `userEvent` gesture produces: **4.1s with the attribute ancestor, 18.6s with the `:has()`**.
+  What it surfaced as was `DeckEditor.stories.tsx > SwapFolds` going from **3.5s to 15.0–16.0s**
+  against the 15s `testTimeout`, and the whole `vitest` run going from **181s to 231s**. **It is
+  the broad subject that is expensive, not the pseudo-class**: an unrelated `.thing:has(.other)`
+  measured 436ms against a 447ms baseline, because its subject fails before the `:has()` is
+  evaluated. `dndManager.test.ts` refuses that one selector shape in `index.css`, with the
+  predicate self-tested against both spellings so it cannot quietly stop detecting anything.
+- **The near-miss is the part worth remembering.** The regression shipped through a green
+  `npm run verify` — the story plays ran, and SwapFolds came in at **15049ms in the full
+  parallel run against a 15000ms wall**, a margin of about fifty milliseconds on a play that had
+  been taking three and a half seconds. A four-fold slowdown reached the branch as a coin flip on
+  one timeout, and the default reporter prints no duration for a test that passes, so nothing in
+  the log said so. The check is the story plays and they already run in `verify`; what they
+  cannot do is report a regression that is still, barely, under the wall.
+- **`src/lib/dndManager.test.ts` is the fence, and it compares against the library rather than
+  against a string.** It starts a real drag through the app's own manager in jsdom (where nothing
+  is blocked), captures the `<style>` elements `StyleInjector` actually injected, parses both them
+  and `index.css` into selector-to-declaration maps, and fails unless every one of the library's
+  is also ours. Verified by mutation on 2026-08-28 in both directions: dropping
+  `will-change: translate` from `index.css`, deleting the `@layer` block and un-fencing the `*`
+  rule each turn it red, and so does editing `node_modules/@dnd-kit/dom/index.js` to add a
+  declaration or a rule the copy has never seen.
+
+**Driven in a built debug app, 2026-08-28** — `tauri build --debug --no-bundle`, the shipped
+`csp`, 1280×800. The policy was confirmed live first, because everything below is void without
+it: a `<style>` created at runtime came back with `sheet === null`. Then a folder card was dragged
+243px with `cdp.mjs pull` over a per-frame sampler (53 frames). The dragged element computed
+`position: fixed`, `top: 344px`, `left: 456px` — the `--dnd-top`/`--dnd-left` the library had
+written inline — `z-index: 2147483647` (`calc(infinity)`, clamped), `pointer-events: none`, and a
+`translate` walking 0 → 122px → 239.328px as the pointer travelled, with the box itself at
+x = 456 → 578 → 695. `<body>` read `cursor: grabbing` and `user-select: none` throughout, and
+`auto` for both at rest.
+
+**Driven again after the fence changed**, same build recipe and same window, because the `<body>`
+readings above were taken while it was still the `:has()` spelling. `data-dragging` is absent at
+rest with `<body>` at `cursor: auto`; through the drag the mark is on `<html>` and the preview
+reads `position: fixed`, `top: 344px`, `left: 456px`, `z-index: 2147483647`, `translate` walking
+0 → 142px → 239.357px, with `<body>` at `grabbing` and `user-select: none`; and it is absent again
+afterwards. The last sampled frame catches the documented difference in the act — `data-dragging`
+already off and the cursor back to `auto` while `data-dnd-dragging` is still on the element for
+the drop animation, which is the mark ending at `dragend` rather than at the end of the flight
+home.
+
+**The control, in the same session and the same window**: the ten copied rules were deleted out of
+`document.styleSheets[0]` and the drag repeated — which is the state the shipped build was in
+before this change. `position: absolute`, `top: 0px`, `left: 0px`, `z-index: auto`, `<body>` at
+`cursor: auto` and `user-select: auto`, while `--dnd-top: 344px` and `--dnd-left: 456px` sat on the
+element with nothing reading them. A reload restored all ten. Two traps cost time on the way:
+**`cdp.mjs drag` cannot drive this** — it waits on `Input.dragIntercepted`, which only fires for a
+native HTML5 drag, so `pull` (a real press/move/release, and absent from that script's own usage
+string) is the one to reach for; and **`tauri dev` cannot see any of this**, because Vite's dev
+server sends no CSP header at all and the HTML carries no meta, which makes `devCsp` irrelevant
+there rather than merely permissive.

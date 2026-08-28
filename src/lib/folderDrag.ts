@@ -1,9 +1,6 @@
 import { useEffect, useRef, useState, type RefObject } from "react";
-import {
-  dropTargetForElements,
-  monitorForElements,
-} from "@atlaskit/pragmatic-drag-and-drop/element/adapter";
-import { composedDraggable } from "@/features/decks/dnd";
+import { Draggable, Droppable, type DragEndEvent } from "@dnd-kit/dom";
+import { dndId, dndManager } from "@/lib/dndManager";
 
 /**
  * The gesture that rearranges a filing cabinet: a folder dropped on another folder's **middle**
@@ -104,20 +101,53 @@ function isFolderId(value: unknown): value is number {
 }
 
 /**
+ * Register an entity **now**, rather than on the microtask dnd-kit would have used.
+ *
+ * **This is a leak fix, and only the running window could have found it.** `Entity`'s
+ * constructor ends with `if (manager && register) queueMicrotask(this.register)`, while
+ * `destroy()` unregisters synchronously — so an entity constructed and destroyed **in the same
+ * tick** unregisters first and is then registered by the microtask, with nothing left holding a
+ * reference to undo it. It stays in the manager's registry for the life of the page.
+ *
+ * `React.StrictMode` does exactly that, on every mount, in development: it runs an effect,
+ * cleans it up, and runs it again. Measured in the shipped dev window 2026-08-27 — four folders
+ * on screen, **eleven** droppables registered, every visible row carrying two. And a second
+ * registration is not harmless here, because the surviving orphan is the one from the *first*
+ * effect run, whose monitor listeners were cleaned up: collision detection picked the orphan as
+ * `operation.target`, the live hook compared it against its own droppable, saw a different
+ * object and returned. **The mark came up, the row rang, and the drop silently did nothing.**
+ *
+ * Nothing in the suite could see it: `render` and `renderHook` do not wrap in `StrictMode`, so
+ * every test mounts each effect exactly once and every registration is the live one.
+ *
+ * `register: false` at the call sites is the other half — without it the constructor still
+ * queues its own registration and this would merely add a second.
+ */
+function registerNow(entity: Draggable | Droppable): void {
+  entity.register();
+}
+
+/**
  * A folder that can be picked up — a card in a grid or a row in the tree, the same either way.
  *
- * **`dnd.ts`'s `composedDraggable`, and this module contributes only the record.** The
- * capture-phase `mousedown` guard is that function's alone and there is exactly one copy of it in
- * the app. It matters here for the reason it was written for: a folder is never just a folder on
- * screen — a card carries a `⋯` menu and a tree row carries one plus a rename field — and
- * Chromium starts a drag from the nearest draggable *ancestor* of whatever was pressed, so
- * without the guard a press on the menu plus five pixels of travel files the folder somewhere.
- * Fields are refused outright by `NOT_A_DRAG`, which is why a rename in progress is a text
- * selection rather than a drag.
+ * **The press guard is the library's now, and it is the same rule.** It used to be
+ * `dnd.ts`'s `composedDraggable`: a capture-phase `mousedown` listener on the element, testing
+ * `NOT_A_DRAG` against what was pressed. `@dnd-kit/dom`'s `PointerSensor` asks that question
+ * itself, through `preventActivation`, and `lib/dndManager.ts` configures it with the very same
+ * selector — once, for every draggable in the app, rather than once per registration. The reason
+ * it matters has not changed: a folder is never just a folder on screen — a card carries a `⋯`
+ * menu and a tree row carries one plus a rename field — and a drag starts from the nearest
+ * draggable *ancestor* of whatever was pressed, so without the guard a press on the menu plus
+ * five pixels of travel files the folder somewhere. Fields are refused by `NOT_A_DRAG` outright,
+ * which is why a rename in progress is a text selection rather than a drag.
  *
- * `folder` is read at `dragstart`, so a folder renamed or moved since it mounted carries what it
- * is now — which is the whole reason it is a callback, and what lets its current parent refuse a
- * nest that would move it nowhere.
+ * `folder` is read **at the press**, so a folder renamed or moved since it mounted carries what
+ * it is now — which is the whole reason it is a callback, and what lets its current parent refuse
+ * a nest that would move it nowhere. dnd-kit's `data` is a settable accessor rather than a
+ * callback the library calls, so the refresh is hung off a capture-phase `pointerdown` on the
+ * element: a press always precedes a drag, and the capture phase is what a control that stops the
+ * press from propagating cannot hide from. That is the guard's own arrangement, kept for the
+ * guard's own reason.
  */
 export function folderDraggable({
   element,
@@ -126,7 +156,20 @@ export function folderDraggable({
   element: HTMLElement;
   folder: () => FolderDrag;
 }): () => void {
-  return composedDraggable({ element, data: () => folderDragData(folder()) });
+  const draggable = new Draggable(
+    // `register: false` and a registration of our own — see {@link registerNow}.
+    { id: dndId("folder-source"), element, data: folderDragData(folder()), register: false },
+    dndManager,
+  );
+  registerNow(draggable);
+  const refresh = () => {
+    draggable.data = folderDragData(folder());
+  };
+  element.addEventListener("pointerdown", refresh, true);
+  return () => {
+    element.removeEventListener("pointerdown", refresh, true);
+    draggable.destroy();
+  };
 }
 
 /** Where a drop would land relative to the target. */
@@ -205,11 +248,17 @@ export function folderEdge(
   return "inside";
 }
 
-/** The two fields of the library's `input` this module reads, named so the handlers below share
- *  one signature without either of them restating the adapter's whole payload type. */
+/** Where the pointer is, in the two names dnd-kit reports it under. The library's own
+ *  `Coordinates`, restated so the handlers below share one signature without importing a type
+ *  from `@dnd-kit/geometry` for two numbers. */
+/** The manager's view of a drag in flight, named once so the three handlers below share a
+ *  signature. dnd-kit spells it as the shape hanging off every drag event rather than as an
+ *  exported type, so this is read off the one event that carries every field. */
+type DragOperation = DragEndEvent["operation"];
+
 interface PointerAt {
-  clientX: number;
-  clientY: number;
+  x: number;
+  y: number;
 }
 
 /**
@@ -217,33 +266,48 @@ interface PointerAt {
  * both, gated by one `canDrop`.
  *
  * **`useCollectionDropTarget`'s shape, and every one of its decisions holds here.** `armed` is
- * computed **per target**, through its own `monitorForElements` gated by its own `canDrop`,
- * because no two folders answer the same yes/no about the folder in the air — the one being
- * dragged refuses itself, its own parent refuses a nest that would move nothing, and a descendant
- * refuses one that would make a cycle. That is what raises the mark on **every** eligible folder
- * at once rather than only on the one under the pointer. `canDrop` and `onDrop` are read through
- * a ref rather than through either effect's deps, so a target does not tear itself down and
- * re-register every time the folder list changes under it. And `canDrop` is asked **again** on
- * the drop, because the two questions can be a second apart and only the second one writes.
+ * computed **per target**, off the manager's own `dragstart` gated by this target's own
+ * `canDrop`, because no two folders answer the same yes/no about the folder in the air — the one
+ * being dragged refuses itself, its own parent refuses a nest that would move nothing, and a
+ * descendant refuses one that would make a cycle. That is what raises the mark on **every**
+ * eligible folder at once rather than only on the one under the pointer. `canDrop` and `onDrop`
+ * are read through a ref rather than through the effect's deps, so a target does not tear itself
+ * down and re-register every time the folder list changes under it. And `canDrop` is asked
+ * **again** on the drop, because the two questions can be a second apart and only the second one
+ * writes.
  *
  * **What is new here is that the question has two arguments.** A folder does not simply take or
  * refuse a payload; it takes some of the three landings and refuses others, so:
  *
- * - the **monitor** asks the "any of the three" question, since at `dragstart` there is no
- *   pointer position yet and `armed` means "this folder could take it somehow";
- * - the **drop target's own `canDrop`** asks the same "any of the three" question, deliberately,
- *   and not the edge-sensitive one. A `canDrop` that answered `false` over the middle of a folder
- *   which only accepts a reorder would take the whole element out of the library's drop-target
- *   hierarchy at that moment: `onDrag` would stop firing at it, and the reported edge would
- *   freeze at whatever it last was instead of following the pointer out of the nest zone;
+ * - the **`dragstart` listener** asks the "any of the three" question, since at `dragstart` there
+ *   is no pointer position yet and `armed` means "this folder could take it somehow";
+ * - the **droppable's own `accept`** asks the same "any of the three" question, deliberately, and
+ *   not the edge-sensitive one. An `accept` that answered `false` over the middle of a folder
+ *   which only accepts a reorder would take the whole element out of collision detection at that
+ *   moment: it would stop being the operation's target, and the reported edge would freeze at
+ *   whatever it last was instead of following the pointer out of the nest zone. dnd-kit asks
+ *   `accepts()` once per collision pass rather than at registration, so this is the same shape the
+ *   pragmatic-dnd `canDrop` had and for the same reason;
  * - `edge` is where the filtering happens instead. It is the edge a drop **would land on**, and
  *   it is `null` both when the pointer is not over this target and when it is over a part of it
  *   that would refuse. A surface draws its mark straight from it — no mark means no drop, which
  *   is the honest thing to show and the opposite of a line leading to a write that never happens.
  *
- * `edge` follows the pointer **within** one target, off `onDrag` rather than `onDragEnter` alone:
- * the whole gesture is that one folder means three different things at three heights, and a mark
- * that only updated on entry would be a mark that is right once per folder.
+ * `edge` follows the pointer **within** one target, off `dragmove` rather than `dragover` alone:
+ * the whole gesture is that one folder means three different things at three heights, and
+ * `dragover` fires only when the operation's *target changes*, so a mark driven by it would be a
+ * mark that is right once per folder.
+ *
+ * **Two things changed shape with the library and neither changed meaning.** Where the pointer is
+ * comes from `operation.position.current` — the manager's own coordinate — rather than from a
+ * `location.current.input`, and it is read at the moment of the event for the reason it always
+ * was: `setEdge` is a render behind, and where the pointer was when the reader let go is the only
+ * honest answer to where a drop lands. And `edge` now **does** stand down in the end handler
+ * alongside `armed`, where under pragmatic-dnd that would have been an unreachable line: that
+ * library cleared its drop-target hierarchy before publishing the end of a drag, so the target's
+ * own `onDragLeave` had already fired. dnd-kit publishes `dragend` with the operation's target
+ * still set — that is how a drop knows where it landed — so clearing here is the only thing that
+ * clears it, on the cancel path as much as on the drop.
  */
 export function useFolderDropTarget({
   ref,
@@ -267,70 +331,70 @@ export function useFolderDropTarget({
     latest.current = { canDrop, onDrop };
   });
 
-  useEffect(
-    () =>
-      monitorForElements({
-        canMonitor: ({ source }) => {
-          const drag = readFolderDrag(source.data, scope);
-          return drag !== null && FOLDER_EDGES.some((at) => latest.current.canDrop(drag, at));
-        },
-        onDragStart: () => setArmed(true),
-        // Fires for a cancelled drag as well as a completed one — the platform ends both the
-        // same way — so the mark stands down on Escape without this hearing a keypress.
-        //
-        // `edge` deliberately does **not** stand down here as well, though the belt and braces
-        // would be one line: the library clears its drop-target hierarchy *before* it publishes
-        // the end of a drag, on the cancel path as much as on the drop, so the target's own
-        // `onDragLeave` has already run by the time this fires. A second clear here would be a
-        // line no test could ever reach — and an unreachable safety net is a claim about the
-        // library that nothing checks.
-        onDrop: () => setArmed(false),
-      }),
-    [scope],
-  );
-
   useEffect(() => {
     const element = ref.current;
     if (!element) return;
+
+    /** The payload this target may act on, or `null` for anything it is blind to. */
+    const read = (source: { data: Record<string, unknown> } | null | undefined) =>
+      source ? readFolderDrag(source.data, scope) : null;
+    /** "Could this folder land here at all?" — the question `armed` and `accept` both ask. */
+    const somehow = (drag: FolderDrag) =>
+      FOLDER_EDGES.some((at) => latest.current.canDrop(drag, at));
     /** The landing the pointer is currently asking for, or `null` if this target refuses it. */
-    const landing = (drag: FolderDrag, input: PointerAt): FolderEdge | null => {
-      const at = folderEdge(
-        element.getBoundingClientRect(),
-        { x: input.clientX, y: input.clientY },
-        axis,
-      );
-      return latest.current.canDrop(drag, at) ? at : null;
+    const landing = (drag: FolderDrag, at: PointerAt): FolderEdge | null => {
+      const which = folderEdge(element.getBoundingClientRect(), at, axis);
+      return latest.current.canDrop(drag, which) ? which : null;
     };
-    const track = ({
-      source,
-      location,
-    }: {
-      source: { data: Record<string, unknown> };
-      location: { current: { input: PointerAt } };
-    }) => {
-      const drag = readFolderDrag(source.data, scope);
-      setEdge(drag === null ? null : landing(drag, location.current.input));
-    };
-    return dropTargetForElements({
-      element,
-      canDrop: ({ source }) => {
-        const drag = readFolderDrag(source.data, scope);
-        return drag !== null && FOLDER_EDGES.some((at) => latest.current.canDrop(drag, at));
+
+    const droppable = new Droppable(
+      {
+        id: dndId("folder-target"),
+        element,
+        // `register: false` and a registration of our own — see {@link registerNow}.
+        register: false,
+        accept: (source) => {
+          const drag = read(source);
+          return drag !== null && somehow(drag);
+        },
       },
-      onDragEnter: track,
-      onDrag: track,
-      onDragLeave: () => setEdge(null),
-      onDrop: ({ source, location }) => {
+      dndManager,
+    );
+    registerNow(droppable);
+
+    const track = (operation: DragOperation) => {
+      const drag = read(operation.source);
+      if (drag === null || operation.target !== droppable) {
         setEdge(null);
-        const drag = readFolderDrag(source.data, scope);
+        return;
+      }
+      setEdge(landing(drag, operation.position.current));
+    };
+
+    const off = [
+      dndManager.monitor.addEventListener("dragstart", ({ operation }) => {
+        const drag = read(operation.source);
+        setArmed(drag !== null && somehow(drag));
+      }),
+      dndManager.monitor.addEventListener("dragmove", ({ operation }) => track(operation)),
+      dndManager.monitor.addEventListener("dragover", ({ operation }) => track(operation)),
+      // Fires for a cancelled drag as well as a completed one — the library ends both the same
+      // way — so both marks stand down on Escape without this hearing a keypress.
+      dndManager.monitor.addEventListener("dragend", ({ operation, canceled }) => {
+        setArmed(false);
+        setEdge(null);
+        if (canceled || operation.target !== droppable) return;
+        const drag = read(operation.source);
         if (drag === null) return;
-        // Measured from the drop's own input rather than read out of state: `setEdge` is a
-        // render behind, and where the pointer was when the reader let go is the only honest
-        // answer to where this lands.
-        const at = landing(drag, location.current.input);
+        const at = landing(drag, operation.position.current);
         if (at !== null) latest.current.onDrop(drag, at);
-      },
-    });
+      }),
+    ];
+
+    return () => {
+      for (const stop of off) stop();
+      droppable.destroy();
+    };
   }, [ref, scope, axis]);
 
   return { armed, edge };

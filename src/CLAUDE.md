@@ -762,7 +762,14 @@ Full detail and every measurement: [docs/reference/motion.md](../docs/reference/
   Both append a `<style>` element to `document.head`, which `style-src 'self'` blocks — and
   **the failure is silent**: `style.sheet` comes back null, popLayout simply does nothing and
   siblings jump. `MotionConfig nonce` is not an escape. `mode="sync"` and `"wait"` are fine.
-  **`devCsp` has `style-src 'self' 'unsafe-inline'` and the shipped `csp` does not**, so dev,
+  **There is no CSP in `tauri dev` at all — `devCsp` is not what makes dev permissive.**
+  Measured 2026-08-28: Vite's dev server sends no `Content-Security-Policy` header and the
+  HTML carries no CSP `meta`, because with a `devUrl` the webview loads straight from Vite
+  and Tauri is never in the response path. Setting `devCsp` to the shipped `style-src 'self'`
+  and rebuilding changes nothing: a runtime `<style>` still resolves with a live `sheet`.
+  **So editing `devCsp` is not a way to test the shipped policy** — only `tauri build` is; a
+  `--debug --no-bundle` binary serves from `tauri.localhost` and does enforce it. The
+  practical conclusion is the one this file already drew, and only the mechanism differs: dev,
   Storybook and jsdom are all green on this and only the packaged exe breaks. A source sweep in
   `src/lib/tokens.test.ts` is the only thing that catches it.
 - **`<MotionConfig reducedMotion="user">` is mounted once, in `App.tsx`** — not `main.tsx`,

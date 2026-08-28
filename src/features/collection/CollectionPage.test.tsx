@@ -22,7 +22,7 @@ import type {
 import { MARKETPLACES } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
 import { MARKETPLACE_KEY } from "@/lib/useMarketplace";
-import { startDrag } from "@/test-drag";
+import { startDrag, startPointerDrag } from "@/test-drag";
 import { openDropdown, pickOption } from "@/test-dropdown";
 import { readCollectionTileDrag } from "./collectionDrag";
 
@@ -401,33 +401,45 @@ const cardSources = (container: HTMLElement): HTMLElement[] =>
 /**
  * A folder card by name, and the inner box its **folder** drop target is registered on.
  *
- * Two boxes rather than one because the drag library keeps a single element drop target per
- * element and the copy drag already owns the `<li>` — `CollectionFolderCard` carries the whole
- * reason. A drag aimed at the card's face finds the inner one by walking up, exactly as a pointer
- * does, which is why {@link folderFace} is what these tests drop on.
+ * Two boxes rather than one because the copy drag already owns the `<li>` and pragmatic-dnd keeps
+ * a single element drop target per element — `CollectionFolderCard` carries the whole reason, and
+ * it survives the folder drag moving to `@dnd-kit/dom`, because the two libraries must not be put
+ * on one element either. {@link folderSlot} is the inner box, and it is what a folder drag is
+ * measured against and aimed at.
  */
 const folderCard = (name: string): HTMLElement =>
   screen.getByRole("button", { name: new RegExp(`^${name} folder`) }).closest("li")!;
-const folderFace = (name: string): HTMLElement =>
-  screen.getByRole("button", { name: new RegExp(`^${name} folder`) });
 const folderSlot = (name: string): HTMLElement =>
   folderCard(name).firstElementChild as HTMLElement;
 
 /**
- * Three boxes, each placed so that the one coordinate `test-drag` sends — `clientX` 8 — falls in a
- * different zone of a folder card laid out **horizontally**.
+ * One box and three landings, because dnd-kit hit-tests by **coordinate** and jsdom measures every
+ * rectangle as zero.
  *
  * jsdom has no layout engine, so every real `getBoundingClientRect` is four zeroes and
- * `folderEdge` answers `inside` for all of them: an edge-dependent test has to state the box.
+ * `folderEdge` answers `inside` for all of them: an edge-dependent test has to state the box, and
+ * a pointer-driven library needs the pointer to be somewhere real as well. The card is read along
+ * the **horizontal** axis, since the wall lays its drawers out as a grid; `EDGE_ZONE` is a
+ * quarter, so a tenth in from either end is unambiguously beside and the middle is unambiguously
+ * inside.
  */
-const AT_START = new DOMRect(0, 0, 100, 100);
-const AT_MIDDLE = new DOMRect(-50, -50, 100, 100);
-const AT_END = new DOMRect(-85, -85, 100, 100);
+const SOURCE_BOX = new DOMRect(0, 0, 100, 100);
+const CARD_BOX = new DOMRect(400, 400, 100, 100);
+const AT_START = { x: 0.1 };
+const AT_MIDDLE = { x: 0.5 };
+const AT_END = { x: 0.9 };
 
-/** Slide a folder card under the stationary pointer. */
-const stand = (name: string, at: DOMRect) => {
-  folderSlot(name).getBoundingClientRect = () => at;
+/** Give a folder card's drop target somewhere to be. */
+const stand = (name: string) => {
+  folderSlot(name).getBoundingClientRect = () => CARD_BOX;
 };
+
+/** Pick a folder card up. dnd-kit reads the press coordinate off the source's own box, so a
+ *  source with no box presses the origin — and the drag then starts nowhere near the wall. */
+async function holdCard(name: string) {
+  folderCard(name).getBoundingClientRect = () => SOURCE_BOX;
+  return startPointerDrag(folderCard(name));
+}
 
 /**
  * jsdom lays nothing out, so the virtualiser measures a scroller of zero height and renders
@@ -3227,10 +3239,10 @@ describe("rearranging the collection's cabinet", () => {
   it("files a drawer inside the one it is dropped on the middle of", async () => {
     wrap(<CollectionPage />);
     await wall();
-    stand("Trade binder", AT_MIDDLE);
+    stand("Trade binder");
 
-    const held = await startDrag(folderCard("Sealed"));
-    await held.over(folderFace("Trade binder"));
+    const held = await holdCard("Sealed");
+    await held.over(folderSlot("Trade binder"), AT_MIDDLE);
     await held.drop();
 
     // `Trade binder`'s own children, then the folder that just arrived: `inside` says which drawer
@@ -3242,10 +3254,10 @@ describe("rearranging the collection's cabinet", () => {
   it("places a drawer before the one it is dropped on the leading edge of", async () => {
     wrap(<CollectionPage />);
     await wall();
-    stand("Trade binder", AT_START);
+    stand("Trade binder");
 
-    const held = await startDrag(folderCard("Sealed"));
-    await held.over(folderFace("Trade binder"));
+    const held = await holdCard("Sealed");
+    await held.over(folderSlot("Trade binder"), AT_START);
     await held.drop();
 
     // The root level, re-ordered — `null` is the destination parent and a real place rather than
@@ -3265,10 +3277,10 @@ describe("rearranging the collection's cabinet", () => {
   it("draws no line and writes nothing for a drop that would change nothing", async () => {
     wrap(<CollectionPage />);
     await wall();
-    stand("Trade binder", AT_END);
+    stand("Trade binder");
 
-    const held = await startDrag(folderCard("Sealed"));
-    await held.over(folderFace("Trade binder"));
+    const held = await holdCard("Sealed");
+    await held.over(folderSlot("Trade binder"), AT_END);
     expect(folderCard("Trade binder").querySelector("[data-folder-drop-line]")).toBeNull();
 
     await held.drop();
@@ -3291,10 +3303,10 @@ describe("rearranging the collection's cabinet", () => {
     wrap(<CollectionPage />);
     await wall();
     await screen.findByRole("button", { name: /^Odds and ends folder/ });
-    stand("Odds and ends", AT_END);
+    stand("Odds and ends");
 
-    const held = await startDrag(folderCard("Sealed"));
-    await held.over(folderFace("Odds and ends"));
+    const held = await holdCard("Sealed");
+    await held.over(folderSlot("Odds and ends"), AT_END);
     await held.drop();
 
     await waitFor(() => expect(collectionFolderReorder).toHaveBeenCalledWith(null, [3, 5, 4]));
@@ -3307,9 +3319,11 @@ describe("rearranging the collection's cabinet", () => {
     await wall();
 
     for (const at of [AT_START, AT_MIDDLE, AT_END]) {
-      stand("Sealed", at);
-      const held = await startDrag(folderCard("Sealed"));
-      await held.over(folderFace("Sealed"));
+      // The card is both ends of this gesture, so it keeps the box it was picked up from rather
+      // than being moved out from under the pointer: the drop target measured is the inner slot.
+      folderSlot("Sealed").getBoundingClientRect = () => SOURCE_BOX;
+      const held = await holdCard("Sealed");
+      await held.over(folderSlot("Sealed"), at);
       await held.drop();
     }
     expect(collectionFolderReorder).not.toHaveBeenCalled();
@@ -3331,6 +3345,7 @@ describe("rearranging the collection's cabinet", () => {
 
     const source = document.createElement("div");
     source.textContent = "the deck group";
+    source.getBoundingClientRect = () => SOURCE_BOX;
     container.append(source);
     const stop = folderDraggable({
       element: source,
@@ -3342,12 +3357,12 @@ describe("rearranging the collection's cabinet", () => {
       }),
     });
 
-    stand("Trade binder", AT_MIDDLE);
-    const held = await startDrag(source);
+    stand("Trade binder");
+    const held = await startPointerDrag(source);
     // Not even armed: no drawer on the wall would take it at any landing.
     expect(folderCard("Trade binder").classList.contains("ring-2")).toBe(false);
 
-    await held.over(folderFace("Trade binder"));
+    await held.over(folderSlot("Trade binder"), AT_MIDDLE);
     await held.drop();
     stop();
     source.remove();
@@ -3365,7 +3380,7 @@ describe("rearranging the collection's cabinet", () => {
       .closest("li") as HTMLElement;
     expect(group.getAttribute("draggable")).toBeNull();
 
-    const held = await startDrag(folderCard("Sealed"));
+    const held = await holdCard("Sealed");
     expect(group.classList.contains("ring-2")).toBe(false);
     await held.cancel();
   });
@@ -3391,6 +3406,7 @@ describe("rearranging the collection's cabinet", () => {
 
     const source = document.createElement("div");
     source.textContent = "the parent";
+    source.getBoundingClientRect = () => SOURCE_BOX;
     container.append(source);
     const stop = folderDraggable({
       element: source,
@@ -3406,10 +3422,10 @@ describe("rearranging the collection's cabinet", () => {
     // under its own child, and `before`/`after Foils` file it into `Trade binder`, which is
     // itself.
     for (const at of [AT_START, AT_MIDDLE, AT_END]) {
-      stand("Foils", at);
-      const held = await startDrag(source);
+      stand("Foils");
+      const held = await startPointerDrag(source);
       expect(folderCard("Foils").classList.contains("ring-2")).toBe(false);
-      await held.over(folderFace("Foils"));
+      await held.over(folderSlot("Foils"), at);
       await held.drop();
     }
     stop();
