@@ -79,7 +79,6 @@ use rusqlite::{params, Connection, OptionalExtension, Params, Row, Statement};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
-use std::path::Path;
 use std::sync::Arc;
 
 /// The largest decklist file this app will read, in bytes.
@@ -1164,27 +1163,59 @@ pub async fn deck_import_commit(
 ///
 /// Two decisions, and each is a thing that would be wrong the other way:
 ///
-/// * **The size is read from the metadata, not from what was read.** [`MAX_IMPORT_BYTES`] is a
-///   fence rather than a truncation — a 200 MB file the reader pointed at by mistake is refused
-///   without ever being pulled into memory, which is the only version of the cap that costs
-///   nothing when it fires. It is the same constant the paste path uses, so the two cannot
-///   disagree about how long a decklist may be.
+/// * **The size is bounded by how much is read, not by `metadata()`.** [`MAX_IMPORT_BYTES`] is a
+///   fence rather than a truncation — a 200 MB file the reader pointed at by mistake costs one
+///   megabyte to refuse rather than two hundred. It was a `metadata()` check until the Android
+///   target arrived: a `content://` URI has no size to stat, so the bound moved into the read
+///   itself. It is the same constant the paste path uses, so the two cannot disagree about how
+///   long a decklist may be.
 /// * **Lossy UTF-8 deliberately**: a Windows-1252 apostrophe in one card name should cost that
 ///   one name, not the other hundred lines. `from_utf8_lossy` turns the bad byte into `U+FFFD`,
 ///   which no card name bears, so the line it damages comes back as an unmatched name in the
 ///   preview, quoted — a thing the reader can act on — while every other line resolves. A
 ///   `from_utf8` here would answer `Err` for the whole file and tell them nothing about which
 ///   line it was.
-fn read_import_file(path: &Path) -> Result<String, String> {
-    let meta =
-        std::fs::metadata(path).map_err(|e| format!("That file could not be opened — {e}"))?;
-    if meta.len() > MAX_IMPORT_BYTES {
+fn read_import_file(app: &tauri::AppHandle, picked: &str) -> Result<String, String> {
+    crate::picked::open_read(app, picked)
+        .map_err(open_failed)
+        .and_then(read_bounded)
+}
+
+/// What a source this app cannot open says, keeping the OS's own reason.
+///
+/// A free function rather than an inline `format!` so the tests can assert the sentence without
+/// an `AppHandle` — `not found` and `access denied` are different things for the reader to do
+/// something about, and dropping the tail would make them the same message.
+fn open_failed(e: String) -> String {
+    format!("That file could not be opened — {e}")
+}
+
+/// The cap and the lossy decode, over anything readable.
+///
+/// Separate from the open because that is where the platforms differ and this is where they do
+/// not: the bytes behind a `content://` descriptor and the bytes behind a path are read the
+/// same way, and the tests are about the bytes.
+fn read_bounded(mut reader: impl std::io::Read) -> Result<String, String> {
+    use std::io::Read as _;
+
+    // **A bounded read rather than a `metadata()` check**, and the change is Android's: a
+    // `content://` URI names a row in a ContentProvider and has no size to stat, so the ceiling
+    // has to be enforced by how much is read. `take(MAX + 1)` then a length test is the whole
+    // of it — one byte over the limit is read and refused, and nothing larger is ever in
+    // memory, which keeps what the fence was for: a 200 MB file the reader pointed at by
+    // mistake costs a megabyte, not two hundred.
+    let mut bytes = Vec::new();
+    reader
+        .by_ref()
+        .take(MAX_IMPORT_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("That file could not be read — {e}"))?;
+    if bytes.len() as u64 > MAX_IMPORT_BYTES {
         return Err(format!(
-            "That file is {} MB. A decklist is text; this reads at most 1 MB.",
-            meta.len() / 1_000_000
+            "That file is over {} MB. A decklist is text; this reads at most 1 MB.",
+            MAX_IMPORT_BYTES / 1_000_000
         ));
     }
-    let bytes = std::fs::read(path).map_err(|e| format!("That file could not be read — {e}"))?;
     Ok(String::from_utf8_lossy(&bytes).into_owned())
 }
 
@@ -1199,8 +1230,8 @@ fn read_import_file(path: &Path) -> Result<String, String> {
 /// On the blocking pool like its two siblings, because a file on a network share or a slow
 /// stick is a disk wait, and the async runtime is not where a disk wait belongs.
 #[tauri::command]
-pub async fn import_read_file(path: String) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || read_import_file(Path::new(&path)))
+pub async fn import_read_file(app: tauri::AppHandle, path: String) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || read_import_file(&app, &path))
         .await
         .map_err(|e| format!("the decklist file could not be read: {e}"))?
 }
@@ -2557,15 +2588,28 @@ mod tests {
         let _ = std::fs::remove_file(path);
     }
 
-    /// The cap is a **fence**, and the half worth pinning is that it is read off the metadata.
+    /// [`read_import_file`] with the `AppHandle` taken out, which is the whole of the
+    /// difference: that argument exists so Android can hand a `content://` URI to the
+    /// ContentResolver, and on this machine the open falls through to the same
+    /// `std::fs::File::open` it always did. `tauri::test::mock_app` is not available here —
+    /// this crate enables no `tauri::test` feature — and every assertion below is about the
+    /// bytes or the sentence rather than about the handle.
+    fn read_file(path: &std::path::Path) -> Result<String, String> {
+        crate::picked::open_path(path.to_str().unwrap())
+            .map_err(open_failed)
+            .and_then(read_bounded)
+    }
+
+    /// The cap is a **fence**, and the half worth pinning is that it costs a megabyte rather
+    /// than the whole file.
     ///
-    /// The refusal quotes a size, which is only possible before the bytes are in memory:
-    /// `read_import_file` calls `metadata` and returns, and never reaches `fs::read`. That
-    /// ordering is what makes the cap cost nothing when it fires — the alternative, reading
-    /// the file and measuring the `String`, pulls a 200 MB mistake into memory to tell the
-    /// reader it was too big.
+    /// It was read off `metadata()` until the Android target arrived, and a `content://` URI
+    /// has no size to stat — so the bound is now `take(MAX + 1)` and a length test. What that
+    /// buys is unchanged: a 200 MB file the reader pointed at by mistake never reaches memory,
+    /// because the reader stops one byte past the cap. The refusal no longer quotes the file's
+    /// real size, which is exactly what a ContentProvider cannot tell it.
     ///
-    /// What this test can see is the message and the fact that no text came back; the ordering
+    /// What this test can see is the message and the fact that no text came back; the bound
     /// itself is structural. Note the fixture is one byte over [`MAX_IMPORT_BYTES`] — the cap is
     /// `>`, so a file of exactly the cap is allowed and this file is the smallest one that is
     /// not.
@@ -2574,12 +2618,12 @@ mod tests {
         let oversized = vec![b'x'; usize::try_from(MAX_IMPORT_BYTES).unwrap() + 1];
         let path = scratch("oversized", &oversized);
 
-        let refused = read_import_file(&path).unwrap_err();
+        let refused = read_file(&path).unwrap_err();
 
         assert!(refused.contains("at most 1 MB"), "{refused}");
         assert!(
-            refused.contains("That file is"),
-            "it quotes the size, which is only knowable from the metadata: {refused}"
+            refused.contains("That file is over"),
+            "it says the cap was passed, which is all a bounded read can know: {refused}"
         );
         gone(&path);
     }
@@ -2591,7 +2635,7 @@ mod tests {
         let full = vec![b'x'; usize::try_from(MAX_IMPORT_BYTES).unwrap()];
         let path = scratch("at-the-cap", &full);
 
-        let text = read_import_file(&path).expect("exactly the cap is under it");
+        let text = read_file(&path).expect("exactly the cap is under it");
 
         assert_eq!(u64::try_from(text.len()).unwrap(), MAX_IMPORT_BYTES);
         gone(&path);
@@ -2607,7 +2651,7 @@ mod tests {
         let path = std::env::temp_dir().join("mtgtest-import-no-such-decklist.txt");
         let _ = std::fs::remove_file(&path);
 
-        let refused = read_import_file(&path).unwrap_err();
+        let refused = read_file(&path).unwrap_err();
 
         assert!(
             refused.starts_with("That file could not be opened"),
@@ -2638,7 +2682,7 @@ mod tests {
         bytes.extend_from_slice(b"1 Yawgmoth\x92s Will\n");
         let path = scratch("cp1252", &bytes);
 
-        let text = read_import_file(&path).expect("one bad byte is not a failed import");
+        let text = read_file(&path).expect("one bad byte is not a failed import");
 
         assert_eq!(text.lines().count(), 105, "no line was lost");
         assert_eq!(

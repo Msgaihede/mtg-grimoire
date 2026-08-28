@@ -28,6 +28,7 @@ pub mod marketplace_feed;
 pub mod mirror;
 pub mod nav;
 pub mod paths;
+pub mod picked;
 pub mod reconcile;
 pub mod reset;
 pub mod schema;
@@ -277,6 +278,15 @@ pub fn run() {
         // dialog. `clipboard-manager:allow-write-text` only — nothing here reads the
         // clipboard, so `:default`'s read half is deliberately not granted.
         .plugin(tauri_plugin_clipboard_manager::init());
+
+    // Android only, and it is here for `picked.rs` alone — see that module. Registering it is
+    // what makes `app.try_state::<tauri_plugin_fs::Fs<_>>()` resolvable and what wires the
+    // Kotlin `FsPlugin` into the activity, so a `content://` URI the document picker answered
+    // can be turned into a file descriptor. **It grants the webview nothing**:
+    // `capabilities/mobile.json` has no `fs:` entry, so every one of this plugin's own commands
+    // is denied at the ACL and the page's filesystem access is unchanged — none.
+    #[cfg(target_os = "android")]
+    let builder = builder.plugin(tauri_plugin_fs::init());
 
     // Windows 11 Snap Layouts for the app's own maximize button — and therefore desktop only,
     // since Android draws no caption at all and `capabilities/mobile.json` grants neither of
