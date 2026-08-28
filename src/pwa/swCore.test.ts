@@ -99,6 +99,27 @@ describe("what the worker must never contain", () => {
   });
 
   /**
+   * **Every Cache Storage lookup passes `ignoreVary`, and a bare one is an offline blank page.**
+   *
+   * `Cache.match` honours the stored response's `Vary` by comparing the header it names on the
+   * *stored request* against the incoming one. Vite's preview and dev servers answer `/assets/*`
+   * with `vary: Origin`; `cache.addAll` stores those with requests that carry **no `Origin` at
+   * all**, and the page's own module-script request — Vite emits `<script type="module"
+   * crossorigin>` — carries one. Every `/assets/` entry therefore misses.
+   *
+   * Measured 2026-08-28 in headless Edge against a production build: with the server up the miss
+   * is invisible, because the `fetch` fallback is answered by the HTTP cache; with the server
+   * stopped the navigation came from Cache Storage and every subresource failed after ~2.3 s,
+   * leaving `#root` at `childElementCount: 0`. Nothing in this suite could see it, which is why
+   * the guard is a source sweep and not a unit test.
+   */
+  it("never looks in a cache without ignoring Vary", () => {
+    const lookups = SW_SOURCE.match(/(?:caches|cache)\.match\([^)]*\)/g) ?? [];
+    expect(lookups.length).toBeGreaterThan(0);
+    for (const lookup of lookups) expect(lookup).toContain("ignoreVary: true");
+  });
+
+  /**
    * A worker that skips waiting in its own `install` handler activates the moment it
    * downloads, which takes the reader's build away mid-session — the exact thing spec §5.4
    * says must not happen. It may only be called from the message handler, where a press put it.

@@ -122,6 +122,7 @@ number to compare against.
 | [in-app-updates.md](docs/reference/in-app-updates.md) | Why the portable swap is hand-written |
 | [web-target.md](docs/reference/web-target.md) | The browser build — the module map, the single Worker and what it costs, the measured browse and facet, and **why two wasm instances in one Worker read as an out-of-memory** |
 | [android-target.md](docs/reference/android-target.md) | The Android build — the toolchain and what it cost, what is gated and what merely never runs, the `content://` file seam, and every figure taken on the phone |
+| [pwa-shell.md](docs/reference/pwa-shell.md) | The installable web shell — the manifest, the two caches, the update flow driven end to end with both build ids, why the service worker attaches no isolation headers, and **why one missing `ignoreVary` made the offline shell a blank page** |
 | [decks-storage.md](docs/reference/decks-storage.md) | Deck tables, the card commands, how owned/missing is answered, the audit log, the decklist import |
 | [commander-brackets.md](docs/reference/commander-brackets.md) | The bracket table as it stands, why the estimate is a floor and never 5, what the four signals can and cannot see, and Commander Spellbook's combo feed measured |
 | [import-export.md](docs/reference/import-export.md) | The seven formats, the field registry, the fold rule, the four import destinations |

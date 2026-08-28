@@ -100,8 +100,16 @@ describe("the storage row", () => {
  */
 describe("the image cache row", () => {
   it("says nothing has been cached rather than printing a zero", () => {
-    render(<WebStoragePanel storage={view()} />);
+    const { unmount } = render(<WebStoragePanel storage={view()} />);
     expect(screen.getByText(/Nothing has been cached yet/)).toBeInTheDocument();
+    unmount();
+
+    // An empty ledger and an unread one read the same, which the live pass is what corrected:
+    // a fresh browser said "0.0 MB cached. The oldest are removed first when the limit is
+    // reached", a rule about an eviction that cannot happen to nothing.
+    render(<WebStoragePanel storage={view({ imageBytes: 0 })} />);
+    expect(screen.getByText(/Nothing has been cached yet/)).toBeInTheDocument();
+    expect(screen.queryByText(/0\.0 MB cached/)).not.toBeInTheDocument();
   });
 
   it("prints what the ledger says is there", () => {

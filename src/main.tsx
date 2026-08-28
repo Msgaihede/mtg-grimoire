@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import { captureInstallPrompt } from "./pwa/install";
+import { PwaShell } from "./pwa/PwaShell";
 import { WebBoot } from "./web/WebBoot";
 import "./index.css";
 // Mana and set glyphs, as bundled icon fonts — no CDN, and the CSP has no remote source.
@@ -28,6 +29,12 @@ ReactDOM.createRoot(root).render(
         a Tauri bundle carries no `WebBoot` and no Worker. The web build cannot render `App`
         directly because its database has to be opened first, and opening it can answer
         "another tab already has it". */}
-    {__CORE__ === "web" ? <WebBoot /> : <App />}
+    {/* **The service worker's registration, around whichever root this build renders.** It
+        is here rather than inside `App` because on the web target `App` is mounted only once
+        a corpus exists - so a hook in there does not run until the reader has downloaded
+        75 MB, which is the shell's whole purpose deferred behind the one download it exists
+        to survive. Measured in a real browser: a first visit had zero registrations while
+        the page showed "Build the card database". Inert on desktop. */}
+    <PwaShell>{__CORE__ === "web" ? <WebBoot /> : <App />}</PwaShell>
   </React.StrictMode>,
 );

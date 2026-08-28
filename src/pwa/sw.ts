@@ -40,6 +40,36 @@ const SHELL = shellCacheName(__BUILD_ID__);
 /** The document every navigation is answered with. One entry, so the app is one page. */
 const SHELL_DOCUMENT = "/index.html";
 
+/**
+ * Every shell lookup, and the reason none of them may be a bare Cache Storage lookup.
+ *
+ * (The sentence above deliberately does not spell that call: `swCore.test.ts` sweeps this
+ * file's text for every lookup and demands `ignoreVary` on each, and prose is swept as
+ * eagerly as code.)
+ *
+ * **`ignoreVary` is load-bearing, and it was found by driving a real browser.** `Cache.match`
+ * honours the stored response's `Vary`, comparing the header it names on the *stored request*
+ * against the incoming one. The dev/preview server answers `/assets/*` with
+ * `access-control-allow-origin` and **`vary: Origin`**; the precache stores those entries
+ * through `cache.addAll`, whose requests are `mode: "no-cors"`, `credentials: "omit"` and carry
+ * **no `Origin` header at all**, while the page's own module-script request — Vite emits
+ * `<script type="module" crossorigin>` — carries `Origin: <this origin>`. The two disagree, so
+ * every single `/assets/` entry **misses**.
+ *
+ * Measured 2026-08-28, headless Edge 151 against a production build: with the server up the
+ * miss is invisible (the `fetch` fallback is answered by the HTTP cache — `deliveryType:
+ * "cache"` rather than `"cache-storage"`), and with the server stopped the navigation is served
+ * from Cache Storage and every subresource fails after ~2.3 s, leaving `#root` with
+ * `childElementCount: 0` — an offline shell that is a blank page.
+ *
+ * Ignoring `Vary` is right rather than expedient here: this cache holds one build's own static
+ * files, keyed by content-hashed path, and there is no second representation of any of them for
+ * a `Vary` to be choosing between.
+ */
+function fromShell(request: Request | string): Promise<Response | undefined> {
+  return caches.match(request, { cacheName: SHELL, ignoreVary: true });
+}
+
 sw.addEventListener("install", (event) => {
   event.waitUntil(
     (async () => {
@@ -73,7 +103,7 @@ sw.addEventListener("fetch", (event) => {
   if (route === "navigation") {
     event.respondWith(
       (async () => {
-        const cached = await caches.match(SHELL_DOCUMENT, { cacheName: SHELL });
+        const cached = await fromShell(SHELL_DOCUMENT);
         return cached ?? fetch(event.request);
       })(),
     );
@@ -83,7 +113,7 @@ sw.addEventListener("fetch", (event) => {
   if (route === "shell") {
     event.respondWith(
       (async () => {
-        const cached = await caches.match(event.request, { cacheName: SHELL });
+        const cached = await fromShell(event.request);
         return cached ?? fetch(event.request);
       })(),
     );
@@ -95,7 +125,10 @@ sw.addEventListener("fetch", (event) => {
 
 /** Read the ledger out of the image cache. Every rule about it is in `imageLedger.ts`. */
 async function readLedger(cache: Cache): Promise<Ledger> {
-  const stored = await cache.match(LEDGER_KEY);
+  // `ignoreVary: true` like every other lookup in this file. The ledger is written by this
+  // worker with no `Vary` at all, so it changes nothing here — it is uniform because the
+  // sweep that guards the two that DO need it is absolute rather than case-by-case.
+  const stored = await cache.match(LEDGER_KEY, { ignoreVary: true });
   return parseLedger(stored ? await stored.text() : null);
 }
 
@@ -121,7 +154,11 @@ async function sweep(cache: Cache, ledger: Ledger): Promise<Ledger> {
  */
 async function image(request: Request): Promise<Response> {
   const cache = await caches.open(IMAGE_CACHE);
-  const hit = await cache.match(request);
+  // `ignoreVary` for `fromShell`'s reason, one layer down: card art is served with CORS
+  // headers too, and a stored request that carried no `Origin` would never match one that
+  // does. A miss here is a re-download rather than a blank page, which is exactly why it
+  // would go unnoticed.
+  const hit = await cache.match(request, { ignoreVary: true });
   if (hit) {
     await writeLedger(cache, touch(await readLedger(cache), request.url, Date.now()));
     return hit;

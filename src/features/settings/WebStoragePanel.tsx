@@ -197,9 +197,12 @@ export function WebStoragePanel({ storage }: { storage: WebStorageView }): JSX.E
             Card pictures kept on this device
           </label>
           <p className="text-sm text-dim">
-            {imageBytes === null
-              ? "Nothing has been cached yet."
-              : `${formatBytes(imageBytes)} cached. The oldest are removed first when the limit is reached.`}
+            {/* Zero reads the same way as unknown, and that is what the live pass corrected:
+                a fresh browser answered "0.0 MB cached. The oldest are removed first…", which
+                is a rule about an eviction that cannot happen yet. */}
+            {imageBytes
+              ? `${formatBytes(imageBytes)} cached. The oldest are removed first when the limit is reached.`
+              : "Nothing has been cached yet."}
           </p>
         </div>
         <Dropdown
