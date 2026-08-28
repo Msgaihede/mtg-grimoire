@@ -31,6 +31,10 @@ pub mod sorting;
 /// files — so there is nothing here for the web target to call.
 pub mod split;
 pub mod sync;
+/// **Every module in here compiles for wasm, and that is the point rather than a bonus.**
+/// The conflict rules are one implementation on three targets (spec §2), so a layer that
+/// only built on the desktop would be a second copy of them waiting to be written.
+pub mod sync_engine;
 pub mod web;
 
 // ── Desktop and Android ──────────────────────────────────────────────────────────
