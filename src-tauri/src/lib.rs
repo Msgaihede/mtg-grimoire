@@ -38,6 +38,11 @@ pub mod sync;
 pub mod tags;
 pub mod transfer;
 pub mod update;
+// Desktop only. `open_sized_to_monitor` calls `WebviewWindow::center()`, which tauri
+// declares `#[cfg(desktop)]` (tauri/src/window/mod.rs:1924) — so this module is not merely
+// useless on a phone, it does not compile there. Android's window is the activity and the
+// OS sizes it.
+#[cfg(desktop)]
 pub mod window;
 pub mod wishlist;
 pub mod wishlist_folders;
@@ -202,6 +207,10 @@ fn update_api_base() -> String {
 ///
 /// Without this, double-clicking the exe a second time looks like nothing happened —
 /// the guard is silent by design, so the app has to answer with the window itself.
+/// Desktop only: it is called from the single-instance callback, which does not exist on
+/// Android — and `WebviewWindow::unminimize` is itself `#[cfg(desktop)]` in tauri 2.11.5, so
+/// this function does not merely go unused on a phone, it does not compile there.
+#[cfg(desktop)]
 fn focus_existing_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
         let _ = window.unminimize();
@@ -218,21 +227,43 @@ pub fn run() {
     // second instance is given exit code 0, no window and no stderr, so a successor that
     // starts too early simply vanishes — and the user is left looking at the old version
     // with nothing to say why. See `update::await_predecessor`.
-    let exe = std::env::current_exe().unwrap_or_default();
-    let args: Vec<String> = std::env::args().collect();
-    if args.iter().any(|a| a == update::AWAIT_FLAG) {
-        update::await_predecessor(&exe, update::predecessor_pid(args));
+    //
+    // **Desktop only, and this one is "must not run" rather than "cannot compile"** — the
+    // block builds fine for Android. There is no portable exe on a phone to swap, no
+    // single-instance lock to wait on, and `current_exe()` there names the app's own
+    // native-library directory. The flag is one only a self-replacing build ever passes
+    // itself, so on Android this is dead weight with a `current_exe()` syscall attached.
+    #[cfg(desktop)]
+    {
+        let exe = std::env::current_exe().unwrap_or_default();
+        let args: Vec<String> = std::env::args().collect();
+        if args.iter().any(|a| a == update::AWAIT_FLAG) {
+            update::await_predecessor(&exe, update::predecessor_pid(args));
+        }
     }
 
-    let builder = tauri::Builder::default()
-        // First, before every other plugin: this one has to decide whether the process
-        // lives at all, and by the time another plugin has initialised, a second instance
-        // has already opened `mtg.db` and the image cache directory that the first one
-        // owns. Two processes sharing a WAL database is survivable; two sharing the temp
-        // `.gz` an ingest streams from is not.
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+    // First, before every other plugin: this one has to decide whether the process
+    // lives at all, and by the time another plugin has initialised, a second instance
+    // has already opened `mtg.db` and the image cache directory that the first one
+    // owns. Two processes sharing a WAL database is survivable; two sharing the temp
+    // `.gz` an ingest streams from is not.
+    //
+    // **On Android the crate does not exist.** `tauri-plugin-single-instance`'s `lib.rs`
+    // opens with `#![cfg(not(any(target_os = "android", target_os = "ios")))]`, so `init` is
+    // not a no-op there — it is an unresolved name and a hard compile error. Android needs
+    // none of it: the OS runs one task per application and there is no second process to
+    // refuse. Two `let` bindings rather than one attribute inside the chain, because an
+    // attribute on a mid-chain method call is not valid Rust — the same reason the MCP
+    // bridge below is bound separately.
+    #[cfg(desktop)]
+    let builder =
+        tauri::Builder::default().plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             focus_existing_window(app);
-        }))
+        }));
+    #[cfg(mobile)]
+    let builder = tauri::Builder::default();
+
+    let builder = builder
         .plugin(tauri_plugin_opener::init())
         // The system file picker: choosing a custom deck cover (`dialog:allow-open`) and
         // naming an export's destination (`dialog:allow-save`, `export_write_file` writes
@@ -245,26 +276,35 @@ pub fn run() {
         // Putting a decklist export on the clipboard, the other way out beside the save
         // dialog. `clipboard-manager:allow-write-text` only — nothing here reads the
         // clipboard, so `:default`'s read half is deliberately not granted.
-        .plugin(tauri_plugin_clipboard_manager::init())
-        // Windows 11 Snap Layouts for the app's own maximize button. `tauri.conf.json` sets
-        // `decorations: false`, so the flyout Windows raises over a native maximize button is
-        // gone — the OS asks its own frame `WM_NCHITTEST`, never a `<button>` in a webview.
-        // This parks a transparent child window over that button's rectangle and answers
-        // `HTMAXBUTTON`.
-        //
-        // **The id is the whole contract, and it fails silently on both sides.** A typo here
-        // or in `SNAP_BUTTON_ID` creates no overlay, raises no error and logs nothing: the
-        // button keeps working and Snap Layouts simply never appear, which is a regression no
-        // test and no launch can catch. `src/lib/window.ts` holds the frontend's copy and says
-        // the same thing.
-        //
-        // A no-op everywhere else — the crate's dummy implementation on non-Windows, and
-        // documented as inert on Windows 10, where the OS has no Snap Layouts to raise.
-        .plugin(
-            tauri_plugin_snap_layout::init()
-                .button_id("snap-maximize-button")
-                .build(),
-        );
+        .plugin(tauri_plugin_clipboard_manager::init());
+
+    // Windows 11 Snap Layouts for the app's own maximize button — and therefore desktop only,
+    // since Android draws no caption at all and `capabilities/mobile.json` grants neither of
+    // the two verbs. The crate itself compiles everywhere (a `#[cfg(not(windows))]` dummy that
+    // still registers both commands, which is what keeps `capabilities/` resolvable on the
+    // Linux CI leg), so this gate is about not *asking* for an overlay over a button that is
+    // not on screen.
+    //
+    // `tauri.conf.json` sets
+    // `decorations: false`, so the flyout Windows raises over a native maximize button is
+    // gone — the OS asks its own frame `WM_NCHITTEST`, never a `<button>` in a webview.
+    // This parks a transparent child window over that button's rectangle and answers
+    // `HTMAXBUTTON`.
+    //
+    // **The id is the whole contract, and it fails silently on both sides.** A typo here
+    // or in `SNAP_BUTTON_ID` creates no overlay, raises no error and logs nothing: the
+    // button keeps working and Snap Layouts simply never appear, which is a regression no
+    // test and no launch can catch. `src/lib/window.ts` holds the frontend's copy and says
+    // the same thing.
+    //
+    // A no-op everywhere else — the crate's dummy implementation on non-Windows, and
+    // documented as inert on Windows 10, where the OS has no Snap Layouts to raise.
+    #[cfg(desktop)]
+    let builder = builder.plugin(
+        tauri_plugin_snap_layout::init()
+            .button_id("snap-maximize-button")
+            .build(),
+    );
 
     // The MCP bridge, and the only reason the chain is split in two: this plugin exists in a
     // debug build and not in a release one, which `.plugin(…)` mid-chain cannot express.
@@ -460,6 +500,9 @@ pub fn run() {
             // window at all. It opens at the largest of 1920×1080 and 1280×720 that the
             // monitor's *work area* holds — a 1080p desk cannot hold a 1080-tall window once
             // Windows has taken its taskbar out of it. See `window.rs`.
+            // Android has no hidden-window step and no rungs to choose between — the
+            // activity is already on screen and the OS sizes it.
+            #[cfg(desktop)]
             window::open_sized_to_monitor(app.handle());
 
             // Printed as well as returned: a `Box<dyn Error>` out of `setup` reaches the
@@ -478,22 +521,41 @@ pub fn run() {
             // runs detached.
             index::lifecycle::spawn_build(&state);
 
-            // The plain-text mirror, in two halves that must stay in this order.
+            // The plain-text mirror, in two halves that must stay in this order. **Desktop
+            // only, and this is the decision rather than a limitation**: the mirror's whole
+            // point is a folder a reader opens in a text editor, syncs with Dropbox or greps,
+            // and on Android that directory is reachable mainly through a file-manager app and
+            // often not by other apps at all. `tauri-plugin-dialog`'s own manifest records
+            // Android support as "partial — Does not support folder picker", so the reader
+            // could not choose the root either.
             //
-            // First the hook, on `state.db` and **nowhere else**: that is the one connection
-            // every user-facing write in this crate goes through (`sync::with_write`), and
-            // `db_read` is opened read-only so it could never fire one. It is installed before
-            // the thread starts so that nothing written between here and the first pass can
-            // slip past unmarked — though the first pass is `Dirty::ALL` and would cover it
-            // anyway, which is what makes this ordering cheap insurance rather than a rule.
-            mirror::watch::install_hook(&db::lock_blocking(&state.db), state.mirror.clone());
+            // The module still *compiles* on Android — `AppState` carries
+            // `mirror::watch::{Mask, LastPass}` and six sites construct them — so what is
+            // gated is the hook and the thread, which is the whole of what makes the mirror
+            // do anything. `mirror_status` there answers a mirror that never runs.
+            #[cfg(desktop)]
+            {
+                // First the hook, on `state.db` and **nowhere else**: that is the one
+                // connection every user-facing write in this crate goes through
+                // (`sync::with_write`), and `db_read` is opened read-only so it could never
+                // fire one. It is installed before the thread starts so that nothing written
+                // between here and the first pass can slip past unmarked — though the first
+                // pass is `Dirty::ALL` and would cover it anyway, which is what makes this
+                // ordering cheap insurance rather than a rule.
+                //
+                // The guard is bound rather than left a temporary so it is released before
+                // `spawn`, which is the lifetime it had before the block existed.
+                let conn = db::lock_blocking(&state.db);
+                mirror::watch::install_hook(&conn, state.mirror.clone());
+                drop(conn);
 
-            // Then the thread. Detached and never fatal, exactly like the facet warm-up above:
-            // it runs one full pass now — the whole of what makes the folder correct after a
-            // crash — and then wakes two seconds after the reader stops editing. It reads
-            // through `db_read` and never takes the write connection, so no press it overlaps
-            // can be answered `db::BUSY` by it.
-            mirror::watch::spawn(state.clone());
+                // Then the thread. Detached and never fatal, exactly like the facet warm-up
+                // above: it runs one full pass now — the whole of what makes the folder
+                // correct after a crash — and then wakes two seconds after the reader stops
+                // editing. It reads through `db_read` and never takes the write connection, so
+                // no press it overlaps can be answered `db::BUSY` by it.
+                mirror::watch::spawn(state.clone());
+            }
 
             // Here rather than before the builder, and the difference is one rare bug: this
             // deletes a staged build, and the second instance of a double-click would
@@ -667,15 +729,11 @@ fn init_state(app: &tauri::App) -> Result<AppState, String> {
 
     let portable = exe_dir.as_ref().map(|d| d.join("data"));
     let fallback = app_data.join("data");
-    let data_dir = match &exe_dir {
-        Some(dir) => paths::resolve_data_dir(dir, &app_data),
-        // No executable path (an unusual host, a deleted binary): the portable location
-        // cannot even be named, so go straight to the per-user folder.
-        None => {
-            let _ = std::fs::create_dir_all(&fallback);
-            fallback.clone()
-        }
-    };
+    // `cfg!(desktop)` is passed in rather than tested inside, so both branches compile and are
+    // tested on every platform — see `paths::data_dir_for`. On Android `portable` stays a name
+    // that never becomes the answer: `data_dir_error` still reports both candidates, and the
+    // one beside the executable is never probed.
+    let data_dir = paths::data_dir_for(exe_dir.as_deref(), &app_data, cfg!(desktop));
 
     let db_path = data_dir.join("mtg.db");
     let conn = db::open(&db_path).map_err(|e| data_dir_error(portable.as_deref(), &fallback, e))?;
