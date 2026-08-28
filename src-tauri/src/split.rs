@@ -571,18 +571,44 @@ mod tests {
         let dir = scratch("real");
         std::fs::copy(&fixture, dir.join(crate::db::LEGACY_DB)).unwrap();
 
-        let before: Vec<(String, i64)> = {
-            let conn = crate::db::open_read_only(&dir.join(crate::db::LEGACY_DB)).unwrap();
-            crate::schema::TABLES
-                .iter()
-                .filter(|(_, s)| *s == crate::schema::Side::User)
+        // **Only the tables the legacy file actually has**, which is not all of them and gets
+        // less so with every user rung. `TABLES` is head's list; a pre-27 `mtg.db` predates
+        // every rung added since, so v28's three pairing tables are simply not in it. Counting
+        // one of those here fails *this test* with `no such table: sync_devices` — a failure
+        // that looks exactly like a broken conversion and is nothing of the kind, which is the
+        // one distinction this test exists to draw. (It is also the same shape as the bug
+        // `shared_columns` was fixed for: head's list walked over a file that predates it.)
+        let legacy = dir.join(crate::db::LEGACY_DB);
+        let (before, absent): (Vec<(String, i64)>, Vec<&str>) = {
+            let conn = crate::db::open_read_only(&legacy).unwrap();
+            let present = |t: &str| -> bool {
+                conn.query_row(
+                    "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                    [t],
+                    |r| r.get::<_, i64>(0),
+                )
+                .unwrap()
+                    == 1
+            };
+            let user = || {
+                crate::schema::TABLES
+                    .iter()
+                    .filter(|(_, s)| *s == crate::schema::Side::User)
+            };
+            let counts = user()
+                .filter(|(t, _)| present(t))
                 .map(|(t, _)| {
                     let n: i64 = conn
                         .query_row(&format!("SELECT count(*) FROM {t}"), [], |r| r.get(0))
                         .unwrap();
                     ((*t).to_owned(), n)
                 })
-                .collect()
+                .collect();
+            let missing = user()
+                .map(|(t, _)| *t)
+                .filter(|t| !present(t))
+                .collect::<Vec<_>>();
+            (counts, missing)
         };
 
         let started = std::time::Instant::now();
@@ -614,13 +640,69 @@ mod tests {
             .unwrap()
             .len();
         drop(conn);
-        let _ = std::fs::remove_dir_all(&dir);
 
         eprintln!(
-            "conversion took {elapsed:?}, user.db is {user_bytes} B, corpus.db is {corpus_bytes} B"
+            "conversion took {elapsed:?}, user.db is {user_bytes} B, corpus.db is {corpus_bytes} B; \
+             {} user tables carried over, {} created by a later rung: {absent:?}",
+            before.len(),
+            absent.len()
         );
         assert_eq!(after, before, "a user row count changed across the split");
         assert_eq!(violations, 0);
         assert!(cards > 100_000, "the corpus must still hold its cards");
+
+        // **What this proves, stated narrowly, because the obvious wider claim is false.**
+        // A converted file opens at head and keeps every one of a real reader's rows through
+        // `prepare_database` — which no fixture can show, because a fixture's rows are ours.
+        //
+        // It does **not** prove the v28 rung, and the tempting comment saying it does was
+        // written and then deleted. `convert` writes the user file through
+        // `create_user_schema`, which builds the *head* shape and stamps
+        // `USER_SCHEMA_VERSION` directly, so on this path `migrate_user` finds nothing to do
+        // and the rung never runs. Mutating the rung's guard to `if v < 27` — never fires on a
+        // v27 file — leaves this test **green**. That is how it was established rather than
+        // assumed. The rung is proved by `schema::tests::v28_creates_the_three_pairing_tables`
+        // and by the byte-identity test that compares a rung-built database against
+        // `USER_SCHEMA_SQL`.
+        //
+        // The path neither this nor a fresh install reaches is a database **already split** at
+        // v27 walked to v28 — a reader who upgraded before pairing shipped. That is the v27
+        // fixture's, in `schema.rs`.
+        let conn = crate::db::open_write(&dir).unwrap();
+        crate::schema::prepare_database(&conn).unwrap();
+        let v: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            v,
+            crate::schema::USER_SCHEMA_VERSION,
+            "the converted file did not walk to head"
+        );
+        // Present because `create_user_schema` built them, not because a rung ran.
+        for t in &absent {
+            let n: i64 = conn
+                .query_row(
+                    "SELECT count(*) FROM main.sqlite_master WHERE type = 'table' AND name = ?1",
+                    [t],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(n, 1, "`{t}` is missing from a file converted at head");
+        }
+        let kept: Vec<(String, i64)> = before
+            .iter()
+            .map(|(t, _)| {
+                let n: i64 = conn
+                    .query_row(&format!("SELECT count(*) FROM main.{t}"), [], |r| r.get(0))
+                    .unwrap();
+                (t.clone(), n)
+            })
+            .collect();
+        assert_eq!(
+            kept, before,
+            "a user row count changed across the migration"
+        );
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }
