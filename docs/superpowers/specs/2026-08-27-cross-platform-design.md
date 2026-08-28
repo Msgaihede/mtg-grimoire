@@ -47,6 +47,7 @@ ships as an installable PWA.
 | Mana Pool is unavailable on web (CORS) | [§5.3](#53-the-corpus-and-the-optional-feeds) |
 | One SQLite Durable Object, no R2 | [§7.7](#77-the-relay) |
 | Compact on ack, keep 30 days | [§7.7](#77-the-relay) |
+| The web build is served from Cloudflare Workers static assets | [§5.5](#55-where-the-web-build-is-served-from) |
 
 ## 2. Architecture
 
@@ -259,6 +260,34 @@ the waiting worker; the app shows a non-modal "A new version is ready" bar; the 
 `skipWaiting` + `clients.claim` run and the page reloads once. A reader who never presses it keeps
 working on the old build rather than being interrupted.
 
+### 5.5 Where the web build is served from
+
+**Cloudflare Workers static assets, on the same free-tier account as the relay.** Decided
+2026-08-28.
+
+An installable PWA needs an HTTPS origin, and until this decision the spec had none — §9 verifies
+the web target against a local dev server and `adb reverse`, which is a *test* rig and was never a
+distribution answer.
+
+**The deciding constraint is scope, not convenience.** A service worker controls its own path and
+below, and nothing above it. GitHub Pages — the otherwise obvious choice, since the repository and
+release-please already live there — serves this project at `<user>.github.io/mtg-grimoire`, a
+**subpath**, which would push a prefix through the manifest's `start_url`, the shell cache routing
+and every asset path in §5.4's update flow. Workers static assets gives the app an origin root, so
+none of that arises.
+
+**This is a second Worker, and it does not weaken decision 4.** What Cloudflare would hold is the
+app shell — public code, already open in this repository. The relay still holds only ciphertext,
+and the two are separate Workers rather than one serving both.
+
+> **It is still not provisioned by an agent.** It is deployed the way the relay is: the source and
+> its `wrangler.jsonc` are committed, and Markus runs `wrangler deploy`. No agent has ever created
+> either.
+
+**Not yet planned.** [PR 5](../plans/2026-08-28-web-target-pwa-shell.md) ends at a live pass against
+a local server and carries no deploy task. Adding one is a follow-up, sized once the shell exists
+and the paths are concrete rather than predicted.
+
 ## 6. Shared frontend work
 
 ### 6.1 Mobile layout
@@ -454,13 +483,31 @@ Sized against the measured data — full state **381.0 KB JSON → 44.7 KB gzipp
 
 | | Modelled (3 devices, 50 edits/day) | Free limit | Use |
 | --- | --- | --- | --- |
-| relay requests/day | ~100–150 | 100 000 | ~0.15% |
+| relay requests/day | ~1 440 | 100 000 | ~1.4% |
 | compacted log | ~484 KB | 5 GB | 0.01% |
-| rows written/day | ~50 | 100 000 | 0.05% |
+| rows written/day | ~3 | 100 000 | 0.003% |
 
 **The one case that gets near a limit is a bulk import**: 50 000 rows one-op-per-row would spend
 half a day's write budget. Batching ~200 ops per row makes it 250 writes. That batch size is
 derived from the limit, not chosen for tidiness.
+
+**The requests figure is the polled one, and that is why it is ~1 440 rather than ~150.**
+Edit-driven traffic alone is ~100–150 requests/day, which is what this table said until
+2026-08-28. But [PR 7's plan](../plans/2026-08-28-sync-relay-and-engine.md) ships **HTTP
+pull-and-push rather than the WebSocket fan-out described above**, and a device that polls
+every 60 s spends 1 440 requests whether anything changed or not. Three devices share one
+group, so the group's total is the poll rate and not three times it. Both numbers sit under
+1.5% of the limit and nothing turns on the difference — but a spec and its plan disagreeing
+tenfold about a quota is how a later reader talks themselves into the wrong architecture, so
+the polled figure is the one recorded here. **When the WebSocket fan-out lands, this row
+falls back to ~150.**
+
+**The rows figure moved for the same reason, from ~50 to ~3.** Fifty was one stored row per
+edit — the *unbatched* count, which contradicted the batching this very section derives two
+paragraphs above. Three devices at 50 edits/day produce ~150 ops, and a push flushes what has
+accumulated rather than waiting for a full 200, so a few rows a day is the shape. Corrected
+2026-08-28 to match [PR 7's plan](../plans/2026-08-28-sync-relay-and-engine.md); the bulk-import
+case above is unaffected, because it was already computed from the batch size.
 
 **KV is ruled out** of the hot path: 1 000 writes/day on the free plan.
 
