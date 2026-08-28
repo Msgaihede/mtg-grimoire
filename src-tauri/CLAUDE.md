@@ -765,6 +765,16 @@ Six layers and five commands; the whole record, with every measurement, is
 - **A foreign row travels as the parent's `sync_uid`, never as a local id** — including
   `decks.default_category_id`, which is a parent with `Absent::Zero` rather than a field, because
   a raw id names a row in a database the far device has never seen.
+- **A write every device derives for itself must NOT be captured**, and `reconcile.rs` is the
+  only module that makes one. `card_migrations` is on the user side and is deliberately not
+  synced, so each machine applies Scryfall's id log against its own rows after its own ingest.
+  Captured, both devices would do the fold **and** then receive the other's — and
+  `fold_into_existing` sums the source row into the survivor, which is a counter delta, and a
+  counter delta applied twice is a collection that has grown by itself. `reconcile::apply` runs
+  behind `capture::Suppressed` (the `&mut` shape of the guard) and `sweep_orphans` behind
+  `capture::suppressed`. The sweep is the same rule from the other end: whether a printing is in
+  *this* device's card database is a fact about this device, and two machines that synced on
+  different days can honestly disagree.
 - **`apply` runs inside `capture::suppressed`**, or two devices ping-pong an op forever. It folds
   each row **twice**: incoming ops for the counter deltas, incoming plus this device's own
   `sync_ops` history for existence and for which side won each field. Without the second fold,
