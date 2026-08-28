@@ -44,9 +44,13 @@ pub const PULL_CURSOR: &str = "pull_cursor";
 pub const LAST_SYNC_AT: &str = "last_sync_at";
 
 /// What one call to [`run_once`] did.
+///
+/// **`Relay`-prefixed because `SyncOutcome` is taken**, by `crate::sync`'s card sync and by
+/// `ipc.ts`'s mirror of it. Two structs of that name would have been a type error in
+/// TypeScript before anybody noticed the collision in Rust.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct SyncOutcome {
+pub struct RelayOutcome {
     /// Ops handed to the relay.
     pub pushed: usize,
     /// Envelopes taken from it.
@@ -61,7 +65,7 @@ pub struct SyncOutcome {
     pub deferred: usize,
 }
 
-impl SyncOutcome {
+impl RelayOutcome {
     fn absorb(&mut self, report: ApplyReport) {
         self.applied += report.applied;
         self.resurrected += report.resurrected;
@@ -414,16 +418,16 @@ pub async fn ack(conn: &Connection, base: &str) -> Result<(), String> {
 ///
 /// Answers `Ok(None)` when there is nothing to do: no relay URL, or no group. That is the
 /// state every existing installation is in, and it is not an error.
-pub async fn run_once(conn: &Connection) -> Result<Option<SyncOutcome>, String> {
+pub async fn run_once(conn: &Connection) -> Result<Option<RelayOutcome>, String> {
     let Some(base) = relay_url(conn) else {
         return Ok(None);
     };
     if me(conn)?.is_none() {
         return Ok(None);
     }
-    let mut outcome = SyncOutcome {
+    let mut outcome = RelayOutcome {
         pushed: push(conn, &base).await?,
-        ..SyncOutcome::default()
+        ..RelayOutcome::default()
     };
     let (unreadable, report) = pull(conn, &base).await?;
     outcome.unreadable = unreadable;

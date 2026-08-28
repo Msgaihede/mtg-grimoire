@@ -26,6 +26,10 @@
 pub mod apply;
 pub mod capture;
 pub mod client;
+/// The IPC surface, and the one module here that is not every-target: a `#[tauri::command]`
+/// does not exist in a browser. Everything it orchestrates does.
+#[cfg(not(target_family = "wasm"))]
+pub mod commands;
 pub mod hlc;
 pub mod merge;
 pub mod wire;
