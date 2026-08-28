@@ -19,8 +19,18 @@ use crate::{
     card, collection, collection_alloc, collection_folders, combos, db, deck, deck_audit,
     deck_meta, deck_theory, deck_undo, errors, export, flatten, images, import, index, listview,
     marketplace, marketplace_feed, mirror, nav, paths, reset, schema, scryfall, search, sync,
-    sync_engine, sync_pair, tags, update, window, wishlist, wishlist_folders, zoom,
+    sync_engine, sync_pair, tags, update, wishlist, wishlist_folders, zoom,
 };
+// **Not in the list above, because this file compiles for Android too.** Its name says
+// `desktop`, but its gate is `cfg(not(target_family = "wasm"))` — desktop *and* mobile — while
+// `window` is `#[cfg(desktop)]` in `lib.rs` (`WebviewWindow::center()` does not exist on
+// Android). The one call site below is already gated; only the import was not, and an
+// unconditional `use` of a configured-out module is an error even when nothing calls it.
+//
+// Nothing in CI catches this: there is no Android job, so `main` compiled for Windows and
+// Linux while `cargo build --target aarch64-linux-android` failed. Found by building an APK.
+#[cfg(desktop)]
+use crate::window;
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex};
