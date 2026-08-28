@@ -77,7 +77,15 @@ export default defineConfig({
     // What the narrower `.test.ts` on the second glob rules out is a
     // `.storybook/**/*.test.tsx`: the fakes are plain modules, and a test needing JSX is
     // testing a component, which lives under `src/`.
-    include: ["src/**/*.test.{ts,tsx}", ".storybook/**/*.test.ts"],
+    // The third glob is the Cloudflare relay's pure logic, and it is a *third* glob rather
+    // than a widening of the first because `src/**` is anchored at the repo root and does not
+    // reach `relay/src/`. Only `log.ts` is testable this way and that is by design: the
+    // Durable Object itself would need `@cloudflare/vitest-pool-workers`, which drags wrangler
+    // and workerd into a tree pinned to vitest 4.1.10, so the compaction, ordering and
+    // retention rules live in a pure module this suite already knows how to run. `relay/` is
+    // absent from `coverage.include` for the same reason `src-tauri/` is: it is not app code
+    // and would move a number that is about the app.
+    include: ["src/**/*.test.{ts,tsx}", ".storybook/**/*.test.ts", "relay/src/**/*.test.ts"],
     // Vitest stubs CSS imports as empty strings by default, which would hand
     // `iconFont.test.ts` an empty `mana.css?raw` to assert against. No *component* imports
     // CSS; `.storybook/preview.tsx` imports three files of it and reaches the suite through

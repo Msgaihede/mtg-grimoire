@@ -7,7 +7,7 @@
   "types": ".design-sync/dist/.design-sync/entry.d.ts",
   "scripts": {
     "dev": "vite",
-    "build": "tsc && tsc -p .storybook && vite build",
+    "build": "tsc && tsc -p .storybook && tsc -p tsconfig.relay.json && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
     "build:wasm": "node scripts/build-wasm.mjs",
@@ -49,6 +49,7 @@
     "zustand": "^5.0.14"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^5.20260828.1",
     "@eslint/js": "^10.0.1",
     "@storybook/addon-a11y": "10.5.7",
     "@storybook/addon-docs": "10.5.7",

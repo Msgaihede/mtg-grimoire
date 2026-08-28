@@ -1,0 +1,41 @@
+{
+  /* The relay's own type-check program, and the reason it is a *separate* file rather than a
+     wider `include` in `tsconfig.json` is the same fence `.storybook/tsconfig.json` exists
+     for, pointed at a different runtime.
+
+     `relay/` runs in workerd. It needs `@cloudflare/workers-types`, which declares `Request`,
+     `Response`, `WebSocket`, `DurableObjectState` and about four hundred other globals — a
+     whole platform's worth of ambient declarations. The app under `src/` runs in a WebView2
+     webview and must see the DOM's versions of those names and nothing else; the root
+     `tsconfig.json` pins `"types": []` for exactly that reason and says so at length. Merging
+     the two programs would put workerd's globals in front of the app's, which is a class of
+     bug nobody would think to look for.
+
+     Nothing had to be *excluded* to keep them apart: the root config's `include` is `["src"]`,
+     which is `<repo>/src` and does not match `<repo>/relay/src`. This file's `include` is the
+     mirror image. `npm run build` runs `tsc`, then `tsc -p .storybook`, then this one, so all
+     three programs are checked by `npm run verify` and none of them can see the others'
+     ambient types.
+
+     `relay/src/log.test.ts` is deliberately inside this program rather than outside it. It is
+     the only file in `relay/` that the vitest suite runs, and a test that does not type-check
+     is a test that can drift from the function it is asserting about. */
+  "compilerOptions": {
+    "target": "ES2022",
+    /* No `DOM`: this is not a browser. `@cloudflare/workers-types` supplies the fetch, stream
+       and URL globals workerd actually has, which are a different and smaller set. */
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": ["@cloudflare/workers-types"],
+
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": ["relay/src"]
+}
