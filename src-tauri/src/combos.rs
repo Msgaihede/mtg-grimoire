@@ -461,6 +461,77 @@ pub fn read_file(body: &mut dyn Read) -> Result<ComboFile, ComboError> {
     Ok(file)
 }
 
+/// Reading the `variants` array as an object the caller pushes into.
+///
+/// [`read_stream`]'s `Iterator` is the desktop shape; this is the shape a browser can
+/// drive, for [`crate::ingest::StreamIngest`]'s reason — an awaited `Stream` has no
+/// blocking `next()` to hand an iterator.
+///
+/// Peak memory is one element plus the reduced list, and [`StreamRead::peak_buffer`] is how
+/// a caller checks that claim. That is not diagnostics: the spike's first framer found
+/// **63 elements in 610 MB** and grew its buffer to 609.82 MB without erroring, and a row
+/// count cannot see that.
+pub struct StreamRead {
+    file: ComboFile,
+    decoder: crate::feed::frame::Decoder,
+    elements: crate::feed::frame::Elements,
+    decoded: Vec<u8>,
+    /// The document's own `timestamp` sits before `variants`, so it is scraped from the
+    /// head rather than parsed structurally - the framer deliberately does not model the
+    /// enclosing object.
+    head: Vec<u8>,
+}
+
+impl StreamRead {
+    pub fn new() -> Self {
+        StreamRead {
+            file: ComboFile::default(),
+            decoder: crate::feed::frame::Decoder::new(),
+            elements: crate::feed::frame::Elements::new(),
+            decoded: Vec::new(),
+            head: Vec::new(),
+        }
+    }
+
+    /// The largest the element framer's buffer has ever been, in bytes.
+    ///
+    /// Measured at **2.01 MB against the real 610.2 MB document**, on both a desktop and a
+    /// OnePlus 12. Anything approaching the document's own size means the framer has
+    /// desynchronised and is silently accumulating rather than draining.
+    pub fn peak_buffer(&self) -> usize {
+        self.elements.peak_buffer()
+    }
+
+    pub fn push(&mut self, chunk: &[u8]) -> Result<(), ComboError> {
+        self.decoded.clear();
+        self.decoder.push(chunk, &mut self.decoded)?;
+        take_head(&mut self.head, &self.decoded);
+        let file = &mut self.file;
+        self.elements
+            .push(&self.decoded, |el| take_element(file, el));
+        Ok(())
+    }
+
+    pub fn finish(mut self) -> Result<ComboFile, ComboError> {
+        self.decoded.clear();
+        self.decoder.finish(&mut self.decoded)?;
+        take_head(&mut self.head, &self.decoded);
+        {
+            let file = &mut self.file;
+            self.elements
+                .push(&self.decoded, |el| take_element(file, el));
+        }
+        self.file.stamp = stamp_from_head(&self.head);
+        Ok(self.file)
+    }
+}
+
+impl Default for StreamRead {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Read `{ timestamp, version, variants: [ … ] }` from a stream of byte chunks.
 ///
 /// **Why this exists beside [`read_file`].** That one streams with
@@ -474,29 +545,11 @@ pub fn read_file(body: &mut dyn Read) -> Result<ComboFile, ComboError> {
 pub fn read_stream(
     chunks: impl Iterator<Item = std::io::Result<Vec<u8>>>,
 ) -> Result<ComboFile, ComboError> {
-    let mut file = ComboFile::default();
-    let mut decoder = crate::feed::frame::Decoder::new();
-    let mut elements = crate::feed::frame::Elements::new();
-    let mut decoded: Vec<u8> = Vec::new();
-    // The document's own `timestamp` sits before `variants`, so it is scraped from the
-    // head rather than parsed structurally - the framer deliberately does not model the
-    // enclosing object.
-    let mut head: Vec<u8> = Vec::new();
-
+    let mut sink = StreamRead::new();
     for chunk in chunks {
-        let chunk = chunk?;
-        decoded.clear();
-        decoder.push(&chunk, &mut decoded)?;
-        take_head(&mut head, &decoded);
-        elements.push(&decoded, |el| take_element(&mut file, el));
+        sink.push(&chunk?)?;
     }
-    decoded.clear();
-    decoder.finish(&mut decoded)?;
-    take_head(&mut head, &decoded);
-    elements.push(&decoded, |el| take_element(&mut file, el));
-
-    file.stamp = stamp_from_head(&head);
-    Ok(file)
+    sink.finish()
 }
 
 /// Keep the first [`HEAD_SCRAPE_BYTES`] of the decoded stream, for [`stamp_from_head`].
@@ -2747,6 +2800,65 @@ mod tests {
             std::fs::metadata(&db_path).map(|m| m.len()).unwrap_or(0)
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The sink and `read_stream` must reduce a document identically — same counts, same
+    /// stamp, same combos in the same order.
+    ///
+    /// **What this can and cannot catch.** `read_stream` *is* `StreamRead` now, so both sides
+    /// run the same drain and a bug in it leaves them agreeing — both were run as mutations
+    /// and this test stayed green for each. What went red was `read_stream_matches_read_file`
+    /// and `read_stream_accepts_plain_and_gzipped_alike`, which compare this parser against
+    /// `read_file`'s independent serde implementation; those are the real cross-check. This
+    /// one pins the driver loop and the public shape of `new`/`push`/`finish`.
+    #[test]
+    fn the_combo_sink_and_read_stream_agree() {
+        let doc = many_variants(120);
+        let bytes = doc.clone().into_bytes();
+
+        let from_iter = read_stream(bytes.chunks(97).map(|c| Ok(c.to_vec()))).unwrap();
+
+        let mut sink = StreamRead::new();
+        for chunk in bytes.chunks(97) {
+            sink.push(chunk).unwrap();
+        }
+        let from_sink = sink.finish().unwrap();
+
+        assert_eq!(from_iter.seen, from_sink.seen);
+        assert_eq!(from_iter.skipped, from_sink.skipped);
+        assert_eq!(from_iter.stamp, from_sink.stamp);
+        assert_eq!(from_iter.combos.len(), from_sink.combos.len());
+        for (a, b) in from_iter.combos.iter().zip(from_sink.combos.iter()) {
+            assert_eq!(a.id, b.id);
+        }
+    }
+
+    /// The regression the spike paid for: a framer that stops draining still returns rows
+    /// for a while and then quietly holds the whole document. The row count cannot see it;
+    /// `peak_buffer` can, and the browser is where the real 610 MB document lives, so the
+    /// sink has to expose it.
+    #[test]
+    fn the_combo_sink_exposes_a_peak_buffer_that_stays_small() {
+        let doc = many_variants(2000);
+        let bytes = doc.into_bytes();
+        assert!(
+            bytes.len() > 200_000,
+            "the fixture must be big enough to matter"
+        );
+
+        let mut sink = StreamRead::new();
+        for chunk in bytes.chunks(64) {
+            sink.push(chunk).unwrap();
+        }
+        let peak = sink.peak_buffer();
+        let file = sink.finish().unwrap();
+
+        assert_eq!(file.seen, 2000);
+        assert!(
+            peak < 16 * 1024,
+            "peak buffer was {peak} bytes against a {} byte document; the framer is not draining",
+            bytes.len()
+        );
     }
 
     /// Many distinct variants, built from the module's own helpers.
