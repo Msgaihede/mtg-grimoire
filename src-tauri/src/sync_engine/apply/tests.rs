@@ -748,8 +748,12 @@ fn two_devices_each_removing_two_copies_clamp_a_collection_row_at_zero() {
     }
 }
 
-/// **A stalled stream does not step over the op that stalled it**, and the ops *after* it in
-/// the same batch are applied without moving the watermark past the block.
+/// **A stalled stream stops at the op that stalled it**, and the ops after it in the same
+/// batch are left for the next pull.
+///
+/// That is the only arrangement that neither loses an op nor doubles a counter: advancing the
+/// watermark past the block loses it, and applying what follows while holding the watermark
+/// below means the next pull re-delivers those ops and applies them a second time.
 #[test]
 fn a_deferred_op_holds_the_watermark_below_the_ops_that_follow_it() {
     let (a, b) = (paired("dev-a"), paired("dev-b"));
@@ -775,13 +779,17 @@ fn a_deferred_op_holds_the_watermark_below_the_ops_that_follow_it() {
     .unwrap();
     let rest = since(&a, &mut ma);
 
-    // The deck stalls on a folder `b` has never heard of; the tag after it is fine.
+    // The deck stalls on a folder `b` has never heard of, and the tag behind it waits its turn
+    // even though nothing about the tag is unresolvable.
     let report = apply(&b, &rest).unwrap();
     assert!(report.deferred > 0, "the deck should not have applied");
     let tags: i64 = b
         .query_row("SELECT count(*) FROM deck_tags", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(tags, 1, "the tag is independent and should land");
+    assert_eq!(
+        tags, 0,
+        "the stream is stalled, so nothing behind the block may land"
+    );
     let peers: i64 = b
         .query_row("SELECT count(*) FROM sync_peers", [], |r| r.get(0))
         .unwrap();
@@ -794,10 +802,14 @@ fn a_deferred_op_holds_the_watermark_below_the_ops_that_follow_it() {
     apply(&b, &folder_ops).unwrap();
     let report = apply(&b, &rest).unwrap();
     assert_eq!(report.deferred, 0);
-    let decks: i64 = b
-        .query_row("SELECT count(*) FROM decks", [], |r| r.get(0))
+    let (decks, tags): (i64, i64) = b
+        .query_row(
+            "SELECT (SELECT count(*) FROM decks), (SELECT count(*) FROM deck_tags)",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
         .unwrap();
-    assert_eq!(decks, 1);
+    assert_eq!((decks, tags), (1, 1), "the whole stream lands once it can");
 }
 
 /// **`muted_tags` travels at all**, which it could not while its own primary key was on no
@@ -1236,6 +1248,54 @@ fn clearing_a_review_sentence_travels_to_the_other_device() {
         })
         .unwrap();
     assert_eq!(review, None, "the other device is still asking");
+}
+
+/// **A stalled stream must not double-count the ops that follow the block.** The watermark
+/// stays below the unappliable op, so the next pull re-delivers everything above it — and a
+/// counter re-applied is the collection growing by itself, which is the failure this whole
+/// module is arranged against.
+#[test]
+fn a_stalled_stream_does_not_double_the_ops_after_the_block() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let mut ma = 0;
+    a.execute(
+        "INSERT INTO deck_folders (name, sort_order, created_at, updated_at)
+         VALUES ('Binder', 0, unixepoch(), unixepoch())",
+        [],
+    )
+    .unwrap();
+    let folder_ops = since(&a, &mut ma);
+    // A deck whose folder `b` has never heard of, and then a collection add after it.
+    a.execute(
+        "INSERT INTO decks (name, format_key, folder_id, created_at, updated_at)
+         VALUES ('A', 'commander', 1, unixepoch(), unixepoch())",
+        [],
+    )
+    .unwrap();
+    add_copy(&a);
+    let rest = since(&a, &mut ma);
+
+    let first = apply(&b, &rest).unwrap();
+    assert!(
+        first.deferred > 0,
+        "the deck should have stalled the stream"
+    );
+    assert_eq!(qty(&b), (0, 0), "nothing behind the block may land");
+
+    // The same page again, which is exactly what the next pull hands over.
+    apply(&b, &rest).unwrap();
+    assert_eq!(qty(&b), (0, 0));
+
+    // The folder arrives and the whole stream lands — once.
+    apply(&b, &folder_ops).unwrap();
+    apply(&b, &rest).unwrap();
+    assert_eq!(qty(&b), (1, 1));
+    apply(&b, &rest).unwrap();
+    assert_eq!(
+        qty(&b),
+        (1, 1),
+        "the ops after the block were counted twice"
+    );
 }
 
 /// Applying nothing is a no-op that still commits cleanly.

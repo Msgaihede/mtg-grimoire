@@ -652,8 +652,22 @@ the batch's latest stamp — `hlc::Hlc::observe` spelled in SQL, because `System
 `sync_peers` is a *watermark*: everything at or below it has been applied. So an op that could
 not be applied cannot be counted and stepped over — advancing past it loses it for good, and not
 advancing replays the ops above it and **adds their counter deltas a second time**. Both are
-silent. The stream stalls at the first unappliable op instead; that is visible in
-`ApplyReport::deferred` and self-heals when the missing parent arrives.
+silent.
+
+**The whole of that device's stream stops at the block**, and that is stronger than it first
+looks: the ops after it in the same page are not applied either, even when nothing about them is
+unresolvable. It has to be. Applying them while holding the watermark below means the next pull
+re-delivers them and applies them again — measured before the fix, one `+1` behind a blocked
+op became a quantity of 2 on the second delivery of the same page.
+
+So a batch that defers anything is applied **twice**: once to find out which devices stall, then
+rolled back and applied again with the stalls known. The loop runs until no new device is found
+blocked, which is at most once per device and in practice once.
+
+A stall is visible in `ApplyReport::deferred` and self-heals when the missing parent arrives. A
+block that *never* becomes appliable — a parent lost to compaction — stalls that device's stream
+permanently, and that is the deliberate choice: it is the only one of the three that neither
+loses an op nor doubles a counter, and it is the only one a reader can be told about.
 
 ### The two `CHECK`s differ and the applier knows it
 

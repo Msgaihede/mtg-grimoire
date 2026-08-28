@@ -436,42 +436,126 @@ fn apply_in(conn: &Connection, ops: &[Op]) -> Result<ApplyReport, String> {
         )
     });
 
-    // 3. Two passes, because a batch can carry a child before its parent even when one device's
-    //    own stream cannot: the relay hands over several devices' streams interleaved.
+    // 3. Apply, discovering as it goes which devices stall — and then apply again with the
+    //    stalls known.
+    //
+    // **The second pass is not an optimisation, it is the whole correctness of the watermark.**
+    // `sync_peers` only advances to the last op before a device's first unappliable one, so the
+    // next pull re-delivers everything above that. If this pass had *applied* the ops after the
+    // block, they would be applied a second time then — and a counter applied twice is the
+    // collection growing by itself. Measured before the fix: one `+1` after a blocked op became
+    // a quantity of 2 on the second delivery of the same page.
+    //
+    // The loop runs until no new device is found to be blocked, which is at most once per
+    // device and in practice once. Each round rolls its own work back, so only the last one
+    // commits.
+    let mut blocked: BTreeMap<String, Hlc> = BTreeMap::new();
+    let mut deferred_ops = 0usize;
+    for round in 0..=groups.len().min(8) {
+        conn.execute_batch("SAVEPOINT sync_pass")
+            .map_err(|e| e.to_string())?;
+        let mut pass = ApplyReport::default();
+        let deferred = run_groups(conn, &groups, &blocked, &mut pass)?;
+        let found = blocks_of(&deferred, &blocked);
+        if found == blocked || round == groups.len().min(8) {
+            conn.execute_batch("RELEASE sync_pass")
+                .map_err(|e| e.to_string())?;
+            report.applied = pass.applied;
+            report.resurrected = pass.resurrected;
+            report.cycles_broken = pass.cycles_broken;
+            deferred_ops = deferred.iter().map(|g| g.ops.len()).sum();
+            blocked = found;
+            break;
+        }
+        conn.execute_batch("ROLLBACK TO sync_pass; RELEASE sync_pass")
+            .map_err(|e| e.to_string())?;
+        blocked = found;
+    }
+
+    report.deferred += deferred_ops;
+    advance_watermarks(conn, &groups, &blocked)?;
+    observe(conn, fresh.iter().map(|o| &o.at).max())?;
+    Ok(report)
+}
+
+/// One attempt at a batch, with the devices already known to be stalled cut short.
+///
+/// Answers the groups it could not apply. Everything else — the soft parent, the cycle-break -
+/// happens here too, because a round that is going to be rolled back must not leave any of it
+/// behind.
+fn run_groups<'a>(
+    conn: &Connection,
+    groups: &'a [Group<'a>],
+    blocked: &BTreeMap<String, Hlc>,
+    report: &mut ApplyReport,
+) -> Result<Vec<&'a Group<'a>>, String> {
+    let held = |g: &Group| {
+        g.ops.iter().any(|op| {
+            blocked
+                .get(op.at.device.as_str())
+                .is_some_and(|b| op.at >= *b)
+        })
+    };
+
     let mut soft: Vec<(&Group, String)> = Vec::new();
     let mut deferred: Vec<&Group> = Vec::new();
-    for g in &groups {
-        match write_group(conn, g, &mut report, &mut soft)? {
+    for g in groups {
+        if held(g) {
+            deferred.push(g);
+            continue;
+        }
+        match write_group(conn, g, report, &mut soft)? {
             Outcome::Written => {}
             Outcome::Deferred => deferred.push(g),
         }
     }
+    // A second attempt, because a batch can carry a child before its parent even when one
+    // device's own stream cannot: the relay hands over several devices' streams interleaved.
     let retry = std::mem::take(&mut deferred);
     for g in retry {
-        match write_group(conn, g, &mut report, &mut soft)? {
+        if held(g) {
+            deferred.push(g);
+            continue;
+        }
+        match write_group(conn, g, report, &mut soft)? {
             Outcome::Written => {}
             Outcome::Deferred => deferred.push(g),
         }
     }
 
-    // 4. The soft parent — `decks.default_category_id` — after both passes, because `decks` and
-    //    `deck_categories` name each other and no order of tables resolves both in one.
+    // The soft parent — `decks.default_category_id` — after both passes, because `decks` and
+    // `deck_categories` name each other and no order of tables resolves both in one.
     for (g, uid) in &soft {
         settle_soft_parents(conn, g, uid)?;
     }
 
-    // 5. §7.3 row 4's second half. LWW decided *where* each folder went; only the whole tree
-    //    can say whether the result is a loop.
+    // §7.3 row 4's second half. LWW decided *where* each folder went; only the whole tree can
+    // say whether the result is a loop.
     for m in META.iter().filter(|m| m.tree.is_some()) {
-        report.cycles_broken += break_cycles(conn, m, &groups)?;
+        report.cycles_broken += break_cycles(conn, m, groups)?;
     }
+    Ok(deferred)
+}
 
-    for g in &deferred {
-        report.deferred += g.ops.len();
+/// The earliest stamp each device is stalled at, taking whatever was already known.
+fn blocks_of(deferred: &[&Group], known: &BTreeMap<String, Hlc>) -> BTreeMap<String, Hlc> {
+    let mut out = known.clone();
+    for g in deferred {
+        for op in &g.ops {
+            let e = out.entry(op.at.device.clone());
+            match e {
+                std::collections::btree_map::Entry::Vacant(v) => {
+                    v.insert(op.at.clone());
+                }
+                std::collections::btree_map::Entry::Occupied(mut o) => {
+                    if op.at < *o.get() {
+                        o.insert(op.at.clone());
+                    }
+                }
+            }
+        }
     }
-    advance_watermarks(conn, &groups, &deferred)?;
-    observe(conn, fresh.iter().map(|o| &o.at).max())?;
-    Ok(report)
+    out
 }
 
 /// Pull this device's clock past the latest stamp in the batch.
@@ -1212,33 +1296,17 @@ fn break_cycles(conn: &Connection, meta: &Meta, groups: &[Group]) -> Result<usiz
 }
 
 /// Move each peer's watermark to the last op before the first one that could not be applied.
+///
+/// **Below the block and never past it.** Everything at or above a device's block is left for
+/// the next pull, which is why the pass above must not have applied any of it: the two halves
+/// are one rule, and getting either wrong doubles a counter or loses an op.
 fn advance_watermarks(
     conn: &Connection,
     groups: &[Group],
-    deferred: &[&Group],
+    blocked: &BTreeMap<String, Hlc>,
 ) -> Result<(), String> {
-    let mut blocked: BTreeMap<&str, Hlc> = BTreeMap::new();
-    for g in deferred {
-        for op in &g.ops {
-            let e = blocked.entry(op.at.device.as_str());
-            match e {
-                std::collections::btree_map::Entry::Vacant(v) => {
-                    v.insert(op.at.clone());
-                }
-                std::collections::btree_map::Entry::Occupied(mut o) => {
-                    if op.at < *o.get() {
-                        o.insert(op.at.clone());
-                    }
-                }
-            }
-        }
-    }
     let mut high: BTreeMap<&str, Hlc> = BTreeMap::new();
-    let deferred_ptrs: Vec<*const Group> = deferred.iter().map(|g| *g as *const Group).collect();
     for g in groups {
-        if deferred_ptrs.contains(&(g as *const Group)) {
-            continue;
-        }
         for op in &g.ops {
             if blocked
                 .get(op.at.device.as_str())
