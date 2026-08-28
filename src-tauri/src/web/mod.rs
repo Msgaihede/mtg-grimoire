@@ -8,3 +8,12 @@
 
 pub mod route;
 pub mod wire;
+
+/// Fetching, in a browser. `reqwest` over `fetch`, with none of the desktop `Client`'s
+/// pacing, penalty or resume — see the module's own docs for why none of it is available.
+#[cfg(target_family = "wasm")]
+pub mod net;
+
+/// The `#[wasm_bindgen]` surface the Worker imports.
+#[cfg(target_family = "wasm")]
+pub mod glue;
