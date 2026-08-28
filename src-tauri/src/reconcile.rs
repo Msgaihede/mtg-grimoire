@@ -5,6 +5,18 @@
 //! collection tracker that silently drops a card because an upstream database tidied its
 //! identifiers has destroyed the only record of something the user paid for.
 //!
+//! **`card_migrations` is in the user file, and that is a correctness requirement rather than
+//! a filing preference.** Its rows come from Scryfall, so the obvious reading is that it is
+//! derived and belongs beside `cards`. It is not: the table's job is "which of these have I
+//! already applied to *my* rows", and [`apply`] writes it in the same transaction as the folds
+//! it is recording. SQLite makes no atomicity guarantee across attached databases in WAL mode
+//! and raises nothing when a transaction spans two — the commit succeeds and either file may
+//! be the one that survives a power cut — so corpus-side, a crash between the two commits
+//! would leave a quantity doubled and nothing to say it had been.
+//! `apply_writes_only_the_user_file` is what keeps them together: it drives the update hook,
+//! which reports SQLite's own schema name for every write, and moving the table turns it red
+//! with `main | corpus`.
+//!
 //! Two halves, and only the first needs the network:
 //!
 //! * [`apply`] walks `/migrations`, Scryfall's log of the ids it changed *deliberately*.
@@ -679,6 +691,53 @@ mod tests {
             new_card_id: new.map(str::to_owned),
             note: None,
         }
+    }
+
+    /// [`apply`] opens one transaction over the reader's rows *and* the ledger of what has
+    /// been applied to them, and SQLite does not promise those two commit together across
+    /// attached databases. So they must not be in two files: both are the user's.
+    ///
+    /// The failure this prevents is not a crash — it is a collection that grows by itself. A
+    /// fold applied and not recorded is a fold applied again on the next poll.
+    #[test]
+    fn apply_writes_only_the_user_file() {
+        use std::sync::atomic::{AtomicU8, Ordering};
+        use std::sync::Arc;
+
+        let mut conn = crate::schema::memory_pair();
+        own(&conn, "old-id", "nonfoil", 2);
+
+        let schemas = Arc::new(AtomicU8::new(0));
+        {
+            let s = schemas.clone();
+            conn.update_hook(Some(
+                move |_a: rusqlite::hooks::Action, db: &str, _t: &str, _r: i64| {
+                    s.fetch_or(if db == "main" { 1 } else { 2 }, Ordering::Relaxed);
+                },
+            ))
+            .unwrap();
+        }
+
+        let stats = apply(
+            &mut conn,
+            &[migration("m-1", "merge", "old-id", Some("new-id"))],
+        )
+        .unwrap();
+
+        assert_eq!(
+            stats.repointed + stats.folded,
+            1,
+            "the fold must have happened"
+        );
+        assert_eq!(
+            schemas.load(Ordering::Relaxed),
+            1,
+            "apply must write the user file and nothing else"
+        );
+        assert_eq!(
+            crate::schema::side_of("card_migrations"),
+            Some(crate::schema::Side::User)
+        );
     }
 
     fn seeded() -> Connection {
