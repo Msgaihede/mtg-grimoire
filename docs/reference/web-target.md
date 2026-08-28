@@ -5,40 +5,56 @@ dedicated Worker with its two SQLite files in OPFS, talking to the same React fr
 the `Core` interface Phase 1 shipped.
 
 Every figure below was taken on **2026-08-28**, on Windows 11, in **headless Edge 151** against
-`npm run web:dev` on port 5173, driven over CDP on 9333. The wasm is a **release** build
+`npm run web:dev` on port 5173, driven over CDP (9333 for the first pass, 9444 for the
+2026-08-28 re-measurement of the first run and the one-tab guard). The wasm is a **release** build
 (`cargo build --release --target wasm32-unknown-unknown`) with no `wasm-opt` pass. Where a
 figure from [the spike](../superpowers/research/2026-08-27-wasm-core-spike.md) is comparable it
 sits beside it, **with the caveat that the spike wrote a 20-column synthetic row and this writes
 the real 43-column one, `raw` included**.
 
-> ## ⚠️ Read this first: the first run does not reliably finish
+> ## The first run finished 6 of 6, and what used to break it
 >
-> **Roughly two runs in three, the corpus ingest dies partway through with an out-of-memory
-> panic in wasm's allocator** and the page sits on a frozen card count forever. Measured over
-> three clean runs from a wiped browser profile: **one completed** (117 606 cards, app
-> rendered), the other two stalled at **110 000** and **116 000** rows. Two earlier runs under
-> the same build stalled at 88 000 and completed once more, so the observed rate is about 2 of 6.
+> **Until 2026-08-28 roughly two runs in three died partway through the corpus ingest** with a
+> panic in wasm's allocator, and the page sat on a frozen card count forever. The cause is
+> now known, fixed, and was never what the message said.
 >
-> The Worker console says:
+> The Worker's console read:
 >
 > ```text
-> panicked at /rust/deps/dlmalloc-0.2.11/src/dlmalloc.rs:1201:9
-> Uncaught RuntimeError: memory access out of bounds
+> panicked at /rust/deps/dlmalloc-0.2.11/src/dlmalloc.rs:1201:9:
+> assertion failed: psize >= size + min_overhead
 > ```
 >
-> `dlmalloc` is what `wasm32-unknown-unknown` allocates through, and a panic there is linear
-> memory failing to grow. The `RefCell already borrowed` panic that follows it in
-> `js-sys/src/futures/queue.rs` is the panic hook running inside a broken state — it is the
-> second error, never the first.
+> **That is not an out-of-memory.** Line 1201 is `Dlmalloc::validate_size`, which every
+> `dealloc` and every `realloc` runs: it compares the size the caller *claims* the block had
+> against the size in the chunk's own header. Failing it means a free of something that was
+> never allocated that way — heap corruption. Linear memory when it fired was **171.6 MB and
+> flat**, sampled every 500 ms off `WebAssembly.Memory.buffer.byteLength`; nothing was running
+> out of anything. The `RefCell already borrowed` in `js-sys/src/futures/queue.rs` that follows
+> is the panic hook running inside a queue whose borrow the first abort never released — it is
+> the second error, never the first.
 >
-> **Everything downstream of a completed ingest is correct and fast** — see the query table.
-> The corpus is right (117 606 rows), the facet index builds, and all four routed commands
-> answer. The failure is confined to building the corpus in the first place, and it takes the
-> Worker with it: the page cannot even show an error, because the trap kills the instance
-> before `handle`'s `catch` can post one.
+> **The corruption was two wasm instances in one Worker.** `src/workers/db.ts`'s `load()` had
+> no in-flight guard: `if (!glue) { … await import … await mod.default() … glue = mod }` sets
+> the variable it tests only at the end, so two `postMessage`s that land in the same turn both
+> find it unset and both run. `wasm-bindgen`'s own re-entry guard has the identical shape —
+> `if (wasm !== undefined) return wasm`, read synchronously, with `wasm` assigned only after
+> the instantiate resolves — so both calls also sail past that and **both instantiate the
+> module**. Measured in the Worker: `distinctMemories=2`. The glue then holds one `wasm`
+> binding, pointing at the second instance, while every callback the first one registered —
+> each `JsFuture`'s `then`, every `Closure` — is still dispatched through it, carrying pointers
+> into a linear memory that is no longer the one being indexed. What sent the two messages is
+> `<React.StrictMode>`, which invokes `WebBoot`'s effect twice; any two calls arriving before
+> the module finished loading would do it.
 >
-> **This is open and unfixed.** It is the one thing standing between this build and a usable
-> web target, and it is the first thing to pick up.
+> The visible sequence, in order, on a failing run: `Error: closure invoked recursively or
+> after being dropped` about 40 ms after the second instance lands, then the `dealloc` panic
+> anywhere between 46 000 and 116 000 rows later, then `unreachable`, then a
+> `memory access out of bounds` inside `CLOSURE_DTORS`.
+>
+> **The fix is `once()` in `src/workers/db.ts`** — memoise the promise, not the result.
+> Measured after it, on the same harness: **6 clean runs from a wiped browser profile, 6
+> completed**, 117 606 rows each, one `WebAssembly.Memory` per Worker each time.
 
 ---
 
@@ -89,17 +105,19 @@ would cost more than it buys, which is the same trade `combos::ingest_gz` alread
 | Figure | Value | Desktop / spike |
 | --- | --- | --- |
 | Rows ingested (completed run) | **117 606** | spike: 117 464 lines, 20-column subset |
-| Wall clock, click to app rendered | **between 11 s and 21 s** on the one run sampled that finely | spike: 10.4 s desktop, 36.5 s phone |
+| Wall clock, click to app rendered | **15.2 s to 16.1 s** across six clean runs, sampled every 500 ms | spike: 10.4 s desktop, 36.5 s phone |
 | Ingest rate, sampled at 250 ms | 0 → **88 000 rows in 10.8 s**, ~8 100 rows/s | — |
-| Runs that finished | **1 of 3** clean runs (2 of 6 including earlier builds) | spike: always |
+| Runs that finished | **6 of 6** clean runs from a wiped profile (was 2 of 6) | spike: always |
 | wasm module | **2 642 182 B** (`mtg_grimoire_lib_bg.wasm`) | spike: ~2.2 MB |
 | wasm-bindgen glue | 42 562 B | — |
 | `navigator.storage.estimate()` after a *partial* ingest | usage **447 MB**, quota **10 687 MB** | — |
+| Linear memory at peak, whole first run | **148.6 MB** to **171.6 MB** | — |
 | Journal, both files | `delete` | desktop: `wal` |
 
-The wall clock is a range and not a number because the run that finished was sampled only every
-10 s at that point; the one run sampled at 250 ms stalled. **Re-measure this properly once the
-memory failure is fixed** — a first-run figure taken across a flaky path is not a figure.
+The wall clock is a range across six runs rather than one number: it is dominated by the
+75 MB download from Scryfall, and the poll that decides "app rendered" runs every 500 ms, so
+each figure carries that much slack. It replaces the 11–21 s this table used to quote, which
+was taken across the flaky path and was not a figure.
 
 **`navigator.storage.estimate()` is never consulted by the app and must not be.** The spike saw
 it report 647 MB and then 7 MB for the same 532.8 MB file. It may be *reported*; it is not a
@@ -232,22 +250,38 @@ desktop bundle and therefore out of the portable exe. Verified: `npm run build` 
   and whose user half had **no tables at all**, and the only thing that noticed was the facet
   index: `index build: no such table: collection_entries`, in a Worker console, with the page
   otherwise working.
-- **`temp_store` defaults to memory on wasm**, and the staging swap's index replay and FTS
-  rebuild build their sort trees there. `db::OPFS_TEMP_STORE` sends them to the VFS instead;
-  without it the ingest died in `dlmalloc` at 116 000 rows every time. It is a mitigation and
-  not a cure — see the warning at the top.
-- **`OPFS_INITIAL_CAPACITY` is 64 because 12 was not enough.** The pool preallocates *files*,
-  and this app wants two databases, two rollback journals, a staging table, an index replay, an
-  FTS rebuild and every temp b-tree behind them. At 12 the first run died 16 s in with
-  `memory access out of bounds` before a single 2 000-row batch had reported.
+- **A fix that moves a failure's threshold has not necessarily touched its cause.**
+  `db::OPFS_TEMP_STORE` (sending SQLite's sort trees to the VFS instead of to memory) and
+  raising `OPFS_INITIAL_CAPACITY` from 12 to 64 were both introduced against the ingest's
+  `dlmalloc` death, and each turned a guaranteed failure into an intermittent one — which read
+  as progress. It was not: the fault was a corrupted heap, and both changes only altered *where
+  the allocations land*, so a bogus pointer hit a different chunk. The tell was the pattern
+  itself. Both are still in the code and neither has been re-measured since the real cause was
+  fixed; see "What is owed".
+- **A wasm-bindgen module can be instantiated twice and nothing says so.** `__wbg_init`'s guard
+  is `if (wasm !== undefined) return wasm`, and `wasm` is set after the `await`. Two overlapping
+  callers get two instances, one shared `wasm` binding, and cross-instance pointers. The cheap
+  detector, with no source change to the module: `Runtime.queryObjects` over
+  `WebAssembly.Memory.prototype` in the Worker's session — one page, one Worker, one memory, or
+  something is wrong.
 - **A dropped `#[wasm_bindgen]` attribute compiles clean, with no error and no warning**, because
   the function stays `pub` in a `pub mod`. Only loading the module in a browser can catch it —
   so `scripts/build-wasm.mjs` greps the generated glue for all five entry points instead.
 
 ## What is owed
 
-- **The memory failure above.** Nothing else matters until the first run is reliable.
 - **The one-tab guard's premise.**
+- **Whether `OPFS_TEMP_STORE` and an `OPFS_INITIAL_CAPACITY` of 64 are still needed.** Both
+  were added against the failure at the top of this page, and both moved its threshold — which
+  is what a change to the allocation *layout* does to a corrupted heap, and is not evidence
+  that either was the cure. Neither has been re-measured against a build with one wasm
+  instance, and neither was changed back: running the pool out of file slots mid-ingest is not
+  survivable, so that experiment is worth doing deliberately rather than by leaving it in.
+- **`@tauri-apps/api/window` throws in the browser.** Once the app renders, the page logs
+  `TypeError: Cannot read properties of undefined (reading 'metadata')` from `getCurrentWindow`
+  and `transformCallback` — the shell reaches for Tauri's window API on a target that has none.
+  It does not stop anything rendering. Not investigated; it belongs with whatever ports the
+  title bar.
 - **A desktop baseline re-measurement.** Spec §8 requires one from any PR touching search,
   faceting or sync, and this one refactored the ingest (`ingest::StreamIngest`) and the index
   build (`index::lifecycle::build_from`). It was **not** taken: this worktree is a fresh install
