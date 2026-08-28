@@ -83,6 +83,14 @@ const WISHLIST_ONLY: Dirty = Dirty {
 /// from being a silent decision is `every_table_in_the_schema_has_been_decided_about`, which
 /// asserts the whole of `sqlite_master` against a written-down list: a migration that adds a
 /// table goes red here until somebody says which side of this match it belongs on.
+///
+/// **The hook reports a schema name as well now, and this map ignores it on purpose.** Since
+/// schema 27 a write arrives as `("main", "decks")` or `("corpus", "cards")`, and taking only
+/// the table is correct because a table name is unique across the two files by
+/// [`crate::schema::TABLES`] — which `every_table_is_on_exactly_one_side` is what keeps
+/// true. The schema name is not wasted: [`install_hook`] passes it to
+/// [`crate::db::CrossFileFence`], which rides in this same callback because SQLite allows one
+/// update hook per connection.
 pub fn surface_of(table: &str) -> Option<Dirty> {
     match table {
         "deck_cards" | "deck_categories" | "deck_tags" | "deck_folders" => Some(DECKS_ONLY),
@@ -200,13 +208,19 @@ fn dirty_of(bits: u8) -> Option<Dirty> {
 /// Zone's three clears still mark: each of them empties a table other rows point at with
 /// `ON DELETE CASCADE`. The tests at the bottom of this file are what keep that true, rather
 /// than a claim about SQLite's release notes.
-pub fn install_hook(conn: &Connection, mask: Arc<Mask>) {
+pub fn install_hook(conn: &Connection, mask: Arc<Mask>, fence: Arc<crate::db::CrossFileFence>) {
+    // **The fence rides in the mirror's hook because SQLite allows exactly one update hook
+    // per connection**, which is the rule stated two paragraphs up: a second `install_hook`
+    // replaces rather than adds, so a second *installer* would silently take this one off.
+    // That is why the two live in one function rather than in two.
+    let marker = fence.clone();
     // The `Result` is `Err` only for a connection this crate never makes — one already lent
     // out, or borrowed from a shared handle — so there is nothing to recover, and refusing to
     // start the app over a mirror that will not notice edits would be the wrong trade. A
     // failure here degrades to "the startup pass is the only pass", which is still a mirror.
     if let Err(e) = conn.update_hook(Some(
-        move |_action: rusqlite::hooks::Action, _db: &str, table: &str, _rowid: i64| {
+        move |_action: rusqlite::hooks::Action, db: &str, table: &str, _rowid: i64| {
+            marker.note(db);
             if let Some(d) = surface_of(table) {
                 mask.mark(d);
             }
@@ -214,6 +228,25 @@ pub fn install_hook(conn: &Connection, mask: Arc<Mask>) {
     )) {
         eprintln!("the backup mirror will not see live edits: {e}");
     }
+    let settling = fence.clone();
+    // Both of these fail for the one reason the update hook does, and with the same answer:
+    // a fence that could not be installed costs a diagnostic, never a launch.
+    let _ = conn.commit_hook(Some(move || {
+        if settling.settle() {
+            // Said out loud rather than asserted: this is a diagnostic on a user's machine
+            // and the write has already happened. `crate::sync::with_write` is where a debug
+            // build turns it into a failing test.
+            eprintln!(
+                "a transaction wrote to both the user database and the card database; \
+                 SQLite does not guarantee those commit together"
+            );
+        }
+        // **Never true.** A commit hook that answered `true` would abort the commit, which
+        // would turn a diagnostic into data loss over a bug in this fence.
+        false
+    }));
+    let clearing = fence;
+    let _ = conn.rollback_hook(Some(move || clearing.clear()));
 }
 
 // ---------------------------------------------------------------------------------------
@@ -535,7 +568,103 @@ mod tests {
             index: std::sync::RwLock::default(),
             mirror: Arc::new(Mask::default()),
             mirror_status: std::sync::Mutex::new(LastPass::default()),
+            fence: std::sync::Arc::new(crate::db::CrossFileFence::new()),
         }
+    }
+
+    /// A transaction that writes both files commits non-atomically in WAL mode, and SQLite
+    /// will not say so. This is what says so.
+    #[test]
+    fn the_fence_trips_on_a_transaction_that_writes_both_files() {
+        let conn = migrated_memory_db();
+        let mask = Arc::new(Mask::default());
+        let fence = Arc::new(crate::db::CrossFileFence::new());
+        install_hook(&conn, mask.clone(), fence.clone());
+
+        conn.execute_batch(
+            "BEGIN;
+             INSERT INTO decks (name, format_key, created_at, updated_at)
+               VALUES ('one file', 'casual', 0, 0);
+             COMMIT;",
+        )
+        .unwrap();
+        assert!(!fence.tripped(), "a user-only transaction is fine");
+
+        conn.execute_batch(
+            "BEGIN;
+             INSERT INTO decks (name, format_key, created_at, updated_at)
+               VALUES ('two files', 'casual', 0, 0);
+             INSERT OR REPLACE INTO sets (code, name) VALUES ('zzz', 'probe');
+             COMMIT;",
+        )
+        .unwrap();
+        assert!(fence.tripped(), "a cross-file transaction must be caught");
+    }
+
+    /// A rolled-back transaction is not a cross-file commit, and marking one would make the
+    /// fence cry wolf on every failed write in the app.
+    ///
+    /// **The second half is what makes the rollback hook load-bearing, and the first half
+    /// alone did not.** `settle` runs from the *commit* hook, which a `ROLLBACK` never
+    /// reaches — so the rolled-back transaction cannot trip the fence whether the rollback
+    /// hook exists or not, and a test that stopped there passed with it deleted. What the
+    /// hook actually buys is the *next* commit: without the clear, the abandoned bits sit in
+    /// `seen`, and the first ordinary user-only write after a failed one reports a crossing
+    /// that never happened.
+    #[test]
+    fn a_rolled_back_cross_file_transaction_does_not_trip_the_fence() {
+        let conn = migrated_memory_db();
+        let fence = Arc::new(crate::db::CrossFileFence::new());
+        install_hook(&conn, Arc::new(Mask::default()), fence.clone());
+        conn.execute_batch(
+            "BEGIN;
+             INSERT INTO decks (name, format_key, created_at, updated_at) VALUES ('x','casual',0,0);
+             INSERT OR REPLACE INTO sets (code, name) VALUES ('zzz','probe');
+             ROLLBACK;",
+        )
+        .unwrap();
+        assert!(!fence.tripped(), "a rollback is not a commit");
+
+        conn.execute(
+            "INSERT INTO decks (name, format_key, created_at, updated_at) VALUES ('y','casual',0,0)",
+            [],
+        )
+        .unwrap();
+        assert!(
+            !fence.tripped(),
+            "the abandoned transaction's bits must not be charged to the next write"
+        );
+    }
+
+    /// The mirror still sees every write it is supposed to, now that half the schema is in
+    /// another file — and it still sees none of the ones it is not.
+    #[test]
+    fn the_mask_is_unmoved_by_the_split() {
+        let conn = migrated_memory_db();
+        let mask = Arc::new(Mask::default());
+        install_hook(
+            &conn,
+            mask.clone(),
+            Arc::new(crate::db::CrossFileFence::new()),
+        );
+
+        conn.execute(
+            "INSERT OR REPLACE INTO sets (code, name) VALUES ('zzz','probe')",
+            [],
+        )
+        .unwrap();
+        assert_eq!(mask.take(), None, "a corpus write must mark nothing");
+
+        conn.execute(
+            "INSERT INTO decks (name, format_key, created_at, updated_at) VALUES ('d','casual',0,0)",
+            [],
+        )
+        .unwrap();
+        let taken = mask.take().expect("a user write must mark something");
+        // Both, because a deck stands for a folder in the cabinet since schema v25 -
+        // `surface_of` maps this table to DECKS_AND_COLLECTION and the split changed nothing
+        // about that.
+        assert!(taken.decks && taken.collection && !taken.wishlist);
     }
 
     /// The load-bearing row of the map. A sync rewrites 116 700 `cards` rows and a feed
@@ -746,7 +875,11 @@ mod tests {
     fn a_write_through_the_hooked_connection_marks_its_surface() {
         let conn = migrated_memory_db();
         let mask = Arc::new(Mask::default());
-        install_hook(&conn, mask.clone());
+        install_hook(
+            &conn,
+            mask.clone(),
+            Arc::new(crate::db::CrossFileFence::new()),
+        );
         conn.execute(
             "INSERT INTO wishlist_folders (name, sort_order, created_at, updated_at)
              VALUES ('Ordered', 0, 0, 0)",
@@ -762,7 +895,11 @@ mod tests {
     fn a_write_to_a_table_the_map_ignores_marks_nothing() {
         let conn = migrated_memory_db();
         let mask = Arc::new(Mask::default());
-        install_hook(&conn, mask.clone());
+        install_hook(
+            &conn,
+            mask.clone(),
+            Arc::new(crate::db::CrossFileFence::new()),
+        );
         crate::update::set_app_meta(&conn, "anything", "at all").unwrap();
         assert_eq!(mask.take(), None);
     }
@@ -772,7 +909,11 @@ mod tests {
     fn writing_a_card_row_does_not_mark_anything() {
         let conn = migrated_memory_db();
         let mask = Arc::new(Mask::default());
-        install_hook(&conn, mask.clone());
+        install_hook(
+            &conn,
+            mask.clone(),
+            Arc::new(crate::db::CrossFileFence::new()),
+        );
         conn.execute(
             "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,is_paper,raw)
              VALUES ('bolt-lea','Lightning Bolt','lea','161','en','normal',1,'{}')",
@@ -799,7 +940,11 @@ mod tests {
         )
         .unwrap();
         let mask = Arc::new(Mask::default());
-        install_hook(&conn, mask.clone());
+        install_hook(
+            &conn,
+            mask.clone(),
+            Arc::new(crate::db::CrossFileFence::new()),
+        );
         conn.execute("DELETE FROM wishlist_folders", []).unwrap();
         assert!(
             mask.take().is_some_and(|d| d.wishlist),
@@ -826,7 +971,11 @@ mod tests {
         )
         .unwrap();
         let mask = Arc::new(Mask::default());
-        install_hook(&conn, mask.clone());
+        install_hook(
+            &conn,
+            mask.clone(),
+            Arc::new(crate::db::CrossFileFence::new()),
+        );
         conn.execute("DELETE FROM collection_entries", []).unwrap();
         assert!(
             mask.take().is_some_and(|d| d.collection),
@@ -840,7 +989,11 @@ mod tests {
     fn creating_a_deck_marks_both_the_decks_and_the_cabinet() {
         let conn = migrated_memory_db();
         let mask = Arc::new(Mask::default());
-        install_hook(&conn, mask.clone());
+        install_hook(
+            &conn,
+            mask.clone(),
+            Arc::new(crate::db::CrossFileFence::new()),
+        );
         crate::deck::create_deck(
             &conn,
             &crate::deck::DeckInput {

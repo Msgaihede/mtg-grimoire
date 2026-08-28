@@ -1835,6 +1835,14 @@ mod tests {
         let conn = crate::db::open_write(&dir).unwrap();
         crate::schema::prepare_database(&conn).unwrap();
         let read = crate::db::open_read(&dir).unwrap();
+        // **Hooked up, so what these fixtures drive runs with the cross-file fence
+        // armed.** `crate::sync::with_write`'s `debug_assert` reads it, so a command
+        // that committed to both files fails its own test rather than printing a line
+        // nobody reads. The mask rides along because SQLite allows one update hook per
+        // connection, and nothing here looks at it.
+        let mirror = std::sync::Arc::new(crate::mirror::watch::Mask::default());
+        let fence = std::sync::Arc::new(crate::db::CrossFileFence::new());
+        crate::mirror::watch::install_hook(&conn, mirror.clone(), fence.clone());
         (
             Arc::new(AppState {
                 db: Mutex::new(conn),
@@ -1846,8 +1854,9 @@ mod tests {
                 index: std::sync::RwLock::default(),
                 // The mirror is never started in these tests; a clean mask and an empty record are
                 // what an `AppState` looks like before the first pass.
-                mirror: std::sync::Arc::new(crate::mirror::watch::Mask::default()),
+                mirror,
                 mirror_status: std::sync::Mutex::new(crate::mirror::watch::LastPass::default()),
+                fence,
             }),
             dir,
         )

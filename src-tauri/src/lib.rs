@@ -487,7 +487,11 @@ pub fn run() {
             // the thread starts so that nothing written between here and the first pass can
             // slip past unmarked — though the first pass is `Dirty::ALL` and would cover it
             // anyway, which is what makes this ordering cheap insurance rather than a rule.
-            mirror::watch::install_hook(&db::lock_blocking(&state.db), state.mirror.clone());
+            mirror::watch::install_hook(
+                &db::lock_blocking(&state.db),
+                state.mirror.clone(),
+                state.fence.clone(),
+            );
 
             // Then the thread. Detached and never fatal, exactly like the facet warm-up above:
             // it runs one full pass now — the whole of what makes the folder correct after a
@@ -741,6 +745,9 @@ fn init_state(app: &tauri::App) -> Result<AppState, String> {
         // `Dirty::ALL` regardless.
         mirror: Arc::new(mirror::watch::Mask::default()),
         mirror_status: Mutex::new(mirror::watch::LastPass::default()),
+        // The mask's twin, and hooked up in the same call for the same reason: SQLite allows
+        // one update hook per connection, so the fence has to ride in the mirror's.
+        fence: Arc::new(db::CrossFileFence::new()),
     })
 }
 

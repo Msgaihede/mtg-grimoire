@@ -114,6 +114,13 @@ pub struct AppState {
     /// that may not survive a restart, and a count read back after one would be a claim about
     /// a disk nobody has looked at since. See [`crate::mirror::watch::LastPass`].
     pub mirror_status: Mutex<crate::mirror::watch::LastPass>,
+    /// Whether any transaction on `db` has committed across both files.
+    ///
+    /// An `Arc` for [`AppState::mirror`]'s reason and by the same mechanism: the update hook
+    /// on `db` holds a clone of it for the life of the process, because the two share that
+    /// hook — SQLite allows one per connection. See [`crate::db::CrossFileFence`], which also
+    /// names what it cannot see.
+    pub fence: Arc<crate::db::CrossFileFence>,
 }
 
 /// Result of a sync run. `updated_at` is `Some` only when `updated` is true, so a
@@ -433,10 +440,21 @@ pub(crate) fn with_write<T>(
     state: &AppState,
     f: impl FnOnce(&Connection) -> Result<T, String>,
 ) -> Result<T, String> {
-    match crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
+    let out = match crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
         Some(conn) => f(&conn),
         None => Err(crate::db::BUSY.to_owned()),
-    }
+    };
+    // **Every user-facing write in the crate passes through here**, so a debug build runs the
+    // whole suite with the fence armed and this is where a path that crossed the files stops
+    // being a line in a log. Release keeps the `eprintln!` in the commit hook and nothing
+    // else: the write has already happened by then, and a panic on a reader's machine would
+    // be a worse answer than a sentence.
+    debug_assert!(
+        !state.fence.tripped(),
+        "a transaction wrote to both user.db and corpus.db; SQLite does not guarantee those \
+         commit together in WAL mode"
+    );
+    out
 }
 
 /// Upsert `sets`, returning how many rows were written.
@@ -1218,6 +1236,14 @@ mod tests {
         crate::split::convert(&dir).unwrap();
         let conn = crate::db::open_write(&dir).unwrap();
         let read = crate::db::open_read(&dir).unwrap();
+        // **Hooked up, so what these fixtures drive runs with the cross-file fence
+        // armed.** `crate::sync::with_write`'s `debug_assert` reads it, so a command
+        // that committed to both files fails its own test rather than printing a line
+        // nobody reads. The mask rides along because SQLite allows one update hook per
+        // connection, and nothing here looks at it.
+        let mirror = std::sync::Arc::new(crate::mirror::watch::Mask::default());
+        let fence = std::sync::Arc::new(crate::db::CrossFileFence::new());
+        crate::mirror::watch::install_hook(&conn, mirror.clone(), fence.clone());
         (
             AppState {
                 db: Mutex::new(conn),
@@ -1232,8 +1258,9 @@ mod tests {
                 index: std::sync::RwLock::default(),
                 // The mirror is never started in these tests; a clean mask and an empty record are
                 // what an `AppState` looks like before the first pass.
-                mirror: std::sync::Arc::new(crate::mirror::watch::Mask::default()),
+                mirror,
                 mirror_status: std::sync::Mutex::new(crate::mirror::watch::LastPass::default()),
+                fence,
             },
             dir,
         )

@@ -1,5 +1,6 @@
 use rusqlite::{Connection, OpenFlags};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard, TryLockError};
 use std::time::{Duration, Instant};
 
@@ -147,6 +148,81 @@ pub fn open_read(data_dir: &Path) -> rusqlite::Result<Connection> {
         [path.to_string_lossy().as_ref()],
     )?;
     Ok(conn)
+}
+
+/// Records whether the transaction now committing wrote to more than one of the
+/// connection's databases.
+///
+/// **SQLite does not promise a cross-file commit is atomic in WAL mode**, and it does not
+/// complain either — the commit succeeds and either file may be the one that survives a
+/// power cut. There is exactly one such transaction in the crate's history
+/// (`crate::reconcile::apply`, closed in schema 27 by moving `card_migrations` to the user
+/// file), and this is what stops the second one being added by somebody who did not know.
+///
+/// Two atomics and a `fetch_or` inside SQLite's own callback: no allocation, no lock, and
+/// nothing that could call back into the database — the same budget
+/// [`crate::mirror::watch::Mask`] works to, and for the same reason, since they share a hook.
+///
+/// # What it cannot see
+///
+/// **The update hook does not fire for `WITHOUT ROWID` tables** — measured, an insert into
+/// `image_cache` produced no callback at all and the row was there. Twelve corpus tables are
+/// `WITHOUT ROWID`: `image_cache`, `marketplace_prices`, `art_tags`, `art_tag_parents`,
+/// `art_taggings`, `art_tag_illustrations`, `oracle_tags`, `oracle_tag_parents`,
+/// `oracle_taggings`, `oracle_tag_cards`, `cards_fts_idx` and `cards_fts_config`;
+/// `muted_tags` is the one on the user side. A transaction whose *only* corpus write is to
+/// one of those is invisible here, and `image_cache` is the likeliest candidate in the crate.
+///
+/// An authorizer would see them — it reports the schema name and does fire for
+/// `WITHOUT ROWID`, both measured — but it fires at *prepare* time, and a `prepare_cached`
+/// statement re-executed does not re-authorize (measured: one callback across two
+/// executions). It cannot attribute a write to a transaction, which is the whole question
+/// here. So this is the honest half of the fence rather than the whole one.
+#[derive(Debug, Default)]
+pub struct CrossFileFence {
+    seen: AtomicU8,
+    tripped: AtomicBool,
+}
+
+impl CrossFileFence {
+    const MAIN: u8 = 1 << 0;
+    const ATTACHED: u8 = 1 << 1;
+
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// From inside the update hook. `db` is SQLite's own schema name for the write.
+    pub fn note(&self, db: &str) {
+        let bit = if db == "main" {
+            Self::MAIN
+        } else {
+            Self::ATTACHED
+        };
+        self.seen.fetch_or(bit, Ordering::Relaxed);
+    }
+
+    /// From the commit hook. Returns whether this commit crossed the files.
+    ///
+    /// **Never returns anything SQLite acts on.** A commit hook that aborted here would turn
+    /// a diagnostic into data loss on a user's machine over a bug in this fence.
+    pub fn settle(&self) -> bool {
+        let crossed = self.seen.swap(0, Ordering::Relaxed) == (Self::MAIN | Self::ATTACHED);
+        if crossed {
+            self.tripped.store(true, Ordering::Relaxed);
+        }
+        crossed
+    }
+
+    /// From the rollback hook. A transaction that did not commit did not cross anything.
+    pub fn clear(&self) {
+        self.seen.store(0, Ordering::Relaxed);
+    }
+
+    /// Whether any commit on this connection has crossed the files since the process began.
+    pub fn tripped(&self) -> bool {
+        self.tripped.load(Ordering::Relaxed)
+    }
 }
 
 /// How long a user-facing write waits for the write connection before answering "busy".
