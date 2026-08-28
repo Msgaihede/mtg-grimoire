@@ -3149,21 +3149,50 @@ break between releases), by building the smallest real thing and reading what ha
 reading the docs.
 
 **The section is titled for `@dnd-kit/dom` and was titled for `@dnd-kit/react` until 2026-08-28,
-which was wrong the day it was written**: nothing in `src/` imports the React package, every
+which was wrong the day it was written**: nothing in `src/` ever imported the React package, every
 answer below is about the DOM one, and §1 and §2 are the record of deciding not to use the hooks.
-`@dnd-kit/dom` and `@dnd-kit/abstract` are both declared exactly in `package.json` as of 3b; until
-then the module every drag in the app went through was an undeclared transitive of
-`@dnd-kit/react`.
 
-The dependency landed alongside `@atlaskit/pragmatic-drag-and-drop` and the two coexisted on
-**different elements** for one plan. **Since 3b (2026-08-28) nothing in `src/` imports
-pragmatic-dnd at all**, so the coexistence rule below is history rather than a constraint — and
-the reason it existed is worth keeping, because it is not the reason it looks like: putting both
-on one element is refused not by the registries but by `PointerSensor.handlePointerDown`, which
-binds a capture-phase `dragstart` listener that `preventDefault()`s the native drag whenever the
-press landed on something that is not itself a native draggable. In this app that is nearly every
-press — a card's name is a button and a tile's art is a button — so the pragmatic drag would have
-died on exactly the gestures a test written for either library would not be watching.
+**As of 3c (2026-08-28) the manifest declares exactly what the code imports and nothing else:**
+`@dnd-kit/abstract`, `@dnd-kit/collision` and `@dnd-kit/dom`, all three pinned at `0.5.0` with no
+caret. That is the end of a defect this repo hit once and should not hit twice — 3a declared
+`@dnd-kit/react` and wrote `dndManager.ts` against `@dnd-kit/dom`, so the module every drag in the
+app went through was an **undeclared transitive** of the wrapper, one `npm update` from resolving
+to something nothing pinned. 3b declared the two the code imports; 3c removed the wrapper, which
+was never imported at all.
+
+**Removing it gives up one signal, and this line is where that signal now lives.**
+`@dnd-kit/react` was the only package in this tree that declared a React peer dependency
+(`react` and `react-dom`, both `^18.0.0 || ^19.0.0`); `@dnd-kit/dom`, `@dnd-kit/abstract` and
+`@dnd-kit/collision` declare no peers at all. **Which React this drag stack has been proved
+against is therefore this repo's to record rather than the dependency graph's: React 19, on
+Windows, as of 2026-08-28.**
+
+**`@atlaskit/pragmatic-drag-and-drop` and its auto-scroller were uninstalled in 3c**, taking
+`bind-event-listener` and `raf-schd` with them — four packages, `npm`'s own count. 3b had already
+removed the last import; 3c removed the last call sites in the test harness and then the
+dependency. `src/lib/dndManager.test.ts` is the fence that keeps them out, and **it matches an
+import statement rather than a name**, on purpose: many files in this app still mention
+pragmatic-dnd in a doc comment as the record of why something is the way it is, and a sweep
+that matched the name would turn this project's memory of its own reasons into a red build.
+
+**The coexistence rule this section used to open with is history, and one sentence of it was
+wrong about the library that replaced it.** While the two libraries overlapped they were kept on
+**different elements**, and what actually refused both on one element was not either registry but
+`PointerSensor.handlePointerDown`, which binds a capture-phase `dragstart` listener that
+`preventDefault()`s the native drag whenever the press landed on something that is not itself a
+native draggable — nearly every press in this app, because a card's name is a button and a tile's
+art is a button.
+
+**What is *not* true of dnd-kit is that a second registration on one element replaces the first.**
+That was pragmatic-dnd's rule: it kept one `draggable()` per element in a `WeakMap`, and a second
+silently took the first's place. **dnd-kit keys its registry by entity id**, so two `Droppable`s
+on one element both register and both compete, and what separates them is `accepts()` —
+`computeCollisions` skips a droppable that refuses the source before it measures anything. Two
+folder cards and every deck pile in the app depend on that, and `TableView`'s rows depend on the
+draggable half of it: one row element carries a `Draggable` *and* a `Droppable` and both stand.
+Where two accepting targets do overlap, `collisionPriority` is what decides them; without one they
+are separated by distance, which is why an element with no measured rectangle in jsdom wins a drop
+the pointer never went near.
 
 The question the spike existed to answer: **`@dnd-kit/react` is provider-and-hooks shaped, and
 `lib/folderDrag.ts` is imperative** (`folderDraggable({ element, folder })` registers on a DOM
@@ -3335,6 +3364,195 @@ helper or a call site has to know:
 - **`PointerHeld.started` is a live reading of the manager's operation, not a remembered
   boolean.** Asserted after a `cancel()` or a `drop()` it is false for every drag there has ever
   been, which reads as a gesture that never started.
+
+### What a drag is to a keyboard and a screen reader, measured
+
+Measured 2026-08-28 in jsdom, against the real components, by reading
+`dndManager.registry.draggables` back off each rendered surface. `src/lib/dndAccessibility.test.tsx`
+is the measurement as assertions; this is the same reading in prose. **Nothing in this subsection
+is a decision** — it is what is true, so that whatever is decided next is decided against
+something.
+
+**The instrument.** `draggable.handle ?? draggable.element` is the exact expression
+`Accessibility.registerEffect` uses to pick the element it would stamp and `KeyboardSensor.bind`
+uses to pick the element it would listen on. Reading the registry answers the question those two
+ask; a `grep` for registration helpers answers a different one, and would have missed two of the
+rows below.
+
+#### Every draggable in the app, and what a caret can reach
+
+| Surface | Activator | `role` | `tabindex` | Tab reaches it? |
+| --- | --- | --- | --- | --- |
+| Collection folder wall (`CollectionFolderCard`) | `<li>` | none | none | **no** |
+| Wishlist folder wall (`WishFolderCard`) | `<li>` | none | none | **no** |
+| Deck sidebar folder tree (`FolderTree`) | `<div>` | none | none | **no** |
+| Deck editor, Stack / Grid / Text views (a card) | `<li>` | none | `-1` | **no** |
+| Deck editor, a pile's heading (`useCategoryDragSource`) | **handle** = the grip `<button>` | none | none | **yes** |
+| **Deck editor, Table view (a card)** | `<div>` | `row` | **`0`** | **yes** |
+| **Collection table (a row)** | `<div>` | `row` | **`0`** | **yes** |
+| Wishlist table (a row) | `<div>` | `row` | none | **no** |
+| Decks wall (a deck tile, `DeckTile`) | `<li>` | none | none | **no** |
+| Any card wall (`CardGrid`: search, collection, wishlist, tags, the deck panel) | `<div>` | none | `-1` | **no** |
+
+**The two bolded rows are the correction; four of the others were not on the plan's list at all.**
+The 3c plan tabulated four surfaces and concluded that the category grip is the only tab-reachable
+draggable in the app. It is not, and the ones it missed are the most numerous:
+`VirtualTable` gives its rows `tabIndex: onActivate ? 0 : undefined` so that
+Enter and Space open the card, and both the deck editor's table view and the collection table
+register a drag on **that same row element** — one `<div>` carrying `role="row"`, `tabindex="0"`,
+a `Draggable` and a `Droppable` at once. The wishlist's table is the control that proves the
+mechanism: it deliberately passes no `onActivate`, so its rows have no tab stop and no keyboard
+drag could ever reach them either.
+
+**A deck card's `tabIndex={-1}` arrives with its *menu*, not with its drag.** `deckCardMenuProps`
+is what writes it, so a view mounted without `actions.menu` — a story, a read-only mount — has cards
+carrying no `tabindex` at all. Both are out of the tab order; only one of them is the shipped
+editor.
+
+#### What a keyboard can actually do
+
+**Nothing, on every surface.** There is no `KeyboardSensor` in the manager since 3b, so Space and
+Enter start no drag anywhere — measured on the grip and on a deck table row, which are the only two
+activators a caret can be put on at all. Both keep their own behaviour: the grip's
+`ArrowLeft`/`ArrowRight` write a real reorder (`ArrowUp`/`ArrowDown` in `CategoriesDialog`), and a
+table row's Enter and Space open the card.
+
+**The sentence 3a wrote — "`KeyboardSensor` is a *sensor* and stays: dragging a folder from the
+keyboard is unaffected" — was never true of this app's markup**, and that is now measured rather than
+argued. That sensor binds its `keydown` to `source.handle ?? source.element` and its default
+`preventActivation` is `event.target !== (source.handle ?? source.element)`, so a keyboard drag
+needs the draggable element **itself** to be focused. Most of the surfaces in the table above could
+never be focused at all, and the folder tree — the surface that sentence was about — is one of them. The comment in `dndManager.ts` is already correct for a different reason (3b
+removed the sensor because it took Enter away from every card); this is the reason it names and the
+one the plan expected.
+
+**Two things that would change that answer, and both are latent today.**
+
+- **A per-source `sensors` list replaces the manager's rather than extending it**
+  (`Draggable`'s effect reads `this.sensors ?? [...manager.sensors]`). Measured by mutation on
+  2026-08-28: putting `KeyboardSensor` back into `dndManager`'s `sensors` array changes **nothing**
+  on the grip, because `useCategoryDragSource` passes a list of its own — and starts a real drag on
+  a **deck table row**, which passes none and therefore inherits the window's. So the surface most
+  people would test is fenced by accident and the surface nobody would test is the one that moves.
+- **`composedDraggable` already names `KeyboardSensor` in a branch nothing reaches.**
+  `features/decks/dnd.ts` builds a per-source `sensors: [PointerSensor…, KeyboardSensor]` whenever
+  a caller narrows `notFrom`, and **no caller anywhere passes `notFrom`** — its own comment says
+  "nothing today". The first surface that narrows its press guard would acquire a keyboard drag it
+  did not ask for, on whatever element it registered.
+
+#### What a screen reader is told: nothing
+
+There is no live region, no instructions element and no `aria-*` on a drag source at rest. The app
+says nothing when a drag begins, nothing about what it is over, and nothing about where it landed.
+`@atlaskit/pragmatic-drag-and-drop` shipped no announcements either, so this is a ceiling rather
+than a regression — but it is worth stating as a ceiling rather than leaving as an absence.
+
+**What the `Accessibility` plugin would supply, and what it would cost, measured by putting it
+back.** With the plugin unfiltered and one animation frame allowed to pass, a collection folder
+card comes back as
+
+```html
+<li role="button" tabindex="0" aria-roledescription="draggable"
+    aria-describedby="dnd-kit-description-0" aria-grabbed="false" aria-pressed="false"
+    aria-disabled="false" class="relative rounded-xl">
+```
+
+`getAllByRole("listitem")` then finds **nothing** on the wall — `role="button"` takes the `listitem`
+role away, which is how a screen reader says how many drawers there are — and the tree row's `<div>`
+comes back `role="button" tabindex="0"` for the same reason. Appended to `<body>`:
+`<div role="status" aria-live="polite" id="dnd-kit-announcement-0">` and a hidden
+`dnd-kit-description-0`. That reproduces 3a's live reading of 2026-08-27 exactly, on markup rather
+than from the plugin's source.
+
+**The app could pre-empt two of those attributes and no more.** The plugin skips an element that
+already carries a `tabindex` or a `role`, so stamping our own would head off exactly those two;
+`aria-roledescription`, `aria-describedby`, `aria-grabbed` (deprecated since ARIA 1.1),
+`aria-pressed` and `aria-disabled` have no opt-out of any kind. Its `announcements` option, by contrast, is fully
+overridable — and its defaults say `Picked up draggable item ${source.id}`, where `source.id` here
+is `dndId()`'s counter (`folder-source-3`), which `dndManager.ts` calls "a registry key and nothing
+else". **So the half worth having is the half that would have to be written anyway, and the half
+that comes for free is the half that cannot be turned off.**
+
+#### The same four questions in the shipped window
+
+Driven 2026-08-28 in a **`tauri dev` debug build**, over `scripts/cdp.mjs`, against a copy of the
+real database. The window was left at whatever size it opened at and **the viewport was not
+recorded**, which matters for none of the readings below — every one of them is an attribute, a
+registry entry or a focus target rather than a measurement in pixels.
+
+**The plugin list and the sensor list, read off the live manager.** `import('/src/lib/dndManager.ts')`
+resolves under Vite's dev server, so the manager can be asked directly rather than deduced from the
+DOM: `dndManager.sensors` is **`[PointerSensor]`** and nothing else, and `dndManager.plugins` is the
+eight `CollisionNotifier, ScrollListener, Scroller, StyleInjector, AutoScroller, Cursor, Feedback,
+PreventSelection` — **`Accessibility` is absent**. That is 3a's filter taking effect in a running
+tree rather than in an array literal.
+
+**Nothing in the document says anything about a drag, at rest or during one.** Zero
+`[id^=dnd-kit-]` elements, zero `[aria-live]` elements anywhere in the app, zero
+`aria-roledescription`, zero `aria-grabbed`. The app draws five `role="status"` regions; only the
+ribbon's carries text (`117,606 cards · data from 2026-08-28`) and none of them is written to by a
+drag.
+
+**During a real in-flight drag**, a deck card's source `<li>` reads
+`tabindex="-1" data-deck-card-body data-dnd-source data-dnd-dragging popover` — no `role`, no
+`aria-*` of any kind; the only additions are the library's own `data-dnd-dragging` and the
+`popover` attribute `Feedback` uses for the preview. A deck **folder tree row** mid-drag is a
+`<div>` carrying only `data-dnd-dragging` and `popover`, and its `<li>` ancestor is untouched.
+Compare 3a's plugin-on reading of the same kind of element:
+`role="button" tabindex="0" aria-roledescription="draggable" aria-grabbed="false"`.
+
+**A collection table row is a tab stop and a drag source at once, confirmed on the shipped table.**
+26 of 27 `[role=row]` elements carried `tabindex="0"` **and** `data-dnd-source` (the 27th is the
+header). Reaching one the way a reader does — click a row, press Escape to close the card pane it
+opens, and the pane hands the caret back to the row — leaves the caret on
+`<div role="row" tabindex="0" data-dnd-source>`. **Space there opens the card and starts no drag**:
+`data-dragging` absent, no `[data-dnd-dragging]`, the pane open.
+
+**The category grip, driven the way a reader drives it.** Nine grips in the deck, each a
+`<button aria-label="Move <name>, n of 9">` with no `tabindex` — real stops in the tab order. A
+click puts the caret on one; `ArrowRight` moves the pile from *1 of 9* to *2 of 9*, rewrites every
+sibling's label, keeps the caret on the grip and starts no drag; **`Space` does nothing at all** —
+no drag, no move, caret unchanged.
+
+##### Two traps this pass cost, both worth writing down
+
+**`cdp.mjs pull` did not start a dnd-kit drag in this window, and a page-dispatched `PointerEvent`
+did.** `Input.dispatchMouseEvent` delivered a well-formed `pointerdown` to the source element
+(`isPrimary: true, button: 0, buttons: 1, pointerType: "mouse"`, not `defaultPrevented`, not inside
+`NOT_A_DRAG`) and eleven `pointermove`s to `document` — and `dndManager.monitor`'s `dragstart` never
+fired, on a folder row *and* on a deck tile, with the operation idle and the source in the registry.
+`event.sensor` was still `undefined` in a bubble listener on the source element, so
+`PointerSensor.handlePointerDown` either never ran or returned before its first assignment. Building
+the same gesture out of `new PointerEvent(...)` inside the page starts the drag immediately
+(`data-dragging` on `<html>`, one `[data-dnd-dragging]`). **The cause was not identified.** Note
+that the successful `cdp.mjs pull` drag recorded above was taken against a
+`tauri build --debug --no-bundle` binary, not `tauri dev`, so the difference may be the build rather
+than the harness. Until somebody settles it: **a `pull` that produces no drag is not evidence the
+drag is broken.**
+
+**A `data-probe` attribute does not survive a re-render.** React replaces the folder tree's nodes
+on a query settle, so a probe tagged in one `cdp.mjs` invocation can be gone by the next and the
+selector then reads as "the element does not exist". Re-tag inside the same invocation that uses it.
+
+#### The trap in measuring any of this
+
+**The plugin's DOM mutations land one animation frame after the render**, not during it:
+`registerEffect` collects them into a set and hands them to `@dnd-kit/dom/utilities`'s `scheduler`,
+whose backing call is `requestAnimationFrame`. Read synchronously, **every absence asserted about
+the plugin is vacuous** — measured 2026-08-28, when putting the plugin back left **every**
+assertion in `dndAccessibility.test.tsx` green. Awaiting a frame is what turns that same mutation
+red on five of them, and it is the only thing that makes the file worth anything.
+
+**Not measured, and it would take a screen reader to measure it.** Everything above is the DOM.
+**What a real screen reader actually says during a drag has not been checked** — not with Narrator,
+not with NVDA, in `tauri dev` or in a packaged build — and no test and no CDP pass can substitute
+for it: jsdom asserts the attributes, a browser asserts the elements exist, and only a screen
+reader asserts that something is spoken. The DOM readings make "nothing is announced" the expected
+answer, since there is no live region for anything to be announced *through*, but what a reader
+hears while dragging — the source's own name repeated, the pointer's target read out by the
+virtual cursor, silence — is a different question and an unmeasured one. Doing it needs Narrator
+(`Ctrl+Win+Enter`, and it is already on the machine) against a `tauri build --debug --no-bundle`
+binary, and the answer written down verbatim including anything spoken twice.
 
 ### The shipped CSP blocks a plugin dnd-kit cannot be told not to load — and the rules moved into `index.css`
 
