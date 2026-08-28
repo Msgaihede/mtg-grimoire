@@ -3285,7 +3285,7 @@ Two smaller measurements from the same pass, both of which change how a helper h
   *inside* a handle. Synthetic `pointermove`s cross the 5px distance with no waiting, which is why
   the gesture activates in a test that runs no timers.
 
-### The shipped CSP blocks a plugin dnd-kit cannot be told not to load
+### The shipped CSP blocks a plugin dnd-kit cannot be told not to load — and the rules moved into `index.css`
 
 Found 2026-08-27, reading the library rather than the app. **`@dnd-kit/dom` positions its drag
 preview from a runtime-injected `<style>` element, and this app's shipped `style-src 'self'`
@@ -3305,10 +3305,14 @@ Three plugins register rules through it, and they are not equally cosmetic:
 
 - **`Feedback`** — the drag preview. Its rules are what give the overlay
   `position: fixed`, `pointer-events: none`, `z-index: calc(infinity)` and, critically, its
-  `top`/`left`/`width` read from `--dnd-kit-*` custom properties. The plugin sets those custom
-  properties inline (allowed by `style-src-attr`); the **rules that read them** are what is
-  blocked. Without the rules the preview is a clone in normal flow that does not follow the
-  pointer. That is a broken drag, not a plain drag.
+  `top`/`left`/`width` read from `--dnd-*` custom properties — **`--dnd-`, not `--dnd-kit-`**,
+  which this paragraph said until the rules were read off a running drag. The plugin sets those
+  custom properties inline (allowed by `style-src-attr`); the **rules that read them** are what is
+  blocked. Without the rules the preview is a clone left at the window's top-left corner rather
+  than under the pointer. **It is a visual defect and not a broken drop**, which this paragraph
+  also had wrong: driven in a built debug app on 2026-08-27 the folder still landed where it was
+  dropped and the move survived a reload, with every injected sheet reporting a null
+  `styleSheet`.
 - **`Cursor`** — `* { cursor: grabbing !important; }`. Cosmetic.
 - **`PreventSelection`** — `* { user-select: none !important; }`. A drag that selects text as it
   travels.
@@ -3322,7 +3326,61 @@ suite cannot answer: the only witness is a `tauri build` portable copy.
 
 `StyleInjector` takes a `nonce` option, which is the documented escape and needs a CSP nonce this
 app does not have — Tauri's `csp` is a static string in `tauri.conf.json`, and a nonce has to be
-per-response. The three ways out are therefore: widen the shipped `style-src` (a real regression,
-and the reason the two CSPs differ at all), thread a nonce (a Tauri-side change), or accept a drag
-preview that does not work in the shipped build. **None of them is a decision this plan was
-scoped to make**, and 3b and 3c both depend on which one is taken.
+per-response. That left three ways out: widen the shipped `style-src` (a real regression, and the
+reason the two CSPs differ at all), thread a nonce (a Tauri-side change), or copy the rules into a
+stylesheet the policy already trusts.
+
+**The third is what shipped, and it costs the CSP nothing.** The rules are static CSS; served from
+the app's own bundle they are `'self'`, which `style-src` already allows. The library goes on
+publishing `--dnd-top`, `--dnd-left`, `--dnd-translate` and the rest as inline style *attributes*,
+which `style-src-attr 'unsafe-inline'` permits and which were never the blocked half — so the
+values still arrive and now something reads them. `StyleInjector` is left to go on injecting
+sheets nobody parses. Nothing about the manager, the plugin list or the policy changed.
+
+Three things about the copy are worth knowing before touching it.
+
+- **The cascade layer has to be *named* before Tailwind's.** `CSS_RULES` puts its popover resets
+  in `@layer dnd-kit`, and the library gets away with it because its sheet is **prepended** to
+  `<head>`, so that layer sorts first and therefore loses to everything. A layer takes its
+  priority from where it is first named, and the block itself sits at the foot of `index.css` —
+  after the `@import` that names `theme`, `base`, `components` and `utilities`. Built both ways
+  against tailwindcss 4.3.x on 2026-08-28: with a bare `@layer dnd-kit;` statement above the
+  import, `dist/assets/index-*.css` orders the layers `properties, dnd-kit, theme, base,
+  components, utilities`; without it, `dnd-kit` lands **last**, the highest priority in the sheet,
+  and its `background: unset` / `border: unset` then beat the utility classes the dragged clone is
+  drawn with. That is the preview broken a second way by the fix for the first.
+- **Two rules are fenced and the rest are verbatim.** `Cursor` and `PreventSelection` register
+  bare `*` rules, which is only safe because the library adds and removes them around one
+  gesture. Copied as-is into a stylesheet that is always loaded they would put a closed hand and
+  an unselectable page over the whole app forever, so both are gated on
+  `:root:has([data-dnd-dragging])` — true exactly while `Feedback`'s element exists. Their
+  declarations are untouched.
+- **`src/lib/dndManager.test.ts` is the fence, and it compares against the library rather than
+  against a string.** It starts a real drag through the app's own manager in jsdom (where nothing
+  is blocked), captures the `<style>` elements `StyleInjector` actually injected, parses both them
+  and `index.css` into selector-to-declaration maps, and fails unless every one of the library's
+  is also ours. Verified by mutation on 2026-08-28 in both directions: dropping
+  `will-change: translate` from `index.css`, deleting the `@layer` block and un-fencing the `*`
+  rule each turn it red, and so does editing `node_modules/@dnd-kit/dom/index.js` to add a
+  declaration or a rule the copy has never seen.
+
+**Driven in a built debug app, 2026-08-28** — `tauri build --debug --no-bundle`, the shipped
+`csp`, 1280×800. The policy was confirmed live first, because everything below is void without
+it: a `<style>` created at runtime came back with `sheet === null`. Then a folder card was dragged
+243px with `cdp.mjs pull` over a per-frame sampler (53 frames). The dragged element computed
+`position: fixed`, `top: 344px`, `left: 456px` — the `--dnd-top`/`--dnd-left` the library had
+written inline — `z-index: 2147483647` (`calc(infinity)`, clamped), `pointer-events: none`, and a
+`translate` walking 0 → 122px → 239.328px as the pointer travelled, with the box itself at
+x = 456 → 578 → 695. `<body>` read `cursor: grabbing` and `user-select: none` throughout, and
+`auto` for both at rest.
+
+**The control, in the same session and the same window**: the ten copied rules were deleted out of
+`document.styleSheets[0]` and the drag repeated — which is the state the shipped build was in
+before this change. `position: absolute`, `top: 0px`, `left: 0px`, `z-index: auto`, `<body>` at
+`cursor: auto` and `user-select: auto`, while `--dnd-top: 344px` and `--dnd-left: 456px` sat on the
+element with nothing reading them. A reload restored all ten. Two traps cost time on the way:
+**`cdp.mjs drag` cannot drive this** — it waits on `Input.dragIntercepted`, which only fires for a
+native HTML5 drag, so `pull` (a real press/move/release, and absent from that script's own usage
+string) is the one to reach for; and **`tauri dev` cannot see any of this**, because Vite's dev
+server sends no CSP header at all and the HTML carries no meta, which makes `devCsp` irrelevant
+there rather than merely permissive.

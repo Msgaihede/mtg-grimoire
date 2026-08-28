@@ -37,11 +37,16 @@ import { NOT_A_DRAG } from "@/features/decks/dnd";
  * capture-phase `mousedown` guard in `features/decks/dnd.ts` said once to the library instead of
  * once per draggable.
  *
- * **One thing this cannot configure away, and it is written down where it can be found:**
- * `StyleInjector` is a `CorePlugin`, cannot be removed from the plugin list, and injects a
- * runtime `<style>` element that the shipped `style-src 'self'` blocks — silently, and only in a
- * packaged build. See "The shipped CSP blocks a plugin dnd-kit cannot be told not to load" in
- * [frontend-design.md](../../docs/reference/frontend-design.md).
+ * **One thing this cannot configure away, and the answer to it is in the stylesheet rather than
+ * here.** `StyleInjector` is a `CorePlugin`, cannot be removed from the plugin list, and installs
+ * the rules that position the drag preview by building a runtime `<style>` element — which the
+ * shipped `style-src 'self'` refuses, silently, and only in a packaged build. So those rules are
+ * **copied into `src/index.css`**, where the app's own bundled stylesheet is an origin the policy
+ * allows; the library goes on publishing its `--dnd-*` values as inline style *attributes*, which
+ * `style-src-attr 'unsafe-inline'` already permits, so nothing about the library changes. The
+ * block at the foot of that file carries the whole reasoning, `dndManager.test.ts` is the fence
+ * that keeps the copy in step with the library, and
+ * [frontend-design.md](../../docs/reference/frontend-design.md) has both live passes.
  */
 export const dndManager = new DragDropManager({
   /**
