@@ -29,6 +29,7 @@ jobs:
       frontend: ${{ steps.classify.outputs.frontend }}
       rust: ${{ steps.classify.outputs.rust }}
       powershell: ${{ steps.classify.outputs.powershell }}
+      wasm: ${{ steps.classify.outputs.wasm }}
     steps:
       # The classification is a diff against the base, so this needs history, not a
       # depth-1 checkout. 188 commits of text — the full fetch costs a second or two.
@@ -49,6 +50,7 @@ jobs:
           frontend=false
           rust=false
           powershell=false
+          wasm=false
 
           # A first push to a branch reports an all-zero `before`, and a force-push can
           # report a commit that no longer exists. Neither can be diffed, so both run
@@ -61,6 +63,7 @@ jobs:
             frontend=true
             rust=true
             powershell=true
+            wasm=true
           else
             # `--no-renames` is load-bearing: with rename detection on (the default since
             # git 2.9) a file moved out of `src/` into `src-tauri/` is reported as the
@@ -81,6 +84,25 @@ jobs:
                 frontend=true
                 rust=true
                 powershell=true
+                wasm=true
+                ;;
+
+              # The wasm build's own inputs, and nothing else's. **Above `scripts/*` and
+              # `src/*`**, both of which match more broadly and would route the wrong jobs
+              # first — `case` is first-match-wins, the rule this whole block is ordered by.
+              # `vite.web.config.ts` is not matched by the `vite.config.ts` arm below (that
+              # one is a literal), but it is listed here so the pair reads as one decision.
+              scripts/build-wasm.mjs|vite.web.config.ts)
+                frontend=true
+                wasm=true
+                ;;
+
+              # The frontend half of the web target. These three directories are what the
+              # web bundle adds on top of the desktop one, and `npm run web:build` type-checks
+              # and bundles all of it.
+              src/workers/*|src/web/*|src/lib/core/*)
+                frontend=true
+                wasm=true
                 ;;
 
               # Affects neither job. Nothing here is compiled, linted or tested: `eslint .`
@@ -139,10 +161,16 @@ jobs:
 
               # Rust. The crate is self-contained: nothing under `src-tauri/` reads a file
               # outside it — every `include_str!` names its own `tauri.conf.json`, a
-              # `capabilities/` file, or one of the two `gen/android/` files routed above — and
-              # the `dist/index.html` that `tauri-build` demands is stubbed by the job itself.
+              # `capabilities/` file, one of the two `gen/android/` files routed above, or
+              # `desktop.rs` itself — and the `dist/index.html` that `tauri-build` demands is
+              # stubbed by the job itself.
+              #
+              # **Every change here can break the wasm build too.** It is one crate with two
+              # targets, and a `use tauri::` added to a module on the wasm side of `lib.rs`'s
+              # map compiles on desktop and fails there — with a fully green `npm run verify`.
               src-tauri/*)
                 rust=true
+                wasm=true
                 ;;
 
               # Frontend. What `npm run build` (`tsc && vite build`), `eslint .` and
@@ -154,9 +182,13 @@ jobs:
                 ;;
               package.json|package-lock.json|components.json|.prettierrc)
                 frontend=true
+                wasm=true
                 ;;
+              # `npm run web:build` is `tsc && vite build --config vite.web.config.ts`, and
+              # that config merges `vite.config.ts` — so all four of these are wasm inputs too.
               tsconfig.json|tsconfig.node.json|vite.config.ts|eslint.config.js)
                 frontend=true
+                wasm=true
                 ;;
               scripts/*)
                 frontend=true
@@ -169,6 +201,7 @@ jobs:
               *)
                 frontend=true
                 rust=true
+                wasm=true
                 ;;
             esac
           done <<< "$files"
@@ -176,6 +209,7 @@ jobs:
           echo "frontend=$frontend" >> "$GITHUB_OUTPUT"
           echo "rust=$rust" >> "$GITHUB_OUTPUT"
           echo "powershell=$powershell" >> "$GITHUB_OUTPUT"
+          echo "wasm=$wasm" >> "$GITHUB_OUTPUT"
 
           {
             echo "### Changed-path routing"
@@ -185,6 +219,7 @@ jobs:
             echo "| frontend | \`$frontend\` |"
             echo "| rust | \`$rust\` |"
             echo "| powershell | \`$powershell\` |"
+            echo "| wasm | \`$wasm\` |"
           } >> "$GITHUB_STEP_SUMMARY"
 
   frontend:
@@ -284,6 +319,83 @@ jobs:
         working-directory: src-tauri
         run: cargo test --locked
 
+  wasm:
+    name: wasm
+    needs: changes
+    if: needs.changes.outputs.wasm == 'true'
+    # Linux only, and not as a preference: this compiles SQLite's C amalgamation to wasm32
+    # with clang, which is the same compiler on every host. A Windows leg would prove the
+    # same thing more slowly. **Note that no measured figure in this repo has ever come off
+    # a Linux build** — this job is a compile gate, not a source of numbers.
+    #
+    # **24.04 for the clang version, and 22.04 genuinely does not work.** `sqlite-wasm-rs`'s
+    # `shim/wasm-shim.h` declares `[[noreturn]] void rust_sqlite_wasm_abort();` — C23
+    # attribute syntax, which clang accepts in C mode by default only from **18**. Ubuntu
+    # 22.04's `apt-get install clang` gives **14**, which rejects it with four
+    # `expected expression` errors inside a `cargo:warning=` stream, so the real cause is
+    # buried in build-script output and the visible failure is `cc-rs: command did not
+    # execute successfully`. 24.04 ships clang 18.
+    #
+    # The trap worth naming: `apt-get install clang` reads as correct and pins nothing. This
+    # job was written and reviewed on a machine with clang 22, where it passes.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci
+
+      # sqlite-wasm-rs compiles SQLite's C with `cc` targeting wasm32. There is no way
+      # around this and no way to cache past it.
+      - name: Install clang
+        run: |
+          sudo apt-get update && sudo apt-get install -y clang
+          # Printed, and checked, because the failure this guards is four errors deep in a
+          # build script's warning stream. 18 is the floor for C23 `[[noreturn]]`.
+          clang --version
+          major=$(clang --version | sed -n 's/.*clang version \([0-9]*\).*/\1/p' | head -1)
+          if [ "$major" -lt 18 ]; then
+            echo "clang $major is too old: sqlite-wasm-rs's shim needs C23 attributes (clang 18+)" >&2
+            exit 1
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          # Its own key: this target's artifacts share nothing with the host build's, and a
+          # shared cache would thrash between the two jobs.
+          key: wasm
+
+      # Pinned, and `--locked`. The CLI must match the `wasm-bindgen` crate EXACTLY;
+      # `scripts/build-wasm.mjs` re-checks that pair and refuses if they have drifted.
+      - name: Install wasm-bindgen-cli
+        run: cargo install wasm-bindgen-cli --version 0.2.127 --locked
+
+      # No `dist/` stub here, unlike the `rust` job: `build.rs` returns early for a wasm
+      # TARGET, so `tauri_build` — which is what demands `frontendDist` — never runs.
+      #
+      # This step also checks something no compiler can: that every `#[wasm_bindgen]` entry
+      # point the Worker imports is actually exported. Dropping that attribute compiles
+      # clean with no warning at all, because the function stays `pub` in a `pub mod`.
+      - name: Build the wasm core
+        run: npm run build:wasm
+
+      - name: cargo clippy (wasm)
+        working-directory: src-tauri
+        run: cargo clippy --lib --locked --target wasm32-unknown-unknown -- -D warnings
+
+      - name: Build the web bundle
+        run: npm run web:build
+
   # Branch protection pins required checks by name string, and a matrix job's name embeds
   # its matrix values — so protecting `rust (windows-latest)` would silently stop applying
   # the day the matrix changes. This fixed name is the protected check; the matrix
@@ -320,7 +432,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [changes, frontend, rust, powershell]
+    needs: [changes, frontend, rust, powershell, wasm]
     runs-on: ubuntu-22.04
     steps:
       - name: Fail unless every dependency succeeded or was deliberately skipped
@@ -329,8 +441,9 @@ jobs:
           FRONTEND: ${{ needs.frontend.result }}
           RUST: ${{ needs.rust.result }}
           POWERSHELL: ${{ needs.powershell.result }}
+          WASM: ${{ needs.wasm.result }}
         run: |
-          echo "changes=$CHANGES frontend=$FRONTEND rust=$RUST powershell=$POWERSHELL"
+          echo "changes=$CHANGES frontend=$FRONTEND rust=$RUST powershell=$POWERSHELL wasm=$WASM"
 
           # `changes` is the one dependency that may never be skipped or fail. It decides
           # what the other two do, so if it dies they skip — and a rule that reads a skip
@@ -340,7 +453,7 @@ jobs:
           # A skip here is a deliberate answer from `changes`: that part of the repo did
           # not change, so it has nothing to prove. Every job gated on a `changes` output
           # belongs in this loop — one left out is a job whose failure the gate ignores.
-          for result in "$FRONTEND" "$RUST" "$POWERSHELL"; do
+          for result in "$FRONTEND" "$RUST" "$POWERSHELL" "$WASM"; do
             case "$result" in
               success|skipped) ;;
               *) exit 1 ;;

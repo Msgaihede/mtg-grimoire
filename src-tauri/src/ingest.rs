@@ -106,31 +106,55 @@ pub fn ingest_gz(
     ingest_stream(db, chunks, progress)
 }
 
-/// Ingest from a stream of byte chunks - gzipped or not, the decoder decides.
+/// The ingest as an object the caller pushes into, rather than a loop that pulls.
 ///
-/// The platform-neutral entry point: desktop feeds it a file and the browser feeds it
-/// `fetch`. Peak memory is one chunk plus one batch, exactly as the file version was.
-pub fn ingest_stream(
-    db: &Mutex<Connection>,
-    chunks: impl Iterator<Item = std::io::Result<Vec<u8>>>,
-    progress: &mut dyn FnMut(u64),
-) -> Result<IngestStats, IngestError> {
-    {
-        let conn = crate::db::lock_blocking(db);
-        schema::create_staging(&conn)?;
-    }
-    let mut stats = IngestStats {
-        inserted: 0,
-        skipped: 0,
-    };
-    let mut batch: Vec<CardRow> = Vec::with_capacity(BATCH as usize);
-    let mut decoder = crate::feed::frame::Decoder::new();
-    let mut lines = crate::feed::frame::Lines::new();
-    let mut decoded: Vec<u8> = Vec::new();
+/// **Why both shapes exist.** [`ingest_stream`] takes an `Iterator`, which is the right
+/// thing on a desktop reading a file: `next()` blocks and that is free. A browser has no
+/// such iterator to offer — `reqwest::Response::bytes_stream()` yields a `Stream` whose
+/// `next()` must be awaited, and `wasm32-unknown-unknown` has no thread to block while it
+/// resolves. So the state the loop was keeping in locals moves in here, `ingest_stream`
+/// becomes a four-line driver, and the browser writes the other driver.
+///
+/// One drain, two drivers. Peak memory is unchanged: one chunk plus one batch.
+pub struct StreamIngest<'a> {
+    db: &'a Mutex<Connection>,
+    stats: IngestStats,
+    batch: Vec<CardRow>,
+    decoder: crate::feed::frame::Decoder,
+    lines: crate::feed::frame::Lines,
+    decoded: Vec<u8>,
+}
 
-    // Parsing happens with the lock *not* held - it is the expensive half of the loop,
-    // and the whole point of chunking is that the connection is free during it.
-    let take_line = |line: &[u8], stats: &mut IngestStats, batch: &mut Vec<CardRow>| {
+impl<'a> StreamIngest<'a> {
+    /// Create `cards_staging` and get ready for the first chunk.
+    ///
+    /// The staging table is made here rather than on the first `push` so that a caller that
+    /// never gets a byte still leaves a database in the state the next run expects.
+    pub fn begin(db: &'a Mutex<Connection>) -> Result<Self, IngestError> {
+        {
+            let conn = crate::db::lock_blocking(db);
+            schema::create_staging(&conn)?;
+        }
+        Ok(StreamIngest {
+            db,
+            stats: IngestStats {
+                inserted: 0,
+                skipped: 0,
+            },
+            batch: Vec::with_capacity(BATCH as usize),
+            decoder: crate::feed::frame::Decoder::new(),
+            lines: crate::feed::frame::Lines::new(),
+            decoded: Vec::new(),
+        })
+    }
+
+    /// Parse one line into the batch, or count it skipped. An associated function rather
+    /// than a method so it can be called from inside a closure that already holds two of
+    /// `self`'s fields.
+    ///
+    /// Parsing happens with the lock *not* held - it is the expensive half of the loop, and
+    /// the whole point of chunking is that the connection is free during it.
+    fn take_line(stats: &mut IngestStats, batch: &mut Vec<CardRow>, line: &[u8]) {
         if line.is_empty() {
             return;
         }
@@ -147,53 +171,95 @@ pub fn ingest_stream(
             return;
         };
         batch.push(row);
-    };
+    }
 
+    /// Feed one chunk of the download. Gzipped or not — the decoder decides from the bytes.
+    pub fn push(&mut self, chunk: &[u8], progress: &mut dyn FnMut(u64)) -> Result<(), IngestError> {
+        self.decoded.clear();
+        self.decoder.push(chunk, &mut self.decoded)?;
+        {
+            let stats = &mut self.stats;
+            let batch = &mut self.batch;
+            self.lines
+                .push(&self.decoded, |line| Self::take_line(stats, batch, line));
+        }
+        flush_full_batches(self.db, &mut self.stats, &mut self.batch, progress)
+    }
+
+    /// Flush what is still owed, refuse an empty file, and swap staging into place.
+    ///
+    /// **The full-batch drain runs again here, and that is not belt-and-braces.**
+    /// `flate2::write::GzDecoder` holds a tail back until `try_finish` — measured at
+    /// 15 163 bytes, about 88 card lines, on the 2001-line fixture — so a file small enough
+    /// to arrive in one chunk delivers its last batch's worth of lines *after* the push
+    /// loop has ended. Without this call they would be written by the unconditional tail
+    /// flush below with no progress callback of their own. That is exactly what
+    /// `progress_fires_every_batch_and_once_at_the_end` caught once already.
+    pub fn finish(mut self, progress: &mut dyn FnMut(u64)) -> Result<IngestStats, IngestError> {
+        self.decoded.clear();
+        self.decoder.finish(&mut self.decoded)?;
+        {
+            let stats = &mut self.stats;
+            let batch = &mut self.batch;
+            self.lines
+                .push(&self.decoded, |line| Self::take_line(stats, batch, line));
+            self.lines
+                .finish(|line| Self::take_line(stats, batch, line));
+        }
+        flush_full_batches(self.db, &mut self.stats, &mut self.batch, progress)?;
+
+        if !self.batch.is_empty() {
+            self.stats.inserted += self.batch.len() as u64;
+            write_batch(self.db, &mut self.batch)?;
+        }
+
+        // Nothing parsed as a card: the download is bad, not the collection. Swapping here
+        // would trade a working card database for an empty one, so refuse - and drop the
+        // empty staging table rather than leave it lying around.
+        //
+        // **Schema-qualified, and it was not before.** `schema::create_staging` builds
+        // `corpus.cards_staging`; an unqualified `DROP` means `main`, so this dropped a table
+        // that has not existed since the user/corpus split and left the real one standing —
+        // silently, because `IF EXISTS` succeeds on nothing. `schema::prepare_database`
+        // qualifies its copy of the same statement.
+        if self.stats.inserted == 0 {
+            let conn = crate::db::lock_blocking(self.db);
+            conn.execute_batch(&format!(
+                "DROP TABLE IF EXISTS {}.cards_staging",
+                crate::db::CORPUS
+            ))?;
+            return Err(IngestError::Empty {
+                skipped: self.stats.skipped,
+            });
+        }
+
+        // The swap is the last thing and belongs to whichever entry point ran the ingest, so
+        // it lives here rather than in `ingest_gz` - both callers need it, and a stream that
+        // filled staging and never swapped would leave the reader's `cards` table untouched
+        // while reporting success.
+        {
+            let conn = crate::db::lock_blocking(self.db);
+            schema::swap_staging(&conn)?;
+        }
+        progress(self.stats.inserted);
+        Ok(self.stats)
+    }
+}
+
+/// Ingest from a stream of byte chunks - gzipped or not, the decoder decides.
+///
+/// The platform-neutral entry point: desktop feeds it a file and the browser feeds it
+/// `fetch`. Peak memory is one chunk plus one batch, exactly as the file version was.
+pub fn ingest_stream(
+    db: &Mutex<Connection>,
+    chunks: impl Iterator<Item = std::io::Result<Vec<u8>>>,
+    progress: &mut dyn FnMut(u64),
+) -> Result<IngestStats, IngestError> {
+    let mut sink = StreamIngest::begin(db)?;
     for chunk in chunks {
-        let chunk = chunk?;
-        decoded.clear();
-        decoder.push(&chunk, &mut decoded)?;
-        lines.push(&decoded, |line| take_line(line, &mut stats, &mut batch));
-        flush_full_batches(db, &mut stats, &mut batch, progress)?;
+        sink.push(&chunk?, progress)?;
     }
-    // The decompressor holds a tail back until `finish` - measured at ~15 KB, roughly
-    // 88 card lines, on the 2001-line fixture. So the batch boundary has to be checked
-    // again HERE and not only inside the loop above: without this, a file small enough
-    // to arrive in one chunk delivers its last batch's worth of lines after the loop has
-    // ended, and the per-batch progress call for them never fires. That is exactly what
-    // `progress_fires_every_batch_and_once_at_the_end` caught.
-    decoded.clear();
-    decoder.finish(&mut decoded)?;
-    lines.push(&decoded, |line| take_line(line, &mut stats, &mut batch));
-    lines.finish(|line| take_line(line, &mut stats, &mut batch));
-    flush_full_batches(db, &mut stats, &mut batch, progress)?;
-
-    if !batch.is_empty() {
-        stats.inserted += batch.len() as u64;
-        write_batch(db, &mut batch)?;
-    }
-
-    // Nothing parsed as a card: the download is bad, not the collection. Swapping here
-    // would trade a working card database for an empty one, so refuse - and drop the
-    // empty staging table rather than leave it lying around.
-    if stats.inserted == 0 {
-        let conn = crate::db::lock_blocking(db);
-        conn.execute_batch("DROP TABLE IF EXISTS cards_staging")?;
-        return Err(IngestError::Empty {
-            skipped: stats.skipped,
-        });
-    }
-
-    // The swap is the last thing and belongs to whichever entry point ran the ingest, so it
-    // moves here verbatim from `ingest_gz` - both callers need it, and a stream that filled
-    // staging and never swapped would leave the reader's `cards` table untouched while
-    // reporting success.
-    {
-        let conn = crate::db::lock_blocking(db);
-        schema::swap_staging(&conn)?;
-    }
-    progress(stats.inserted);
-    Ok(stats)
+    sink.finish(progress)
 }
 
 /// Write out every whole [`BATCH`] sitting in `batch`, reporting progress after each.
@@ -363,6 +429,66 @@ mod tests {
         format!(
             r#"{{"object":"card","id":"c{i}","name":"Card {i}","lang":"en","layout":"normal","set":"x","collector_number":"{i}","games":["paper"],"finishes":["nonfoil"],"digital":false}}"#
         )
+    }
+
+    /// The sink and the iterator entry point must agree row for row. This is what makes the
+    /// browser's async loop legitimate: it drives the same object, and the desktop's own
+    /// tests are what prove the object is right.
+    ///
+    /// **What this can and cannot catch, measured rather than assumed.** `ingest_gz` calls
+    /// `ingest_stream`, which is now four lines over `StreamIngest` — so both sides of this
+    /// equality run the *same* drain, and breaking that drain leaves them agreeing. Deleting
+    /// `finish`'s `flush_full_batches` was run as a mutation: this test stayed green and
+    /// `progress_fires_every_batch_and_once_at_the_end` and
+    /// `the_sink_reports_a_batch_that_only_emerges_at_finish` went red. So what this pins is
+    /// the *driver* — a loop that dropped a chunk, or `ingest_gz`'s 64 KB chunking — and the
+    /// public shape of `begin`/`push`/`finish`. The drain itself is guarded by the tests that
+    /// assert against known counts.
+    #[test]
+    fn the_sink_and_ingest_stream_agree_row_for_row() {
+        let lines: Vec<String> = (0..50).map(card_line).collect();
+        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let path = gz_fixture(&refs);
+        let bytes = std::fs::read(&path).unwrap();
+
+        let db_a = mem_db();
+        let a = ingest_gz(&db_a, &path, &mut |_| {}).unwrap();
+
+        let db_b = mem_db();
+        let mut sink = StreamIngest::begin(&db_b).unwrap();
+        for chunk in bytes.chunks(64) {
+            sink.push(chunk, &mut |_| {}).unwrap();
+        }
+        let b = sink.finish(&mut |_| {}).unwrap();
+
+        assert_eq!(a.inserted, b.inserted);
+        assert_eq!(a.skipped, b.skipped);
+        assert_eq!(b.inserted, 50);
+    }
+
+    /// A file small enough to arrive in ONE chunk still owes bytes after that chunk: the
+    /// decompressor holds a tail back until `finish`. So the sink's own `finish` has to run
+    /// the full-batch drain, not only the unconditional tail write — otherwise the last
+    /// batch is written with no progress callback of its own.
+    #[test]
+    fn the_sink_reports_a_batch_that_only_emerges_at_finish() {
+        let lines: Vec<String> = (0..2001).map(card_line).collect();
+        let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+        let bytes = std::fs::read(gz_fixture(&refs)).unwrap();
+
+        let db = mem_db();
+        let mut seen: Vec<u64> = Vec::new();
+        let mut sink = StreamIngest::begin(&db).unwrap();
+        // One push: the whole file, exactly the shape that exposed this in PR 1.
+        sink.push(&bytes, &mut |n| seen.push(n)).unwrap();
+        let stats = sink.finish(&mut |n| seen.push(n)).unwrap();
+
+        assert_eq!(stats.inserted, 2001);
+        assert_eq!(
+            seen,
+            vec![2000, 2001],
+            "the 2000-row batch must report before the swap, not only after it"
+        );
     }
 
     #[test]

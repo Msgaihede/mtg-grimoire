@@ -1208,6 +1208,30 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
   which is inside the work-area check either way, since both rungs are chosen against the work
   area rather than against the screen.
 
+## The web target
+
+- **`src-tauri/src/lib.rs` is the module map, and the split in it is binding.** A module in the
+  "Every target" column must compile for `wasm32-unknown-unknown`, which means no `tauri::`, no
+  `tokio::fs`, no `std::thread` — and **no `SystemTime::now()` or `Instant::now()`, both of
+  which panic there**. Those two imports are gated off the target in `sync.rs`, `combos.rs` and
+  `db.rs` rather than only their callers, so the names are not even in scope to reach for.
+- **`npm run verify` cannot see any of this; the `wasm` CI job is what does.** Measured: with a
+  `use tauri::Manager` added to `search.rs`, `cargo test` passes 1 495 and desktop
+  `clippy -D warnings` is silent, while the wasm leg fails with `unresolved import tauri`.
+- **`build.rs` asks `TARGET`, never `cfg!`** — a build script compiles for the host. It returns
+  before `tauri_build::build()` for a wasm target and emits `cargo:rustc-check-cfg` for
+  `desktop` and `mobile` on the way out, because `#[cfg(desktop)]` in the map would otherwise be
+  an unknown cfg name there.
+- **The web target opens the same pair on OPFS** — `db::open_pooled_pair` is `db::open_write`
+  with bare names, because the pool is the filesystem. Both files answer `delete` to
+  `PRAGMA journal_mode = WAL`, which is why `db::apply_pragmas` returns the journal instead of
+  assuming one.
+- **`schema::migrate_user` creates the user file's shape when there is none**, and that arm
+  exists for the browser alone: there is no `mtg.db` for `split::convert` to take apart there.
+  Its absence failed in one place only — the facet index, which reads `collection_entries`.
+- **The first run is not yet reliable.** Read
+  [web-target.md](../docs/reference/web-target.md) before touching the wasm ingest.
+
 ## Further reading
 
 | Doc | What it holds |
@@ -1222,4 +1246,5 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
 | [wishlist-folders.md](../docs/reference/wishlist-folders.md) | The wishlist's cabinet (v23) — the four-term grain, the merge rule, the root-add duplicate |
 | [collection-folders.md](../docs/reference/collection-folders.md) | The collection's cabinet (v24–v25) — the eleventh grain term, the deck groups and `Recently removed`, the conversion that made them, what a zero quantity now costs |
 | [sync.md](../docs/reference/sync.md) | `sync_pair/` and user schema v28 — the protocol step by step, why the typed code is 105 characters, what the six digits do and do not defend, where the keys live, and what revocation cannot do |
+| [web-target.md](../docs/reference/web-target.md) | The browser build — the module map, the OPFS pair, the measured browse and facet, and the first run's open memory failure |
 | [text-mirror.md](../docs/reference/text-mirror.md) | `mirror/` — the layout, the dirty map, why the pruner reads a manifest instead of guessing, what a pass costs measured, and the bugs still open |

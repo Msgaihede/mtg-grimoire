@@ -19,6 +19,11 @@ export default defineConfig({
     alias: { "@": "/src" },
   },
 
+  // Which core the bundle talks to. `"tauri"` here and in vitest; `vite.web.config.ts`
+  // overrides it. A `define` rather than an env read so the unused branch is folded away
+  // rather than merely unreachable.
+  define: { __CORE__: JSON.stringify("tauri") },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors

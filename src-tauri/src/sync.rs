@@ -31,21 +31,32 @@
 //! `sync_meta.value` is `NOT NULL`, so this module never writes an absent value as
 //! NULL or as `""`: [`set_meta_opt`] deletes the row instead. See [`get_meta`].
 
-use crate::{ingest, scryfall};
+#[cfg(not(target_family = "wasm"))]
+use crate::ingest;
+#[cfg(not(target_family = "wasm"))]
+use crate::scryfall;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
+// `SystemTime::now()` **panics** on `wasm32-unknown-unknown`. Gating the import rather
+// than only its callers is the fence: on the web target the name is not in scope, so a
+// clock cannot be reached for by accident from a module the map says compiles there.
+#[cfg(not(target_family = "wasm"))]
 use std::time::{SystemTime, UNIX_EPOCH};
+#[cfg(not(target_family = "wasm"))]
 use tauri::Emitter;
 
 /// `sync_meta` keys. Named constants because they are also read by `sync_status` and,
 /// via the DTOs below, mirrored in the frontend.
+#[cfg(not(target_family = "wasm"))]
 const K_BULK_ETAG: &str = "bulk_etag";
 const K_BULK_UPDATED_AT: &str = "bulk_updated_at";
 const K_LAST_CHECK_AT: &str = "last_check_at";
+#[cfg(not(target_family = "wasm"))]
 const K_LAST_INGEST_AT: &str = "last_ingest_at";
+#[cfg(not(target_family = "wasm"))]
 const K_CARD_COUNT: &str = "card_count";
 /// Lines the last ingest could not read as cards. Scryfall's bulk file has shipped
 /// truncated lines and non-card objects before; the spec requires the count be *surfaced*
@@ -69,11 +80,13 @@ const CHECK_INTERVAL_SECS: u64 = 86_400;
 
 /// Approximate row count of `default_cards`, used only as the denominator of the
 /// ingest progress bar — the real count is not known until the ingest is finished.
+#[cfg(not(target_family = "wasm"))]
 const INGEST_TOTAL_ESTIMATE: u64 = 117_000;
 
 /// Bytes of download between `sync:progress` events. The client's own callback fires
 /// once per network chunk (thousands of times over 77 MB), which is far more than a
 /// progress bar can use.
+#[cfg(not(target_family = "wasm"))]
 const DOWNLOAD_EMIT_BYTES: u64 = 1_000_000;
 
 /// Everything a command or a background sync needs. Managed by Tauri as
@@ -86,12 +99,26 @@ const DOWNLOAD_EMIT_BYTES: u64 = 1_000_000;
 /// writer at all. See [`crate::db::open_read_only`].
 pub struct AppState {
     pub db: Mutex<Connection>,
+    /// **Desktop and Android only, and the reason is the VFS.** The browser's whole database
+    /// lives in one dedicated Worker, because `opfs-sahpool` can only obtain its exclusive
+    /// `FileSystemSyncAccessHandle`s off the main thread — so there is exactly one thread
+    /// there, and a second connection could never be *used* concurrently even though the pool
+    /// will happily hand one out (measured 2026-08-28: a second `Connection::open` on an
+    /// installed pool opens, attaches, reads and writes). What this field buys on desktop is a
+    /// search that does not queue behind an ingest running on another thread; with no other
+    /// thread there is no queue to jump, and under the rollback journal the pool forces
+    /// (`PRAGMA journal_mode = WAL` answers `delete`) a second connection would contend at the
+    /// file level instead of sailing past on a WAL snapshot. So [`lock_db_read`] answers with
+    /// the write connection there, and a search really does wait out an ingest.
+    #[cfg(not(target_family = "wasm"))]
     pub db_read: Mutex<Connection>,
     pub data_dir: PathBuf,
     pub syncing: AtomicBool,
+    #[cfg(not(target_family = "wasm"))]
     pub client: scryfall::Client,
     /// The image cache. Lives here so the `mtgimg://` handler can reach it from an
     /// `AppHandle` — that handle is the only state the handler is given.
+    #[cfg(not(target_family = "wasm"))]
     pub images: crate::images::Cache,
     /// The in-memory facet index and the generation of the corpus it describes — cold, which
     /// is a supported state and not an error, until the first build lands. Read it through
@@ -107,12 +134,14 @@ pub struct AppState {
     /// the life of the process — see [`crate::mirror::watch::install_hook`]. Written from
     /// inside SQLite's own callback and read by the mirror thread; no lock is involved either
     /// way, which is the point.
+    #[cfg(not(target_family = "wasm"))]
     pub mirror: Arc<crate::mirror::watch::Mask>,
     /// What the mirror's last pass did, for the Settings panel to read back.
     ///
     /// In memory rather than in the database, deliberately: the numbers describe a folder
     /// that may not survive a restart, and a count read back after one would be a claim about
     /// a disk nobody has looked at since. See [`crate::mirror::watch::LastPass`].
+    #[cfg(not(target_family = "wasm"))]
     pub mirror_status: Mutex<crate::mirror::watch::LastPass>,
     /// Whether any transaction on `db` has committed across both files.
     ///
@@ -131,6 +160,17 @@ pub struct AppState {
     ///
     /// It holds the derived pair key, which is the other reason it is here and not in SQLite:
     /// nothing this side of a completed pairing has any business surviving a crash.
+    ///
+    /// **Desktop and Android only, and this one is temporary in a way the other gates on this
+    /// struct are not.** `db_read`, `client`, `images` and `mirror` are gated because the web
+    /// target genuinely does not have those things. This is gated because `sync_pair` is not
+    /// in `web::COMMANDS` yet — the browser has no pairing panel to drive it, and PR 4 carried
+    /// no sync. The spec's whole premise is one dataset across all three platforms, so when
+    /// the relay lands the web target needs this field and its module, and the honest fix then
+    /// is to compile `sync_pair` for wasm rather than to widen anything here. The crates it
+    /// needs (`x25519-dalek`, `chacha20poly1305`, `hkdf`, `getrandom`) all support wasm;
+    /// nothing about the protocol is desktop-shaped. Nobody has tried it.
+    #[cfg(not(target_family = "wasm"))]
     pub pairing: Mutex<Option<crate::sync_pair::pairing::Pending>>,
 }
 
@@ -210,6 +250,7 @@ pub struct Progress {
     pub message: Option<String>,
 }
 
+#[cfg(not(target_family = "wasm"))]
 impl Progress {
     fn new(phase: &str, done: u64, total: u64) -> Progress {
         // The frontend's `SyncPhase` is a closed union and `PHASE_LABEL` a total map over
@@ -290,6 +331,7 @@ pub fn should_check(last: Option<u64>, now: u64, force: bool) -> bool {
 /// `card_count > 0` is not a detail: metadata can outlive the cards it describes (an
 /// interrupted first run, a swapped-in staging table that never landed), and an empty
 /// database must download no matter what the metadata claims.
+#[cfg(not(target_family = "wasm"))]
 fn already_ingested(remote: Option<&str>, stored: Option<&str>, card_count: i64) -> bool {
     remote.is_some() && remote == stored && card_count > 0
 }
@@ -305,6 +347,7 @@ fn already_ingested(remote: Option<&str>, stored: Option<&str>, card_count: i64)
 ///
 /// This is the same reasoning as [`already_ingested`]'s `card_count > 0`, one step
 /// earlier: that one guards the 200 path, this one stops the 304 happening at all.
+#[cfg(not(target_family = "wasm"))]
 fn conditional_etag(etag: Option<&str>, card_count: i64) -> Option<&str> {
     etag.filter(|_| card_count > 0)
 }
@@ -314,6 +357,7 @@ fn conditional_etag(etag: Option<&str>, card_count: i64) -> Option<&str> {
 /// A listing with no size gives the download nothing to check itself against; the client
 /// would fetch the whole file and then reject it as a mismatch against zero. Refuse
 /// before spending the bandwidth, and say why.
+#[cfg(not(target_family = "wasm"))]
 fn check_download_size(compressed_size: u64) -> Result<u64, String> {
     if compressed_size == 0 {
         return Err("bulk listing had no size; refusing to download".into());
@@ -323,6 +367,7 @@ fn check_download_size(compressed_size: u64) -> Result<u64, String> {
 
 /// Seconds since the Unix epoch. A clock before 1970 is not worth a panic: it reads as
 /// 0, which makes every check due.
+#[cfg(not(target_family = "wasm"))]
 fn unix_now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -331,6 +376,7 @@ fn unix_now() -> u64 {
 }
 
 /// What a sync run reads out of the database before it does anything else.
+#[cfg(not(target_family = "wasm"))]
 struct StoredState {
     etag: Option<String>,
     bulk_updated_at: Option<String>,
@@ -338,6 +384,7 @@ struct StoredState {
     card_count: i64,
 }
 
+#[cfg(not(target_family = "wasm"))]
 fn read_stored_state(conn: &Connection) -> StoredState {
     StoredState {
         etag: get_meta(conn, K_BULK_ETAG),
@@ -349,6 +396,7 @@ fn read_stored_state(conn: &Connection) -> StoredState {
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
 fn count_cards(conn: &Connection) -> i64 {
     conn.query_row("SELECT count(*) FROM cards", [], |r| r.get(0))
         .unwrap_or(0)
@@ -356,6 +404,7 @@ fn count_cards(conn: &Connection) -> i64 {
 
 /// Has `sets` never been filled? A failed count reads as "not empty" — if the database
 /// cannot answer, a `/sets` fetch it cannot store either is not the fix.
+#[cfg(not(target_family = "wasm"))]
 fn sets_are_empty(conn: &Connection) -> bool {
     conn.query_row("SELECT count(*) FROM sets", [], |r| r.get::<_, i64>(0))
         .map(|n| n == 0)
@@ -367,12 +416,14 @@ fn sets_are_empty(conn: &Connection) -> bool {
 ///
 /// Deliberately *not* called on the throttled short-circuit — that run checked nothing,
 /// and clearing `last_error` there would erase a failure the user never got to see.
+#[cfg(not(target_family = "wasm"))]
 fn mark_checked(conn: &Connection, now: u64) -> rusqlite::Result<()> {
     set_meta(conn, K_LAST_CHECK_AT, &now.to_string())?;
     set_meta_opt(conn, K_LAST_ERROR, None)
 }
 
 /// The outcome of a run that changed nothing.
+#[cfg(not(target_family = "wasm"))]
 fn unchanged(card_count: i64) -> SyncOutcome {
     SyncOutcome {
         updated: false,
@@ -388,6 +439,13 @@ fn unchanged(card_count: i64) -> SyncOutcome {
 /// refusing to lock ever again would brick every later sync and search for no gain.
 ///
 /// Shared with [`crate::search`] so that recovery rule lives in exactly one place.
+/// **Compiled for wasm with no caller there yet, and that is the point.** The web target
+/// routes four of the app's 136 commands, so every write in the crate still reaches this
+/// only on desktop — but the wasm build type-checking the path is what proves
+/// [`crate::db::lock_for`]'s wasm arm compiles against its real caller rather than in
+/// isolation. `Instant::now()` panics on `wasm32-unknown-unknown`, so that arm exists
+/// before the first web write rather than after it.
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
 pub(crate) fn lock_db(state: &AppState) -> MutexGuard<'_, Connection> {
     lock_conn(&state.db)
 }
@@ -411,6 +469,13 @@ pub(crate) fn lock_conn(mutex: &Mutex<Connection>) -> MutexGuard<'_, Connection>
 /// A one-line delegate for the same reason [`lock_conn`] is one: the recovery rule has
 /// exactly one definition, in [`crate::db::lock_plain`], and a second copy of
 /// `unwrap_or_else(|e| e.into_inner())` is a second place for it to drift.
+/// **Compiled for wasm with no caller there yet, and that is the point.** The web target
+/// routes four of the app's 136 commands, so every write in the crate still reaches this
+/// only on desktop — but the wasm build type-checking the path is what proves
+/// [`crate::db::lock_for`]'s wasm arm compiles against its real caller rather than in
+/// isolation. `Instant::now()` panics on `wasm32-unknown-unknown`, so that arm exists
+/// before the first web write rather than after it.
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
 pub(crate) fn lock_plain<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     crate::db::lock_plain(mutex)
 }
@@ -421,7 +486,17 @@ pub(crate) fn lock_plain<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 /// run of queries — one search, or the five reads [`status`] makes — and never across an
 /// `.await`, so waiting for it is bounded no matter what the writer is doing.
 pub(crate) fn lock_db_read(state: &AppState) -> MutexGuard<'_, Connection> {
-    lock_conn(&state.db_read)
+    #[cfg(not(target_family = "wasm"))]
+    {
+        lock_conn(&state.db_read)
+    }
+    // One thread is all a Worker has, so the read path is the write path. See `AppState`'s
+    // own note: the pool would hand out a second connection, and there is nothing on the
+    // other side of it to run concurrently with.
+    #[cfg(target_family = "wasm")]
+    {
+        lock_conn(&state.db)
+    }
 }
 
 /// Run `f` with the write connection, or answer [`crate::db::BUSY`].
@@ -447,6 +522,13 @@ pub(crate) fn lock_db_read(state: &AppState) -> MutexGuard<'_, Connection> {
 /// take a lock its own thread already holds, then answers [`crate::db::BUSY`] against itself.
 /// `do_sync`'s orphan-sweep arm is the site that has to remember: it passes its already-open
 /// connection down instead.
+/// **Compiled for wasm with no caller there yet, and that is the point.** The web target
+/// routes four of the app's 136 commands, so every write in the crate still reaches this
+/// only on desktop — but the wasm build type-checking the path is what proves
+/// [`crate::db::lock_for`]'s wasm arm compiles against its real caller rather than in
+/// isolation. `Instant::now()` panics on `wasm32-unknown-unknown`, so that arm exists
+/// before the first web write rather than after it.
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
 pub(crate) fn with_write<T>(
     state: &AppState,
     f: impl FnOnce(&Connection) -> Result<T, String>,
@@ -472,6 +554,7 @@ pub(crate) fn with_write<T>(
 ///
 /// Rows with a blank `code` are skipped: `code` is the primary key, and SQLite would
 /// happily store `''` as a real set that nothing can ever match.
+#[cfg(not(target_family = "wasm"))]
 pub fn insert_sets(conn: &mut Connection, sets: &[scryfall::SetRow]) -> rusqlite::Result<usize> {
     let tx = conn.transaction()?;
     let mut written = 0usize;
@@ -501,6 +584,7 @@ pub fn insert_sets(conn: &mut Connection, sets: &[scryfall::SetRow]) -> rusqlite
     Ok(written)
 }
 
+#[cfg(not(target_family = "wasm"))]
 fn emit(app: &tauri::AppHandle, phase: &str, done: u64, total: u64) {
     // A dropped progress event is never worth failing a sync over.
     let _ = app.emit("sync:progress", Progress::new(phase, done, total));
@@ -512,6 +596,7 @@ fn emit(app: &tauri::AppHandle, phase: &str, done: u64, total: u64) {
 /// `skipped` is `Some` only on the path that actually ingested — a run that found nothing
 /// new has no lines of its own to report, and repeating the previous run's figure would
 /// read as a fresh count.
+#[cfg(not(target_family = "wasm"))]
 fn emit_done(app: &tauri::AppHandle, card_count: i64, skipped: Option<u64>) {
     let n = card_count.max(0) as u64;
     let mut progress = Progress::new("done", n, n);
@@ -521,6 +606,7 @@ fn emit_done(app: &tauri::AppHandle, card_count: i64, skipped: Option<u64>) {
 
 /// What the `done` event says. The skipped clause appears only when there is something
 /// to report — "(0 lines skipped)" is noise on the run where everything went right.
+#[cfg(not(target_family = "wasm"))]
 fn done_message(card_count: u64, skipped: Option<u64>) -> String {
     let cards = format!("{} cards", group_digits(card_count));
     match skipped {
@@ -535,6 +621,7 @@ fn done_message(card_count: u64, skipped: Option<u64>) -> String {
 
 /// `116568` → `116,568`. The UI formats its own numbers, but this string is carried by
 /// the event and has nowhere else to be formatted.
+#[cfg(not(target_family = "wasm"))]
 fn group_digits(n: u64) -> String {
     let digits = n.to_string();
     let mut out = String::with_capacity(digits.len() + digits.len() / 3);
@@ -549,8 +636,10 @@ fn group_digits(n: u64) -> String {
 
 /// Clears `syncing` however the run ends — early return, error, panic, or a dropped
 /// future. A flag left set would lock the user out of syncing until they restart.
+#[cfg(not(target_family = "wasm"))]
 struct SyncingGuard<'a>(&'a AtomicBool);
 
+#[cfg(not(target_family = "wasm"))]
 impl Drop for SyncingGuard<'_> {
     fn drop(&mut self) {
         self.0.store(false, Ordering::SeqCst);
@@ -564,6 +653,7 @@ impl Drop for SyncingGuard<'_> {
 /// `sync:progress` event with phase `error` (Tauri drops events the webview is not yet
 /// listening for, which at startup is all of them), and written to `sync_meta.last_error`
 /// (which is still there whenever the UI gets around to asking).
+#[cfg(not(target_family = "wasm"))]
 pub async fn run_sync(
     state: Arc<AppState>,
     app: tauri::AppHandle,
@@ -609,6 +699,7 @@ pub async fn run_sync(
 /// `tauri::AppHandle` and this crate has no mock-app harness, so nothing in the suite can enter
 /// it. This much is reachable, and the condition is the half worth testing; what stays untested
 /// is the single call above it.
+#[cfg(not(target_family = "wasm"))]
 pub(crate) fn note_mirror_after_sync(state: &AppState, result: &Result<SyncOutcome, String>) {
     if let Ok(outcome) = result {
         if outcome.updated {
@@ -627,6 +718,7 @@ pub(crate) fn note_mirror_after_sync(state: &AppState, result: &Result<SyncOutco
 /// Best-effort, and skipped rather than waited for if the write connection is busy: this
 /// describes a failure that has already happened, on a path that is already returning an
 /// error, and no part of it is worth blocking on.
+#[cfg(not(target_family = "wasm"))]
 fn note_scryfall(state: &Arc<AppState>, operation: &str, err: &scryfall::ScryfallError) {
     if let Some(conn) = crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
         crate::errors::record(
@@ -681,6 +773,7 @@ pub(crate) fn note_database(state: &AppState, operation: &str, message: &str) {
 ///
 /// Best-effort throughout: this is bookkeeping about a refusal that has already happened,
 /// and failing a sync over it would be absurd.
+#[cfg(not(target_family = "wasm"))]
 fn persist_penalty(state: &Arc<AppState>) {
     let until = state.client.penalty_until_unix();
     if let Some(conn) = crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
@@ -695,6 +788,7 @@ fn persist_penalty(state: &Arc<AppState>) {
 /// stored every later run is a 304 that skips it, and a `/sets` call that failed during
 /// the run which ingested the cards would leave the table empty until Scryfall next
 /// rotates the bulk file. A `count(*)` is cheap; a permanently empty `sets` table is not.
+#[cfg(not(target_family = "wasm"))]
 async fn finish_unchanged(
     state: &Arc<AppState>,
     app: &tauri::AppHandle,
@@ -746,6 +840,7 @@ async fn finish_unchanged(
 /// A failure is logged and dropped. The bulk data is ingested either way, and an id
 /// migration that did not apply today applies tomorrow — whereas failing the whole sync
 /// over it would cost the user their card update.
+#[cfg(not(target_family = "wasm"))]
 async fn reconcile_ids(state: &Arc<AppState>, app: &tauri::AppHandle) {
     let worth_it = {
         // The read connection: this is one `count(*)` against each user table, and it must
@@ -829,6 +924,7 @@ async fn reconcile_ids(state: &Arc<AppState>, app: &tauri::AppHandle) {
 ///
 /// A failure is logged and nothing more. The cards are ingested and swapped in either way,
 /// and a database whose freelist did not shrink is a database that works.
+#[cfg(not(target_family = "wasm"))]
 async fn reclaim_freed_pages(state: &Arc<AppState>, app: &tauri::AppHandle) {
     let joined = {
         let state = state.clone();
@@ -886,6 +982,7 @@ async fn reclaim_freed_pages(state: &Arc<AppState>, app: &tauri::AppHandle) {
 /// attempted: a caller that hears `true` owes a rebuild whatever the outcome, because a
 /// conversion that failed still leaves the index cleared and cold is not a state to settle
 /// into either.
+#[cfg(not(target_family = "wasm"))]
 async fn compact_once(state: &Arc<AppState>, app: &tauri::AppHandle) -> bool {
     let (convert, rebuild) = {
         let conn = lock_db(state);
@@ -952,6 +1049,7 @@ async fn compact_once(state: &Arc<AppState>, app: &tauri::AppHandle) -> bool {
     convert
 }
 
+#[cfg(not(target_family = "wasm"))]
 async fn do_sync(
     state: &Arc<AppState>,
     app: &tauri::AppHandle,
@@ -1223,7 +1321,13 @@ pub fn status(state: &AppState) -> SyncStatus {
         data_dir: state.data_dir.display().to_string(),
         syncing: state.syncing.load(Ordering::SeqCst),
         // An atomic in memory, so this one is answered even when the read above was not.
+        #[cfg(not(target_family = "wasm"))]
         image_store_failures: state.images.store_failures(),
+        // No filesystem image cache on web — the browser's is Cache Storage, and it is not
+        // built yet. Zero is the honest answer for "failures writing a store that does not
+        // exist", and it is what the field means on a desktop that has had none.
+        #[cfg(target_family = "wasm")]
+        image_store_failures: 0,
     }
 }
 

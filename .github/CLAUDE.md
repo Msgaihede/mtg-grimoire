@@ -10,13 +10,24 @@ Two workflows, and every rule below was measured live. Full detail, including th
   underneath stays free. `enforce_admins` is **false**: a red PR cannot merge, a direct push to
   `main` still can.
 - **A change only builds the half it touched.** The `changes` job diffs against the base and
-  routes each path: `src-tauri/**` → `rust`; frontend sources, lockfiles, configs and
-  **`scripts/` because `eslint .` lints it** → `frontend`; `*.ps1`/`*.psm1`/`*.psd1` →
-  `powershell`; `ci.yml` itself → all three; prose and
-  editor bookkeeping → neither; and **anything unrecognised → both build jobs**. That last arm
+  routes each path: `src-tauri/**` → `rust` **and `wasm`**; frontend sources, lockfiles,
+  configs and **`scripts/` because `eslint .` lints it** → `frontend`; `src/workers/`,
+  `src/web/`, `src/lib/core/`, `scripts/build-wasm.mjs` and `vite.web.config.ts` → `frontend`
+  and `wasm`; `*.ps1`/`*.psm1`/`*.psd1` → `powershell`; `ci.yml` itself → all four; prose and
+  editor bookkeeping → neither; and **anything unrecognised → every build job**. That last arm
   is the
   fail-safe that makes the lists safe to be wrong in the cheap direction. **Only the "neither"
   arm can wrongly skip work, so it stays small.**
+- **The `wasm` job exists because a fully green `npm run verify` can ship a broken web
+  target.** The crate is one crate with two targets, and a `use tauri::` added to a module on
+  the wasm side of `lib.rs`'s module map compiles on desktop and fails on
+  `wasm32-unknown-unknown` — the same shape as `cargo fmt` and `clippy` already being outside
+  `verify`. It is Linux-only (this compiles SQLite's C amalgamation with clang, which is the
+  same compiler everywhere), installs a `wasm-bindgen-cli` **pinned to the crate's exact
+  version**, and needs no `dist/` stub because `build.rs` returns before `tauri_build` runs for
+  a wasm `TARGET`. Its `npm run build:wasm` step also greps the generated glue for every
+  exported entry point, which is the one check no compiler can make: dropping a
+  `#[wasm_bindgen]` attribute builds clean with no error and no warning.
 - **The `powershell` job runs the repo's `.ps1` tests on `windows-latest`** — `lock.test.ps1`
   for the worktree locks and `pr-auto.test.ps1` for the auto-PR guard — and its `case` arm must
   stay **above** `src-tauri/*` and `scripts/*` — first-match-wins, and `scripts/` is on the

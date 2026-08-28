@@ -1,6 +1,7 @@
 import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
+import { WebBoot } from "./web/WebBoot";
 import "./index.css";
 // Mana and set glyphs, as bundled icon fonts — no CDN, and the CSP has no remote source.
 // Imported here rather than from `index.css` so Vite owns them as modules and the
@@ -17,6 +18,10 @@ if (!root) throw new Error("index.html is missing its #root element");
 
 ReactDOM.createRoot(root).render(
   <React.StrictMode>
-    <App />
+    {/* Which root a build gets is the same `define` that picks the core, and it folds away:
+        a Tauri bundle carries no `WebBoot` and no Worker. The web build cannot render `App`
+        directly because its database has to be opened first, and opening it can answer
+        "another tab already has it". */}
+    {__CORE__ === "web" ? <WebBoot /> : <App />}
   </React.StrictMode>,
 );
