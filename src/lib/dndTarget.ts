@@ -1,4 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { CollisionPriority } from "@dnd-kit/abstract";
+import { pointerIntersection } from "@dnd-kit/collision";
 import { Draggable, Droppable } from "@dnd-kit/dom";
 import { carryAtDragStart, dndId, dndManager, registerNow } from "@/lib/dndManager";
 
@@ -37,7 +39,7 @@ export function useDndDropTarget<T>({
   read,
   canDrop,
   onDrop,
-  collisionPriority,
+  overlay,
 }: {
   ref: RefObject<HTMLElement | null>;
   /** This feature's payload out of the library's untyped store, or `null` for everything else. */
@@ -45,17 +47,31 @@ export function useDndDropTarget<T>({
   canDrop: (drop: T) => boolean;
   onDrop: (drop: T) => void;
   /**
-   * Higher wins a tie with an overlapping target — and an overlay needs one.
+   * An overlay: this target wins the pointer against whatever it is drawn over, **and only when
+   * the pointer is actually inside it**.
    *
    * **dnd-kit resolves overlap by geometry, not by paint order**, which is the one habit
-   * pragmatic-dnd left behind. `defaultCollisionDetection` is `pointerIntersection` falling back
-   * to `shapeIntersection`, and `pointerIntersection` scores a hit as `1 / distance` from the
-   * droppable's **centre** — so a small bar sitting on top of a tall pile does not reliably win,
-   * and `z-index` is not consulted at all. `computeCollisions` overrides the detector's own
-   * priority with this when it is set, and `sortCollisions` sorts by priority first. The quick
-   * zones and the remove tray pass `CollisionPriority.Highest`; nothing else passes anything.
+   * pragmatic-dnd left behind: that library hit-tested with `event.target`, so a bar painted over
+   * a pile won by being on top. Here `z-index` is not consulted at all, and a small bar over a
+   * tall pile does not reliably win on `1 / distance-to-centre`. So an overlay needs
+   * `CollisionPriority.Highest`, which `computeCollisions` puts on the collision and
+   * `sortCollisions` sorts by first.
+   *
+   * **Priority alone is a defect, and it took the shipped window to find it.** The default
+   * detector is `pointerIntersection(args) ?? shapeIntersection(args)`, and the fallback compares
+   * the **dragged element's whole rectangle** against the droppable's. A deck card is 293px tall
+   * and the quick-zone bar is 74px at the top of the editor, so a card dropped anywhere in the
+   * top third of the desk overlaps the bar by *shape* while the pointer is nowhere near it —
+   * and the priority then makes the bar beat the pile the pointer is genuinely inside. Measured
+   * 2026-08-28 in a `tauri dev` window at 1920×1080: a card released at `(810, 246)`, 51px below
+   * a bar occupying `y 121–195` and squarely inside the Removal pile, opened the **New category**
+   * dialog.
+   *
+   * `pointerIntersection` as the detector is the fix and it is the narrower statement of what was
+   * meant all along: an overlay produces **no collision at all** unless the pointer is inside it,
+   * and wins outright when it is. Nothing else in the app passes this, so nothing else changes.
    */
-  collisionPriority?: number;
+  overlay?: boolean;
 }): { armed: boolean; over: boolean } {
   const [armed, setArmed] = useState(false);
   const [over, setOver] = useState(false);
@@ -85,7 +101,9 @@ export function useDndDropTarget<T>({
         // Asked once per collision pass rather than at registration, which is what lets it read
         // live state through the ref above.
         accept: (source) => taken(source) !== null,
-        ...(collisionPriority === undefined ? {} : { collisionPriority }),
+        ...(overlay
+          ? { collisionDetector: pointerIntersection, collisionPriority: CollisionPriority.Highest }
+          : {}),
       },
       dndManager,
     );
@@ -117,7 +135,7 @@ export function useDndDropTarget<T>({
       for (const stop of off) stop();
       droppable.destroy();
     };
-  }, [ref, collisionPriority]);
+  }, [ref, overlay]);
 
   return { armed, over };
 }

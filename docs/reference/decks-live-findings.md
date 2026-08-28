@@ -1274,3 +1274,124 @@ cannot be removed — positions its drag preview from a runtime `<style>` elemen
 preview in a `tauri build` copy is unverified and has reason to be broken. That is
 [frontend-design.md](frontend-design.md)'s "The shipped CSP blocks a plugin dnd-kit cannot be told
 not to load", and it needs a portable exe rather than another dev-server pass.
+
+## Every migrated drag, driven — 2026-08-28, `npm run tauri dev` (debug), 1920x1080, a fresh sync
+
+3a proved one gesture in the shipped window and called it the payoff. This is the rest of them:
+the card payload, the category reorder, the deck being filed, the count chip, the remove tray and
+the auto-scroller, all on `@dnd-kit/dom` and none of them a native HTML5 drag any more.
+
+**Driven with `cdp.mjs pull`, and `cdp.mjs drag` cannot be used at all now.** That command waits on
+`Input.dragIntercepted`, which only fires for a native drag, and there are none left in the app.
+`pull` is a real press, real moves and a real release — which is what dnd-kit's `PointerSensor`
+listens for.
+
+The window was a **cold first-run sync** (117 603 cards, data from 2026-08-27) rather than a copy
+of the real database, and the deck was seeded through the app's own IPC from the page: 22 printings
+across two piles the app made itself (`Ramp`, `Removal`).
+
+### The defect this pass exists for: the quick-zone bar stole a drop the pointer never reached
+
+**Measured, then fixed, then re-measured.** A card dragged out of `Ramp` and released at
+`(810, 246)` — **51px below** a quick-zone bar occupying `y 121-195`, and squarely inside the
+`Removal` pile — opened the **New category** dialog. Nothing moved; the reader's gesture landed on
+a surface their pointer was never over.
+
+The mechanism is the two halves of Task 5 meeting. `defaultCollisionDetection` is
+`pointerIntersection(args) ?? shapeIntersection(args)`, and the fallback compares the **dragged
+element's whole rectangle** against the droppable's. A deck card is 293px tall and the bar is 74px,
+so a card released anywhere in the top third of the desk overlaps the bar *by shape* while the
+pointer is nowhere near it — and `CollisionPriority.Highest`, which the bar carries so that it can
+beat the pile it is drawn over, then makes the shape hit win against a pile the pointer is
+genuinely inside.
+
+**The fix is `pointerIntersection` as the zone's own `collisionDetector`**, which is the narrower
+statement of what the priority was always for: an overlay produces **no collision at all** unless
+the pointer is inside it, and wins outright when it is. `useDndDropTarget` takes one
+`overlay: true` rather than a bare priority, so the pair cannot be half-applied; the quick zones
+and the remove tray are its only callers. `@dnd-kit/collision` is declared exactly at `0.5.0` for
+it, beside `@dnd-kit/dom` and `@dnd-kit/abstract`.
+
+Both directions re-measured after the fix, at the same geometry:
+
+| Release point | Bar | What took it |
+| --- | --- | --- |
+| `(810, 250)` — 55px below the bar, inside `Removal`; the card's own box overlaps the bar | no zone lit | **`Removal`** — `bg-accent/10` on the section, `Ramp 11 -> 10`, `Removal 10 -> 11` |
+| `(810, 132)` — inside the bar | `New category` lit | **`New category`** — the dialog opened, named for the card |
+| `(1378, 272)`, before the fix | `Sideboard` lit | `Sideboard` — the shape hit, from a pointer 77px below the bar |
+
+`QuickZones.test.tsx`'s "leaves a drop the pointer never reached to the pile it landed in" is that
+geometry in miniature, and it goes red against the priority alone.
+
+**This is the one thing jsdom could not have found.** Every box in the suite is a rectangle a test
+wrote, and the plan's own overlap case gave the two targets boxes that made the priority the only
+thing that could decide — which is a true test of the priority and blind to the fallback that sits
+under it.
+
+### What each gesture did
+
+Every write re-read through a second `deckGet` **and** after a `location.reload()`, so a move that
+only changed React state would have shown.
+
+- **A card from one pile to another.** `Ramp 14 -> 13`, `Removal 8 -> 9`; unchanged after a
+  reload. The pile under the pointer wore `bg-accent/10` and every other eligible pile wore
+  `ring-accent` — including the two rail piles and the command zone — while the pile the card came
+  *from* wore neither, which is `canDrop` refusing a move to where the card already is.
+- **A multi-card drag.** Three cards picked (the ring drawn on all three, counted as
+  `[data-deck-card-selected]`), one of them dragged: `Ramp 10 -> 7`, `Removal 11 -> 14`, and the
+  selection cleared by the drop. **The count chip read `3 cards`**, `position: fixed`,
+  `z-index: 2147483647`, at `(808, 411)` against a pointer at `(810, 386)`. That is not a 25px
+  error: the offset is exactly `+12, +12` from the *previous* pointer position, which is
+  `dragOperation.position.current` lagging one move behind — the same lag `test-drag.ts` moves
+  twice per step for, confirmed here against a real pointer.
+- **The remove tray.** The tray named the card while it was held over it
+  (`Remove Lightning Bolt from deck`, a 29px strip at `y 1031-1060` spanning the editor's width),
+  and the drop took the card out: 21 rows -> 20.
+- **A pile moved past its neighbour by its grip.** Never drivable in this app's history — it was a
+  native HTML5 drag, which Chromium will not start from a synthetic event. Pressing the grip and
+  carrying the heading onto `Removal` reordered them: `[5, 9, 10, 6, 8]` -> `[5, 10, 9, 6, 8]` in
+  the DOM, `Move Removal, 1 of 2` / `Move Ramp, 2 of 2` in the grips' own names, and it survived a
+  reload. Only the target pile was armed; the pile being dragged was not.
+- **A deck filed into a folder.** The other gesture that has never been drivable. The tile carried
+  onto the folder card set `folderId: 1` on the deck row, and the gallery redrew with the deck
+  inside `Shelf`.
+- **The auto-scroller, which is the question Task 5 left open.** `DeckEditor`'s
+  `autoScrollForElements` registration was deleted, on the argument that `AutoScroller` has been in
+  the manager's plugin list since 3a. **It does scroll**: with a card held near the bottom edge,
+  `AppShell`'s `main` went from `scrollTop 0` to **487** of a 535 maximum. So the behaviour is not
+  merely preserved — the scroller the library walks to is the shell's `main`, which is the one
+  scroller in this view since 2026-08-24 and the ancestor the deleted registration was reaching for
+  through the page.
+
+### Three things only the running window says
+
+- **`data-dnd-source` is on live sources and on nothing else.** The open deck reported 24 of them:
+  22 cards and the two flowing piles' heading wrappers. It replaces `draggable="true"`, which a
+  dozen selectors in this repo used to read and which **may not be written back** —
+  `PointerSensor` stands down for a press on a native draggable, so restoring the attribute would
+  leave every selector passing and every drag off.
+- **`folderDraggable` sets no such mark.** It is 3a's own function and does not go through
+  `dndDraggable`, so a folder card is a drag source with nothing on it to say so. A folder drag was
+  driven successfully all the same; this is a gap in the *handle*, not in the gesture.
+- **`Feedback` clones the source, so a mid-drag DOM query sees the card twice.** Reading the grips'
+  labels during the reorder returned three entries for two piles. Any live probe that counts
+  elements during a drag has to expect the clone.
+
+### The trap that cost this pass half an hour, again
+
+**Vite serves a stale transform in a worktree, and a reload does not clear it.** The fix to
+`dndTarget.ts` was on disk, `git` agreed, and `fetch('/src/lib/dndTarget.ts')` from the page kept
+returning a module whose signature still read `collisionPriority`. Touching the file did not help
+and neither did `?t=Date.now()`. The window went on running the old behaviour, which reads exactly
+like the fix not working — one measurement was taken that way and had to be thrown out. The cure is
+the one already written down one section up: stop `tauri dev`, delete `node_modules/.vite`,
+relaunch, and **`fetch` the module and grep the served text before believing any reading.**
+
+### Still not driven
+
+**The packaged build.** `tauri dev` sends no CSP at all — Vite serves the page and Tauri is out of
+the response path — so the shipped `style-src 'self'` is unfalsifiable here. What that would answer
+is whether the copied `@dnd-kit` rules in `index.css` still position the preview, and whether the
+**count chip** draws: its styles are inline `style` *attributes*, which `style-src-attr
+'unsafe-inline'` permits, and this pass is the first to put a second element on that distinction.
+It needs `npm run tauri build -- --debug --no-bundle` and a repeat of the first two gestures.

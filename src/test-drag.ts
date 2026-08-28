@@ -212,14 +212,21 @@ export async function dragOnto(source: Element, target: Element): Promise<void> 
  * `getBoundingClientRect`. These helpers read the rects they are given; supplying them is the
  * caller's job, and a test that forgets will see a drag that lands nowhere.
  *
- * **Giving the two elements rects is necessary and not sufficient.** dnd-kit clamps an element's
- * visible rectangle against every ancestor whose overflow is not `visible`, and jsdom's computed
- * `overflow` on `<body>` is the empty string — so the document itself used to erase every
- * measurement. `test-setup.ts` gives `<body>` the viewport for that reason; **a scrolling box
- * between a target and the body still needs a rect of its own**, or the target inside it has zero
- * area, never gets a shape, and can never be collided with. That failure is silent: registration
- * is correct, the droppable accepts the payload, and the operation's target is `null` on every
- * frame.
+ * **Giving the two elements rects is necessary and not sufficient, and the second half is not
+ * what this comment used to say.** dnd-kit clamps an element's visible rectangle against every
+ * ancestor whose overflow is not `visible`, and jsdom's computed `overflow` on `<body>` is the
+ * empty string — so the document itself would erase every measurement. This said that
+ * `test-setup.ts` "gives `<body>` the viewport" and that "a scrolling box between a target and
+ * the body still needs a rect of its own". **Neither is true of the shim that exists.** That file
+ * wraps `window.getComputedStyle` and answers `visible` wherever jsdom answers the empty string,
+ * so no ancestor counts as clipping, none needs a rectangle, and a test that puts a scroller
+ * between a target and the body inherits the fix rather than having to know about it.
+ *
+ * What *is* still necessary is the box on the source and on the target themselves. That failure
+ * is silent, and worse than silent: an element with no rect is not invisible to the hit test but a
+ * **degenerate box at the origin**, which contains `(0, 0)` — so an unboxed target still "wins" a
+ * drop whose pointer never moved, and two unboxed targets are separated by document order rather
+ * than by where the reader aimed.
  *
  * The whole reading — the four jsdom globals, the ancestor clamp, and the collision pass no shim
  * can schedule — is in `docs/reference/frontend-design.md`.

@@ -444,10 +444,18 @@ const AT_END = { x: 0.9 };
  * what keeps them apart is `accept`, which refuses the payload each was not written for before
  * dnd-kit measures either. The face takes the same rect because it is what a real pointer is over
  * for all but the `⋯`'s corner.
+ *
+ * **Leaving the `<li>` out of that list still passes, and that is the trap rather than a licence
+ * to.** Measured 2026-08-28: with only the inner boxes stated, the `<li>`'s shape is four zeroes
+ * at the origin and `over(folderCard(…))` therefore aims the pointer at `0, 0` — which a zero
+ * rectangle *contains*, so the drop lands and every assertion below is green. It proves nothing:
+ * every other drawer on the wall is an equally unmeasured zero at the same point, and which one
+ * takes the copy is registry order. A boxed `<li>` is the difference between a hit-test and a
+ * coincidence.
  */
 const stand = (name: string) => {
   const card = folderCard(name);
-  for (const element of [folderSlot(name), card.querySelector("button")!]) {
+  for (const element of [card, folderSlot(name), card.querySelector("button")!]) {
     element.getBoundingClientRect = () => CARD_BOX;
   }
   return card;

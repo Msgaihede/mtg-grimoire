@@ -1,5 +1,4 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactElement } from "react";
-import { CollisionPriority } from "@dnd-kit/abstract";
 import { useDndDragging, useDndDropTarget, useDndTargetRef } from "@/lib/dndTarget";
 import { FolderPlus, MoveRight, Plus, Wand2, type LucideIcon } from "lucide-react";
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
@@ -355,10 +354,14 @@ interface Zone {
  * through a ref of its own, so they are rebuilt on every render of the bar without the
  * registration tearing itself down and back up under the reader's pointer.
  *
- * **It carries a `collisionPriority` and that is not decoration.** dnd-kit resolves overlapping
- * targets by distance to a droppable's *centre* and consults no z-index at all, so this short bar
- * drawn over a tall pile does not reliably win the pointer — `LAYER.dragTray` decides what is
- * painted and nothing about what is hit.
+ * **It is an `overlay`, and that is not decoration.** dnd-kit resolves overlapping targets by
+ * geometry and consults no z-index at all, so this short bar drawn over a tall pile does not
+ * reliably win the pointer — `LAYER.dragTray` decides what is painted and nothing about what is
+ * hit. `useDndDropTarget`'s `overlay` is the pair that says it: highest priority so the bar beats
+ * the pile when the pointer is on it, and a pointer-only detector so it produces no collision at
+ * all when the pointer is not — without the second half a 293px card dropped anywhere in the top
+ * third of the desk overlapped the 74px bar by *shape* and the bar took it, which is the defect
+ * the live pass of 2026-08-28 found.
  */
 function QuickZone({ label, icon: Icon, takes, accepts, drop }: Zone): ReactElement {
   // Named `attach` rather than `ref` for `useCategoryDrop`'s reason: React's ref lint reads a
@@ -373,7 +376,7 @@ function QuickZone({ label, icon: Icon, takes, accepts, drop }: Zone): ReactElem
     read: (data) => (accepts(data) ? data : null),
     canDrop: () => true,
     onDrop: (data) => drop(data),
-    collisionPriority: CollisionPriority.Highest,
+    overlay: true,
   });
 
   return (

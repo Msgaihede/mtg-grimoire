@@ -296,6 +296,45 @@ describe("a zone drawn over a pile", () => {
     return <div ref={attach} data-pile="" />;
   }
 
+  /**
+   * **…and does not take one the pointer never reached, which is the half priority alone got
+   * wrong.** The default detector is `pointerIntersection(args) ?? shapeIntersection(args)`, and
+   * the fallback compares the **dragged element's whole rectangle** against the droppable's — so
+   * a 293px card dropped in the top third of the desk overlaps the 74px bar by shape while the
+   * pointer is nowhere near it, and `CollisionPriority.Highest` then makes the bar beat the pile
+   * the pointer is genuinely inside.
+   *
+   * Measured in the shipped window on 2026-08-28 (`npm run tauri dev`, a debug build at
+   * 1920×1080): a card released at `(810, 246)`, **51px below** a bar occupying `y 121–195` and
+   * squarely inside the Removal pile, opened the **New category** dialog. The boxes below are
+   * that geometry in miniature — a 300px source, a zone the dragged box reaches and the pointer
+   * does not, and a pile the pointer is in the middle of.
+   */
+  it("leaves a drop the pointer never reached to the pile it landed in", async () => {
+    const onPile = vi.fn<(writes: DeckWrite[]) => void>();
+    render(
+      <>
+        <Source payload={TILE} />
+        <Pile onDrop={onPile} />
+        <QuickZones categories={CATEGORIES} onDrop={onDrop} onNewCategory={onNewCategory} />
+      </>,
+    );
+
+    // A card-shaped source: 300px tall, so its own box reaches the bar long before the pointer
+    // does. `Source` boxes itself at 40px, which is why this one is restated here.
+    boxed(screen.getByText("the card"), 0, 300);
+    const held = await startPointerDrag(screen.getByText("the card"));
+    boxed(document.querySelector<HTMLElement>("[data-pile]")!, 350, 250);
+    boxed(document.querySelector<HTMLElement>(`[${QUICK_ZONE_ATTR}="Sideboard"]`)!, 250, 40);
+    // The pointer travels 250px, so the dragged box is y 250–550 and overlaps the zone at
+    // 250–290; the pointer itself is at 400, inside the pile and 110px clear of the zone.
+    await held.moveTo(100, 400);
+    await held.drop();
+
+    expect(onPile).toHaveBeenCalledWith([{ write: "add", cardId: "c-bolt", categoryId: MAIN }]);
+    expect(onDrop).not.toHaveBeenCalled();
+  });
+
   it("takes the drop from the pile underneath it", async () => {
     const onPile = vi.fn<(writes: DeckWrite[]) => void>();
     render(

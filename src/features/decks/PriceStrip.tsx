@@ -1,5 +1,4 @@
 import { type ReactElement } from "react";
-import { CollisionPriority } from "@dnd-kit/abstract";
 import { useDndDragging, useDndDropTarget, useDndTargetRef } from "@/lib/dndTarget";
 import { Trash2 } from "lucide-react";
 import type { DeckVariant } from "@/lib/ipc";
@@ -140,9 +139,11 @@ export function PriceStrip({
   // enters the next collision pass, which is how a tray that appears on `dragstart` can be
   // dropped on at all.
   //
-  // **`collisionPriority` for `QuickZones`' reason**: this tray is drawn *over* the strip at the
-  // foot of the deck, and dnd-kit ranks overlapping targets by distance to a droppable's centre
-  // with no regard for what is painted on top.
+  // **An `overlay` for `QuickZones`' reason**: this tray is drawn *over* the strip at the foot of
+  // the deck, and dnd-kit ranks overlapping targets by geometry with no regard for what is
+  // painted on top. The pair matters — highest priority so the tray wins the pointer that is on
+  // it, and a pointer-only detector so a 293px card whose *box* reaches the tray while the
+  // pointer is still over a pile does not get taken out of the deck.
   const { ref: trayRef, attach: attachTray } = useDndTargetRef();
   const writesFor = (payloads: DragPayload[]) => dropWrites(payloads, { kind: "remove" });
   const { over: overTray } = useDndDropTarget({
@@ -156,7 +157,7 @@ export function PriceStrip({
       const writes = writesFor(payloads);
       if (writes.length > 0) onRemove(writes);
     },
-    collisionPriority: CollisionPriority.Highest,
+    overlay: true,
   });
 
   return (
