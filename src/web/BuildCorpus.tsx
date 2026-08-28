@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { browserCore } from "@/lib/core/browser";
+import type { CorpusState } from "@/pwa/corpusMark";
 
 /** Scryfall's bulk descriptor for the everything-printing file. `Access-Control-Allow-Origin: *`
  *  — verified 2026-08-27, and it is the only reason a browser can build its own corpus. */
@@ -16,8 +17,22 @@ export const BULK_DESCRIPTOR_URL = "https://api.scryfall.com/bulk-data/default_c
  * **Nothing here asks `navigator.storage.estimate()`.** It reported 647 MB during a fill and
  * 7 MB immediately after a restart, against a file that was 532.8 MB both times, and the same
  * quota on a desktop and a phone. It is not a pre-flight and must never gate an ingest.
+ *
+ * **It is also where an EVICTION lands, and it must not call that a first run** (spec 5.4).
+ * Cache Storage and OPFS are evicted independently, so a reader who has used this app for a
+ * month can open it to an empty database with the shell itself perfectly intact - and this
+ * screen is the one they meet, because `WebBoot` gates `<App />` on a corpus existing and
+ * `SyncProgress` is inside `App`. Only the heading and the sentence under it change: there is
+ * no card data either way, and the way out is the same download.
  */
-export function BuildCorpus({ onDone }: { onDone: () => void }) {
+export function BuildCorpus({
+  onDone,
+  reason = "never-built",
+}: {
+  onDone: () => void;
+  /** Why the database is empty. `corpusMark`’s answer; `WebBoot` supplies it. */
+  reason?: CorpusState;
+}) {
   const [inserted, setInserted] = useState<number | undefined>(undefined);
   const [failed, setFailed] = useState<string | undefined>(undefined);
   const running = inserted !== undefined && failed === undefined;
@@ -34,10 +49,13 @@ export function BuildCorpus({ onDone }: { onDone: () => void }) {
   return (
     <main className="flex min-h-screen items-center justify-center bg-background p-8 text-foreground">
       <div className="max-w-md space-y-4 text-center">
-        <h1 className="text-xl font-semibold">Build the card database</h1>
+        <h1 className="text-xl font-semibold">
+          {reason === "evicted" ? "Your card data was cleared" : "Build the card database"}
+        </h1>
         <p className="text-muted-foreground">
-          MTG Grimoire builds its own copy of Scryfall&rsquo;s card data on this device. It is
-          about 75 MB to download and takes under a minute on a desktop.
+          {reason === "evicted"
+            ? "This browser removed the card database to free up space. It has to be downloaded again — about 75 MB."
+            : "MTG Grimoire builds its own copy of Scryfall’s card data on this device. It is about 75 MB to download and takes under a minute on a desktop."}
         </p>
         {failed !== undefined && <p role="alert">{failed}</p>}
         {running ? (
