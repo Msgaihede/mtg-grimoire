@@ -582,6 +582,19 @@ tombstone and C's edit only meet if they arrive in one batch. The relay hands th
 hybrid-logical-clock order, so the common case orders itself; the residual is a sparse edit
 arriving after a tombstone, which is **deferred** rather than lost.
 
+### ...and a resurrected row is rebuilt from it
+
+A row this device deleted, which add-wins has just brought back, is described by nothing the
+network sent: the incoming op that saved it can be a sparse note edit that mentions no folder at
+all. So an **insert** takes its fields and its parents from the combined fold, where an update
+takes only what the incoming ops won. Without that, a card jumps out of its binder because
+somebody else edited a note.
+
+The first attempt at this was dead code, and the test said so with `left: None, right:
+Some("Binder")`. The resolved-parents map **always** holds every key — an op that mentions no
+parent resolves to "nobody", which is written in as the absent value — so asking whether the
+map has the key is always yes. The condition has to be about the *incoming* fold.
+
 ### The cycle-break needs the same
 
 A loop takes **two** moves and each device only ever *receives* one of them — the other is its
