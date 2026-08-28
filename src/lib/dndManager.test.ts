@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from "vitest";
 import css from "@/index.css?raw";
 import { folderDraggable } from "@/lib/folderDrag";
+import { DRAGGING_ATTRIBUTE } from "@/lib/dndManager";
 import { startPointerDrag } from "@/test-drag";
 
 /**
@@ -29,10 +30,10 @@ import { startPointerDrag } from "@/test-drag";
  * `Cursor` and `PreventSelection` register bare `*` rules — which the library can afford because
  * it adds and removes them around a single drag. Copied verbatim into a stylesheet that is always
  * loaded, a grabbing cursor on `*` would put a closed hand over the whole app forever. The
- * declarations are untouched; only the selector is gated on the library's own feedback element
- * existing.
+ * declarations are untouched; only the ancestor is added, and `dndManager.ts` sets that mark for
+ * exactly as long as the library's own rules would have been up.
  */
-const DRAG_SCOPE = ":root:has([data-dnd-dragging])";
+const DRAG_SCOPE = `html[${DRAGGING_ATTRIBUTE}]`;
 
 /** The library's selector, as this file expects to find it spelled in `index.css`. */
 function asCopied(selector: string): string {
@@ -113,6 +114,28 @@ function parse(source: string): Rules {
     }
     return text.length;
   }
+}
+
+/**
+ * Whether a selector puts `:has()` in an *ancestor* position — the shape whose cost is paid once
+ * per element in the document rather than once per match. See the test that uses it for the
+ * measurement and for what it broke.
+ */
+function scansTheDocumentPerElement(selector: string): boolean {
+  const at = selector.indexOf(":has(");
+  if (at < 0) return false;
+  let depth = 0;
+  let i = selector.indexOf("(", at);
+  for (; i < selector.length; i++) {
+    if (selector[i] === "(") depth += 1;
+    else if (selector[i] === ")") {
+      depth -= 1;
+      if (depth === 0) break;
+    }
+  }
+  // A combinator after the `:has()` means something to its right is the subject, and that is what
+  // every element in the document gets tested against.
+  return /[\s>+~]/.test(selector.slice(i + 1));
 }
 
 /** A rect of its own, because jsdom measures every box as zero and a drag has to travel five
@@ -219,6 +242,68 @@ describe("the dnd-kit rules copied into index.css", () => {
         `${declaration} is not fenced behind a drag`,
       ).toContain(declaration);
     }
+  });
+
+  /**
+   * **The fence is two halves and this is the half CSS cannot state.** The rules above hang off
+   * `html[data-dragging]`, and a mark nothing ever sets is a stylesheet that silently does
+   * nothing — the grabbing cursor and the selection guard would be gone from the shipped app with
+   * every assertion in this file still green. So the wiring is asserted through a real drag
+   * rather than by reading `dndManager.ts`.
+   */
+  it("marks the document for the length of a drag, and unmarks it after", async () => {
+    const element = boxed(document.createElement("div"));
+    document.body.append(element);
+    const stop = folderDraggable({
+      element,
+      folder: () => ({ folderId: 7, name: "Modern", parentId: null, scope: "deck" }),
+    });
+    undo.push(() => {
+      stop();
+      element.remove();
+    });
+
+    expect(document.documentElement.hasAttribute(DRAGGING_ATTRIBUTE)).toBe(false);
+    const held = await startPointerDrag(element);
+    expect(held.started, "the probe drag never started").toBe(true);
+    expect(
+      document.documentElement.hasAttribute(DRAGGING_ATTRIBUTE),
+      "nothing marked the document, so the copied `*` rules can never match",
+    ).toBe(true);
+    await held.cancel();
+    expect(
+      document.documentElement.hasAttribute(DRAGGING_ATTRIBUTE),
+      "the mark outlived the drag, so the whole app keeps a grabbing cursor",
+    ).toBe(false);
+  });
+
+  /**
+   * **The shape of selector that cost a shipped test, fenced so it cannot come back.**
+   *
+   * The first spelling of the fence above was `:root:has([data-dnd-dragging]) *`, which is
+   * correct CSS, free in a browser, and quadratic in jsdom: style resolution matches every loaded
+   * rule against every element, and a rule whose *subject* is broad and whose ancestor part holds
+   * `:has()` makes each of those matches a scan of the whole document. Measured 2026-08-28 over a
+   * 400-element tree with a DOM mutation between reads — what a `userEvent` gesture produces —
+   * **4.1s with an attribute ancestor against 18.6s with the `:has()`**. What it broke was
+   * `DeckEditor.stories.tsx > SwapFolds`, a play that drags nothing: 3.5s to just over the 15s
+   * `testTimeout`, i.e. the whole suite taxed by one selector in one stylesheet.
+   *
+   * **It is the broad subject that is expensive, not `:has()`.** An unrelated
+   * `.thing:has(.other)` measured 436ms against a 447ms baseline, because its subject fails
+   * before the `:has()` is ever evaluated — so this fence refuses one shape rather than the
+   * pseudo-class, and a `has-[…]` utility on a real class is unaffected.
+   */
+  it("authors no selector that makes every style read scan the document", () => {
+    // The rule itself, checked against the two spellings that made it and one that is fine —
+    // without which a predicate that had stopped detecting anything would pass over every file.
+    expect(scansTheDocumentPerElement(":root:has([data-dnd-dragging]) *")).toBe(true);
+    expect(scansTheDocumentPerElement(":root:has([data-dnd-dragging]) > div")).toBe(true);
+    expect(scansTheDocumentPerElement(`${DRAG_SCOPE} *`)).toBe(false);
+    expect(scansTheDocumentPerElement(".card:has(img)")).toBe(false);
+
+    const offenders = [...parse(css).keys()].filter(scansTheDocumentPerElement);
+    expect(offenders, "index.css selectors that scan the document for every element").toEqual([]);
   });
 
   /**

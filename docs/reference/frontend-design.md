@@ -3352,9 +3352,31 @@ Three things about the copy are worth knowing before touching it.
 - **Two rules are fenced and the rest are verbatim.** `Cursor` and `PreventSelection` register
   bare `*` rules, which is only safe because the library adds and removes them around one
   gesture. Copied as-is into a stylesheet that is always loaded they would put a closed hand and
-  an unselectable page over the whole app forever, so both are gated on
-  `:root:has([data-dnd-dragging])` — true exactly while `Feedback`'s element exists. Their
-  declarations are untouched.
+  an unselectable page over the whole app forever, so both hang off `html[data-dragging]`, a mark
+  `lib/dndManager.ts` sets between the library's own `dragstart` and `dragend`. Their
+  declarations are untouched. The mark comes off when the reader lets go rather than when the
+  drop animation ends, because the status signal the library itself reads lives in
+  `@dnd-kit/state`, a transitive dependency this app does not declare.
+- **That fence was `:root:has([data-dnd-dragging])` for one commit, and it broke a story play in
+  a feature that does not drag.** It is correct CSS and free in a browser, which is what made it
+  the obvious first spelling. jsdom resolves style by matching every loaded rule against every
+  element, and a rule whose **subject** is broad and whose ancestor part holds `:has()` turns
+  each of those matches into a scan of the whole document — O(n²) over the page. Measured
+  2026-08-28 over a 400-element tree with a DOM mutation between reads, which is what a
+  `userEvent` gesture produces: **4.1s with the attribute ancestor, 18.6s with the `:has()`**.
+  What it surfaced as was `DeckEditor.stories.tsx > SwapFolds` going from **3.5s to 15.0–16.0s**
+  against the 15s `testTimeout`, and the whole `vitest` run going from **181s to 231s**. **It is
+  the broad subject that is expensive, not the pseudo-class**: an unrelated `.thing:has(.other)`
+  measured 436ms against a 447ms baseline, because its subject fails before the `:has()` is
+  evaluated. `dndManager.test.ts` refuses that one selector shape in `index.css`, with the
+  predicate self-tested against both spellings so it cannot quietly stop detecting anything.
+- **The near-miss is the part worth remembering.** The regression shipped through a green
+  `npm run verify` — the story plays ran, and SwapFolds came in at **15049ms in the full
+  parallel run against a 15000ms wall**, a margin of about fifty milliseconds on a play that had
+  been taking three and a half seconds. A four-fold slowdown reached the branch as a coin flip on
+  one timeout, and the default reporter prints no duration for a test that passes, so nothing in
+  the log said so. The check is the story plays and they already run in `verify`; what they
+  cannot do is report a regression that is still, barely, under the wall.
 - **`src/lib/dndManager.test.ts` is the fence, and it compares against the library rather than
   against a string.** It starts a real drag through the app's own manager in jsdom (where nothing
   is blocked), captures the `<style>` elements `StyleInjector` actually injected, parses both them
@@ -3373,6 +3395,16 @@ written inline — `z-index: 2147483647` (`calc(infinity)`, clamped), `pointer-e
 `translate` walking 0 → 122px → 239.328px as the pointer travelled, with the box itself at
 x = 456 → 578 → 695. `<body>` read `cursor: grabbing` and `user-select: none` throughout, and
 `auto` for both at rest.
+
+**Driven again after the fence changed**, same build recipe and same window, because the `<body>`
+readings above were taken while it was still the `:has()` spelling. `data-dragging` is absent at
+rest with `<body>` at `cursor: auto`; through the drag the mark is on `<html>` and the preview
+reads `position: fixed`, `top: 344px`, `left: 456px`, `z-index: 2147483647`, `translate` walking
+0 → 142px → 239.357px, with `<body>` at `grabbing` and `user-select: none`; and it is absent again
+afterwards. The last sampled frame catches the documented difference in the act — `data-dragging`
+already off and the cursor back to `auto` while `data-dnd-dragging` is still on the element for
+the drop animation, which is the mark ending at `dragend` rather than at the end of the flight
+home.
 
 **The control, in the same session and the same window**: the ten copied rules were deleted out of
 `document.styleSheets[0]` and the drag repeated — which is the state the shipped build was in

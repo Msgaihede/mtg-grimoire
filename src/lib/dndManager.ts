@@ -86,6 +86,53 @@ export const dndManager = new DragDropManager({
   ],
 });
 
+/**
+ * The mark that says a drag is up, on `<html>` — and the fence for the two rules `index.css`
+ * copies out of `Cursor` and `PreventSelection`.
+ *
+ * **Why those two rules need a fence at all.** Both are bare `* { … !important }`, which the
+ * library can afford because it *registers and unregisters them around one gesture*. Copied into
+ * a stylesheet that is always loaded they would put a closed hand and an unselectable page over
+ * the whole app forever, so the copy carries an ancestor condition the library's does not — and
+ * this attribute is what makes that condition true for exactly as long as the library's own rules
+ * would have been up.
+ *
+ * **Why an attribute and not `:root:has([data-dnd-dragging])`, which needs no JavaScript at all.**
+ * That was the first spelling and it cost a shipped test. jsdom resolves style by matching every
+ * loaded rule against every element, and a rule whose *subject* is `*` and whose ancestor part
+ * contains `:has()` makes each of those matches a scan of the whole document — O(n²) over the
+ * page. Measured 2026-08-28 on a 400-element tree with a DOM mutation between reads, which is
+ * what a `userEvent` gesture produces: **4.1s with this attribute, 18.6s with the `:has()`**. In
+ * the suite that showed up as `DeckEditor.stories.tsx > SwapFolds`, a play that touches no drag
+ * at all, going from **3.5s to just over the 15s `testTimeout`** — a whole-suite tax collected by
+ * one selector. An unrelated `:has()` rule costs nothing (measured: 436ms against 447ms), because
+ * its subject fails before the `:has()` is ever evaluated; it is the broad subject that is
+ * expensive, not the pseudo-class. `dndManager.test.ts` holds that fence.
+ *
+ * A real browser has none of this problem — Chromium keeps an invalidation set for `:has()` — so
+ * the reason this is an attribute is jsdom, and jsdom is where this app's UI is proved.
+ */
+export const DRAGGING_ATTRIBUTE = "data-dragging";
+
+/**
+ * Set for the length of a drag, and **module scope on purpose**: the manager above is a singleton
+ * with no teardown, so its mark is one subscription for the life of the window rather than
+ * something a component owns and could forget.
+ *
+ * `dragstart` and `dragend` rather than the operation's own `status`, which is what the library's
+ * `StyleInjector` reads: that signal is reachable only through `@dnd-kit/state`, a transitive
+ * dependency this app does not declare. The difference is the drop animation — the library keeps
+ * its rules up while the preview flies home and this mark comes off when the reader lets go. That
+ * is a cursor returning to normal a couple of hundred milliseconds earlier, on a pointer that is
+ * no longer holding anything, and it is the right side to err on.
+ */
+dndManager.monitor.addEventListener("dragstart", () => {
+  document.documentElement.setAttribute(DRAGGING_ATTRIBUTE, "");
+});
+dndManager.monitor.addEventListener("dragend", () => {
+  document.documentElement.removeAttribute(DRAGGING_ATTRIBUTE);
+});
+
 let nextId = 0;
 
 /**

@@ -386,10 +386,20 @@ body {
 
    **Two of them are scoped and the rest are the library's selectors unchanged.** `Cursor` and
    `PreventSelection` register plain `*` rules, which the library can only do because it adds
-   and removes them around a single drag. A permanent copy of `* { cursor: grabbing }` would
-   put a closed hand over the whole app forever, so those two — and only those two — are
-   fenced behind `:root:has([data-dnd-dragging])`, which is true exactly while the library's
-   own feedback element exists. Their declarations are untouched.
+   and removes them around a single drag. A permanent copy of a grabbing cursor on `*` would
+   put a closed hand over the whole app forever, so those two — and only those two — hang off
+   `html[data-dragging]`, a mark `lib/dndManager.ts` sets between the library's own `dragstart`
+   and `dragend`. Their declarations are untouched.
+
+   **That fence was `:root:has([data-dnd-dragging])` for one commit, and it cost a shipped
+   test.** jsdom resolves style by matching every loaded rule against every element, and a rule
+   whose *subject* is `*` and whose ancestor part holds `:has()` turns each of those matches into
+   a scan of the whole document. Measured 2026-08-28 over a 400-element tree with a mutation
+   between reads — what a `userEvent` gesture produces — **4.1s with the attribute, 18.6s with the
+   `:has()`**; in the suite, `DeckEditor.stories.tsx > SwapFolds` went from 3.5s to just over the
+   15s test timeout, a play that never drags anything. A browser has no such problem, so this is
+   a jsdom cost paid for a browser convenience, and not worth it. An unrelated `:has()` is fine
+   and costs nothing measurable: it is the broad subject that is expensive.
 
    **`lib/dndManager.test.ts` is what keeps this honest.** It starts a real drag in jsdom —
    where nothing is blocked — captures the stylesheets the library injects, and fails unless
@@ -460,13 +470,13 @@ body {
 
 /* The library writes this one as a bare `*`, and registers it only for the length of a drag.
    The fence is this copy's alone; the declaration is the library's. */
-:root:has([data-dnd-dragging]) * {
+html[data-dragging] * {
   cursor: grabbing !important;
 }
 
 /* Likewise. Two rules rather than one merged block, so each still reads as the plugin it came
    from — `Cursor` above, `PreventSelection` here. */
-:root:has([data-dnd-dragging]) * {
+html[data-dragging] * {
   user-select: none !important;
   -webkit-user-select: none !important;
 }
