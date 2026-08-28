@@ -4063,8 +4063,11 @@ pub async fn deck_set_cover_image(
 ) -> Result<DeckRow, String> {
     let state = state.inner().clone();
     let covers = crate::paths::covers_dir(&app)?;
+    // `app` is cloned into the blocking task the way `state` is, because on Android the source
+    // is a `content://` URI and `encode_cover_picked` needs the handle to reach the
+    // ContentResolver. On desktop the handle is unused and the path is opened directly.
     tauri::async_runtime::spawn_blocking(move || {
-        let bytes = crate::images::encode_cover(Path::new(&source_path))?;
+        let bytes = crate::images::encode_cover_picked(&app, &source_path)?;
         with_write(&state, |c| set_cover_image(c, &covers, deck_id, &bytes))
     })
     .await
@@ -4463,8 +4466,7 @@ mod tests {
     /// fixture, both traps, and neither of them invented — those are the real rarities and
     /// the real legalities.
     fn seeded() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        let conn = crate::schema::memory_pair();
         conn.execute_batch(
             r#"INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
                     rarity,artist,mana_cost,cmc,type_line,oracle_text,colors,color_identity,

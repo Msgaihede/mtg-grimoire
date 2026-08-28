@@ -21,6 +21,7 @@ import { TitleBar } from "@/components/TitleBar";
 import { CabinetFiling, Cards } from "@/components/icons";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { useSidebarDrops, type SidebarDrop } from "@/components/useSidebarDrops";
+import { isAndroid } from "@/lib/platform";
 import { useCardToDeckRefusal } from "@/features/card/cardMenu";
 import { readCards } from "@/features/decks/dnd";
 import { useDndDropTarget } from "@/lib/dndTarget";
@@ -246,7 +247,16 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
           now by `LAYER.caption` in `TitleBar` itself, where the rung carries the argument; the
           claim lives here because this is where the row is placed, and `layers.test.ts` is
           what holds the two together. */}
-      <TitleBar />
+      {/* **Not on Android, and it is three of its four buttons that decide it.** In tauri
+          2.11.5 `minimize`, `toggle_maximize` and `start_dragging` are all `#[cfg(desktop)]`
+          (`tauri/src/window/plugin.rs`) — they are not commands there at all — and
+          `capabilities/mobile.json` grants none of the four. The fourth, `close`, exists and
+          would kill the app from a button no phone user is looking for. The OS owns the frame
+          there, and `lib.rs` does not even compile `window.rs` for it.
+
+          The argument above about `LAYER.caption` still governs, on the platforms that draw
+          the row. */}
+      {!isAndroid() && <TitleBar />}
 
       <div className="flex min-h-0 flex-1">
         {/* **`w-52` is 208px and it is pinned, which is the one part of this shell that got

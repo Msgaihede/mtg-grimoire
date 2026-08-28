@@ -1181,38 +1181,63 @@ pub(crate) const MAX_COVER_SOURCE_PIXELS: u64 = 100_000_000;
 /// portable app against a native `libwebp` build, and the file count here is the number of
 /// decks a person has.
 pub fn encode_cover(source: &std::path::Path) -> Result<Vec<u8>, String> {
+    let label = source.display().to_string();
+    encode_cover_from(
+        || {
+            std::fs::File::open(source)
+                .map_err(|e| format!("could not open {}: {e}", source.display()))
+        },
+        &label,
+    )
+}
+
+/// [`encode_cover`], for a file the reader picked on Android.
+///
+/// The source there is a `content://` URI rather than a path, so it is opened through
+/// [`crate::picked::open_read`] — which hands back a [`std::fs::File`] built from the
+/// descriptor the ContentResolver gave, and is therefore `Seek` as well as `Read`. That is not
+/// a detail: the two-pass bound below **reopens** the source, because `into_dimensions`
+/// consumes its reader, and a boxed `Read` could do neither.
+pub fn encode_cover_picked(app: &tauri::AppHandle, picked: &str) -> Result<Vec<u8>, String> {
+    encode_cover_from(|| crate::picked::open_read(app, picked), picked)
+}
+
+/// The whole of the cover encode, over a *reopenable* source rather than a path.
+///
+/// `open` is called **twice**, and that is the existing two-pass bound rather than waste: the
+/// header is read on a pass of its own so [`MAX_COVER_SOURCE_PIXELS`] is checked as a product
+/// before anything is decoded, and `into_dimensions` consumes the reader it is given. Reading
+/// the whole file into a `Vec` first would make one open do — and would also put an arbitrarily
+/// large photo in a phone's memory before the ceiling that exists to prevent exactly that had
+/// been consulted.
+///
+/// `label` is what a refusal names. For a path it is `source.display()`, for a picked file the
+/// URI itself; either way the user gets back the thing they chose.
+fn encode_cover_from<F>(open: F, label: &str) -> Result<Vec<u8>, String>
+where
+    F: Fn() -> Result<std::fs::File, String>,
+{
     let (width, height) = COVER_VARIANT.dimensions();
-    let open = || {
-        image::ImageReader::open(source)
-            .map_err(|e| format!("could not open {}: {e}", source.display()))?
+    let reader = || {
+        image::ImageReader::new(std::io::BufReader::new(open()?))
             .with_guessed_format()
-            .map_err(|e| format!("could not read {}: {e}", source.display()))
+            .map_err(|e| format!("could not read {label}: {e}"))
     };
-    // The header on a pass of its own, before anything is decoded. `into_dimensions` consumes
-    // the reader, hence the second open — two header reads of a local file against the one
-    // strict way to bound [`MAX_COVER_SOURCE_PIXELS`] as a product.
-    let (w, h) = open()?.into_dimensions().map_err(|e| {
-        format!(
-            "{} is not an image this app can read: {e}",
-            source.display()
-        )
-    })?;
+    let (w, h) = reader()?
+        .into_dimensions()
+        .map_err(|e| format!("{label} is not an image this app can read: {e}"))?;
     if u64::from(w) * u64::from(h) > MAX_COVER_SOURCE_PIXELS {
         return Err(format!(
-            "{} is {w} × {h}, which is too large a picture to make a deck cover from.",
-            source.display()
+            "{label} is {w} × {h}, which is too large a picture to make a deck cover from."
         ));
     }
-    let mut reader = open()?;
+    let mut reader = reader()?;
     let mut limits = image::Limits::default();
     limits.max_alloc = Some(MAX_COVER_SOURCE_PIXELS * 4);
     reader.limits(limits);
-    let decoded = reader.decode().map_err(|e| {
-        format!(
-            "{} is not an image this app can read: {e}",
-            source.display()
-        )
-    })?;
+    let decoded = reader
+        .decode()
+        .map_err(|e| format!("{label} is not an image this app can read: {e}"))?;
     let filled = decoded
         .resize_to_fill(width, height, image::imageops::FilterType::Lanczos3)
         .to_rgba8();
@@ -1538,8 +1563,7 @@ mod tests {
     /// A normal card (top-level images), a transform (per-face), one of the 162 printings
     /// that have no image anywhere, and one of the eight that have something worse.
     fn seeded() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        let conn = crate::schema::memory_pair();
         conn.execute(
             "INSERT INTO cards (id, name, set_code, collector_number, lang, layout, image_uris, raw)
              VALUES ('0000419b-0bba-4488-8f7a-6194544ce91d','Bolt','lea','161','en','normal',
@@ -2046,10 +2070,9 @@ mod tests {
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(&dir).unwrap();
 
-            let db = dir.join("mtg.db");
-            let write = crate::db::open(&db).unwrap();
-            crate::schema::migrate(&write).unwrap();
-            let read = crate::db::open_read_only(&db).unwrap();
+            crate::split::convert(&dir).unwrap();
+            let write = crate::db::open_write(&dir).unwrap();
+            let read = crate::db::open_read(&dir).unwrap();
 
             Fixture {
                 cache: Cache::new(dir.join("images")),

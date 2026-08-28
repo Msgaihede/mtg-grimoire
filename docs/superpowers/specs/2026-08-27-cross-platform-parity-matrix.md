@@ -29,7 +29,7 @@ Platforms: **Desktop** (Tauri/Windows, today's app) · **Web** (Vite + wasm core
 | Tag search syntax | ✅ | ✅ | ✅ | Depends only on the tagger tables being present. |
 | Printings, card detail | ✅ | ✅ | ✅ | |
 | Card zoom (the 16-stop ladder) | ✅ | ❓ | ❓ | ⚠️ **`useCardZoomGesture` listens for `wheel`+`ctrlKey`. A touchscreen pinch is not a wheel event**, and no other control steps the ladder — so it is unreachable on touch today. Needs a gesture, planned in mobile-layout 9a. |
-| Collapsed / uncollapsed browse | ✅ | ❓ | ✅ | **Not yet measured on the real corpus in wasm.** See open question 1. |
+| Collapsed / uncollapsed browse | ✅ | ❓ | ❓ | **Not yet measured on the real corpus in wasm, and not measured on Android either** — the ✅ there was an assumption. No APK has been built (the JDK blocks Gradle), so no Android figure of any kind exists. Desktop is 131.8 ms end to end. See open question 1 and [android-target.md](../../reference/android-target.md). |
 
 ## 2. Optional feeds
 
@@ -152,12 +152,12 @@ The fifteen frontend files that name a Tauri API today, and what each becomes.
 | Seam | Desktop | Web | Android |
 | --- | --- | --- | --- |
 | `src/lib/ipc.ts` — all 136 commands | Tauri `invoke` | wasm-core call into the DB Worker | Tauri `invoke` |
-| `plugin-dialog` (4 components) | native picker | `<input type=file>` / FS Access API | Tauri mobile dialog |
+| `plugin-dialog` (4 components) | native picker | `<input type=file>` / FS Access API | Tauri mobile dialog — **which answers a `content://` URI, not a path** (see below) |
 | `plugin-clipboard-manager` | Tauri | `navigator.clipboard` | Tauri |
 | `plugin-opener` | Tauri | `window.open` | Tauri |
 | `api/window` + `TitleBar` + snap layouts | custom caption, Win32 hit-test | ⛔ — the browser owns the frame | ⛔ — the OS owns the frame |
 | `api/event` (sync/tag/combo progress) | Tauri events | `postMessage` from the Worker | Tauri events |
-| `mtgimg://` protocol (`src/lib/images.ts`) | custom protocol | Cache Storage + blob URLs | Tauri asset protocol |
+| `mtgimg://` protocol (`src/lib/images.ts`) | custom protocol | Cache Storage + blob URLs | **custom URI scheme protocol**, origin `http://mtgimg.localhost` — not the asset protocol; `imageOrigin()` already returns that for an Android agent. Unverified on a device. |
 
 **The 136 commands are one file.** `src/lib/ipc.ts` is the only place the frontend names a
 command, which makes boundary 2a a genuinely small PR: one interface, three implementations
@@ -167,11 +167,11 @@ behind it, and no call site changes.
 
 | Feature | Desktop | Web | Android |
 | --- | --- | --- | --- |
-| Image cache | uncapped (519 MB / 7 929 files live) | 🟡 **256 MB LRU** | 🟡 **256 MB LRU** |
+| Image cache | uncapped (519 MB / 7 929 files live) | 🟡 **256 MB LRU** | ❓ **no measurement supports 256 MB here.** That number is derived in the design's §5.4 from *browser eviction* and a 1 GB web footprint ceiling, neither of which applies to a native app with a real filesystem. A cap on Android is an argument about phone storage and is a different one. |
 | Corpus storage | file on disk | OPFS via `opfs-sahpool` | file on disk |
 | WAL journal | ✅ | ⛔ rollback journal only | ✅ |
-| Two windows / tabs at once | ✅ | ⛔ **first tab wins** | ✅ |
-| Updates | hand-written portable exe swap | service worker | Play Store |
+| Two windows / tabs at once | ✅ | ⛔ **first tab wins** | ❓ **the ✅ here had no evidence and is very likely wrong.** Android runs one task per application, and `tauri-plugin-single-instance` does not compile there at all — its crate is empty on that target. Unmeasured. |
+| Updates | hand-written portable exe swap | service worker | Play Store — now `InstallKind::Managed` in the app (2026-08-28). The daily check is not spawned and `UpdatePanel` says so; the release itself is a stop gate outside this PR. |
 
 **The image cache cap, with the number you asked for: 256 MB, LRU, reader-adjustable up to 1 GB.**
 The live cache is 519 MB over 7 929 files — **~65 KB per image** at browsed sizes. 256 MB is

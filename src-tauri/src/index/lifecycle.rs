@@ -135,8 +135,8 @@ fn publish_amendment(state: &AppState, base: &Arc<CardIndex>, ix: CardIndex) -> 
 pub fn build_now(state: &AppState) -> Result<(), String> {
     let generation = clear(state);
     // Spelled here and in `lib.rs`'s `init_state`, which is the one that creates it.
-    let conn = crate::db::open_read_only(&state.data_dir.join("mtg.db"))
-        .map_err(|e| format!("index connection: {e}"))?;
+    let conn =
+        crate::db::open_read(&state.data_dir).map_err(|e| format!("index connection: {e}"))?;
     let ix = CardIndex::build(&conn).map_err(|e| format!("index build: {e}"))?;
     if !publish_build(state, generation, ix) {
         // Not an error: something cleared while this ran, and whatever cleared owes a rebuild
@@ -188,7 +188,7 @@ pub fn invalidate_owned(state: &AppState) {
     let Some(base) = current(state) else {
         return;
     };
-    let Ok(conn) = crate::db::open_read_only(&state.data_dir.join("mtg.db")) else {
+    let Ok(conn) = crate::db::open_read(&state.data_dir) else {
         return;
     };
     let mut next = (*base).clone();
@@ -324,7 +324,7 @@ mod tests {
     /// One printing's worth of index, built the way [`build_now`] builds it — the thing a
     /// rebuild is holding in its hands when the moment below arrives.
     fn built(state: &AppState) -> CardIndex {
-        let conn = crate::db::open_read_only(&state.data_dir.join("mtg.db")).unwrap();
+        let conn = crate::db::open_read(&state.data_dir).unwrap();
         CardIndex::build(&conn).unwrap()
     }
 

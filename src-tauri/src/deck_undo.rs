@@ -1336,9 +1336,7 @@ mod tests {
     /// Two printings of one card and one of another — a swap needs two printings of one oracle
     /// card, and a move needs somewhere to go. `deck_audit`'s fixture, for its reasons.
     fn seeded() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("PRAGMA foreign_keys=ON;").unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        let conn = crate::schema::memory_pair();
         conn.execute_batch(
             r#"INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
                     rarity,mana_cost,cmc,type_line,prices,finishes,raw)

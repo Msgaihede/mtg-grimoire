@@ -300,8 +300,7 @@ mod tests {
     /// write commands from there — a hand-written `collection_entries` row would be a grain
     /// this crate never produces and a test about nothing.
     fn seeded() -> Connection {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        let conn = crate::schema::memory_pair();
         for (id, oracle, name, set, num) in [
             ("bolt-lea", "o1", "Lightning Bolt", "lea", "161"),
             ("sol-lea", "o2", "Sol Ring", "lea", "263"),

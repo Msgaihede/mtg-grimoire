@@ -15,6 +15,7 @@ or a number to compare a new measurement against.
 | [image-cache.md](image-cache.md) | Cache layout, concurrency, placeholders, the `/cover/` route | [`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) |
 | [search-faceting.md](search-faceting.md) | The in-memory index, and why faceting fails open | [`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) |
 | [in-app-updates.md](in-app-updates.md) | Why the portable swap is hand-written | [`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) |
+| [android-target.md](android-target.md) | The Android build — the toolchain and what it cost, what is gated and what merely never runs, the `content://` file seam, and every figure taken on the phone **plus what is still blocked** | [`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) |
 | [decks-storage.md](decks-storage.md) | Deck tables, the card commands, how owned/missing is answered, the audit log, the decklist import | [`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) |
 | [wishlist-folders.md](wishlist-folders.md) | The wishlist's cabinet (v23) — the two folder tables, the four-term grain, the merge rule, the root-add duplicate and the `elsewhere` mark | [`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) |
 | [collection-folders.md](collection-folders.md) | The collection's cabinet (v24–v25) — the eleventh grain term, the deck groups and `Recently removed` that made it the ledger of where every card sits, the conversion that filled them, and what a zero quantity now costs | [`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) |

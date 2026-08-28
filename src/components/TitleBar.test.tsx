@@ -11,7 +11,7 @@ import { resetWindow, setMaximized, windowCalls } from "../../.storybook/fake/wi
  * The fakes, not hand-rolled stubs, and both at the same rung they sit at in Storybook: under
  * `src/lib/window.ts` rather than replacing it. That module is a hand-written mirror of four
  * Tauri methods and four ACL permissions, and a test that mocked it would prove nothing about
- * the one file that can drift from `capabilities/default.json`.
+ * the one file that can drift from `capabilities/desktop.json`.
  */
 vi.mock("@tauri-apps/api/window", () => import("../../.storybook/fake/window"));
 vi.mock("@tauri-apps/api/event", () => import("../../.storybook/fake/event"));

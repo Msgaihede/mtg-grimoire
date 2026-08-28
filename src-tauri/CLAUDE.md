@@ -37,16 +37,57 @@ both plus the frontend.
   does the latter, so it always needs one. A migration that only adds and fills unindexed
   columns does not (schema v2; `the_v2_backfill_leaves_the_search_index_answering` is the
   proof).
-- Two connections: `AppState.db` writes, `AppState.db_read` is `SQLITE_OPEN_READ_ONLY`.
-  Reads go through `db_read` so a search is not stuck behind an ~80 s ingest.
-- `db::open` sets `PRAGMA auto_vacuum=INCREMENTAL` **before** `journal_mode=WAL` — after WAL
-  has materialised the file the pragma is a silent no-op that only a `VACUUM` can apply.
-  Databases from Plans 1–2 are converted once, after a sync, by `maintenance` (`compacting`
-  phase); a `VACUUM` **always** needs `schema::create_fts` after it.
-- Only `schema::migrate` may stop a launch. `prepare_database`'s other two steps (an FTS
-  rebuild an interrupted compaction owed; the staging table an interrupted ingest left)
-  are logged and left owing — their likeliest cause is a full or read-only disk, and
-  `init_state` turns any error into "move `mtg.db` aside", which that disk cannot do.
+- **The data folder holds two databases, and which one is `main` is the whole design**
+  (schema 27). `data/user.db` is the reader's — the fifteen tables in `schema::TABLES` marked
+  `Side::User`, which nothing outside this app can produce again — and it is what
+  `Connection::open` names. `data/corpus.db` is everything a feed or this app's own ladder can
+  rebuild, and it is **`ATTACH`ed as `corpus`**, because *you cannot `DETACH main`*: discarding
+  a corpus that will not open has to be a delete and a re-`ATTACH`, not a process-wide reopen
+  with live connections in the way. `schema::prepare_data_dir` runs before any connection the
+  app keeps: it converts a pre-27 `mtg.db` through `split::convert` and replaces a corpus that
+  fails `quick_check`. Measured on a byte copy of the real 788 MB database: 359 ms (debug),
+  a 1.35 MB user file beside a 787 MB corpus, zero `foreign_key_check` violations.
+- **An unqualified name resolves into whichever attached database holds the table, so no
+  command changed — but a bare `CREATE`, `DROP`, `ALTER` or `PRAGMA` means `main` and says
+  nothing about it.** Every corpus DDL statement is schema-qualified (`schema::on_schema`,
+  `cards_indexes_sql(schema)`, `create_fts_in(conn, schema)`), and every one of them fails
+  *silently* without it: the table simply appears in the user's file. The single fence is
+  `schema::tests::a_full_sync_leaves_every_table_on_its_own_side`, which runs all four feeds'
+  staging paths against a pair and asserts each side's `sqlite_master` against the registry.
+  **An `sqlite_master` read in a test needs the same care** — unqualified it is `main`'s, so a
+  guard written before the split silently halves its own scope; `schema::tests::master` and
+  `watch::every_table_in_the_schema_has_been_decided_about`'s `UNION ALL` are the two answers.
+- **Six connections, not two.** `AppState.db` writes and `AppState.db_read` is
+  `SQLITE_OPEN_READ_ONLY`; four more are opened outside it — the facet index's two
+  (`index::lifecycle::build_now`, `invalidate_owned`), the mirror thread's and the settings
+  panel's. **Every one reads tables from both files**, so all six go through `db::open_write` /
+  `db::open_read`, which attach the corpus. One that attached only half does not error: it
+  reports an empty collection, or a cold index.
+- `db::configure` sets `PRAGMA auto_vacuum=INCREMENTAL` **before** `journal_mode=WAL` — after
+  WAL has materialised the file the pragma is a silent no-op that only a `VACUUM` can apply —
+  and it runs **once per schema**, because an attached file inherits neither
+  `journal_size_limit` nor `synchronous` (measured against the real database: `-1` and `2`
+  against `main`'s `67108864` and `1`). Databases from Plans 1–2 are converted once, after a
+  sync, by `maintenance` (`compacting` phase); a `VACUUM` **always** needs
+  `schema::create_fts` after it.
+- **The whole of `maintenance.rs` is about the corpus and every pragma in it says so.**
+  `freelist_count`, `page_count`, `auto_vacuum`, `incremental_vacuum` and a bare `VACUUM` all
+  mean `main`, which after the split is a 1.3 MB file — measured, `page_count` 323 against
+  `corpus.page_count` 192 149 — so `needs_conversion` and `freelist_pages` take a schema
+  argument and `vacuum_into_incremental` runs `VACUUM corpus`.
+- Only `schema::migrate_user` / `migrate_corpus` may stop a launch. `prepare_database`'s other
+  two steps (an FTS rebuild an interrupted compaction owed; the staging table an interrupted
+  ingest left) are logged and left owing — their likeliest cause is a full or read-only disk,
+  and `init_state` turns any error into "move it aside", which that disk cannot do. **A corpus
+  that will not open is not one of those failures**: it is deleted and rebuilt, and the
+  collection is untouched — `split::tests::a_destroyed_corpus_costs_a_resync_and_nothing_else`.
+- **`card_migrations` is on the user side and that is a correctness requirement.** Its rows are
+  Scryfall's, but `reconcile::apply` writes it in the same transaction as the folds it records,
+  and SQLite makes **no** atomicity guarantee across attached databases in WAL mode. Corpus-side,
+  a crash between the two commits would leave a quantity doubled and nothing to say it had been.
+  `db::CrossFileFence` rides in the mirror's update hook (SQLite allows one per connection) and
+  `sync::with_write` reads it in a debug build; its blind spot is `WITHOUT ROWID` tables, which
+  the hook does not fire for at all.
 - **A new migration step goes at the _bottom_ of the ladder, and takes the
   `CARDS_INDEXES` replay from the step below it.** `migrate` reads `user_version` **once**
   and then walks every block above it, so position in the file is the order of execution
@@ -66,7 +107,10 @@ both plus the frontend.
   never runs it again. **It happened three times, not twice**: the oracle-tag step was a third
   branch numbering itself 12 against that same head of 11, and it is **v14**. Three collisions on
   one rung in one day is the ladder's own argument — take the next free number when you land, and
-  never reuse one. Schema is at **v25** — `schema::SCHEMA_VERSION` is the answer, and
+  never reuse one. The single-file ladder is frozen at **v26** — `schema::migrate_single_file`
+  climbs to `schema::LEGACY_SINGLE_FILE_VERSION` and stops, and the two files carry their own
+  numbers from there (`USER_SCHEMA_VERSION` 27, `CORPUS_SCHEMA_VERSION` 1, deliberately
+  incomparable). This line read **v25** while that was head, and
   [the ladder's history](../docs/reference/data-and-sync.md) is the story. (This line read
   **v18** for two whole rungs, then **v20** for two more, then **v23** for one and **v24** for
   one, because a prose-only edit routes to neither CI job: v19 added `deck_cards.finish`, v20 the
@@ -957,7 +1001,8 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
 ## Tauri capabilities
 
 - **`@tauri-apps/plugin-dialog` names files and never opens them, and the capability says so.**
-  `capabilities/default.json` grants **`dialog:allow-open`** (choosing a deck cover) and
+  `capabilities/desktop.json` and `capabilities/mobile.json` both grant
+  **`dialog:allow-open`** (choosing a deck cover) and
   **`dialog:allow-save`** (naming an export's destination, added 2026-08-14) — never
   `dialog:default`, so message, ask and confirm stay unreachable from the webview however the
   plugin is initialised. The app's own questions are drawn in the page instead, which is
@@ -971,11 +1016,14 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
   permission, and **no `fs:` permission is granted anywhere**. So this is the app's **habit** now
   rather than one precedent, and it is the shape to copy: the day one of these is "simplified"
   into a `readTextFile`/`writeTextFile` from the page, the answer is another twelve-line command,
-  never a wider capability. **`tauri-plugin-fs` and `rfd` entered `Cargo.lock` transitively** as
-  the dialog plugin's own dependencies and are **unreachable**: `tauri_plugin_fs::init()` is never
-  called — `lib.rs` registers single-instance, opener, dialog, clipboard-manager, and the MCP
-  bridge in a debug build only — and the ACL would deny them even if it were. Adding a plugin
-  means adding its narrowest permission, never its `:default`.
+  never a wider capability. **`rfd` entered `Cargo.lock` transitively** as one of the dialog
+  plugin's own dependencies and is **unreachable**. **`tauri-plugin-fs` came in the same way and
+  is no longer unreachable — on Android only**, where `lib.rs` registers it under
+  `#[cfg(target_os = "android")]` because a picked file there is a `content://` URI rather than a
+  path. It is still granted **no `fs:` permission on any platform**: the ACL gates commands the
+  *webview* invokes, and `picked.rs` reaches `Fs::open` from Rust, where the ACL is not in the
+  path. See the Android section below. Adding a plugin means adding its narrowest permission,
+  never its `:default`.
 - **`tauri-plugin-clipboard-manager` is granted `clipboard-manager:allow-write-text` and
   deliberately not the read half.** Nothing in this app reads the clipboard; `:default` grants
   both, and a page that can read the clipboard can read whatever the reader last copied out of
@@ -1034,6 +1082,48 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
   in `src/lib/window.ts`. A mismatch creates no overlay, raises no error and logs nothing: the
   button keeps working and Snap Layouts simply never appear, which is a regression neither a test
   nor a launch can catch. `TitleBar.test.tsx` pins the frontend half.
+- **`capabilities/` is two files and `platforms` is why** (2026-08-28). `default.json` targeted
+  every platform because there was only one; `desktop.json` carries
+  `"platforms": ["windows", "linux", "macOS"]` and the shipped permission set unchanged, and
+  `mobile.json` carries `["android"]` and four absences, each a decision:
+  **no `core:window:` verbs** — `minimize`, `toggle_maximize` and `start_dragging` are all
+  `#[cfg(desktop)]` in tauri 2.11.5 and are not commands on Android at all, and the fourth,
+  `close`, would kill the app from a button no phone user is looking for;
+  **no `snap-layout:`** (no caption to park an overlay over);
+  **no `mcp-bridge:`** (an unauthenticated WebSocket that evaluates arbitrary JavaScript, and
+  `tauri android dev` is a *debug* build, so `#[cfg(debug_assertions)]` alone would put it on a
+  phone); and **`opener` narrowed from `:default`** to `allow-open-url` + `allow-default-urls`,
+  because the third verb reveals an item in a directory and the plugin's own manifest records
+  Android as not supporting it. **`platforms` filters before permission resolution** — a
+  nonexistent permission planted in `desktop.json` fails the Windows build and is invisible to
+  the `aarch64-linux-android` one, which is how that was established rather than assumed.
+- **`tauri-plugin-fs` is a dependency with no permission, deliberately, and this paragraph exists
+  to stop the next edit granting one.** On Android a file the reader picks is a `content://` URI:
+  `tauri-plugin-dialog`'s `DialogPlugin.kt` fires `ACTION_OPEN_DOCUMENT`/`ACTION_CREATE_DOCUMENT`
+  and returns `uri.toString()`, so `std::fs` of one answers "No such file or directory".
+  `src/picked.rs` is the one place that knows the difference, and `Fs::open` resolves the URI
+  through the ContentResolver into a **`std::fs::File`** built from the descriptor — a Rust-side
+  method on managed state, with no `invoke` crossing the boundary. **The page's filesystem access
+  is unchanged: none**, and
+  `the_mobile_capability_drops_every_verb_the_platform_has_no_answer_for` asserts no `fs:` entry
+  exists. `open_read` answers a concrete `File` rather than a boxed `Read` because
+  `image::ImageReader` needs `Seek` and `encode_cover` reopens its source.
+- **Android is native, and the wasm constraints are the web target's alone.** The mobile build is
+  this same crate compiled for `aarch64-linux-android`, so it has `rusqlite` with `bundled`, a
+  real filesystem, `tokio`, threads and WAL. It is the fact most easily lost, and a plan that
+  treats Android as a wasm port is wrong from its first line.
+- **`cfg(desktop)` and `cfg(mobile)` are real cfgs**, emitted by `tauri_build::build()`, so cargo
+  checks every gate. Three things are gated because they **cannot compile** on Android —
+  `tauri_plugin_single_instance::init` (an empty crate there), `window.rs` (`center()` is
+  `#[cfg(desktop)]`) and `focus_existing_window` (`unminimize()` likewise). Four more are gated
+  because they **must not run**: the `--await-predecessor` handshake, the mirror's hook and
+  thread, `update::clean_up` and the daily update check. **`mirror/`, `transfer/` and `update.rs`
+  still compile there and that is deliberate** — `AppState` names two mirror types and a dozen
+  modules call `get_app_meta`/`set_app_meta`, and in a library crate a `pub fn` in a `pub mod`
+  raises no `dead_code`, so not *running* them costs nothing where not *compiling* them costs a
+  six-file ripple. When adding a `cfg`, prefer a `bool` parameter over a `cfg!` inside a body —
+  `paths::data_dir_for` and `update::install_kind_for` both do this, so both arms compile and are
+  tested on every platform. Full record: [android-target.md](../docs/reference/android-target.md).
 - `tauri.conf.json` is embedded at **compile time** — editing it needs a Rust rebuild
   (`touch src-tauri/src/main.rs`), not just a dev-server restart. `"dragDropEnabled": false` is
   load-bearing; re-enabling it kills all in-app drag-and-drop on Windows. **So are the window's

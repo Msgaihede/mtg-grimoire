@@ -120,6 +120,7 @@ number to compare against.
 | [search-faceting.md](docs/reference/search-faceting.md) | The in-memory index, and why faceting fails open |
 | [tag-search-syntax.md](docs/reference/tag-search-syntax.md) | Scryfall tagger syntax in the search box — the keywords, why resolution is exact, and the two failures that fail closed |
 | [in-app-updates.md](docs/reference/in-app-updates.md) | Why the portable swap is hand-written |
+| [android-target.md](docs/reference/android-target.md) | The Android build — the toolchain and what it cost, what is gated and what merely never runs, the `content://` file seam, and every figure taken on the phone |
 | [decks-storage.md](docs/reference/decks-storage.md) | Deck tables, the card commands, how owned/missing is answered, the audit log, the decklist import |
 | [commander-brackets.md](docs/reference/commander-brackets.md) | The bracket table as it stands, why the estimate is a floor and never 5, what the four signals can and cannot see, and Commander Spellbook's combo feed measured |
 | [import-export.md](docs/reference/import-export.md) | The seven formats, the field registry, the fold rule, the four import destinations |
@@ -142,8 +143,11 @@ number to compare against.
   the suite could not. Drive the real window over CDP —
   [live-ui-verification.md](docs/reference/live-ui-verification.md) is the contract, and it
   documents traps that have each cost a session.
-- **Under `tauri dev` the database is `src-tauri/target/debug/data/mtg.db`** — not
-  `src-tauri/data/`. Delete that `data/` folder to force a clean first-run sync.
+- **Under `tauri dev` the databases are `src-tauri/target/debug/data/user.db` and
+  `corpus.db`** — not `src-tauri/data/`, and not one file: schema 27 split the reader's
+  own tables out of the rebuildable ones. A folder still holding `mtg.db` is converted at
+  the next launch. Delete that `data/` folder to force a clean first-run sync; deleting
+  `corpus.db` alone costs a resync and nothing else, which is what the split is for.
 - **A built app embeds `dist/` at compile time, so a frontend-only edit does not reach a
   `tauri build` binary.** Vite writes a new bundle, cargo then sees no Rust source change and
   leaves the old bundle inside the old exe — exiting 0. `touch src-tauri/src/main.rs` first, and

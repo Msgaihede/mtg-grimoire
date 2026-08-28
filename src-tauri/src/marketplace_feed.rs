@@ -1162,8 +1162,7 @@ mod tests {
     use super::*;
 
     fn mem_db() -> Mutex<Connection> {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        let conn = crate::schema::memory_pair();
         Mutex::new(conn)
     }
 
@@ -1690,8 +1689,7 @@ mod tests {
     /// empty" rather than "these prices are old".
     #[test]
     fn a_never_fetched_feed_reports_itself_as_never_fetched_and_stale() {
-        let conn = Connection::open_in_memory().unwrap();
-        crate::schema::migrate(&conn).unwrap();
+        let conn = crate::schema::memory_pair();
 
         let status = read_status(&conn, &CardKingdom, 1_800_000_000);
         assert_eq!(
@@ -1833,9 +1831,18 @@ mod tests {
         ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let conn = crate::db::open(&dir.join("mtg.db")).unwrap();
+        crate::schema::prepare_data_dir(&dir).unwrap();
+        let conn = crate::db::open_write(&dir).unwrap();
         crate::schema::prepare_database(&conn).unwrap();
-        let read = crate::db::open_read_only(&dir.join("mtg.db")).unwrap();
+        let read = crate::db::open_read(&dir).unwrap();
+        // **Hooked up, so what these fixtures drive runs with the cross-file fence
+        // armed.** `crate::sync::with_write`'s `debug_assert` reads it, so a command
+        // that committed to both files fails its own test rather than printing a line
+        // nobody reads. The mask rides along because SQLite allows one update hook per
+        // connection, and nothing here looks at it.
+        let mirror = std::sync::Arc::new(crate::mirror::watch::Mask::default());
+        let fence = std::sync::Arc::new(crate::db::CrossFileFence::new());
+        crate::mirror::watch::install_hook(&conn, mirror.clone(), fence.clone());
         (
             Arc::new(AppState {
                 db: Mutex::new(conn),
@@ -1847,8 +1854,9 @@ mod tests {
                 index: std::sync::RwLock::default(),
                 // The mirror is never started in these tests; a clean mask and an empty record are
                 // what an `AppState` looks like before the first pass.
-                mirror: std::sync::Arc::new(crate::mirror::watch::Mask::default()),
+                mirror,
                 mirror_status: std::sync::Mutex::new(crate::mirror::watch::LastPass::default()),
+                fence,
             }),
             dir,
         )
