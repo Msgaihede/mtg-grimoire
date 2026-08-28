@@ -1,9 +1,14 @@
 import { describe, expect, it } from "vitest";
 import { isAndroid } from "./platform";
 
-/** The shape the app's own WebView reports on the OnePlus 12 (CPH2581), Android 16. */
+/**
+ * **Read off the device, not invented.** Taken from `/json/version` on the OnePlus 12
+ * (CPH2581, Android 16, SDK 36) on 2026-08-28, over `adb forward` to a WebView's DevTools
+ * socket — so the `Build/...` segment and the `; wv` marker are the real ones. The system
+ * WebView there is Chrome 150.0.7871.183.
+ */
 const ANDROID_WEBVIEW =
-  "Mozilla/5.0 (Linux; Android 16; CPH2581) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/151.0.7922.173 Mobile Safari/537.36";
+  "Mozilla/5.0 (Linux; Android 16; CPH2581 Build/BP2A.250605.015; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/150.0.7871.183 Mobile Safari/537.36";
 /** WebView2 on this workstation. */
 const WINDOWS_WEBVIEW2 =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36 Edg/151.0.0.0";

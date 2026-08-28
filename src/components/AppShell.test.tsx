@@ -294,7 +294,7 @@ it("draws no window caption on Android", () => {
   );
   Object.defineProperty(navigator, "userAgent", {
     value:
-      "Mozilla/5.0 (Linux; Android 16; CPH2581) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151 Mobile Safari/537.36",
+      "Mozilla/5.0 (Linux; Android 16; CPH2581 Build/BP2A.250605.015; wv) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/150.0.7871.183 Mobile Safari/537.36",
     configurable: true,
   });
   try {
