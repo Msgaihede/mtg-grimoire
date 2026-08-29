@@ -94,7 +94,8 @@ whole of the baseline's arithmetic.
 | The baseline is **ops over the existing log**, not a snapshot artifact | [§5](#5-approach-the-baseline-is-ops-and-the-log-is-the-carrier) |
 | Baseline ops are **never written to `sync_ops`** | [§5](#5-approach-the-baseline-is-ops-and-the-log-is-the-carrier) |
 | It is triggered by **a peer needing it**, not by the pairing event | [§10](#10-when-a-baseline-is-emitted) |
-| A key rotation **re-arms** the baseline for the devices that remain | [§12](#12-revocation-and-a-device-that-sleeps) |
+| **Removing a device changes no card on any other device** — it stops new data, never withdraws old | [§12.3](#123-the-collection-is-a-living-object-and-removing-a-device-must-not-edit-its-past) |
+| A key rotation **re-arms** the baseline for the devices that remain | [§12.4](#124-what-this-design-does-about-it) |
 
 ## 5. Approach: the baseline is ops, and the log is the carrier
 
@@ -387,17 +388,44 @@ key, but nothing tells the reader that. The app also points at a control that do
 `"This device cannot remove itself. Use Leave group instead."` There is no `leave_group` in the
 crate, no `syncLeave` in `ipc.ts` and no Leave button in `SyncPanel.tsx`.
 
-### 12.3 What this design does about it
+### 12.3 The collection is a living object, and removing a device must not edit its past
 
-Two repairs, both inside code this work already touches:
+**A device's contributions outlive it.** Removing a phone does not withdraw the cards it added,
+the decks it built or the folders it made — those are rows in every device's tables, and they
+stay. The collection is one object the whole group has been writing, and revocation ends a
+device's ability to keep writing rather than unwinding what it wrote.
 
-1. **The trigger skips revoked devices** (§10). Without it a device the reader removed sits on
+That is already the design: `apply` writes a peer's ops into the reader's own tables, and
+`revoke_device` touches `sync_devices` and the group key and nothing else. **What is broken is
+only the tail** — the last thing that device said, in the window between saying it and being
+removed:
+
+| what | reaches the others? |
+| --- | --- |
+| ops the device pushed, and a peer already pulled | **yes** — they are rows now |
+| ops it pushed that nobody pulled before the rotation | **no** — sealed under the old epoch, and `pull` steps over them |
+| ops it never pushed | no, and nothing could |
+
+So the promise holds for everything except a race, and the race is closable.
+
+### 12.4 What this design does about it
+
+Three repairs, all inside code this work already touches:
+
+1. **Revoking pulls before it rotates.** The whole point of §12.3 is that the leaving device's
+   contributions are kept; a rotation that fires while its last push is still sitting on the
+   relay throws exactly those away. So `sync_device_revoke` completes a pull first, and only
+   then marks the row and rotates. A pull that fails is a reason to say so and not rotate —
+   removing a device is not urgent, and doing it offline is the one way to lose what it said.
+2. **The trigger skips revoked devices** (§10). Without it a device the reader removed sits on
    the roster with no watermark for ever and — with §10.1's re-arm — triggers a full baseline
    every month for a peer that will never answer.
-2. **A rotation clears `baselined_at` for the devices that remain**, in `revoke_device`'s
+3. **A rotation clears `baselined_at` for the devices that remain**, in `revoke_device`'s
    existing transaction. The next sync then re-baselines under the new epoch, which repairs
-   exactly what the epoch boundary swallowed. Claims resolve by `max` and a horizon only ever
-   raises a watermark, so re-baselining cannot double-count.
+   exactly what the epoch boundary swallowed — including carrying the departed device's rows to
+   a peer that had not pulled them yet, because by then they are the emitter's own rows like any
+   other. Claims resolve by `max` and a horizon only ever raises a watermark, so re-baselining
+   cannot double-count.
 
 Key redistribution after a rotation, and the missing Leave group, are §7.6 work and are **not**
 fixed here — see §17.
@@ -548,6 +576,14 @@ pairing flow and the deployed Worker:
 - **Two-database**: the existing in-process pair test extended to "A has 275 rows, B has none",
   to "both have overlapping rows", and to a rotation followed by a re-baseline — asserting
   convergence, no duplicates, and that an ordinary edit still lands at +2.
+- **Removal changes nothing** — §12.3's invariant, and the one test on this list whose failure
+  would be a reader losing cards rather than not gaining them. Two databases converge; B revokes
+  A; **every synced table on B is then compared row for row against a snapshot taken before the
+  revocation and must be identical.** Not a count — the rows themselves, `sync_uid` included, so
+  a rule that quietly rewrote or re-parented A's contributions is caught as well as one that
+  deleted them. `sync_devices` and `sync_group` are the only tables allowed to differ, and the
+  test names them rather than skipping whatever failed. Its mutation is to make `revoke_device`
+  delete the departed device's rows: that must go red.
 - **The one that matters**: the live pass in §1 re-run. The phone's collection must read **275**,
   and its decks, folders and wishes must match the desktop's. That number is the deliverable —
   nothing else demonstrates the feature this design exists for.
