@@ -33,14 +33,19 @@ has sync off, which is the state every existing installation is in. **The relay 
 Worker Markus runs**, not one each reader deploys — that was the original premise and nobody
 would ever have done it. **Its address is compiled into the binary as `RELAY_BASE`, is in this
 repository, and is public**, in exactly the way every application's API base URL is public: the
-relay can decrypt nothing it stores, and every endpoint refuses anything without a token it
-minted, so nothing follows from knowing where it lives. **What is not deployed at that address
-yet is this design's Worker code** — no auth gate, no `/claim`, no `/token` — so a device
-pointed there today reaches a live relay that does not speak the endpoints the app now calls.
+relay can decrypt nothing it stores, and **every `/g/…` sync route refuses a request without a
+token the relay minted** — the four entitlement routes are not behind that gate and cannot be,
+because three of them exist precisely so a caller with no token can get one, so each is guarded
+by something else instead (an authorization code Patreon carries, a single-use ten-minute claim
+code, the refresh secret being presented, the webhook's HMAC). Either way nothing follows from
+knowing where it lives. **What is not deployed at that address yet is this design's Worker code**
+— no auth gate, no `/claim`, no `/token` — so a device pointed there today reaches a live relay
+that does not speak the endpoints the app now calls.
 `PATREON_CLIENT_ID` beside it is a different case and is **still a placeholder**.
-**What must never be committed are the four secrets** in
+**What must never be committed are the three secrets the Worker holds** —
+`PATREON_CLIENT_SECRET`, `PATREON_WEBHOOK_SECRET` and `RELAY_HMAC_KEY`, in
 [the hosted-relay design](docs/superpowers/specs/2026-08-29-hosted-relay-and-patreon-design.md)
-§9 — they are set with `wrangler secret put` and belong in no `.dev.vars` either. A reader who
+§9. They are set with `wrangler secret put` and belong in no `.dev.vars` either. A reader who
 wants their own relay still can: `relay/` is the whole source and a fork changes that one
 constant. [sync.md](docs/reference/sync.md) has the whole record.
 

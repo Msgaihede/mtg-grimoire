@@ -52,7 +52,8 @@ use serde::Deserialize;
 /// is public the way every application's is.** It is on the wire of every request that uses it and
 /// it ships inside the binary whatever this tree says, so withholding it would have hidden it from
 /// nobody while leaving this module lying about where it points. What does not belong here are the
-/// four secrets the relay holds (spec §9).
+/// three secrets the relay holds. §9's table **listed** a fourth, `PATREON_CREATOR_TOKEN`, until
+/// 2026-08-29; nothing in the Worker consumes one, and that table says three now.
 ///
 /// **What is not on that host yet is this design's Worker, and the distinction matters.** The host
 /// is live — it is the relay the 2026-08-29 end-to-end pass ran against — but what is deployed
@@ -180,9 +181,11 @@ struct Grant {
 
 /// The relay's base URL: the override if there is one, [`RELAY_BASE`] otherwise.
 ///
-/// **This never answers `None`**, which is the difference from `client::relay_url` as it was.
+/// **This never answers `None`**, which is the difference from the `client::relay_url` it
+/// replaced — that one meant "sync is off" by answering `None`, briefly became
+/// `Some(base(conn))`, and is now deleted; this is the only place the address is decided.
 /// The override is `client::RELAY_URL` and has no UI. It exists for the tests that stand a server
-/// on localhost — `client/tests.rs`, and this module's own three endpoint tests. A **blank** value
+/// on localhost — `client/tests.rs`, and this module's own endpoint tests. A **blank** value
 /// is not an override — every installation that predates
 /// this holds `""` there, and reading that as a base would build the relative URL `/g/…` and fail
 /// with a message about nothing the reader did. Trailing slashes go because every caller appends
@@ -509,8 +512,18 @@ fn encoded(value: &str) -> String {
 /// registered byte for byte; a localhost override is for driving the relay's own endpoints in a
 /// test and can never be what Patreon redirects to.
 ///
-/// `state` is minted by the caller and checked when the code comes back — it is what stops a code
-/// the reader never asked for being pasted into their app.
+/// **`state` is minted by the caller and nothing checks it, and this doc used to claim otherwise.**
+/// It said the value "is checked when the code comes back", which no code on either side does:
+/// the redirect lands on the *relay* (that is §6.1's whole point), so `state` never returns to
+/// this device, and the relay cannot check it either — it holds no record of a flow it did not
+/// start. `claim.ts`'s `handleCallback` and `commands.rs`'s `PATREON_STATE` are both explicit
+/// about that, and this line was the outlier a reviewer would have trusted.
+///
+/// What it buys today is what the OAuth parameter is for at minimum: it is echoed by Patreon, so
+/// it is the hook a later check hangs on — the relay stamping it into the claim page, or carrying
+/// it on `/claim`. Minting it now makes that a one-line change rather than a protocol one. What
+/// actually binds a claim code to the reader who consented is the code itself: shown only to the
+/// browser session that finished the consent, single-use, and dead in ten minutes.
 pub fn authorize_url(state: &str) -> String {
     let redirect = format!("{RELAY_BASE}{PATREON_REDIRECT_PATH}");
     format!(
@@ -546,8 +559,9 @@ mod tests {
     #[test]
     fn an_override_wins_and_is_trimmed() {
         // The override has no UI and exists for the tests that stand a server on localhost -
-        // `client/tests.rs`, and the three at the foot of this file. Trailing slashes are trimmed
-        // because every caller appends its own path.
+        // `client/tests.rs`, and this file's own `httpmock` block below. A count went here twice
+        // and drifted twice; naming the block is a fact a reader can check. Trailing slashes are
+        // trimmed because every caller appends its own path.
         let conn = db();
         client::set_state(&conn, client::RELAY_URL, "http://127.0.0.1:8787/").expect("set");
 
@@ -846,19 +860,25 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------------------
-    // The two endpoints
+    // Over the wire: the two endpoints, and the margin that decides when `/token` is asked
     //
     // Against `httpmock`, never a deployed Worker - `client/tests.rs`' rule, and it still holds
     // even though the relay's address is now in this file. `RELAY_BASE` is compiled in and public
     // exactly the way any application's API base URL is public: it is on the wire of every request
-    // that uses it. What is never in this repository are spec 9's four secrets -
-    // `PATREON_CLIENT_SECRET`, `PATREON_WEBHOOK_SECRET`, `PATREON_CREATOR_TOKEN` and
-    // `RELAY_HMAC_KEY` - and a test that reached a deployed Worker would need none of them and
-    // still be a test whose result depends on somebody else's uptime.
+    // that uses it. What is never in this repository are the three secrets the Worker holds -
+    // `PATREON_CLIENT_SECRET`, `PATREON_WEBHOOK_SECRET` and `RELAY_HMAC_KEY` - and a test that
+    // reached a deployed Worker would need none of them and still be a test whose result depends
+    // on somebody else's uptime. (Spec 9's table *listed* a fourth, `PATREON_CREATOR_TOKEN`, for
+    // the reconciliation cron until 2026-08-29. The Worker that was written has no consumer for
+    // one - the cron refreshes each subject against their own stored token - and 9 says three now,
+    // so this is history rather than a disagreement to go and settle.)
     //
-    // These three exist because a mutation pass found the decisions below unasserted by anything:
-    // dropping the group from `/claim`, and turning the 401's `revoke` back into a `clear`, both
-    // left the whole file green.
+    // Most of what is below was written because a mutation pass found the decision it covers
+    // unasserted by anything: dropping the group from `/claim`, turning the 401's `revoke` back
+    // into a `clear`, clearing the grant on a *refused claim code*, and moving
+    // `REFRESH_MARGIN_SECS` in either direction each left the whole file green. The exception is
+    // `claiming_with_no_group_says_so_instead_of_asking`, which pins a refusal that never reaches
+    // the network at all - the only test here that registers no mock.
     // -----------------------------------------------------------------------------------
 
     use httpmock::prelude::*;
@@ -934,6 +954,53 @@ mod tests {
         let error = claim(&conn, "ABCD-1234").await.expect_err("no group");
 
         assert_eq!(error, NO_GROUP);
+    }
+
+    #[tokio::test]
+    async fn a_401_from_claim_is_a_refused_press_and_clears_nothing() {
+        // **The same status code, the opposite meaning, and nothing was holding the difference.**
+        // A 401 from `/token` is a lapse and `revoke`s the grant; a 401 from `/claim` is the relay
+        // refusing *this code* - it is one-time and expires in ten minutes (spec 6.1) - so a
+        // reader who mistypes one, or pastes one they already spent, must still hold the
+        // entitlement they had a moment ago. Inserting `revoke(conn)?` beside the `Err` below left
+        // all 1786 tests green: this is the mutation that found this test missing, and the
+        // assertions are the whole of what fails under it.
+        let server = MockServer::start_async().await;
+        let mock = server.mock(|when, then| {
+            when.method(POST).path("/claim");
+            then.status(401).body("");
+        });
+        let conn = db_in_a_group(&server);
+        // A device that is already connected, because that is what the mutation would take away.
+        // On a fixture with no grant the *deletion* assertions below would pass under the bug -
+        // `revoke`'s `clear` half deletes nothing from an empty row set - and only
+        // `membership_ended` would still have caught it, because `revoke`'s second half writes a
+        // `SUPPORTER_STATUS` row on any database at all. One surviving assertion is not the
+        // margin to leave: the grant is stored so that every line below fails when it is cleared.
+        store_grant(&conn, "a1", "r1", 1_900_000_000).expect("store");
+        store_status(&conn, "active", Some(1_740_000_000)).expect("status");
+
+        let error = claim(&conn, "WRONG-CODE").await.expect_err("a refusal");
+
+        mock.assert();
+        assert_eq!(error, "the relay refused that claim code");
+        assert_eq!(
+            refresh_secret(&conn).as_deref(),
+            Some("r1"),
+            "a mistyped code must not cost the reader the membership they already hold"
+        );
+        assert_eq!(
+            client::get_state(&conn, ACCESS_TOKEN).as_deref(),
+            Some("a1")
+        );
+        assert_eq!(
+            supporter_state(&conn),
+            ("active".to_owned(), Some(1_740_000_000))
+        );
+        assert!(
+            !membership_ended(&conn),
+            "a refused press is not a lapse, and the panel must not say one ended"
+        );
     }
 
     #[tokio::test]

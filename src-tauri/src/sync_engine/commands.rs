@@ -256,9 +256,11 @@ fn begin_authorize(conn: &Connection) -> Result<String, String> {
 /// * A reader who mistypes a claim code is left in a group of one. Harmless in itself, and the
 ///   group is the one this device would have minted the first time it invited another.
 /// * **A device in a group of one may no longer *join* somebody else's group** —
-///   `pairing::respond` refuses a second group, because joining one overwrites the key this
-///   device already syncs under. So the order a reader wants is *pair first, then claim*, and
-///   the panel's copy is where that belongs.
+///   `pairing::complete` refuses a differing `group_id`, because joining one overwrites the key
+///   this device already syncs under. (**`complete`, not `respond`**, which this said and which
+///   has no group check at all: `respond` is the *inviter's* half and the joiner is the device
+///   that can be holding a group it must not lose.) So the order a reader wants is *pair first,
+///   then claim*, and the panel's copy is where that belongs.
 ///
 /// Undoing it on failure would be worse than either: a claim that reached the relay may already
 /// have bound this group id (§6.3 is trust-on-first-use and the binding is refused for a second

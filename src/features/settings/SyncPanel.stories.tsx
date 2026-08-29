@@ -374,6 +374,9 @@ export const NotConnected: Story = {
     await expect(canvas.queryByRole("button", { name: /sync now/i })).not.toBeInTheDocument();
     // The lapse copy belongs to a lapse. This reader has not had one.
     await expect(canvas.queryByText(/stays on this device/i)).not.toBeInTheDocument();
+    // **The one warning that does belong here**, because it is about the press below it:
+    // connecting founds a group of one, and a device in a group can never join another.
+    await expect(canvas.getByText(/pair this one to them first/i)).toBeInTheDocument();
   },
 };
 
@@ -400,6 +403,8 @@ export const Supporting: Story = {
     // Connected, so the two presses that were the whole block are gone and sync has one.
     await expect(canvas.queryByRole("button", { name: /connect patreon/i })).not.toBeInTheDocument();
     await expect(canvas.getByRole("button", { name: /sync now/i })).toBeInTheDocument();
+    // ...and the advice about *which* device to connect on goes with the press it was about.
+    await expect(canvas.queryByText(/pair this one to them first/i)).not.toBeInTheDocument();
   },
 };
 

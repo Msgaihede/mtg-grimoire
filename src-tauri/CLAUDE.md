@@ -809,8 +809,10 @@ Six layers and five commands; the whole record, with every measurement, is
 - **The relay's address is `entitlement::RELAY_BASE`, compiled in and public, and this reverses
   what this file said.** One deployment serves every reader, so an address stopped being a
   setting: `entitlement::base` answers the override when `sync_state.relay_url` holds one and
-  `RELAY_BASE` otherwise, and **it never answers `None`** — which is the difference from
-  `client::relay_url` as it was. This line read "it is never in this repository, in a test, or in
+  `RELAY_BASE` otherwise, and **it never answers `None`** — which is the difference from the
+  `client::relay_url` it replaced. That wrapper had become `Some(entitlement::base(conn))` and is
+  **now deleted**, so `entitlement::base` is the only place the address is decided. This line read
+  "it is never in this repository, in a test, or in
   a default: this repo is public and the URL is the reader's own". An API base is on the wire of
   every request that uses it, so being public is what it is *for*, and it belongs here — as does
   `entitlement::PATREON_CLIENT_ID`, for the same reason — **but the two are not a matched pair
@@ -822,9 +824,13 @@ Six layers and five commands; the whole record, with every measurement, is
   that must never go in either constant**: a plausible-looking value gets copied into
   documentation and eventually deployed against, where one that cannot resolve is caught by the
   first person who tries it.
-  **What must never be in this repository, a test or a default are the four secrets the
-  relay holds** (spec §9): `PATREON_CLIENT_SECRET`, `PATREON_WEBHOOK_SECRET`,
-  `PATREON_CREATOR_TOKEN` and `RELAY_HMAC_KEY`. `relay_url` stays as a **test/dev override with
+  **What must never be in this repository, a test or a default are the three secrets the
+  relay holds** (spec §9): `PATREON_CLIENT_SECRET`, `PATREON_WEBHOOK_SECRET` and
+  `RELAY_HMAC_KEY`. **Three and not four**: spec §9's table **listed** a `PATREON_CREATOR_TOKEN`
+  for the reconciliation cron until 2026-08-29, and the Worker that was written has no consumer for
+  one — the cron refreshes each subject against *their own* stored token, so a creator-wide token
+  is never used and is not set. §9 says three now, and so does `relay/README.md`; this line records
+  why, and is not a live disagreement with either. `relay_url` stays as a **test/dev override with
   no UI** — and a blank is not an override, because every installation that predates this holds
   `""` there and reading that as a base builds the relative URL `/g/…`. Every test is against
   `httpmock`, never a deployed Worker.

@@ -124,20 +124,6 @@ pub fn set_state(conn: &Connection, key: &str, value: &str) -> rusqlite::Result<
     .map(|_| ())
 }
 
-/// The relay's base URL, with trailing slashes trimmed.
-///
-/// **This never answers `None` any more**, and the `Option` survives only so `commands.rs`
-/// compiles unchanged: the relay is one hosted service rather than one deployment per reader,
-/// so an address stopped being a setting and [`entitlement::base`] is the whole of the answer —
-/// the [`RELAY_URL`] override if there is one, [`entitlement::RELAY_BASE`] otherwise.
-///
-/// What this used to spell — a `None` meaning "sync is off" — is now
-/// [`entitlement::access_token`] answering `Ok(None)` for a device holding no grant, and
-/// [`round_trip`] asks it there instead.
-pub fn relay_url(conn: &Connection) -> Option<String> {
-    Some(entitlement::base(conn))
-}
-
 /// Who this device is and which group it is in, or `None` when it is in none.
 fn me(conn: &Connection) -> Result<Option<(String, Group)>, String> {
     let device: Option<String> = conn

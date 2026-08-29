@@ -112,8 +112,9 @@ const RELAY_ON: RelayStatus = {
   reviewCount: 0,
 };
 
-/** A device that has never connected a membership. `since` is null, and that is the whole of
- *  what tells this apart from a membership that has ended. */
+/** A device that has never connected a membership. **`groupBound: false` is the whole of what
+ *  tells this apart from a membership that has ended** — `since` is null in both, because
+ *  `entitlement::revoke` deletes the date along with the refresh secret. */
 const NOT_CONNECTED: SupporterStatus = {
   connected: false,
   status: "dead",
@@ -578,6 +579,50 @@ describe("the supporter half", () => {
   });
 
   /**
+   * **The other sentence with a placement rule, and it had none of these.**
+   *
+   * Connecting founds a group of one (§6.3's `ensure_group`) and `pairing::complete` refuses a
+   * differing `group_id`, so a reader who connects on their phone can never afterwards *join*
+   * their desktop's group — and this panel has no Leave to undo it. `CONNECT_ORDER` is drawn
+   * inside the `offering` block for that reason: it belongs to the press that causes the trap.
+   *
+   * **Asserted both ways, exactly as `LAPSE_REASSURANCE` above is**, because the placement is the
+   * whole claim. Moving the paragraph one level out — up beside `supporterNote`, where it would
+   * also greet a paid-up supporter — leaves every other test in this file green.
+   */
+  it("tells a first-run reader which device to connect on", async () => {
+    syncSupporterStatus.mockResolvedValue({
+      connected: false, status: "dead", since: null, groupBound: false,
+    });
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    expect(await screen.findByText(/pair this one to them first/i)).toBeInTheDocument();
+  });
+
+  it("says it to a lapsed reader too, who is offered the same press", async () => {
+    // `ended` is the second state with a Connect button on it, and reconnecting on the wrong
+    // device strands them the same way a first connect would.
+    syncSupporterStatus.mockResolvedValue({
+      connected: false, status: "dead", since: null, groupBound: true,
+    });
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    expect(await screen.findByText(/pair this one to them first/i)).toBeInTheDocument();
+  });
+
+  it("stops saying it once a membership is connected", async () => {
+    // The advice is about a press that is no longer on screen. Left drawn, it reads as an
+    // instruction to a reader with nothing left to do about it.
+    syncSupporterStatus.mockResolvedValue({
+      connected: true, status: "active", since: 1_756_000_000, groupBound: true,
+    });
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    await screen.findByText(/supporting since/i);
+    expect(screen.queryByText(/pair this one to them first/i)).toBeNull();
+  });
+
+  /**
    * **Device B, which never opens a browser** (§6.2) — and whose three fields read as a lapse.
    *
    * A phone paired to a paid-up desktop is handed the refresh secret and nothing else, so it
@@ -669,8 +714,9 @@ describe("the supporter half", () => {
 /**
  * Four states, and the pair that share every field but one.
  *
- * `since` is the whole of what tells *never connected* from *membership ended* — both are
- * `connected: false, status: "dead"` — so it is asserted here rather than only through a render.
+ * `groupBound` is the whole of what tells *never connected* from *membership ended* — both are
+ * `connected: false, status: "dead"`, and both are `since: null`, because `entitlement::revoke`
+ * deletes the date with the secret. So it is asserted here rather than only through a render.
  */
 describe("supporterState", () => {
   it("tells a reader who never connected from one whose membership ended", () => {

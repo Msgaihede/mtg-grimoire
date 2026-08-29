@@ -6,7 +6,8 @@
 each reader deploys their own relay, and the three documents that state in bold that the relay's
 address is nowhere in this repository — root `CLAUDE.md`, [`relay/README.md`](../../../relay/README.md)
 and [sync.md](../../reference/sync.md). **After this change the address IS in the repository.** What
-must never be in it are the four secrets named in §9.
+must never be in it are the secrets named in §9 — **three of them**, not the four that section
+originally listed.
 
 **Goal:** a reader who supports the project on Patreon presses one button, pastes one code, and
 their devices sync through infrastructure Markus runs — with no Cloudflare credential anywhere in
@@ -95,8 +96,13 @@ is what "remove it entirely" meant.
 ### 4.1 What the binary contains
 
 `RELAY_BASE` is public in exactly the way every application's API base URL is public. Anyone can
-read it out of the binary, and nothing follows from that, because every endpoint requires a token
-the relay issued.
+read it out of the binary, and nothing follows from that, because **every `/g/…` sync route**
+requires a token the relay issued. ⚠️ **Corrected 2026-08-29: this said "every endpoint".** The
+four entitlement routes of §6.1 are not behind that gate and cannot be — three of them exist
+precisely because the caller has no token yet — so each is guarded by something else: the
+authorization code Patreon's redirect carries, the single-use ten-minute claim code, the refresh
+secret being presented, and the webhook's HMAC. `relay/src/index.ts`'s `CLAIM_ROUTES` doc says
+the same beside the routes themselves.
 
 ### 4.2 What sits on the reader's disk
 
@@ -165,10 +171,21 @@ buy a listener and nothing else. This way the app runs no HTTP server, handles n
 no CSP change, and the flow is byte-identical on desktop, Android and web. It is also the same page
 and the same paste field Paddle will reuse: **one reader-facing flow, two sources.**
 
-**The claim code is Crockford base32 with a positional checksum**, reusing `sync_pair::invite`'s
-existing alphabet and checksum rather than inventing a second one. That alphabet was chosen because
-it omits `I`, `L`, `O` and `U` and folds the confusions a person makes copying between two screens —
-which is exactly what this code is for. It is one-time and expires in 10 minutes.
+**The claim code is Crockford base32**, 12 characters in three hyphenated groups, reusing
+`sync_pair::invite`'s existing alphabet rather than inventing a second one. That alphabet was
+chosen because it omits `I`, `L`, `O` and `U` and folds the confusions a person makes copying
+between two screens — which is exactly what this code is for. It is one-time and expires in
+10 minutes.
+
+⚠️ **Corrected 2026-08-29: this asked for a positional checksum, and there is deliberately
+none.** Nothing would decode one. A checksum buys "this is not a valid code" *without asking the
+server*, and there is no such moment here: the code is looked up against `claim_codes` on the one
+press that uses it, a miss is already a clear refusal that costs one request and clears nothing
+(`entitlement::claim`'s 401 arm), and the reader retypes. Crockford's alphabet plus
+`normaliseCode` — which strips separators, upper-cases, and folds `I`/`L` to `1` and `O` to `0` —
+already catch every confusion a checksum would, at the point where they can actually be repaired
+rather than merely detected. Adding one now would mean a second implementation on the app side to
+verify it, for a refusal the relay gives anyway.
 
 ### 6.2 The token — what is on the wire
 
@@ -225,8 +242,19 @@ feature. It is one `UPDATE` and it is deliberately not automated.
 
 ### 7.1 Cancellation deletes the log at once
 
-`members:pledge:delete`, or a `members:update` that drops the reader below the tier, sets
-`status = 'dead'`, clears `refresh_secret`, and calls the group's Durable Object to drop its log.
+`members:pledge:delete`, or a `members:update` that leaves the reader no longer an active patron
+of this campaign, sets `status = 'dead'`, clears `refresh_secret`, and calls the group's Durable
+Object to drop its log.
+
+⚠️ **Corrected 2026-08-29: this said "drops the reader below the tier", and nothing checks a
+tier.** **In v1 any pledge of any size entitles**, and there is no minimum, no tier id and no
+amount anywhere in `relay/src/`. The whole of the decision is `patron_status` — `active_patron`,
+`declined_patron` (§7.2), `former_patron` — read off the reader's membership of **one campaign**,
+and it is that campaign filter, not a tier, that is the gate: `readIdentity` skips every member
+object whose `relationships.campaign.data.id` is not `PATREON_CAMPAIGN_ID`, so a reader who
+supports some other creator on Patreon reads as no patron here. A tier floor is a later decision
+and would be a change to `entitlement.ts`'s `decide` and to what `patreon.ts` asks for; describing
+one as though it existed invites an agent to "fix" the code to match this page.
 
 **Deleting the relay log destroys no reader data.** Every device holds the whole collection in its
 own SQLite; the log is a transport buffer with a 30-day tail. Resubscribing resumes without
@@ -335,17 +363,26 @@ not take it. The table above is what to take it with.
 ## 9. Operations, and what stays out of the repository
 
 The relay stops being source that type-checks and becomes a service with an uptime obligation:
-a webhook endpoint Patreon needs to reach, a cron job, and four secrets set with
-`wrangler secret put` — **never in this repository, and never in a `.dev.vars` that is committed**:
+a webhook endpoint Patreon needs to reach, a cron job, and **three** secrets set with
+`wrangler secret put` — **never in this repository, and never in a `.dev.vars` that is committed**
+(`.gitignore` covers `.dev.vars` and `.wrangler/` for exactly that reason):
 
 | Secret | Used by |
 | --- | --- |
 | `PATREON_CLIENT_SECRET` | the OAuth code exchange |
 | `PATREON_WEBHOOK_SECRET` | `X-Patreon-Signature` verification |
-| `PATREON_CREATOR_TOKEN` | the daily reconciliation cron |
 | `RELAY_HMAC_KEY` | minting and verifying `access` |
 
-`PATREON_CLIENT_ID` and `RELAY_BASE` are public and may be committed.
+⚠️ **Corrected 2026-08-29: this table listed a fourth, `PATREON_CREATOR_TOKEN`, for the daily
+reconciliation cron — and the Worker that was written has no consumer for one.** The cron walks
+`entitlements` and re-reads each subject through **that subject's own stored `patreon_refresh`**
+(refreshed with `PATREON_CLIENT_SECRET`, which is already on the list) rather than reading the
+campaign's member list, so there is no campaign-wide credential to hold. Nothing in
+`relay/src/` reads such a variable, `wrangler.jsonc` does not declare it, and setting it would be
+a live secret guarding nothing. `relay/README.md`'s **Deploying** section says three and explains
+the absence.
+
+`PATREON_CLIENT_ID`, `PATREON_CAMPAIGN_ID` and `RELAY_BASE` are public and may be committed.
 
 **Rotating `RELAY_HMAC_KEY` invalidates every outstanding `access` token.** Readers recover
 silently on their next refresh, within 24 hours, without touching Patreon. That is the intended
@@ -359,10 +396,12 @@ break-glass and it is worth having written down.
 
 - New `entitlement.rs`: `RELAY_BASE`, the `access`/`refresh`/`access_expires` `sync_state` keys,
   `claim(code)`, `refresh()`, and the `Authorization` header applied to every relay request.
-- `client::relay_url()` falls back to `RELAY_BASE` when `sync_state.relay_url` is empty, instead of
+- The base URL falls back to `RELAY_BASE` when `sync_state.relay_url` is empty, instead of
   answering `None`. **The "sync is off" state stops being "no URL" and becomes "no entitlement"**:
   `round_trip` answers `Ok(None)` when there is no `refresh` secret, exactly as it does today for
-  a device in no group, and that remains not an error.
+  a device in no group, and that remains not an error. *(As shipped this is `entitlement::base`
+  and nothing else: `client::relay_url` became `Some(entitlement::base(conn))` — a `pub` wrapper
+  whose only caller was its own test — and **is deleted**. Do not reinstate it from this line.)*
 - **A `401` is a sentence, not an `error_log` row.** When the relay refuses a token and the refresh
   also refuses, the membership has ended — the panel says so and offers the connect button again.
   Routing that through `errors::record` like a network failure would tell a reader their sync is
@@ -386,7 +425,7 @@ Stories and tests follow.
 - `patreon.ts` — the exchange, the identity fetch, and `verifySignature` (itself pure and tested).
 - `claim.ts` — the callback landing page and the code mint.
 - `index.ts` — the auth gate ahead of the DO hop, and the new routes.
-- `wrangler.jsonc` — a D1 binding, a cron trigger, four secrets.
+- `wrangler.jsonc` — a D1 binding, a cron trigger, three secrets (§9).
 
 `group.ts` and `log.ts` are untouched but for the log-drop call §7.1 needs.
 

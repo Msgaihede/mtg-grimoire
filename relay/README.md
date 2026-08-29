@@ -296,11 +296,13 @@ Four steps, in order, and the first two are why `npx wrangler deploy` alone is n
 | `PATREON_WEBHOOK_SECRET` | `X-Patreon-Signature` verification |
 | `RELAY_HMAC_KEY` | minting and verifying `access` |
 
-Each is set with `npx wrangler secret put <NAME>`. **Spec §9 lists a fourth,
-`PATREON_CREATOR_TOKEN`, and this implementation does not have one**: the cron reconciles each
+Each is set with `npx wrangler secret put <NAME>`. **Spec §9 *listed* a fourth,
+`PATREON_CREATOR_TOKEN`, and this implementation never had one**: the cron reconciles each
 subject through the reader's own stored `patreon_refresh` rather than reading the campaign's
-member list, so there is no campaign-wide credential to hold. If reconciliation ever moves to the
-campaign endpoint, that secret comes back with it.
+member list, so there is no campaign-wide credential to hold. **§9 was corrected to three on
+2026-08-29, for this reason** — this paragraph is why that row went, not a standing
+disagreement with a table that still carries it. If reconciliation ever moves to the campaign
+endpoint, that secret comes back with it.
 
 `PATREON_CLIENT_ID` and `PATREON_CAMPAIGN_ID` are **public** and belong in `vars` beside
 `RELAY_BASE` the day they are known. Both are deliberately absent rather than empty for step 1's

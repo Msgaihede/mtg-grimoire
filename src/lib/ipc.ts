@@ -3978,8 +3978,12 @@ export interface RelayStatus {
  * different sentences: *Not connected* points at a button, *Membership ended* points at a
  * renewal and has to say that nothing local was touched (spec §7.1).
  *
- * `since` is what tells them apart. It is `null` on a device that has never been told a start
- * date, and a stamp on one that has — including one whose membership has since stopped.
+ * **`groupBound` is what tells them apart, and `since` cannot.** `entitlement::revoke` deletes the
+ * start date along with the refresh secret, so a lapsed membership and a device out of the box
+ * both read `since: null` — the field that survives a lapse is `groupBound`, which says an
+ * entitlement was once bound to this device's group. `supporterState` therefore asks `connected`
+ * first and `groupBound` second, and a build that keyed the two silences on `since` showed every
+ * lapsed reader *Not connected*.
  *
  * **`grace` is a third thing again, not a softer `dead`** (spec §7.2): a card Patreon is still
  * retrying, where tokens are still minted and sync keeps working. Drawing it as a cancellation
@@ -3990,9 +3994,11 @@ export interface SupporterStatus {
   connected: boolean;
   /** `"active"`, `"grace"` or `"dead"`, as the relay last answered. */
   status: string;
-  /** Unix **seconds** the membership began, or null for never having been told one. */
+  /** Unix **seconds** the membership began; null for never having been told one **and for one
+   *  that has ended**, because `revoke` deletes the date with the secret. */
   since: number | null;
-  /** The entitlement is bound to this device's pairing group. */
+  /** An entitlement was bound to this device's pairing group — and it outlives a lapse, which
+   *  is what makes it and not `since` the discriminator above. */
   groupBound: boolean;
 }
 

@@ -871,7 +871,9 @@ and `payload.grp` against the path segment with **zero storage reads**, so a jun
 refused in microseconds and **never bills a Durable Object request** — which is the line that
 actually costs money. What mints the token is a Patreon membership resolved server-side;
 [the hosted relay design](../superpowers/specs/2026-08-29-hosted-relay-and-patreon-design.md)
-holds the claim flow, the lapse rules and the four secrets that must stay out of this repository.
+holds the claim flow, the lapse rules and the secrets that must stay out of this repository —
+**three of them**. §9 listed four until 2026-08-29 and says three now; the correction below
+records why.
 
 Compaction, the 30-day tail and the pull ordering are pure functions in `relay/src/log.ts`,
 tested by the root vitest. **`since` orders by `(hlcMs, hlcCtr, device)` and not by arrival**, and
@@ -895,7 +897,13 @@ a deploy produces goes in each reader's own `sync_state.relay_url`, through Sett
 **"never in this repository"**. It is one deployment Markus runs rather than one each reader
 stands up, so it is compiled in as `RELAY_BASE` and is public in exactly the way every
 application's API base URL is public — nothing follows from reading it out of the binary, because
-every endpoint refuses a request without a token the relay minted. **The hostname is real and is
+**every `/g/…` sync route refuses a request without a token the relay minted**. ⚠️ That sentence
+read "**every** endpoint", **corrected 2026-08-29**, and `relay/src/index.ts`'s `CLAIM_ROUTES` doc
+says so in the code: **none of the four entitlement routes is behind the bearer gate**, and none
+of them could be — three of the four exist precisely because the caller has no token yet. Each is
+guarded by something else instead: `/oauth/patreon/callback` by the authorization code Patreon's
+redirect carries, `/claim` by a single-use code that expires in ten minutes, `/token` by the
+refresh secret it is presenting, `/webhook/patreon` by its HMAC. **The hostname is real and is
 committed with Markus's approval** — it is the baseline relay the 2026-08-29 pass ran against.
 **What is not deployed at it is this design's Worker code**: no auth gate, no `/claim`, no
 `/token`, no callback, no webhook, no D1. A device pointed there today reaches a live relay that
@@ -904,10 +912,16 @@ answers push, pull and ack and does not speak the endpoints the app now calls.
 terms, and not yet settled. `sync_state.relay_url` stays a
 **test/dev override with no UI**: `sync_engine/client/tests.rs` stands a server on localhost for
 the length of one test and points the client at it, and deleting the key would delete those
-tests. What must never be committed are the four secrets — `PATREON_CLIENT_SECRET`,
-`PATREON_WEBHOOK_SECRET`, `PATREON_CREATOR_TOKEN`, `RELAY_HMAC_KEY` — in
+tests. What must never be committed are the **three** secrets the Worker holds —
+`PATREON_CLIENT_SECRET`, `PATREON_WEBHOOK_SECRET`, `RELAY_HMAC_KEY` — in
 [the hosted relay design](../superpowers/specs/2026-08-29-hosted-relay-and-patreon-design.md) §9,
-and not in a committed `.dev.vars` either.
+and not in a committed `.dev.vars` either — which is why `.dev.vars` and `.wrangler/` are both in
+`.gitignore`. ⚠️ **Three and not four, corrected 2026-08-29 — in §9 itself as well as here.**
+That table **listed** a `PATREON_CREATOR_TOKEN` for the reconciliation cron; **the Worker that
+was written has no consumer for one**, because the cron refreshes each subject against *their
+own* stored token rather than querying the campaign with a creator-wide credential. §9 says three
+now, and so does `relay/README.md`'s **Deploying** section — this paragraph is the record of that
+fix, not a pointer to a table that still disagrees with it.
 
 ---
 
@@ -939,8 +953,11 @@ with the reason in the body — for the PR that adds it. Three reasons, in order
 
    Recomputed 2026-08-29 against Cloudflare limits verified live the same day. **Every relay
    request bills twice** — one Worker invocation and one Durable Object request — except one the
-   auth gate refuses, which bills only the Worker. Per group of three devices, plus three token
-   refreshes a day:
+   auth gate refuses, which bills only the Worker. Per group of three devices, plus about **four**
+   token refreshes a day — a 24-hour token with a six-hour margin refreshes a little over once per
+   device per *day*, so the figure is per device and not per group. ⚠️ This said three;
+   **corrected 2026-08-29**, and spec §8 carries the same correction. The difference is inside the
+   rounding of every figure below:
 
    | Cadence | Requests/day/group | Groups on **free** (100 000/day) | 1 000 groups, **paid** |
    | --- | --- | --- | --- |
@@ -1156,7 +1173,7 @@ in this repository and never will be"; **corrected 2026-08-29** — one deployme
 reader, its address is compiled in as `RELAY_BASE`, and it is public. See the relay section above
 for why that costs nothing, and
 [the hosted relay design](../superpowers/specs/2026-08-29-hosted-relay-and-patreon-design.md) §9
-for the four secrets that are not.
+for the secrets that are not — **three of them**, per the correction in the relay section above.
 
 ### What was broken, and what it reads now
 

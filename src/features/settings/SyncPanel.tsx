@@ -554,6 +554,29 @@ const LAPSE_REASSURANCE =
   "up where you left off — your devices stay paired.";
 
 /**
+ * The order the two flows have to be done in, and the dead end it exists to prevent.
+ *
+ * **Connecting founds a group of one when this device is in none** (§6.3, `ensure_group`), and
+ * `pairing::complete` refuses a `group_id` that differs from the one this device already holds. So
+ * a device that has connected can still *invite* others into its group, but can never *join* a
+ * group that already exists — and there is no Leave and no Disconnect in this panel to undo it.
+ * A reader who connects on their phone and then tries to join their desktop's group meets
+ * *"This device is already in a different pairing group. Leave that one first."* with nothing to
+ * press, which is the one way this panel can strand somebody.
+ *
+ * **Drawn beside the press that causes it**, not in the pairing half above: the trap belongs to
+ * this button, and a reader whose devices are already paired has nothing here to avoid. That
+ * placement is a claim, so it is asserted both ways — present on `never` and on `ended`, absent
+ * once a membership is connected — in `SyncPanel.test.tsx` and in the `NotConnected` and
+ * `Supporting` plays, exactly as {@link LAPSE_REASSURANCE} above is. Moving this paragraph one
+ * level out of the `offering` block leaves the rest of the file green.
+ */
+const CONNECT_ORDER =
+  "Connect on the device you want to pair from: connecting puts this device in a sync group of " +
+  "its own and a device can only be in one, so if your other devices already sync together, " +
+  "pair this one to them first.";
+
+/**
  * The membership, the relay it pays for, and the one press that makes a round trip.
  *
  * **The relay is one hosted server now and its address is compiled into the crate**, which
@@ -677,6 +700,8 @@ function SupporterSection(): JSX.Element {
 
           {offering && (
             <div className="space-y-3">
+              <p className="text-sm text-dim">{CONNECT_ORDER}</p>
+
               <button
                 type="button"
                 onClick={() => connect.mutate()}

@@ -277,32 +277,13 @@ async fn a_failed_pull_leaves_the_cursor_alone() {
     assert_eq!((rows[0].0.as_str(), rows[0].1.as_str()), ("pull", "http"));
 }
 
-/// **An empty relay URL is no longer "sync is off"** — it is the ordinary state of every
-/// installation, and it means the compiled-in [`entitlement::RELAY_BASE`].
-///
-/// This test used to assert `relay_url(&a) == None` for a fresh device and carry the "sync is
-/// off" meaning; [`entitlement::base`] never answers `None` now, so that half moved to
-/// [`no_grant_means_no_request_at_all`] below and what is left here is the URL arithmetic, which
-/// is still this function's and is still worth pinning: a blank is not an override, a real one
-/// wins, and a trailing slash would build a double slash into every path.
-#[tokio::test]
-async fn a_blank_relay_url_falls_back_to_the_compiled_in_base() {
-    let a = paired("dev-a", 0);
-    add_copy(&a, "c1", 1);
-    assert_eq!(relay_url(&a).as_deref(), Some(entitlement::RELAY_BASE));
-    set_state(&a, RELAY_URL, "   ").unwrap();
-    assert_eq!(
-        relay_url(&a).as_deref(),
-        Some(entitlement::RELAY_BASE),
-        "a blank is the shape every pre-hosted-relay installation holds, not an override"
-    );
-    set_state(&a, RELAY_URL, "https://example.invalid/relay/").unwrap();
-    assert_eq!(
-        relay_url(&a).as_deref(),
-        Some("https://example.invalid/relay"),
-        "a trailing slash would build a double slash into every path"
-    );
-}
+// **The URL arithmetic is asserted in `entitlement.rs`, not here.** This file used to carry
+// `a_blank_relay_url_falls_back_to_the_compiled_in_base`, over a `client::relay_url` that had
+// become `Some(entitlement::base(conn))` and nothing else — a `pub` wrapper whose only caller was
+// that test. Both are deleted: the three `base` tests next to the function say the same three
+// things (a blank is not an override, a real one wins, a trailing slash is trimmed) about the code
+// that actually decides them. What was this test's *other* half — "no URL" meaning sync is off —
+// moved to `no_grant_means_no_request_at_all` below when the entitlement replaced it.
 
 /// **A device with no entitlement makes no request at all**, and that is not an error — it is
 /// the state every existing installation is in, and the successor to "no relay URL".
