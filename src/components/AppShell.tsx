@@ -22,6 +22,7 @@ import { CabinetFiling, Cards } from "@/components/icons";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { useSidebarDrops, type SidebarDrop } from "@/components/useSidebarDrops";
 import { isAndroid } from "@/lib/platform";
+import { isWebTarget } from "@/pwa/target";
 import { useCardToDeckRefusal } from "@/features/card/cardMenu";
 import { readCards } from "@/features/decks/dnd";
 import { useDndDropTarget } from "@/lib/dndTarget";
@@ -278,8 +279,24 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
           there, and `lib.rs` does not even compile `window.rs` for it.
 
           The argument above about `LAYER.caption` still governs, on the platforms that draw
-          the row. */}
-      {!isAndroid() && <TitleBar />}
+          the row.
+
+          **And not on the web either, which this gate got wrong until 2026-08-29.** Parity §5
+          gives the window's edge to the browser exactly as it gives it to the OS on Android, so
+          the reasoning above transfers whole — but the test was `isAndroid()`, which is false in
+          a desktop browser, so the web build drew a caption for a window it does not own and
+          `TitleBar` reached for Tauri's window API on a target that has none. `window.ts`
+          imports `getCurrentWindow` at module scope, so **mounting the row at all was enough**:
+          the page logged `TypeError: Cannot read properties of undefined (reading 'metadata')`
+          from `getCurrentWindow` and `transformCallback` on every load. It rendered anyway,
+          which is why it read as noise rather than as a bug.
+
+          `isWebTarget()` and not a second `isAndroid()`-style user-agent probe: the target is a
+          build-time fact here (`__CORE__`), so the branch folds away and the desktop bundle
+          carries no web check at all. The two questions are different — *which platform is this
+          agent* versus *which core was this built against* — and `src/lib/images.ts`'s header
+          makes the same distinction for the same reason. */}
+      {!isAndroid() && !isWebTarget() && <TitleBar />}
 
       <div className="flex min-h-0 flex-1">
         {/* **`w-52` is 208px and it is pinned, which is the one part of this shell that got
