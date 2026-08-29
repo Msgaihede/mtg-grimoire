@@ -577,6 +577,7 @@ Every remaining PR now has a task-level plan in `docs/superpowers/plans/`.
 | 9a | mobile layout: foundation + options | `2026-08-28-mobile-layout-9a-foundation-and-options.md` | **done** — #274 shipped Tasks 1–4 (the foundation); the four design rounds ran and **the decision was taken on 2026-08-29** |
 | 9b | implement the chosen layout | `2026-08-29-mobile-layout-9b.md` | **done 2026-08-29** — #294 and #295. All four layouts built; the device pass then **falsified the vertical budget**, which is what it was written to do. See 9c |
 | 9c | the vertical, re-opened | `2026-08-29-mobile-layout-9c.md` | **done 2026-08-29** — #297 through #300. Driven on the phone: the wall went **0.44 rows → 1.97**, two columns, two whole cards and 97%% of the next two |
+| **10** | **the rest of the command surface in wasm** | — | **decided 2026-08-29, not yet planned.** The web build routes **4 of 155**; one of six destinations works. All but ten, by destination, worst broken first |
 
 **Updated 2026-08-29.** Everything above 9a has shipped, and the phase is done end to end: the
 app runs on Windows, in a browser and on an Android phone, two devices pair with no account, and
@@ -674,6 +675,38 @@ rather than planned:
 > It also discharged a reading owed since PR #274: **a `fixed inset-0` box resolves against the
 > *visible* viewport** (696, matching `dvh` and `svh`, against `lvh`'s 752), so `Dialog`'s footer
 > never lands under the URL bar and it needs no change.
+
+> ## PR 10: the web build routes 4 of 155, and the phone layout is what made that matter
+>
+> **Reported by Markus on 2026-08-29, minutes after 9c shipped:** selecting a card on the phone
+> answers *"Could not read this card — unknown command `card_detail`"*. Surveyed on the device
+> immediately after — **one of the six nav destinations works**. Tagger wants `tag_children`,
+> Decks `deck_list` and `deck_folder_list`, Collection `collection_list`, Wishlist
+> `wishlist_list`, Settings three more.
+>
+> **Nothing regressed, and that is the interesting part.** `web::route`'s own doc always said the
+> four were "a first slice and not the whole surface". What changed is that **the browse became
+> good enough to invite the next tap**: before 9c the wall showed 0.44 of a tile row and nobody
+> got as far as pressing a card. A layout that works is what turned a documented boundary into a
+> reported bug — which is an argument for finishing layouts before deciding a slice is enough,
+> not against.
+>
+> **Decided: all of them except ten**, and the ten are the ones §6.3 already named — the plain-text
+> mirror's 5 and the portable updater's 5. Each is a *different feature* on web rather than a
+> port: a mirror in OPFS is unreadable by the other programs a mirror exists for, and a PWA
+> already updates through its service worker. On web they are hidden, through the seam
+> `SettingsPage` already uses on Android.
+>
+> **~145 to go, and most are one shape** — lift the pure function out of the `cfg` gate into a
+> module that compiles everywhere, then add a `match` arm. `image_uri.rs` is the worked example,
+> carved out of `images.rs` when the search DTO needed it on web. **Three families are not that
+> shape**: `import`/`export` need the file handles §6.2 specifies, and `reset` needs OPFS deletion.
+>
+> **Order: by destination, worst broken first** — Decks (55 commands across four modules), then
+> Collection, Wishlist, the card pane, Tagger, Settings — so every PR makes one destination work
+> and can be driven on the phone. It front-loads the hardest cluster deliberately.
+>
+> Every figure: [web-target.md](../../reference/web-target.md), *"One of six destinations works"*.
 
 **9b had no plan on purpose, and now has a brief.** §6.1 says the layout options come to Markus
 before anything is built; naming the components 9b would create required a choice nobody had made.

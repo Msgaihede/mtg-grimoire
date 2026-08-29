@@ -77,10 +77,15 @@ the real 43-column one, `raw` included**.
   `Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy: require-corp` and
   it passed both ways. **Do not add those headers**, and do not let a future service worker
   re-attach them.
-- **Four commands**, not 136: `sync_status`, `search_cards`, `list_sets`, `facet_cards`. That
-  is the browse, which is the read path spec §8 wanted measured in wasm rather than guessed.
-  Adding a fifth once its module is in the map is one line in `web::route::COMMANDS` and one
-  `match` arm.
+- **Four commands**, not 136 — **155 as of 2026-08-29**: `sync_status`, `search_cards`,
+  `list_sets`, `facet_cards`. That is the browse, which is the read path spec §8 wanted measured
+  in wasm rather than guessed. Adding a fifth once its module is in the map is one line in
+  `web::route::COMMANDS` and one `match` arm.
+
+  ⚠️ **Four is no longer the intended end state.** Decided 2026-08-29, after the phone layout made
+  the boundary visible: **all of them but ten**, by destination, worst broken first. The survey,
+  the ten that stay desktop-only and the reason each is a different feature rather than a port are
+  at the foot of this file.
 
 ## The module map
 
@@ -321,3 +326,72 @@ desktop bundle and therefore out of the portable exe. Verified: `npm run build` 
   [data-and-sync.md](data-and-sync.md) is still owed a column.
 - **A run on a phone.** Every figure here is desktop Edge. The spike's phone column suggests
   roughly 3.5× slower, and the memory ceiling is lower there.
+
+---
+
+## One of six destinations works, and the phone layout is what made that visible
+
+**Surveyed on the device 2026-08-29** — OnePlus, Chrome 152, portrait, against the production build
+of `main` at PR #301 with a 117 606-card corpus. Each nav destination was opened in turn and its
+`main` scraped for `unknown command`.
+
+| Destination | Works | Missing |
+| --- | --- | --- |
+| **Search** | ✅ | — |
+| Tagger | ❌ | `tag_children` |
+| Decks | ❌ | `deck_folder_list`, `deck_list` |
+| Collection | ❌ | `collection_list` |
+| Wishlist | ❌ | `wishlist_list` |
+| Settings | ❌ | `update_history`, `tags_muted`, `error_log_list` |
+| The card pane, from Search | ❌ | `card_detail` — *"Could not read this card — unknown command `card_detail`"* |
+
+**Nothing regressed.** `web/route.rs`'s own doc has always said so: *"This is a first slice and not
+the whole surface. The app has 152 commands; the four here are the browse."* The web target was
+built as a browse and it is exactly that.
+
+**What changed is that the browse became good enough to invite the next tap.** Before 9c the phone's
+search wall showed 0.44 of a tile row and nobody got as far as pressing a card. With two columns and
+two whole rows the natural next act is to open one — and that is where the slice ends. A layout that
+works is what turned a documented boundary into a reported bug.
+
+### The size of it, measured
+
+| | |
+| --- | --- |
+| `#[tauri::command]` in the crate | **155** |
+| Routed in `web::route::COMMANDS` | **4** |
+| Modules gated `cfg(not(target_family = "wasm"))` in `lib.rs` | **31** |
+
+The largest clusters are the deck domain — `deck.rs` 20, `deck_meta.rs` 20, `deck_theory.rs` 4,
+`deck_undo.rs` 3 — then `collection_folders.rs` 8, `wishlist_folders.rs` 8, `collection.rs` 7,
+`wishlist.rs` 6, `card.rs` 6.
+
+### Decided 2026-08-29: all of them except ten, by destination, worst-broken first
+
+**The ten that stay desktop-only are the ones §6.3 already named**, and the reason each is not a
+port but a different feature:
+
+- **`mirror/settings.rs`, 5.** The plain-text mirror writes a folder on disk *for other programs to
+  read*. In OPFS nothing else can read it, so a web mirror would be the feature's name without the
+  feature. `transfer` exists only to serve it and carries no commands of its own.
+- **`desktop.rs`'s updater, 5** — `update_check`, `update_download`, `update_apply`,
+  `update_history`, `update_open_release_page`. The portable updater swaps an `.exe`. **A PWA
+  already updates through its service worker**, which ships and works; routing these would be a
+  second answer to a question already answered.
+
+On web those ten are hidden rather than broken, through the seam `SettingsPage` already uses to
+hide the Backup panel on Android.
+
+**The remaining ~145 are ports, and most are one shape**: lift the pure function out of the `cfg`
+gate into a module that compiles everywhere, then add a `match` arm to `web::route`.
+[`image_uri.rs`](../../src-tauri/src/image_uri.rs) is the worked example — it was carved out of
+`images.rs` for exactly this reason when the search DTO needed it on web.
+
+**Three families are not that shape** and need a browser mechanism that does not exist yet:
+`import`/`export`'s file handles (spec §6.2 already specifies `<input type=file>` and a `Blob`
+download), and `reset`'s OPFS deletion.
+
+**The order is by destination, worst broken first** — Decks, then Collection, Wishlist, the card
+pane, Tagger, Settings — so that every PR makes one nav destination genuinely work and can be
+driven on the phone. It front-loads the deck domain, which is the biggest cluster and where the
+surprises will be, and that is deliberate.
