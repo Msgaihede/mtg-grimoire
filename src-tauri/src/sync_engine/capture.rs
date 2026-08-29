@@ -40,8 +40,9 @@ use rusqlite::Connection;
 /// What one synced table needs captured.
 pub struct Spec {
     pub table: &'static str,
-    /// The columns that identify a row locally. `id` for everything except `muted_tags`, which
-    /// is `WITHOUT ROWID` on `(namespace, tag_id)` and has no `id` at all.
+    /// The columns that identify a row locally. `id` for everything except the two
+    /// `WITHOUT ROWID` tables, which have no `id` at all: `muted_tags` on
+    /// `(namespace, tag_id)` and `device_names` on `device_id`.
     pub keys: &'static [&'static str],
     /// Scalar fields — last-writer-wins **per field** (spec §7.3).
     ///
@@ -104,7 +105,7 @@ impl Spec {
 }
 
 /// One spec per synced table. `schema::SYNCED_TABLES` is the census this is held to.
-pub const TABLES: [Spec; 11] = [
+pub const TABLES: [Spec; 12] = [
     Spec {
         table: "collection_entries",
         keys: &["id"],
@@ -307,12 +308,29 @@ pub const TABLES: [Spec; 11] = [
         append_only: false,
     },
     Spec {
+        table: "device_names",
+        keys: &["device_id"],
+        // **The primary key is on the field list, for `muted_tags`' reason** — this is the
+        // second of the two tables where that is so. `device_id` is `NOT NULL` and is the whole
+        // of the row's identity rather than a rowid the far device assigns itself, so an op
+        // that did not carry it would describe no row that device could build.
+        //
+        // **`name` is the only other column, and that is the design rather than an accident.**
+        // `sync_devices` holds the public keys and is deliberately off `schema::SYNCED_TABLES`
+        // for ever; a column added to this spec that named key material would be a key on the
+        // wire, which is the one thing this table exists to avoid.
+        fields: &["device_id", "name"],
+        counters: &[],
+        parents: &[],
+        append_only: false,
+    },
+    Spec {
         table: "muted_tags",
         keys: &["namespace", "tag_id"],
-        // **The primary key is on the field list, and it is the only table where that is so.**
-        // Everywhere else the key is a rowid the far device assigns itself; here it is
-        // `(namespace, tag_id)`, both `NOT NULL`, and an op that did not carry them would be an
-        // op the far device cannot turn into a row at all.
+        // **The primary key is on the field list**, as it is one table over on
+        // `device_names`. Everywhere else the key is a rowid the far device assigns itself;
+        // here it is `(namespace, tag_id)`, both `NOT NULL`, and an op that did not carry them
+        // would be an op the far device cannot turn into a row at all.
         fields: &["namespace", "tag_id", "slug", "muted_at"],
         counters: &[],
         parents: &[],
@@ -630,7 +648,7 @@ fn delete_trigger(spec: &Spec) -> String {
 
 /// The clock follows the op it just stamped.
 ///
-/// A separate trigger rather than a second statement inside each of the thirty-one, so the rule
+/// A separate trigger rather than a second statement inside each of the thirty-four, so the rule
 /// lives once. It is not recursive — a different table — so `PRAGMA recursive_triggers` has no
 /// bearing on it either way, and nothing here depends on that pragma's value.
 const CLOCK_TRIGGER: &str = "DROP TRIGGER IF EXISTS sync_ops_clock;
@@ -645,11 +663,11 @@ const CLOCK_TRIGGER: &str = "DROP TRIGGER IF EXISTS sync_ops_clock;
 /// **`DROP` then `CREATE`, never `CREATE … IF NOT EXISTS`.** A trigger is stored SQL: a build
 /// that changed the generator and shipped `IF NOT EXISTS` would leave every existing database
 /// running last year's rules forever, silently, and a bug fixed here would reach nobody who
-/// already had the app. Thirty-one drops and creates at open is a fraction of a millisecond.
+/// already had the app. Thirty-four drops and creates at open is a fraction of a millisecond.
 ///
 /// Called from [`crate::schema::prepare_database`], so it reaches the desktop, Android and the
 /// browser through the one door. **Not** on a read-only connection: it never writes, and a
-/// trigger there is thirty-one objects nobody fires.
+/// trigger there is thirty-four objects nobody fires.
 pub fn install(conn: &Connection) -> rusqlite::Result<()> {
     for spec in &TABLES {
         conn.execute_batch(&insert_trigger(spec))?;

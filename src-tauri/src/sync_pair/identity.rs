@@ -263,6 +263,14 @@ const NOT_ON_THE_ROSTER: &str = "That device is not in this pairing group.";
 /// name on every call would look like keeping the roster current and would in fact overwrite a
 /// reader who renamed this device in Settings — and quietly rename every existing install the
 /// first time it launched a new build. A name is minted once and is the reader's from then on.
+///
+/// **It also files this device's name where the group can read it, which is what makes the name
+/// travel at all** — see [`file_name_if_unfiled`]. This is the one place that can: nothing else
+/// in the crate is called by every device on every pairing path and knows what this machine is
+/// called. A device that has never filed one is a device every *other* device goes on calling
+/// `DEFAULT_PEER_NAME`, because a joiner is never told the initiator's name and no later rename
+/// crossed either. It is cheap here and nowhere else — `ensure` is called from the six pairing
+/// entry points and from [`revoke_device`], never on a hot path.
 pub fn ensure(conn: &Connection) -> rusqlite::Result<Identity> {
     if let Some(mut id) = read(conn)? {
         // **The placeholder is upgraded exactly once; a name a reader chose never is.**
@@ -277,10 +285,11 @@ pub fn ensure(conn: &Connection) -> rusqlite::Result<Identity> {
         // anybody picked — it is what every install shared — so replacing it takes nothing from
         // anyone, while a reader who renamed holds a different string and is not touched.
         //
-        // **The far device does not learn the new name from this.** `sync_devices` never syncs
-        // (it holds keys), so a name crosses only at pairing, where `create_group`, `join_group`
-        // and `accept` carry it. Two devices already paired need to pair again for the roster to
-        // catch up — which is the same gap a later `rename_device` has always had.
+        // **The far device does learn the new name from this, since user schema v31.** It used
+        // to be the opposite: `sync_devices` holds keys and never syncs, so a name crossed only
+        // at pairing and two devices already paired had to pair again for a rename to catch up.
+        // `device_names` is the twelfth synced table and [`write_synced_name`] is the third
+        // write here — an upgraded name now travels exactly like a typed one.
         if id.name == PLACEHOLDER {
             let minted = mint_name();
             conn.execute(
@@ -291,8 +300,17 @@ pub fn ensure(conn: &Connection) -> rusqlite::Result<Identity> {
                 "UPDATE sync_devices SET name = ?1 WHERE device_id = ?2",
                 params![minted, id.device_id],
             )?;
+            // The upsert and not the `if_unfiled` arm: the name genuinely changed, and an
+            // install carrying the placeholder may already have filed it under that string.
+            write_synced_name(conn, &id.device_id, &minted)?;
             id.name = minted;
         }
+        // **Every other existing install, which the upgrade above cannot reach.** A reader who
+        // renamed before v31, or whose machine minted a real hostname on a build after
+        // 2026-08-29, holds a perfectly good name that no device but this one has ever seen. One
+        // `DO NOTHING` insert is the whole repair, and it cannot undo a rename that arrived from
+        // the group because a row already there wins.
+        file_name_if_unfiled(conn, &id.device_id, &id.name)?;
         return Ok(id);
     }
     let device_id = hex(&crypto::random_bytes::<16>());
@@ -303,6 +321,13 @@ pub fn ensure(conn: &Connection) -> rusqlite::Result<Identity> {
          VALUES (1, ?1, ?2, ?3, ?4, unixepoch())",
         params![device_id, kp.secret.as_slice(), kp.public.as_slice(), name],
     )?;
+    // **A fresh install has to file its name too, or the joiner's "Paired device" is repaired
+    // for nobody.** The upgrade above reaches installs carrying the old shared placeholder and
+    // nothing else; a machine installed today mints a real hostname, never trips that branch,
+    // and would have no `device_names` row at all — so the device that pairs *with* it goes on
+    // reading `DEFAULT_PEER_NAME` for ever. The id is minted a line above and can collide with
+    // nothing, so this is the upsert rather than the guarded arm.
+    write_synced_name(conn, &device_id, &name)?;
     Ok(Identity {
         device_id,
         keypair: kp,
@@ -393,10 +418,28 @@ fn write_group(conn: &Connection, g: &Group) -> rusqlite::Result<()> {
 }
 
 /// Every device the group has ever had, oldest first, removed ones included.
+///
+/// **A synced name outranks the one the roster was filed under, and that is what repairs
+/// "Paired device" without touching the pairing protocol.** `sync_devices.name` is whatever
+/// this device learned at the ceremony, and the ceremony is asymmetric: `Invite` carries no
+/// name at all and `pairing::respond` — the one place `peer_name` is set — runs on the
+/// **initiator** alone, so a joiner has never learnt who it joined and files it under
+/// `DEFAULT_PEER_NAME`. Measured on the real pair 2026-08-29: the desktop's roster read
+/// `["main-game", "CPH2581"]` and the phone's read `["Paired device", "CPH2581"]`.
+/// [`write_synced_name`] is the other end — once a real name reaches `device_names`, the
+/// placeholder is simply outranked.
+///
+/// **`coalesce` over a `LEFT JOIN`, and both halves are load-bearing.** `device_names` is
+/// synced and `sync_devices` deliberately is not, so a device can be on the roster with no
+/// synced name — every peer of a build older than this one, and every peer whose first sync has
+/// not landed yet. An inner join would not show them a stale name, it would **drop the rows**:
+/// silent, total, and on a real group the roster would simply lose members.
 pub fn roster(conn: &Connection) -> rusqlite::Result<Vec<Device>> {
     let mut stmt = conn.prepare(
-        "SELECT device_id, public_key, name, added_at, revoked_at
-           FROM sync_devices ORDER BY added_at, device_id",
+        "SELECT d.device_id, d.public_key, coalesce(n.name, d.name), d.added_at, d.revoked_at
+           FROM sync_devices d
+           LEFT JOIN device_names n ON n.device_id = d.device_id
+          ORDER BY d.added_at, d.device_id",
     )?;
     let rows = stmt.query_map([], |r| {
         Ok(Device {
@@ -432,14 +475,68 @@ pub fn add_device(
     Ok(())
 }
 
-/// Rename a device on the roster — **and this device's own copy of its name, when that is who
-/// is being renamed.**
+/// A name filed where the rest of the group can read it — `device_names`, the twelfth synced
+/// table (user schema v31).
 ///
-/// The second statement is not tidiness. `sync_identity.name` is the copy every pairing sends:
-/// [`create_group`] and [`join_group`] both file this device on the roster under it, and
-/// `pairing::accept` seals it into the blob the other device files this one by. Without this
-/// line a reader who renamed this device would have the rename silently undone by their next
-/// pairing, and the roster row on the *other* device would have been wrong from the start.
+/// **The keys and the name had to be separated for a name to travel at all.** `sync_devices`
+/// holds every device's public key and is deliberately absent from `schema::SYNCED_TABLES`, so
+/// before this table a name crossed only during a pairing ceremony — and a later rename crossed
+/// never. This table holds a `device_id` and a string and nothing else, which is what makes it
+/// safe to put on the wire.
+///
+/// **The conflict target is `device_id` and never the `sync_uid`, which no caller here
+/// supplies.** The capture trigger mints one on insert; a row written before the triggers are
+/// installed is swept by `schema::mint_missing_uids`. Writing one by hand would be this module
+/// naming a row the way the sync engine names it, in a second place.
+fn write_synced_name(conn: &Connection, device_id: &str, name: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO device_names (device_id, name, created_at, updated_at)
+              VALUES (?1, ?2, unixepoch(), unixepoch())
+         ON CONFLICT(device_id) DO UPDATE SET
+              name = excluded.name,
+              updated_at = unixepoch()",
+        params![device_id, name],
+    )?;
+    Ok(())
+}
+
+/// File a name only if this device has never had one filed — the arm [`ensure`] uses, and the
+/// one that must not overwrite.
+///
+/// **A row already there is the group's answer, not this device's.** By the time `ensure` runs
+/// again, `device_names` may hold a name somebody typed on the *other* device and synced across;
+/// an upsert here would replace it with whatever the hostname says and undo a rename the reader
+/// made on a screen they were not looking at. `DO NOTHING` is what keeps the local write to the
+/// one case it is for: a device that has never told the group what it is called.
+fn file_name_if_unfiled(conn: &Connection, device_id: &str, name: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "INSERT INTO device_names (device_id, name, created_at, updated_at)
+              VALUES (?1, ?2, unixepoch(), unixepoch())
+         ON CONFLICT(device_id) DO NOTHING",
+        params![device_id, name],
+    )?;
+    Ok(())
+}
+
+/// Rename a device on the roster — **this device's own copy of its name, when that is who is
+/// being renamed, and the copy the rest of the group reads.**
+///
+/// Three statements, and none of them is tidiness.
+///
+/// `sync_identity.name` is the copy every pairing sends: [`create_group`] and [`join_group`]
+/// both file this device on the roster under it, and `pairing::accept` seals it into the blob
+/// the other device files this one by. Without that line a reader who renamed this device would
+/// have the rename silently undone by their next pairing, and the roster row on the *other*
+/// device would have been wrong from the start.
+///
+/// [`write_synced_name`] is the third, and it is the only one that reaches a device the reader
+/// is not standing in front of. `sync_devices` does not sync, so until user schema v31 a rename
+/// crossed **only** during a pairing ceremony — two devices already paired kept two different
+/// names for one machine for ever, with nothing on either screen to say so.
+///
+/// **All three, not one.** `sync_devices` is what this device draws today, before any sync has
+/// run; `sync_identity` is what the next pairing sends; `device_names` is what the group reads.
+/// Dropping any of them leaves a name that is right in one place and wrong in another.
 pub fn rename_device(conn: &Connection, device_id: &str, name: &str) -> rusqlite::Result<()> {
     conn.execute(
         "UPDATE sync_devices SET name = ?2 WHERE device_id = ?1",
@@ -449,7 +546,7 @@ pub fn rename_device(conn: &Connection, device_id: &str, name: &str) -> rusqlite
         "UPDATE sync_identity SET name = ?2 WHERE id = 1 AND device_id = ?1",
         params![device_id, name],
     )?;
-    Ok(())
+    write_synced_name(conn, device_id, name)
 }
 
 /// Take a device off the group and rotate the key — §7.6, and the two halves are one statement.
@@ -1194,6 +1291,191 @@ mod tests {
             marker("tablet"),
             Some(1000),
             "the removed device's marker must be left where it was"
+        );
+    }
+
+    // -------------------------------------------------------------------------------------
+    // `device_names` — the name the group reads, user schema v31
+    // -------------------------------------------------------------------------------------
+
+    /// A device's synced name, or `None` if it has never filed one.
+    fn synced_name(conn: &Connection, device_id: &str) -> Option<String> {
+        conn.query_row(
+            "SELECT name FROM device_names WHERE device_id = ?1",
+            params![device_id],
+            |r| r.get(0),
+        )
+        .optional()
+        .unwrap()
+    }
+
+    /// **A rename is recorded where it can travel, as well as where it is read locally.**
+    ///
+    /// `sync_devices` holds the keys and never syncs, so before v31 a rename reached the other
+    /// device only if the reader paired again — which nobody does to fix a label.
+    #[test]
+    fn renaming_writes_the_synced_name() {
+        let conn = db();
+        let me = ensure(&conn).unwrap();
+        create_group(&conn, &me).unwrap();
+
+        rename_device(&conn, &me.device_id, "Kitchen tablet").unwrap();
+
+        assert_eq!(
+            synced_name(&conn, &me.device_id).as_deref(),
+            Some("Kitchen tablet")
+        );
+        assert_eq!(roster(&conn).unwrap()[0].name, "Kitchen tablet");
+        // The two local copies the rename has always written are still written.
+        assert_eq!(ensure(&conn).unwrap().name, "Kitchen tablet");
+    }
+
+    /// **A synced name outranks the local roster copy**, which is what makes an arriving rename
+    /// visible and what quietly repairs "Paired device" on the first sync.
+    #[test]
+    fn a_synced_name_outranks_the_placeholder_the_roster_was_filed_under() {
+        let conn = db();
+        add_device(&conn, "dev-b", &[9u8; 32], "Paired device").unwrap();
+        conn.execute(
+            "INSERT INTO device_names (device_id, name, created_at, updated_at, sync_uid)
+             VALUES ('dev-b', 'MAIN-PC', 0, 0, 'u1')",
+            [],
+        )
+        .unwrap();
+
+        let row = roster(&conn)
+            .unwrap()
+            .into_iter()
+            .find(|d| d.device_id == "dev-b")
+            .expect("the roster row is still there");
+        assert_eq!(row.name, "MAIN-PC");
+    }
+
+    /// ...and a device with no synced name still reads the name it was filed under, **and is
+    /// still on the list at all**.
+    ///
+    /// This is what the `LEFT` in the join is for, and the failure it prevents is not a stale
+    /// name: an inner join drops every device that has filed none — every peer on a build older
+    /// than v31, and every peer whose first sync has not landed — so a real group would silently
+    /// lose roster rows with nothing on the screen to say why.
+    #[test]
+    fn a_device_with_no_synced_name_keeps_its_local_one() {
+        let conn = db();
+        let me = ensure(&conn).unwrap();
+        create_group(&conn, &me).unwrap();
+        add_device(&conn, "dev-b", &[9u8; 32], "Phone").unwrap();
+        assert_eq!(
+            synced_name(&conn, "dev-b"),
+            None,
+            "the fixture is only about a device that has filed nothing"
+        );
+
+        let list = roster(&conn).unwrap();
+        assert_eq!(
+            list.len(),
+            2,
+            "a device with no synced name is still on the roster"
+        );
+        let phone = list
+            .into_iter()
+            .find(|d| d.device_id == "dev-b")
+            .expect("dev-b was dropped by the join");
+        assert_eq!(phone.name, "Phone");
+    }
+
+    /// **A fresh install files its own name, or the joiner's "Paired device" is repaired for
+    /// nobody.**
+    ///
+    /// `Invite` carries no name and `pairing::respond` runs on the initiator alone, so a joiner
+    /// files the device it joined under `DEFAULT_PEER_NAME`. The only thing that can outrank
+    /// that is a `device_names` row the *other* device wrote about itself — and a machine
+    /// installed today mints a real hostname, so it never trips the placeholder upgrade and
+    /// would otherwise have no row at all.
+    #[test]
+    fn a_fresh_identity_files_its_own_name_where_the_group_can_read_it() {
+        let conn = db();
+        let me = ensure(&conn).unwrap();
+        assert_eq!(
+            synced_name(&conn, &me.device_id).as_deref(),
+            Some(&*me.name)
+        );
+        assert_eq!(count(&conn, "device_names"), 1, "itself and nobody else");
+    }
+
+    /// An install that already had an identity files the name it already had, without changing
+    /// it. That is every device that paired before v31 and never carried the shared placeholder
+    /// — the population the upgrade in [`ensure`] cannot see.
+    #[test]
+    fn an_existing_install_files_the_name_it_already_had() {
+        let conn = db();
+        conn.execute(
+            "INSERT INTO sync_identity (id, device_id, secret_key, public_key, name, created_at)
+             VALUES (1, 'deadbeef', ?1, ?2, 'MARKUS-PC', 0)",
+            params![[1u8; 32].as_slice(), [2u8; 32].as_slice()],
+        )
+        .unwrap();
+
+        let me = ensure(&conn).unwrap();
+        assert_eq!(me.name, "MARKUS-PC", "nothing renamed it");
+        assert_eq!(synced_name(&conn, "deadbeef").as_deref(), Some("MARKUS-PC"));
+    }
+
+    /// The placeholder upgrade files the name it minted, so an upgraded name travels like a
+    /// typed one rather than stopping at this device.
+    #[test]
+    fn the_upgraded_placeholder_travels() {
+        let conn = db();
+        conn.execute(
+            "INSERT INTO sync_identity (id, device_id, secret_key, public_key, name, created_at)
+             VALUES (1, 'deadbeef', ?1, ?2, ?3, 0)",
+            params![[1u8; 32].as_slice(), [2u8; 32].as_slice(), PLACEHOLDER],
+        )
+        .unwrap();
+        add_device(&conn, "deadbeef", &[3u8; 32], PLACEHOLDER).unwrap();
+
+        let upgraded = ensure(&conn).unwrap();
+        assert_ne!(upgraded.name, PLACEHOLDER);
+        assert_eq!(
+            synced_name(&conn, "deadbeef").as_deref(),
+            Some(&*upgraded.name),
+            "the upgrade wrote three rows, not two"
+        );
+        assert_eq!(roster(&conn).unwrap()[0].name, upgraded.name);
+    }
+
+    /// **A name that arrived from the group is never overwritten by a later [`ensure`].**
+    ///
+    /// Renaming a peer is a press on the *other* device, so this device's copy of its own name
+    /// can be older than the group's. An upsert on this path would put the hostname back at the
+    /// next pairing command and undo a rename the reader made on a screen they were not looking
+    /// at; `DO NOTHING` is what stops it.
+    #[test]
+    fn a_name_that_arrived_from_the_group_is_not_overwritten_by_ensure() {
+        let conn = db();
+        let me = ensure(&conn).unwrap();
+        create_group(&conn, &me).unwrap();
+        // What `apply` does when the other device renames this one.
+        conn.execute(
+            "UPDATE device_names SET name = 'Markus desk' WHERE device_id = ?1",
+            params![me.device_id],
+        )
+        .unwrap();
+
+        let again = ensure(&conn).unwrap();
+
+        assert_eq!(
+            synced_name(&conn, &me.device_id).as_deref(),
+            Some("Markus desk"),
+            "the group's answer stands"
+        );
+        assert_eq!(
+            again.name, me.name,
+            "and `sync_identity` is not rewritten from it either"
+        );
+        assert_eq!(
+            roster(&conn).unwrap()[0].name,
+            "Markus desk",
+            "the panel draws the name the group agreed on"
         );
     }
 }

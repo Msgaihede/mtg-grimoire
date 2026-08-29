@@ -106,6 +106,57 @@ fn two_offline_devices_each_adding_one_copy_converge_on_one_row_at_two() {
     assert_eq!(ua, ub, "the two devices must adopt one uid");
 }
 
+/// **The whole path, with nothing assumed: two devices name a peer independently, meet, and
+/// only then is one of them renamed.**
+///
+/// This is the test that would catch a rename that cannot land. A rename op is *sparse* — the
+/// update trigger emits only what changed, so it carries `name` and no `device_id`, and the
+/// grain has nothing to bind. It travels by uid, so it works exactly when the two rows have
+/// already converged on one. The exchange in the middle is what makes them converge, and
+/// driving it here is the difference between testing the feature and testing a fixture that
+/// was handed the answer.
+#[test]
+fn a_rename_travels_once_two_independent_rows_have_met() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let (mut ma, mut mb) = (0, 0);
+
+    // Both file a name for the same peer, knowing nothing of each other. These are INSERTs, so
+    // the ops carry every field and the grain can bind on `device_id`.
+    a.execute(
+        "INSERT INTO device_names (device_id, name, created_at, updated_at)
+         VALUES ('dev-c', 'Desktop', 0, 0)",
+        [],
+    )
+    .unwrap();
+    b.execute(
+        "INSERT INTO device_names (device_id, name, created_at, updated_at)
+         VALUES ('dev-c', 'Phone', 0, 0)",
+        [],
+    )
+    .unwrap();
+    let (from_a, from_b) = (since(&a, &mut ma), since(&b, &mut mb));
+    apply(&b, &from_a).unwrap();
+    apply(&a, &from_b).unwrap();
+
+    // Now a reader renames that peer, on one device only.
+    a.execute(
+        "UPDATE device_names SET name = 'Kitchen tablet' WHERE device_id = 'dev-c'",
+        [],
+    )
+    .unwrap();
+    apply(&b, &since(&a, &mut ma)).unwrap();
+
+    for (who, c) in [("a", &a), ("b", &b)] {
+        let (rows, name): (i64, String) = c
+            .query_row("SELECT count(*), max(name) FROM device_names", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(rows, 1, "{who} kept two rows for one device");
+        assert_eq!(name, "Kitchen tablet", "{who} did not see the rename");
+    }
+}
+
 /// ...and a second round changes nothing, which is what "converged" has to mean. Without the
 /// uid adoption the grain match would fire again every round, and the quantity would climb by
 /// one on each device every time they spoke.
@@ -835,6 +886,111 @@ fn a_muted_tag_travels_with_its_primary_key() {
     );
 }
 
+/// **A rename reaches the other device.** This is the whole feature: two devices converge on
+/// one name for a third, with no pairing ceremony in between and no key material on the wire.
+#[test]
+fn a_renamed_device_is_renamed_on_the_other_device_too() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    // **Seeded with capture SUPPRESSED, because that is how the row really gets here.** A
+    // device learns a peer's name from a sync, and `apply` runs inside `capture::suppressed`,
+    // so the row arrives writing no op of its own.
+    //
+    // Seeding it as an ordinary local write instead makes B's insert a competing op, and the
+    // combined fold then weighs it against A's rename by stamp. That is a race, and it is one
+    // this test lost on Linux while passing on Windows: all three writes can land in one
+    // millisecond, leaving `(ms, ctr)` tied and the device id to break it — and `dev-a` sorts
+    // before `dev-b`, so B's own "This device" won and the rename was discarded. The feature
+    // was never at fault; the fixture was inventing a conflict the app does not have.
+    //
+    // **One uid on both, and suppressed, because that is the state a rename actually finds.**
+    // Suppressing the insert also suppresses the *mint* — it lives in the same trigger — so a
+    // suppressed row is anonymous and the first update to it fails `sync_ops.uid NOT NULL`.
+    //
+    // The shared uid is not a convenience. **A rename op is sparse**: the update trigger emits
+    // only the columns that changed, so it carries `name` and not `device_id` — and without
+    // `device_id` the grain cannot bind. A rename therefore travels by *uid*, which is why the
+    // two sides must already have converged on one. They always have by then, and
+    // `a_rename_travels_once_two_independent_rows_have_met` drives that convergence rather than
+    // assuming it.
+    for c in [&a, &b] {
+        capture::suppressed(c, || {
+            c.execute(
+                "INSERT INTO device_names (device_id, name, created_at, updated_at, sync_uid)
+                 VALUES ('dev-c', 'This device', 0, 0, 'uid-dev-c')",
+                [],
+            )
+        })
+        .unwrap();
+    }
+    a.execute(
+        "UPDATE device_names SET name = 'Kitchen tablet' WHERE device_id = 'dev-c'",
+        [],
+    )
+    .unwrap();
+    apply(&b, &outbox(&a)).unwrap();
+
+    let got: String = b
+        .query_row(
+            "SELECT name FROM device_names WHERE device_id = 'dev-c'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(got, "Kitchen tablet");
+    let rows: i64 = b
+        .query_row("SELECT count(*) FROM device_names", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        rows, 1,
+        "the grain must match on device_id, not insert a second row"
+    );
+}
+
+/// Two devices that independently named the same peer end with ONE row, by grain — the same
+/// argument `muted_tags` makes, on a table whose primary key is a device id rather than a rowid
+/// the far device could ever invent.
+#[test]
+fn two_devices_naming_one_peer_end_with_one_row() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    a.execute(
+        "INSERT INTO device_names (device_id, name, created_at, updated_at)
+         VALUES ('dev-c', 'Desktop', 0, 0)",
+        [],
+    )
+    .unwrap();
+    b.execute(
+        "INSERT INTO device_names (device_id, name, created_at, updated_at)
+         VALUES ('dev-c', 'Phone', 0, 0)",
+        [],
+    )
+    .unwrap();
+    let (from_a, from_b) = (outbox(&a), outbox(&b));
+    apply(&b, &from_a).unwrap();
+    apply(&a, &from_b).unwrap();
+
+    for (who, c) in [("a", &a), ("b", &b)] {
+        let (rows, name): (i64, String) = c
+            .query_row("SELECT count(*), max(name) FROM device_names", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(rows, 1, "{who} kept two rows for one device");
+        // `dev-b` wrote second, so its op carries the later stamp on both machines — and where
+        // the millisecond is shared the device id breaks the tie the same way everywhere.
+        assert_eq!(name, "Phone", "{who} did not converge on the later name");
+    }
+
+    // ...and they agree on which uid that row wears, which is what stops the next round from
+    // splitting it again.
+    let ua: String = a
+        .query_row("SELECT sync_uid FROM device_names", [], |r| r.get(0))
+        .unwrap();
+    let ub: String = b
+        .query_row("SELECT sync_uid FROM device_names", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(ua, ub, "the two devices must adopt one uid");
+}
+
 /// **A stale field from a peer does not overwrite a newer local edit.** The incoming fold says
 /// what the peer wants; the combined fold says who won.
 #[test]
@@ -1192,8 +1348,13 @@ fn every_unique_index_on_a_synced_table_has_been_decided_about() {
             "deck_categories.idx_deck_categories_kind",
             // `DECK_TAG_GRAIN` — one app-wide list since v21.
             "deck_tags.idx_deck_tags_grain",
-            // **The one that is not a `CREATE INDEX` at all**: `muted_tags` is `WITHOUT ROWID`
-            // on `(namespace, tag_id)`, so its primary key IS the table and SQLite reports it
+            // **The second of the two that are not a `CREATE INDEX` at all.** `device_names`
+            // is `WITHOUT ROWID` on `device_id` (user schema v31), so its primary key IS the
+            // table and SQLite reports it here under a generated name. It is the table's
+            // grain, and `META`'s spec for it is `device_id = ?`.
+            "device_names.sqlite_autoindex_device_names_1",
+            // **Not a `CREATE INDEX` either**: `muted_tags` is `WITHOUT ROWID` on
+            // `(namespace, tag_id)`, so its primary key IS the table and SQLite reports it
             // here under a generated name. It is the table's grain, and `apply`'s spec for it
             // spells those two columns out.
             "muted_tags.sqlite_autoindex_muted_tags_1",
