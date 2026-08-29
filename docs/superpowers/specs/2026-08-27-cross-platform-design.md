@@ -575,7 +575,7 @@ Every remaining PR now has a task-level plan in `docs/superpowers/plans/`.
 | 7 | the relay and conflict engine | `2026-08-28-sync-relay-and-engine.md` | **done** — #269 |
 | 8 | the Android target | `2026-08-28-android-target.md` | **done** — #262, with #270 fixing the cross-compile |
 | 9a | mobile layout: foundation + options | `2026-08-28-mobile-layout-9a-foundation-and-options.md` | **done** — #274 shipped Tasks 1–4 (the foundation); the four design rounds ran and **the decision was taken on 2026-08-29** |
-| 9b | implement the chosen layout | — | **now writable.** The brief is [the options document](2026-08-28-mobile-layout-options.md)'s "What 9b has to do, per surface" |
+| 9b | implement the chosen layout | `2026-08-29-mobile-layout-9b.md` | **planned 2026-08-29**, against the four decisions. Nine tasks; the brief it argues from is [the options document](2026-08-28-mobile-layout-options.md)'s "What 9b has to do, per surface" |
 
 **Updated 2026-08-29.** Everything above 9a has shipped, and the phase is done end to end: the
 app runs on Windows, in a browser and on an Android phone, two devices pair with no account, and
