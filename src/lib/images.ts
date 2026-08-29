@@ -1,11 +1,23 @@
 /**
- * Naming a card image. The renderer never sees a file path — it asks the `mtgimg://`
- * protocol for `<variant>/<card id>/<face>` and Rust decides where the bytes come from.
+ * Naming a card image. On the desktop build the renderer never sees a file path — it asks the
+ * `mtgimg://` protocol for `<variant>/<card id>/<face>` and Rust decides where the bytes come
+ * from.
  *
  * Written out rather than delegated to `@tauri-apps/api`'s `convertFileSrc`, which reads
  * `window.__TAURI_INTERNALS__` — undefined in jsdom, so every component test that renders
  * a card would throw. The platform rule is two lines and it is pinned by a test.
+ *
+ * **There are two platform rules here now, and they are different questions.** `imageOrigin`
+ * answers *which spelling of a Tauri custom protocol this OS uses*; {@link cardArtSrc} answers
+ * *whether this build has a custom protocol at all* — a browser has none, and wasm cannot
+ * register a URL scheme with one, so the web build draws the URL its own list rows carry
+ * (`CardSummary.imageUris`) straight off `cards.scryfall.io`. Both live here, and **neither may
+ * be spread into a component**: a second `__CORE__` check somewhere up the tree is a second
+ * thing to keep in step, and the failure when the two disagree is a page of broken images
+ * rather than an error.
  */
+
+import { isWebTarget } from "@/pwa/target";
 
 /** The four WEBP sizes the cache stores. Nothing else exists as far as the UI is aware. */
 export const IMAGE_VARIANTS = ["thumb", "grid", "display", "art"] as const;
@@ -76,6 +88,37 @@ export function imageOrigin(userAgent: string): string {
  */
 export function cardImageUrl(cardId: string, face: number, variant: ImageVariant): string {
   return `${imageOrigin(navigator.userAgent)}/${variant}/${encodeURIComponent(cardId)}/${face}`;
+}
+
+/**
+ * Which of a card frame's two possible pictures this build actually draws — **the whole of the
+ * desktop/web branch, in one function**.
+ *
+ * On desktop the answer is always the protocol URL: the bytes are in the local cache, already
+ * re-encoded to the variant's exact size, and a frame that drew Scryfall's own URL instead would
+ * refetch every tile over the network on a wall the reader has already paid for. So `suppliedUrl`
+ * is *ignored* there rather than preferred — a list row carries it on both builds, because the
+ * DTO is one shape.
+ *
+ * On web there is no protocol to ask. `mtgimg://` is registered natively with the webview and
+ * **wasm cannot register a URL scheme with a browser**, so the only picture a browser can reach
+ * is the one the row was handed by `search_cards`. A row that carries none answers `null` —
+ * which is the frame's "no art" state and not a URL to try — because Scryfall says "no image" in
+ * a shape that looks like a picture (`soon.jpg`), and a frame handed a protocol URL it cannot
+ * resolve draws a broken `<img>` where a named, empty card frame belongs.
+ *
+ * **The protocol URL is computed by the caller and passed in, rather than built here**, and that
+ * is load-bearing rather than a style choice: `.storybook/main.ts` aliases `@/lib/images` to a
+ * fake whose whole job is to replace {@link cardImageUrl} with generated art, and a call made
+ * *inside* this module would reach the real function and paint every story a broken image. The
+ * caller's `cardImageUrl` is the overridable one. It costs a string concatenation the web build
+ * throws away, which is cheaper than a workbench that cannot draw a card.
+ */
+export function cardArtSrc(
+  protocolUrl: string | null,
+  suppliedUrl?: string | null,
+): string | null {
+  return isWebTarget() ? (suppliedUrl ?? null) : protocolUrl;
 }
 
 /**

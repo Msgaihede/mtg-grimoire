@@ -396,6 +396,32 @@ export interface CardSummary {
    */
   priceLow: number | null;
   priceHigh: number | null;
+  /**
+   * The front face's image URLs, keyed by the app's own variant names — `null` when Scryfall
+   * has no usable picture for this printing.
+   *
+   * **The web build has no other way to get one, which is the whole reason this is on the
+   * row.** `cardImageUrl` answers `mtgimg://…`, a Tauri custom protocol registered natively
+   * with the webview, and wasm cannot register a URL scheme with a browser; `card_image_uri`
+   * would be the fallback and it lives in `card.rs`, which is gated out of the wasm build.
+   * So on web a tile draws `imageUris?.[WALL_CARD_VARIANT]` and on Tauri it goes on drawing
+   * `mtgimg://` — the platform branch stays in `images.ts`, where the two lines already are.
+   *
+   * **Front face only.** The walls draw the front; flipping lives in the card pane, which is
+   * not routed on web at all.
+   *
+   * `Partial`, and not decoration: a `transform` printing publishes only the variants its
+   * faces carry, and a printing whose only URL is Scryfall's `soon.jpg` error page carries
+   * **nothing** rather than a URL — the backend refuses a URI with no `?<epoch>` cache-buster
+   * or from a host that is not `cards.scryfall.io`, because such a URL answers `200` with
+   * something that is not the card. Treat a missing entry as "no art", never as a reason to
+   * build a URL of your own.
+   *
+   * Mirrors `CardSummary::image_uris` in `src-tauri/src/search.rs`, which is a
+   * `BTreeMap<String, String>`. Nothing type-checks this file against the crate —
+   * `ipc.test.ts`'s field-name pin reads both and is the only fence.
+   */
+  imageUris?: Partial<Record<ImageVariant, string>> | null;
 }
 
 /** A page of results plus the size of the whole match set, for the pager. */

@@ -25,6 +25,7 @@ use crate::filters;
 use crate::sync::{lock_db_read, AppState};
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 #[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
@@ -276,6 +277,43 @@ pub struct CardSummary {
     /// range that pretended otherwise would be inventing a number.
     pub price_low: Option<f64>,
     pub price_high: Option<f64>,
+    /// The front face's image URL, resolved by the same precedence `images::resolve` applies:
+    /// the face's own entry first, the top-level `image_uris` as the fallback, and a
+    /// non-fetchable URI treated as no image at all. All three rules are
+    /// [`crate::image_uri`]'s and none of them is respelled here.
+    ///
+    /// **One key, [`crate::image_uri::LIST_VARIANT`] (`display`), and that is a decision rather
+    /// than a first instalment.** It is the size `WALL_CARD_VARIANT` draws and `CardArt`
+    /// defaults to, which makes it the only one with a reader; `thumb`, `grid` and `art` have
+    /// no caller on any wall, and this repo adds a field together with the thing that reads it.
+    /// **Widening is deliberate future work and costs no type change on either side** — the
+    /// shape is a map, and TypeScript's mirror is already a
+    /// `Partial<Record<ImageVariant, string>>`, so a name added to
+    /// [`crate::image_uri::LIST_VARIANTS`] is the whole of it.
+    ///
+    /// **Face 0 only, and that is the scope rather than an omission.** The walls draw the
+    /// front; the flip control lives in the card pane, which is not routed on web.
+    ///
+    /// **It is on this DTO and on no other, and the reason is `web/route.rs`'s `COMMANDS`
+    /// list.** `search_cards` is the one card-bearing command a browser can call, so the
+    /// search wall is the one wall that can draw art there; `mtgimg://` is a Tauri custom
+    /// protocol and wasm cannot register a URL scheme with a browser, so the URL has to
+    /// travel with the row or not at all. Adding the same field to the collection's, the
+    /// wishlist's and the deck editor's DTOs would widen three payloads on the desktop,
+    /// where `mtgimg://` already works, and change nothing anywhere else.
+    ///
+    /// `None` when the printing has no fetchable image — the same answer
+    /// `images::Placeholder::NoImage` stands for, in a shape a DTO can carry. 162 of the live
+    /// corpus's 117 606 rows are that, and the `soon.jpg` fence can make any row that.
+    ///
+    /// **The price, measured rather than assumed** (2026-08-29, debug build, against a byte
+    /// copy of the 117 606-row dev corpus, one collapsed 50-row page): **23 199 B → 29 349 B,
+    /// +6 150 B — +26.5%, 123 B a row**, one URL of ~108 B plus its key.
+    /// All four variants would have been +21 600 B, +93.1%, 432 B a row — affordable, since
+    /// this crosses a Worker `postMessage` or a Tauri IPC hop and never a network, which is
+    /// why the count is *not* what settled the shape. `front_face_selects` carries the third
+    /// option that was weighed and declined: the URL is derivable from the row's id, at ~10 B.
+    pub image_uris: Option<BTreeMap<String, String>>,
 }
 
 /// A page of results plus the size of the whole match set, for the pager.
@@ -967,6 +1005,14 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
         // printings — built by [`crate::collection_source`] rather than written out, so the
         // wall and the Collection page cannot disagree about what the reader has.
         let owned_by_oracle = crate::collection_source::copies_of_oracle(conn, "c.oracle_id");
+        // The front face's picture, as eight `json_extract`s off the `cards` row the query
+        // already has in hand — no join and no second statement. Built by
+        // [`crate::image_uri::front_face_selects`] rather than written out, because the
+        // *precedence* between the two columns is applied in Rust by
+        // [`crate::image_uri::front_face_map`], and a `COALESCE` spelled here would be a
+        // second copy of it. Shared by both branches, and placed **before** the three
+        // collapse-only aggregates so the two row mappings stay one mapping.
+        let image_uris = crate::image_uri::front_face_selects("c").join(", ");
         format!(
             "{cte} g AS (
                 SELECT {COLLAPSE_KEY} AS oid, count(*) AS printings,
@@ -984,14 +1030,16 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
                     -- `c.`, not an aggregate: being a game changer is a fact about the
                     -- oracle card, so every printing in the group already agrees and the
                     -- representative's own column is the group's answer. Position 13 in
-                    -- **both** branches — the two share one row mapping, and only the three
-                    -- collapse-only aggregates may follow it.
+                    -- **both** branches — the two share one row mapping, so every column
+                    -- either branch adds goes in both, at the same index, and the three
+                    -- collapse-only aggregates stay last of all.
                     c.game_changer,
                     {owned_by_oracle},
                     EXISTS (SELECT 1 FROM wishlist_entries w
                              WHERE (w.oracle_id IS NOT NULL AND w.oracle_id = c.oracle_id)
                                 OR w.card_id IN (SELECT id FROM cards
                                                   WHERE oracle_id = c.oracle_id)),
+                    {image_uris},
                     g.printings, g.lo, g.hi
              FROM g JOIN cards c ON c.id = g.rep
              ORDER BY {final_order}"
@@ -1000,6 +1048,8 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
         // The same badge, by **printing**: an uncollapsed row is one printing, so the count
         // beside it is that printing's.
         let owned_by_printing = crate::collection_source::copies_of_printing(conn, "c.id");
+        // The same eight columns, in the same place: the branches share one row mapping.
+        let image_uris = crate::image_uri::front_face_selects("c").join(", ");
         format!(
             "SELECT c.id, c.name, c.set_code, c.set_name, c.collector_number, c.rarity,
                     c.type_line, c.mana_cost, {price} AS price, c.layout,
@@ -1008,7 +1058,8 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
                     EXISTS (SELECT 1 FROM wishlist_entries w
                              WHERE w.card_id = c.id
                                 OR (w.card_id IS NULL AND w.oracle_id IS NOT NULL
-                                    AND w.oracle_id = c.oracle_id))
+                                    AND w.oracle_id = c.oracle_id)),
+                    {image_uris}
              FROM {from_sql} WHERE {where_sql} ORDER BY {order} LIMIT ? OFFSET ?"
         )
     };
@@ -1022,6 +1073,14 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
             params.iter().map(|p| p.as_ref()),
         ))
         .map_err(|e| e.to_string())?;
+
+    // Where the shared columns past `wishlisted` begin, and where the three collapse-only
+    // aggregates begin after them. Written down rather than spelled as literals because both
+    // branches feed one row mapping and the two blocks move together: a number left behind
+    // reads a URL as a price, which is an `InvalidColumnType` at best and a wrong number at
+    // worst.
+    const IMAGE_COL: usize = 16;
+    const COLLAPSE_COL: usize = IMAGE_COL + crate::image_uri::FRONT_FACE_COLUMNS;
 
     let mut items = Vec::new();
     while let Some(row) = rows.next().map_err(|e| e.to_string())? {
@@ -1051,20 +1110,26 @@ pub fn run_search(conn: &Connection, req: &SearchRequest) -> Result<SearchRespon
             // Uncollapsed, a row is a printing: it stands for one, and the "range" is its own
             // price. Collapsed, the three ride on the group step's aggregates.
             printings: if collapse {
-                row.get(16).map_err(|e| e.to_string())?
+                row.get(COLLAPSE_COL).map_err(|e| e.to_string())?
             } else {
                 1
             },
             price_low: if collapse {
-                row.get(17).map_err(|e| e.to_string())?
+                row.get(COLLAPSE_COL + 1).map_err(|e| e.to_string())?
             } else {
                 row.get(8).map_err(|e| e.to_string())?
             },
             price_high: if collapse {
-                row.get(18).map_err(|e| e.to_string())?
+                row.get(COLLAPSE_COL + 2).map_err(|e| e.to_string())?
             } else {
                 row.get(8).map_err(|e| e.to_string())?
             },
+            // The face-first precedence and the `soon.jpg` fence are both applied in here,
+            // by the module `images::resolve` reads them out of.
+            image_uris: crate::image_uri::front_face_map(|i| {
+                row.get::<_, Option<String>>(IMAGE_COL + i)
+                    .map_err(|e| e.to_string())
+            })?,
         });
     }
     Ok(SearchResponse {
@@ -1770,6 +1835,13 @@ mod tests {
                 printings: 1,
                 price_low: Some(400.5),
                 price_high: Some(400.5),
+                // An object rather than `null`, because the shape is what the mirror in
+                // `src/lib/ipc.ts` has to agree with: the keys are the app's own variant
+                // names and the values are whole URLs, not a blob to be parsed.
+                image_uris: Some(BTreeMap::from([(
+                    "display".to_owned(),
+                    "https://cards.scryfall.io/display/x.webp?1".to_owned(),
+                )])),
             }],
             total: 5000,
             total_is_capped: true,
@@ -1789,7 +1861,8 @@ mod tests {
                     "gameChanger": true,
                     "ownedQuantity": 0, "wishlisted": false,
                     "printings": 1,
-                    "priceLow": 400.5, "priceHigh": 400.5
+                    "priceLow": 400.5, "priceHigh": 400.5,
+                    "imageUris": {"display": "https://cards.scryfall.io/display/x.webp?1"}
                 }],
                 "total": 5000,
                 "totalIsCapped": true
@@ -3810,6 +3883,115 @@ mod tests {
             assert_eq!(bolt.name, "Lightning Bolt", "{collapse:?}");
             assert_eq!(bolt.owned_quantity, 0, "{collapse:?}");
             assert!(!bolt.wishlisted, "{collapse:?}");
+        }
+    }
+
+    /// The front face's picture, on the row, because the web build has no other way to get
+    /// one: `mtgimg://` is a Tauri custom protocol and wasm cannot register a URL scheme
+    /// with a browser, and `card_image_uri` lives in `card.rs`, which is gated out of that
+    /// build entirely.
+    ///
+    /// Three rows, because the rule has three parts and each one fails silently on its own:
+    /// a plain printing carries its top-level blob, a **meld** printing carries its *face's*
+    /// URL and not the top-level one, and a `soon.jpg` printing carries no map at all rather
+    /// than a URL that answers `200` with Scryfall's error page. And the key set itself, which
+    /// is the fourth: `display` alone is a decision, so a widening has to edit a test.
+    ///
+    /// Both query shapes, for `results_say_which_cards_are_game_changers`' reason: two select
+    /// lists feed one row mapping, and eight columns added to one of them or at a different
+    /// position come back as another column's value rather than as an error.
+    #[test]
+    fn results_carry_the_front_faces_image_urls() {
+        let conn = seeded();
+        // A normal printing: all four variants in the top-level blob, no faces.
+        conn.execute(
+            "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,is_paper,image_uris,raw)
+             VALUES ('img-plain','Plain Card','m21','1','en','normal',1,
+                     json_object(
+                       'thumb','https://cards.scryfall.io/thumb/p.webp?7',
+                       'grid','https://cards.scryfall.io/grid/p.webp?7',
+                       'display','https://cards.scryfall.io/display/p.webp?7',
+                       'art','https://cards.scryfall.io/art/p.webp?7'),'{}')",
+            [],
+        )
+        .unwrap();
+        // A `meld` printing: **both** columns carry `display`, which is the only shape that
+        // can tell the two orders apart. Reversed, this row draws the melded card where its
+        // front belongs and nothing on screen says so.
+        conn.execute(
+            "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,is_paper,
+                                image_uris,face_image_uris,raw)
+             VALUES ('img-meld','Bruna','emn','15','en','meld',1,
+                     json_object('display','https://cards.scryfall.io/display/top.webp?3'),
+                     json_array(json_object('display','https://cards.scryfall.io/display/face0.webp?3')),
+                     '{}')",
+            [],
+        )
+        .unwrap();
+        // One of the eight live rows publishing Scryfall's error page as its artwork.
+        conn.execute(
+            "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,is_paper,image_uris,raw)
+             VALUES ('img-soon','Ghouls'' Night Out','mic','57','en','normal',1,
+                     json_object(
+                       'thumb','https://errors.scryfall.com/soon.jpg',
+                       'grid','https://errors.scryfall.com/soon.jpg',
+                       'display','https://errors.scryfall.com/soon.jpg',
+                       'art','https://errors.scryfall.com/soon.jpg'),'{}')",
+            [],
+        )
+        .unwrap();
+
+        for collapse in [None, Some(true)] {
+            let r = run_search(
+                &conn,
+                &SearchRequest {
+                    collapse,
+                    limit: 50,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+            let pick = |id: &str| r.items.iter().find(|c| c.id == id).unwrap();
+
+            let plain_row = pick("img-plain");
+            let plain = plain_row.image_uris.as_ref().unwrap();
+            assert_eq!(
+                plain[crate::image_uri::LIST_VARIANT],
+                "https://cards.scryfall.io/display/p.webp?7",
+                "a top-level blob answers ({collapse:?})"
+            );
+            // The narrowing to one variant, fenced on the DTO as well as in the module: a
+            // row that grew back to four would pass every other assertion here.
+            assert_eq!(
+                plain.keys().collect::<Vec<_>>(),
+                [crate::image_uri::LIST_VARIANT],
+                "the row carries the wall's variant and no other ({collapse:?})"
+            );
+
+            assert_eq!(
+                pick("img-meld").image_uris.as_ref().unwrap()[crate::image_uri::LIST_VARIANT],
+                "https://cards.scryfall.io/display/face0.webp?3",
+                "the face wins over the top-level image ({collapse:?})"
+            );
+
+            assert_eq!(
+                pick("img-soon").image_uris,
+                None,
+                "an error page is no image at all, never a URL ({collapse:?})"
+            );
+            assert_eq!(
+                pick("1").image_uris,
+                None,
+                "a printing with neither column carries nothing ({collapse:?})"
+            );
+
+            // The neighbours on either side of the eight new columns still land in their own
+            // fields — the failure a shifted index actually produces.
+            let bolt = pick("1");
+            assert!(!bolt.wishlisted, "{collapse:?}");
+            assert_eq!(bolt.printings, 1, "{collapse:?}");
+            assert_eq!(bolt.price_low, Some(400.5), "{collapse:?}");
+            assert_eq!(bolt.price_high, Some(400.5), "{collapse:?}");
         }
     }
 

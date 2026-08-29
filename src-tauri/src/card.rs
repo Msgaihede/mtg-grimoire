@@ -505,18 +505,18 @@ fn card_image_uri_inner(
     }
     // The face index is the literal `0`: this command takes no face, and face 0 is the whole
     // of what a printing's picture means here.
-    let row = crate::images::image_uri_row(conn, card_id, variant, 0)?;
-    // Face first, top-level second — `images::resolve`'s
-    // `face.or_else(|| (key.face == 0).then_some(top).flatten())` with the face pinned to 0,
-    // so the two cannot answer differently about the front of a card. A `meld` printing
-    // carries both, and its top-level image is its front and nothing else.
+    let row = crate::image_uri::row(conn, card_id, variant, 0)?;
+    // Face first, top-level second — literally `image_uri::for_face` with the face pinned to
+    // 0, which is the same call `images::resolve` makes, so the two cannot answer differently
+    // about the front of a card. A `meld` printing carries both, and its top-level image is
+    // its front and nothing else.
     //
     // **Deliberately without `resolve`'s host fence.** That function answers `NoImage` for a
     // URI off `cards.scryfall.io` or one with no `?<epoch>` cache-buster, because it is about
     // to cache the bytes; this command hands a URL back to a caller who is not caching, and
     // refusing one here would be a policy `resolve` owns and this does not. The query is
     // shared; the policy is not.
-    Ok(row.and_then(|(top, face)| face.or(top)))
+    Ok(row.and_then(|(top, face)| crate::image_uri::for_face(top, face, 0)))
 }
 
 // ---------------------------------------------------------------------------------------

@@ -248,13 +248,87 @@ loosely; it is not a measurement of your database."* The spike's 647 MB-then-7 M
 `0.0 MB cached. The oldest are removed first when the limit is reached.`, which is a rule about
 an eviction that cannot happen to nothing.
 
-## The image route has no caller yet
+## The image route has a caller now — and its first exercise found a race
 
-`src/lib/images.ts` still answers `mtgimg://localhost` only, so `cardImageUrl` returns a scheme
-no browser fetches and no service worker can intercept. `__IMAGE_ORIGIN__` therefore defaults to
-`https://cards.scryfall.io` and `vite.sw.config.ts` says to read it from `images.ts` once that
-file grows a web branch. The ledger is unaffected either way: it is pure data with no idea where
-the bytes came from, and every rule in it is under vitest.
+**Driven 2026-08-29** against the production web build (`npm run web:build`, served by
+`vite preview` on 4173, Chromium via CDP), on a corpus built in the browser from Scryfall's bulk
+file: **117 606 cards**.
+
+### It works
+
+`CardSummary` now carries the front face's `display` URL, `images.ts` answers it on the web build
+instead of `mtgimg://`, and the wall draws. Measured on the search wall with no query:
+
+- **63 `<img>` on the wall, 63 loaded, 0 broken, 0 on the `mtgimg://` scheme, 63 from
+  `cards.scryfall.io`** — every one `672 × 936`, which is the `display` variant and not one of the
+  other three.
+- The service worker is **active and controlling** on the production build, and
+  `grimoire-images` filled with **64 entries — the 63 pictures and the ledger**.
+- **`caches.match` on a tile's own URL returns a hit.** The route that "had no caller yet" has
+  one, and it stores what it is asked to.
+
+⚠️ **`npm run web:dev` registers no service worker at all**, so none of the caching half is
+reachable from the dev server — the first pass there showed `swActive: false` and zero caches
+while the pictures drew perfectly. **A dev-server reading cannot answer any question about this
+route.** Use `web:build` + `vite preview`.
+
+### The bug: the ledger is a read-modify-write race, and it under-counts ~9×
+
+**`image()` in `src/pwa/sw.ts` is not serialised**, and a wall of card art is the one workload
+that guarantees the collision:
+
+```ts
+const ledger = admit(await readLedger(cache), request.url, bytes, Date.now());
+await writeLedger(cache, await sweep(cache, ledger));
+```
+
+Every tile that misses runs that whole read-modify-write independently. A wall fires dozens at
+once, they interleave at each `await`, and **each writes back a ledger built from the copy it read
+before any of the others landed** — so all but the last are discarded. The cache-hit path has the
+same shape one line up (`touch(await readLedger(cache), …)`).
+
+**Measured from a genuinely empty `grimoire-images`, one wall load:**
+
+| | |
+| --- | --- |
+| Pictures actually in the cache | **78** |
+| Entries in the ledger (`size` and `used` alike) | **9** |
+| What the ledger believes it is holding | 585 000 B |
+| What it holds, by the ledger's own 65 KB average | 5 070 000 B |
+| **Under-count** | **≈ 8.7×** |
+
+**What that costs.** `DEFAULT_CAP_BYTES` is 256 MB, so at this ratio the cache would have to hold
+something like **2.2 GB** before the ledger ever reported being full — the cap does not bite, and
+the browser's own quota eviction takes over instead, on its own policy rather than on
+least-recently-used. And when `sweep` does run it can only see the handful of files it knows
+about, so it evicts from a tiny subset rather than from the true LRU set.
+
+**This is exactly the failure `measuredSize`'s doc comment was written to prevent** — *"the cap
+would never bite and the 256 MB would be a number in a settings panel and nowhere else"* —
+arriving by a different route. That comment guards the *value* of one entry; nothing guarded the
+number of entries that survive being written.
+
+**It is PR 5's bug, not the DTO change's.** The image work simply gave the route its first caller,
+which is what the 9a-era note *"the image route has no caller yet"* was quietly protecting.
+
+**Why no test caught it.** `imageLedger.ts`'s functions — `admit`, `touch`, `sweep`, `evictions`,
+`measuredSize` — are pure and correct in isolation, and `imageLedger.test.ts` exercises them that
+way. The defect is in the *caller*'s interleaving, which no unit test over pure functions can
+reach and which jsdom has no service worker to reproduce.
+
+**Not fixed here, deliberately.** The remedy is a design choice rather than a patch — serialise
+through a promise chain in the worker, batch the writes behind a debounce, or stop storing the
+ledger as one blob and give each URL its own cache entry so concurrent writers cannot clobber one
+another. Each has a different failure mode under eviction, and picking one belongs with its own
+change and its own tests.
+
+### One more thing, unmeasured
+
+`useImageRetry` appends `?retry=N` to whatever `src` it holds, and a Scryfall URL already carries
+`?<epoch>` — so a **retried** web tile requests `…webp?1783920578?retry=1`, where the second `?`
+becomes part of the query value. Scryfall will very probably still serve it, but it is a second
+cache key for one picture. Only reachable after an image error, so it was not hit on this pass and
+is recorded rather than guessed at.
 
 ## Timings
 
