@@ -3,7 +3,13 @@ import { FinishMark } from "@/components/FinishMark";
 import { GAME_CHANGER_LABEL, GameChangerMark } from "@/components/GameChangerMark";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { FINISH_LABEL, type Finish } from "@/lib/finish";
-import { CARD_ASPECT, cardImageUrl, WALL_CARD_VARIANT, type ImageVariant } from "@/lib/images";
+import {
+  CARD_ASPECT,
+  cardArtSrc,
+  cardImageUrl,
+  WALL_CARD_VARIANT,
+  type ImageVariant,
+} from "@/lib/images";
 import { type Treatment, treatmentTitle } from "@/lib/treatment";
 import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
@@ -69,6 +75,7 @@ export function CardArt({
   name,
   face = 0,
   variant = WALL_CARD_VARIANT,
+  imageUrl,
   selected = false,
   hoverZoom = false,
   finish = null,
@@ -98,6 +105,22 @@ export function CardArt({
    * 626×457 crop, which a caller drawing a cover passes explicitly.
    */
   variant?: ImageVariant;
+  /**
+   * The picture this row **already knows the address of** — `CardSummary.imageUris[variant]`,
+   * the front face's URL on `cards.scryfall.io`, resolved by the backend and filtered through
+   * its `is_fetchable` rule.
+   *
+   * **A URL, and never a platform.** This frame does not ask which build it is in: it hands
+   * both candidates to {@link cardArtSrc}, which is the one place that branch is written (see
+   * its comment for why it must stay one place). So on desktop this is ignored and the local
+   * cache wins; on web it is the only picture there is, and a row that carries none draws the
+   * no-art frame below rather than a broken `<img>`.
+   *
+   * Absent on every desktop-only surface, which is all of them but the search wall — the walls
+   * that are not routed in a browser have no such field on their rows, and `undefined` is
+   * exactly the same answer as "there is no picture" on the build where it matters.
+   */
+  imageUrl?: string | null;
   /**
    * Ringed, because this is the card an open pane is about. Gold says "focus" as an outline
    * and "state" as a ring everywhere else in the app, and it hugs the art rather than
@@ -157,7 +180,9 @@ export function CardArt({
   // belongs to a *slot* rather than to a card, so a new search hands it a different card
   // without remounting it, and the last card's failure must not be the new card's. Both live
   // in the hook — see it for why a failed image comes back twice.
-  const image = useImageRetry(cardId === null ? null : cardImageUrl(cardId, face, variant));
+  const image = useImageRetry(
+    cardArtSrc(cardId === null ? null : cardImageUrl(cardId, face, variant), imageUrl),
+  );
 
   return (
     <span

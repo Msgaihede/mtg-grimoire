@@ -5,6 +5,12 @@ const listen = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 vi.mock("@tauri-apps/api/event", () => ({ listen }));
 
+// Read as text, not imported as a module: this pair is the only thing in the build that
+// compares the hand-written mirror below with the crate it mirrors. `viewports.test.ts`
+// reads `tauri.conf.json` the same way, for the same reason — Rust owns the fact and
+// TypeScript only quotes it, so the quote is what can rot.
+import searchRs from "../../src-tauri/src/search.rs?raw";
+import ipcSource from "./ipc.ts?raw";
 import {
   AUTO_BRACKET,
   ipc,
@@ -1838,5 +1844,70 @@ describe("pairing", () => {
       table: "collection_entries",
       uid: "aa".repeat(16),
     });
+  });
+});
+/**
+ * **`src/lib/ipc.ts` is a hand-written mirror and nothing in the build type-checks it against
+ * the crate.** A field added to a Rust DTO and forgotten here is `undefined` at the call site
+ * with no type error anywhere; a field renamed on either side is the same. Every other pin in
+ * this file guards an *argument* name — the shape going out. This one guards the shape coming
+ * back, for the one DTO the card walls are built on.
+ *
+ * Read as text rather than reflected over, because there is nothing to reflect over: a
+ * TypeScript `interface` is erased at run time and the Rust struct is not in this process at
+ * all. `#[serde(rename_all = "camelCase")]` makes the mapping mechanical, which is what lets
+ * two lists of names be compared instead of two schemas.
+ */
+describe("the CardSummary mirror agrees with the Rust struct field for field", () => {
+  /** Field names of a `pub struct` in a Rust source file, in declaration order. */
+  const rustFields = (src: string, name: string): string[] => {
+    const start = src.indexOf(`pub struct ${name} {`);
+    expect(start, `\`pub struct ${name}\` is not in search.rs`).toBeGreaterThan(-1);
+    const body = src.slice(start).split("\n").slice(1);
+    const end = body.indexOf("}");
+    expect(end, `\`${name}\` has no closing brace`).toBeGreaterThan(0);
+    return body
+      .slice(0, end)
+      .map((line) => /^\s*pub\s+([a-z0-9_]+)\s*:/.exec(line)?.[1])
+      .filter((f): f is string => f !== undefined);
+  };
+
+  /** Field names of an exported `interface`, comments stripped first. */
+  const tsFields = (src: string, name: string): string[] => {
+    const start = src.indexOf(`export interface ${name} {`);
+    expect(start, `\`export interface ${name}\` is not in ipc.ts`).toBeGreaterThan(-1);
+    const body = src.slice(start).split("\n").slice(1);
+    const end = body.indexOf("}");
+    expect(end, `\`${name}\` has no closing brace`).toBeGreaterThan(0);
+    return body
+      .slice(0, end)
+      .join("\n")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .split("\n")
+      .map((line) => /^ {2}([A-Za-z0-9_]+)\??:/.exec(line)?.[1])
+      .filter((f): f is string => f !== undefined);
+  };
+
+  const camel = (s: string) => s.replace(/_([a-z0-9])/g, (_, c: string) => c.toUpperCase());
+
+  it("carries every field the Rust struct declares, and no field it does not", () => {
+    const rust = rustFields(searchRs, "CardSummary").map(camel);
+    const ts = tsFields(ipcSource, "CardSummary");
+
+    // Not `toEqual` on the raw arrays: the parsers are the thing under suspicion, so a pass
+    // has to mean "both found fields", never "both found nothing".
+    expect(rust.length).toBeGreaterThan(10);
+    expect(ts.length).toBeGreaterThan(10);
+    expect([...ts].sort()).toEqual([...rust].sort());
+  });
+
+  /**
+   * The field this whole pin was added for. Named on its own as well as counted above,
+   * because the failure it guards is silent in a way the others are not: a search wall on the
+   * web build draws no art at all without it, and jsdom has no network to notice.
+   */
+  it("names the front face's image URLs on both sides", () => {
+    expect(rustFields(searchRs, "CardSummary")).toContain("image_uris");
+    expect(tsFields(ipcSource, "CardSummary")).toContain("imageUris");
   });
 });
