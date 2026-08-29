@@ -14,10 +14,11 @@
 //! # The row handle here is the `sync_uid`, not the rowid
 //!
 //! Every statement this module builds addresses a row by `WHERE sync_uid = ?`. Ten of the
-//! eleven synced tables have an `INTEGER PRIMARY KEY` and `muted_tags` has none at all — it is
-//! `WITHOUT ROWID` on `(namespace, tag_id)` — so a rowid would need a second spelling of every
-//! statement for one table. The uid is `UNIQUE` on all eleven and every row has one, which is
-//! what `schema::mint_missing_uids` and the capture trigger's mint are between them for.
+//! twelve synced tables have an `INTEGER PRIMARY KEY` and two have none at all — `muted_tags`
+//! is `WITHOUT ROWID` on `(namespace, tag_id)` and `device_names` on `device_id` — so a rowid
+//! would need a second spelling of every statement for both. The uid is `UNIQUE` on all
+//! twelve and every row has one, which is what `schema::mint_missing_uids` and the capture
+//! trigger's mint are between them for.
 //!
 //! # Add-wins needs this device's own history, and `sync_ops` is where it is
 //!
@@ -159,14 +160,14 @@ struct Meta {
     /// `created_at` / `updated_at`. `deck_audit` and `muted_tags` carry their own stamp
     /// (`at`, `muted_at`) as an ordinary field and have neither column.
     timestamps: bool,
-    /// Whether the table can hold a sentence for the reader at all. Five of the eleven cannot:
-    /// `decks`, `deck_categories`, `deck_tags`, `deck_audit` and `muted_tags`.
+    /// Whether the table can hold a sentence for the reader at all. Six of the twelve cannot:
+    /// `decks`, `deck_categories`, `deck_tags`, `deck_audit`, `muted_tags` and `device_names`.
     needs_review: bool,
     /// The self-referencing column a cycle can form on, for the three folder tables.
     tree: Option<&'static str>,
 }
 
-const META: [Meta; 11] = [
+const META: [Meta; 12] = [
     Meta {
         table: "deck_folders",
         order: 0,
@@ -337,6 +338,25 @@ const META: [Meta; 11] = [
         }],
         counters: &[],
         timestamps: false,
+        needs_review: false,
+        tree: None,
+    },
+    Meta {
+        table: "device_names",
+        order: 11,
+        // **The grain is the device id, and it is `sqlite_autoindex_device_names_1` read as a
+        // predicate**: the table is `WITHOUT ROWID` on `device_id`, so its primary key IS its
+        // unique index. Two devices that each filed a name for the same peer — which is what
+        // pairing itself leaves behind — hold one row for it under two uids, so without this
+        // grain the far op is not a row to update but a row to insert: it hits that primary key,
+        // the group's savepoint rolls back, and it is deferred for ever. Measured by emptying
+        // this list: both convergence tests go red and neither name moves.
+        grains: &[Grain {
+            predicate: "device_id = ?",
+            sources: &[Source::Field("device_id")],
+        }],
+        counters: &[],
+        timestamps: true,
         needs_review: false,
         tree: None,
     },

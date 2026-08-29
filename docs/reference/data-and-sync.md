@@ -502,7 +502,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   failed every upgrade from a pre-27 folder with `cannot split: 'sync_identity' has no
   columns in common`. The whole record is [sync.md](sync.md).
   **v29 is sync's own rung and it is the widest one on either ladder.** It adds `sync_uid` to
-  all eleven synced tables with a unique index each, `needs_review` to the three folder tables,
+  all twelve synced tables with a unique index each, `needs_review` to the three folder tables,
   the op log (`sync_ops`, `sync_clock`, `sync_state`, `sync_peers`), and it **rebuilds
   `error_log`** so `source` can be `'relay'` — that vocabulary is inside a `CHECK` and SQLite
   has no `ALTER — CHECK`. The user side is **twenty-two tables and thirty-six indexes**

@@ -296,9 +296,11 @@ pub const LEGACY_SINGLE_FILE_VERSION: i64 = 26;
 /// that turned [`migrate_user`] from a version check into a ladder. 29 is sync's own: a
 /// `sync_uid` on every synced table, `needs_review` on the three folder tables, and the op
 /// log. 30 is the pairing baseline's one column, `sync_devices.baselined_at` — when this
-/// device last handed that peer a full copy of its rows. The user's ladder can never restart,
-/// because its rungs describe rows nothing else can produce.
-pub const USER_SCHEMA_VERSION: i64 = 30;
+/// device last handed that peer a full copy of its rows. 31 is the twelfth synced table,
+/// `device_names` — what each device in the group is called, and the only thing about a peer
+/// that travels, because the roster that holds the keys must never itself sync. The user's
+/// ladder can never restart, because its rungs describe rows nothing else can produce.
+pub const USER_SCHEMA_VERSION: i64 = 31;
 
 /// `corpus.db`'s version, on a number line of its own.
 ///
@@ -346,6 +348,10 @@ pub const TABLES: &[(&str, Side)] = &[
     ("deck_tags", Side::User),
     ("deck_undo", Side::User),
     ("decks", Side::User),
+    // A name is something a person typed, and nothing rebuilds it: no feed knows what the
+    // reader calls their phone. Synced (user schema v31) and the reader's are different
+    // questions, and this list only answers the second — `SYNCED_TABLES` answers the first.
+    ("device_names", Side::User),
     // Per-device and never synced, but nothing rebuilds it either — and it is the record of
     // *why* somebody might be about to throw the corpus away.
     ("error_log", Side::User),
@@ -419,10 +425,13 @@ pub fn side_of(table: &str) -> Option<Side> {
 
 /// The tables a pairing group keeps in step — spec §7.2, corrected against this file.
 ///
-/// **Eleven and not twelve.** The spec's list names `deck_allocations`, which schema v25
-/// dropped: which deck holds a card is now which folder its row sits in, so the work that table
-/// did is inside `collection_folders`, which is on this list. A table that does not exist cannot
-/// be synced, and the count moved rather than the intent.
+/// **Twelve, and the spec named neither of the two moves that got it there.** The spec's list
+/// names `deck_allocations`, which schema v25 dropped: which deck holds a card is now which
+/// folder its row sits in, so the work that table did is inside `collection_folders`, which is
+/// on this list. And `device_names` is user schema v31's, which the spec predates — the names
+/// of the devices in the group, while `sync_devices`, the roster holding their public keys,
+/// stays off this list for ever. A table that does not exist cannot be synced, and the count
+/// moved rather than the intent.
 ///
 /// **Sorted, and `sync_engine::capture::every_synced_table_is_on_the_census` holds it to the
 /// capture specs.** A new user table that nobody decides about is a table whose writes never
@@ -431,10 +440,12 @@ pub fn side_of(table: &str) -> Option<Side> {
 ///
 /// **This constant is deliberately absent from the v29 rung**, which spells its eleven
 /// `ALTER TABLE`s out literally. A migration step is history the day it ships: a step that read
-/// this list would try to add `sync_uid` to a twelfth table that will not exist until v30, on
-/// every database that upgrades through v29 afterwards. It is the same rule
-/// [`CARDS_COLUMNS`] states and every rung from v4 on repeats.
-pub const SYNCED_TABLES: [&str; 11] = [
+/// this list would try to add `sync_uid` to `device_names`, which no database has until it
+/// climbs v31, on every database that upgrades through v29 afterwards. **That is no longer a
+/// hypothetical** — v31 is the rung that made it real, and the v29 rung needed no edit for it
+/// precisely because it was written this way. It is the same rule [`CARDS_COLUMNS`] states and
+/// every rung from v4 on repeats.
+pub const SYNCED_TABLES: [&str; 12] = [
     "collection_entries",
     "collection_folders",
     "deck_audit",
@@ -443,6 +454,10 @@ pub const SYNCED_TABLES: [&str; 11] = [
     "deck_folders",
     "deck_tags",
     "decks",
+    // What each device in the group is called (user schema v31). The twelfth, and the one
+    // that is here while `sync_devices` — the roster beside it, holding the public keys —
+    // deliberately is not: a NAME travels, key material never does.
+    "device_names",
     "muted_tags",
     "wishlist_entries",
     "wishlist_folders",
@@ -3250,7 +3265,7 @@ const COMBO_INDEXES_SQL: &str = "
 /// Public because `VACUUM` needs it. Anything that renumbers `cards`' rowids leaves this
 /// index pointing at the wrong rows, and the failure is silent — see
 /// [`crate::maintenance::convert_to_incremental`], which calls this unconditionally.
-/// The twenty-two user tables and their thirty-six indexes, at [`USER_SCHEMA_VERSION`]'s
+/// The twenty-three user tables and their thirty-seven indexes, at [`USER_SCHEMA_VERSION`]'s
 /// shape, with `{schema}` where the file goes.
 ///
 /// **Copied verbatim out of a migrated database's own `sqlite_master`, not retyped from the
@@ -3639,6 +3654,17 @@ CREATE TABLE {schema}.sync_peers (
                  last_ctr INTEGER NOT NULL
              ) WITHOUT ROWID;
 
+CREATE TABLE {schema}.device_names (
+                 -- The device this names. A group member's id, not a foreign key:
+                 -- `sync_devices` does not sync, so a name can arrive before the roster row
+                 -- it describes and has to survive that.
+                 device_id TEXT PRIMARY KEY,
+                 name TEXT NOT NULL,
+                 created_at INTEGER NOT NULL,
+                 updated_at INTEGER NOT NULL,
+                 sync_uid TEXT
+             ) WITHOUT ROWID;
+
 CREATE UNIQUE INDEX {schema}.idx_collection_grain ON collection_entries (
                  card_id, finish, condition, lang, altered, signed, proxy, misprint,
                  coalesce(serial_number, ''), coalesce(grading, ''), coalesce(folder_id, 0)
@@ -3730,9 +3756,11 @@ CREATE INDEX {schema}.idx_sync_ops_unpushed
                  ON sync_ops (seq) WHERE pushed_at IS NULL;
 
 CREATE INDEX {schema}.idx_sync_ops_row ON sync_ops (tbl, uid);
+
+CREATE UNIQUE INDEX {schema}.idx_device_names_uid ON device_names (sync_uid);
 "#;
 
-/// Create the twenty-two user tables and their indexes in `schema`, at
+/// Create the twenty-three user tables and their indexes in `schema`, at
 /// [`USER_SCHEMA_VERSION`]'s shape.
 ///
 /// **One function, two callers, and that is deliberate**: [`crate::split::extract_user_file`]
@@ -4533,6 +4561,43 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
         tx.commit()?;
     }
 
+    // v31: the twelfth synced table — what each device in the group is called.
+    //
+    // **A name and nothing else, in a table of its own rather than a column on
+    // `sync_devices`.** That roster holds every member's public key and is deliberately
+    // absent from [`SYNCED_TABLES`], so a rename written there reaches no other device and a
+    // joiner goes on calling its peer "Paired device" for ever. Widening the roster is not
+    // the fix: it would put key material on the wire, which is the one thing sync's shape
+    // exists to avoid. A name is the reader's own text and travels like any other row they
+    // authored.
+    //
+    // `WITHOUT ROWID` on a TEXT primary key, which is `muted_tags`' shape and the precedent
+    // for a synced table keyed by something other than a rowid — and, like `muted_tags`, its
+    // primary key is on the capture spec's field list, because the far device cannot build
+    // the row without it. `device_id` is **not** a foreign key for the same reason it is not
+    // a column on `sync_devices`: that table does not sync, so a name can arrive before the
+    // roster row it describes and has to survive that.
+    if v < 31 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(
+            "CREATE TABLE device_names (
+                 -- The device this names. A group member's id, not a foreign key:
+                 -- `sync_devices` does not sync, so a name can arrive before the roster row
+                 -- it describes and has to survive that.
+                 device_id TEXT PRIMARY KEY,
+                 name TEXT NOT NULL,
+                 created_at INTEGER NOT NULL,
+                 updated_at INTEGER NOT NULL,
+                 sync_uid TEXT
+             ) WITHOUT ROWID;
+             CREATE UNIQUE INDEX idx_device_names_uid ON device_names (sync_uid);",
+        )?;
+        // Literal `31`, for the reason every step before it writes its own: this step is what
+        // *makes* a database version 31.
+        tx.execute_batch("PRAGMA main.user_version = 31;")?;
+        tx.commit()?;
+    }
+
     // **The clock, repaired on every launch at every version — and this is not belt-and-braces.**
     //
     // Every capture trigger ends `FROM sync_clock c, sync_identity i, sync_group g`. That is a
@@ -5275,8 +5340,8 @@ pub(crate) mod tests {
             )
             .unwrap();
         assert_eq!(
-            stray, 22,
-            "the user file holds the twenty-two and nothing else"
+            stray, 23,
+            "the user file holds the twenty-three and nothing else"
         );
     }
 
@@ -5423,8 +5488,8 @@ pub(crate) mod tests {
 
         assert_eq!(
             want.len(),
-            60,
-            "twenty-two tables, thirty-six indexes, and the two `sqlite_autoindex` rows a \n             TEXT PRIMARY KEY brings with it — `sync_devices`, `sync_state` and \n             `sync_peers` are `WITHOUT ROWID`, so each one's TEXT primary key IS the \n             table and brings no index of its own"
+            62,
+            "twenty-three tables, thirty-seven indexes, and the two `sqlite_autoindex` rows a \n             TEXT PRIMARY KEY brings with it — `sync_devices`, `sync_state`, \n             `sync_peers` and `device_names` are `WITHOUT ROWID`, so each one's TEXT primary key IS the \n             table and brings no index of its own"
         );
         for (w, g) in want.iter().zip(got.iter()) {
             assert_eq!(w, g, "{} {} differs from the ladder's", g.0, g.1);
@@ -5498,7 +5563,7 @@ pub(crate) mod tests {
     /// The user side, spelled out. A table moving between the two files is a data migration,
     /// never a diff nobody noticed.
     #[test]
-    fn the_user_side_is_the_twenty_two_tables_no_feed_can_rebuild() {
+    fn the_user_side_is_the_twenty_three_tables_no_feed_can_rebuild() {
         let mut user: Vec<&str> = TABLES
             .iter()
             .filter(|(_, s)| *s == Side::User)
@@ -5519,6 +5584,7 @@ pub(crate) mod tests {
                 "deck_tags",
                 "deck_undo",
                 "decks",
+                "device_names",
                 "error_log",
                 "muted_tags",
                 "sync_clock",
@@ -5626,13 +5692,28 @@ pub(crate) mod tests {
     /// `DROP COLUMN` would refuse a column an index named.
     const UNDO_V30: &str = "ALTER TABLE sync_devices DROP COLUMN baselined_at;";
 
+    /// And v31's synced name table.
+    ///
+    /// Owed for [`UNDO_V13`]'s **loud** reason rather than [`UNDO_V14`]'s quiet one: the rung
+    /// is a plain `CREATE TABLE`, not `CREATE TABLE IF NOT EXISTS`, so a fixture that left
+    /// `device_names` standing dies at `table already exists` on the way back up — a failure
+    /// no real upgrade can produce, and one that takes every unrelated test in the chain with
+    /// it rather than only the ones about names.
+    ///
+    /// **It runs first, before [`UNDO_V30`]**, for that constant's stated reason: a rewind
+    /// walks the ladder backwards.
+    ///
+    /// **No index needs a line of its own**, [`UNDO_V20`]'s rule: `DROP TABLE` takes
+    /// `idx_device_names_uid` with it.
+    const UNDO_V31: &str = "DROP TABLE IF EXISTS device_names;";
+
     /// A user file at 28 — the shape every machine that upgraded before sync landed carries,
     /// and the only population the v29 rung is *for*.
     fn user_file_at_28() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V30} {UNDO_V29} PRAGMA main.user_version = 28;"
+            "{UNDO_V31} {UNDO_V30} {UNDO_V29} PRAGMA main.user_version = 28;"
         ))
         .unwrap();
         conn
@@ -5648,7 +5729,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V30} {UNDO_V29} {UNDO_V28} PRAGMA main.user_version = 27;"
+            "{UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} PRAGMA main.user_version = 27;"
         ))
         .unwrap();
         conn
@@ -5995,7 +6076,67 @@ pub(crate) mod tests {
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
         assert_eq!(version, USER_SCHEMA_VERSION);
-        assert_eq!(USER_SCHEMA_VERSION, 30);
+    }
+
+    /// v31's table exists on an UPGRADED file, and the ladder is what put it there.
+    ///
+    /// A name is the reader's, and it is the one thing about a paired device that travels —
+    /// so it is a table of its own rather than a column on `sync_devices`, which holds the
+    /// keys and must never sync.
+    #[test]
+    fn a_device_name_survives_its_own_device_row() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate_single_file(&conn).unwrap();
+        migrate_user(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO device_names (device_id, name, created_at, updated_at, sync_uid)
+             VALUES ('dev-a', 'MAIN-PC', 0, 0, 'u1')",
+            [],
+        )
+        .unwrap();
+        let n: String = conn
+            .query_row(
+                "SELECT name FROM device_names WHERE device_id = 'dev-a'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, "MAIN-PC");
+        let v: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(v, USER_SCHEMA_VERSION);
+        assert_eq!(USER_SCHEMA_VERSION, 31);
+    }
+
+    /// **It is synced, and `sync_devices` still is not.** The whole point is that a NAME
+    /// travels while the keys beside it do not.
+    #[test]
+    fn names_sync_and_the_roster_that_holds_keys_does_not() {
+        assert!(SYNCED_TABLES.contains(&"device_names"));
+        assert!(!SYNCED_TABLES.contains(&"sync_devices"));
+        assert!(!SYNCED_TABLES.contains(&"sync_identity"));
+        assert!(!SYNCED_TABLES.contains(&"sync_group"));
+        assert_eq!(SYNCED_TABLES.len(), 12);
+    }
+
+    /// The table carries no key material. A column added here later that did would be a key
+    /// on the wire, which is the one thing this design exists to avoid.
+    #[test]
+    fn the_name_table_holds_no_key_material() {
+        let conn = memory_pair();
+        let mut stmt = conn
+            .prepare("SELECT name FROM pragma_table_info('device_names')")
+            .unwrap();
+        let cols: Vec<String> = stmt
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            cols,
+            ["device_id", "name", "created_at", "updated_at", "sync_uid"]
+        );
     }
 
     /// A v28 file walks up keeping every row it had, and twice is the same as once.
@@ -6047,7 +6188,8 @@ pub(crate) mod tests {
     ///
     /// Point `MTG_SPLIT_FIXTURE` at a **copy** of a real `mtg.db` — the escape hatch
     /// [`crate::split::tests::the_real_database_converts_with_every_row_intact`] already uses —
-    /// and this converts it, winds the user file back to 28 with [`UNDO_V30`] and [`UNDO_V29`],
+    /// and this converts it, winds the user file back to 28 with [`UNDO_V31`], [`UNDO_V30`]
+    /// and [`UNDO_V29`],
     /// and climbs the rungs over the reader's own rows. **Winding back is the whole trick**:
     /// `split::convert` stamps head, so a converted file never climbs anything and a test that
     /// only converted would prove nothing about the rung.
@@ -6066,7 +6208,7 @@ pub(crate) mod tests {
 
         let conn = crate::db::open_write(dir.path()).unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V30} {UNDO_V29} PRAGMA main.user_version = 28;"
+            "{UNDO_V31} {UNDO_V30} {UNDO_V29} PRAGMA main.user_version = 28;"
         ))
         .unwrap();
         let before: Vec<(String, i64)> = SYNCED_TABLES

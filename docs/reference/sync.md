@@ -849,7 +849,8 @@ of the two ways it happens:
 
 | Object | What it is |
 | --- | --- |
-| `sync_uid TEXT` + `idx_<table>_uid` on all eleven synced tables | a name every device agrees on |
+| `sync_uid TEXT` + `idx_<table>_uid` on all twelve synced tables | a name every device agrees on |
+| `device_names` (v31) | `device_id` → `name`, and nothing else. **The twelfth synced table**, so a rename reaches the group and a joiner stops reading "Paired device". `sync_devices` stays unsynced beside it, because it holds keys |
 | `needs_review TEXT` on `deck_folders`, `wishlist_folders`, `collection_folders` | §7.4's second surfaced outcome had nowhere to go |
 | `sync_ops` | the op log: `tbl`, `uid`, `kind`, `fields`, `counters`, `parents`, the stamp, `pushed_at` |
 | `sync_clock` | one row: the hybrid logical clock, **seeded** |
