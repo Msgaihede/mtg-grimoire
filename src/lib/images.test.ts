@@ -1,5 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { isWebTarget } from "@/pwa/target";
+import imageUriRs from "../../src-tauri/src/image_uri.rs?raw";
 import {
+  cardArtSrc,
   cardImageUrl,
   deckCoverUrl,
   imageOrigin,
@@ -8,7 +11,22 @@ import {
   IMAGE_RETRY_CEILING_MS,
   IMAGE_RETRY_FLOOR_MS,
   IMAGE_RETRY_SPREAD_MS,
+  WALL_CARD_VARIANT,
 } from "@/lib/images";
+
+/**
+ * Which build is answering. `isWebTarget()` is a `define` folded away at build time, so the
+ * web branch is unreachable from a suite that runs on `vite.config.ts` — mocking the module is
+ * the only way to exercise it, and it is the seam `src/pwa/target.ts`'s own comment names.
+ *
+ * `false` by default, because that is what the real function answers here — pinned below rather
+ * than assumed, so a mock that has quietly become the *only* thing saying "desktop" is caught.
+ */
+vi.mock("@/pwa/target", () => ({ isWebTarget: vi.fn(() => false) }));
+
+beforeEach(() => {
+  vi.mocked(isWebTarget).mockReturnValue(false);
+});
 
 /**
  * Tauri serves a custom protocol from a different origin on every platform: Windows and
@@ -43,6 +61,70 @@ describe("cardImageUrl", () => {
 
     expect(front).not.toBe(back);
     expect(back).toMatch(/\/1$/);
+  });
+});
+
+/**
+ * The desktop/web branch, which is the whole of what a card frame has to decide and is
+ * deliberately not decided in a component.
+ *
+ * Two different pictures of one card: the local cache's, re-encoded to the variant's exact
+ * size and reachable only through a Tauri custom protocol, and Scryfall's own URL, which is
+ * the only one a browser can fetch because **wasm cannot register a URL scheme**. Getting it
+ * backwards is silent in both directions — a desktop wall that refetched every tile over the
+ * network still draws cards, and a browser handed `mtgimg://` draws broken images with nothing
+ * on screen saying why.
+ */
+describe("cardArtSrc", () => {
+  const PROTOCOL = cardImageUrl("0000419b-0bba-4488-8f7a-6194544ce91d", 0, "display");
+  const SUPPLIED = "https://cards.scryfall.io/large/front/0/0/0000419b.jpg?1706230661";
+
+  /**
+   * **The row carries a URL on both builds** — one DTO, one shape — so "ignored" rather than
+   * "not passed" is what the desktop side has to be true of. A wall that preferred it would
+   * refetch a screenful of art the cache already holds, at Scryfall's expense, every scroll.
+   */
+  it("draws the cached protocol picture on the desktop build, even for a row carrying its own URL", () => {
+    expect(cardArtSrc(PROTOCOL, SUPPLIED)).toBe(PROTOCOL);
+    expect(cardArtSrc(PROTOCOL, SUPPLIED)).not.toContain("scryfall.io");
+  });
+
+  it("draws the row's own URL verbatim on the web build", () => {
+    vi.mocked(isWebTarget).mockReturnValue(true);
+
+    expect(cardArtSrc(PROTOCOL, SUPPLIED)).toBe(SUPPLIED);
+  });
+
+  /**
+   * `null` is the frame's *no art* state, and it has to be the answer rather than a fallback to
+   * the protocol URL: a printing whose only picture is Scryfall's `soon.jpg` placeholder reaches
+   * the page with no URL at all, and a browser handed `mtgimg://` for it would draw a broken
+   * `<img>` where a named, empty card frame belongs.
+   */
+  it("answers null on web for a printing with no picture, never the unreachable protocol URL", () => {
+    vi.mocked(isWebTarget).mockReturnValue(true);
+
+    expect(cardArtSrc(PROTOCOL, undefined)).toBeNull();
+    expect(cardArtSrc(PROTOCOL, null)).toBeNull();
+  });
+
+  /** An orphan — a row whose card has left the database — fetches nothing on either build. */
+  it("answers null for a row with no card at all", () => {
+    expect(cardArtSrc(null, undefined)).toBeNull();
+    vi.mocked(isWebTarget).mockReturnValue(true);
+    expect(cardArtSrc(null, undefined)).toBeNull();
+  });
+
+  /**
+   * The mock above defaults to `false` because that is what the *real* module answers under
+   * vitest — `vite.config.ts` defines `__CORE__` as `"tauri"` and the suite runs on that config.
+   * Stated rather than assumed: without this the desktop assertions are checking a mock's
+   * default and would go on passing if the shipped default flipped.
+   */
+  it("is the desktop build that vitest actually runs, which is what the default above states", async () => {
+    const actual = await vi.importActual<typeof import("@/pwa/target")>("@/pwa/target");
+
+    expect(actual.isWebTarget()).toBe(false);
   });
 });
 
@@ -106,5 +188,38 @@ describe("imageRetryDelayMs", () => {
 
     expect(delays.size).toBeGreaterThan(1);
     expect(Math.max(...delays)).toBeLessThan(IMAGE_RETRY_FLOOR_MS + IMAGE_RETRY_SPREAD_MS);
+  });
+});
+
+/**
+ * **The wall's variant is spelled in two languages, and this is the only thing that compares
+ * them.**
+ *
+ * `src-tauri/src/image_uri.rs`'s `LIST_VARIANT` decides which URL `CardSummary` carries — it is
+ * the one string in that module that reaches SQL unbound — and `WALL_CARD_VARIANT` decides which
+ * key `CardGrid` reads back out of the map. **They are the same fact written twice**, and the
+ * failure when they disagree is silent in the specific way this file's neighbours already
+ * document: the DTO carries one variant, the tile asks for another, the lookup misses, and every
+ * card on a browser's wall draws the no-art frame — which is exactly what a card with no picture
+ * is *supposed* to look like. Nothing is thrown and nothing is logged.
+ *
+ * The `?raw` import is `viewports.test.ts`'s idiom for the same shape of problem — a fact Rust
+ * owns and TypeScript only quotes — and it is used here for the same reason: this project has no
+ * `@types/node` and cannot reach `node:fs`.
+ */
+const LIST_VARIANT = /pub const LIST_VARIANT: &str = "([a-z]+)";/.exec(imageUriRs)?.[1];
+
+describe("the wall's variant, across the language boundary", () => {
+  it("is the same string Rust puts on the DTO", () => {
+    // Its own assertion: a renamed constant makes the capture `undefined`, and
+    // `expect(undefined).toBe(...)` would read as a *changed* variant rather than a missing
+    // one — two different repairs.
+    expect(LIST_VARIANT).toBeDefined();
+    expect(WALL_CARD_VARIANT).toBe(LIST_VARIANT);
+  });
+
+  it("is a variant this app actually draws", () => {
+    // Rust fences that the name is a column that exists; nothing over here did until now.
+    expect(IMAGE_VARIANTS).toContain(WALL_CARD_VARIANT);
   });
 });

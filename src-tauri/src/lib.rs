@@ -15,6 +15,12 @@ pub mod db;
 pub mod errors;
 pub mod feed;
 pub mod filters;
+/// **The resolution rule under the image cache, and the reason it is on this side of the
+/// map while [`images`] is not.** Two columns of `cards`, the precedence between them and
+/// one predicate over a string — no filesystem, no protocol handler, nothing a browser
+/// lacks. `search.rs` puts a card's URL on a result row from here, and `images` composes
+/// the same three pieces into a cached fetch.
+pub mod image_uri;
 pub mod index;
 pub mod ingest;
 pub mod legalities;

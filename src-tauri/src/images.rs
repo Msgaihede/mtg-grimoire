@@ -11,7 +11,7 @@
 //!   URI they came from. No clock, no mtime, nothing a FAT32 stick can round away.
 //!   The corollary is a rule in its own right: a URI with *no* cache-buster is one this
 //!   cache must never hold, because bytes stored under it would answer "current" for the
-//!   life of the installation ([`is_fetchable`]).
+//!   life of the installation ([`crate::image_uri::is_fetchable`]).
 //! * **The cache is disposable.** `image_cache` records what was fetched; deleting
 //!   `data/images` is always safe and costs only re-downloads (spec §8).
 
@@ -19,6 +19,10 @@
 // lockout and this cache's are separate deadlines over separate hosts, but they are one
 // rule, and a second copy of a clamp is a second place for it to drift.
 use crate::scryfall::{self, rate_limit_penalty, ScryfallError};
+// The host allowlist and the resolution rule live in [`crate::image_uri`], which compiles
+// for wasm; this module is the cache that reads them. IMAGE_HOST is imported rather than
+// re-spelled because the stderr line below names it.
+use crate::image_uri::IMAGE_HOST;
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -189,100 +193,22 @@ pub enum Resolution {
     Unknown,
 }
 
-/// The only host this app will fetch a card image from.
-///
-/// The trailing slash is the entire check. `https://cards.scryfall.io.evil.test/…` and
-/// `https://cards.scryfall.io@evil.test/…` both fail it, because the byte after the host
-/// has to be the path separator — which is what makes a `starts_with` a host comparison
-/// rather than a substring search.
-const IMAGE_HOST: &str = "https://cards.scryfall.io/";
-
-/// Does `uri` carry the `?<epoch>` cache-buster the whole invalidation rule stands on?
-///
-/// Digits, not merely a query string: `?<epoch>` is `image_updated_at`, and the point is
-/// that it *moves* when Scryfall re-scans the card. A `?` followed by anything else is not
-/// a version, it is punctuation.
-fn has_cache_buster(uri: &str) -> bool {
-    uri.split_once('?')
-        .is_some_and(|(_, v)| !v.is_empty() && v.bytes().all(|b| b.is_ascii_digit()))
-}
-
-/// Is this a URI worth fetching — and, more to the point, worth *keeping*?
-///
-/// Both halves answer a live defect rather than a hypothesis. Eight printings in the
-/// current bulk data (`plst UMA-149`, `mic 55`–`58`, three more) publish
-/// `https://errors.scryfall.com/soon.jpg` in all four `image_uris` slots: Scryfall's own
-/// error page, as a JPEG, on a host that is not the image CDN, with nothing after it.
-/// Fetched, those bytes would be written as `<id>-0.webp` and — because [`is_current`]
-/// compares URIs and this URI can never change — served as that card's artwork forever.
-/// No re-sync would clear it and no re-scan could, because there is nothing there to
-/// re-scan. Deleting `data/images` would not even help: the next request would fetch the
-/// same error page again.
-///
-/// So the version rule is the one that catches today's eight, and the host allowlist is
-/// the belt for whatever the next placeholder host turns out to be.
-///
-/// Scryfall says the same thing in a second place — all eight carry `image_status`
-/// `'missing'`, and the column is already on `cards` — but that is a *label* on the data
-/// and this is a property of the URI itself: a versionless URI is uncacheable whatever any
-/// status field claims, and it is the one of the two that cannot be wrong. `image_status`
-/// is the right signal for the other half of spec §5, re-fetching when a picture improves
-/// from `lowres`/`placeholder`, which is Plan-3 work.
-fn is_fetchable(uri: &str) -> bool {
-    // `cfg!` the macro, not the attribute: `is_image_host` stays compiled and directly
-    // tested in both configurations rather than being swapped for something weaker. The
-    // widening exists because the fetch tests below run against an `httpmock` server on
-    // loopback, and it is the only seam in this predicate.
-    has_cache_buster(uri) && (is_image_host(uri) || (cfg!(test) && is_loopback(uri)))
-}
-
-fn is_image_host(uri: &str) -> bool {
-    uri.starts_with(IMAGE_HOST)
-}
-
-fn is_loopback(uri: &str) -> bool {
-    uri.starts_with("http://127.0.0.1:") || uri.starts_with("http://localhost:")
-}
-
-/// The two columns a printing's picture can be in, for one variant and one face.
-///
-/// `(top_level, face)` — `image_uris` and `card_faces[face].image_uris`, spec §5's pair.
-/// `None` for a card that is not in the corpus.
-///
-/// One function because two readers want the same row and apply **different policies** to it:
-/// [`resolve`] falls back from face to top-level only for face 0 and then puts the answer
-/// through [`is_fetchable`] and the cache-buster check, while
-/// `card::card_image_uri_inner` pins the face to 0 and deliberately skips both fences. That
-/// difference is real and stays; what may not differ is which two columns the picture lives
-/// in, and this is now the one place that says so.
-///
-/// **Read-only by contract**, like [`resolve`]: every caller passes `db_read`.
-#[allow(clippy::type_complexity)]
-pub(crate) fn image_uri_row(
-    conn: &Connection,
-    card_id: &str,
-    variant: &str,
-    face: i64,
-) -> Result<Option<(Option<String>, Option<String>)>, String> {
-    conn.query_row(
-        "SELECT json_extract(image_uris, '$.' || ?2),
-                json_extract(face_image_uris, '$[' || ?3 || '].' || ?2)
-         FROM cards WHERE id = ?1",
-        params![card_id, variant, face],
-        |r| Ok((r.get(0)?, r.get(1)?)),
-    )
-    .optional()
-    .map_err(|e| e.to_string())
-}
-
 /// Resolve a key against `cards`, applying spec §5's rule: `image_uris` if present, else
 /// `card_faces[i].image_uris`.
+///
+/// **The rule itself is [`crate::image_uri`]'s and this is the cache's reading of it.** Which
+/// two columns, the face-first precedence and [`crate::image_uri::is_fetchable`] all live in a
+/// module that compiles for wasm as well, because `search.rs` needs the same three answers to
+/// put a URL on a result row and a second copy of a precedence is exactly the drift this
+/// repo's golden fence exists to prevent. What is left here is what the *cache* adds: a
+/// placeholder for each way an image can be absent, and one line on stderr when the allowlist
+/// and Scryfall's data stop agreeing.
 ///
 /// **Read-only by contract.** Every caller passes the `db_read` connection: a card
 /// picture must not queue behind an ingest — ~80 s of writing, in 2 000-row batches —
 /// and it must never be the handle that takes a write lock.
 pub fn resolve(conn: &Connection, key: &ImageKey) -> Result<Resolution, String> {
-    let row = image_uri_row(conn, &key.card_id, key.variant.key(), key.face as i64)?;
+    let row = crate::image_uri::row(conn, &key.card_id, key.variant.key(), key.face as i64)?;
 
     let Some((top, face)) = row else {
         return Ok(Resolution::Unknown);
@@ -290,13 +216,13 @@ pub fn resolve(conn: &Connection, key: &ImageKey) -> Result<Resolution, String> 
     // Face first for anything past the front: a transform's back exists only on the face,
     // and a `meld` card's top-level image is its front and nothing else. Falling back to
     // the top-level image for face 1 would show the front of the card on its own back.
-    if let Some(uri) = face.or_else(|| (key.face == 0).then_some(top).flatten()) {
+    if let Some(uri) = crate::image_uri::for_face(top, face, key.face) {
         // A URI this cache cannot version — or one from a host that does not serve card
         // art — is Scryfall saying "no image" in a shape that looks like a picture. It is
         // answered as the gap it is, here, before any of it reaches the network or the
         // disk. `NoImage` on either face: "Scryfall has no image for this" is exactly what
         // a `soon.jpg` means, and it stays true of a back face that never got scanned.
-        return Ok(if is_fetchable(&uri) {
+        return Ok(if crate::image_uri::is_fetchable(&uri) {
             Resolution::Uri(uri)
         } else {
             // Once per process, not once per tile: a CDN move would make this true of every
@@ -305,7 +231,7 @@ pub fn resolve(conn: &Connection, key: &ImageKey) -> Result<Resolution, String> 
             // saying "no image", which the placeholder already says. An *off-host* URI is
             // different: it means the allowlist and Scryfall's data no longer agree, and
             // the symptom (every card shows "No image") looks nothing like the cause.
-            if !(is_image_host(&uri) || (cfg!(test) && is_loopback(&uri))) {
+            if !crate::image_uri::is_allowed_host(&uri) {
                 static WARNED: AtomicBool = AtomicBool::new(false);
                 if !WARNED.swap(true, Ordering::Relaxed) {
                     eprintln!(
@@ -1915,90 +1841,6 @@ mod tests {
             assert!(
                 matches!(r, Resolution::Missing(Placeholder::NoImage)),
                 "{variant:?} must not resolve to an error page: {r:?}"
-            );
-        }
-    }
-
-    /// The one row both readers take. `card::card_image_uri_inner` and [`resolve`] each apply
-    /// their own policy to it — the card pane deliberately skips the host fence — but they must
-    /// never disagree about *which two columns* a printing's picture is in.
-    #[test]
-    fn image_uri_row_answers_both_columns_and_none_for_an_unknown_card() {
-        let conn = seeded();
-
-        // The plain printing: a top-level image for every variant, no per-face ones.
-        let (top, face) = image_uri_row(&conn, "0000419b-0bba-4488-8f7a-6194544ce91d", "grid", 0)
-            .unwrap()
-            .expect("a card that is in the corpus answers a row");
-        assert_eq!(
-            top.as_deref(),
-            Some("https://cards.scryfall.io/grid/front/0/0/x.webp?17")
-        );
-        assert_eq!(face, None, "a normal printing carries no per-face images");
-
-        // The transform: per-face images and no top-level one, and face 1 is its own picture.
-        // Which of the two a caller then *uses* is the caller's policy, not this function's.
-        let (top, face) = image_uri_row(&conn, "ab000000-0000-0000-0000-000000000001", "grid", 1)
-            .unwrap()
-            .unwrap();
-        assert_eq!(top, None, "a transform carries no top-level image");
-        assert_eq!(
-            face.as_deref(),
-            Some("https://cards.scryfall.io/grid/back/a/b/y.webp?9")
-        );
-
-        assert!(
-            image_uri_row(&conn, "not-a-card", "grid", 0)
-                .unwrap()
-                .is_none(),
-            "an unknown card is None, not an error"
-        );
-    }
-
-    /// The two halves of [`is_fetchable`], separately, because they fail for different
-    /// reasons and only one of them is a security boundary.
-    ///
-    /// The host check is a `starts_with` and that is only a host comparison because of the
-    /// trailing slash — the near-misses below are the ones that would make it a substring
-    /// search instead, and they are exactly the shapes an attacker-supplied `image_uris`
-    /// would take if the bulk file were ever tampered with in transit.
-    #[test]
-    fn only_a_versioned_uri_on_the_image_host_is_worth_fetching() {
-        for good in [
-            "https://cards.scryfall.io/grid/front/0/0/x.webp?1699999999",
-            "https://cards.scryfall.io/art/back/a/b/y.webp?0",
-        ] {
-            assert!(has_cache_buster(good), "{good}");
-            assert!(is_image_host(good), "{good}");
-            assert!(is_fetchable(good), "{good}");
-        }
-
-        // No version: nothing here can ever be invalidated, whoever serves it.
-        for versionless in [
-            "https://errors.scryfall.com/soon.jpg",
-            "https://cards.scryfall.io/grid/front/0/0/x.webp",
-            "https://cards.scryfall.io/grid/front/0/0/x.webp?",
-            "https://cards.scryfall.io/grid/front/0/0/x.webp?v=17",
-            "https://cards.scryfall.io/grid/front/0/0/x.webp?latest",
-            "",
-        ] {
-            assert!(!has_cache_buster(versionless), "{versionless}");
-            assert!(!is_fetchable(versionless), "{versionless}");
-        }
-
-        // Right shape, wrong host — including the two that a substring check would wave
-        // through, where the real host is the *prefix* of a hostile one or its userinfo.
-        for off_host in [
-            "https://errors.scryfall.com/soon.jpg?17",
-            "https://cards.scryfall.io.evil.test/grid/x.webp?17",
-            "https://cards.scryfall.io@evil.test/grid/x.webp?17",
-            "https://evil.test/https://cards.scryfall.io/grid/x.webp?17",
-            "http://cards.scryfall.io/grid/x.webp?17",
-        ] {
-            assert!(has_cache_buster(off_host), "{off_host}");
-            assert!(
-                !is_image_host(off_host),
-                "{off_host} must not read as the CDN"
             );
         }
     }
