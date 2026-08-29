@@ -22,6 +22,40 @@ pub enum Kind {
     Del,
 }
 
+/// What the emitter had already folded into its claims when it read its tables.
+///
+/// Not a watermark write. See spec §9.1: this filters ONE batch and `sync_peers` is untouched.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Horizon {
+    /// device id → the highest stamp from that device already inside the claims.
+    pub seen: BTreeMap<String, Hlc>,
+}
+
+impl Horizon {
+    /// Is `op` already inside the claims this horizon belongs to?
+    ///
+    /// **Only ever asked of a non-baseline `Put`** — the caller enforces the other two
+    /// exemptions, because a `Horizon` cannot see an op's kind without being handed one.
+    ///
+    /// `<=` and not `<`: a stamp exactly at the horizon is one the emitter had folded in.
+    pub fn covers(&self, at: &Hlc) -> bool {
+        self.seen.get(&at.device).is_some_and(|h| at <= h)
+    }
+
+    /// Fold another horizon in, keeping the greater stamp per device.
+    pub fn absorb(&mut self, other: &Horizon) {
+        for (device, stamp) in &other.seen {
+            match self.seen.get(device) {
+                Some(held) if held >= stamp => {}
+                _ => {
+                    self.seen.insert(device.clone(), stamp.clone());
+                }
+            }
+        }
+    }
+}
+
 /// One change to one row, as it travels.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -39,6 +73,13 @@ pub struct Op {
     #[serde(default)]
     pub parents: BTreeMap<String, Option<String>>,
     pub at: Hlc,
+    /// A state CLAIM rather than a change: `counters` hold values. Spec §8.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub baseline: bool,
+    /// Carried by the FIRST op of each baseline batch, so every stored relay row has one.
+    /// The receiver unions whatever it finds. Spec §9.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub horizon: Option<Horizon>,
 }
 
 /// What a set of ops about one row adds up to.
@@ -50,6 +91,8 @@ pub struct Resolved {
     /// Summed deltas.
     pub counters: BTreeMap<String, i64>,
     pub parents: BTreeMap<String, (Option<String>, Hlc)>,
+    /// Per counter key, the greatest value any baseline op claimed. Spec §8.2.
+    pub claims: BTreeMap<String, i64>,
     pub deleted: bool,
     /// A delete lost the race and the row survives — §7.4's first surfaced outcome.
     pub resurrected: bool,
@@ -118,8 +161,19 @@ pub fn fold(ops: &[Op]) -> Resolved {
                         }
                     }
                 }
-                for (k, d) in &op.counters {
-                    *out.counters.entry(k.clone()).or_insert(0) += d;
+                // **A claim is not a delta and the two must never meet in one map.** Summing
+                // them is §8.1's failure: a baseline claiming 5 plus the `+1` already inside
+                // that 5 inserts the row at 6. `max` across claims is §8's rule — two devices
+                // holding 4 and 3 of one printing hold 4 between them, not 7.
+                if op.baseline {
+                    for (k, v) in &op.counters {
+                        let held = out.claims.entry(k.clone()).or_insert(*v);
+                        *held = (*held).max(*v);
+                    }
+                } else {
+                    for (k, d) in &op.counters {
+                        *out.counters.entry(k.clone()).or_insert(0) += d;
+                    }
                 }
                 for (k, p) in &op.parents {
                     match out.parents.get(k) {
@@ -187,6 +241,8 @@ mod tests {
                 .unwrap_or_default(),
             parents: Default::default(),
             at: at(ms, dev),
+            baseline: false,
+            horizon: None,
         }
     }
 
@@ -194,6 +250,14 @@ mod tests {
         Op {
             kind: Kind::Del,
             ..put(dev, ms, json!({}), json!({}))
+        }
+    }
+
+    /// A baseline op: the same shape, but its counters are **values** rather than deltas.
+    fn claim(dev: &str, ms: i64, counters: serde_json::Value) -> Op {
+        Op {
+            baseline: true,
+            ..put(dev, ms, json!({}), counters)
         }
     }
 
@@ -417,5 +481,84 @@ mod tests {
         .unwrap();
         assert_eq!(sparse.kind, Kind::Del);
         assert!(sparse.fields.is_empty());
+    }
+
+    /// §8.2, row 2: two claims about one row resolve to the LARGER, never their sum.
+    #[test]
+    fn two_baselines_claim_rather_than_add() {
+        let a = claim("dev-a", 10, json!({"quantity": 4}));
+        let b = claim("dev-b", 20, json!({"quantity": 3}));
+        for pair in [vec![a.clone(), b.clone()], vec![b, a]] {
+            let r = fold(&pair);
+            assert_eq!(r.claims.get("quantity"), Some(&4), "claims must not sum");
+            assert_eq!(r.counters.get("quantity"), None, "a claim is not a delta");
+        }
+    }
+
+    /// A baseline op's counters never reach `counters`, and an ordinary op's never reach `claims`.
+    /// This is the whole separation, and folding them together is the +1 bug in §8.1.
+    #[test]
+    fn a_claim_and_a_delta_are_kept_apart() {
+        let ops = vec![
+            claim("dev-a", 10, json!({"quantity": 5})),
+            put("dev-a", 20, json!({}), json!({"quantity": 1})),
+        ];
+        let r = fold(&ops);
+        assert_eq!(r.claims.get("quantity"), Some(&5));
+        assert_eq!(r.counters.get("quantity"), Some(&1));
+    }
+
+    /// The founding constraint, unchanged: with no baseline in the set, deltas still sum.
+    #[test]
+    fn two_ordinary_adds_still_sum_to_two() {
+        let ops = vec![
+            put("dev-a", 10, json!({}), json!({"quantity": 1})),
+            put("dev-b", 20, json!({}), json!({"quantity": 1})),
+        ];
+        assert_eq!(fold(&ops).counters.get("quantity"), Some(&2));
+        assert!(fold(&ops).claims.is_empty());
+    }
+
+    /// A horizon covers a stamp at or below its own for that device, and nothing from a device
+    /// it says nothing about.
+    #[test]
+    fn a_horizon_covers_only_what_it_names() {
+        let mut h = Horizon::default();
+        h.seen.insert("dev-a".into(), at(50, "dev-a"));
+        assert!(h.covers(&at(50, "dev-a")), "at the horizon is inside it");
+        assert!(h.covers(&at(49, "dev-a")));
+        assert!(!h.covers(&at(51, "dev-a")));
+        assert!(
+            !h.covers(&at(1, "dev-b")),
+            "a device it never heard of is not covered"
+        );
+    }
+
+    /// Unioning two horizons keeps the greater stamp per device, so a page carrying two
+    /// baselines is filtered by both.
+    #[test]
+    fn absorbing_a_horizon_keeps_the_greater_stamp() {
+        let mut a = Horizon::default();
+        a.seen.insert("x".into(), at(10, "x"));
+        a.seen.insert("y".into(), at(90, "y"));
+        let mut b = Horizon::default();
+        b.seen.insert("x".into(), at(50, "x"));
+        b.seen.insert("z".into(), at(7, "z"));
+        a.absorb(&b);
+        assert_eq!(a.seen.get("x"), Some(&at(50, "x")));
+        assert_eq!(a.seen.get("y"), Some(&at(90, "y")));
+        assert_eq!(a.seen.get("z"), Some(&at(7, "z")));
+    }
+
+    /// The wire keeps its shape for a peer on an older build: an ordinary op serialises with
+    /// neither new key, so nothing that reads it today has to change.
+    #[test]
+    fn an_ordinary_op_carries_no_baseline_keys_on_the_wire() {
+        let json = serde_json::to_string(&put("dev-a", 1, json!({}), json!({}))).unwrap();
+        assert!(!json.contains("baseline"), "{json}");
+        assert!(!json.contains("horizon"), "{json}");
+        let back: Op = serde_json::from_str(&json).unwrap();
+        assert!(!back.baseline);
+        assert_eq!(back.horizon, None);
     }
 }

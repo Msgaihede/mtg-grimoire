@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
@@ -55,7 +55,11 @@ const OLD = "dd".repeat(16);
  *  panel must draw as an offer rather than as a group of one. */
 const UNPAIRED: PairingStatus = {
   deviceId: ME,
-  deviceName: "This device",
+  // A hostname, because `identity::ensure` mints one — `COMPUTERNAME` on Windows, the model on
+  // Android, a user-agent label in a browser. "This device" was every install's name until
+  // 2026-08-29 and is now only ever the **pill**, so a fixture still carrying it as a *name*
+  // would make `getByText("This device")` ambiguous in exactly the test that matters.
+  deviceName: "MAIN-PC",
   groupId: null,
   epoch: null,
   devices: [],
@@ -108,6 +112,10 @@ const OUTCOME: RelayOutcome = {
   cyclesBroken: 0,
   skipped: 0,
   deferred: 0,
+  // An ordinary trip, which is every trip but the first with a given device — so both baseline
+  // counts are zero and the panel must say nothing at all about a first exchange.
+  baselineOps: 0,
+  baselineHistory: 0,
 };
 
 /** A 21×21 matrix with a third of its modules dark — enough for the drawing test to count. */
@@ -166,6 +174,79 @@ describe("SyncPanel", () => {
     expect(screen.queryByRole("button", { name: /remove old laptop/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /remove desk/i })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /remove phone/i })).toBeInTheDocument();
+  });
+
+  /**
+   * **The marker that says which machine you are at is a pill, and there is exactly one.**
+   * While every install minted the name "This device" this word was the only thing telling two
+   * rows apart; now that the rows read `MAIN-PC` and `OnePlus 12` it answers the other half of
+   * the question, and it has to be findable by shape rather than read for.
+   */
+  it("marks this device with a pill, on its own row and no other", async () => {
+    render(<SyncPanel />, { wrapper: paired });
+
+    const pill = await screen.findByText("This device");
+    expect(screen.getAllByText("This device")).toHaveLength(1);
+    // A token rather than a word: bordered, filled, and fully rounded.
+    expect(pill.classList.contains("rounded-full")).toBe(true);
+    expect(pill.classList.contains("border")).toBe(true);
+    expect(pill.classList.contains("bg-bg")).toBe(true);
+
+    const row = pill.closest("li");
+    expect(row).not.toBeNull();
+    expect(within(row as HTMLElement).getByText("Desk")).toBeInTheDocument();
+  });
+
+  /**
+   * **The pill sits against the end of the name, not at the far edge beside the buttons.**
+   * The name span carried `flex-1` and ate the row's free space, which put the one word that
+   * orients the reader down among the controls. Asserting the *grouping* rather than a pixel is
+   * what jsdom can see: name and pill are siblings, the group takes the row's stretch, and no
+   * button is inside it.
+   */
+  it("keeps the pill in one group with the name, and the buttons out of it", async () => {
+    render(<SyncPanel />, { wrapper: paired });
+
+    const pill = await screen.findByText("This device");
+    const group = pill.parentElement as HTMLElement;
+    expect(group.classList.contains("flex-1")).toBe(true);
+    expect(group.classList.contains("min-w-0")).toBe(true);
+    expect(within(group).queryByRole("button")).toBeNull();
+
+    const name = within(group).getByText("Desk");
+    // The name sizes to its content now. `flex-1` here is what pushed the pill away.
+    expect(name.classList.contains("flex-1")).toBe(false);
+    // And a long hostname must truncate rather than shove the presses off the row.
+    expect(name.classList.contains("truncate")).toBe(true);
+    expect(name.classList.contains("min-w-0")).toBe(true);
+  });
+
+  /**
+   * **`Removed` stays a word.** Two tokens of equal weight in one row would make history read
+   * as status; the removed row already says what it is through the struck-through name and the
+   * two presses it no longer offers.
+   */
+  it("leaves Removed as plain text rather than a second pill", async () => {
+    render(<SyncPanel />, { wrapper: paired });
+
+    const removed = await screen.findByText(/^removed$/i);
+    expect(removed.classList.contains("rounded-full")).toBe(false);
+    expect(removed.classList.contains("border")).toBe(false);
+    expect(removed.classList.contains("text-dim")).toBe(true);
+  });
+
+  /**
+   * **Rename survives on this device's own row, and it matters more now than it did.** The name
+   * a device mints is its hostname, and `sync_identity.name` is the copy every pairing sends —
+   * so this press is the reader's way out of putting `MAIN-PC` on their phone. The pill must not
+   * have replaced it.
+   */
+  it("still offers Rename on this device's own row", async () => {
+    render(<SyncPanel />, { wrapper: paired });
+
+    const row = (await screen.findByText("This device")).closest("li") as HTMLElement;
+    expect(within(row).getByRole("button", { name: "Rename" })).toBeInTheDocument();
+    expect(within(row).queryByRole("button", { name: /^remove/i })).toBeNull();
   });
 
   /**
@@ -468,5 +549,24 @@ describe("outcomeText", () => {
     expect(text).toMatch(/Moved 1 folder to the top level/);
     expect(text).toMatch(/Needs review, just below, says which\./);
     expect(text).toMatch(/3 changes arrived before the change they build on/);
+  });
+
+  /**
+   * Baseline spec §13, and the numbers measured on the real pair. **The thousands separator is
+   * the assertion that is not decoration**: `plural` writes its number plainly, which is right
+   * for the four clauses that count changes in a sync and wrong here — a baseline is the one
+   * figure in this sentence that reaches four digits, so it goes through `count`.
+   */
+  it("says a first exchange is a first exchange, and names the history separately", () => {
+    const text = outcomeText({ ...OUTCOME, baselineOps: 1069, baselineHistory: 240 });
+    expect(text).toMatch(/first exchange/i);
+    expect(text).toMatch(/1,069/);
+    expect(text).toMatch(/240 .*(history|deck)/i);
+  });
+
+  /** Zero is the state of every sync but one, so the clause has to be absent rather than
+   *  drawn empty — "0 rows went across" on a routine trip is the whole of what §13 is against. */
+  it("says nothing about a baseline on an ordinary sync", () => {
+    expect(outcomeText(OUTCOME)).not.toMatch(/first exchange/i);
   });
 });

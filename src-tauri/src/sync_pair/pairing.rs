@@ -390,6 +390,15 @@ fn from_hex16(s: &str) -> Option<[u8; 16]> {
 // mutex and is safe to hold across it — it is taken first, below.
 
 use crate::sync::{self, AppState};
+use crate::sync_engine::client;
+
+/// What [`sync_device_revoke`] says when the round trip it makes first does not complete.
+///
+/// A sentence rather than the bare transport error, because the reader pressed Remove and what
+/// they need told is that nothing was removed — the `reqwest` message underneath it is appended
+/// rather than shown alone.
+const COULD_NOT_COLLECT: &str =
+    "Could not reach the relay to collect that device's last changes, so it was not removed.";
 
 /// What Settings draws: this device, the group it is in, and the roster.
 #[tauri::command]
@@ -500,6 +509,24 @@ pub async fn sync_device_rename(
 ///
 /// **The rotation is the removal** — see §7.6. What it cannot do is reach the removed device:
 /// whatever that device already synced, it keeps, and no server can take it back.
+///
+/// **It completes a round trip before it rotates, and a failed one removes nothing.** Spec
+/// §12.4: the rotation makes every op sealed under the old epoch unreadable, and
+/// [`client::pull`] steps over such an envelope rather than stalling on it — so anything the
+/// leaving device pushed that this one has not yet taken is thrown away at the boundary, which
+/// is exactly the tail §12.3 promises to keep. Removing a device is never urgent; doing it
+/// offline is the one way to lose what that device last said. A device with no relay address
+/// gets `Ok(None)` from [`client::run_once_without_baselines`] and the removal goes straight
+/// ahead — sync is off, so there is nothing on any server to collect.
+///
+/// **It is the trip that emits no baseline**, and that function's own doc comment says why:
+/// [`client::run_once`] here would hand a full baseline to the device this command is about to
+/// mark gone.
+///
+/// **On the blocking pool with a runtime of its own**, for `sync_engine::commands::sync_now`'s
+/// reason: the write connection is behind a `Mutex`, a guard on it cannot cross an `await` on a
+/// multi-threaded runtime, and `spawn_blocking` moves the whole trip to a thread where a
+/// `block_on` is legal and the guard never has to be `Send`.
 #[tauri::command]
 pub async fn sync_device_revoke(
     state: tauri::State<'_, Arc<AppState>>,
@@ -507,7 +534,14 @@ pub async fn sync_device_revoke(
 ) -> Result<(), String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| e.to_string())?;
         sync::with_write(&state, |conn| {
+            let _ = runtime
+                .block_on(client::run_once_without_baselines(conn))
+                .map_err(|e| format!("{COULD_NOT_COLLECT} {e}"))?;
             identity::revoke_device(conn, &device_id).map(|_| ())
         })
     })
@@ -855,7 +889,15 @@ mod tests {
         let mut pa = None;
         let before = status(&a).unwrap();
         assert_eq!(before.device_id.len(), 32);
-        assert_eq!(before.device_name, "This device");
+        // The panel's heading is whatever this machine minted — a hostname on a desktop, a
+        // model on a phone. The shape is what a test on any machine can assert: a real name,
+        // and not the placeholder every install used to share.
+        assert_eq!(
+            before.device_name,
+            crate::sync_pair::identity::ensure(&a).unwrap().name
+        );
+        assert!(!before.device_name.trim().is_empty());
+        assert_ne!(before.device_name, "This device");
         assert!(before.group_id.is_none());
         assert!(before.epoch.is_none());
         assert!(before.devices.is_empty());

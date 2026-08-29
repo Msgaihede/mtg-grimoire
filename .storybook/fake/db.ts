@@ -1706,7 +1706,7 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // fake diverges from `identity::ensure`, which mints on first read.
     pairing: {
       deviceId: "a1b2c3d4e5f60718293a4b5c6d7e8f90",
-      deviceName: "This device",
+      deviceName: "MAIN-PC",
       group: null,
       devices: [],
       pending: null,
@@ -12105,11 +12105,20 @@ export function writeHandlers(db: FakeDb) {
      * story that wants the two surfaced outcomes seeds the rows rather than asking this to
      * invent them - `needsReview` is that world, and a sentence appearing because a button was
      * pressed would be the one thing about this feature a fake must not make up.
+     *
+     * **The first trip a world makes is a first exchange, and that is read off state rather
+     * than stubbed.** A baseline goes to a peer this device has never heard from; there is no
+     * peer here and no `sync_peers` to be empty, so the honest stand-in is the one fact the
+     * world does hold - a device that has never completed a round trip, which is exactly where
+     * the `paired` seed starts. The counts are the world's own **eleven synced tables** counted
+     * back (`schema::SYNCED_TABLES`), not figures invented for the sentence, and `deck_audit` is
+     * counted a second time on its own because that is the half the panel names separately.
      */
     sync_now: (): RelayOutcome | null => {
       refuseIfBusy(db);
       if (db.relay.url === "" || db.pairing.group === null) return null;
       const pushed = db.relay.pending;
+      const first = db.relay.lastSyncAt === null;
       db.relay.pending = 0;
       db.relay.lastSyncAt = Math.floor(Date.now() / 1000);
       return {
@@ -12121,6 +12130,20 @@ export function writeHandlers(db: FakeDb) {
         cyclesBroken: 0,
         skipped: 0,
         deferred: 0,
+        baselineOps: first
+          ? db.collectionEntries.length +
+            db.collectionFolders.length +
+            db.wishlistEntries.length +
+            db.wishlistFolders.length +
+            db.decks.length +
+            db.deckFolders.length +
+            db.deckCategories.length +
+            db.deckTags.length +
+            db.deckCards.length +
+            db.deckAudit.length +
+            db.mutedTags.length
+          : 0,
+        baselineHistory: first ? db.deckAudit.length : 0,
       };
     },
 

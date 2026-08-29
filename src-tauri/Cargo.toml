@@ -252,6 +252,23 @@ windows-sys = { version = "0.61", features = [
 # `FilePath: FromStr` is infallible and makes the path-or-URL decision itself.
 [target.'cfg(target_os = "android")'.dependencies]
 tauri-plugin-fs = "2"
+# Reading one static field — `android.os.Build.MODEL` — so a phone on the pairing roster reads
+# "OnePlus 12" rather than the same string as every other device in the group. There is no
+# hostname to ask for here: Android answers `localhost` on every handset ever made, which is why
+# `sync_pair::identity::mint_name`'s three arms are three different questions rather than one.
+#
+# **It was already in `Cargo.lock` transitively — `tao`, `wry` and `tauri` all depend on it — so
+# this adds a direct edge rather than a new crate**, `tauri-plugin-fs`'s case above. The `0.21`
+# range is the one those three resolve, so cargo unifies to a single package and the `JavaVM` a
+# `tao` context hands back is the same type this crate names.
+#
+# **`ndk-context` is deliberately absent, and that is the correction worth recording.** It is the
+# textbook route to a `JavaVM` and it is *not* in this tree at all: nothing calls
+# `initialize_android_context`, so `android_context()` would answer a null pointer and the model
+# lookup would fall back on every phone forever. The VM comes from
+# `tauri::tao::platform::android::prelude::main_android_context` instead — the runtime this app
+# is actually built on, holding the pointer the activity gave it.
+jni = "0.21"
 
 [dev-dependencies]
 httpmock = "0.8"

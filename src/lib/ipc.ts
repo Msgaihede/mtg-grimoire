@@ -3975,6 +3975,11 @@ export interface RelayStatus {
  * query keys once rather than per op. `deferred` is the one worth reading twice: it means a
  * peer's stream is **stalled** on an op whose parent has not arrived, which self-heals on a
  * later pull and is visible until it does.
+ *
+ * The last two are the **first-contact baseline** (baseline spec §13). They are not part of
+ * `pushed`: a baseline is built in memory and posted without ever entering `sync_ops`, so the
+ * outbox count cannot see it. Both are zero on every sync after the first with a given peer,
+ * which is every sync a reader ever presses but one.
  */
 export interface RelayOutcome {
   pushed: number;
@@ -3985,6 +3990,21 @@ export interface RelayOutcome {
   cyclesBroken: number;
   skipped: number;
   deferred: number;
+  /**
+   * Rows handed to a device that had not heard from this one before.
+   *
+   * Larger than any other number here by orders of magnitude — 1 069 on the measured pair —
+   * which is why the panel says what it is rather than letting it read as a hang.
+   */
+  baselineOps: number;
+  /**
+   * The `deck_audit` rows among {@link RelayOutcome.baselineOps}, named separately.
+   *
+   * Baseline spec §7: history is the one synced table with no ceiling, so it is the part of a
+   * first exchange that can surprise. A reader who is told only the total has no way to tell a
+   * large collection from a long one.
+   */
+  baselineHistory: number;
 }
 
 /**
