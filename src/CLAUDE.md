@@ -115,8 +115,11 @@ Every one of these has its measurement and its story in
   `fixed` panel mounts at the app root (`LAYER.tooltip`) because a virtualised row is both
   `position: absolute` and transformed, which caps a nested `z-index` *and* makes the row the
   containing block for a `fixed` descendant — root-mounting is what escapes both at once. **The
-  sweep is done**: every real tooltip in the app binds through `useTooltip()`. **One native
-  `title` survives on purpose** — `AppShell.tsx`'s drag-inert sidebar entry, because Chromium
+  sweep is done**: every real tooltip in the app binds through `useTooltip()`. **Two native
+  `title`s survive on purpose, and they are the same one drawn twice** — the drag-inert entry in
+  `AppShell.tsx`'s rail and its twin in `BottomTabBar.tsx` (added 2026-08-29 with the phone's tab
+  bar; the *row* is duplicated on purpose while the drop wiring is shared through
+  `useSidebarDropTarget`) — because Chromium
   freezes `:hover` at a drag's origin for the whole drag, so the attribute's sentence is never
   seen mid-drag and is read instead through the accname spec's description fallback. Everything
   else `title=` still finds in the tree is a component **prop** — drawn as a heading

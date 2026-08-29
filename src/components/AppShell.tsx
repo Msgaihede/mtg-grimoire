@@ -1,12 +1,8 @@
 import { useRef, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
-  Heart,
   PanelLeftClose,
   PanelLeftOpen,
-  Search,
-  Settings,
-  Tags,
   TriangleAlert,
   type LucideIcon,
 } from "lucide-react";
@@ -18,14 +14,16 @@ import {
 import { Ribbon } from "@/components/Ribbon";
 import { SyncProgress } from "@/components/SyncProgress";
 import { TitleBar } from "@/components/TitleBar";
-import { CabinetFiling, Cards } from "@/components/icons";
+import { NAV } from "@/components/nav";
 import { useTooltip } from "@/components/tooltip/useTooltip";
-import { useSidebarDrops, type SidebarDrop } from "@/components/useSidebarDrops";
+import {
+  useSidebarDrops,
+  useSidebarDropTarget,
+  type SidebarDrop,
+} from "@/components/useSidebarDrops";
 import { isAndroid } from "@/lib/platform";
 import { isWebTarget } from "@/pwa/target";
 import { useCardToDeckRefusal } from "@/features/card/cardMenu";
-import { readCards } from "@/features/decks/dnd";
-import { useDndDropTarget } from "@/lib/dndTarget";
 import {
   ACTIVITY_DELAY_MS,
   marketplaceFeedActivity,
@@ -36,7 +34,7 @@ import {
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { LAYER } from "@/lib/layers";
 import { DURATION, statusLine as statusLineMotion } from "@/lib/motion";
-import { useAppStore, type ViewId } from "@/lib/store";
+import { useAppStore } from "@/lib/store";
 import { usePrefetchDeckSearchOpen } from "@/features/decks/useDeckSearchOpen";
 import { useCardZoomPersistence } from "@/lib/useCardZoomPersistence";
 import { useListViewPersistence } from "@/lib/useListViewPersistence";
@@ -52,29 +50,6 @@ import { useSyncProgress } from "@/lib/useSyncProgress";
 import { useWebStorageLifecycle } from "@/pwa/useWebStorageLifecycle";
 import type { Update } from "@/lib/useUpdate";
 import { cn } from "@/lib/utils";
-
-/**
- * The six destinations, in the order the column draws them — and the order is the point.
- *
- * Two ways into the database first, then the three lists the reader owns, then Settings. Search
- * asks "which card is this"; Tagger asks "what is this card of", which is why it sits directly
- * under Search rather than among the lists. Below the pair the run is by how often a reader is
- * in it: Decks is where the app is used, Collection is what backs a deck, Wishlist is what is
- * not owned yet. Settings is last because it is not a destination in the same sense.
- *
- * **The label is also the ribbon's `<h1>`** — `Shell` looks the active view's title up in here,
- * so there is one word per view rather than two that can drift. "Tagger" is Scryfall's own name
- * for the taxonomy that view browses, and the page's own heading below it still says what it
- * does in a sentence.
- */
-const NAV: { id: ViewId; label: string; Icon: LucideIcon }[] = [
-  { id: "search", label: "Search", Icon: Search },
-  { id: "tags", label: "Tagger", Icon: Tags },
-  { id: "decks", label: "Decks", Icon: Cards },
-  { id: "collection", label: "Collection", Icon: CabinetFiling },
-  { id: "wishlist", label: "Wishlist", Icon: Heart },
-  { id: "settings", label: "Settings", Icon: Settings },
-];
 
 /**
  * The `<nav>`'s id, so the toggle at its foot can point `aria-controls` at the region it is
@@ -554,34 +529,12 @@ function NavItem({
 }) {
   const ref = useRef<HTMLButtonElement>(null);
   const tip = useTooltip();
-  // **Every card the drag is carrying** (issue #214) — `readCards`, which answers with one
-  // payload for an ordinary drag, several for a multi-select one, and `null` for a drag this app
-  // did not put in the air. The entry's own rule is asked once for the whole gesture: both
-  // entries take every kind of card payload, so "may this land here" has never been a per-card
-  // question.
-  //
-  // No `getData`: what a drop writes is decided by the entry, and the entry is already here. An
-  // entry that cannot take a card never accepts one — so `over` is only ever true for a drop that
-  // will happen. `useDndDropTarget` reads `canDrop` and `onDrop` through a ref of its own, which
-  // is what keeps the registration standing while the shell re-renders mid-drag: the shell
-  // re-renders the moment a card is picked up — that is what raises the ring — and a drop target
-  // that unregisters mid-drag is a drop that never arrives.
-  //
-  // The three entries a card cannot land on (`drop === null`) register a droppable too and refuse
-  // every payload, which costs a registry entry and nothing else: `computeCollisions` skips a
-  // droppable whose `accepts()` is false before it measures it.
-  /** The card is over *this* entry: which one of the ringed pair is about to take it. */
-  const { over } = useDndDropTarget({
-    ref,
-    read: readCards,
-    canDrop: () => drop?.eligible === true,
-    onDrop: (payloads) => {
-      for (const payload of payloads) drop?.onDrop(payload);
-    },
-  });
-
-  const eligible = drop !== null && dragging && drop.eligible;
-  const inert = drop !== null && dragging && !drop.eligible;
+  // The registration, and the three facts drawn from it — `useSidebarDropTarget`, which is
+  // where the whole of the drag reasoning lives now. It moved out of this function on
+  // 2026-08-29, when `BottomTabBar` became the second drawing of navigation: the rail's row and
+  // the phone's tab are two drawings, but "which entries register, and what they accept" is one
+  // rule and had to stop being written twice.
+  const { over, eligible, inert } = useSidebarDropTarget({ ref, drop, dragging });
 
   return (
     // `relative` for the report line below: `.sr-only` is `position: absolute`, so the empty
@@ -610,7 +563,11 @@ function NavItem({
         // line below — a change that would announce it on *every* drag while no deck is open,
         // which is a product call and is written up in
         // `docs/superpowers/notes/plan-5-followups-note.md` rather than made here.
-        title={inert ? (drop.inertReason ?? undefined) : undefined}
+        // `drop?.` rather than `drop.`: `inert` is a hook's answer now rather than a `const`
+        // alias of `drop !== null && …` in this scope, so TypeScript's aliased-condition
+        // narrowing no longer reaches the field. The optional chain says the same thing and is
+        // the one line the lift cost.
+        title={inert ? (drop?.inertReason ?? undefined) : undefined}
         // **The word, for the eye, while the rail is 68px wide** — `useTooltip()` at side
         // `"right"`, which is the app's one hint mechanism, and never a native `title`.
         //

@@ -4042,6 +4042,17 @@ $ grep -o "@media(pointer:coarse){[^{]*{[^}]*}}" dist/assets/*.css
 @media(pointer:coarse){.coarse\:min-h-\[var\(--target-min\)\]{min-height:var(--target-min)}}
 ```
 
+> ⚠️ **That pattern only works while the block holds exactly one rule, and it stopped being true
+> on 2026-08-29** when 9b's Task 7 gave the variant eleven utilities. `{[^{]*{[^}]*}}` matches one
+> `.selector{…}` and then demands the closing brace, so over a multi-rule block it **exits 1 with
+> no output** — which reads exactly like "the variant did not compile", the failure this check
+> exists to detect. It is the same false negative the paragraph below warns about, one consumer
+> later. Repeat the rule group instead:
+>
+> ```
+> $ grep -oE "@media\(pointer:coarse\)\{(\.[^{]*\{[^}]*\})*\}" dist/assets/*.css
+> ```
+
 **The obvious grep for it finds nothing, and it is wrong twice.** Written as
 `grep -o "@media (pointer:coarse){[^}]*}"` it exits 1 with no output over a sheet that plainly
 contains the rule: Tailwind's minifier emits `@media(pointer:coarse)` with **no space** after

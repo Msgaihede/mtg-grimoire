@@ -75,7 +75,12 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
   },
 }));
 
-import { DECK_SEARCH_TAB_KEY, DeckSearchPanel, type DeckSearchTab } from "./DeckSearchPanel";
+import {
+  DECK_SEARCH_TAB_KEY,
+  DeckSearchPanel,
+  SEARCH_OVER_ATTR,
+  type DeckSearchTab,
+} from "./DeckSearchPanel";
 import { DECK_SEARCH_OPEN_KEY } from "./useDeckSearchOpen";
 import { useDeck } from "./useDeck";
 import { useAppStore } from "@/lib/store";
@@ -276,6 +281,10 @@ interface Props {
   deckId: number;
   targetCategoryId: number;
   roomy: boolean;
+  /** How wide to draw the panel *over* the deck, for a desk too narrow to hold both. Absent is
+   *  the docked arrangement, which is what every case in this file that says nothing about
+   *  width is asking about. */
+  overWidth?: number;
   defaultFormat?: FormatFilterOption | null;
   /** The editor's cap on the drag. Absent is `Infinity`, which is what a story and the first
    *  paint both get — see the prop's own doc. */
@@ -292,6 +301,7 @@ function panel({
   deckId = 4,
   targetCategoryId = MAIN.id,
   roomy = true,
+  overWidth = undefined as number | undefined,
   // `null` rather than an omission, because `null` is what the editor actually sends for a deck
   // it has no format to seed the search with — the annotation is what keeps the other cases
   // assignable.
@@ -328,6 +338,7 @@ function panel({
     deckId,
     targetCategoryId,
     roomy,
+    overWidth,
     defaultFormat,
     maxWidth,
   };
@@ -970,6 +981,88 @@ describe("DeckSearchPanel", () => {
     view.update({ roomy: true });
 
     expect(screen.getByRole("searchbox", { name: "Search cards" })).toBeInTheDocument();
+  });
+
+  /**
+   * **The door out of that rail, which until 2026-08-29 did not exist.**
+   *
+   * `roomy` answers *is there room beside the deck*, and below 414px of desk — which is every
+   * phone — the answer is no and used to be the end of it: the disclosure was `aria-disabled`
+   * and offered to widen a window that has no width to give. There is a second placement now,
+   * and the editor names it by sending a width: the panel is drawn **over** the deck, at the
+   * desk's own width, the way the card pane already covers one of the desk's two columns.
+   *
+   * Four things, and each fails differently:
+   *
+   * - **The control is live.** `aria-disabled` absent and no refusal bound to it — the tooltip
+   *   is the half a reader meets first, and leaving it would explain a refusal that is not
+   *   happening.
+   * - **The press works, both ways.** This is the assertion the guard it replaced would fail:
+   *   `onClick={() => roomy && setOpen(!open)}` reads as a control that records an intention and
+   *   moves nothing, which is precisely what the rail was.
+   * - **The placement is stamped.** What separates the two is a `position` and a width, and
+   *   jsdom reads both as nothing — so {@link SEARCH_OVER_ATTR} is the choice written where a
+   *   suite can hold it, which is `PANE_OVER_ATTR`'s own argument one surface over.
+   * - **The rail keeps its 36px in the flow.** The overlay is out of the dock, so without the
+   *   spacer the deck behind would be re-laid-out on the way in and again on the way out — twice
+   *   per press, for a masonry the reader cannot see. A class rather than a pixel, because jsdom
+   *   lays nothing out.
+   */
+  it("opens over the deck where there is no room for it beside the deck", async () => {
+    const view = await openPanel({ roomy: false, overWidth: 390 });
+
+    const rail = screen.getByRole("button", { name: PANEL_TOGGLE });
+    expect(rail).not.toHaveAttribute("aria-disabled");
+    expect(rail).toHaveAttribute("aria-expanded", "true");
+
+    const section = screen.getByRole("region", { name: "Add cards" });
+    expect(section).toHaveAttribute(SEARCH_OVER_ATTR, "deck");
+    expect(section.classList.contains("absolute")).toBe(true);
+    expect(section).toHaveStyle({ width: "390px" });
+    expect(section.previousElementSibling).toHaveClass("w-9");
+    // Nothing to drag: the width is the desk's, so the edge the handle would move is the window.
+    expect(screen.queryByRole("separator", { name: "Resize card search" })).not.toBeInTheDocument();
+
+    await userEvent.click(rail);
+
+    expect(rail).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+    expect(section).not.toHaveAttribute(SEARCH_OVER_ATTR);
+    expect(section.previousElementSibling).toBeNull();
+
+    await userEvent.click(rail);
+
+    expect(await screen.findByRole("button", { name: ALL_CARDS })).toBeInTheDocument();
+    expect(section).toHaveAttribute(SEARCH_OVER_ATTR, "deck");
+    // The same node throughout, which is what the caret hand-back rests on — the spacer takes a
+    // slot of its own so that appearing and disappearing cannot renumber the section beside it.
+    expect(screen.getByRole("region", { name: "Add cards" })).toBe(section);
+    view.unmount();
+  });
+
+  /**
+   * And the refusal is still there for the one desk that can hold the panel **neither** way.
+   *
+   * The editor sends no width while a card pane is open, because the pane and this overlay would
+   * both be covering the deck and only one of them can be on top — so the rail comes back and
+   * says so, and the first remedy in its sentence is the one that works.
+   */
+  it("still refuses where neither placement fits", async () => {
+    const view = await openPanel({ roomy: false, overWidth: 390 });
+    view.update({ overWidth: undefined });
+
+    const rail = screen.getByRole("button", { name: PANEL_TOGGLE });
+    expect(rail).toHaveAttribute("aria-disabled", "true");
+    expect(screen.queryByRole("searchbox")).not.toBeInTheDocument();
+
+    // And the reader's own answer survives it, exactly as a railing already leaves it alone:
+    // the width coming back draws the panel again with nothing pressed in between.
+    view.update({ overWidth: 390 });
+
+    expect(screen.getByRole("region", { name: "Add cards" })).toHaveAttribute(
+      SEARCH_OVER_ATTR,
+      "deck",
+    );
   });
 
   /**

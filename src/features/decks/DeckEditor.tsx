@@ -765,6 +765,15 @@ const ACTIONS: readonly HeaderAction[] = [
  * up: the first paint of a wide window must not flash a narrow header, and jsdom — which lays
  * nothing out and whose `ResizeObserver` never fires — draws the state every test is written
  * against.
+ *
+ * **Three rungs and not four, re-asked at a phone width on 2026-08-29** (with
+ * {@link panelOverWidth}) and deliberately left where they are. A 390px window is a ~350px desk,
+ * which is under {@link TIGHT_HEADER_PX} — so the ladder is already at its bottom rung there and
+ * every word in the row has gone. A fourth rung could only drop **controls**, and which of the
+ * six actions a deck may be edited without is a different question from which of them has room
+ * for its word: the first is about what the header *holds* and belongs with whatever decides
+ * what the ribbon sheds, and the second is what this ladder is. The row is `flex-wrap`, so what
+ * a narrow desk costs is height rather than an overhang.
  */
 const WIDE_HEADER_PX = 1400;
 const SETTINGS_ICON_PX = 1100;
@@ -1645,6 +1654,38 @@ export function DeckEditor({ deckId }: { deckId: number }) {
    * rail says so in words.
    */
   const roomForPanel = deskWidth === 0 || maxPanelWidth >= MIN_PANEL_WIDTH_PX;
+
+  /**
+   * How wide to draw the search panel **over** the deck, for a desk that cannot hold the two of
+   * them side by side — `undefined` where it can, which is every desk at or above the 414 the
+   * bullet above works out.
+   *
+   * **This is the door out of the rail, and until 2026-08-29 there was none.** Below 414 the
+   * panel railed *and refused to be pressed*: `roomy` was the whole of whether the disclosure
+   * did anything, so on a 390px phone the one route from a deck to a card search was
+   * `aria-disabled` with a sentence about widening a window that has no width to give. The
+   * arithmetic was right and the question was wrong — there is no room for the two of them
+   * **beside each other**, which is not the same as no room for the search.
+   *
+   * **The placement is issue #183's, reused.** The card pane already draws over one of this
+   * row's two columns rather than taking width from either; this is that arrangement at the one
+   * width where the deck and the panel cannot both be on screen. The panel positions itself
+   * inside its own dock, which is `sticky` and therefore already the box it needs — so what it
+   * is missing, and all it is missing, is this number.
+   *
+   * **Never while a card is open, and that is a paint-order fact rather than a preference.** The
+   * pane and this overlay would both be covering the deck, and the pane is drawn from a `sticky`
+   * host *earlier* in this scroller at the same `LAYER.popup` — equal z-indexes resolve by
+   * document order, so an overlay raised enough to beat the deck's own `LAYER.raised` also beats
+   * the pane, and a tile pressed in the search would open a card behind the search. One surface
+   * at a time is the honest answer at 390px anyway, and it is the phone's own idiom: the list
+   * steps aside for the thing you tapped and is there again when you come back — `open` is
+   * untouched and the body is hidden rather than unmounted, exactly as a railing already does.
+   * The refusal the reader then sees on the rail is `NO_ROOM`, whose first remedy is *close the
+   * card details*, which is now literally the thing to do.
+   */
+  const panelOverWidth =
+    deskWidth > 0 && !roomForPanel && selectedCardId === null ? deskWidth : undefined;
 
   /**
    * Hold the docked search panel against the top of the page and draw it exactly as tall as the
@@ -3992,8 +4033,24 @@ export function DeckEditor({ deckId }: { deckId: number }) {
           {/* The panel's dock — `sticky` so the search stays put while a deck taller than the
               window scrolls past it, `self-start` so the row's own `stretch` does not draw it as
               tall as the deck, and `flex` so the panel inside fills whatever height the effect
-              above measures for it. Every word of why: that effect. */}
-          <div ref={dockRef} className="sticky top-0 flex shrink-0 self-start">
+              above measures for it. Every word of why: that effect.
+
+              **`LAYER.popup` while the panel is drawn over the deck, and it has to be _here_.**
+              `position: sticky` always creates a stacking context, so a z-index asked for inside
+              this box competes only with its own siblings — which is the trap the card pane's
+              note two hundred lines up records from the other side, and the reason the overlay
+              itself carries no number. The deck it is covering draws at `LAYER.raised` (an open
+              stack card) and `LAYER.header` (the table view's sticky header row), both of which
+              would paint straight through an unraised overlay: this is the one element that can
+              out-rank them. It is not applied at every width, because a rung nothing overlaps is
+              a claim about an overlap that does not occur — see {@link panelOverWidth}. */}
+          <div
+            ref={dockRef}
+            className={cn(
+              "sticky top-0 flex shrink-0 self-start",
+              panelOverWidth !== undefined && LAYER.popup,
+            )}
+          >
             <DeckSearchPanel
               // `deck.addCard` unwrapped since 2026-08-25 — it was `panelAdd`, the same mutation
               // with the own/need answer folded into every `mutate` on the way past, and there is
@@ -4007,6 +4064,7 @@ export function DeckEditor({ deckId }: { deckId: number }) {
               cardMenu={panelCardMenu}
               cardMenuKey={panelCardMenuKey}
               roomy={roomForPanel}
+              overWidth={panelOverWidth}
               maxWidth={maxPanelWidth}
             />
           </div>
