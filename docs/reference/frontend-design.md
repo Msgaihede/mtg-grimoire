@@ -3488,10 +3488,23 @@ PreventSelection` — **`Accessibility` is absent**. That is 3a's filter taking 
 tree rather than in an array literal.
 
 **Nothing in the document says anything about a drag, at rest or during one.** Zero
-`[id^=dnd-kit-]` elements, zero `[aria-live]` elements anywhere in the app, zero
-`aria-roledescription`, zero `aria-grabbed`. The app draws five `role="status"` regions; only the
-ribbon's carries text (`117,606 cards · data from 2026-08-28`) and none of them is written to by a
-drag.
+`[id^=dnd-kit-]` elements, zero `[aria-live]` elements, zero `aria-roledescription`, zero
+`aria-grabbed`. Five `role="status"` regions were in the document; only the ribbon's carried text
+(`117,606 cards · data from 2026-08-28`) and none of them is written to by a drag.
+
+> ⚠️ **"Zero `[aria-live]`" is a fact about the document that was measured, not about the app, and
+> the difference matters — corrected 2026-08-29.** It was a `querySelectorAll` on one page of a
+> running window, so it counted what was **mounted**. The source has **four** `aria-live="polite"`
+> elements — `DeckHistoryDialog.tsx:284`, `TheoryDiffDialog.tsx:620`,
+> `transfer/import/shared/CommitBar.tsx:88`, `web/BuildCorpus.tsx:62` — each inside a dialog or a
+> page that was not open, and **93** `role="status"`/`role="alert"` sites against the five that
+> were on screen.
+>
+> **None of the four is about a drag, so the finding this section rests on is unchanged.** What
+> changes is the cost of doing something about it: the app already has a live-region vocabulary to
+> reuse rather than one to invent. A reading like this one answers "what does a screen reader meet
+> on this page"; it cannot answer "what does this app contain", and the two were being conflated by
+> one sentence.
 
 **During a real in-flight drag**, a deck card's source `<li>` reads
 `tabindex="-1" data-deck-card-body data-dnd-source data-dnd-dragging popover` — no `role`, no
@@ -3553,6 +3566,59 @@ hears while dragging — the source's own name repeated, the pointer's target re
 virtual cursor, silence — is a different question and an unmeasured one. Doing it needs Narrator
 (`Ctrl+Win+Enter`, and it is already on the machine) against a `tauri build --debug --no-bundle`
 binary, and the answer written down verbatim including anything spoken twice.
+
+### The decision: adopt dnd-kit's `Accessibility` plugin
+
+**Taken by Markus on 2026-08-29**, against the measurements above and against two alternatives —
+"stay pointer-only and stop implying otherwise", and an app-owned keyboard flow scoped to the two
+surfaces that already have a caret. **No direction was recommended**: the evidence did not favour
+one, and which reader the app is for is not a question a measurement answers.
+
+**What it settles.** 3c's Tasks 4–6 are unblocked and get planned against this. The plugin brings
+its own instructions element, its own live region and its own keyboard drag, maintained upstream
+rather than hand-rolled — which is the whole of the case for it, given that the app's drop half is
+**pointer-only on every surface** and an app-owned flow would have had to invent a
+target-picking UI that does not exist.
+
+**What it costs, and none of this is a surprise — it is why 3a removed the plugin in the first
+place.** The plan that adopts it has to answer each of these at its own site:
+
+- **It stamps `role="button"` on the element it picks** — `draggable.handle ?? draggable.element`,
+  the same expression `dndAccessibility.test.tsx` reads the registry with. That takes the
+  `listitem` role off every folder card and every card-wall row, so **`getAllByRole("listitem")`
+  stops working on every wall in the app**. Two measurements in `dndAccessibility.test.tsx` pin
+  exactly that role today — `keeps every folder card a listitem, on both walls` and the wishlist
+  twin. **Those two are the specification changing, not tests to delete quietly:** they were
+  written as measurements, and the file's own header says a failure there is *news*.
+- **It adds a tab stop per row.** On a virtualised card wall that is a caret walk through the
+  whole result set, and it is the second reason 3a filtered the plugin out.
+- **`KeyboardSensor` answers Enter and Space with `preventDefault()` *and*
+  `stopImmediatePropagation()`.** From the moment every card became a drag source, that was Enter
+  no longer opening a card — the reason 3b removed the sensor, fenced by `dndManager.test.ts`.
+  Adopting the plugin without re-adding that sensor is coherent; re-adding both is not, unless the
+  activation key changes.
+
+**Three traps for whoever writes it, each already paid for once.**
+
+1. **`Accessibility.registerEffect` defers through `requestAnimationFrame`.** A synchronous
+   assertion that dnd-kit added nothing **passes whether the plugin is installed or not** — await a
+   frame, or the whole file is vacuous. `dndAccessibility.test.tsx` already does this and says why.
+2. **A per-source `sensors` list *replaces* the manager's rather than merging** —
+   `this.sensors ?? [...manager.sensors]`, `??` and not a merge. `useCategoryDragSource` passes its
+   own, so **the category grip is fenced by accident** and says nothing about what the manager is
+   configured with. Assert on a table row, which inherits.
+3. **A latent one, still true and still unfired**: `src/features/decks/dnd.ts`'s
+   `composedDraggable` builds a per-source sensor list *including* `KeyboardSensor` whenever a
+   caller narrows `notFrom` — and **no caller does** (confirmed 2026-08-29: every `notFrom`
+   occurrence in the tree is inside `dnd.ts` itself). The first surface that narrows its press
+   guard silently acquires a keyboard drag. Adopting the plugin is the moment to make that
+   deliberate rather than incidental.
+
+**The audit this does not remove.** The plugin answers the *drag*. It does not answer the app's
+other pointer-only affordances, which the phone census enumerated: `menuClick` — a plain-click door
+to a context menu — exists at exactly **two** surfaces in the whole app (the collection's and the
+wishlist's folder cards), and the ctrl+wheel card zoom has exactly one caller and no other door.
+Those stay open and belong to the mobile work rather than to this decision.
 
 ### The shipped CSP blocks a plugin dnd-kit cannot be told not to load — and the rules moved into `index.css`
 
@@ -4212,14 +4278,22 @@ it found a coupling between two rounds that the 9a plan does not have.
 `useNavCollapsed`'s persisted state, and **nothing collapses it automatically at any width** — a
 390px window opens with the full 208px rail unless the reader has collapsed it before.
 
-| Rail | `nav` | `main` content | `columnsFor` @170 | @160 | @135 |
-| --- | --- | --- | --- | --- | --- |
-| Expanded — **today's default** | 208 | **142** | 1 | 1 | 1 |
-| Collapsed (`useNavCollapsed`) | 68 | **282** | 1 | **1** | 2 |
-| Gone entirely | — | 350 | 1 | **2** | 2 |
+⚠️ **`main`'s content box is not the wall, and the 26px between them is worth a column.** The
+`ResizeObserver` is on `rowsRef` (`CardGrid.tsx:646–648`), which sits **inside** the scroller's
+`border` and `p-3` (`:1020`) — 1px + 12px each side. `rowsRef`'s own comment says it, having no
+padding of its own, "is the honest answer to how wide a row of tiles may be." So the wall is
+`main` content **− 26**, and any arithmetic done on `main`'s width overstates the columns.
 
-The first two rows were driven; the third is `columnsFor`'s arithmetic on the width a missing rail
-leaves. `columnsFor` is `max(1, floor((width + 12) / (tile + 12)))` (`CardGrid.tsx:180`).
+| Rail | `nav` | `main` content | **wall** (`rowsRef`) | `columnsFor` @170 | @160 | @144 |
+| --- | --- | --- | --- | --- | --- | --- |
+| Expanded — **today's default** | 208 | **142** | **116** | 1 | 1 | 1 |
+| Collapsed (`useNavCollapsed`) | 68 | **282** | **256** | 1 | 1 | **1** |
+| Gone entirely | — | 350 | **324** | 1 | **1** | **2** |
+
+The first two `nav`/`main` rows were driven in the window; the wall column is those figures less
+the 26px inset read from the class string, and the column counts are `columnsFor` — `max(1,
+floor((width + 12) / (tile + 12)))` (`CardGrid.tsx:180`) — over them. A desktop scrollbar takes
+another ~15px off the wall; a phone's overlay scrollbar takes none.
 
 **At 142px the tile is narrower than one whole tile**, so `tileWidthFor`'s cap — its only
 arithmetic, and it covers exactly this case — draws the card at 142 rather than 170, and
@@ -4227,15 +4301,25 @@ arithmetic, and it covers exactly this case — draws the card at 142 rather tha
 
 ### The coupling, which is the finding
 
-**A 160px tile does not buy a second column while the rail is there.** At 282px of content,
-`columnsFor(282, 160)` is still **1**; the tile has to come down to **135px** before a 390px phone
-draws two columns with a 68px rail beside them. Without the rail, 160 is enough and so is anything
-up to 169.
+**Two columns need the rail gone *and* a tile well under 160.** Against the wall rather than
+against `main`: `columnsFor(324, 160)` is **1**, so 160 — the width the 9a plan suggests for a
+phone tile — draws a **single** column on a phone, which is the failure it was meant to fix. The
+largest round width that gives two columns at 324 is **144**; at 144 the leftover is 24 and the
+gutter is exactly `GAP`, so the margins and the inter-card gap become one measurement.
 
-So the wall's round and the chrome's round are not independent, and the option matrix is smaller
-than it looks: **a phone tile width only delivers two columns if the rail is gone** — a bottom bar
-or a drawer — **not if the collapsed rail is kept.** Keeping the rail and wanting two columns costs
-a 135px tile, which is a 21% shrink on the chin's type rather than the 6% a 160px tile costs.
+And 144 only holds if the rail has gone. With the collapsed 68px rail the wall is 256, where
+`columnsFor(256, 144)` is **1** again and the tile would have to fall to about 122.
+
+So the wall's round and the chrome's round are **not independent**, and the option matrix is
+smaller than it looks: **a phone tile width delivers two columns only if the rail is gone** — a
+bottom bar or a drawer — **not if the collapsed rail is kept.** That is one finding across two
+rounds, and either round decided on its own gets it wrong.
+
+**What a narrower tile does *not* do is shrink the chin's type.** `--mark-scale` and
+`--control-scale` come from `cardScaleVars(zoom)` and know nothing about `baseTileWidth`, so the
+chin stays 28px with 10px type at any base — a narrower tile makes the chin proportionally
+**taller** (10.7 % of tile height at 170, 12.4 % at 144), which is a cost in the other direction
+from the one "a 6 % shrink on the type" suggests.
 
 ### The vertical, on the same pass
 
