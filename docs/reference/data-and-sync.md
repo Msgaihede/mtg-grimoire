@@ -439,7 +439,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   answers the question the switch was asking — the decks *are* where the cards are now.
 - **The single-file ladder is frozen at v26**, and `schema::LEGACY_SINGLE_FILE_VERSION` is the
   answer; schema 27 splits the file in two and the halves number themselves separately
-  (`USER_SCHEMA_VERSION` **29** on the reader's file, `CORPUS_SCHEMA_VERSION` 1 on the
+  (`USER_SCHEMA_VERSION` **30** on the reader's file, `CORPUS_SCHEMA_VERSION` 1 on the
   rebuildable one). This line read **v18** for two
   whole rungs, because a prose-only edit routes to neither CI job and nothing goes red when a
   ladder entry rots.

@@ -335,3 +335,359 @@ async fn an_outbox_larger_than_one_batch_is_several_stored_rows() {
     assert_eq!(mock.calls(), 2, "205 ops is two stored rows at 200 each");
     assert_eq!(unpushed_count(&a), 0);
 }
+
+// ---------------------------------------------------------------------------------------
+// The baseline
+// ---------------------------------------------------------------------------------------
+
+/// A peer on the roster. `sync_devices` is what [`baseline::peers_needing`] reads, and a group
+/// with nobody else on it is the state every test above is in — which is why none of them emits
+/// a baseline and none of them had to change.
+fn roster(conn: &Connection, device: &str) {
+    conn.execute(
+        "INSERT INTO sync_devices (device_id, public_key, name, added_at)
+         VALUES (?1, x'00', ?1, 0)",
+        [device],
+    )
+    .unwrap();
+}
+
+/// When that peer was last handed a baseline, or `None` for never.
+fn baselined_at(conn: &Connection, device: &str) -> Option<i64> {
+    conn.query_row(
+        "SELECT baselined_at FROM sync_devices WHERE device_id = ?1",
+        [device],
+        |r| r.get::<_, Option<i64>>(0),
+    )
+    .unwrap()
+}
+
+/// The ops this device has written, oldest first — what it would hand the relay.
+fn outbox(conn: &Connection) -> Vec<Op> {
+    let sql = format!("{} ORDER BY seq", capture::OPS_SELECT);
+    let mut stmt = conn.prepare(&sql).unwrap();
+    let ops = stmt
+        .query_map([], capture::op_from_row)
+        .unwrap()
+        .map(|r| r.unwrap().1)
+        .collect();
+    ops
+}
+
+/// Every request body the relay was handed, with the path it went to.
+///
+/// **`httpmock` 0.8 remembers a call count and nothing else** — `Mock::calls()` is the whole of
+/// what it hands back — so a test that has to read what was *sent* taps the wire from inside a
+/// matcher. [`tap`] always answers `true`, so it is an observation rather than an expectation;
+/// it can be asked about a request meant for another mock, which is why it records the path
+/// beside the body and every reader filters on it.
+type Sent = std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>;
+
+fn tap(
+    sent: &Sent,
+) -> impl Fn(&httpmock::prelude::HttpMockRequest) -> bool + Send + Sync + 'static {
+    let sent = sent.clone();
+    move |req: &httpmock::prelude::HttpMockRequest| {
+        sent.lock()
+            .unwrap()
+            .push((req.uri().path().to_owned(), req.body_string()));
+        true
+    }
+}
+
+/// The pushed envelopes that carry baseline ops, opened, one `Vec` per stored relay row.
+///
+/// Bodies are de-duplicated because a matcher is an observation and nothing promises it is run
+/// exactly once per request; nothing here retries, so two identical push bodies can only be one
+/// request seen twice.
+fn pushed_baselines(sent: &Sent, group: &Group) -> Vec<Vec<Op>> {
+    let seen = sent.lock().unwrap();
+    let mut bodies: Vec<&str> = Vec::new();
+    for (path, body) in seen.iter() {
+        if path.ends_with("/push") && !bodies.contains(&body.as_str()) {
+            bodies.push(body);
+        }
+    }
+    bodies
+        .into_iter()
+        .filter_map(|body| serde_json::from_str::<Envelope>(body).ok())
+        .filter_map(|envelope| wire::open_batch(group, &envelope).ok())
+        .filter(|ops| ops.iter().any(|op| op.baseline))
+        .collect()
+}
+
+/// **Spec §10.2: the pull completes before anything is emitted**, so a device that is behind
+/// never speaks for the group in a voice that is out of date.
+///
+/// Asserted by *content* rather than by arrival order, which `httpmock` cannot report: the relay
+/// hands `dev-a` a row that only `dev-b` has ever held, and the baseline `dev-a` emits has to
+/// contain it. Emitted before the pull, `dev-a` has never heard of that card and the baseline
+/// cannot mention it.
+#[tokio::test]
+async fn a_baseline_is_emitted_after_the_pull_and_not_before() {
+    let b = paired("dev-b", 0);
+    add_copy(&b, "from-b", 2);
+    let group = identity::group(&b).unwrap().unwrap();
+    let envelope = wire::seal_batch(&group, "dev-b", &outbox(&b)).unwrap();
+
+    let server = MockServer::start_async().await;
+    let sent = Sent::default();
+    server.mock(|when, then| {
+        when.method(POST)
+            .path(format!("/g/{GROUP}/push"))
+            .is_true(tap(&sent));
+        then.status(200)
+            .json_body(serde_json::json!({ "cursor": 1 }));
+    });
+    server.mock(|when, then| {
+        when.method(GET).path(format!("/g/{GROUP}/pull"));
+        then.status(200).json_body(serde_json::json!({
+            "envelopes": [serde_json::to_value(&envelope).unwrap()],
+            "cursor": 3,
+        }));
+    });
+    server.mock(|when, then| {
+        when.method(POST).path(format!("/g/{GROUP}/ack"));
+        then.status(204);
+    });
+
+    let a = paired("dev-a", 0);
+    roster(&a, "dev-b");
+    set_state(&a, RELAY_URL, &server.base_url()).unwrap();
+    let outcome = run_once(&a).await.unwrap().unwrap();
+    assert!(outcome.baseline_ops > 0, "nothing was emitted at all");
+
+    let batches = pushed_baselines(&sent, &group);
+    assert_eq!(batches.len(), 1, "one batch of baseline ops was expected");
+    let cards: Vec<String> = batches[0]
+        .iter()
+        .filter(|op| op.table == "collection_entries")
+        .filter_map(|op| op.fields.get("card_id").and_then(|v| v.as_str()))
+        .map(str::to_owned)
+        .collect();
+    assert!(
+        cards.iter().any(|c| c == "from-b"),
+        "the baseline was built before the pull landed: {cards:?}"
+    );
+}
+
+/// **The marker is stamped only once the whole baseline has landed**, so a failed push is
+/// simply done again on the next run rather than leaving that peer empty for ever.
+///
+/// The outbox is empty here on purpose: the only thing that can POST is the baseline, so the
+/// 500 cannot be the ordinary push's.
+#[tokio::test]
+async fn a_failed_baseline_push_leaves_the_marker_unset() {
+    let server = MockServer::start_async().await;
+    let pushed = server.mock(|when, then| {
+        when.method(POST).path(format!("/g/{GROUP}/push"));
+        then.status(500).body("nope");
+    });
+    server.mock(|when, then| {
+        when.method(GET).path(format!("/g/{GROUP}/pull"));
+        then.status(200)
+            .json_body(serde_json::json!({ "envelopes": [], "cursor": 1 }));
+    });
+
+    let a = paired("dev-a", 0);
+    roster(&a, "dev-b");
+    set_state(&a, RELAY_URL, &server.base_url()).unwrap();
+    assert_eq!(unpushed_count(&a), 0, "the outbox must be empty here");
+
+    let error = run_once(&a).await.unwrap_err();
+    assert!(error.contains("500"), "{error}");
+    pushed.assert();
+    assert_eq!(
+        baselined_at(&a, "dev-b"),
+        None,
+        "a half-sent baseline must leave the marker NULL"
+    );
+    assert_eq!(
+        error_rows(&a).first().map(|r| r.0.clone()),
+        Some("push".to_owned())
+    );
+}
+
+/// ...and a successful one is not sent again on the next run.
+#[tokio::test]
+async fn a_baseline_is_sent_once_per_peer() {
+    let server = MockServer::start_async().await;
+    server.mock(|when, then| {
+        when.method(POST).path(format!("/g/{GROUP}/push"));
+        then.status(200)
+            .json_body(serde_json::json!({ "cursor": 1 }));
+    });
+    server.mock(|when, then| {
+        when.method(GET).path(format!("/g/{GROUP}/pull"));
+        then.status(200)
+            .json_body(serde_json::json!({ "envelopes": [], "cursor": 1 }));
+    });
+    server.mock(|when, then| {
+        when.method(POST).path(format!("/g/{GROUP}/ack"));
+        then.status(204);
+    });
+
+    let a = paired("dev-a", 0);
+    roster(&a, "dev-b");
+    set_state(&a, RELAY_URL, &server.base_url()).unwrap();
+
+    let first = run_once(&a).await.unwrap().unwrap();
+    assert!(first.baseline_ops > 0);
+    assert!(
+        baselined_at(&a, "dev-b").is_some(),
+        "the marker was not set"
+    );
+
+    let second = run_once(&a).await.unwrap().unwrap();
+    assert_eq!(second.baseline_ops, 0, "the baseline was sent twice");
+}
+
+/// **Spec §5.1: the outbox never holds a baseline op.** They are built in memory, sealed,
+/// pushed and forgotten — `sync_ops.counters` means deltas and a baseline holds values.
+#[tokio::test]
+async fn baseline_ops_are_never_written_to_sync_ops() {
+    let server = MockServer::start_async().await;
+    server.mock(|when, then| {
+        when.method(POST).path(format!("/g/{GROUP}/push"));
+        then.status(200)
+            .json_body(serde_json::json!({ "cursor": 1 }));
+    });
+    server.mock(|when, then| {
+        when.method(GET).path(format!("/g/{GROUP}/pull"));
+        then.status(200)
+            .json_body(serde_json::json!({ "envelopes": [], "cursor": 1 }));
+    });
+    server.mock(|when, then| {
+        when.method(POST).path(format!("/g/{GROUP}/ack"));
+        then.status(204);
+    });
+
+    let a = paired("dev-a", 0);
+    add_copy(&a, "c1", 1);
+    roster(&a, "dev-b");
+    set_state(&a, RELAY_URL, &server.base_url()).unwrap();
+    let before: i64 = a
+        .query_row("SELECT count(*) FROM sync_ops", [], |r| r.get(0))
+        .unwrap();
+
+    let outcome = run_once(&a).await.unwrap().unwrap();
+    assert!(outcome.baseline_ops > 1, "{outcome:?}");
+    let after: i64 = a
+        .query_row("SELECT count(*) FROM sync_ops", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(after, before, "a baseline op reached the outbox");
+}
+
+/// **Spec §9: every stored relay row carries a horizon**, because the receiver unions whatever
+/// it finds and chunks arrive independently — so it goes on the first op of *each* batch and
+/// not merely on the first batch of the emission.
+#[tokio::test]
+async fn every_pushed_batch_carries_a_horizon() {
+    let server = MockServer::start_async().await;
+    let sent = Sent::default();
+    server.mock(|when, then| {
+        when.method(POST)
+            .path(format!("/g/{GROUP}/push"))
+            .is_true(tap(&sent));
+        then.status(200)
+            .json_body(serde_json::json!({ "cursor": 1 }));
+    });
+    server.mock(|when, then| {
+        when.method(GET).path(format!("/g/{GROUP}/pull"));
+        then.status(200)
+            .json_body(serde_json::json!({ "envelopes": [], "cursor": 1 }));
+    });
+    server.mock(|when, then| {
+        when.method(POST).path(format!("/g/{GROUP}/ack"));
+        then.status(204);
+    });
+
+    let a = paired("dev-a", 0);
+    // A full batch of entries plus the seeded folder, so the emission is cut in two.
+    for i in 0..wire::BATCH {
+        add_copy(&a, &format!("c{i}"), 1);
+    }
+    roster(&a, "dev-b");
+    set_state(&a, RELAY_URL, &server.base_url()).unwrap();
+    let outcome = run_once(&a).await.unwrap().unwrap();
+    assert_eq!(outcome.baseline_ops, wire::BATCH + 1);
+
+    let group = identity::group(&a).unwrap().unwrap();
+    let batches = pushed_baselines(&sent, &group);
+    assert_eq!(
+        batches.len(),
+        2,
+        "{} ops is two stored rows",
+        wire::BATCH + 1
+    );
+    for (i, ops) in batches.iter().enumerate() {
+        let horizon = ops[0]
+            .horizon
+            .as_ref()
+            .unwrap_or_else(|| panic!("batch {i} carries no horizon"));
+        assert!(
+            horizon.seen.contains_key("dev-a"),
+            "the horizon must name the emitter's own top stamp: {horizon:?}"
+        );
+    }
+}
+
+/// **The trip a revocation makes, which emits nothing.** Spec §12.4: `sync_device_revoke` runs
+/// a round trip before it rotates the group key, to absorb the departing device's last push —
+/// but a full baseline handed to a peer one statement before it is marked gone is thousands of
+/// ops pushed at a device that will never read them. Push, pull and ack still happen, because
+/// this device's own pending ops have to reach the relay before the epoch moves.
+#[tokio::test]
+async fn the_revoke_trip_pushes_and_pulls_and_emits_no_baseline() {
+    let server = MockServer::start_async().await;
+    let sent = Sent::default();
+    let pushed = server.mock(|when, then| {
+        when.method(POST)
+            .path(format!("/g/{GROUP}/push"))
+            .is_true(tap(&sent));
+        then.status(200)
+            .json_body(serde_json::json!({ "cursor": 1 }));
+    });
+    let pulled = server.mock(|when, then| {
+        when.method(GET).path(format!("/g/{GROUP}/pull"));
+        then.status(200)
+            .json_body(serde_json::json!({ "envelopes": [], "cursor": 1 }));
+    });
+    let acked = server.mock(|when, then| {
+        when.method(POST).path(format!("/g/{GROUP}/ack"));
+        then.status(204);
+    });
+
+    let a = paired("dev-a", 0);
+    add_copy(&a, "c1", 1);
+    roster(&a, "dev-b");
+    set_state(&a, RELAY_URL, &server.base_url()).unwrap();
+
+    let outcome = run_once_without_baselines(&a).await.unwrap().unwrap();
+
+    // What must NOT have happened, asserted first. `Mock::assert` fails on a *second* call as
+    // well as on none, so leaving it above would report an emitted baseline as an arithmetic
+    // complaint about a request count.
+    let group = identity::group(&a).unwrap().unwrap();
+    assert!(
+        pushed_baselines(&sent, &group).is_empty(),
+        "a baseline was pushed at a device about to be revoked"
+    );
+    assert_eq!((outcome.baseline_ops, outcome.baseline_history), (0, 0));
+    assert_eq!(
+        baselined_at(&a, "dev-b"),
+        None,
+        "the marker must not move on a trip that emitted nothing"
+    );
+
+    // ...and what must: the outbox reaches the relay before the epoch moves, and this device
+    // takes the departing one's last words with it on the way past.
+    pushed.assert();
+    pulled.assert();
+    acked.assert();
+    assert!(
+        outcome.pushed > 0,
+        "the outbox still has to reach the relay"
+    );
+    assert_eq!(unpushed_count(&a), 0);
+}

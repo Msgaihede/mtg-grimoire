@@ -292,9 +292,27 @@ a wiped phone re-pairs. A pairing-time one-shot would work exactly once and then
 
 **The trigger is a peer that needs one.** A row in `sync_devices` that is
 
-- **not revoked** (`revoked_at IS NULL` — see §12),
-- has **no watermark** in `sync_peers`, and
+- **not revoked** (`revoked_at IS NULL` — see §12), and
 - has **no `baselined_at`**, or one older than the relay's tail.
+
+**The marker alone is the whole condition, and `sync_peers` is deliberately not consulted.** The
+first draft of this section also required the peer to have no watermark, which reads as the
+natural spelling of "never heard from" and breaks two of the cases below — it makes §12.4's
+rotation repair a **no-op**, because the devices that remain have been syncing for months and all
+have watermarks, and it means a device that is revoked and later re-paired is never baselined and
+so can never read anything sealed under the old epoch.
+
+| case | `baselined_at` | baselined? |
+| --- | --- | --- |
+| a peer never seen before | NULL | yes |
+| already done | set, recent | no |
+| after a key rotation, which clears it (§12.4) | NULL | **yes — the repair works** |
+| revoked, then re-paired | NULL | **yes** |
+| marker older than the relay's tail (§10.1) | stale | yes |
+
+Re-emitting to a peer that did not strictly need one is *harmless* — claims resolve by `max`, the
+grain finds the same row, and the horizon filters — which is what lets the marker carry this
+alone. It is also why `add_device` must clear `baselined_at` when it puts a revoked device back.
 
 That covers the first pairing, a third device joining later, and a device wiped and re-paired —
 all the same condition, detected the same way.
@@ -304,10 +322,10 @@ INTEGER;` — NULL means "this peer has never been sent a baseline". **This is t
 schema change**, and it makes user schema v30.
 
 It goes on the **roster** and not on `sync_peers`, and that is the whole reason to name the table
-here: `sync_peers` only gains a row once a peer has *acked* something, so a peer that needs a
-baseline is precisely a peer with no row there. A marker on a table whose absence is the trigger
-cannot work. `sync_devices` has one row per device in the group from the moment pairing completes
-— verified on the live pair, two rows.
+here: `sync_peers` has no row for a peer that has never acked, so a marker kept there would be
+absent exactly when it needed to say something. `sync_devices` has one row per device in the group
+from the moment pairing completes — verified on the live pair, two rows — which is what lets the
+marker be the trigger's only term.
 
 ### 10.1 The marker re-arms, and it has to
 
@@ -330,8 +348,15 @@ is chosen by the roster rather than by who started the pairing.
 
 **Pull before emit.** A joining device is handed the state of whichever device it paired with, so
 `client::run_once` must complete its pull before it emits — otherwise a host that is behind
-speaks for the group in a voice that is out of date. Today's order is push, pull, ack; the
-baseline is emitted after the pull and before the push that carries it.
+speaks for the group in a voice that is out of date. Today's order is push, pull, ack; it becomes
+**push, pull, emit, ack**, and the emission does its own push rather than feeding the first one.
+It cannot feed the first one: a baseline is never written to `sync_ops` (§5.1), and `push` sends
+what the outbox holds.
+
+**And a revocation must not emit one.** `sync_device_revoke` syncs before it rotates (§12.4), which
+would otherwise hand a full baseline to the device being removed — correct but wasteful, and
+potentially thousands of ops pushed one statement before that peer is marked gone. It therefore
+calls a variant that keeps push, pull and ack and drops only the emission.
 
 **Ordering.** Rows are emitted parents-first — folders, decks, categories, then entries, cards,
 wishes, tags, audit. `apply` re-imposes that order by table anyway and the deferral machinery

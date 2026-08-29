@@ -713,6 +713,12 @@ pub fn op_from_row(row: &rusqlite::Row) -> rusqlite::Result<(i64, super::merge::
                 ctr: row.get(8)?,
                 device: row.get(9)?,
             },
+            // Constants rather than column reads, because **the outbox never holds a baseline
+            // op** (spec §5.1): a baseline is built in memory, sealed and pushed without ever
+            // touching `sync_ops`, so a row read back from that table is by construction an
+            // ordinary delta and carries no horizon.
+            baseline: false,
+            horizon: None,
         },
     ))
 }

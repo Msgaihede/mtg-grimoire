@@ -3,7 +3,7 @@ import type { QueryKey } from "@tanstack/react-query";
 import { Copy, Link2, RefreshCw, ShieldCheck, X } from "lucide-react";
 import { useState, type JSX } from "react";
 import { copyText } from "@/lib/clipboard";
-import { plural } from "@/lib/counts";
+import { count, plural } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
 import {
   ipc,
@@ -375,6 +375,18 @@ export function relayNote(
  * `deferred` is the one worth reading twice: a peer's stream is stalled on an op whose parent
  * has not arrived, which self-heals on a later pull. Saying "waiting" rather than "failed" is
  * the difference between a reader pressing again in a minute and one filing a bug.
+ *
+ * **The baseline clause is the one that has to explain a number rather than report it** (baseline
+ * spec §13). A first exchange moves every row this device holds — 1 069 on the measured pair,
+ * against the four or nine an ordinary trip carries — and a figure three orders of magnitude off
+ * the sentence above it reads as a fault unless something says what it is. `deck_audit` gets a
+ * clause of its own for §7's reason: history is the one synced table with no ceiling, so it is
+ * the part of the total that can surprise, and a reader told only the sum cannot tell a large
+ * collection from a long one.
+ *
+ * **It is the one clause here that counts through `count` rather than `plural`.** Every other
+ * number in this sentence is a handful of changes; this one reaches four digits, which is the
+ * case `plural`'s own doc comment hands to `count`.
  */
 export function outcomeText(outcome: RelayOutcome | null): string {
   if (outcome === null) {
@@ -396,6 +408,21 @@ export function outcomeText(outcome: RelayOutcome | null): string {
   }
   if (outcome.resurrected > 0 || outcome.cyclesBroken > 0) {
     parts.push("Needs review, just below, says which.");
+  }
+  if (outcome.baselineOps > 0) {
+    parts.push(
+      "This was the first exchange with a device that had not heard from this one, so " +
+        `everything here went across — ${count(outcome.baselineOps)} rows.`,
+    );
+    // Nested rather than a clause of its own: history rows are *among* the baseline's, so a
+    // count with no baseline behind it is a state the backend cannot produce, and drawing "0 of
+    // those" on a routine trip is the noise every other clause here is guarded against.
+    if (outcome.baselineHistory > 0) {
+      parts.push(
+        `${count(outcome.baselineHistory)} of those are deck history — a deck's story reads ` +
+          "the same wherever it is opened, so it goes across too.",
+      );
+    }
   }
   if (outcome.deferred > 0) {
     parts.push(

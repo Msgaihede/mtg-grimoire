@@ -112,6 +112,10 @@ const OUTCOME: RelayOutcome = {
   cyclesBroken: 0,
   skipped: 0,
   deferred: 0,
+  // An ordinary trip, which is every trip but the first with a given device — so both baseline
+  // counts are zero and the panel must say nothing at all about a first exchange.
+  baselineOps: 0,
+  baselineHistory: 0,
 };
 
 /** A 21×21 matrix with a third of its modules dark — enough for the drawing test to count. */
@@ -545,5 +549,24 @@ describe("outcomeText", () => {
     expect(text).toMatch(/Moved 1 folder to the top level/);
     expect(text).toMatch(/Needs review, just below, says which\./);
     expect(text).toMatch(/3 changes arrived before the change they build on/);
+  });
+
+  /**
+   * Baseline spec §13, and the numbers measured on the real pair. **The thousands separator is
+   * the assertion that is not decoration**: `plural` writes its number plainly, which is right
+   * for the four clauses that count changes in a sync and wrong here — a baseline is the one
+   * figure in this sentence that reaches four digits, so it goes through `count`.
+   */
+  it("says a first exchange is a first exchange, and names the history separately", () => {
+    const text = outcomeText({ ...OUTCOME, baselineOps: 1069, baselineHistory: 240 });
+    expect(text).toMatch(/first exchange/i);
+    expect(text).toMatch(/1,069/);
+    expect(text).toMatch(/240 .*(history|deck)/i);
+  });
+
+  /** Zero is the state of every sync but one, so the clause has to be absent rather than
+   *  drawn empty — "0 rows went across" on a routine trip is the whole of what §13 is against. */
+  it("says nothing about a baseline on an ordinary sync", () => {
+    expect(outcomeText(OUTCOME)).not.toMatch(/first exchange/i);
   });
 });
