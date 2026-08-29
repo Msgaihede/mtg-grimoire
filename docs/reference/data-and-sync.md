@@ -164,6 +164,51 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   exactly that way: the uncollapsed baseline was taken before the index existed and the
   collapsed figures after, which credited the grouping with a 2.3× win the index had paid
   for. A `#[test]` calling `run_search` found it in one run.
+- **PR #282 put the front face's picture on `CardSummary`, and it cost the query nothing that can
+  be measured.** Two `json_extract`s a row joined both branches of the page `SELECT` —
+  `image_uris` and `face_image_uris[0]` for the `display` variant, folded in Rust by
+  `image_uri::front_face_map` and fenced by `is_fetchable`. Re-measured 2026-08-29 the way the two
+  figures above were: **release** build, through `run_search` itself, against a byte copy of the
+  dev pair (`user.db` + `corpus.db` — **117 606 printings, 108 261 of them paper**), `limit: 50`,
+  `offset: 0`, TCGplayer, medians of five after two warm-ups. Two binaries were built from one
+  tree with the two `json_extract`s replaced by `NULL` in one of them, and **run alternately in a
+  single session**, four rounds each, so whatever the desk is doing falls on both:
+
+  | arrangement                                       | with the pictures | without      | delta           |
+  | ------------------------------------------------- | ----------------- | ------------ | --------------- |
+  | uncollapsed browse                                 | **28.7 ms**       | 28.4 ms      | +0.4 ms, +1.2 % |
+  | collapsed browse                                   | **146.6 ms**      | 149.6 ms     | −3.1 ms, −2.0 % |
+  | collapsed + `playableOnly` — what the wall sends   | **137.4 ms**      | 139.3 ms     | −1.9 ms, −1.3 % |
+
+  Medians over the 20 pooled samples per cell. **Two of the three deltas have the wrong sign**,
+  and that is the whole reading: the difference is under the run-to-run spread — the eight round
+  medians for the collapsed browse span **141.6–159.7 ms**, a band that straddles both variants —
+  so no cost can be resolved out of it. The minima say the same (140.7 with against 142.5
+  without), and they are the least load-contaminated statistic available. It is what the shape
+  predicts: the two columns are read off a `cards` row the query is already holding, for the
+  **50 rows the page produces**, while every figure in the collapsed column is dominated by the
+  count walking to `TOTAL_CAP`. What the `NULL` variant does *not* back out is the per-row
+  `front_face_map` call, which still runs over two NULL columns — 50 map lookups a page, and not
+  a thing a stopwatch can see either.
+
+  **The 2026-08-11 pair — 25 ms / 145 ms — corroborates rather than decomposes**, which is the
+  standard the bullet above it sets and it applies here too: a different machine-day and a
+  different corpus (107 337 paper rows against today's 108 261), so it cannot carry a delta on
+  its own. What it does say is that the with-pictures browse is still where that session left
+  it, 146.6 ms against 145 ms, so the with-and-without pair is not being read against a corpus
+  that has drifted somewhere else entirely.
+
+  **To a reader, the pictures are free.** A collapsed browse is ~147 ms carrying them and ~150 ms
+  without; the wall's own request is ~137 ms either way. Those differences sit under the IPC hop
+  and the paint that follow them, and the 123 B a row the payload grew buys the browser build a
+  wall that can draw art at all — `mtgimg://` is a Tauri protocol and wasm cannot register a URL
+  scheme, so on web the URL travels with the row or there is no picture.
+
+  **One caveat, because it nearly became a fiction.** The first with-and-without pair taken this
+  session read 28.4 / 146.6 against 61.4 / 318.9 — a 2× "regression" that reproduced on a second
+  run. It was the machine: rebuilding the *with* binary and running it again gave 57.7 / 276.7
+  too. **Two builds measured minutes apart on this desk are not comparable to each other**, and
+  the table above is four alternating pairs inside one quiet session for exactly that reason.
 - **v9 widened `idx_cards_collapse` to carry `legal_mask`, `cmc` and `color_identity`, and a
   filtered collapsed browse went 505 ms → 41 ms for it.** Measured 2026-08-11 over the live
   corpus: 455–505 ms without the three columns against 22–47 ms with them, because without
