@@ -517,6 +517,39 @@ saying different things."
 
 > **Nothing in 9a measured this**, because until one option per surface was chosen there was no stack to measure. Every task above spends or saves on the vertical, and the vertical is the scarce axis: ribbon 58 + `main`'s 40 + a 273px shut filter bar left ≈**329px** of wall against a ~700px visible viewport *before* the bar's 53px. **If the assembled answer is one tile row, this plan has not succeeded**, and the thing to re-open is what the chrome spends vertically rather than which layout won.
 
+> ### ✅ Done 2026-08-29, and the answer is that it has not succeeded
+>
+> Driven on the OnePlus in Chrome 152, portrait, against the production web build with a
+> 117 606-card corpus built on the device. **Both halves of the budget were wrong, independently,
+> and neither is visible from a desktop.** The full record with every figure is in
+> [frontend-design.md](../../reference/frontend-design.md) under *"The phone layout on an actual
+> phone"*; the two results are:
+>
+> 1. **The device is 360 CSS px wide, not `PHONE_PX`'s 390.** The wall is **294** rather than 324,
+>    so `columnsFor(294, 144)` is **1** — measured, not computed: the rows are 226 × 294 carrying
+>    **one tile each**. G1 misses its second column by **three pixels** on this hardware. The
+>    largest tile that gives two at 360 is **141**.
+> 2. **The shut filter bar is 381px, not 273, and the wall gets 99** against a 226px row — 44 % of
+>    one. **108px of that is Task 7's touch floor**, isolated on the device by setting
+>    `--target-min: 0px` and re-reading: the bar falls to **exactly 273** — the plan's own
+>    predicted figure, because that measurement predates `coarse:` having a consumer — and the
+>    wall rises to 207. Restored, it returns to 381/99.
+>
+> **So 9b's two decisions are in direct conflict and the size of it is now known.** F1 buys a
+> reachable control on the axis that had room and spends 108px on the axis that had none. That is
+> not an argument against the floor — every chip measures 44 × 44 on hardware where it is 32, and
+> `(pointer: coarse)` is genuinely `true` — it is the price, and **it is what 9c spends next**.
+>
+> **What did work, measured:** the tab bar is exactly 53px, there is no horizontal overflow,
+> `100dvh` is 696 against `100lvh`'s 752 so `h-dvh` is right, and every touch target clears 44px.
+>
+> **Step 4's owed dialog reading is discharged with the good outcome**: a `fixed inset-0` box
+> resolves to **696** — `visualViewport`, `dvh` and `svh` alike — against `lvh`'s 752. `Dialog`
+> already clamps to the visible viewport and its footer never lands under the URL bar. No change.
+>
+> **Step 3b is not settled and was not driven.** With a 99px wall there is no honest drag to make;
+> a reader who cannot see a tile cannot drag one. Re-ask it once the vertical is fixed.
+
 - [ ] **Step 1** — Build the web target and serve it (`npm run build:wasm`, `npm run web:build`, then `vite preview --config vite.web.config.ts`). **`npm run web:dev` registers no service worker at all**, so a dev-server reading answers nothing about caching — and it cost a pass on 2026-08-29.
 - [ ] **Step 2** — `adb reverse tcp:4173 tcp:4173` and open it on the phone. **This is the only instrument where the URL bar, the safe area and a coarse pointer are real rather than emulated**: `cdp.mjs size` hardcodes `mobile: false` and emulates a narrow *desktop*.
 - [ ] **Step 3** — In one expression, read `visualViewport.height`, the ribbon's box, `main`'s content box, the filter bar's height, the bar's height, and how many tile rows are visible. One expression because a rect and a viewport taken minutes apart can be at two different sizes.
