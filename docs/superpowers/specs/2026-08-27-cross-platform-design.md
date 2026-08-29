@@ -465,6 +465,12 @@ the new key, and the removed device can read nothing further.
 
 ### 7.7 The relay
 
+> ⚠️ **Superseded 2026-08-29 by
+> [the hosted relay design](2026-08-29-hosted-relay-and-patreon-design.md).** Readers no longer
+> deploy their own relay; one deployment serves everyone, gated on Patreon membership, and the
+> free-tier table below is superseded by that spec's §8 — which corrects the request figure for
+> counting pulls alone against a poll that was never built.
+
 **One SQLite-backed Durable Object per pairing group. No R2, no KV.**
 
 It holds a compacted op log — one row per change, latest-wins, **batched ~200 ops per stored

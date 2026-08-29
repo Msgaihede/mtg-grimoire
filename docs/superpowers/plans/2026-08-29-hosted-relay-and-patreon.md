@@ -266,7 +266,7 @@ Requirements the tests pin, each of which is a real way to get this wrong:
 - [ ] **Step 4: Run the test and watch it pass**
 
 Run: `npm run test:run -- relay/src/md5.test.ts`
-Expected: PASS, 12 tests.
+Expected: PASS, 13 tests.
 
 - [ ] **Step 5: Type-check the relay program alone**
 
@@ -393,7 +393,7 @@ Expected: FAIL — cannot resolve `./token`.
 - [ ] **Step 4: Run the test and watch it pass**
 
 Run: `npm run test:run -- relay/src/token.test.ts`
-Expected: PASS, 10 tests.
+Expected: PASS, 11 tests.
 
 - [ ] **Step 5: Type-check**
 
@@ -569,6 +569,10 @@ fails. Restore. **Report any survivor.** Do not commit.
   - `pub fn base(conn: &Connection) -> String`
   - `pub fn refresh_secret(conn: &Connection) -> Option<String>`
   - `pub fn store_grant(conn: &Connection, access: &str, refresh: &str, expires: i64) -> Result<(), String>`
+  - `pub const SUPPORTER_STATUS: &str = "supporter_status"`, `pub const SUPPORTER_SINCE: &str = "supporter_since"`
+  - `pub fn store_status(conn: &Connection, status: &str, since: Option<i64>) -> Result<(), String>`
+  - `pub fn supporter_state(conn: &Connection) -> (String, Option<i64>)` — the stored status, or
+    `("dead".to_owned(), None)` when nothing has been stored
   - `pub fn clear(conn: &Connection) -> Result<(), String>`
   - `pub async fn access_token(conn: &Connection) -> Result<Option<String>, String>` — returns the
     stored token, refreshing it first when fewer than `REFRESH_MARGIN_SECS` remain
@@ -695,14 +699,28 @@ Expected: FAIL to compile — the functions do not exist.
 - `REFRESH_MARGIN_SECS: i64 = 6 * 60 * 60`.
 - `base` reads `client::RELAY_URL`, trims whitespace and trailing `/`, and falls back to
   `RELAY_BASE` when the result is empty.
-- `store_grant` writes all three keys; `clear` deletes all three.
+- `store_grant` writes all three token keys; `clear` deletes **all five** — the two supporter
+  keys as well.
+- **`store_status` and `supporter_state` exist because `since` has no local source.** The
+  entitlement row and its `created_at` live on the relay; a device knows only what the relay last
+  told it. So `/claim` and `/token` answer `{access, refresh, expires, status, since}`, and `claim`
+  and the refresh path both call `store_status` with the last two. `store_grant` keeps its
+  three-argument shape because Task 9 calls it directly.
 - `access_token` returns `Ok(None)` when there is no refresh secret. Otherwise, if
   `ACCESS_EXPIRES` is missing or within the margin, it calls `POST {base}/token` with
   `{"refresh": …}` and stores the answer. **A 401 from `/token` calls `clear` and returns
   `Ok(None)`** — the membership has ended, which is a state and not an error.
 - `claim` calls `POST {base}/claim` with `{"code": …}` and stores the answer.
-- Both use `client::http()` — make it `pub(crate)` if it is not already — and must **not** record
-  a 401 through `errors::note`. Spec §10: a 401 is a sentence, not an `error_log` row.
+- **Both use an `http()` helper defined in THIS file, not `client::http()`.** Reaching into
+  `client.rs` to widen its visibility would put two agents in one file in the same wave. Copy the
+  shape from `client.rs:158` — a `OnceLock<reqwest::Client>` on native, a bare `Client::new()`
+  under `#[cfg(target_family = "wasm")]` because reqwest's wasm client is not `Sync` — and say in
+  a comment that the duplication is deliberate: an entitlement call is a short control-plane
+  request and does not want the relay client's 30-second read timeout. Neither may record
+  a 401 through `errors::record`. Spec §10: a 401 is a sentence, not an `error_log` row.
+  *(`errors::record` is the shared function in `errors.rs:156`. `note` is `client.rs:197`'s
+  own private wrapper over it and is not reachable from this module — an earlier draft named
+  it here.)*
 
 - [ ] **Step 5: Run and watch it pass**
 
@@ -820,11 +838,50 @@ sibling touches.
   `I`, `L`, `O` and `U` — in three groups of four. It is the alphabet `sync_pair::invite` already
   uses, chosen for the confusions a person makes copying between two screens, which is exactly
   what this code is for. Store it in `claim_codes` with `expires_at = now + 10 minutes`.
-- `POST /claim {code}` — look up and **delete** the code (one-time), load the entitlement, refuse
-  a `dead` one with 403, bind `group_id` if it is `NULL`, refuse with 409 if it is bound to a
-  different group, mint a `refresh_secret` if absent, and answer `{access, refresh, expires}`.
+- `POST /claim {code, group}` — look up and **delete** the code (one-time), load the entitlement,
+  refuse a `dead` one with 403, bind `group_id` from the body if it is `NULL`, refuse with 409 if
+  it is bound to a different group, mint a `refresh_secret` if absent, and answer
+  `{access, refresh, expires, status, since}`.
 - `POST /token {refresh}` — look up by `refresh_secret`, refuse a `dead` one **and a `grace` one
-  whose window has closed** with 401, and answer a fresh `{access, refresh, expires}`.
+  whose window has closed** with 401, and answer a fresh
+  `{access, refresh, expires, status, since}`.
+
+**⚠️ Two contract corrections, found by review of Wave 1 and both fatal in silence. The Rust half
+is already built to these; getting either wrong makes both halves pass their own tests and fail
+together at runtime.**
+
+- **`/claim` carries the group id in its body**, and the token's `grp` is stamped from it. There
+  is no other channel — `/claim` has no `Authorization` header (the device holds no token yet)
+  and `claim_codes` has no group column. With `{code}` alone the relay has nothing to bind and
+  nothing to put in `grp`, so the claim succeeds and every later push, pull and ack 401s on a
+  group mismatch: Patreon connects, then sync is broken for ever.
+- **`expires` and `since` go out as unix SECONDS**, not milliseconds. This file counts in ms
+  (`TOKEN_TTL_MS`, `nowMs`) and the app counts in seconds (`unixepoch()`). So convert at the
+  boundary — `Math.floor(claims.exp / 1000)` — and say in a comment that the wire is seconds
+  because the app is. If ms reached the app, `expires - now` would be ~1.7e12, always exceed the
+  refresh margin, the token would never refresh, and the relay would 401 every sync request a day
+  later **on the sync route rather than on `/token`**, where nothing is watching. Sync dies
+  silently and permanently.
+
+**Five call-site obligations that Wave 1's tests provably cannot enforce.** Each was found by
+review against the module it constrains; all five are yours.
+
+1. **Reject a missing `X-Patreon-Signature` before comparing.** `timingSafeEqualHex("", "")` is
+   `true` and is now a pinned behaviour, so `timingSafeEqualHex(header ?? "", expected ?? "")`
+   authenticates an *unsigned* webhook — on the one path where failing open deletes a reader's
+   log.
+2. **Never call `verify(token, …)` with `null`.** It throws on `token.split(".")`, and the
+   `Authorization` header is `string | null` in workerd. The gate code below coalesces; keep it
+   that way. This is the one remaining route from a 401 to a 500.
+3. **Never spell the secret `String(env.RELAY_HMAC_KEY)`.** An unset binding then signs with the
+   literal text `"undefined"` and every token verifies. Unset must throw loudly, which is what
+   `token.ts` is written for.
+4. **`claim_codes` enforces neither one-time nor ten-minute expiry** — both live only in a
+   comment. Single-use means `DELETE` in the *same transaction* as the read, never
+   read-then-delete; expiry means a `WHERE expires_at > ?` you must remember.
+5. **Write `grace_until` unconditionally from the `Decision`, including on `dead`.** A stale value
+   is picked up by `decide`'s `??` the next time a subject flaps to `declined_patron`, handing
+   them an already-spent window.
 - `POST /webhook/patreon` — verify the signature and **refuse an unverified body with 401 before
   reading it**. An unverified `pledge:delete` deletes a reader's log; this is the one failure in
   the design that destroys data. Then `decide(...)`, update the row, and on `dead`: clear
@@ -991,8 +1048,17 @@ Expected: FAIL to compile, or the three new tests fail.
   **above** the existing `me(conn)?.is_none()` check.
 - Thread `&token` into `post_ops`, `pull` and `ack`, adding
   `.header("authorization", format!("Bearer {token}"))` to each.
-- In each of those three, a `401` calls `entitlement::clear(conn)` and returns the error
-  **without** calling `note`. Every other status keeps the existing `note` path unchanged.
+- In each of those three, a `401` calls **`entitlement::revoke(conn)`** — *not* `clear` — and
+  returns the error **without** calling `note`. Every other status keeps the existing `note` path
+  unchanged.
+
+  **⚠️ Corrected after Task 4's review: this step said `clear`, and `clear` is the wrong verb
+  here.** The two are different by design. `clear` is *Disconnect* and deliberately leaves no
+  mark; `revoke` is *the membership ended* and leaves the mark that `entitlement::membership_ended`
+  reads. Calling `clear` on a sync-route 401 erases that mark, and the panel then shows a lapsed
+  reader "Not connected" instead of "Membership ended" — which is exactly the state spec §7.1
+  requires, because it is the one that carries the sentence telling them their local data is
+  untouched. Task 4 discovered this against its own code and could not fix it here.
 
 - [ ] **Step 5: Run and watch it pass**
 
@@ -1002,7 +1068,10 @@ Expected: PASS. **Report the selected test count** — a filter matching nothing
 - [ ] **Step 6: Mutate, then report**
 
 Remove the header from `ack` alone and confirm the first test fails naming `/ack`. Make the 401
-path call `note` and confirm the second fails. Restore. **Report any survivor.** Do not commit.
+path call `note` and confirm the second fails. Swap `revoke` back to `clear` and confirm a test
+catches it — **if nothing does, that is a finding**, because it is precisely the defect the
+correction in Step 4 exists to prevent, and it fails by showing a lapsed reader the wrong
+sentence rather than by breaking anything. Restore. **Report any survivor.** Do not commit.
 
 ---
 
@@ -1378,10 +1447,19 @@ git commit -m "feat(sync): host the relay and gate it on Patreon"
 - [ ] **Step 6: What no test reaches**
 
 Deploy is Markus's, and these need the real thing: `wrangler d1 create` and applying `schema.sql`;
-`wrangler secret put` for the four secrets; the Patreon app's redirect URI; and one live pass —
+`wrangler secret put` for the four secrets; **a Cloudflare notification at ~70% of the daily
+request cap** (decided 2026-08-29 — the free ceiling is a cliff, not a slope, and the alarm is what
+turns it into warning rather than complaints); creating the Patreon OAuth app and registering its
+redirect URI as `{RELAY_BASE}/oauth/patreon/callback` **byte for byte**; and one live pass —
 consent screen, landing page, pasted code, a sync, then a real `pledge:delete` webhook. Write it up
-in `docs/superpowers/research/` with the date and the build. **`RELAY_BASE` carries a placeholder
-hostname until that deploy.**
+in `docs/superpowers/research/` with the date and the build.
+
+**`RELAY_BASE` holds the real hostname** — `https://mtg-grimoire-relay.denmark-east.workers.dev`,
+committed deliberately (it ships in every binary anyway, and what guards the endpoints is the
+token, not the address being unguessable). **`PATREON_CLIENT_ID` is still an unset placeholder.**
+What is *not* deployed at that URL is this design's Worker code — the auth gate, `/claim`,
+`/token`, the callback, the webhook and the D1 binding — so a device pointed there today reaches
+a live baseline relay that does not speak the endpoints the app now calls.
 
 ---
 

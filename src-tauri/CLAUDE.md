@@ -803,12 +803,44 @@ Six layers and five commands; the whole record, with every measurement, is
 - **Six tables can hold a `needs_review` sentence** since v29, and `sync_engine::commands::REVIEWABLE`
   is the list, held to `sqlite_master` by a test. The sentences are Rust's, following
   `reconcile.rs`, and the first message wins.
-- **The relay's address is `sync_state.relay_url` and is empty by default.** It is never in this
-  repository, in a test, or in a default: this repo is public and the URL is the reader's own.
-  Every client test is against `httpmock`.
-- **Every relay failure goes to `error_log` under `Source::Relay`** with the operation
-  (`push`/`pull`/`ack`), folding on the existing grain so a bad afternoon is one row with a count.
-  `pushed_at` is stamped only on a 200.
+- **The relay's address is `entitlement::RELAY_BASE`, compiled in and public, and this reverses
+  what this file said.** One deployment serves every reader, so an address stopped being a
+  setting: `entitlement::base` answers the override when `sync_state.relay_url` holds one and
+  `RELAY_BASE` otherwise, and **it never answers `None`** — which is the difference from
+  `client::relay_url` as it was. This line read "it is never in this repository, in a test, or in
+  a default: this repo is public and the URL is the reader's own". An API base is on the wire of
+  every request that uses it, so being public is what it is *for*, and it belongs here — as does
+  `entitlement::PATREON_CLIENT_ID`, for the same reason — **but the two are not a matched pair
+  and must not be read as one.** `RELAY_BASE` holds a real hostname, committed with Markus's
+  approval; it is the baseline relay the 2026-08-29 pass ran against, and **what is not deployed
+  at it is this design's Worker code** — no auth gate, no `/claim`, no `/token` — so a device
+  pointed there today reaches a live relay that does not speak the endpoints this crate now calls.
+  `PATREON_CLIENT_ID` is **still a placeholder** and is not settled. **A *guess* is the one thing
+  that must never go in either constant**: a plausible-looking value gets copied into
+  documentation and eventually deployed against, where one that cannot resolve is caught by the
+  first person who tries it.
+  **What must never be in this repository, a test or a default are the four secrets the
+  relay holds** (spec §9): `PATREON_CLIENT_SECRET`, `PATREON_WEBHOOK_SECRET`,
+  `PATREON_CREATOR_TOKEN` and `RELAY_HMAC_KEY`. `relay_url` stays as a **test/dev override with
+  no UI** — and a blank is not an override, because every installation that predates this holds
+  `""` there and reading that as a base builds the relative URL `/g/…`. Every test is against
+  `httpmock`, never a deployed Worker.
+- **A sync failure goes to `error_log` under `Source::Relay`; an entitlement failure goes
+  nowhere.** `client.rs` records `push`/`pull`/`ack` through its own `note`, folding on the
+  existing grain so a bad afternoon is one row with a count, and `pushed_at` is stamped only on a
+  200. This line read "**every** relay failure", and `entitlement.rs` is the exception:
+  **nothing in that module writes to `error_log` on any path.** A 401 there means the membership
+  ended, and routing it through `errors::record` like a network failure tells the reader their
+  sync is broken when in fact their pledge lapsed — the wrong sentence, pointing at the wrong fix
+  (spec §10).
+- **That exception is a condition and not a principle, and it is true today and only today.**
+  Every path in `entitlement.rs` is a press — Settings' connect button, its paste field, and the
+  **Sync now** button, which is `run_once`'s only caller — so the failure is already on the
+  screen of the reader who caused it, and `error_log` is for the failures nobody was watching.
+  **`client.rs`'s own module doc still plans a 60-second poll, and when one lands the argument
+  inverts**: a refresh that fails in the background is exactly a failure nobody was watching, and
+  the non-401 paths in `entitlement::post_for_grant` owe an `errors::record` then. **The 401 rule
+  does not invert** — a lapse is never an `error_log` row, whatever triggered the request.
 - **`sync_engine` compiles for `wasm32-unknown-unknown` and that is a requirement, not a bonus** —
   spec §2's one-implementation rule. Only `sync_engine::commands` is gated off it, because a
   `#[tauri::command]` does not exist in a browser. So are `sync_pair::pairing` and nothing else in

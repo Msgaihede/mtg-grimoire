@@ -49,9 +49,13 @@ address. There is no directory of readers anywhere in the relay, and this design
 
 Each of these is a load-bearing number that the existing documents get wrong.
 
-**3.1 There is no polling. The scheduler was specified and never built.** `client::run_once` has
-exactly two callers: `sync_now` (`sync_engine/commands.rs:208`) and the revoke path in
-`sync_pair/pairing.rs:543`. In the frontend, `ipc.syncNow()` is called from one place — a mutation
+**3.1 There is no polling. The scheduler was specified and never built.** `client::round_trip` has
+exactly two callers in production, one through each of its wrappers: `sync_now`
+(`sync_engine/commands.rs:208`) calls `run_once`, and the revoke path
+(`sync_pair/pairing.rs:543`) calls `run_once_without_baselines`. *(An earlier draft of this
+section named `run_once` for both — the revoke path deliberately uses the other wrapper, which
+is §7's whole point about not baselining a device you are about to remove.)* In the frontend,
+`ipc.syncNow()` is called from one place — a mutation
 behind the **Sync now** button (`SyncPanel.tsx:483`). There is no `setInterval`, no
 `refetchInterval` and no Rust timer. `client.rs`'s module doc and sync.md's "pull every 60 s while
 the window has focus" describe a design, not shipped code. **Sync today is manual.**
@@ -168,7 +172,26 @@ which is exactly what this code is for. It is one-time and expires in 10 minutes
 
 ### 6.2 The token — what is on the wire
 
-`POST /claim {code}` and `POST /token {refresh}` both answer `{access, refresh}`.
+`POST /claim {code, group}` and `POST /token {refresh}` both answer
+`{access, refresh, expires, status, since}`.
+
+**⚠️ Corrected 2026-08-29, twice, and both corrections are contract bugs no test on either side
+would have caught.** This section first said `/claim {code}` answering `{access, refresh}`.
+
+- **`/claim` must carry the group id.** The token payload is `{sub, grp, exp}` and the gate
+  compares `grp` against the path segment — but `/claim` carries no `Authorization` header (the
+  device has no token yet) and `claim_codes` has no group column, so with a body of `{code}`
+  alone the relay is handed nothing to bind and nothing to stamp into `grp`. The claim would
+  succeed and every later push, pull and ack would 401 on a group mismatch: a reader connects
+  Patreon and then finds sync broken for ever.
+- **`expires` and `since` are unix SECONDS on the wire.** The relay counts in milliseconds
+  internally (`TOKEN_TTL_MS`, `nowMs`) and the app counts in seconds (`unixepoch()`, as
+  `last_sync_at` already does), so the boundary has to pick one and say so. If milliseconds
+  reached the app, `expires - now` would be ~1.7e12, always exceed the refresh margin, and the
+  token would never be refreshed — the relay then 401s every sync request a day later, on the
+  sync route rather than on `/token`, where nothing is watching for it. **Sync would die
+  silently and permanently.** The relay converts; the app holds a magnitude guard so the unit
+  cannot regress in silence.
 
 - **`access`** is `base64url(payload) "." base64url(HMAC-SHA256(payload, RELAY_HMAC_KEY))` where
   payload is `{sub, grp, exp}`. **TTL 24 hours.**
@@ -275,7 +298,10 @@ the Worker.
 | DO rows written | 100 000/day | 50 M/mo |
 | D1 | 5 GB, 5 M reads/day, 100 k writes/day | — |
 
-Per group — three devices, plus three token refreshes a day:
+Per group — three devices, plus about four token refreshes a day. *(A 24-hour token with a
+six-hour margin refreshes a little over once per device per day, not once per group; an
+earlier draft said three. The difference is inside the rounding of every figure below.)*
+
 
 | Cadence | Requests/day/group | Groups on **free** | 1 000 groups, **paid** |
 | --- | --- | --- | --- |
@@ -291,8 +317,15 @@ Three conclusions:
   interval is a 5× change in the bill.
 - **Even the worst case is ~4¢ per patron per month.** A €3 tier keeps roughly 98% of it. Billing
   here is not really about recouping cost — it is about not waking to an unbounded bill.
-- **The free plan's 100 000/day is a hard wall that errors for every reader once hit.** That, and
-  not the money, is the argument for the $5 plan before the first patron.
+- **The free plan's 100 000/day is a hard wall that errors for every reader once hit.** It is a
+  cliff, not a slope: past it every reader starts erroring simultaneously, so without warning
+  the first signal is complaints.
+
+**Decided 2026-08-29: stay on the free plan, and add a Cloudflare notification at ~70% of the
+daily request cap.** At the manual cadence that actually ships (§3.1), ~1 400 groups fit inside
+the free tier, so paying now would buy headroom against a number no reader is near. What the
+alarm buys is the thing the free tier otherwise lacks — warning instead of complaints — and it
+costs nothing. Going paid stays a one-switch change if the alarm ever fires.
 
 **Because sync is manual today (§3.1), the scheduler is a separate decision** and this design does
 not take it. The table above is what to take it with.
@@ -332,7 +365,7 @@ break-glass and it is worth having written down.
   a device in no group, and that remains not an error.
 - **A `401` is a sentence, not an `error_log` row.** When the relay refuses a token and the refresh
   also refuses, the membership has ended — the panel says so and offers the connect button again.
-  Routing that through `errors::note` like a network failure would tell a reader their sync is
+  Routing that through `errors::record` like a network failure would tell a reader their sync is
   broken when in fact their pledge lapsed, which is the wrong sentence and the wrong fix.
 - New commands `sync_patreon_begin`, `sync_patreon_claim`, `sync_supporter_status`.
 - `sync_relay_url_set` and `valid_relay_url` deleted.

@@ -32,6 +32,9 @@ pub mod client;
 /// does not exist in a browser. Everything it orchestrates does.
 #[cfg(not(target_family = "wasm"))]
 pub mod commands;
+/// The entitlement grant — the tokens that let this device talk to the relay at all, and the
+/// supporter status the relay last reported. Every-target: a browser needs the same grant.
+pub mod entitlement;
 pub mod hlc;
 pub mod merge;
 pub mod wire;
