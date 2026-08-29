@@ -316,11 +316,57 @@ which is what the 9a-era note *"the image route has no caller yet"* was quietly 
 way. The defect is in the *caller*'s interleaving, which no unit test over pure functions can
 reach and which jsdom has no service worker to reproduce.
 
+### Fixed 2026-08-29, and the fix's own first draft was worse than the bug
+
+`imageLedger.ts`'s `ledgerWriter` is now the only writer: every mutation queues behind the last,
+so `read → mutate → write` cannot interleave. `sw.ts`'s three ledger updates — the cache hit, the
+admit-and-sweep, and `SET_IMAGE_CAP` — all go through it, and `swCore.test.ts` sweeps this file's
+text to keep it that way, because reaching around the queue is a one-line change with a silent
+consequence.
+
+**Driven in the browser under the same conditions that produced the bug**, empty cache and every
+request concurrent:
+
+| | before | memoised first draft | after |
+| --- | --- | --- | --- |
+| pictures cached | 78 | 45 | **45** |
+| entries in the ledger | 9 | **0** | **45** |
+| missing | 69 | 45 | **0** |
+
+`bytes` reads **2 925 000** against 45 × 65 000 = 2 925 000 — exact.
+
+⚠️ **The middle column is the part worth keeping.** The first draft memoised the ledger in
+memory — the worker is the only writer, so its copy should stay authoritative — and closed over
+the `Cache` handle it was built with. `image()` re-opens the cache on every request, so once the
+image cache was deleted and recreated the pictures went to the live cache and the ledger went to
+a dead handle: **45 cached and no ledger at all**, which is worse than the defect being fixed and
+invisible to every test in this repo. Both halves are gone — the store is re-read on every
+mutation, and `caches.open` sits inside the read and write callbacks rather than being captured.
+
+**The reads are not free** — N queued mutations each read a blob that grows with them — but they
+are serialised regardless, the blob is small, and it is Cache Storage rather than a network hop.
+That is correctness bought cheaply, against a micro-optimisation that had already produced one
+silent failure.
+
+**What the suite can now see**, which is the other half of the repair: `imageLedger.test.ts`
+exercises the queue directly, and its **first case is the unserialised shape written out** — 40
+concurrent read-modify-writes keeping at most 2 — so the file demonstrably reproduces the defect
+rather than merely passing over the fix. Removing the queue turns both the concurrency case and
+the re-read case red; reaching around it in `sw.ts` turns the sweep red.
+
+<details>
+<summary>The original report, kept because the reasoning is what dates it</summary>
+
 **Not fixed here, deliberately.** The remedy is a design choice rather than a patch — serialise
 through a promise chain in the worker, batch the writes behind a debounce, or stop storing the
 ledger as one blob and give each URL its own cache entry so concurrent writers cannot clobber one
 another. Each has a different failure mode under eviction, and picking one belongs with its own
 change and its own tests.
+
+*(The first option is what was taken. The third — an entry per URL — would also have worked and
+is the one to reach for if the serialised reads ever show up in a profile.)*
+
+</details>
 
 ### One more thing, unmeasured
 

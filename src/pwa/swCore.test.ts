@@ -134,4 +134,33 @@ describe("what the worker must never contain", () => {
     expect(at).toBeGreaterThan(messageAt);
     expect(at).toBeGreaterThan(installAt);
   });
+
+  /**
+   * **The read-modify-write race, fenced at the one place it can come back.**
+   *
+   * `writeLedger` is only safe inside `ledgerWriter`'s queue. Called directly it is the defect
+   * that shipped: dozens of card tiles run `read → mutate → write` concurrently, interleave at
+   * each `await`, and all but the last write back a ledger built from a copy that predates the
+   * others. Measured in the shipped web build on 2026-08-29, from an empty cache, one wall
+   * load: **78 pictures in the cache and 9 in the ledger.**
+   *
+   * The behaviour is pinned in `imageLedger.test.ts`, which can exercise the queue directly.
+   * What that cannot see is *this file reaching around it*, which is a one-line mistake with a
+   * silent consequence — so the sweep is here, in the idiom this file already uses for
+   * `ignoreVary`. `readLedger` is deliberately not counted: `ledgerFor` has to call it, and a
+   * lone read races nothing.
+   */
+  it("never writes the ledger outside the serialising writer", () => {
+    // The definition, plus the single call inside `ledgerFor`'s writer argument. Anything more
+    // is a caller that has gone around the queue.
+    const calls = SW_SOURCE.match(/writeLedger\(/g) ?? [];
+    expect(calls.length).toBeGreaterThan(0);
+    expect(calls).toHaveLength(2);
+
+    const writerAt = SW_SOURCE.indexOf("ledgerWriter(");
+    const lastCallAt = SW_SOURCE.lastIndexOf("writeLedger(");
+    expect(writerAt).toBeGreaterThan(-1);
+    // The surviving call site is the one `ledgerWriter` is handed, so it sits after it.
+    expect(lastCallAt).toBeGreaterThan(writerAt);
+  });
 });
