@@ -845,7 +845,7 @@ of the two ways it happens:
 
 ---
 
-## Schema — user v29
+## Schema — user v30
 
 | Object | What it is |
 | --- | --- |
@@ -856,6 +856,7 @@ of the two ways it happens:
 | `sync_state` | key/value: `relay_url`, `pull_cursor`, `last_sync_at`, the `applying` guard |
 | `sync_peers` | per-device watermarks — what makes a counter idempotent |
 | `error_log` rebuilt | `source` gains `'relay'`, which is a table rebuild because the vocabulary is inside a `CHECK` |
+| `sync_devices.baselined_at INTEGER` (v30) | when this peer was last handed a baseline. NULL is "never", which is the trigger. **`sync_peers` is deliberately not consulted** — see the pairing-baseline design §10 |
 
 **`ALTER TABLE … ADD COLUMN` refuses a non-constant `DEFAULT`** — verified against 3.53.0, which
 answers `Cannot add a column with non-constant default` — so the uid arrives as a plain nullable
@@ -965,6 +966,103 @@ clang on `PATH`; on this machine that is `C:\Program Files\LLVM\bin`.
 
 ---
 
+## The first end-to-end pass, 2026-08-29
+
+**Two real devices over the deployed relay.** A Windows desktop and a OnePlus 12 (`CPH2581`),
+both debug builds off `main` at the pairing-baseline merge, both driven over CDP — 9222 for the
+desktop's WebView2, 9333 forwarded to `webview_devtools_remote_<pid>` on the phone.
+
+**The relay is deployed and its address is not in this repository and never will be.** It lives
+in each device's own `sync_state.relay_url`, typed by the reader. Nothing here names it.
+
+### What was broken, and what it reads now
+
+| | before | after |
+| --- | --- | --- |
+| Desktop collection | 275 entries | 275 |
+| **Phone collection** | **0 entries** | **275** |
+| Ops deferred on the phone | 1, permanently | **0** |
+| Ops applied on the phone | 0 | 1 069 |
+
+The deferral was correct and permanent: the one captured op was a `put collection_entries` naming
+a folder by uid, and the folder's own op had never been written, so it waited for something that
+did not exist.
+
+### The baseline, measured
+
+| | |
+| --- | --- |
+| Ops in one baseline | **1 069** — the figure §11 of the design predicted, unchanged |
+| `deck_audit` rows among them | 28 |
+| Desktop build + seal + push | **694 ms** |
+| Phone pull + apply of all 1 069 | **1 543 ms** |
+| Deferred | **0** |
+| `needs_review` raised on either device | **0** — no resurrection, no broken cycle |
+| One full 200-op stored relay row | **186 299 B**, against a 2 MB cap (`wire::tests`, debug) |
+
+Both directions fired: the phone emitted its own baseline back and the desktop applied 1 070. The
+second sync on each device emitted **0** — the marker holds.
+
+### Every field agrees
+
+```
+field        desktop      phone
+entries      275          275
+cards        330          330
+unique       272          272
+decks        4            4
+folders      6            6
+review       0            0
+pending      0            0
+epoch        1            1
+roster       2            2
+```
+
+`value` is the one figure that differs by design: prices are corpus-side and each device builds
+its own.
+
+### The founding constraint, over the wire
+
+A row holding **2** (`Aerith Gainsborough`, `fin` 4, nonfoil NM) was incremented on **both**
+devices before either synced, then both synced. **Both ended at 4.**
+
+That is the case worth driving rather than asserting, because the claim and the delta travel in
+one pull page: 3 would be a lost update and 5 would be the baseline counting a delta already
+inside its own claim. It is the whole of the design's §8.2 in one row of cardboard.
+
+### Pairing, and a discovery
+
+Re-pairing was driven end to end over CDP. Both devices independently derived the same six
+digits — `144733` — before anything was confirmed, which is the property the ceremony exists for.
+
+**The first Sync of the session answered `baselineOps: 0`, and that was correct.** Both devices
+had revoked each other minutes earlier — the desktop marked the phone at one stamp, the phone
+marked the desktop 16 seconds later, both landing on epoch 1. The trigger skips a revoked peer,
+so it did. It is worth recording that the *right* answer looked exactly like the feature not
+working, and that the roster was what said otherwise.
+
+**Two devices that have revoked each other cannot recover on their own** — §7.6's rotation mints
+a key nothing distributes, so re-pairing by hand is the only route back, and the app does not say
+so. That is the hole listed under "what is still owed" below, met in the wild rather than in a
+test.
+
+### Traps this pass paid for
+
+- **The debug APK is `com.mtggrimoire.app.debug`**, not the identifier in `tauri.conf.json` —
+  `applicationIdSuffix = ".debug"`. `monkey` answers "No activities found to run" for the
+  unsuffixed name, which reads like a broken build.
+- **Two clangs, and each leg needs the other one.** `wasm32` needs `C:\Program Files\LLVMin`;
+  `aarch64-linux-android` needs the **NDK's** toolchain first on PATH, or `ring` fails with
+  `fatal error: 'assert.h' file not found` — an error that names a missing C header when the
+  cause is a clang with no Android sysroot. Neither is on PATH by default.
+- **A failed `sync_pairing_complete` clears the pending state**, so a mangled sealed key costs the
+  whole handshake and the *second* attempt reports "There is no pairing in progress" — which
+  names the wrong cause. Marshal the 224-char blob through `JSON.stringify`, never through shell
+  quoting.
+- **`cdp.mjs eval` right after launch can find the page mid-load**, where
+  `window.__TAURI_INTERNALS__` is still `undefined`. That reads as the bridge being broken; it is
+  a race, and `document.readyState` tells them apart.
+
 ## What is still owed
 
 - **The WebSocket fan-out**, with the CSP decision that comes with it. Until then §7.7's request
@@ -981,6 +1079,6 @@ clang on `PATH`; on this machine that is `C:\Program Files\LLVM\bin`.
   op and fifty edits a day, that is a few megabytes a year, which is small beside a 787 MB
   corpus and is still unbounded. A pruner would have to keep whatever the two readers above can
   still need, which is a decision nobody has taken.
-- **Nothing has been driven in the shipped window.** Every figure here is from `cargo test`; the
-  relay is not deployed, so there is no end-to-end pass over a real network to have driven.
+- ~~**Nothing has been driven in the shipped window.**~~ **Done 2026-08-29** — the relay is
+  deployed and a desktop and a phone converged over it. See "The first end-to-end pass" below.
 - **The bulk-import cost.** 4.22× is measured and unaddressed; see above.
