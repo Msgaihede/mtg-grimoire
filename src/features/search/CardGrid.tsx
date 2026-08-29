@@ -141,9 +141,28 @@ const GAP = 12;
  *   1.95 columns and floors to the same single card. It is what the 9a round's draft suggested,
  *   and it is the same failure arriving one inset later.
  * - `columnsFor(324, 144)` is **2**, and the leftover is exactly 24 — so {@link sideGutterFor}
- *   splits it into 12 either side and the gutter is {@link GAP}. **That is why 144 rather than
- *   156**, which is the largest tile two of which fit: at 156 the row is flush to both edges with
- *   no gutter at all, and every wall in this app is a row centred in what it did not use.
+ *   splits it into 12 either side and the gutter is {@link GAP}. That is why 144 rather than
+ *   156, which is the largest tile two of which fit at 324.
+ *
+ * ⚠️ **All of the above is about a 390px window, and the phone this was driven on is 360 — which
+ * is why the number is 141 and not 144.** Measured on the device 2026-08-29 (OnePlus, Chrome 152,
+ * portrait): `innerWidth` **360**, so `main`'s content is 320 and this wall is **294**, and
+ * `columnsFor(294, 144)` is **1**. The rows came back 226 × 294 carrying one tile each — 144
+ * missed its second column by **three pixels** on real hardware, against a `PHONE_PX` of 390 that
+ * 9a picked as "a hard case… within a pixel or two of the common Android flagship". It was not
+ * the hard case.
+ *
+ * **141 is the largest tile two of which fit at 294**, and it holds at both widths: two columns at
+ * 294 and at 324. Its gutter at 294 is **0** — the pair exactly fills the row — and that is
+ * acceptable here where 156's zero gutter at 324 was not the reason 144 won: {@link sideGutterFor}
+ * pads the **row**, inside the box the `ResizeObserver` measures, and the scroller's own `p-3`
+ * sits *outside* that, so a tile with no gutter is still 12px from the scroller's border box. The
+ * wall does not scroll horizontally — `documentElement.scrollWidth` equalled `innerWidth` on the
+ * device — so nothing here reaches the scrollport's edge. At 324 the gutter is 15.
+ *
+ * **Below about 320px of window even 141 floors at one column** (a 254px wall), and nothing
+ * reasonable fixes that: two columns of *readable* card art stops existing somewhere, and this is
+ * roughly where.
  *
  * A `grid` image is 488px wide, so this is a deeper downscale and never a blowup — the same thing
  * the deck panel's 150 already relies on. The reader's zoom scales *this*, exactly as it scales
@@ -152,9 +171,9 @@ const GAP = 12;
  * **What this does not fix, and the decision that goes with it: the chin does not scale with the
  * tile, and that is accepted.** `--mark-scale`/`--control-scale` are published by
  * `cardScaleVars(zoom)` and know nothing about this prop, so the chin stays 28px of 10px type and
- * becomes proportionally *taller* on a narrower card — 12.4% of tile height here against 10.7% at
+ * becomes proportionally *taller* on a narrower card — 12.6% of tile height here against 10.7% at
  * 170. It is accepted because the chin's contents are **type at the app's floor**: 10px is already
- * the smallest interface size in the chrome ladder, and 144/170 would put it at 8.5px, which is
+ * the smallest interface size in the chrome ladder, and 141/170 would put it at 8.3px, which is
  * not a smaller chin but an unreadable one. The proportion is the wrong measurement to optimise —
  * the readable size is. Tying the marks to `baseTileWidth` instead would also silently redraw the
  * deck panel's 150px wall, a shipped surface with no phone in it. A reader who wants the chin
@@ -164,7 +183,7 @@ const GAP = 12;
  * under WCAG 2.5.8's 24, and `opacity-0` — see the `action` strip below, where the rest of that
  * note is.
  */
-export const PHONE_TILE_WIDTH = 144;
+export const PHONE_TILE_WIDTH = 141;
 
 /**
  * A tile's **absolute** position in `rows`, published on its own root element.
