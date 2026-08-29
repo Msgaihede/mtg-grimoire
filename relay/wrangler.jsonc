@@ -6,15 +6,15 @@
   // One Durable Object per pairing group, addressed by the group id. No R2, no KV: KV allows
   // 1 000 writes/day on the free plan, which this would spend in an afternoon.
   "durable_objects": {
-    "bindings": [{ "name": "GROUP", "class_name": "Group" }]
+    "bindings": [{ "name": "GROUP", "class_name": "Group" }],
   },
   "migrations": [
     {
       "tag": "v1",
       // `new_sqlite_classes` and NOT `new_classes`: Durable Objects are on the free plan
       // **SQLite-backed only**, and the key-value backend is a paid feature.
-      "new_sqlite_classes": ["Group"]
-    }
+      "new_sqlite_classes": ["Group"],
+    },
   ],
   // The entitlement store — `relay/schema.sql` is its shape, applied with
   // `npx wrangler d1 execute mtg-grimoire-relay --remote --file=./schema.sql`.
@@ -28,7 +28,11 @@
   // and written rarely, and the hot path — the auth gate in `index.ts` — touches no storage at
   // all, which is the whole reason the access token is signed rather than looked up.
   "d1_databases": [
-    { "binding": "DB", "database_name": "mtg-grimoire-relay", "database_id": "<set on create>" }
+    {
+      "binding": "DB",
+      "database_name": "mtg-grimoire-relay",
+      "database_id": "5e0381b0-d2aa-4861-a725-26ca18ae00ef",
+    },
   ],
   // The webhook is primary and this is the backstop: a webhook Patreon failed to deliver would
   // otherwise leave a cancelled membership syncing for ever, and an expired grace window
@@ -50,7 +54,9 @@
   // secrets. The three that are never committed, set with `wrangler secret put`, are
   // `PATREON_CLIENT_SECRET`, `PATREON_WEBHOOK_SECRET` and `RELAY_HMAC_KEY`.
   "vars": {
-    "RELAY_BASE": "https://mtg-grimoire-relay.denmark-east.workers.dev"
+    "RELAY_BASE": "https://mtg-grimoire-relay.denmark-east.workers.dev",
+    "PATREON_CLIENT_ID": "UFkUESN45GFyy36WQBaOpedWwFvtcOfujPZz_s8Yhu54z4I7-eA8Zg9lv-FEXqV4",
+    "PATREON_CAMPAIGN_ID": "16694056",
   },
-  "observability": { "enabled": true }
+  "observability": { "enabled": true },
 }
