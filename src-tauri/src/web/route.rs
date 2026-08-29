@@ -15,14 +15,39 @@ use serde_json::Value;
 
 /// Every command this build routes, in the order they were added.
 ///
-/// **This is a first slice and not the whole surface.** The app has 152 commands; the four
-/// here are the browse, which is the read path spec 8 requires measured in wasm rather than
-/// guessed. The rest arrive with their modules - see `lib.rs`'s module map for which are
-/// still desktop-only.
+/// **This is still not the whole surface.** The app has 152 commands; the first four here are
+/// the browse, which is the read path spec 8 requires measured in wasm rather than guessed,
+/// and the thirteen after them are the Decks destination's reads. The rest arrive with their
+/// modules - see `lib.rs`'s module map for which are still desktop-only.
+///
+/// **Compiling for wasm and being routed are two different things, and the deck cluster is
+/// the proof.** Those modules have compiled for the target since PR 10a; until a name
+/// appeared here with a `match` arm the page still got `unknown command`. A module's
+/// portability is a fact about its contents, this list is a fact about its reachability.
 ///
 /// A test asserts every name here has a `match` arm, because a list and a table that drift
 /// produce a silent `undefined` on the far side rather than a compile error.
-pub const COMMANDS: &[&str] = &["sync_status", "search_cards", "list_sets", "facet_cards"];
+pub const COMMANDS: &[&str] = &[
+    "sync_status",
+    "search_cards",
+    "list_sets",
+    "facet_cards",
+    // Decks, read path. The write path is a separate PR: a read that answers the wrong rows
+    // is visible on the page, and a write that lands wrong is not.
+    "deck_list",
+    "deck_get",
+    "deck_folder_list",
+    "deck_category_list",
+    "deck_tag_list",
+    "deck_tag_all",
+    "format_specs_list",
+    "deck_last_format",
+    "deck_search_open",
+    "deck_audit_list",
+    "deck_theory_slots",
+    "deck_theory_diff",
+    "deck_undo_state",
+];
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum RouteError {
@@ -55,6 +80,30 @@ fn field<T: serde::de::DeserializeOwned>(
         command: command.to_owned(),
         message: e.to_string(),
     })
+}
+
+/// Pull an argument that the caller is allowed not to send.
+///
+/// **A missing key and a `null` are the same answer here, and that is the difference from
+/// [`field`].** `invoke("deck_get", { id, variant, marketplace })` omits `marketplace`
+/// entirely when the page has no marketplace to name, and JavaScript sends `undefined` as an
+/// absent key rather than as `null` — so a `field::<Option<String>>` would refuse the ordinary
+/// call with "missing `marketplace`". A *malformed* value is still an error: this returns
+/// `None` for absent, never for unreadable.
+fn optional<T: serde::de::DeserializeOwned>(
+    command: &str,
+    args: &Value,
+    name: &str,
+) -> Result<Option<T>, RouteError> {
+    match args.get(name) {
+        None | Some(Value::Null) => Ok(None),
+        Some(raw) => serde_json::from_value(raw.clone())
+            .map(Some)
+            .map_err(|e| RouteError::Args {
+                command: command.to_owned(),
+                message: e.to_string(),
+            }),
+    }
 }
 
 /// Serialize a command's answer. A DTO that will not encode is a bug in this crate, not in
@@ -97,6 +146,136 @@ pub fn call(state: &AppState, command: &str, args: &Value) -> Result<Value, Rout
             let req: crate::search::SearchRequest = field(command, args, "req")?;
             let out = crate::index::facets::run_facets(state, &req).map_err(RouteError::Failed)?;
             encode(command, out)
+        }
+
+        // ── Decks, read path ────────────────────────────────────────────────────────
+        //
+        // **Every arm below is its `#[tauri::command]` wrapper with the `spawn_blocking`
+        // removed**, and the argument names are read off that wrapper rather than chosen
+        // here — `invoke` matches a Rust command's parameters by name, so a key spelled
+        // differently in this file is a `RouteError::Args` at run time that reads exactly
+        // like a bug in the page. Nothing here concludes anything the desktop does not.
+        "deck_list" => {
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::deck::list_decks(&conn).map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_get" => {
+            let id: i64 = field(command, args, "id")?;
+            let variant: String = field(command, args, "variant")?;
+            let marketplace: Option<String> = optional(command, args, "marketplace")?;
+            // The wrapper converts before it calls, and so must this: `get_deck` takes a
+            // `Marketplace`, not the `Option<String>` the page sends.
+            let marketplace = crate::sorting::Marketplace::from_opt(marketplace.as_deref());
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::deck::get_deck(&conn, id, &variant, marketplace)
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_folder_list" => {
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::deck_meta::list_folders(&conn).map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_category_list" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let variant: String = field(command, args, "variant")?;
+            let marketplace: Option<String> = optional(command, args, "marketplace")?;
+            let marketplace = crate::sorting::Marketplace::from_opt(marketplace.as_deref());
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::deck_meta::list_categories(&conn, deck_id, &variant, marketplace)
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_tag_list" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let variant: String = field(command, args, "variant")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::deck_meta::list_tags(&conn, deck_id, &variant)
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_tag_all" => {
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::deck_meta::list_all_tags(&conn).map_err(RouteError::Failed)?,
+            )
+        }
+
+        "format_specs_list" => {
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::deck::list_format_specs(&conn).map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_last_format" => {
+            let conn = crate::sync::lock_db_read(state);
+            encode(command, crate::deck::last_deck_format(&conn))
+        }
+
+        "deck_search_open" => {
+            let conn = crate::sync::lock_db_read(state);
+            encode(command, crate::deck::stored_deck_search_open(&conn))
+        }
+
+        "deck_audit_list" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let limit: i64 = field(command, args, "limit")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::deck_audit::list(&conn, deck_id, limit).map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_theory_slots" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::deck_theory::theory_slots(&conn, deck_id).map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_theory_diff" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let marketplace: Option<String> = optional(command, args, "marketplace")?;
+            let marketplace = crate::sorting::Marketplace::from_opt(marketplace.as_deref());
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::deck_theory::theory_diff(&conn, deck_id, marketplace)
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_undo_state" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let redo_id: Option<i64> = optional(command, args, "redoId")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::deck_undo::undo_state(&conn, deck_id, redo_id)
+                    .map_err(RouteError::Failed)?,
+            )
         }
 
         other => Err(RouteError::Unknown(other.to_owned())),
@@ -196,13 +375,128 @@ mod tests {
         assert_eq!(warm["ready"], json!(true));
     }
 
+    /// A deck, so the Decks arms have something to answer about.
+    fn make_deck(s: &crate::sync::AppState, name: &str) -> i64 {
+        let conn = crate::db::lock_blocking(&s.db);
+        crate::deck::create_deck(
+            &conn,
+            &crate::deck::DeckInput {
+                name: name.to_owned(),
+                format_key: "commander".to_owned(),
+                ..Default::default()
+            },
+        )
+        .expect("the fixture's deck must be creatable")
+        .id
+    }
+
+    #[test]
+    fn deck_list_answers_an_empty_list_before_a_deck_exists() {
+        let s = state("web-route-deck-list-empty");
+        let out = call(&s, "deck_list", &json!({})).unwrap();
+        assert_eq!(
+            out.as_array().expect("deck_list answers an array").len(),
+            0,
+            "a database with no decks is a supported state, not an error"
+        );
+    }
+
+    #[test]
+    fn deck_list_answers_a_deck_that_was_created() {
+        let s = state("web-route-deck-list-one");
+        make_deck(&s, "Web Deck");
+        let out = call(&s, "deck_list", &json!({})).unwrap();
+        assert_eq!(out.as_array().unwrap().len(), 1);
+        assert_eq!(out[0]["name"], json!("Web Deck"));
+        // camelCase, because `DeckRow` is `rename_all = "camelCase"` and `src/lib/ipc.ts`
+        // reads these exact keys. A snake_case answer is a silent `undefined` on the page,
+        // which is the failure this whole module exists in-tree to prevent.
+        assert!(
+            out[0].get("formatKey").is_some(),
+            "the DTO's camelCase names must survive the route"
+        );
+    }
+
+    /// **The arms take `deckId`, not `deck_id`, and this is what says so.** `invoke` matches a
+    /// command's parameters by name, `src/lib/ipc.ts` sends
+    /// `invoke("deck_category_list", { deckId, variant, marketplace })`, and a `match` arm that
+    /// reached for the Rust spelling would compile, pass every type check, and answer
+    /// `RouteError::Args` on every real call — which reads as a bug in the page.
+    #[test]
+    fn the_deck_arms_read_the_camel_case_keys_the_page_sends() {
+        let s = state("web-route-deck-arg-names");
+        let id = make_deck(&s, "Args");
+        call(
+            &s,
+            "deck_category_list",
+            &json!({ "deckId": id, "variant": "live" }),
+        )
+        .expect("`deckId` is the key the page sends");
+
+        let err = call(
+            &s,
+            "deck_category_list",
+            &json!({ "deck_id": id, "variant": "live" }),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&err, RouteError::Args { .. }),
+            "the Rust spelling must not be accepted as well, or the pin means nothing: {err:?}"
+        );
+    }
+
+    /// **An absent `marketplace` is the ordinary call, not a malformed one.** JavaScript sends
+    /// an unset optional as a missing key rather than as `null`, so an arm built on [`field`]
+    /// would refuse every default-marketplace read with "missing `marketplace`".
+    #[test]
+    fn an_omitted_optional_argument_is_not_an_error() {
+        let s = state("web-route-optional-arg");
+        let id = make_deck(&s, "Optional");
+
+        call(&s, "deck_get", &json!({ "id": id, "variant": "live" }))
+            .expect("no marketplace key at all");
+        call(
+            &s,
+            "deck_get",
+            &json!({ "id": id, "variant": "live", "marketplace": null }),
+        )
+        .expect("an explicit null means the same thing");
+
+        // A value that is present and unreadable is still an error, which is the half of the
+        // rule that a bare `unwrap_or_default` would have thrown away.
+        let err = call(
+            &s,
+            "deck_get",
+            &json!({ "id": id, "variant": "live", "marketplace": { "not": "a string" } }),
+        )
+        .unwrap_err();
+        assert!(matches!(&err, RouteError::Args { .. }), "got {err:?}");
+    }
+
+    /// `deck_undo_state`'s logic lived inside its `#[tauri::command]` until it was lifted into
+    /// [`crate::deck_undo::undo_state`] for this arm. A fresh deck can undo nothing, and both
+    /// sides being `null` is the answer rather than an error.
+    #[test]
+    fn deck_undo_state_answers_both_sides_null_on_a_fresh_deck() {
+        let s = state("web-route-undo-state");
+        let id = make_deck(&s, "Undo");
+        let out = call(&s, "deck_undo_state", &json!({ "deckId": id })).unwrap();
+        assert_eq!(out["undo"], json!(null));
+        assert_eq!(out["redo"], json!(null), "no redo id was sent");
+    }
+
+    /// **`mirror_rebuild`, and the choice of name is the point.** This used to reach for
+    /// `deck_list`, which stopped being unknown the moment the Decks reads were routed — so
+    /// the example is now one of the ten §6.3 names that are *permanently* desktop-only. A
+    /// command merely waiting its turn would rot this test on the day it lands, quietly
+    /// turning the assertion into a check that a routed command is unroutable.
     #[test]
     fn an_unknown_command_is_refused_by_name() {
         let s = state("web-route-unknown");
-        let err = call(&s, "deck_list", &json!({})).unwrap_err();
-        assert_eq!(err, RouteError::Unknown("deck_list".into()));
+        let err = call(&s, "mirror_rebuild", &json!({})).unwrap_err();
+        assert_eq!(err, RouteError::Unknown("mirror_rebuild".into()));
         // The message is what reaches a developer console, so it names the command.
-        assert!(err.to_string().contains("deck_list"));
+        assert!(err.to_string().contains("mirror_rebuild"));
     }
 
     #[test]
@@ -228,7 +522,7 @@ mod tests {
         }
         assert_eq!(
             COMMANDS.len(),
-            4,
+            17,
             "update this number when a command is added"
         );
     }
