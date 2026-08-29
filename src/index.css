@@ -35,6 +35,23 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* A coarse pointer — a finger, a stylus — as a variant, so `coarse:min-h-[var(--target-min)]` is
+   how a control says it grows for touch.
+
+   **One spelling, for `layers.test.ts`'s reason.** A raw media query written in a component is a
+   second answer to a question the app should answer once, and the two drift the first time either
+   moves. `src/lib/touchTargets.test.ts` sweeps `src/` for the raw query and this file is the one
+   place exempt from it. It is also the shape `motion-reduce:` already has here — grep it, the
+   count is a fact about a tree — so the vocabulary is one a reader of this codebase already has.
+
+   `pointer`, not `any-pointer`: a laptop with a touchscreen has a fine pointer *and* a coarse one,
+   and the `any-` spelling would grow every control on it for a finger nobody is using.
+
+   The at-rule form is what Tailwind 4.3.3 accepts, and it was proved by building rather than by
+   reading: a `@custom-variant` this version does not understand emits **nothing**, silently, with
+   `tsc` and the suite both green. See `docs/reference/frontend-design.md` for the grep. */
+@custom-variant coarse (@media (pointer: coarse));
+
 @theme inline {
   /* The display face. Titles, the first-run hero, section headers — never body text and
        never below 18px, which is the whole of Cinzel's brief. */
@@ -157,6 +174,40 @@
   --sidebar-accent-foreground: var(--color-text);
   --sidebar-border: var(--color-border);
   --sidebar-ring: var(--color-accent);
+}
+
+/* The environment, rather than the palette — which is why this is a `:root` block of its own and
+   not four more lines in the one above. That block and `.dark` carry *identical* values on
+   purpose, and these have no `.dark` twin to carry: they are not a colour, and a second theme
+   would not move them.
+
+   The four edges the OS reserves — a notch, a rounded corner, a home indicator, a landscape
+   cutout. **They are `0px` in every context until `index.html` carries `viewport-fit=cover`**,
+   which is why that meta and these four ship together: half of this pair is dead code without
+   the other.
+
+   The `0px` fallback is load-bearing rather than defensive. A browser that does not know `env()`
+   treats the whole declaration as invalid, and a `padding-top` that fails to parse is not zero —
+   it is whatever the cascade had before it. On desktop and in WebView2 every one of these is
+   `0px` and the block costs nothing. */
+:root {
+  --safe-t: env(safe-area-inset-top, 0px);
+  --safe-r: env(safe-area-inset-right, 0px);
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-l: env(safe-area-inset-left, 0px);
+
+  /* The smallest a control may be when a finger is aiming at it. WCAG 2.5.5 (AAA) asks 44×44 CSS
+     px; 2.5.8 (AA) asks 24×24, which this app already clears everywhere. 44 is the number because
+     the AA floor is a floor for a *pointer*, and the surfaces this token is for have no pointer at
+     all.
+
+     A plain custom property rather than a `@theme` entry: it is a minimum, not a step on the
+     spacing scale, and putting it in the spacing namespace would generate `p-target-min` and
+     `gap-target-min` — two utilities that mean nothing and one that means this.
+
+     **Nothing in the app reads it yet**, and that is deliberate: which control grows, and where,
+     is a design decision and belongs to 9b. */
+  --target-min: 44px;
 }
 
 @layer base {

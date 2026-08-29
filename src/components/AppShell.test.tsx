@@ -11,6 +11,12 @@ import {
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeckDetail, SyncOutcome, SyncProgressEvent, SyncStatus } from "@/lib/ipc";
+/**
+ * The shipped page shell, as text. `viewport-fit=cover` lives in a file no component imports and
+ * no render can reach, so the only observable is the source — the same `?raw` idiom
+ * `tokens.test.ts` uses to assert against `index.css`.
+ */
+import html from "../../index.html?raw";
 
 const syncStatus = vi.hoisted(() => vi.fn());
 const syncRun = vi.hoisted(() => vi.fn());
@@ -352,6 +358,61 @@ it("scrolls in main, which is the containing block for its own absolute content"
   expect(main).not.toBeNull();
   expect(main!.className).toContain("overflow-auto");
   expect(main!.className).toContain("relative");
+});
+
+/**
+ * **`100vh` is the *large* viewport on a mobile browser, and this shell is the window.**
+ *
+ * `h-screen` is `100vh`, which on a phone is the height the page would have if the URL bar were
+ * hidden — so an `h-screen` shell reaches past the bottom of what the reader can see and puts its
+ * own last row under the browser's chrome. `h-dvh` is `100dvh`, the *visible* height, and it
+ * tracks the bar as it hides and returns. On desktop and in WebView2 the two are the same number,
+ * which is why this costs the shipped window nothing.
+ *
+ * **jsdom has no layout engine and no URL bar**, so nothing here can measure the failure — this
+ * is a class pin, in the idiom the `main` assertion above already uses, and the numbers come from
+ * a browser.
+ */
+it("is as tall as the visible viewport, not the large one", () => {
+  render(<AppShell update={noUpdate}>{null}</AppShell>);
+
+  // The shell root: the element `TitleBar` and the sidebar row live inside. First in document
+  // order, because RTL's own container carries no classes.
+  const root = document.querySelector("div.flex.flex-col");
+  expect(root).not.toBeNull();
+  expect(root).toHaveClass("h-dvh");
+  expect(root).not.toHaveClass("h-screen");
+});
+
+/**
+ * The `content` of the page's one viewport meta, captured rather than grepped for.
+ *
+ * **A whole-file `toMatch(/viewport-fit=cover/)` is vacuous here, and it was measured so**
+ * (2026-08-29): `index.html` carries an HTML comment above the meta explaining why the attribute
+ * and `index.css`'s four `--safe-*` properties ship together, and that comment names the
+ * attribute. Deleting it from the tag left the string in the prose, and the assertion stayed
+ * green over the exact regression it exists to catch. It is `tokens.test.ts`'s trap — Tailwind
+ * reads prose as eagerly as code — arriving from the other side: here the *test* read prose as
+ * eagerly as markup. Anchoring on the tag is what makes the fence bite.
+ */
+const VIEWPORT_META = /<meta\s+name="viewport"[^>]*\scontent="([^"]*)"/;
+
+/**
+ * **Half of a pair, and the half that is invisible from inside the app.**
+ *
+ * `env(safe-area-inset-*)` resolves to `0px` in every context until the viewport meta says
+ * `viewport-fit=cover`. Without it the four custom properties `index.css` publishes are dead
+ * code — green in this suite, zero in the shipped window, and only findable on hardware with a
+ * notch. The meta and those four properties therefore ship together, and this is the assertion
+ * that says so.
+ */
+it("opts the document into the safe area", () => {
+  const content = html.match(VIEWPORT_META)?.[1];
+  // Its own assertion: a meta that has been renamed or removed makes `content` `undefined`, and
+  // `expect(undefined).toContain(...)` would report a missing *attribute* rather than a missing
+  // tag — two different repairs.
+  expect(content).toBeDefined();
+  expect(content).toContain("viewport-fit=cover");
 });
 
 describe("the status line", () => {
