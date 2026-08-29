@@ -985,6 +985,57 @@ const phone = (Story: () => ReactElement) => {
 };
 
 /**
+ * **The strip — what this row is on a phone with the sheet shut, and the whole of 9c's Task 2.**
+ *
+ * Measured on the device on 2026-08-29 (OnePlus, Chrome 152, portrait): the bar below drew
+ * **381px of a 545px content box** and left the wall **99** — 0.42 of a tile row, so a reader saw
+ * no whole card. With everything but the box and one button in the sheet it is **44**, and the
+ * wall gets **436**: **1.84** rows at the shipped 237px row, which is two whole cards and most of
+ * the next two. ⚠️ **Not two rows** — that needs 474 — whatever the option story's 390px-frame
+ * arithmetic said.
+ *
+ * **Every filter in `everything` is on and the strip says so with one digit**, which is exactly
+ * the cost F3 accepted: the chips that stated a search in words are behind the same disclosure as
+ * the controls that made it, and `6` is the whole of what a reader is told without pressing. What
+ * the strip should say instead is the next task's question and is deliberately unanswered here.
+ *
+ * **What this frame cannot show is the pin.** The strip is `sticky top-0` with `-mx-5 px-5` and
+ * `-mt-5 pt-5` against `AppShell`'s `main`, and the decorator below is a `contain: layout` box
+ * with nothing scrolling inside it — so this is the strip at rest, which is where a reader meets
+ * it. The `p-5` on the frame is `main`'s own, so the gutter those four classes exist to cover is
+ * at least on screen.
+ */
+export const PhoneStrip: Story = {
+  args: { preset: everything, width: "w-full" },
+  decorators: [phone],
+  parameters: {
+    // Its own iframe, for `PhoneSheet`'s reason: this story patches `window.matchMedia` for the
+    // length of its own life, and rendered inline that patch would be live while every other
+    // story on the docs page rendered.
+    docs: { story: { inline: false, height: `${PHONE_HEIGHT_PX + 40}px` } },
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    // The two that stay. The badge is on the button, so the count a reader gets is the count the
+    // chips used to spell out.
+    await expect(canvas.getByLabelText("Search cards")).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: /^Show filters/ })).toHaveTextContent(
+      "Filters",
+    );
+
+    // And nothing else — the colours, the mana values, the sort, the layout pair and the stated
+    // filters are all in the sheet. `queryByRole` searches the whole canvas, so a control that had
+    // merely moved would still be found.
+    await expect(canvas.queryByRole("group", { name: "Color identity" })).toBeNull();
+    await expect(canvas.queryByRole("group", { name: "Mana value" })).toBeNull();
+    await expect(canvas.queryByRole("group", { name: "Result layout" })).toBeNull();
+    await expect(canvas.queryByRole("button", { name: "Sort results" })).toBeNull();
+    await expect(canvas.queryByRole("button", { name: /^Reset all/ })).toBeNull();
+  },
+};
+
+/**
  * **The tray as a sheet — every width at or below the phone's, and nowhere else.**
  *
  * Measured on the device on 2026-08-29 (OnePlus, Chrome 152, portrait): the shut bar is 381px of
@@ -1025,6 +1076,15 @@ export const PhoneSheet: Story = {
     await expect(within(sheet).getByRole("button", { name: "Format" })).toBeInTheDocument();
     await expect(within(sheet).getByRole("button", { name: "All printings" })).toBeInTheDocument();
     await expect(canvas.getAllByRole("button", { name: "Format" })).toHaveLength(1);
+    // And the controls the strip shed are in here with it — the colours, the mana values, the
+    // sort, the layout pair, and the chips that state what is on. One copy of each: the row is
+    // mounted here instead of in the flow, never in both.
+    await expect(within(sheet).getByRole("group", { name: "Color identity" })).toBeInTheDocument();
+    await expect(within(sheet).getByRole("group", { name: "Mana value" })).toBeInTheDocument();
+    await expect(within(sheet).getByRole("group", { name: "Result layout" })).toBeInTheDocument();
+    await expect(within(sheet).getByRole("button", { name: "Sort results" })).toBeInTheDocument();
+    await expect(within(sheet).getByRole("button", { name: /^Reset all/ })).toBeInTheDocument();
+    await expect(canvas.getAllByRole("group", { name: "Color identity" })).toHaveLength(1);
     // The search box stays on the bar behind it — Task 2's strip is what it becomes, and this
     // story is what that task sheds into.
     await expect(sheet).not.toContainElement(canvas.getByLabelText("Search cards"));

@@ -82,7 +82,25 @@ A row is **237px** at the shipped 141px tile (art at 5:7, plus the 28px chin, pl
 
 **The sticky mechanics are the substance of this task, and all of them are invisible to jsdom:**
 
-- **`position: sticky` sticks against the scroller's *padding box***, so the strip needs `-mx-5 px-5` and `-mt-5 pt-5` or the wall scrolls through `main`'s 20px gutters beside and above it.
+- **`position: sticky` sticks against the scroller's *padding box***, so the strip needs `-mx-5 px-5` and ~~`-mt-5 pt-5`~~ or the wall scrolls through `main`'s 20px gutters beside and above it.
+
+  > ⚠️ **`-mt-5 pt-5` was built, argued and removed in the same task, 2026-08-29 — and the reason
+  > matters more than the class.** **The pin cannot engage in this layout at all**: every page
+  > that carries this bar is `<section className="flex h-full flex-col">`, so it exactly fills
+  > `main` and `main` never scrolls. `position: sticky` therefore behaves as `relative`.
+  >
+  > The two bleeds are **not** symmetric in cost. `-mx-5` paints `bg-bg` over `main`'s own `bg-bg`
+  > gutters and is invisible at rest. `-mt-5` reaches 20px *up*, and on three of the four pages
+  > something is there — `TagChips` at `gap-3`, the collection's summary header and the wishlist's
+  > `FigureRow` at `gap-4` — so it eats the last **8px, 4px and 4px** of those boxes. A guaranteed
+  > cost in the state that exists, against a benefit in a state that does not.
+  >
+  > **The test now asserts its absence**, because "completing the set" from the horizontal pair is
+  > the obvious wrong repair. Put it back in the same commit as whatever makes `main` scroll.
+  >
+  > **And be plain about what this task actually buys:** the 337px returned to the wall comes from
+  > the bar being **44px instead of 381px**, not from the pin. F3 is "a one-line bar" first and
+  > "sticky" second, and only the first half is doing work today.
 - It needs an **opaque `bg-bg`**, or the wall shows through.
 - It needs **`LAYER.header`** — the rung `src/lib/layers.ts` names for exactly this pairing, and its own doc's example is a table header against a filter bar. **Take it from `LAYER`, never a bare `z-` class**; `layers.test.ts` sweeps for that.
 

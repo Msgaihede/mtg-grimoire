@@ -24,6 +24,7 @@ import { useTooltip } from "@/components/tooltip/useTooltip";
 import { CONDITIONS, CONDITION_LABEL, type Condition } from "@/lib/conditions";
 import { FINISHES, FINISH_LABEL, type Finish } from "@/lib/finish";
 import type { FacetResponse, SearchSortKey } from "@/lib/ipc";
+import { LAYER } from "@/lib/layers";
 import { MANA_KEYS, MANA_LABEL } from "@/lib/mana";
 import { TRANSITION } from "@/lib/motion";
 import { sortOptions } from "@/lib/options";
@@ -601,17 +602,18 @@ export function FilterBar<SortKey extends string>({
   const [trayOpen, setTrayOpen] = useState(false);
   const trayId = useId();
   /**
-   * Whether the tray is drawn as a sheet instead of in the flow — **the one thing on this row
-   * that asks about the window rather than about its own box.**
+   * Whether this is a phone: the row is a 44px strip over a sheet holding everything else,
+   * instead of the wrapped row of controls with the tray in the flow under it — **the one thing
+   * here that asks about the window rather than about its own box.**
    *
    * Everything else here lays out through `@container/fb`, and that is the right mechanism for
    * every other fold: this component is the search page's 1500px bar *and* the deck editor's
    * 206px docked panel, so a question about width is a question about which box it is in. This
    * one is not a question about width. It asks whether the reader is on a phone — whether the
-   * only surface on screen is the wall this row sits above, and whether a 922px tray therefore
-   * has anywhere to go. A 206px docked panel is narrow and is emphatically **not** that: it sits
-   * beside a deck on a desktop window, and a modal over the whole app for its filters would take
-   * the deck away to answer a question about the panel.
+   * only surface on screen is the wall this row sits above, and whether a 381px bar over a 922px
+   * tray therefore has anywhere to go. A 206px docked panel is narrow and is emphatically **not**
+   * that: it sits beside a deck on a desktop window, and a modal over the whole app for its
+   * filters would take the deck away to answer a question about the panel.
    *
    * So the branch is the window's, and `useNarrowWindow` is the app's one such branch — its own
    * doc sets the test for a second one ("name the box the question is about"), and the box here
@@ -727,6 +729,455 @@ export function FilterBar<SortKey extends string>({
     disabled: s.disabled,
   }));
 
+  /**
+   * The box the reader types in, written once and mounted in one of two places — the bar's own
+   * row above the phone width, and the strip below it.
+   *
+   * **A value rather than a copy per place**, which is the row's own arrangement rule read one
+   * level up: two mounted boxes would be two tab stops and two accessible names for one filter,
+   * and a `getByLabelText` that starts throwing "found multiple". Only the classes differ, and
+   * they differ inside the one `cn` below where the two spellings can be read against each other.
+   */
+  const searchField = (
+    <>
+      {/* The name is the surface's — see {@link FilterLabels}, and the two questions it keeps
+          apart. */}
+      <label htmlFor={`${labels.idStem}-text`} className="sr-only">
+        {labels.search}
+      </label>
+      <input
+        id={`${labels.idStem}-text`}
+        type="search"
+        value={search.text}
+        onChange={(e) => search.setText(e.target.value)}
+        // Escape empties the box while there is something in it to empty, and falls through
+        // when there is not. Chromium clears an `<input type="search">` by itself but leaves
+        // `defaultPrevented` false, so on a view where Escape also means "go back" the same
+        // press would do both — and this row is the deck editor's docked panel as well as the
+        // search page's. jsdom implements no native clear at all, so the handler is also the
+        // only half of the behaviour a test can see. The rule is {@link clearFieldOnEscape}'s.
+        onKeyDown={(e) => clearFieldOnEscape(e, search.text, () => search.setText(""))}
+        // The accessible name with an ellipsis, so the two say the same thing — a placeholder
+        // that differed from the label would be two names for one box.
+        placeholder={`${labels.search}…`}
+        // `FILTER_FIELD` and not `FILTER_CONTROL`: the row's chips dip 3% under the press and
+        // a box the reader types into must not, or the native ✕ slides out from under the
+        // pointer clearing it. Issue #179 — the reason is on the constant. It is also where the
+        // finger's floor comes from: `FILTER_SHAPE`'s `coarse:min-h-[var(--target-min)]` is what
+        // makes this box 44 tall on the strip without a number being written a second time here.
+        //
+        // **A whole line to itself below 640** (`basis-full`), which is the one control here
+        // that earns it: it is the only one whose usefulness scales with its width, and in a
+        // 206px panel a box sharing a line with six colour chips is four characters wide.
+        // Above that it is `flex-1` again and capped, so a maximised window does not hand it
+        // half the bar.
+        //
+        // **On the strip it is `flex-1` on the only line there is, and it drops `order-[1]`
+        // with the rest of the row.** The strip holds two items and nothing else sets an
+        // `order`, so an `order-[1]` here would put the box *after* the button that opens the
+        // sheet. `flex-1` is what `basis-full` amounts to there anyway — `FiltersButton` carries
+        // `shrink-0`, so the box takes everything the button leaves either way — and it is the
+        // spelling that says so.
+        className={cn(
+          FILTER_FIELD,
+          FILTER_FOCUS,
+          narrow
+            ? "min-w-0 flex-1 border-border bg-surface px-3 placeholder:text-dim focus:border-accent"
+            : "order-[1] min-w-0 basis-full border-border bg-surface px-3 placeholder:text-dim focus:border-accent",
+          !narrow &&
+            "@min-[640px]/fb:max-w-[min(34%,460px)] @min-[640px]/fb:flex-1 @min-[640px]/fb:basis-48",
+        )}
+      />
+    </>
+  );
+
+  /**
+   * The disclosure the tray opens from — one button, mounted in one of two places for the reason
+   * the box above is: the count it carries and the panel it names are one control, and a second
+   * copy would be a second `aria-controls` pointing at the same `id`.
+   */
+  const filtersButton = (
+    <FiltersButton
+      open={trayOpen}
+      count={search.activeCount}
+      onToggle={() => setTrayOpen((open) => !open)}
+      controls={trayId}
+      // The word appears at 900 rather than at 640, because it is the widest thing in the
+      // right-hand group and the second line has to hold the mana values at their full 396px
+      // before it holds anything else. **Never hidden on the strip**: it is the only labelled
+      // control left there, and a bar of one text box and one unlabelled icon says nothing about
+      // where the rest of the filters went.
+      labelClass={narrow ? undefined : "hidden @min-[900px]/fb:inline"}
+      // Fills what the colours leave of its line below 640, where there is no spacer to push
+      // it right and a 44px button floating beside six chips reads as a seventh chip. On the
+      // strip it takes its own width and the box beside it takes the rest, which is the button's
+      // own `shrink-0` doing the work rather than anything said here.
+      className={narrow ? undefined : "order-[5] flex-1 @min-[640px]/fb:flex-none"}
+    />
+  );
+
+  /**
+   * **The bar's own row — one flex container for both lines, ordered rather than duplicated.**
+   *
+   * The obvious build is a `<div>` per breakpoint with `hidden` on the ones that do not
+   * apply — and it puts two mana-value groups and two sort pickers in the tree at once, which
+   * is two controls with one accessible name, two tab stops for one filter, and a
+   * `getByLabelText` that starts throwing "found multiple". So the items are written once and
+   * the arrangement is `order` plus a `basis-full` spacer that forces a line break. The order
+   * numbers below are the whole layout; each item carries its own.
+   *
+   * The gaps close as the box narrows — 12px, 10px, 8px — because at 640 the same gaps that
+   * gave a 1500px bar its air are what tip the second line into a third.
+   *
+   * **Mounted in one of two places since 2026-08-29, and that is the whole of 9c's Task 2.** In
+   * the flow above the phone width; inside the sheet below it, where the two items it does not
+   * draw — the search box and the `Filters` button — are the strip instead. Nothing new arranges
+   * it there: the sheet is under 640, so the same `order` numbers and the same two `basis-full`
+   * breaks stack it as the colours, the mana values, and then the sort beside the view controls.
+   * A value rather than a second copy, for the reason stated three paragraphs up: the failure a
+   * duplicate causes is two accessible names per filter, and it is silent.
+   */
+  const row = (
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-2 @min-[640px]/fb:gap-x-2.5 @min-[900px]/fb:gap-x-3">
+      {/* The two the strip keeps, drawn here only when there is no strip — this row is the whole
+          of the bar above the phone width and the sheet's contents below it, and below it these
+          two are on the bar instead. `false` renders nothing, so the desktop tree is the tree it
+          was; what a `true` here would cost is the box and the button mounted twice at once, which
+          is two tab stops and two accessible names for each of them. */}
+      {!narrow && searchField}
+
+      {/* Wider than the other groups' `gap-1`: a pressed chip's ring reaches 4px past its
+          edge, and at 4px apart two pressed chips look like one welded object.
+
+          `flex-wrap` for the narrowest surface's sake — the panel's floor is 206px, where six
+          chips at 246 do not fit a line and an unwrapped group would hang out of the panel
+          and put a horizontal scrollbar across the whole deck builder. */}
+      <div role="group" aria-label="Color identity" className="order-[2] flex flex-wrap gap-1.5">
+        {MANA_KEYS.map((key) => (
+          <ManaChip
+            key={key}
+            symbol={key}
+            pressed={search.colors.includes(key)}
+            // The one control on this row that does not ask "would this return nothing".
+            // `colors` is subset semantics, so pressing a chip with another already on
+            // *broadens* — the count is the size of the result set after the press, read
+            // against `facets.total`. And that total is the facets' own: printings, exact,
+            // and not the collapsed, capped number the results caption prints.
+            disabled={colorDisabled(
+              facets?.colors[key],
+              facets?.total ?? 0,
+              search.colors.includes(key),
+            )}
+            title={facetTitle(MANA_LABEL[key], facets?.colors[key])}
+            onClick={() => search.toggleColor(key)}
+          />
+        ))}
+      </div>
+
+      {/* The empty flex item that pushes everything after it to the right end of its line. At
+          1500 it separates the mana values from Filters; below that, the colours from Filters.
+          Gone below 640, where the Filters button takes the rest of the colours' line itself. */}
+      <div aria-hidden="true" className="order-[4] hidden flex-1 @min-[640px]/fb:block" />
+
+      {!narrow && filtersButton}
+
+      {/* A hairline between the filters and the two controls that are not filters. Only at the
+          widest, where the sort sits on this line and would otherwise read as one more thing
+          the tray is about. */}
+      <div
+        aria-hidden="true"
+        className="order-[6] hidden h-9 w-px bg-border @min-[1500px]/fb:block"
+      />
+
+      {/* The sort, from the other end of the state the table's headers already drive. Picking
+          here *replaces* the sort with that one term; the headers refine and extend it. So the
+          picker follows a header press and a header's arrow follows the picker — one piece of
+          state with two controls on it.
+
+          **Drawn in both layouts and on both surfaces, which is the whole of the feature.** The
+          grid has no headers to press, and the deck editor's docked panel is a grid with no
+          table to switch to at all — so `layoutToggle` is deliberately not the fence. That prop
+          says "this surface has no second layout", which names exactly the surface with no other
+          way to sort; fencing on it would take the control away from the one place it is the
+          only one.
+
+          **On the bar rather than in the tray, which is the one thing here that is not a
+          filter and is on it anyway.** A list is always in some order, so a reader who wants a
+          different one is not narrowing — they are reading — and a control behind a disclosure
+          called Filters would be the wrong cupboard.
+
+          The pair is boxed rather than left to the row's own gap, which would stand the arrow
+          12px off the order it belongs to and let `flex-wrap` break the two onto separate lines
+          — a direction with its order on the line above is a button about nothing. 4px apart,
+          like the layout pair at the far end of the row.
+
+          It costs the docked panel nothing at its 206px floor, for a different reason since the
+          2026-08-25 move to `<Dropdown>`. The old `<select>` was as wide as its widest option
+          — `Best match` and `Mana value`, both ten characters, the same count as the `Any
+          format` in the tray — measured at 119px against the built stylesheet with the app's
+          own fonts loaded (2026-08-24), a floor no narrow panel could shrink under whichever
+          row was picked. A `<Dropdown>` trigger sizes to its own **picked** text instead, never
+          to the widest row it could show, so it is narrower than that measurement for every
+          order shorter than the widest and the docked panel has more headroom than it used to
+          need rather than exactly as much. **Below 640 it still does not have to fit
+          anything** — the trigger is `flex-1` on a line of its own, so neither sizing rule
+          matters at the panel's floor, and the break at `order-[28]` above is what makes that
+          line its own. */}
+      <div className="order-[30] flex min-w-0 flex-1 items-center gap-1 @min-[640px]/fb:flex-none @min-[1500px]/fb:order-[7]">
+        {/* **`Sort results`, and never shortened back to `Sort`.** The collection's twin is a bare
+            `Sort` and this one may not copy it, because this row is drawn on two surfaces and one
+            of them already has a `Sort`: the deck editor's toolbar sorts **the deck**, this sorts
+            **the search results**, and with the docked panel open both lists are on screen at
+            once. Two controls with one name is not a WCAG failure — it is a control that cannot
+            be addressed unambiguously, by a screen reader walking the form, by anyone driving the
+            app by voice, or by a `getByRole("button", { name: "Sort" })` that starts throwing
+            "found multiple".
+
+            The widening goes here rather than on the deck editor's label for the reason that
+            decides every one of these: that one has only to be unambiguous where it is mounted,
+            and this one has to be unambiguous *wherever* it is. `PrintingsFilterBar.tsx:380` made
+            the same call and wrote down the same trap — a bare verb names an action and not the
+            thing it acts on, which is why it draws `Sort printings by` and not `Sort by`. */}
+        <label
+          id={`${labels.idStem}-sort-label`}
+          htmlFor={`${labels.idStem}-sort`}
+          className="sr-only"
+        >
+          Sort results
+        </label>
+        <Dropdown
+          id={`${labels.idStem}-sort`}
+          labelledBy={`${labels.idStem}-sort-label`}
+          value={search.sortSelection}
+          onChange={(key) => search.setSortKey(key as SortKey)}
+          options={sortDropdownOptions}
+          // **Never gold** — no `active` passed, unlike the format picker in the tray. Accent
+          // there means "this is not where the control opens", which is a state a filter can be
+          // in and out of. A list is always in *some* order, so a sort cannot be inactive — and
+          // a gold sort picker would be saying "a filter is on" about the one control on this
+          // row that is not a filter, and that Reset all deliberately does not clear.
+          className="min-w-0 flex-1 @min-[640px]/fb:flex-none"
+        />
+
+        {/* One arrow, turned over — never `ArrowDown` swapped in for `ArrowUp`. That is the rule
+            `SortableHeader.tsx:51-55` states and this is the reason it states it: a different
+            element in the same slot is unmounted and remounted, so the indicator *teleports*,
+            and the whole of what the press means is that the order reversed. Half a turn is that
+            fact, drawn. `initial={false}`, so a row that opens already descending draws its
+            arrow turned rather than spinning on first paint — the header's rule, for the
+            header's reason.
+
+            `rotate` is a transform prop, so `MotionConfig reducedMotion="user"` reaches it and
+            no `useReducedMotion` opt-out is owed here (`docs/reference/motion.md` — the trap
+            there is the *non*-positional properties, and this animates none).
+
+            **The real `disabled`, and the row's `aria-disabled` rule does not bind.** That rule
+            is about a filter row greying *as the reader types*, where a control leaving the tab
+            order would shrink the row out from under a keyboard caret. This one can only grey
+            when the reader themselves puts the select back to `Best match`, and their caret
+            is on that select when they do it — the button never vanishes from under the thing
+            focusing it. */}
+        {/* **Wrapped, for the same reason `AllPrintingsDialog`'s end-of-walk chevron is.**
+            `aria-label` already carries the whole sentence, so the tooltip is `describes: false`
+            — pure redundancy for a pointer, which is the state this button spends most of a
+            default search in: `disabled={!sortDir}`. A `disabled` control fires no pointer
+            events at all, so `{...tip()}` bound to the button directly would be silently inert
+            in exactly the state a reader is likeliest to hover it, which is a real loss rather
+            than a no-op (Chromium still draws a native `title` on a disabled control today). The
+            wrapper adds no box beyond the button's own, so an enabled press and an enabled hover
+            both work exactly as before. */}
+        <span {...tip(sortDirectionName(sortDir), { describes: false })}>
+          <button
+            type="button"
+            onClick={search.flipSortDir}
+            disabled={!sortDir}
+            aria-label={sortDirectionName(sortDir)}
+            className={cn(
+              FILTER_CONTROL,
+              FILTER_FOCUS,
+              "flex size-9 items-center justify-center",
+              // Not `aria-pressed`, and never gold: descending is not a filter switched on, it is
+              // the other half of a control that is always doing something. `filterChipState`'s
+              // unpressed arm is what every other quiet control on this row wears, and its
+              // `unavailable` arm is the row's one greying treatment rather than a second one
+              // written next to it.
+              filterChipState(false, !sortDir),
+            )}
+          >
+            {/* `flex` on the span is load-bearing and not decoration: a bare `<span>` is a
+                non-replaced inline box, a transform does not apply to one at all, and the rotation
+                would silently do nothing. `SortableHeader` carries the same class for the same
+                reason. */}
+            <motion.span
+              aria-hidden="true"
+              initial={false}
+              animate={{ rotate: sortDir === "desc" ? 180 : 0 }}
+              transition={TRANSITION.fast}
+              className="flex"
+            >
+              <ArrowUp className="size-4" />
+            </motion.span>
+          </button>
+        </span>
+      </div>
+
+      {/* The second hairline, and it precedes a **group** rather than one pair: Flatten, the
+          grid-or-table pair, or both. What it says is the same either way — the controls past it
+          are about the *drawing* rather than about which cards there are, so none of them is
+          counted by the badge or cleared by Reset all. Drawn wherever the group has anything in
+          it, because a row carrying only Flatten needs the line for exactly the reason a row
+          carrying only the pair does. */}
+      {(layoutToggle || flatten) && (
+        <div
+          aria-hidden="true"
+          className="order-[8] hidden h-9 w-px bg-border @min-[640px]/fb:block"
+        />
+      )}
+
+      {/* **The two controls that are about the drawing, in one wrapper so they cannot wrap
+          apart.** Both are view modes rather than filters — how much of the tree is on screen,
+          and how the rows are laid out — so they sit past the divider with the sort rather than
+          among the statements about which cards to show, and, like the sort, neither is touched
+          by Reset all. Flatten leads, because it says which *rows* there are to lay out and the
+          pair says how they are laid out.
+
+          The wrapper is the layout pair's own, lifted out of {@link ViewToggle} so that the
+          second control could join it: two siblings in the row's own flex would be two items the
+          `flex-wrap` is free to break between, and a Flatten chip on the line above the pair it
+          was moved next to is the whole of what this change was for. The 8px inside it is the
+          row's own gap at the narrowest band and *tighter* than it at the two wider ones, where
+          the row opens to 10px and 12px — so the group closes up as the bar grows and reads as
+          one object rather than as two more items in the row.
+
+          **`ml-auto` on `LayoutToggle`'s own group survives this and does nothing**, which was
+          worth checking rather than assuming: an auto margin absorbs positive free space, and
+          this wrapper is a flex item at `flex: 0 1 auto` whose base size is its contents — so
+          there is none to absorb. Swept in headless Chromium over this row's real markup and the
+          app's own compiled stylesheet, 206px to 1700px in 2px steps (2026-08-26):
+          `margin-left` computes to `0px` at every width, the chip stands exactly the wrapper's
+          8px from the pair at every width, the two never land on different lines, and forcing
+          the margin to zero changes no measurement. **jsdom applies no container query and loads
+          no stylesheet**, so none of that is visible to the suite — what the suite pins instead
+          is the tree the wrapping rests on.
+
+          **`order-[40]`, and not `order-[9]` unconditionally.** At 640 and up the group rides
+          the first line past the divider, which is where the design puts it; below that there is
+          no first line to ride — the colours already share theirs with Filters — so an
+          `order-[9]` would strand it on a line of its own between the colours and the mana
+          values. Ordered past the sort instead, it shares that line, which is the other control
+          on this bar that is about how the results are *shown* rather than which ones there
+          are. */}
+      {(layoutToggle || flatten) && (
+        <div className="order-[40] flex items-center gap-2 @min-[640px]/fb:order-[9]">
+          {flatten && (
+            <ToggleChip label="Flatten" pressed={flatten.pressed} onClick={flatten.onToggle} />
+          )}
+          {layoutToggle && <ViewToggle section={layoutFor} />}
+        </div>
+      )}
+
+      {/* **The line break.** A `basis-full` flex item consumes the rest of its line, so
+          everything ordered after it starts a new one. Gone at 1500, where the whole bar is one
+          line and the items after it fold back into their places between `order-[2]` and
+          `order-[8]`. */}
+      <div aria-hidden="true" className="order-[10] h-0 basis-full @min-[1500px]/fb:hidden" />
+
+      {/* The mana values, and the one control whose *size* moves with the breakpoint. */}
+      <div className="order-[20] flex min-w-0 @min-[1500px]/fb:order-[3]">
+        <ManaValueChips
+          // **32px below 640 and the family's 36 above it**, which buys exactly one line: ten
+          // chips at `gap-1` are 396px at 36 and 356 at 32, and the deck panel's 384px default
+          // leaves ~371 of content. `flex-wrap` inside the group is still what makes the
+          // panel's 206px floor safe — this is a fit, never a fence.
+          chipClass="size-8 @min-[640px]/fb:size-9"
+          selected={search.manaValues}
+          onToggle={search.toggleManaValue}
+          disabled={(value) =>
+            optionDisabled(facets?.manaValues, String(value), search.manaValues.includes(value))
+          }
+          // The chip hands its own label back, so "8 or more" is spelled in one place.
+          title={(value, label) => facetTitle(label, facets?.manaValues[String(value)])}
+          xSelected={search.manaX}
+          onToggleX={search.toggleManaX}
+          // `manaX` is a **field** of the facet response beside `manaValues` rather than a key
+          // inside it, so this reads a bare count — and `countDisabled` is the same rule the
+          // nine chips to its left grey by rather than a second one written next to it. Rust
+          // counts it off the same `Skip::Mana` base, so X greys when and only when its
+          // neighbours would: because nothing in this search has one.
+          xDisabled={countDisabled(facets?.manaX, search.manaX)}
+          xTitle={(label) => facetTitle(label, facets?.manaX)}
+        />
+      </div>
+
+      {/* Pushes the sort to the right end of the second line. Hidden at 1500, where there is no
+          second line and this item would land past the layout toggle. */}
+      <div
+        aria-hidden="true"
+        className="order-[25] hidden flex-1 @min-[640px]/fb:block @min-[1500px]/fb:hidden"
+      />
+
+      {/* **The second break, and it is a fix rather than a tidy.** Below 640 the sort is
+          `flex-1` so it can fill a line of its own; without this it instead shares the mana
+          values' line wherever one is left over, and `flex-1` then makes it take *whatever is
+          left* — which between about 360 and 560 of container is a handful of pixels. The div
+          shrinks (it carries `min-w-0`); the 36px direction button inside it cannot, so it
+          spills out of the panel, and `DeckEditor`'s page section computes `overflow-x` to
+          `auto` and draws a horizontal scrollbar across the whole deck builder. Measured at a
+          369px container before this existed: the sort was allotted **5px** and overflowed by
+          **53**. The panel is draggable from 206, so that band is reachable by a drag.
+
+          Above 640 it is gone and the sort is `flex-none`, which is what makes the second line
+          safe there without a break: an item that cannot be crushed *wraps* instead. */}
+      <div
+        aria-hidden="true"
+        className="order-[28] h-0 basis-full @min-[640px]/fb:hidden"
+      />
+    </div>
+  );
+
+  /**
+   * **The search, in words — and the row is drawn whether or not there is anything in it.**
+   *
+   * Reset all lives here now, and its own rule is why the row is unconditional: it is always
+   * drawn and greyed at zero, because a control that appears mid-press moves everything beside
+   * it. What changed is *which* things it would move. On the bar it took its width out of a
+   * `flex-1` search box and slid nine colour chips left under the finger that had just pressed
+   * one; under a rule below every control, an appearing chip moves only the wall of cards, and
+   * a wall that has just been re-queried is moving anyway.
+   *
+   * **On a phone it follows the controls it states into the sheet** (2026-08-29). It is 151px
+   * with five kinds on, measured against a 545px content box, and it is a statement about
+   * filters every one of which is now behind the same disclosure — so a reader who cannot see
+   * the control cannot see the chip either, which is the cost 9c's F3 accepted and the thing its
+   * next task is about. What the strip says in its place with the sheet shut is deliberately not
+   * answered here.
+   */
+  const statedFilters = (
+    <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
+      {chips.length > 0 && (
+        // Only when there is something to caption. `Filtering by` over an empty row is a
+        // sentence with nothing after it.
+        <span className={cn(FILTER_LABEL, "shrink-0")}>Filtering by</span>
+      )}
+      {chips.map((chip) => (
+        <ActiveFilterChip key={chip.label} label={chip.label} onRemove={chip.remove} />
+      ))}
+      {/* A whole line of its own below 640 and the right end of this one above it. `grid`
+          rather than `block` so the button stretches, and the arbitrary variant is what centres
+          its label once it has — `ResetAll` is `inline-flex` and would otherwise leave its two
+          words against the left edge of a 200px button.
+
+          **First when it is stacked, last when it is not**, which is the design's own call and
+          has a reason worth keeping: below 640 the chips wrap onto two and three lines as the
+          reader narrows, and a full-width button under them moves every time one does. Above
+          640 it is at the end of the line, where `ml-auto` holds it against the right edge and
+          the chips grow leftwards away from it. Either way it does not move under the press. */}
+      <div className="order-first grid basis-full [&>button]:justify-center @min-[640px]/fb:order-none @min-[640px]/fb:ml-auto @min-[640px]/fb:block @min-[640px]/fb:basis-auto">
+        <ResetAll count={search.activeCount} onReset={search.resetAll} />
+      </div>
+    </div>
+  );
+
   return (
     // **A fragment, and the sheet is the container box's *sibling* rather than its child.** That
     // is a containing-block rule, not tidiness: `@container/fb` below is `container-type:
@@ -746,355 +1197,84 @@ export function FilterBar<SortKey extends string>({
           Everything below reads `/fb` explicitly. */}
       <div className="@container/fb flex flex-col gap-2">
         {/*
-          **One flex container for both lines, ordered rather than duplicated.**
+          **The strip: the search box, one `Filters` button, and nothing else.**
 
-          The obvious build is a `<div>` per breakpoint with `hidden` on the ones that do not
-          apply — and it puts two mana-value groups and two sort pickers in the tree at once, which
-          is two controls with one accessible name, two tab stops for one filter, and a
-          `getByLabelText` that starts throwing "found multiple". So the items are written once and
-          the arrangement is `order` plus a `basis-full` spacer that forces a line break. The order
-          numbers below are the whole layout; each item carries its own.
+          Measured on the device on 2026-08-29 (OnePlus, Chrome 152, portrait): the shut bar was
+          **381px of a 545px content box** and the wall got **99** — 0.42 of a tile row, so a
+          reader on a phone was shown no whole card. With everything else in the sheet the bar is
+          **44** and the wall gets **436**, which is **1.84** rows at the shipped 237px row: two
+          whole cards and most of the next two. ⚠️ **It is not two rows** — that needs 474 — and
+          the "two full rows" the option story costed was against a 390px window, a 170px tile and
+          a 602px content box, all three of which the hardware disagrees with.
 
-          The gaps close as the box narrows — 12px, 10px, 8px — because at 640 the same gaps that
-          gave a 1500px bar its air are what tip the second line into a third.
+          **44 is `FILTER_SHAPE`'s and is not written here.** Both controls are built on it, and
+          its `coarse:min-h-[var(--target-min)]` is the finger's floor — so the strip's height is
+          the filter family's one answer rather than a second number at this site.
+
+          **The four classes that make the pin honest, none of which jsdom can see:**
+
+          - **`sticky top-0` sticks against the *scroller's padding box***, and the scroller is
+            `AppShell`'s `main` (`relative min-h-0 flex-1 overflow-auto p-5`). A pinned strip
+            therefore sits flush against the top of that padding box, 20px above where the content
+            begins at rest — so `-mt-5 pt-5` is what puts the strip's own box over that gutter
+            while its contents stay exactly where they were.
+          - **`-mx-5 px-5` covers the rest of the same gutter.** With the top 20px covered
+            vertically, the 20px columns either side of it are still transparent, and cards
+            scrolling up show through them beside a bar that looks solid.
+          - **`bg-bg`, opaque and `main`'s own colour**, or the wall is legible straight through
+            the strip.
+          - **`LAYER.header`, taken from `src/lib/layers.ts` and never a bare `z-`.** That rung is
+            named for exactly this pairing — a sticky header against the rows scrolling under it —
+            and `layers.test.ts` sweeps `src/` for the literal.
+
+          **Two things about the pin are honestly untested, and both are written here rather than
+          left to be discovered.**
+
+          **It does not currently engage.** Every wall this row sits above is its own scroller
+          (`CardGrid`'s `overflow-auto`, the tables' virtualiser) and all five pages are `h-full`
+          flex columns, so `main` does not scroll as the app stands. The classes are not
+          speculative — they are what stops the strip being wrong the moment this bar's own flow
+          content outgrows its section, which is one tall `TagQueryRow` away — but nobody should
+          read a scroll-locked page as evidence that the pin was driven.
+
+          **And `-mt-5` assumes this row is the first thing in `main`, which is true on one page
+          of four.** Only the search page puts the bar straight under `main`'s 20px of padding.
+          Tags draws `TagChips` above it at `gap-3`, the collection a summary header and the
+          needs-review row at `gap-4`, the wishlist a `FigureRow` at `gap-4` — so on those three
+          the 20px the strip reaches up is the gap **plus** the last 8px, 4px and 4px of the box
+          above, and `bg-bg` paints over them. At rest that is a visible bite out of the element
+          above; pinned it is exactly right, because by then that element has scrolled away. There
+          is no class that tells the two apart (CSS has no `:stuck`) and this component cannot see
+          which page it is on, so the choice is the plan's and the number is here to be argued
+          with on the device.
+
+          **Argued, and `-mt-5 pt-5` is gone: it can only cost.** The pin cannot engage in this
+          layout — all four pages are `flex h-full flex-col`, so a section exactly fills `main`
+          and `main` never scrolls — which means the vertical bleed has **no** state in which it
+          is the right answer today, and a guaranteed bite out of three pages in the state that
+          actually exists. `-mx-5 px-5` stays because it is the opposite trade: invisible at rest
+          (it paints `bg-bg` over `main`'s own `bg-bg` gutters) and correct the moment anything
+          does scroll under it. **Put `-mt-5 pt-5` back in the same commit as whatever makes
+          `main` scroll**, and not before.
+
+          Worth being plain about what this does and does not buy, because the option story's
+          name is misleading: **the 337px this task returns to the wall comes from the bar being
+          44px instead of 381px, not from the pin.** F3 is "a one-line bar" first and "sticky"
+          second, and only the first half is doing work here.
         */}
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-2 @min-[640px]/fb:gap-x-2.5 @min-[900px]/fb:gap-x-3">
-          {/* The name is the surface's — see {@link FilterLabels}, and the two questions it keeps
-              apart. */}
-          <label htmlFor={`${labels.idStem}-text`} className="sr-only">
-            {labels.search}
-          </label>
-          <input
-            id={`${labels.idStem}-text`}
-            type="search"
-            value={search.text}
-            onChange={(e) => search.setText(e.target.value)}
-            // Escape empties the box while there is something in it to empty, and falls through
-            // when there is not. Chromium clears an `<input type="search">` by itself but leaves
-            // `defaultPrevented` false, so on a view where Escape also means "go back" the same
-            // press would do both — and this row is the deck editor's docked panel as well as the
-            // search page's. jsdom implements no native clear at all, so the handler is also the
-            // only half of the behaviour a test can see. The rule is {@link clearFieldOnEscape}'s.
-            onKeyDown={(e) => clearFieldOnEscape(e, search.text, () => search.setText(""))}
-            // The accessible name with an ellipsis, so the two say the same thing — a placeholder
-            // that differed from the label would be two names for one box.
-            placeholder={`${labels.search}…`}
-            // `FILTER_FIELD` and not `FILTER_CONTROL`: the row's chips dip 3% under the press and
-            // a box the reader types into must not, or the native ✕ slides out from under the
-            // pointer clearing it. Issue #179 — the reason is on the constant.
-            //
-            // **A whole line to itself below 640** (`basis-full`), which is the one control here
-            // that earns it: it is the only one whose usefulness scales with its width, and in a
-            // 206px panel a box sharing a line with six colour chips is four characters wide.
-            // Above that it is `flex-1` again and capped, so a maximised window does not hand it
-            // half the bar.
+        {narrow ? (
+          <div
             className={cn(
-              FILTER_FIELD,
-              FILTER_FOCUS,
-              "order-[1] min-w-0 basis-full border-border bg-surface px-3 placeholder:text-dim focus:border-accent",
-              "@min-[640px]/fb:max-w-[min(34%,460px)] @min-[640px]/fb:flex-1 @min-[640px]/fb:basis-48",
+              "sticky top-0 -mx-5 flex items-center gap-2 bg-bg px-5",
+              LAYER.header,
             )}
-          />
-
-          {/* Wider than the other groups' `gap-1`: a pressed chip's ring reaches 4px past its
-              edge, and at 4px apart two pressed chips look like one welded object.
-
-              `flex-wrap` for the narrowest surface's sake — the panel's floor is 206px, where six
-              chips at 246 do not fit a line and an unwrapped group would hang out of the panel
-              and put a horizontal scrollbar across the whole deck builder. */}
-          <div role="group" aria-label="Color identity" className="order-[2] flex flex-wrap gap-1.5">
-            {MANA_KEYS.map((key) => (
-              <ManaChip
-                key={key}
-                symbol={key}
-                pressed={search.colors.includes(key)}
-                // The one control on this row that does not ask "would this return nothing".
-                // `colors` is subset semantics, so pressing a chip with another already on
-                // *broadens* — the count is the size of the result set after the press, read
-                // against `facets.total`. And that total is the facets' own: printings, exact,
-                // and not the collapsed, capped number the results caption prints.
-                disabled={colorDisabled(
-                  facets?.colors[key],
-                  facets?.total ?? 0,
-                  search.colors.includes(key),
-                )}
-                title={facetTitle(MANA_LABEL[key], facets?.colors[key])}
-                onClick={() => search.toggleColor(key)}
-              />
-            ))}
+          >
+            {searchField}
+            {filtersButton}
           </div>
-
-          {/* The empty flex item that pushes everything after it to the right end of its line. At
-              1500 it separates the mana values from Filters; below that, the colours from Filters.
-              Gone below 640, where the Filters button takes the rest of the colours' line itself. */}
-          <div aria-hidden="true" className="order-[4] hidden flex-1 @min-[640px]/fb:block" />
-
-          <FiltersButton
-            open={trayOpen}
-            count={search.activeCount}
-            onToggle={() => setTrayOpen((open) => !open)}
-            controls={trayId}
-            // The word appears at 900 rather than at 640, because it is the widest thing in the
-            // right-hand group and the second line has to hold the mana values at their full 396px
-            // before it holds anything else.
-            labelClass="hidden @min-[900px]/fb:inline"
-            // Fills what the colours leave of its line below 640, where there is no spacer to push
-            // it right and a 44px button floating beside six chips reads as a seventh chip.
-            className="order-[5] flex-1 @min-[640px]/fb:flex-none"
-          />
-
-          {/* A hairline between the filters and the two controls that are not filters. Only at the
-              widest, where the sort sits on this line and would otherwise read as one more thing
-              the tray is about. */}
-          <div
-            aria-hidden="true"
-            className="order-[6] hidden h-9 w-px bg-border @min-[1500px]/fb:block"
-          />
-
-          {/* The sort, from the other end of the state the table's headers already drive. Picking
-              here *replaces* the sort with that one term; the headers refine and extend it. So the
-              picker follows a header press and a header's arrow follows the picker — one piece of
-              state with two controls on it.
-
-              **Drawn in both layouts and on both surfaces, which is the whole of the feature.** The
-              grid has no headers to press, and the deck editor's docked panel is a grid with no
-              table to switch to at all — so `layoutToggle` is deliberately not the fence. That prop
-              says "this surface has no second layout", which names exactly the surface with no other
-              way to sort; fencing on it would take the control away from the one place it is the
-              only one.
-
-              **On the bar rather than in the tray, which is the one thing here that is not a
-              filter and is on it anyway.** A list is always in some order, so a reader who wants a
-              different one is not narrowing — they are reading — and a control behind a disclosure
-              called Filters would be the wrong cupboard.
-
-              The pair is boxed rather than left to the row's own gap, which would stand the arrow
-              12px off the order it belongs to and let `flex-wrap` break the two onto separate lines
-              — a direction with its order on the line above is a button about nothing. 4px apart,
-              like the layout pair at the far end of the row.
-
-              It costs the docked panel nothing at its 206px floor, for a different reason since the
-              2026-08-25 move to `<Dropdown>`. The old `<select>` was as wide as its widest option
-              — `Best match` and `Mana value`, both ten characters, the same count as the `Any
-              format` in the tray — measured at 119px against the built stylesheet with the app's
-              own fonts loaded (2026-08-24), a floor no narrow panel could shrink under whichever
-              row was picked. A `<Dropdown>` trigger sizes to its own **picked** text instead, never
-              to the widest row it could show, so it is narrower than that measurement for every
-              order shorter than the widest and the docked panel has more headroom than it used to
-              need rather than exactly as much. **Below 640 it still does not have to fit
-              anything** — the trigger is `flex-1` on a line of its own, so neither sizing rule
-              matters at the panel's floor, and the break at `order-[28]` above is what makes that
-              line its own. */}
-          <div className="order-[30] flex min-w-0 flex-1 items-center gap-1 @min-[640px]/fb:flex-none @min-[1500px]/fb:order-[7]">
-            {/* **`Sort results`, and never shortened back to `Sort`.** The collection's twin is a bare
-                `Sort` and this one may not copy it, because this row is drawn on two surfaces and one
-                of them already has a `Sort`: the deck editor's toolbar sorts **the deck**, this sorts
-                **the search results**, and with the docked panel open both lists are on screen at
-                once. Two controls with one name is not a WCAG failure — it is a control that cannot
-                be addressed unambiguously, by a screen reader walking the form, by anyone driving the
-                app by voice, or by a `getByRole("button", { name: "Sort" })` that starts throwing
-                "found multiple".
-
-                The widening goes here rather than on the deck editor's label for the reason that
-                decides every one of these: that one has only to be unambiguous where it is mounted,
-                and this one has to be unambiguous *wherever* it is. `PrintingsFilterBar.tsx:380` made
-                the same call and wrote down the same trap — a bare verb names an action and not the
-                thing it acts on, which is why it draws `Sort printings by` and not `Sort by`. */}
-            <label
-              id={`${labels.idStem}-sort-label`}
-              htmlFor={`${labels.idStem}-sort`}
-              className="sr-only"
-            >
-              Sort results
-            </label>
-            <Dropdown
-              id={`${labels.idStem}-sort`}
-              labelledBy={`${labels.idStem}-sort-label`}
-              value={search.sortSelection}
-              onChange={(key) => search.setSortKey(key as SortKey)}
-              options={sortDropdownOptions}
-              // **Never gold** — no `active` passed, unlike the format picker in the tray. Accent
-              // there means "this is not where the control opens", which is a state a filter can be
-              // in and out of. A list is always in *some* order, so a sort cannot be inactive — and
-              // a gold sort picker would be saying "a filter is on" about the one control on this
-              // row that is not a filter, and that Reset all deliberately does not clear.
-              className="min-w-0 flex-1 @min-[640px]/fb:flex-none"
-            />
-
-            {/* One arrow, turned over — never `ArrowDown` swapped in for `ArrowUp`. That is the rule
-                `SortableHeader.tsx:51-55` states and this is the reason it states it: a different
-                element in the same slot is unmounted and remounted, so the indicator *teleports*,
-                and the whole of what the press means is that the order reversed. Half a turn is that
-                fact, drawn. `initial={false}`, so a row that opens already descending draws its
-                arrow turned rather than spinning on first paint — the header's rule, for the
-                header's reason.
-
-                `rotate` is a transform prop, so `MotionConfig reducedMotion="user"` reaches it and
-                no `useReducedMotion` opt-out is owed here (`docs/reference/motion.md` — the trap
-                there is the *non*-positional properties, and this animates none).
-
-                **The real `disabled`, and the row's `aria-disabled` rule does not bind.** That rule
-                is about a filter row greying *as the reader types*, where a control leaving the tab
-                order would shrink the row out from under a keyboard caret. This one can only grey
-                when the reader themselves puts the select back to `Best match`, and their caret
-                is on that select when they do it — the button never vanishes from under the thing
-                focusing it. */}
-            {/* **Wrapped, for the same reason `AllPrintingsDialog`'s end-of-walk chevron is.**
-                `aria-label` already carries the whole sentence, so the tooltip is `describes: false`
-                — pure redundancy for a pointer, which is the state this button spends most of a
-                default search in: `disabled={!sortDir}`. A `disabled` control fires no pointer
-                events at all, so `{...tip()}` bound to the button directly would be silently inert
-                in exactly the state a reader is likeliest to hover it, which is a real loss rather
-                than a no-op (Chromium still draws a native `title` on a disabled control today). The
-                wrapper adds no box beyond the button's own, so an enabled press and an enabled hover
-                both work exactly as before. */}
-            <span {...tip(sortDirectionName(sortDir), { describes: false })}>
-              <button
-                type="button"
-                onClick={search.flipSortDir}
-                disabled={!sortDir}
-                aria-label={sortDirectionName(sortDir)}
-                className={cn(
-                  FILTER_CONTROL,
-                  FILTER_FOCUS,
-                  "flex size-9 items-center justify-center",
-                  // Not `aria-pressed`, and never gold: descending is not a filter switched on, it is
-                  // the other half of a control that is always doing something. `filterChipState`'s
-                  // unpressed arm is what every other quiet control on this row wears, and its
-                  // `unavailable` arm is the row's one greying treatment rather than a second one
-                  // written next to it.
-                  filterChipState(false, !sortDir),
-                )}
-              >
-                {/* `flex` on the span is load-bearing and not decoration: a bare `<span>` is a
-                    non-replaced inline box, a transform does not apply to one at all, and the rotation
-                    would silently do nothing. `SortableHeader` carries the same class for the same
-                    reason. */}
-                <motion.span
-                  aria-hidden="true"
-                  initial={false}
-                  animate={{ rotate: sortDir === "desc" ? 180 : 0 }}
-                  transition={TRANSITION.fast}
-                  className="flex"
-                >
-                  <ArrowUp className="size-4" />
-                </motion.span>
-              </button>
-            </span>
-          </div>
-
-          {/* The second hairline, and it precedes a **group** rather than one pair: Flatten, the
-              grid-or-table pair, or both. What it says is the same either way — the controls past it
-              are about the *drawing* rather than about which cards there are, so none of them is
-              counted by the badge or cleared by Reset all. Drawn wherever the group has anything in
-              it, because a row carrying only Flatten needs the line for exactly the reason a row
-              carrying only the pair does. */}
-          {(layoutToggle || flatten) && (
-            <div
-              aria-hidden="true"
-              className="order-[8] hidden h-9 w-px bg-border @min-[640px]/fb:block"
-            />
-          )}
-
-          {/* **The two controls that are about the drawing, in one wrapper so they cannot wrap
-              apart.** Both are view modes rather than filters — how much of the tree is on screen,
-              and how the rows are laid out — so they sit past the divider with the sort rather than
-              among the statements about which cards to show, and, like the sort, neither is touched
-              by Reset all. Flatten leads, because it says which *rows* there are to lay out and the
-              pair says how they are laid out.
-
-              The wrapper is the layout pair's own, lifted out of {@link ViewToggle} so that the
-              second control could join it: two siblings in the row's own flex would be two items the
-              `flex-wrap` is free to break between, and a Flatten chip on the line above the pair it
-              was moved next to is the whole of what this change was for. The 8px inside it is the
-              row's own gap at the narrowest band and *tighter* than it at the two wider ones, where
-              the row opens to 10px and 12px — so the group closes up as the bar grows and reads as
-              one object rather than as two more items in the row.
-
-              **`ml-auto` on `LayoutToggle`'s own group survives this and does nothing**, which was
-              worth checking rather than assuming: an auto margin absorbs positive free space, and
-              this wrapper is a flex item at `flex: 0 1 auto` whose base size is its contents — so
-              there is none to absorb. Swept in headless Chromium over this row's real markup and the
-              app's own compiled stylesheet, 206px to 1700px in 2px steps (2026-08-26):
-              `margin-left` computes to `0px` at every width, the chip stands exactly the wrapper's
-              8px from the pair at every width, the two never land on different lines, and forcing
-              the margin to zero changes no measurement. **jsdom applies no container query and loads
-              no stylesheet**, so none of that is visible to the suite — what the suite pins instead
-              is the tree the wrapping rests on.
-
-              **`order-[40]`, and not `order-[9]` unconditionally.** At 640 and up the group rides
-              the first line past the divider, which is where the design puts it; below that there is
-              no first line to ride — the colours already share theirs with Filters — so an
-              `order-[9]` would strand it on a line of its own between the colours and the mana
-              values. Ordered past the sort instead, it shares that line, which is the other control
-              on this bar that is about how the results are *shown* rather than which ones there
-              are. */}
-          {(layoutToggle || flatten) && (
-            <div className="order-[40] flex items-center gap-2 @min-[640px]/fb:order-[9]">
-              {flatten && (
-                <ToggleChip label="Flatten" pressed={flatten.pressed} onClick={flatten.onToggle} />
-              )}
-              {layoutToggle && <ViewToggle section={layoutFor} />}
-            </div>
-          )}
-
-          {/* **The line break.** A `basis-full` flex item consumes the rest of its line, so
-              everything ordered after it starts a new one. Gone at 1500, where the whole bar is one
-              line and the items after it fold back into their places between `order-[2]` and
-              `order-[8]`. */}
-          <div aria-hidden="true" className="order-[10] h-0 basis-full @min-[1500px]/fb:hidden" />
-
-          {/* The mana values, and the one control whose *size* moves with the breakpoint. */}
-          <div className="order-[20] flex min-w-0 @min-[1500px]/fb:order-[3]">
-            <ManaValueChips
-              // **32px below 640 and the family's 36 above it**, which buys exactly one line: ten
-              // chips at `gap-1` are 396px at 36 and 356 at 32, and the deck panel's 384px default
-              // leaves ~371 of content. `flex-wrap` inside the group is still what makes the
-              // panel's 206px floor safe — this is a fit, never a fence.
-              chipClass="size-8 @min-[640px]/fb:size-9"
-              selected={search.manaValues}
-              onToggle={search.toggleManaValue}
-              disabled={(value) =>
-                optionDisabled(facets?.manaValues, String(value), search.manaValues.includes(value))
-              }
-              // The chip hands its own label back, so "8 or more" is spelled in one place.
-              title={(value, label) => facetTitle(label, facets?.manaValues[String(value)])}
-              xSelected={search.manaX}
-              onToggleX={search.toggleManaX}
-              // `manaX` is a **field** of the facet response beside `manaValues` rather than a key
-              // inside it, so this reads a bare count — and `countDisabled` is the same rule the
-              // nine chips to its left grey by rather than a second one written next to it. Rust
-              // counts it off the same `Skip::Mana` base, so X greys when and only when its
-              // neighbours would: because nothing in this search has one.
-              xDisabled={countDisabled(facets?.manaX, search.manaX)}
-              xTitle={(label) => facetTitle(label, facets?.manaX)}
-            />
-          </div>
-
-          {/* Pushes the sort to the right end of the second line. Hidden at 1500, where there is no
-              second line and this item would land past the layout toggle. */}
-          <div
-            aria-hidden="true"
-            className="order-[25] hidden flex-1 @min-[640px]/fb:block @min-[1500px]/fb:hidden"
-          />
-
-          {/* **The second break, and it is a fix rather than a tidy.** Below 640 the sort is
-              `flex-1` so it can fill a line of its own; without this it instead shares the mana
-              values' line wherever one is left over, and `flex-1` then makes it take *whatever is
-              left* — which between about 360 and 560 of container is a handful of pixels. The div
-              shrinks (it carries `min-w-0`); the 36px direction button inside it cannot, so it
-              spills out of the panel, and `DeckEditor`'s page section computes `overflow-x` to
-              `auto` and draws a horizontal scrollbar across the whole deck builder. Measured at a
-              369px container before this existed: the sort was allotted **5px** and overflowed by
-              **53**. The panel is draggable from 206, so that band is reachable by a drag.
-
-              Above 640 it is gone and the sort is `flex-none`, which is what makes the second line
-              safe there without a break: an item that cannot be crushed *wraps* instead. */}
-          <div
-            aria-hidden="true"
-            className="order-[28] h-0 basis-full @min-[640px]/fb:hidden"
-          />
-        </div>
+        ) : (
+          row
+        )}
 
         {/* **In the flow at every width but the phone's**, where the same tray is the sheet
             below instead. One `FilterTray`, mounted in one of two places — never two copies —
@@ -1111,50 +1291,27 @@ export function FilterBar<SortKey extends string>({
           />
         )}
 
-        {/*
-          **The search, in words — and the row is drawn whether or not there is anything in it.**
-
-          Reset all lives here now, and its own rule is why the row is unconditional: it is always
-          drawn and greyed at zero, because a control that appears mid-press moves everything beside
-          it. What changed is *which* things it would move. On the bar it took its width out of a
-          `flex-1` search box and slid nine colour chips left under the finger that had just pressed
-          one; under a rule below every control, an appearing chip moves only the wall of cards, and
-          a wall that has just been re-queried is moving anyway.
-        */}
-        <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
-          {chips.length > 0 && (
-            // Only when there is something to caption. `Filtering by` over an empty row is a
-            // sentence with nothing after it.
-            <span className={cn(FILTER_LABEL, "shrink-0")}>Filtering by</span>
-          )}
-          {chips.map((chip) => (
-            <ActiveFilterChip key={chip.label} label={chip.label} onRemove={chip.remove} />
-          ))}
-          {/* A whole line of its own below 640 and the right end of this one above it. `grid`
-              rather than `block` so the button stretches, and the arbitrary variant is what centres
-              its label once it has — `ResetAll` is `inline-flex` and would otherwise leave its two
-              words against the left edge of a 200px button.
-
-              **First when it is stacked, last when it is not**, which is the design's own call and
-              has a reason worth keeping: below 640 the chips wrap onto two and three lines as the
-              reader narrows, and a full-width button under them moves every time one does. Above
-              640 it is at the end of the line, where `ml-auto` holds it against the right edge and
-              the chips grow leftwards away from it. Either way it does not move under the press. */}
-          <div className="order-first grid basis-full [&>button]:justify-center @min-[640px]/fb:order-none @min-[640px]/fb:ml-auto @min-[640px]/fb:block @min-[640px]/fb:basis-auto">
-            <ResetAll count={search.activeCount} onReset={search.resetAll} />
-          </div>
-        </div>
+        {/* The chips and Reset all, under the controls that made them — and on a phone under the
+            same disclosure as those controls, which is the sheet. See the value's own note. */}
+        {!narrow && statedFilters}
 
         {/* The chips a typed `o:ramp` produces, and the note an unknown tag name gets. Under the
             stated filters rather than among them: these are the *query's* own terms, which the box
             above still holds the text of, and a reader looking for why a name did not resolve is
             looking under the box they typed it into. Renders nothing at all until there is
-            something to say. */}
+            something to say.
+
+            **It stays on the bar on a phone, where everything else left.** It is the answer to
+            something the reader typed into the box directly above it — an unresolved tag name is
+            why the wall is empty — so a note about it behind a disclosure would be an error
+            message the reader has to go looking for. It draws nothing until there is. */}
         <TagQueryRow search={search} />
       </div>
 
       {/*
-        **The tray as a sheet, below the phone width and nowhere else.**
+        **The whole row as a sheet, below the phone width and nowhere else** — the tray since
+        2026-08-29, and since the strip landed the same day, everything else the bar used to draw
+        except the search box and the button that opens this.
 
         `src/CLAUDE.md`'s rule decides the shape and needs no extending: a surface that is
         *consulted* is a `Dialog` over a scrim, and only a surface *worked out of* earns a place
@@ -1219,9 +1376,17 @@ export function FilterBar<SortKey extends string>({
             arrangement is what those rules were already choosing.
 
             `min-h-0 flex-1 overflow-y-auto` is the body contract `Dialog` states: the panel is
-            the `flex flex-col` that bounds it, and this is what actually scrolls the 922px.
+            the `flex flex-col` that bounds it, and this is what actually scrolls the 922px. The
+            `flex flex-col gap-2` on top of it is the bar's own stack, spelled the same way and at
+            the same gap — three blocks in the order the bar draws them, so a reader who has used
+            this row on a desktop meets it here in the order they know.
           */}
-          <div className="@container/fb min-h-0 flex-1 overflow-y-auto p-5">
+          <div className="@container/fb flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-5">
+            {/* **The bar's row, mounted here instead of in the flow** — every control the strip
+                shed, laid out by the same `order` numbers and the same two `basis-full` breaks it
+                uses at any width under 640: the colours, the mana values, then the sort beside the
+                view controls. The two items it does not draw here are the two that are the strip. */}
+            {row}
             <FilterTray
               id={trayId}
               search={search}
@@ -1229,6 +1394,7 @@ export function FilterBar<SortKey extends string>({
               labels={labels}
               formatOptions={formatOptions}
             />
+            {statedFilters}
           </div>
         </Dialog>
       )}
