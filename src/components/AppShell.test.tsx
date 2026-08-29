@@ -323,6 +323,58 @@ it("draws no window caption on Android", () => {
 });
 
 /**
+ * **The browser owns the window's edge exactly as the OS does on Android, and this gate did not
+ * say so until 2026-08-29.**
+ *
+ * The test was `isAndroid()` alone, which is false in a desktop browser — so the web build drew
+ * a caption for a window it does not own, and `TitleBar` reached for Tauri's window API on a
+ * target that has none. `src/lib/window.ts` imports `getCurrentWindow` at module scope, so
+ * **mounting the row at all was enough**: every web load logged `TypeError: Cannot read
+ * properties of undefined (reading 'metadata')` from `getCurrentWindow` and `transformCallback`.
+ * It rendered anyway, which is why it read as console noise rather than as a bug.
+ *
+ * `isWebTarget()` is a build-time flag (`__CORE__`), so it cannot be reached by redefining a
+ * user agent the way the Android case above is — mocking the module is the only door, and
+ * `src/pwa/target.ts`'s own comment says why that is deliberate.
+ */
+vi.mock("@/pwa/target", () => ({ isWebTarget: vi.fn(() => false) }));
+
+it("draws no window caption on the web build, where the browser owns the frame", async () => {
+  const { isWebTarget } = await import("@/pwa/target");
+  vi.mocked(isWebTarget).mockReturnValue(true);
+  try {
+    render(
+      <AppShell update={noUpdate}>
+        <div>content</div>
+      </AppShell>,
+    );
+
+    expect(screen.queryByRole("button", { name: /minimi[sz]e/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /maximi[sz]e/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^close$/i })).not.toBeInTheDocument();
+    // The shell still mounted, so this is the caption being absent rather than a throw.
+    expect(screen.getByText("content")).toBeInTheDocument();
+  } finally {
+    vi.mocked(isWebTarget).mockReturnValue(false);
+  }
+});
+
+/**
+ * The desktop build is the one that *does* own its frame, and it is worth pinning from this side
+ * too: a gate that answered "no caption" everywhere would pass the case above and take the
+ * window's controls away from the platform that needs them.
+ */
+it("still draws the caption on the desktop build", () => {
+  render(
+    <AppShell update={noUpdate}>
+      <div>content</div>
+    </AppShell>,
+  );
+
+  expect(screen.getByRole("button", { name: /^close$/i })).toBeInTheDocument();
+});
+
+/**
  * **`main` is the app's one scroller, and `relative` on it is a whole second scrollbar.**
  *
  * `overflow` clips a descendant only when the scroller sits between it and that descendant's

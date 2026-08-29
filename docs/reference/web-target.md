@@ -291,11 +291,27 @@ desktop bundle and therefore out of the portable exe. Verified: `npm run build` 
   that either was the cure. Neither has been re-measured against a build with one wasm
   instance, and neither was changed back: running the pool out of file slots mid-ingest is not
   survivable, so that experiment is worth doing deliberately rather than by leaving it in.
-- **`@tauri-apps/api/window` throws in the browser.** Once the app renders, the page logs
-  `TypeError: Cannot read properties of undefined (reading 'metadata')` from `getCurrentWindow`
-  and `transformCallback` — the shell reaches for Tauri's window API on a target that has none.
-  It does not stop anything rendering. Not investigated; it belongs with whatever ports the
-  title bar.
+- ~~**`@tauri-apps/api/window` throws in the browser.**~~ **Fixed 2026-08-29, and the cause was
+  one word in a gate.** The page logged `TypeError: Cannot read properties of undefined (reading
+  'metadata')` from `getCurrentWindow` and `transformCallback` on every load, and it did not stop
+  anything rendering — which is why it read as noise.
+
+  `AppShell` drew the caption unless `isAndroid()`, and that is false in a desktop browser. But
+  **parity §5 gives the window's edge to the browser exactly as it gives it to the OS on
+  Android**, so the reasoning the Android branch already carried transferred whole and nobody had
+  transferred it. `src/lib/window.ts` imports `getCurrentWindow` at **module scope**, so mounting
+  `TitleBar` at all was enough to throw — the buttons never had to be pressed.
+
+  The gate is now `!isAndroid() && !isWebTarget()`. `isWebTarget()` rather than a second
+  user-agent probe: the target is a build-time fact (`__CORE__`), so the branch folds away and
+  the desktop bundle carries no web check at all. The two questions are genuinely different —
+  *which platform is this agent* versus *which core was this built against*.
+
+  **Driven in the production web build after the fix: zero console errors, zero caption buttons
+  in the document, and the app renders.** `AppShell.test.tsx` pins both directions — no caption
+  on the web build, and the caption still present on the desktop one, because a gate that
+  answered "no caption" everywhere would pass the first and take the window's controls away from
+  the only platform that needs them.
 - **A desktop baseline re-measurement.** Spec §8 requires one from any PR touching search,
   faceting or sync, and this one refactored the ingest (`ingest::StreamIngest`) and the index
   build (`index::lifecycle::build_from`). It was **not** taken: this worktree is a fresh install
