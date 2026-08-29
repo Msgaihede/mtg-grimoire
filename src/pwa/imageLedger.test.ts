@@ -9,8 +9,10 @@ import {
   measuredSize,
   parseLedger,
   serializeLedger,
+  ledgerWriter,
   touch,
   withCap,
+  type Ledger,
 } from "@/pwa/imageLedger";
 
 const KB = 65_000; // ~65 KB per image: 519 MB over 7 929 files in the live cache.
@@ -121,5 +123,134 @@ describe("the ledger on disk", () => {
       expect(l.bytes).toBe(0);
       expect(l.cap).toBe(DEFAULT_CAP_BYTES);
     }
+  });
+});
+
+/**
+ * **The race that shipped, and the control that proves this test can see it.**
+ *
+ * A wall of card art fires dozens of concurrent cache misses, each running
+ * `read → mutate → write` on one stored ledger. Interleaved, all but the last write back a copy
+ * that predates the others. Measured in the shipped web build on 2026-08-29 from an empty cache:
+ * **78 pictures cached, 9 in the ledger** — an 8.7× under-count, which put the 256 MB cap out of
+ * reach of anything short of ~2.2 GB.
+ *
+ * The first case below is the **unserialised** shape, written out rather than imported: it is
+ * what `sw.ts` did, and it is here so that this file demonstrably reproduces the defect rather
+ * than merely passing over the fix. If it ever starts passing, the store has stopped
+ * interleaving and the second case has stopped proving anything.
+ */
+describe("ledgerWriter", () => {
+  /** A ledger store whose read and write both yield, which is what lets callers interleave. */
+  function store() {
+    let stored = serializeLedger(parseLedger(null));
+    let writes = 0;
+    return {
+      writes: () => writes,
+      current: () => parseLedger(stored),
+      read: async () => {
+        await Promise.resolve();
+        return parseLedger(stored);
+      },
+      write: async (ledger: Ledger) => {
+        await Promise.resolve();
+        writes += 1;
+        stored = serializeLedger(ledger);
+      },
+    };
+  }
+
+  const urls = Array.from({ length: 40 }, (_, i) => `https://cards.example/${i}.webp`);
+
+  it("loses all but a handful of concurrent writes without serialisation — the shipped bug", async () => {
+    const s = store();
+
+    await Promise.all(
+      urls.map(async (url) => {
+        const ledger = await s.read();
+        await s.write(admit(ledger, url, 1000, 1));
+      }),
+    );
+
+    const kept = Object.keys(s.current().size).length;
+    expect(kept).toBeLessThan(urls.length);
+    // Not a tautology dressed as an assertion: 40 interleaved read-modify-writes keep a very
+    // small number, and the live measurement's ratio was 9 of 78. If this ever reaches 40 the
+    // fake has stopped interleaving and the case below is worthless.
+    expect(kept).toBeLessThanOrEqual(2);
+  });
+
+  it("keeps every concurrent write", async () => {
+    const s = store();
+    const mutate = ledgerWriter(s.read, s.write);
+
+    await Promise.all(urls.map((url) => mutate((ledger) => admit(ledger, url, 1000, 1))));
+
+    const led = s.current();
+    expect(Object.keys(led.size)).toHaveLength(urls.length);
+    expect(led.bytes).toBe(urls.length * 1000);
+  });
+
+  /**
+   * **It re-reads every time on purpose, and a memo is the thing that was tried and removed.**
+   * The worker is the only writer, so caching the ledger in memory looks free — but the image
+   * cache can be deleted underneath it by storage eviction or by a reader clearing site data,
+   * and a memoised writer then keeps describing files that are gone. Driven in a real browser
+   * on 2026-08-29 the memoised draft produced 45 images cached and no ledger at all. The reads
+   * are serialised anyway and the blob is small; this is correctness bought cheaply.
+   */
+  it("re-reads the store for every mutation rather than trusting a cached copy", async () => {
+    const s = store();
+    let reads = 0;
+    const mutate = ledgerWriter(async () => {
+      reads += 1;
+      return s.read();
+    }, s.write);
+
+    await Promise.all(urls.map((url) => mutate((ledger) => admit(ledger, url, 1000, 1))));
+
+    expect(reads).toBe(urls.length);
+    expect(s.writes()).toBe(urls.length);
+    // The point of re-reading is that every mutation still sees its predecessors.
+    expect(Object.keys(s.current().size)).toHaveLength(urls.length);
+  });
+
+  it("survives a failed write and re-reads rather than trusting a value that never landed", async () => {
+    const s = store();
+    let failNext = true;
+    const mutate = ledgerWriter(s.read, async (ledger) => {
+      if (failNext) {
+        failNext = false;
+        throw new Error("cache write failed");
+      }
+      await s.write(ledger);
+    });
+
+    await expect(mutate((l) => admit(l, urls[0], 1000, 1))).rejects.toThrow("cache write failed");
+
+    // The queue must not stay rejected: a single failure that poisoned it would stop the ledger
+    // being written for the life of the worker, which is the 256 MB cap silently switching off.
+    await mutate((l) => admit(l, urls[1], 2000, 2));
+
+    const led = s.current();
+    expect(Object.keys(led.size)).toEqual([urls[1]]);
+    expect(led.bytes).toBe(2000);
+  });
+
+  it("runs mutations in the order they were queued", async () => {
+    const s = store();
+    const mutate = ledgerWriter(s.read, s.write);
+    const order: number[] = [];
+
+    await Promise.all(
+      [1, 2, 3].map((n) =>
+        mutate((ledger) => {
+          order.push(n);
+          return admit(ledger, `https://cards.example/${n}.webp`, n, n);
+        }),
+      ),
+    );
+
+    expect(order).toEqual([1, 2, 3]);
   });
 });

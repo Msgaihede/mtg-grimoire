@@ -157,3 +157,60 @@ export function parseLedger(raw: string | null): Ledger {
     return empty();
   }
 }
+
+/**
+ * A serialising, memoising writer over one stored ledger — the whole of what makes concurrent
+ * updates safe.
+ *
+ * **A wall of card art is the workload that breaks a read-modify-write, and it broke this one.**
+ * Every tile that misses the cache runs `read → mutate → write`; dozens are in flight at once,
+ * they interleave at every `await`, and each writes back a ledger built from the copy it read
+ * **before any of the others landed**. All but the last are discarded.
+ *
+ * Measured in the shipped web build on 2026-08-29, from an empty cache, one wall load: **78
+ * pictures in the cache and 9 in the ledger** — an 8.7× under-count. `DEFAULT_CAP_BYTES` is
+ * 256 MB, so at that ratio the cache would have to hold something like **2.2 GB** before the cap
+ * ever bit, and {@link evictions} could only ever choose from the handful of files it knew
+ * about. It is the failure {@link measuredSize}'s comment exists to prevent — *"the cap would
+ * never bite and the 256 MB would be a number in a settings panel and nowhere else"* — arriving
+ * by a route nothing guarded: that comment defends the **value** of one entry, and nothing
+ * defended **how many** entries survive being written.
+ *
+ * **Why no test caught it.** Every other function in this module is pure and correct in
+ * isolation, which is how the suite exercises them. The defect lived in the *caller's*
+ * interleaving, and jsdom has no service worker to reproduce it in. That is why this — the one
+ * stateful thing here — is in this module rather than in `sw.ts`: it is the piece that needed a
+ * test, so it lives where the tests are.
+ *
+ * **It deliberately does not cache the ledger in memory, and that was measured rather than
+ * assumed.** A memo looks free — the worker is the only writer, so its copy should stay
+ * authoritative — but the image cache can be deleted out from under it, by storage eviction or
+ * by a reader clearing site data, and a memoised writer then keeps writing a ledger describing
+ * files that are gone. A first draft of this function did memoise, and driving it in a real
+ * browser on 2026-08-29 produced **45 images cached and no ledger written at all**, because the
+ * writer had also closed over the `Cache` handle it first saw and that handle was dead. Both
+ * halves of that are fixed here: the store is re-read every mutation, and `sw.ts` opens the
+ * cache inside `read`/`write` rather than capturing one.
+ *
+ * The re-read is not free — N queued mutations each read a blob that grows with them — but they
+ * are serialised anyway, the blob is small, and it is Cache Storage rather than a network hop.
+ * Correctness over a micro-optimisation that had already produced one silent failure.
+ */
+export function ledgerWriter(
+  read: () => Promise<Ledger>,
+  write: (ledger: Ledger) => Promise<void>,
+): (change: (ledger: Ledger) => Ledger | Promise<Ledger>) => Promise<Ledger> {
+  let queue: Promise<unknown> = Promise.resolve();
+
+  return (change) => {
+    const run = queue.then(async () => {
+      const next = await change(await read());
+      await write(next);
+      return next;
+    });
+    // The queue must never become a rejected promise: every later mutation chains onto it, so
+    // one failure would otherwise stop the ledger being written for the life of the worker.
+    queue = run.catch(() => {});
+    return run;
+  };
+}

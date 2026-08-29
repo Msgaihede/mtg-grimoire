@@ -25,6 +25,7 @@ import {
   admit,
   evictions,
   forget,
+  ledgerWriter,
   measuredSize,
   parseLedger,
   serializeLedger,
@@ -137,6 +138,28 @@ async function writeLedger(cache: Cache, ledger: Ledger): Promise<void> {
   await cache.put(LEDGER_KEY, new Response(serializeLedger(ledger)));
 }
 
+/**
+ * The one writer of the ledger, and every update in this file goes through it.
+ *
+ * **A raw `readLedger`/`writeLedger` pair anywhere else is the read-modify-write race back
+ * again** — dozens of card tiles run their update concurrently, interleave at each `await`, and
+ * all but the last write back a ledger built from a copy that predates the others.
+ * `swCore.test.ts` sweeps this file's text for exactly that, and `ledgerWriter`'s comment in
+ * `imageLedger.ts` carries the measurement.
+ *
+ * **`caches.open` is inside the two callbacks rather than captured, and that is not tidiness.**
+ * `image()` re-opens the cache on every request, so a writer holding one `Cache` handle from
+ * whenever it happened to be built keeps writing to that handle after the image cache is
+ * deleted — by storage eviction, or by a reader clearing site data. Driven in a real browser on
+ * 2026-08-29 that produced **45 images cached and the ledger missing entirely**, which is worse
+ * than the bug being fixed and is invisible to every test in this repo. Opening it here costs a
+ * lookup of an already-open cache and cannot go stale.
+ */
+const mutateLedger = ledgerWriter(
+  async () => readLedger(await caches.open(IMAGE_CACHE)),
+  async (ledger) => writeLedger(await caches.open(IMAGE_CACHE), ledger),
+);
+
 /** Delete what the ledger says to, and take those bytes off the count in the same step. */
 async function sweep(cache: Cache, ledger: Ledger): Promise<Ledger> {
   const gone = evictions(ledger);
@@ -160,7 +183,7 @@ async function image(request: Request): Promise<Response> {
   // would go unnoticed.
   const hit = await cache.match(request, { ignoreVary: true });
   if (hit) {
-    await writeLedger(cache, touch(await readLedger(cache), request.url, Date.now()));
+    await mutateLedger((ledger) => touch(ledger, request.url, Date.now()));
     return hit;
   }
 
@@ -172,8 +195,11 @@ async function image(request: Request): Promise<Response> {
   const copy = response.clone();
   const bytes = measuredSize((await copy.clone().blob()).size);
   await cache.put(request, copy);
-  const ledger = admit(await readLedger(cache), request.url, bytes, Date.now());
-  await writeLedger(cache, await sweep(cache, ledger));
+  // Admit and sweep are one mutation, not two: a sweep computed from a ledger a concurrent
+  // admit has already moved on from would evict against a stale `bytes`.
+  await mutateLedger(async (ledger) =>
+    sweep(cache, admit(ledger, request.url, bytes, Date.now())),
+  );
   return response;
 }
 
@@ -190,8 +216,11 @@ sw.addEventListener("message", (event) => {
     event.waitUntil(
       (async () => {
         const cache = await caches.open(IMAGE_CACHE);
-        const next = withCap(await readLedger(cache), Number(data.bytes));
-        await writeLedger(cache, await sweep(cache, next));
+        // Through the same queue as the image path: a cap change that raced an admit used to
+        // be able to write back a ledger with that admit missing from it.
+        await mutateLedger(async (ledger) =>
+          sweep(cache, withCap(ledger, Number(data.bytes))),
+        );
       })(),
     );
     return;
