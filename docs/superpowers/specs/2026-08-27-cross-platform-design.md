@@ -576,7 +576,7 @@ Every remaining PR now has a task-level plan in `docs/superpowers/plans/`.
 | 8 | the Android target | `2026-08-28-android-target.md` | **done** — #262, with #270 fixing the cross-compile |
 | 9a | mobile layout: foundation + options | `2026-08-28-mobile-layout-9a-foundation-and-options.md` | **done** — #274 shipped Tasks 1–4 (the foundation); the four design rounds ran and **the decision was taken on 2026-08-29** |
 | 9b | implement the chosen layout | `2026-08-29-mobile-layout-9b.md` | **done 2026-08-29** — #294 and #295. All four layouts built; the device pass then **falsified the vertical budget**, which is what it was written to do. See 9c |
-| 9c | the vertical, re-opened | — | **needed, and now the only thing between this app and a usable phone.** The measurement is taken; the direction is not chosen |
+| 9c | the vertical, re-opened | — | **decided 2026-08-29, not yet planned.** The tile is fixed (141, shipped); the vertical is **F3, the sticky one-line bar** |
 
 **Updated 2026-08-29.** Everything above 9a has shipped, and the phase is done end to end: the
 app runs on Windows, in a browser and on an Android phone, two devices pair with no account, and
@@ -624,7 +624,38 @@ rather than planned:
 > now a number rather than a worry. F1 buys a control a finger can hit on the axis that had room,
 > and spends 108px on the axis that had none. **Neither is wrong; the budget is.**
 >
-> **What 9c has to choose between**, and none of it should be picked without him:
+> ### Both halves decided by Markus, 2026-08-29
+>
+> **The horizontal is fixed and shipped: the phone tile is 141.** It is the largest tile two of
+> which fit a 294px wall, and it holds at both widths — two columns at 294 *and* at 324. Its
+> gutter at 294 is 0, which is acceptable here for a reason worth keeping: `sideGutterFor` pads the
+> **row**, inside the box the `ResizeObserver` measures, and the scroller's own `p-3` sits outside
+> it, so a tile with no gutter is still 12px from the scroller's border box — and the wall does not
+> scroll horizontally. `CardGrid.test.tsx` now pins **both** walls, and reverting to 144 turns the
+> narrow one red.
+>
+> **The vertical is F3 — the sticky one-line bar**, and it is not yet planned. The search box and a
+> single `Filters` button stick to the top of the wall as it scrolls; everything else moves into a
+> sheet. 9a measured it at **672px of wall against F1's 387** in its option story, by far the most
+> vertical of the three. **9a rejected it, and the reason it gave has been inverted by the
+> measurement**: it was rejected partly because "Round 2 has not settled the column count" — the
+> count is settled now, and the vertical turned out to be the binding constraint rather than the
+> horizontal. The cost is real and was named then: what is currently filtered stops being visible
+> at a glance.
+>
+> **What 9c's plan has to answer**, none of which the decision settles:
+>
+> - Where the stated-filter chips go, since F3 spends them. `Reset all` counting a filter the
+>   reader cannot see is the failure mode.
+> - Whether the sheet is F2's sheet — the open tray measures **922px** against a 545px content box,
+>   so the sheet has its own vertical problem and inherits it.
+> - Whether the 44px floor stays whole. It costs a measured **108px**, and F3 buys back more than
+>   that, so the two are compatible — but that is arithmetic to redo after the bar moves, not
+>   before.
+>
+> **What was considered and not chosen**, kept because the reason is what a later reader needs:
+
+
 >
 > - **F2, already named and costed in [the options document](2026-08-28-mobile-layout-options.md)** —
 >   the filter tray as a sheet. It was the named follow-on for exactly this, conditional on
