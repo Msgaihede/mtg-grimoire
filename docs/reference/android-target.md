@@ -17,7 +17,7 @@ device number is an optimistic bound** and is labelled as one. The build is name
 
 | | |
 | --- | --- |
-| The crate compiles for `aarch64-linux-android` | ✅ `cargo build --target aarch64-linux-android --lib`, zero errors, zero warnings |
+| The crate compiles for `aarch64-linux-android` | ✅ `cargo build --target aarch64-linux-android --lib`, zero errors, zero warnings — **and CI runs it since 2026-08-29**, so this row can no longer rot silently. It had: #270 fixed a `main` that had stopped cross-compiling, found only because somebody built an APK by hand. See [ci-and-releases.md](ci-and-releases.md)'s `android` job |
 | `libsqlite3-sys` (`bundled`) against the NDK | ✅ — the riskiest compile in the whole target, and it works untouched |
 | `ring` against the NDK | ✅ — so HTTPS needs no cert plumbing and no cmake |
 | The Gradle project | ✅ generated and committed |
