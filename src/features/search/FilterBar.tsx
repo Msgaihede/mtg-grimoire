@@ -22,6 +22,7 @@ import {
 import { PriceRange } from "@/components/PriceRange";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { CONDITIONS, CONDITION_LABEL, type Condition } from "@/lib/conditions";
+import { DROP_MARK_ROOM } from "@/lib/dropMarks";
 import { FINISHES, FINISH_LABEL, type Finish } from "@/lib/finish";
 import type { FacetResponse, SearchSortKey } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
@@ -1145,12 +1146,12 @@ export function FilterBar<SortKey extends string>({
    * one; under a rule below every control, an appearing chip moves only the wall of cards, and
    * a wall that has just been re-queried is moving anyway.
    *
-   * **On a phone it follows the controls it states into the sheet** (2026-08-29). It is 151px
-   * with five kinds on, measured against a 545px content box, and it is a statement about
-   * filters every one of which is now behind the same disclosure — so a reader who cannot see
-   * the control cannot see the chip either, which is the cost 9c's F3 accepted and the thing its
-   * next task is about. What the strip says in its place with the sheet shut is deliberately not
-   * answered here.
+   * **This shape is the bar's, at every width but the phone's.** It followed the controls it
+   * states into the sheet for one day (2026-08-29, 9c's Task 2) and came back out the same week:
+   * a statement about filters that is only readable behind the disclosure those filters are
+   * behind states nothing a reader can act on. {@link statedFiltersStrip} below is what a phone
+   * draws instead, and its own note carries the decision, the two shapes it was chosen over and
+   * what the second line costs.
    */
   const statedFilters = (
     <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
@@ -1173,6 +1174,109 @@ export function FilterBar<SortKey extends string>({
           640 it is at the end of the line, where `ml-auto` holds it against the right edge and
           the chips grow leftwards away from it. Either way it does not move under the press. */}
       <div className="order-first grid basis-full [&>button]:justify-center @min-[640px]/fb:order-none @min-[640px]/fb:ml-auto @min-[640px]/fb:block @min-[640px]/fb:basis-auto">
+        <ResetAll count={search.activeCount} onReset={search.resetAll} />
+      </div>
+    </div>
+  );
+
+  /**
+   * **The same statement on a phone — the real chips, on a scrolling second line of the strip.**
+   *
+   * 9c's Task 3, and the one decision that plan deliberately left open. **Markus chose this shape
+   * on 2026-08-29**, over the two below.
+   *
+   * **Why chips at all, when the strip has 44px and the wall is short of room.** The row above
+   * exists because *a filter behind a shut disclosure has no control on screen at all* — that is
+   * {@link statedFilters}' whole argument, and on a phone every filter but the text is behind
+   * one. The failure it is drawn against is **Reset all counting a filter the reader cannot
+   * see**: a badge reading `4` says how much is on and nothing about what, so a reader cannot
+   * tell whether pressing Reset all takes away something they wanted. Chips are the only shape
+   * that answers that — the search read in a glance, undone one filter at a time — and each one
+   * is still removable by its own ✕, so the row is a control and not a caption.
+   *
+   * **The two shapes rejected, and why they lost rather than merely came second.**
+   * 1. **The badge alone**, which is how F3 was costed and what Task 2 shipped for a day. It is
+   *    free and it is the failure above written out: `4` is not a sentence, and finding out which
+   *    four is a press into a modal that covers the wall the reader is asking about.
+   * 2. **`Filters · red, rare, +3` — the button names them.** One line, no new surface, and it
+   *    was the close one. It loses on two counts: the strip's button is ~100px beside a `flex-1`
+   *    box on a 320px content line, so the truncation rule would be doing all the work and `+3`
+   *    is the badge again with extra steps; and a name is not a control — undoing one filter
+   *    still means opening the sheet, so the *second* half of "read in a glance and undone one
+   *    filter at a time" is lost outright.
+   *
+   * **What it costs, and the plan's 151px was wrong for this layout.** 151 is what this row
+   * measured *stacked and wrapped* in the old bar. `ActiveFilterChip` is `h-[1.625rem]` — 26px —
+   * so on one line the chips themselves are 26. What sets the line is `ResetAll`, which is the
+   * filter family's 36px and `FILTER_SHAPE`'s `coarse:min-h-[var(--target-min)]` **44** on a
+   * finger. So the strip is **44 at rest and 44 + 8 + 44 = 96 with a filter on**. Against the
+   * 436px wall measured on the device (OnePlus, Chrome 152, portrait, 2026-08-29) that is 1.84
+   * tile rows at rest and **1.62** with a filter on, at the shipped 237px row — two whole cards
+   * either way. It was never a space decision.
+   *
+   * **44 is also what the chips' own targets already are**, which is the half of that cost that
+   * is not a cost. `ActiveFilterChip` draws 26px of ink inside a 44px `::before` — its doc says
+   * so, and says the overlap between adjacent lines is the price. Drawing this line at 26 would
+   * not have made those targets smaller; it would have left them reaching 9px up into the search
+   * box and 9px down into the first row of cards. A 44px line is where they fit.
+   *
+   * **Drawn only when there is something to state**, which is the one place this parts company
+   * with the row above. That row is unconditional because an appearing `Reset all` used to take
+   * its width out of a `flex-1` search box and slide nine chips under the finger pressing one.
+   * Here it takes no width from anything: the line arrives *under* the strip and the only thing
+   * it moves is the wall — which is the same answer that rule already reached, and it is what
+   * keeps the shut, unfiltered phone at the 44px Task 2 measured.
+   *
+   * **`Reset all` is pinned outside the scroller, at the right end of the line.** It is the same
+   * failure mode wearing a different hat: a Reset all the reader cannot see while looking at the
+   * chips it would undo is no better than a count they cannot read. Inside the scroller it would
+   * scroll away from exactly the chips it is about; on the first line it would take ~118px off a
+   * 320px content box that a `flex-1` search box and a 100px button already share.
+   *
+   * **One scrolling line and never a wrapped one.** Wrapping is what made this row 151px, and a
+   * row that grows a line each time a filter goes on is the wall moving under a reader who is
+   * narrowing it. The chips carry `shrink-0` themselves, so nowrap plus `overflow-x-auto` is the
+   * whole mechanism.
+   *
+   * **{@link DROP_MARK_ROOM}, because a scroller clips at its padding box.** `FOCUS` stands 4px
+   * proud of a chip's border box, so the first and last chip of a flush row lose that side of
+   * their ring — `dropMarks.ts`' rule reached from the same end it was written at, and `CardGrid`
+   * reaches the same 6 from the other side with `scroll-m-1.5`. The `-mx-1.5` against it puts the
+   * *ink* back on the strip's own content edge, so the first chip lines up with the box above it
+   * and the last one sits a `gap-2` from Reset all. Nothing vertical is clawed back the same way:
+   * the line is 44 for Reset all's sake and the 38px scroller is centred inside it with room to
+   * spare.
+   *
+   * **No `touch-action` here.** `src/index.css:464` already applies one to whatever is mid-drag,
+   * and a second registration on one element silently replaces the first. A horizontal scroller
+   * inside a vertical one needs nothing declared anyway — the browser routes a horizontal pan to
+   * this box and a vertical one to the page, which is the behaviour `overflow-x-auto` asks for.
+   *
+   * **And no second copy in the sheet.** Two mounted `ResetAll`s are two tab stops and two
+   * accessible names for one control, which is the same rule that keeps one `FilterTray` and one
+   * search box mounted in one of two places. The sheet loses nothing a reader needs: every
+   * control in it states its own filter in its own vocabulary — a gold border on a picker, two
+   * bright chips out of six — and that is precisely what this row stands in for when they are off
+   * screen. The accepted cost is that clearing everything from inside the sheet is a dismiss and
+   * then a press, on a strip where the button is already waiting with the count on it.
+   */
+  const statedFiltersStrip = chips.length > 0 && (
+    <div className="flex basis-full items-center gap-2">
+      <div
+        className={cn(
+          // No `flex-wrap`: this is the one line, and the chips are `shrink-0`.
+          "-mx-1.5 flex min-w-0 flex-1 items-center gap-2 overflow-x-auto",
+          DROP_MARK_ROOM,
+        )}
+      >
+        {chips.map((chip) => (
+          <ActiveFilterChip key={chip.label} label={chip.label} onRemove={chip.remove} />
+        ))}
+      </div>
+      {/* `shrink-0` so a long statement scrolls rather than crushing the way to undo it. The
+          scroller's `flex-1` basis is 0, so this keeps its content width whenever there is any
+          free space at all — the class is what holds when there is not. */}
+      <div className="shrink-0">
         <ResetAll count={search.activeCount} onReset={search.resetAll} />
       </div>
     </div>
@@ -1265,12 +1369,23 @@ export function FilterBar<SortKey extends string>({
         {narrow ? (
           <div
             className={cn(
-              "sticky top-0 -mx-5 flex items-center gap-2 bg-bg px-5",
+              // **`flex-wrap` and a `basis-full` child, never a nested box per line** — the same
+              // arrangement rule the bar's own `row` follows, and here it buys one more thing:
+              // the strip stays *one* element, so the pin, the gutter cover, the opacity and the
+              // rung are still four requirements of the one box a test reaches through the search
+              // field.
+              // A wrapper per line would have put the sticky box one level up from every
+              // assertion about it.
+              "sticky top-0 -mx-5 flex flex-wrap items-center gap-2 bg-bg px-5",
               LAYER.header,
             )}
           >
             {searchField}
             {filtersButton}
+            {/* The second line, and it is drawn only when there is something to state — see the
+                value's own note for the shape, the two it was chosen over, and the 44/96 it
+                costs. */}
+            {statedFiltersStrip}
           </div>
         ) : (
           row
@@ -1291,8 +1406,9 @@ export function FilterBar<SortKey extends string>({
           />
         )}
 
-        {/* The chips and Reset all, under the controls that made them — and on a phone under the
-            same disclosure as those controls, which is the sheet. See the value's own note. */}
+        {/* The chips and Reset all, under the controls that made them. **On a phone they are the
+            strip's second line instead** — mounted up there rather than here, one copy in one of
+            two places, and in the sheet neither. See {@link statedFiltersStrip}. */}
         {!narrow && statedFilters}
 
         {/* The chips a typed `o:ramp` produces, and the note an unknown tag name gets. Under the
@@ -1378,8 +1494,18 @@ export function FilterBar<SortKey extends string>({
             `min-h-0 flex-1 overflow-y-auto` is the body contract `Dialog` states: the panel is
             the `flex flex-col` that bounds it, and this is what actually scrolls the 922px. The
             `flex flex-col gap-2` on top of it is the bar's own stack, spelled the same way and at
-            the same gap — three blocks in the order the bar draws them, so a reader who has used
+            the same gap — two blocks in the order the bar draws them, so a reader who has used
             this row on a desktop meets it here in the order they know.
+
+            **The stated filters are not the third block, since 9c's Task 3.** They are the
+            strip's second line now, on the other side of this scrim — see
+            {@link statedFiltersStrip} for why, and for the cost of the one thing that leaves
+            here: `Reset all` is a dismiss and a press away rather than in reach of the controls
+            that made the count. What the sheet keeps is every control stating its own filter in
+            its own vocabulary, which is what those chips stand in for when they are off screen.
+            A copy in both places is not the fix: two mounted `ResetAll`s are two tab stops and
+            two accessible names for one control, which is the same reason there is one `row` and
+            one `FilterTray` mounted in one of two places rather than a copy per surface.
           */}
           <div className="@container/fb flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-5">
             {/* **The bar's row, mounted here instead of in the flow** — every control the strip
@@ -1394,7 +1520,6 @@ export function FilterBar<SortKey extends string>({
               labels={labels}
               formatOptions={formatOptions}
             />
-            {statedFilters}
           </div>
         </Dialog>
       )}

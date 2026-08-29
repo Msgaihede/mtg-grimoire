@@ -126,7 +126,21 @@ A row is **237px** at the shipped 141px tile (art at 5:7, plus the 28px chin, pl
 **Three shapes, and this task picks one with its reasoning at the site.** None is obviously right, which is why it is its own task rather than a step:
 
 1. **The badge alone**, as F3 was costed. Cheapest, and the weakest: `4` is not a sentence.
-2. **The chips scroll horizontally on the strip's second line.** Keeps them visible and legible; costs a second line, which is 26–40px of the 337 F3 just bought, and a horizontal scroller inside a vertical one.
+2. **The chips scroll horizontally on the strip's second line.** ✅ **Chosen by Markus, 2026-08-29.** Keeps them visible and legible; costs a second line and a horizontal scroller inside a vertical one.
+
+   > ⚠️ **The cost was stated twice and both figures were wrong. The real one is 52px, and it only appears when a filter is on.**
+   >
+   > This plan first said **151px**, which was the chips' height *stacked* in the old bar and not a figure about a strip at all. When the decision was put to Markus it was corrected to **34px** (a 26px `ActiveFilterChip` plus a gap) — **also wrong, and wrong in the direction that flatters the recommendation.** The line is **44**, because `ResetAll` sets its height: `FILTER_SHAPE`'s 36 plus `coarse:min-h-[var(--target-min)]`'s **44** on a finger. With the 8px gap the second line costs **52**.
+   >
+   > **The 26 was never going to be the height anyway**, and this is the part worth carrying: `ActiveFilterChip` draws 26px of *ink* inside a **44px `::before` target** — Task 7 of 9b put it there. A 26px line would not have made the targets smaller, only left them reaching 9px up into the search box and 9px down into the first row of cards.
+   >
+   > | | wall | rows | cards whole |
+   > | --- | --- | --- | --- |
+   > | at rest, no filters | 436 | 1.84 | **2** |
+   > | the 34 that was quoted | 402 | 1.70 | 2 |
+   > | **the real 52, filtered** | **384** | **1.62** | **2** |
+   >
+   > **The decision survives its own bad number** — two whole cards under every one of them — and the strip is 44 at rest because the second line is drawn only when something is filtered. But a recommendation resting on a figure nobody had measured is the thing that went wrong here, not the pixels.
 3. **The `Filters` button names them** — `Filters · red, rare, +3`. One line, no new surface, and it degrades honestly as they multiply. Costs a truncation rule and an accessible name that stays readable.
 
 - [ ] **Step 1: Write the failing test** for whichever you choose, asserting **what a reader can learn without pressing anything**.
