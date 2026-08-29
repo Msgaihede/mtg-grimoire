@@ -1,8 +1,9 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type RefObject } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { readDragData, type DragPayload } from "@/features/decks/dnd";
+import { readCards, readDragData, type DragPayload } from "@/features/decks/dnd";
 import { useDeck } from "@/features/decks/useDeck";
 import { dndManager } from "@/lib/dndManager";
+import { useDndDropTarget } from "@/lib/dndTarget";
 import { ipc, ipcError } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
 
@@ -190,5 +191,69 @@ export function useSidebarDrops() {
       report: report?.at === "wishlist" ? report.text : null,
       onDrop: dropOnWishlist,
     } satisfies SidebarDrop,
+  };
+}
+
+/**
+ * One navigation entry as a place to let a card go — the registration, and the two facts the
+ * entry draws itself from.
+ *
+ * **It is here rather than in either drawing of navigation, because there are two of them now.**
+ * `AppShell`'s `NavItem` is the rail's row and `BottomTabBar`'s tab is the phone's, and they are
+ * two drawings rather than one component with a flag — a rail entry is a full-width button with a
+ * left-anchored icon and a tab is a square with its word under the glyph. What they must *not*
+ * be is two registrations, because everything below is a rule about the drag rather than about
+ * the row, and a second copy of it would be a second place for the rule to move.
+ *
+ * **Every card the drag is carrying** (issue #214) — `readCards`, which answers with one payload
+ * for an ordinary drag, several for a multi-select one, and `null` for a drag this app did not put
+ * in the air. The entry's own rule is asked once for the whole gesture: both entries take every
+ * kind of card payload, so "may this land here" has never been a per-card question.
+ *
+ * No `getData`: what a drop writes is decided by the entry, and the entry is already here. An
+ * entry that cannot take a card never accepts one — so `over` is only ever true for a drop that
+ * will happen. `useDndDropTarget` reads `canDrop` and `onDrop` through a ref of its own, which is
+ * what keeps the registration standing while the shell re-renders mid-drag: the shell re-renders
+ * the moment a card is picked up — that is what raises the ring — and a drop target that
+ * unregisters mid-drag is a drop that never arrives.
+ *
+ * **The entries a card cannot land on (`drop === null`) register a droppable too and refuse every
+ * payload**, which costs a registry entry and nothing else: `computeCollisions` skips a droppable
+ * whose `accepts()` is false before it measures it. Registering all of them is what keeps the
+ * target set from changing shape mid-drag.
+ */
+export function useSidebarDropTarget({
+  ref,
+  drop,
+  dragging,
+}: {
+  /** The element a card is let go on — the whole entry, never something smaller inside it. */
+  ref: RefObject<HTMLElement | null>;
+  /** What a drop here would mean, or `null` for the entries a card cannot land on. */
+  drop: SidebarDrop | null;
+  /** A card is in the air somewhere in the window — the only time an entry is anything but a
+   *  link. */
+  dragging: boolean;
+}): {
+  /** The card is over *this* entry: which one of the ringed set is about to take it. */
+  over: boolean;
+  /** This entry would take the card being carried — what raises the ring. */
+  eligible: boolean;
+  /** This entry takes cards, but not this one, and not now — what the refusal is drawn from. */
+  inert: boolean;
+} {
+  const { over } = useDndDropTarget({
+    ref,
+    read: readCards,
+    canDrop: () => drop?.eligible === true,
+    onDrop: (payloads) => {
+      for (const payload of payloads) drop?.onDrop(payload);
+    },
+  });
+
+  return {
+    over,
+    eligible: drop !== null && dragging && drop.eligible,
+    inert: drop !== null && dragging && !drop.eligible,
   };
 }

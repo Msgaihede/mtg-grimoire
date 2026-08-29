@@ -33,6 +33,19 @@ import { useDeckSearchOpen } from "./useDeckSearchOpen";
 const NO_ROOM = "Not enough room — close the card details or widen the window";
 
 /**
+ * Stamped on this panel while it is drawn **over** the deck rather than docked beside it — the
+ * phone case, where the desk cannot hold {@link MIN_PANEL_WIDTH_PX} and the deck's floor at once.
+ *
+ * **A sibling of `DeckEditor`'s `PANE_OVER_ATTR` and deliberately not that attribute.** That one
+ * says which of the desk's two columns the *card pane* covers, and a second element answering
+ * `[data-pane-over]` would make the editor's own probes ambiguous. What is reused is the
+ * argument, word for word: the difference between the two placements is a `position` and a
+ * width, both of which jsdom reads as nothing, so the *choice* is stamped where a suite and a
+ * CDP pass can both ask about it and the geometry stays a live-window question.
+ */
+export const SEARCH_OVER_ATTR = "data-search-over";
+
+/**
  * How wide the panel is **when it is first opened**, in px — the reader may then drag its edge
  * (see {@link ResizeHandle}), and this is where every deck starts.
  *
@@ -333,8 +346,45 @@ export interface DeckSearchPanelProps {
    * Gating the mount on this as well threw every one of those away on a *resize*: at 1024 a
    * tile press opens the card pane, the pane's arrival rails the panel, and Escape brought it
    * back empty on the deck's default format.
+   *
+   * **It is no longer the whole of whether the panel may be drawn** — see
+   * {@link DeckSearchPanelProps.overWidth}. `roomy` answers one question, *is there room to draw
+   * this **beside** the deck*, and below that width there is now a second answer rather than a
+   * refusal.
    */
   roomy?: boolean;
+  /**
+   * How wide to draw this panel **over** the deck, in px — the desk's own width — for a desk too
+   * narrow to hold the deck and this column side by side. Absent is a desk that can.
+   *
+   * **This is the door out of the rail, and until 2026-08-29 there was none.** `roomy` is
+   * `DECK_FLOOR` (192) plus {@link MIN_PANEL_WIDTH_PX} (206) plus the desk's gap (16) — **414** —
+   * so on a 390px phone the panel railed *and the disclosure refused*: `aria-disabled`, a
+   * sentence about widening a window that cannot be widened, and no way to reach a card search
+   * from a deck at all. The refusal was right about the arithmetic it was doing and wrong about
+   * the question: there is no room for the two of them **beside each other**, which is not the
+   * same as no room for the search.
+   *
+   * **The placement is issue #183's, reused rather than invented.** The card pane already draws
+   * over one of the desk's two columns instead of taking width from either, on the argument that
+   * opening a surface must not change the flow of the deck; this is that arrangement for the one
+   * width at which the deck and the panel cannot both be on screen. So the panel is absolutely
+   * positioned over the desk and the rail keeps its 36px place in the flow — the deck behind is
+   * laid out at exactly the width it had before the press, and a masonry of a hundred piles is
+   * not re-measured twice per disclosure.
+   *
+   * **What it costs is the drag, and that was chosen knowingly**: while the overlay covers the
+   * deck there is no pile to drag a tile into, so adding a card from the search is a tap on its
+   * Add button. Every drag *within* the deck is untouched — this adds no drag source, no drop
+   * target and no `touch-action`, and covers no element that carries one.
+   *
+   * A number and not a boolean because the width is the editor's measurement (`deskWidth`) and
+   * this panel is inside a 36px dock: `right-0` gives the desk's right edge for free and the
+   * width is the one thing CSS in here cannot derive. `undefined` — which is also the first
+   * paint, before the observer has answered — is the docked arrangement, which is what every
+   * test that says nothing about width gets.
+   */
+  overWidth?: number;
   /**
    * What a tile offers on a right-click — **the handler already built**, from the editor.
    *
@@ -408,6 +458,7 @@ export function DeckSearchPanel({
   cardMenu,
   cardMenuKey,
   roomy = true,
+  overWidth,
   maxWidth = Number.POSITIVE_INFINITY,
 }: DeckSearchPanelProps) {
   /**
@@ -453,7 +504,24 @@ export function DeckSearchPanel({
   const tip = useTooltip();
   const { open, setOpen } = useDeckSearchOpen();
   const { tab, setTab } = useDeckSearchTab();
-  const shown = open && roomy;
+  /**
+   * Whether this panel is drawn over the deck rather than beside it — see
+   * {@link DeckSearchPanelProps.overWidth}.
+   *
+   * `> 0` rather than a presence test, because the editor's own measurement is `0` until its
+   * observer has answered and a zero-width overlay is a panel drawn as nothing at all.
+   */
+  const over = overWidth !== undefined && overWidth > 0;
+  /**
+   * Whether a press could do anything — **the question the disclosure is actually asking**, and
+   * the one it got wrong for as long as `roomy` was the whole of it.
+   *
+   * Two placements answer it now: docked beside the deck where the desk can hold both, drawn
+   * over the deck where it cannot. Only a desk that can do neither refuses, and it still says so
+   * in words.
+   */
+  const drawable = roomy || over;
+  const shown = open && drawable;
   const toggleRef = useRef<HTMLButtonElement>(null);
   const bodyId = useId();
 
@@ -529,14 +597,20 @@ export function DeckSearchPanel({
     const had = hadCard.current;
     hadCard.current = selectedCardId !== null;
     if (selectedCardId !== null) {
-      if (!roomy) shutUnderCard.current = true;
+      // **`drawable` rather than `roomy`, since the overlay** — the phone case reaches this by
+      // the same road one width down: at 390 the panel is *already* drawn over the deck, and the
+      // editor takes the overlay away when a card opens (there is room for one surface, and the
+      // card is the one that was just asked for). So a tile pressed in the overlay goes
+      // `display: none` with the body exactly as it does at 1024, and the caret has the same
+      // nowhere to go.
+      if (!drawable) shutUnderCard.current = true;
       return;
     }
     const shut = shutUnderCard.current;
     shutUnderCard.current = false;
     if (!had || !shut) return;
     if (document.activeElement === document.body) toggleRef.current?.focus();
-  }, [selectedCardId, roomy]);
+  }, [selectedCardId, drawable]);
 
   /**
    * The disclosure, in both of its states — one control, one name, and `aria-expanded` for the
@@ -559,7 +633,13 @@ export function DeckSearchPanel({
       ref={toggleRef}
       type="button"
       aria-expanded={shown}
-      aria-disabled={!roomy || undefined}
+      // **`drawable`, not `roomy`** — the refusal used to fire for every desk under 414, which
+      // is every phone, and there is nothing wrong with a search column at 390 except where it
+      // was being asked to go. What still refuses is a desk that can hold the panel neither
+      // beside the deck nor over it, which today is only ever a card pane taking the desk at a
+      // width the panel could otherwise have overlaid — and the sentence below names exactly
+      // that remedy first.
+      aria-disabled={!drawable || undefined}
       // **An `aria-label`, which the words on the button used to be** (2026-08-25). This was an
       // icon *and* the text `Search cards`, so the visible words were the accessible name and a
       // label differing from them would have been a control voice control cannot reach (WCAG
@@ -571,17 +651,17 @@ export function DeckSearchPanel({
       // arrow on the filter bar follows: `aria-expanded` already says which way round it is, and
       // a reader who has just heard "collapsed" wants to know what the press will do about it.
       aria-label={shown ? "Collapse card search" : "Expand card search"}
-      {...tip(roomy ? null : NO_ROOM)}
+      {...tip(drawable ? null : NO_ROOM)}
       // `setOpen(!open)` rather than an updater, because the answer is a *query's* now rather
       // than a `useState`'s and there is no functional form to take one. Safe for the same
       // reason the updater was never load-bearing here: `open` is read in this render, a press
       // is one event, and the write is optimistic — the cache holds the new value before the
       // next press can be made.
-      onClick={() => roomy && setOpen(!open)}
+      onClick={() => drawable && setOpen(!open)}
       className={cn(
         "flex size-7 shrink-0 items-center justify-center rounded-md text-dim",
         "transition-colors duration-150 motion-reduce:transition-none",
-        roomy ? "hover:text-text" : "cursor-not-allowed opacity-60",
+        drawable ? "hover:text-text" : "cursor-not-allowed opacity-60",
         // **Flat in both states, and that is the change of 2026-08-26.** Collapsed, this button
         // carried `border border-border` — the rail's own hairline, drawn on the only thing in
         // 36px that could hold one — which made the one control the reader sees at that width a
@@ -631,222 +711,254 @@ export function DeckSearchPanel({
     </button>
   );
 
+  /** Drawn open, over the deck rather than beside it — see {@link DeckSearchPanelProps.overWidth}. */
+  const overlaid = shown && over;
+
   return (
-    // A `section`, not an `aside`: the card pane is the app's one complementary landmark, and
-    // a second unnamed one would answer to the same role query.
-    //
-    // **One root for both states**, rather than a bare rail in the collapsed one. React
-    // reconciles by position, so two shapes would mean the disclosure is a *different* button
-    // either side of a collapse — and the caret handed to the rail when the card pane closed
-    // would be dropped again one commit later, when the returning width reopened the panel
-    // around a freshly mounted copy of it. Measured in the running window; the effect above
-    // reads as if it works with either shape and only works with this one.
-    //
-    // Which is why the open body is a **child** rather than a second root: `OpenPanel` mounts
-    // and unmounts with the reader's own press — closed really is nothing mounted — while this
-    // element, the row below it and the disclosure inside that row are the same three nodes
-    // throughout, and a railing takes the body out of the *layout* without taking it out of the
-    // tree.
-    <section
-      id={bodyId}
-      aria-label="Add cards"
-      // One hairline down the left edge, and it is the only chrome the panel adds: the
-      // category columns beside it are bordered boxes and these controls sit on the page, so without it
-      // the "Add to" select reads as part of the deck's own header row. Everything right of
-      // the line is not your deck. **Railed too, since 2026-08-26** — that sentence is as true of
-      // 36px of rail as of the drawn panel, and it used to be said by a border on the disclosure
-      // instead, which drew the button as a box rather than the column as a column. The rail and
-      // the panel are one edge now, so a collapse changes what is in this column and not what it
-      // is. The `w-9` is unchanged and stays 36px: `box-sizing` is `border-box`, so the hairline
-      // comes out of the rail rather than out of the desk beside it.
-      // `relative` for the resize handle, which is drawn *over* the hairline rather than in the
-      // column: a grab strip that took a place in this flex column would be a strip the length
-      // of one row rather than the length of the edge.
-      className={cn(
-        "flex min-h-0 shrink-0 flex-col gap-2 border-l border-border",
-        shown ? "relative pl-3" : "w-9",
-      )}
-      style={shown ? { width: drawnWidth } : undefined}
-    >
-      {shown && (
-        <ResizeHandle
-          controls={bodyId}
-          width={drawnWidth}
-          max={Math.max(maxWidth, MIN_PANEL_WIDTH_PX)}
-          onResize={resize}
-        />
-      )}
-      {/* **The panel's title bar** — the chevron at the left edge and the name of the column
-          centred over the rest of it.
+    <>
+      {/* **The rail's 36px, kept in the flow while the panel is drawn over the deck.**
+          Positioning the panel absolutely takes it out of this dock, which would otherwise
+          collapse to nothing and hand the deck behind it 52px it does not get to keep — a
+          re-measure of the whole masonry on the way in and another on the way out, twice per
+          press, for a layout the reader cannot see. This holds the desk still instead, which is
+          the half of issue #183's arrangement that is about the *deck* rather than about the
+          surface over it.
 
-          Collapsed, this row *is* the panel, so it takes the height and lets the rail stretch
-          down it — a 36px strip reads as an edge, an 80px one reads as a stray button. Drawn, it
-          is a heading row and `items-center` is what keeps the 28px chevron and the title on one
-          baseline.
+          Its own slot in this fragment, exactly as the resize handle has one below: React
+          reconciles static JSX children by position, so a slot that alternates between an
+          element and `null` leaves every sibling's identity alone — which is what the caret
+          hand-back depends on and what the note on the `<section>` is about. */}
+      {overlaid && <div aria-hidden="true" className="w-9 shrink-0" />}
+      {/* A `section`, not an `aside`: the card pane is the app's one complementary landmark, and
+          a second unnamed one would answer to the same role query.
 
-          **No `flex-wrap` any more, and nothing here can overhang without it.** That class was
-          load-bearing while this row held three controls — the disclosure at 99px, the tab strip
-          at 141 and the own/need pair at 175, none of which shared a line inside the panel's
-          **193px** content box at its floor, so unwrapped they became a horizontal scrollbar
-          across the whole deck builder (`src/CLAUDE.md`, and `ManaValueChips` shipped that bug
-          once already). The strip is a line of its own and the pair is deleted; what is left is a
-          28px square and a text node that can shrink to a word, so there is nothing here with a
-          min-content wider than the panel. The title carries `truncate` rather than wrapping,
-          because a two-line heading over a search box is a heading that moves when the reader
-          drags the edge. */}
-      <div
+          **One root for both states**, rather than a bare rail in the collapsed one. React
+          reconciles by position, so two shapes would mean the disclosure is a *different* button
+          either side of a collapse — and the caret handed to the rail when the card pane closed
+          would be dropped again one commit later, when the returning width reopened the panel
+          around a freshly mounted copy of it. Measured in the running window; the effect above
+          reads as if it works with either shape and only works with this one. **Three states
+          now** — railed, docked, drawn over the deck — and it is still one element: what the
+          third changes is a `position`, a background and where the width comes from.
+
+          Which is why the open body is a **child** rather than a second root: `OpenPanel` mounts
+          and unmounts with the reader's own press — closed really is nothing mounted — while this
+          element, the row below it and the disclosure inside that row are the same three nodes
+          throughout, and a railing takes the body out of the *layout* without taking it out of the
+          tree. */}
+      <section
+        id={bodyId}
+        aria-label="Add cards"
+        {...(overlaid ? { [SEARCH_OVER_ATTR]: "deck" } : {})}
+        // One hairline down the left edge, and it is the only chrome the panel adds: the
+        // category columns beside it are bordered boxes and these controls sit on the page, so without it
+        // the "Add to" select reads as part of the deck's own header row. Everything right of
+        // the line is not your deck. **Railed too, since 2026-08-26** — that sentence is as true of
+        // 36px of rail as of the drawn panel, and it used to be said by a border on the disclosure
+        // instead, which drew the button as a box rather than the column as a column. The rail and
+        // the panel are one edge now, so a collapse changes what is in this column and not what it
+        // is. The `w-9` is unchanged and stays 36px: `box-sizing` is `border-box`, so the hairline
+        // comes out of the rail rather than out of the desk beside it.
+        // **No hairline in the overlay**, which is the one state it says nothing in: the panel is
+        // the whole desk there, so a line down its left edge is a line down the window.
+        // `relative` for the resize handle, which is drawn *over* the hairline rather than in the
+        // column: a grab strip that took a place in this flex column would be a strip the length
+        // of one row rather than the length of the edge.
+        //
+        // **Over the deck it is `absolute` and opaque.** The dock it sits in is `sticky` and
+        // therefore already the containing block, so `inset-y-0` is the height the dock effect
+        // measured — the same two ends the docked panel is drawn between — and `right-0` is the
+        // desk's own right edge; only the width has to be told. `bg-bg` because it is covering
+        // the deck rather than sitting beside it, and no z-index: a `sticky` ancestor is always
+        // a stacking context, so a number here could never out-rank the deck's own
+        // `LAYER.raised` — the dock is where that has to be said, and `DeckEditor` says it.
         className={cn(
-          "flex gap-2",
-          shown ? "shrink-0 items-center" : "min-h-0 flex-1 flex-col items-stretch",
+          "flex min-h-0 shrink-0 flex-col gap-2",
+          !overlaid && "border-l border-border",
+          overlaid ? "absolute inset-y-0 right-0 bg-bg pl-3" : shown ? "relative pl-3" : "w-9",
         )}
+        style={shown ? { width: overlaid ? overWidth : drawnWidth } : undefined}
       >
-        {/* **The "Add to" select was here until 2026-08-15 and is now in deck settings.** It
-            was the click path's answer to "where does this go" and it was the wrong place to
-            answer it from: the choice was `useState` in `DeckEditor`, so a reader who set the
-            panel to their Sideboard lost it the moment they closed the deck, and the same
-            answer governed the toolbar's quick-add field, which drew no control at all. It is
-            `decks.default_category_id` now, asked once in the settings dialog and remembered.
-            Nothing on this row replaced it: every Add button below already names the pile it
-            files into, per card, which is where the question is actually being asked.
+        {shown && !overlaid && (
+          <ResizeHandle
+            controls={bodyId}
+            width={drawnWidth}
+            max={Math.max(maxWidth, MIN_PANEL_WIDTH_PX)}
+            onResize={resize}
+          />
+        )}
+        {/* **The panel's title bar** — the chevron at the left edge and the name of the column
+            centred over the rest of it.
 
-            **The tab strip was here from 2026-08-23 to 2026-08-24 and is a line of its own now.**
-            It sat here because the row had the space; what that cost is on {@link TabStrip}.
+            Collapsed, this row *is* the panel, so it takes the height and lets the rail stretch
+            down it — a 36px strip reads as an edge, an 80px one reads as a stray button. Drawn, it
+            is a heading row and `items-center` is what keeps the 28px chevron and the title on one
+            baseline.
 
-            **The own/need pair was here from 2026-08-23 to 2026-08-25 and is deleted** — see
-            {@link DeckSearchPanelProps} for why the Collection tab is the better answer to the
-            question it asked. */}
-        {toggle}
-        {/* The column's name, centred over the row — **a `<span>` and not the button's label**,
-            which is the change of 2026-08-25. The two used to be one control: an icon and the
-            words inside the disclosure, which made the heading a thing you could press by
-            accident and put the panel's name hard against its left edge. Split, the button is an
-            icon with an `aria-label` of its own and this is a heading a reader's eye lands on.
-
-            `flex-1 text-center` plus the spacer below is how it is centred over the *panel*
-            rather than over what the chevron leaves: without the spacer the midpoint of a
-            `flex-1` text node sits 14px right of the panel's own. Cheaper than absolute
-            positioning and it keeps the title in flow, so `truncate` still has a box to work
-            against at the 193px floor.
-
-            Down the rail when the panel is shut, so 36px of chrome still says what it is rather
-            than leaving a bare icon to be guessed at — and `select-none` in that state alone,
-            which is `TitleBar`'s rule for the wordmark reached from the other side. There the
-            words sit in a drag region and a highlight fights the reader; here they *are* the
-            rail, so a pointer moved down the shut column with the button held drags a selection
-            across the whole of what the panel has left on screen. Drawn, this is an ordinary
-            heading over a search box and there is nothing to protect it from.
-
-            **`self-center` down the rail, and `text-center` is not what centres it there** —
-            reported 2026-08-26, once the chevron's border stopped framing the misalignment. In
-            `vertical-rl` the *inline* axis is the one running down the page and the **block**
-            axis runs right to left, so `text-align` moves the words up and down (against a box
-            whose height is their own content, i.e. not at all), and the line box is laid at
-            block-start — which is the span's **right** edge. Stretched by the row's
-            `items-stretch` to the rail's full width, that put the title's centre ~7px right of
-            the chevron's in a 36px column.
-
-            So the span stops stretching and is centred as an item instead: `align-self: center`
-            shrink-wraps it to one line box's thickness and puts that box on the rail's own
-            centre line, which is where `justify-center` has already put the chevron. `text-center`
-            is left off that arm rather than kept as decoration — a class that cannot act in the
-            writing mode it is written for is the thing somebody later "fixes" the real bug by
-            adjusting. */}
-        <span
+            **No `flex-wrap` any more, and nothing here can overhang without it.** That class was
+            load-bearing while this row held three controls — the disclosure at 99px, the tab strip
+            at 141 and the own/need pair at 175, none of which shared a line inside the panel's
+            **193px** content box at its floor, so unwrapped they became a horizontal scrollbar
+            across the whole deck builder (`src/CLAUDE.md`, and `ManaValueChips` shipped that bug
+            once already). The strip is a line of its own and the pair is deleted; what is left is a
+            28px square and a text node that can shrink to a word, so there is nothing here with a
+            min-content wider than the panel. The title carries `truncate` rather than wrapping,
+            because a two-line heading over a search box is a heading that moves when the reader
+            drags the edge. */}
+        <div
           className={cn(
-            "min-w-0 truncate text-sm font-medium text-text",
-            shown ? "flex-1 text-center" : "select-none self-center",
+            "flex gap-2",
+            shown ? "shrink-0 items-center" : "min-h-0 flex-1 flex-col items-stretch",
           )}
-          style={shown ? undefined : { writingMode: "vertical-rl" }}
         >
-          Search cards
-        </span>
-        {/* The chevron's own width given back on the other side, so the title's centre is the
-            panel's centre. `aria-hidden` and no text: it is a shim, not a control. */}
-        {shown && <span aria-hidden="true" className="size-7 shrink-0" />}
-      </div>
+          {/* **The "Add to" select was here until 2026-08-15 and is now in deck settings.** It
+              was the click path's answer to "where does this go" and it was the wrong place to
+              answer it from: the choice was `useState` in `DeckEditor`, so a reader who set the
+              panel to their Sideboard lost it the moment they closed the deck, and the same
+              answer governed the toolbar's quick-add field, which drew no control at all. It is
+              `decks.default_category_id` now, asked once in the settings dialog and remembered.
+              Nothing on this row replaced it: every Add button below already names the pile it
+              files into, per card, which is where the question is actually being asked.
 
-      {/* **Above the body rather than inside it**, which is what makes it the panel's own chrome
-          rather than one tab's: it is drawn for both tabs, it does not move when they switch, and
-          it survives the railing that merely *hides* the body below (see {@link OpenPanel}) — so
-          a width change cannot take the reader's tab away any more than it takes their query.
+              **The tab strip was here from 2026-08-23 to 2026-08-24 and is a line of its own now.**
+              It sat here because the row had the space; what that cost is on {@link TabStrip}.
 
-          Gated on `shown` alone: `open` is what decides whether there is a search at all, and a
-          tab bar over nothing would be two words offering to switch between two things that are
-          not mounted. Collapsed, this column is a 36px rail and draws neither. */}
-      {shown && <TabStrip tab={tab} onPick={setTab} />}
+              **The own/need pair was here from 2026-08-23 to 2026-08-25 and is deleted** — see
+              {@link DeckSearchPanelProps} for why the Collection tab is the better answer to the
+              question it asked. */}
+          {toggle}
+          {/* The column's name, centred over the row — **a `<span>` and not the button's label**,
+              which is the change of 2026-08-25. The two used to be one control: an icon and the
+              words inside the disclosure, which made the heading a thing you could press by
+              accident and put the panel's name hard against its left edge. Split, the button is an
+              icon with an `aria-label` of its own and this is a heading a reader's eye lands on.
 
-      {/* Everything below the row, and only once the reader has asked for it — see
-          {@link OpenPanel}. One gate where there were five, which is what makes the search a
-          thing the reader asks for rather than a thing every deck pays for.
+              `flex-1 text-center` plus the spacer below is how it is centred over the *panel*
+              rather than over what the chevron leaves: without the spacer the midpoint of a
+              `flex-1` text node sits 14px right of the panel's own. Cheaper than absolute
+              positioning and it keeps the title in flow, so `truncate` still has a box to work
+              against at the 193px floor.
 
-          **Mounted on `open`, hidden on `!roomy`.** The press is a choice and the room is a
-          measurement, so a width change must not be able to throw the reader's search away —
-          which is exactly what `{shown && …}` here did.
+              Down the rail when the panel is shut, so 36px of chrome still says what it is rather
+              than leaving a bare icon to be guessed at — and `select-none` in that state alone,
+              which is `TitleBar`'s rule for the wordmark reached from the other side. There the
+              words sit in a drag region and a highlight fights the reader; here they *are* the
+              rail, so a pointer moved down the shut column with the button held drags a selection
+              across the whole of what the panel has left on screen. Drawn, this is an ordinary
+              heading over a search box and there is nothing to protect it from.
 
-          `display: contents` is what makes the wrapper free: it generates no box at all, so
-          `OpenPanel`'s children stay flex items of this column and the `gap-2`, the `min-h-0`
-          and the wall's `flex-1` distribute exactly as they did with no wrapper there. Hiding
-          is `display: none` and deliberately not an `opacity` or a `visibility`: those two
-          leave the wall holding its space in the layout and its tiles in the tab order, which
-          is the whole of what the rail exists to give back. The `hidden` **attribute** beside
-          the class says the same thing to the accessibility tree — and to the suite, which
-          loads no stylesheet, so under jsdom the class alone would hide nothing from a role
-          query. */}
-      {open && (
-        <div className={shown ? "contents" : "hidden"} hidden={!shown}>
-          {/* **Two components, never one body with a branch in it**, and that is {@link OpenPanel}'s
-              own reason one level in: each tab's data hook is called from a component that mounts
-              with that tab, because a hook called from a branch is a hook called conditionally and
-              React will not have it. Do not hoist the two hooks up here to "simplify" this — the
-              collection tab would then run a `collection_list` for every reader browsing the wider
-              search, and the card search would run a `search_cards` for every reader who never
-              leaves their binder.
+              **`self-center` down the rail, and `text-center` is not what centres it there** —
+              reported 2026-08-26, once the chevron's border stopped framing the misalignment. In
+              `vertical-rl` the *inline* axis is the one running down the page and the **block**
+              axis runs right to left, so `text-align` moves the words up and down (against a box
+              whose height is their own content, i.e. not at all), and the line box is laid at
+              block-start — which is the span's **right** edge. Stretched by the row's
+              `items-stretch` to the rail's full width, that put the title's centre ~7px right of
+              the chevron's in a 36px column.
 
-              Switching therefore throws the other tab's state away, exactly as a collapse does:
-              a press is a decision, and a reader who goes back to the wall is starting a search
-              rather than resuming one. */}
-          {/* **Four props where `OpenPanel` takes seven, and each absence is a fact about this
-              write rather than an oversight** — a prop nothing reads is a prop lint refuses, so
-              the ones that cannot be read are not accepted:
-
-              - **`add`** is `useDeck.addCard`, which is `deck_add_card` — it writes a deck row and
-                moves no copies. Putting a card the reader *owns* into a deck is
-                `collection_to_deck`, a different command with a different address, and sending
-                both would put the card in the deck twice.
-              - **`onAdded`** carries the `deck_cards` row a write landed in, which is what the
-                editor glows for five seconds. `MoveOutcome.deckCardId` *is* that row and this tab
-                could hand it back — what it has instead is a status line of its own, which says
-                the thing this press has that an ordinary add does not: which deck the copies came
-                out of. Naming the donor is the report; a glow is not.
-              - **`cardMenu` / `cardMenuKey`** are `(card: CardSummary) => …`, and this list draws
-                `CollectionRow`s. A collection row's own menu is the collection page's
-                (`Move to → folder`), and building a fake `CardSummary` to reach a menu written for
-                a different object is how one surface starts offering rows that mean nothing where
-                they are drawn.
-              - **`mode` / `onMode`** are the own/need question, and a row of this list has already
-                answered it: the copy is in the reader's binder, which is what "I own this" *means*.
-                That is why {@link AddModeStrip} is drawn on the other tab only. */}
-          {tab === "collection" ? (
-            <CollectionSearchTab
-              categories={categories}
-              deckId={deckId}
-              targetCategoryId={targetCategoryId}
-              defaultFormat={defaultFormat}
-            />
-          ) : (
-            <OpenPanel
-              add={add}
-              onAdded={onAdded}
-              categories={categories}
-              targetCategoryId={targetCategoryId}
-              defaultFormat={defaultFormat}
-              cardMenu={cardMenu}
-              cardMenuKey={cardMenuKey}
-            />
-          )}
+              So the span stops stretching and is centred as an item instead: `align-self: center`
+              shrink-wraps it to one line box's thickness and puts that box on the rail's own
+              centre line, which is where `justify-center` has already put the chevron. `text-center`
+              is left off that arm rather than kept as decoration — a class that cannot act in the
+              writing mode it is written for is the thing somebody later "fixes" the real bug by
+              adjusting. */}
+          <span
+            className={cn(
+              "min-w-0 truncate text-sm font-medium text-text",
+              shown ? "flex-1 text-center" : "select-none self-center",
+            )}
+            style={shown ? undefined : { writingMode: "vertical-rl" }}
+          >
+            Search cards
+          </span>
+          {/* The chevron's own width given back on the other side, so the title's centre is the
+              panel's centre. `aria-hidden` and no text: it is a shim, not a control. */}
+          {shown && <span aria-hidden="true" className="size-7 shrink-0" />}
         </div>
-      )}
-    </section>
+
+        {/* **Above the body rather than inside it**, which is what makes it the panel's own chrome
+            rather than one tab's: it is drawn for both tabs, it does not move when they switch, and
+            it survives the railing that merely *hides* the body below (see {@link OpenPanel}) — so
+            a width change cannot take the reader's tab away any more than it takes their query.
+
+            Gated on `shown` alone: `open` is what decides whether there is a search at all, and a
+            tab bar over nothing would be two words offering to switch between two things that are
+            not mounted. Collapsed, this column is a 36px rail and draws neither. */}
+        {shown && <TabStrip tab={tab} onPick={setTab} />}
+
+        {/* Everything below the row, and only once the reader has asked for it — see
+            {@link OpenPanel}. One gate where there were five, which is what makes the search a
+            thing the reader asks for rather than a thing every deck pays for.
+
+            **Mounted on `open`, hidden on `!roomy`.** The press is a choice and the room is a
+            measurement, so a width change must not be able to throw the reader's search away —
+            which is exactly what `{shown && …}` here did.
+
+            `display: contents` is what makes the wrapper free: it generates no box at all, so
+            `OpenPanel`'s children stay flex items of this column and the `gap-2`, the `min-h-0`
+            and the wall's `flex-1` distribute exactly as they did with no wrapper there. Hiding
+            is `display: none` and deliberately not an `opacity` or a `visibility`: those two
+            leave the wall holding its space in the layout and its tiles in the tab order, which
+            is the whole of what the rail exists to give back. The `hidden` **attribute** beside
+            the class says the same thing to the accessibility tree — and to the suite, which
+            loads no stylesheet, so under jsdom the class alone would hide nothing from a role
+            query. */}
+        {open && (
+          <div className={shown ? "contents" : "hidden"} hidden={!shown}>
+            {/* **Two components, never one body with a branch in it**, and that is {@link OpenPanel}'s
+                own reason one level in: each tab's data hook is called from a component that mounts
+                with that tab, because a hook called from a branch is a hook called conditionally and
+                React will not have it. Do not hoist the two hooks up here to "simplify" this — the
+                collection tab would then run a `collection_list` for every reader browsing the wider
+                search, and the card search would run a `search_cards` for every reader who never
+                leaves their binder.
+
+                Switching therefore throws the other tab's state away, exactly as a collapse does:
+                a press is a decision, and a reader who goes back to the wall is starting a search
+                rather than resuming one. */}
+            {/* **Four props where `OpenPanel` takes seven, and each absence is a fact about this
+                write rather than an oversight** — a prop nothing reads is a prop lint refuses, so
+                the ones that cannot be read are not accepted:
+
+                - **`add`** is `useDeck.addCard`, which is `deck_add_card` — it writes a deck row and
+                  moves no copies. Putting a card the reader *owns* into a deck is
+                  `collection_to_deck`, a different command with a different address, and sending
+                  both would put the card in the deck twice.
+                - **`onAdded`** carries the `deck_cards` row a write landed in, which is what the
+                  editor glows for five seconds. `MoveOutcome.deckCardId` *is* that row and this tab
+                  could hand it back — what it has instead is a status line of its own, which says
+                  the thing this press has that an ordinary add does not: which deck the copies came
+                  out of. Naming the donor is the report; a glow is not.
+                - **`cardMenu` / `cardMenuKey`** are `(card: CardSummary) => …`, and this list draws
+                  `CollectionRow`s. A collection row's own menu is the collection page's
+                  (`Move to → folder`), and building a fake `CardSummary` to reach a menu written for
+                  a different object is how one surface starts offering rows that mean nothing where
+                  they are drawn.
+                - **`mode` / `onMode`** are the own/need question, and a row of this list has already
+                  answered it: the copy is in the reader's binder, which is what "I own this" *means*.
+                  That is why {@link AddModeStrip} is drawn on the other tab only. */}
+            {tab === "collection" ? (
+              <CollectionSearchTab
+                categories={categories}
+                deckId={deckId}
+                targetCategoryId={targetCategoryId}
+                defaultFormat={defaultFormat}
+              />
+            ) : (
+              <OpenPanel
+                add={add}
+                onAdded={onAdded}
+                categories={categories}
+                targetCategoryId={targetCategoryId}
+                defaultFormat={defaultFormat}
+                cardMenu={cardMenu}
+                cardMenuKey={cardMenuKey}
+              />
+            )}
+          </div>
+        )}
+      </section>
+    </>
   );
 }
 

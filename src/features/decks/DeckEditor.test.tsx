@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { DND_SOURCE_ATTR } from "@/lib/dndTarget";
 import userEvent from "@testing-library/user-event";
 import type { UserEvent } from "@testing-library/user-event";
@@ -37,6 +37,7 @@ import {
 import { THEORY_MATCH_ATTR } from "./CardMarks";
 import { deckCardSlot, DECK_CARD_ATTR } from "./dnd";
 import { PANE_OVER_ATTR } from "./DeckEditor";
+import { SEARCH_OVER_ATTR } from "./DeckSearchPanel";
 import { CUT_CARDS_NOTE } from "./PriceStrip";
 import { theorySlot } from "./theoryMatch";
 import { QUICK_ZONE_ATTR } from "./QuickZones";
@@ -2473,14 +2474,37 @@ describe("DeckEditor", () => {
    * drag is `floor(414/2)` = 207, one pixel *above* what the deck's floor allows. Which cap
    * binds is therefore the deck's at these widths, and that is the one this pair is about; the
    * other has a test of its own below.
+   *
+   * **What 376 no longer means is a refusal** (2026-08-29). It means the panel is not *docked*:
+   * it is drawn over the deck instead, at the desk's own width, so the door out of the rail is
+   * the whole of what this width now shows. The refusal survives for the one desk that can hold
+   * the panel neither way — a card pane already covering the deck — which is the second half of
+   * this test and the only place its sentence is still true.
    */
-  it("falls back to the rail when the deck and the panel cannot both fit", async () => {
+  it("draws the search over the deck where the two cannot both fit, and refuses only where neither will", async () => {
+    searchCards.mockResolvedValue({
+      items: [found("Goblin Guide")],
+      total: 1,
+      totalIsCapped: false,
+    });
     const restore = desk(376);
     try {
       await open();
 
       const rail = await screen.findByRole("button", { name: PANEL_TOGGLE });
-      expect(rail).toHaveAttribute("aria-expanded", "false");
+      expect(rail).toHaveAttribute("aria-expanded", "true");
+      expect(rail).not.toHaveAttribute("aria-disabled");
+      const panel = screen.getByRole("region", { name: "Add cards" });
+      expect(panel).toHaveAttribute(SEARCH_OVER_ATTR, "deck");
+
+      // **A tile in that overlay is how a reader at this width opens a card**, and it is what
+      // takes the overlay away: the pane covers the deck too, and only one of the two can be on
+      // top — see `panelOverWidth`, where the paint-order argument is written out.
+      await openSearchPanel();
+      await userEvent.click(await screen.findByRole("button", { name: /^Goblin Guide/ }));
+      await screen.findByRole("complementary", { name: "Card details" });
+
+      await waitFor(() => expect(panel).not.toHaveAttribute(SEARCH_OVER_ATTR));
       // Not a control that records an intention and moves nothing: there is no width for what
       // it would open, and it says so rather than doing nothing.
       expect(rail).toHaveAttribute("aria-disabled", "true");
@@ -2499,6 +2523,13 @@ describe("DeckEditor", () => {
       await userEvent.click(rail);
       expect(rail).toHaveAttribute("aria-expanded", "false");
       expect(screen.queryByRole("searchbox", { name: "Search cards" })).not.toBeInTheDocument();
+
+      // And "does nothing" includes not quietly flipping the reader's own choice: the card
+      // closing gives the width back and the search is where they left it.
+      act(() => useAppStore.setState({ selectedCardId: null, paneFromDeckSearch: false }));
+
+      expect(panel).toHaveAttribute(SEARCH_OVER_ATTR, "deck");
+      expect(screen.getByRole("searchbox", { name: "Search cards" })).toBeInTheDocument();
     } finally {
       restore();
     }
@@ -2521,17 +2552,70 @@ describe("DeckEditor", () => {
     }
   });
 
-  /** And one pixel under it is the rail — the floor is a number, not a feeling. */
+  /**
+   * And one pixel under it is the rail — the floor is a number, not a feeling.
+   *
+   * **The rail, and no longer a refusal**, since 2026-08-29: below 414 the panel is drawn *over*
+   * the deck instead, so what this pins is that it stopped being docked. Whether the disclosure
+   * still works there is the pair of tests below, and it is the half this one used to assert.
+   */
   it("gives way one pixel below that", async () => {
     const restore = desk(413);
     try {
       await open();
 
-      expect(await screen.findByRole("button", { name: PANEL_TOGGLE })).toHaveAttribute(
-        "aria-disabled",
-        "true",
+      await screen.findByRole("button", { name: PANEL_TOGGLE });
+      expect(screen.getByRole("region", { name: "Add cards" })).toHaveAttribute(
+        SEARCH_OVER_ATTR,
+        "deck",
       );
-      expect(screen.queryByRole("searchbox", { name: "Search cards" })).not.toBeInTheDocument();
+      expect(screen.getByRole("region", { name: "Add cards" })).not.toHaveStyle({
+        width: "206px",
+      });
+    } finally {
+      restore();
+    }
+  });
+
+  /**
+   * **The deck search opens over the deck on a phone, and until 2026-08-29 it could not be
+   * opened at all.**
+   *
+   * `roomForPanel` is `DECK_FLOOR` (192) plus `MIN_PANEL_WIDTH_PX` (206) plus this row's `gap-4`
+   * — **414** — so a 390px window's desk was below it, the panel railed, *and the rail refused*:
+   * `aria-disabled`, with a sentence offering to widen a window that has no width to give. The
+   * arithmetic was right and the question was wrong. There is no room for the deck and the panel
+   * **beside each other**, which is not the same as no room for a search — so the editor now
+   * sends the desk's own width and the panel draws itself over the deck, which is issue #183's
+   * arrangement for the card pane reused rather than a second mechanism.
+   *
+   * **The press is the assertion**, in both directions, because that is the half the guard it
+   * replaced would fail: `onClick={() => roomy && setOpen(!open)}` is a control that records an
+   * intention and moves nothing, which is what the rail was. The attribute is the other half —
+   * the difference between the two placements is a `position` and a width, and jsdom reads both
+   * as `0`.
+   */
+  it("opens the card search over the deck at a phone-width desk", async () => {
+    const restore = desk(390);
+    try {
+      await open();
+
+      const rail = await screen.findByRole("button", { name: PANEL_TOGGLE });
+      expect(rail).not.toHaveAttribute("aria-disabled");
+      const panel = screen.getByRole("region", { name: "Add cards" });
+      expect(panel).toHaveAttribute(SEARCH_OVER_ATTR, "deck");
+      expect(panel).toHaveStyle({ width: "390px" });
+
+      // Shut by a press, and the deck is the whole desk again.
+      await userEvent.click(rail);
+      expect(rail).toHaveAttribute("aria-expanded", "false");
+      expect(panel).not.toHaveAttribute(SEARCH_OVER_ATTR);
+
+      // And opened again by another one, which is the door this task exists to cut.
+      await userEvent.click(rail);
+      expect(rail).toHaveAttribute("aria-expanded", "true");
+      expect(panel).toHaveAttribute(SEARCH_OVER_ATTR, "deck");
+      expect(await screen.findByRole("button", { name: "All cards" })).toBeInTheDocument();
     } finally {
       restore();
     }
@@ -3797,6 +3881,48 @@ describe("DeckEditor drag and drop", () => {
       expect(deckMoveCard).toHaveBeenCalledWith(4, "c-Lightning Bolt", MAIN, SIDE, null, "live", null),
     );
     await waitFor(() => expect(group("Sideboard")).toHaveFocus());
+  });
+
+  /**
+   * **And the same drag with the search drawn over the deck** — which is the half a new overlay
+   * is never evidence for (2026-08-29).
+   *
+   * The cost that placement accepts is that there is nothing to drag a *search tile* into while
+   * it covers the deck; what it must not touch is the drags that were already there. It adds no
+   * drag source, no drop target and no `touch-action`, and it covers no element carrying one —
+   * but "it should not have" is an argument, and this is the drag run in the new state. Same
+   * source, same target, same write.
+   *
+   * jsdom has no layout engine and dnd-kit hit-tests by rect, so what this cannot show is
+   * whether the overlay is *in the way* of a pointer — that is a live-window question, and the
+   * answer it would give is the one already written down: the piles under the overlay are still
+   * droppable by rect, which is why adding from the search here is a tap rather than a drag.
+   */
+  it("still moves a card between piles while the search is drawn over the deck", async () => {
+    const restore = desk(390);
+    try {
+      await open();
+      expect(screen.getByRole("region", { name: "Add cards" })).toHaveAttribute(
+        SEARCH_OVER_ATTR,
+        "deck",
+      );
+
+      await pointerDrag(card_("Lightning Bolt"), boxedGroup("Sideboard"));
+
+      await waitFor(() =>
+        expect(deckMoveCard).toHaveBeenCalledWith(
+          4,
+          "c-Lightning Bolt",
+          MAIN,
+          SIDE,
+          null,
+          "live",
+          null,
+        ),
+      );
+    } finally {
+      restore();
+    }
   });
 
   /**

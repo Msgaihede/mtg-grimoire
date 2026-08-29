@@ -16,12 +16,14 @@ import { SyncProgress } from "@/components/SyncProgress";
 import { TitleBar } from "@/components/TitleBar";
 import { NAV } from "@/components/nav";
 import { useTooltip } from "@/components/tooltip/useTooltip";
-import { useSidebarDrops, type SidebarDrop } from "@/components/useSidebarDrops";
+import {
+  useSidebarDrops,
+  useSidebarDropTarget,
+  type SidebarDrop,
+} from "@/components/useSidebarDrops";
 import { isAndroid } from "@/lib/platform";
 import { isWebTarget } from "@/pwa/target";
 import { useCardToDeckRefusal } from "@/features/card/cardMenu";
-import { readCards } from "@/features/decks/dnd";
-import { useDndDropTarget } from "@/lib/dndTarget";
 import {
   ACTIVITY_DELAY_MS,
   marketplaceFeedActivity,
@@ -527,34 +529,12 @@ function NavItem({
 }) {
   const ref = useRef<HTMLButtonElement>(null);
   const tip = useTooltip();
-  // **Every card the drag is carrying** (issue #214) — `readCards`, which answers with one
-  // payload for an ordinary drag, several for a multi-select one, and `null` for a drag this app
-  // did not put in the air. The entry's own rule is asked once for the whole gesture: both
-  // entries take every kind of card payload, so "may this land here" has never been a per-card
-  // question.
-  //
-  // No `getData`: what a drop writes is decided by the entry, and the entry is already here. An
-  // entry that cannot take a card never accepts one — so `over` is only ever true for a drop that
-  // will happen. `useDndDropTarget` reads `canDrop` and `onDrop` through a ref of its own, which
-  // is what keeps the registration standing while the shell re-renders mid-drag: the shell
-  // re-renders the moment a card is picked up — that is what raises the ring — and a drop target
-  // that unregisters mid-drag is a drop that never arrives.
-  //
-  // The three entries a card cannot land on (`drop === null`) register a droppable too and refuse
-  // every payload, which costs a registry entry and nothing else: `computeCollisions` skips a
-  // droppable whose `accepts()` is false before it measures it.
-  /** The card is over *this* entry: which one of the ringed pair is about to take it. */
-  const { over } = useDndDropTarget({
-    ref,
-    read: readCards,
-    canDrop: () => drop?.eligible === true,
-    onDrop: (payloads) => {
-      for (const payload of payloads) drop?.onDrop(payload);
-    },
-  });
-
-  const eligible = drop !== null && dragging && drop.eligible;
-  const inert = drop !== null && dragging && !drop.eligible;
+  // The registration, and the three facts drawn from it — `useSidebarDropTarget`, which is
+  // where the whole of the drag reasoning lives now. It moved out of this function on
+  // 2026-08-29, when `BottomTabBar` became the second drawing of navigation: the rail's row and
+  // the phone's tab are two drawings, but "which entries register, and what they accept" is one
+  // rule and had to stop being written twice.
+  const { over, eligible, inert } = useSidebarDropTarget({ ref, drop, dragging });
 
   return (
     // `relative` for the report line below: `.sr-only` is `position: absolute`, so the empty
@@ -583,7 +563,11 @@ function NavItem({
         // line below — a change that would announce it on *every* drag while no deck is open,
         // which is a product call and is written up in
         // `docs/superpowers/notes/plan-5-followups-note.md` rather than made here.
-        title={inert ? (drop.inertReason ?? undefined) : undefined}
+        // `drop?.` rather than `drop.`: `inert` is a hook's answer now rather than a `const`
+        // alias of `drop !== null && …` in this scope, so TypeScript's aliased-condition
+        // narrowing no longer reaches the field. The optional chain says the same thing and is
+        // the one line the lift cost.
+        title={inert ? (drop?.inertReason ?? undefined) : undefined}
         // **The word, for the eye, while the rail is 68px wide** — `useTooltip()` at side
         // `"right"`, which is the app's one hint mechanism, and never a native `title`.
         //
