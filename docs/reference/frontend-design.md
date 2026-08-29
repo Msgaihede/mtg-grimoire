@@ -4464,3 +4464,77 @@ would put the bar's targets under it without this.
 - **One device, one browser.** Every figure here is this OnePlus in Chrome 152. A 390 px phone
   would get the second column; the point is that this one does not, and `PHONE_PX` is the app's
   own stated frame.
+
+---
+
+## 9c on the phone: the wall shows cards
+
+**Driven 2026-08-29 on the OnePlus, Chrome 152, portrait, `innerWidth` 360**, against the
+production web build of `main` at the merge of PR #300, with the 117 606-card corpus already in
+OPFS. Same instrument as 9b's pass — the recipe is in *"The phone layout on an actual phone"*
+above.
+
+**The prediction was 436px of wall and it came back at exactly 436.** The one figure that was off
+was the row height, and it was off in the app's favour.
+
+| | 9b (measured) | 9c predicted | **9c measured** |
+| --- | --- | --- | --- |
+| shut bar / strip | 381 | 44 | **44** |
+| wall | 99 | 436 | **436** |
+| tile row | 226 | 237 | **221** |
+| complete rows | **0** | 1.84 | **1.97** |
+| tiles per row | **1** | 2 | **2** |
+
+**0.44 of a row to 1.97.** A reader sees two whole cards and 97 % of the next two — **two whole
+rows are 442 and the wall is 436, short by six pixels.** Nothing else changed: the ribbon block is
+still 58, the tab bar still 53, `main`'s content still 545, and `documentElement.scrollWidth`
+still equals `innerWidth`.
+
+**The row is 221 rather than the projected 237** because the projection added `GAP` to the row
+box; the virtualiser's row *is* the tile and the gap sits between rows in the total. A 16px error
+that made the estimate pessimistic — worth naming so the next projection uses the measured shape.
+
+### Filtered, which is where the strip's second line appears
+
+| | px |
+| --- | --- |
+| strip, no filters | **44** |
+| strip, one filter on | **96** — 44 + 8 + 44 |
+| wall, filtered | **384** — 1.74 rows |
+
+The chip is on the strip and it is the real one: `Remove filter — Colour: Red`, with its own ✕.
+`Reset all` is beside it at **44px**, and `resetInScroller` reads **false** — it is outside the
+horizontal scroller, so it cannot scroll away from the chips it undoes. Both were designed that
+way and both are confirmed on hardware rather than in jsdom, which can see neither.
+
+**The second line is 44 and not 26**, because `ResetAll` sets it at the coarse floor. That is the
+figure this plan quoted as 34 when the decision was taken — see the plan's Task 3 for the
+correction and why the decision survives it.
+
+### What the whole screen is now
+
+One frame, top to bottom: the ribbon shed to a card count and Refresh; the strip's search box and
+`Filters · 1`; the stated `Colour: Red ×` beside `Reset all · 1`; four cards in two columns; the
+bottom tab bar with **Search** marked. Every decision from 9a's four rounds and 9c's two is
+visible at once, and the horizontal overflow is zero.
+
+### What is still owed, and it is the same question as before
+
+**9b's Step 3b — whether a drag from the deck editor's search overlay can land in a pile hidden
+behind it — was still not driven.** dnd-kit hit-tests by **rect**, so the piles stay droppable
+while invisible. The blocker is no longer a 99px wall: it is that the question needs a deck with
+categories on the device and a synthesised pointer drag, which is its own pass rather than a step
+in this one. **It is now answerable for the first time** — record that, because the reason it was
+deferred has changed.
+
+### One operational note for the next pass
+
+**The one-tab guard is a real obstacle to repeat measurement.** A tab left open from an earlier
+pass makes the next one render *"MTG Grimoire is already open"* and nothing else — correct
+behaviour, and indistinguishable from a broken build if you are not expecting it. Close the stale
+tab through `http://localhost:9333/json/close/<id>` before reloading, and take the ids from
+`/json/list` so the reader's own tabs are left alone.
+
+**And `vite preview` needs `--host`.** Without it the PC gets 200 and the phone gets `000` through
+`adb reverse` — the server binds too narrowly for the tunnel to reach, and the failure looks like
+a broken tunnel rather than a bound socket.

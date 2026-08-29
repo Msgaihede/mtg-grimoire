@@ -576,7 +576,7 @@ Every remaining PR now has a task-level plan in `docs/superpowers/plans/`.
 | 8 | the Android target | `2026-08-28-android-target.md` | **done** — #262, with #270 fixing the cross-compile |
 | 9a | mobile layout: foundation + options | `2026-08-28-mobile-layout-9a-foundation-and-options.md` | **done** — #274 shipped Tasks 1–4 (the foundation); the four design rounds ran and **the decision was taken on 2026-08-29** |
 | 9b | implement the chosen layout | `2026-08-29-mobile-layout-9b.md` | **done 2026-08-29** — #294 and #295. All four layouts built; the device pass then **falsified the vertical budget**, which is what it was written to do. See 9c |
-| 9c | the vertical, re-opened | `2026-08-29-mobile-layout-9c.md` | **planned 2026-08-29.** The tile is fixed (141, shipped); the vertical is **F3, the sticky one-line bar** — four tasks |
+| 9c | the vertical, re-opened | `2026-08-29-mobile-layout-9c.md` | **done 2026-08-29** — #297 through #300. Driven on the phone: the wall went **0.44 rows → 1.97**, two columns, two whole cards and 97%% of the next two |
 
 **Updated 2026-08-29.** Everything above 9a has shipped, and the phase is done end to end: the
 app runs on Windows, in a browser and on an Android phone, two devices pair with no account, and

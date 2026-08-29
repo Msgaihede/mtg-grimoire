@@ -165,6 +165,38 @@ A row is **237px** at the shipped 141px tile (art at 5:7, plus the 28px chin, pl
 - [ ] **Step 5 — re-ask 9b's Step 3b**, which could not be driven at a 99px wall: can a drag from the deck editor's search overlay land in a pile hidden behind it? dnd-kit hit-tests by **rect**, so the piles stay droppable while invisible. With a wall a reader can actually see, there is now an honest gesture to make.
 - [ ] **Step 6** — write it into `frontend-design.md` with the device, the build and the date, then commit.
 
+> ### ✅ Done 2026-08-29 — and it worked
+>
+> Driven on the OnePlus, Chrome 152, portrait, `innerWidth` 360, against `main` at PR #300. Full
+> record in [frontend-design.md](../../reference/frontend-design.md), *"9c on the phone"*.
+>
+> | | 9b | predicted | **measured** |
+> | --- | --- | --- | --- |
+> | strip | 381 | 44 | **44** |
+> | wall | 99 | 436 | **436** |
+> | tile row | 226 | 237 | **221** |
+> | complete rows | **0** | 1.84 | **1.97** |
+> | tiles per row | **1** | 2 | **2** |
+>
+> **0.44 of a row to 1.97** — two whole cards and 97 % of the next two, where before there was no
+> whole card. The wall figure was predicted exactly; the row came in 16px *under* the projection,
+> because the projection added `GAP` to the row box when the virtualiser's row is the tile and the
+> gap sits between rows in the total. The estimate was pessimistic, which is the better direction.
+>
+> Filtered: strip **96** (44 + 8 + 44), wall **384**, 1.74 rows — still two whole cards. The chip
+> is the real `Remove filter — Colour: Red` with its own ✕, and `Reset all` is beside it at 44px
+> with `resetInScroller` reading **false**, so it cannot scroll away from what it undoes.
+>
+> **Step 5 was not driven and the reason has changed.** The drag from the deck editor's search
+> overlay into a hidden pile is now *answerable* — the blocker was a 99px wall and is not any
+> more — but it needs a deck with categories on the device and a synthesised pointer drag, which
+> is its own pass. Carried, with that noted.
+>
+> Two operational notes cost time and are recorded: **`vite preview` needs `--host`** or the PC
+> gets 200 while the phone gets `000` through `adb reverse`, and **the one-tab guard** makes a
+> stale tab from an earlier pass render *"MTG Grimoire is already open"* and nothing else —
+> correct behaviour, indistinguishable from a broken build.
+
 ---
 
 ## Self-Review
