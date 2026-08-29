@@ -1706,7 +1706,7 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // fake diverges from `identity::ensure`, which mints on first read.
     pairing: {
       deviceId: "a1b2c3d4e5f60718293a4b5c6d7e8f90",
-      deviceName: "This device",
+      deviceName: "MAIN-PC",
       group: null,
       devices: [],
       pending: null,

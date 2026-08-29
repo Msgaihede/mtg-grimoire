@@ -230,6 +230,16 @@ export const AnswerUnreadable: Story = {
  * **The removed device is still on the roster**, struck through and labelled, because a row that
  * was deleted could not answer "who did I take off, and when". The key version beside the group
  * is `2` for the same reason: the rotation *is* the removal, so the number is a count of them.
+ *
+ * **This is where the two marks are drawn side by side, and they are deliberately not the same
+ * weight.** `This device` is a pill — orientation, the thing a reader scans a roster for, and
+ * the question a real machine name leaves open once the rows stop reading identically.
+ * `Removed` stays a plain word, because history that looked like status would compete with it,
+ * and the struck-through name plus both missing presses already say what that row is.
+ *
+ * The three names here are what a reader who has renamed their devices sees. What a fresh
+ * install mints is the machine itself — `MAIN-PC` on Windows, `OnePlus 12` on Android, a label
+ * like `Chrome on Windows` in a browser — and `Rename` is the one press away from either.
  */
 export const Paired: Story = {
   parameters: { fake: { seed: "paired" } },
@@ -246,6 +256,53 @@ export const Paired: Story = {
     ).not.toBeInTheDocument();
     await expect(canvas.queryByRole("button", { name: /remove desk/i })).not.toBeInTheDocument();
     await expect(canvas.getByRole("button", { name: /remove phone/i })).toBeInTheDocument();
+
+    // One pill, on one row, beside the name it belongs to — and never beside the buttons.
+    const pill = canvas.getByText("This device");
+    await expect(canvas.getAllByText("This device")).toHaveLength(1);
+    await expect(pill).toHaveClass("rounded-full");
+    const group = pill.parentElement as HTMLElement;
+    await expect(within(group).getByText("Desk")).toBeInTheDocument();
+    await expect(within(group).queryByRole("button")).not.toBeInTheDocument();
+
+    // And the second mark is a word, not a second pill.
+    await expect(canvas.getByText("Removed")).not.toHaveClass("rounded-full");
+  },
+};
+
+/**
+ * **A hostname long enough to fight the row — and the press that gets a reader out of one.**
+ *
+ * Two things are being drawn here at once. The pill has to stay against the end of the name at
+ * every length: the name truncates and the group it shares with the pill takes the row's
+ * stretch, so a 26-character machine name shortens rather than shoving `This device` and both
+ * presses off the row. That failure is invisible to a screenshot of a short name, which is why
+ * this story exists beside `Paired` rather than instead of it.
+ *
+ * The other half is `Rename` itself. A minted name is the machine's own — on Windows frequently
+ * the owner's — and `sync_identity.name` is the copy every later pairing sends to every device
+ * in the group. So the escape hatch is one press, on this device's own row, and it stayed there
+ * when the pill arrived.
+ */
+export const ALongMachineNameStillFitsTheRow: Story = {
+  parameters: { fake: { seed: "paired" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    // This device's own row still offers Rename — it is the first in the roster.
+    const renames = await canvas.findAllByRole("button", { name: "Rename" });
+    await userEvent.click(renames[0]);
+    const field = await canvas.findByLabelText(/name for desk/i);
+    await userEvent.clear(field);
+    await userEvent.type(field, "MARKUS-DESKTOP-WORKSTATION{Enter}");
+
+    const renamed = await canvas.findByText("MARKUS-DESKTOP-WORKSTATION");
+    await expect(renamed).toHaveClass("truncate");
+    // Still the name's sibling, and still ahead of the presses.
+    const pill = canvas.getByText("This device");
+    await expect(pill.parentElement).toBe(renamed.parentElement);
+    await expect(within(pill.parentElement as HTMLElement).queryByRole("button")).not
+      .toBeInTheDocument();
   },
 };
 

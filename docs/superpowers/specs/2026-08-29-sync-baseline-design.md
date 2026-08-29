@@ -549,9 +549,18 @@ pairing, so a group of two shows two identically-named rows and the reader canno
 "Remove" button removes the phone. The panel's own copy says "Paired device" for the far one,
 which papers over it for exactly two devices and stops working at three.
 
-Not part of this design and not fixed by it. It belongs with the baseline work because a first
-pairing is when a reader meets the roster, and because `sync_device_rename` already writes both
-rows correctly — what is missing is only a default worth showing.
+Not part of this design, and **fixed alongside it** rather than by it. It belongs with the
+baseline work because a first pairing is when a reader meets the roster, and because
+`sync_device_rename` already wrote both rows correctly — what was missing was only a default worth
+showing.
+
+A device now mints its name from what it is: the hostname on the desktop, `android.os.Build.MODEL`
+on Android, a user-agent label in the browser. Minted on absence only, so a reader who renamed a
+device keeps that name. **The reader overruled `DEFAULT_NAME`'s privacy argument knowingly** — a
+hostname does travel to every device in the group — and `rename_device` is the way back. The
+roster's "This device" marker became a pill beside the name, because once the rows read `MAIN-PC`
+and `OnePlus 12` the question changes from "which of these is which" to "which one am I sitting
+at".
 
 ## 16. Where the six places are
 

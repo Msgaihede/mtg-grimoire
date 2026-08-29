@@ -889,7 +889,15 @@ mod tests {
         let mut pa = None;
         let before = status(&a).unwrap();
         assert_eq!(before.device_id.len(), 32);
-        assert_eq!(before.device_name, "This device");
+        // The panel's heading is whatever this machine minted — a hostname on a desktop, a
+        // model on a phone. The shape is what a test on any machine can assert: a real name,
+        // and not the placeholder every install used to share.
+        assert_eq!(
+            before.device_name,
+            crate::sync_pair::identity::ensure(&a).unwrap().name
+        );
+        assert!(!before.device_name.trim().is_empty());
+        assert_ne!(before.device_name, "This device");
         assert!(before.group_id.is_none());
         assert!(before.epoch.is_none());
         assert!(before.devices.is_empty());

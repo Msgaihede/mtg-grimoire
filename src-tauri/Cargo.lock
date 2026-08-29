@@ -2683,6 +2683,7 @@ dependencies = [
  "hkdf",
  "httpmock",
  "image",
+ "jni",
  "js-sys",
  "qrcode",
  "reqwest 0.12.28",

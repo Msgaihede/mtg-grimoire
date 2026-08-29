@@ -1695,7 +1695,7 @@ describe("the collection folder wrappers name the commands `collection_folders.r
 describe("pairing", () => {
   const status = {
     deviceId: "aa".repeat(16),
-    deviceName: "This device",
+    deviceName: "MAIN-PC",
     groupId: null,
     epoch: null,
     devices: [],
