@@ -787,6 +787,11 @@ mod tests {
                 "combos",
                 "deck_audit",
                 "deck_undo",
+                // What each device in the group is called (user schema v31). It describes a
+                // conversation rather than a collection — no mirrored file quotes a device
+                // name — and it is `WITHOUT ROWID`, like `muted_tags`, so it could not reach
+                // the hook anyway. "The hook cannot see it" is not a decision; this is.
+                "device_names",
                 "error_log",
                 "format_specs",
                 "image_cache",

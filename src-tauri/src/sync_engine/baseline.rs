@@ -91,7 +91,7 @@ pub fn peers_needing(conn: &Connection) -> Result<Vec<String>, String> {
 /// [`tests::every_synced_table_carries_the_stamp_column_this_module_reads`] is where that
 /// reading is done, over `PRAGMA table_info`.
 ///
-/// Nine tables carry `updated_at`; the two that do not carry their own stamp as an ordinary
+/// Ten tables carry `updated_at`; the two that do not carry their own stamp as an ordinary
 /// field instead, and have no `created_at`/`updated_at` pair at all. Every synced table has one,
 /// so the `_` arm is the majority case and not a fallback — there is nothing to invent.
 ///
@@ -560,7 +560,8 @@ mod tests {
             MUTED * 1000,
             "muted_tags stamps from `muted_at`"
         );
-        // `muted_tags` is the one table whose primary key is on the field list, because the far
+        // `muted_tags` and `device_names` are the two tables whose primary key is on the field
+        // list, because the far
         // device cannot invent `(namespace, tag_id)` for itself.
         assert_eq!(
             muted[0].fields.get("namespace"),
