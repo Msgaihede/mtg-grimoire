@@ -73,7 +73,7 @@ pub fn is_layout(view: &str) -> bool {
 /// that is not JSON, a row holding an array or a bare string. None of those is worth failing over,
 /// and all of them mean one thing to a caller — nothing has been stored.
 fn stored_object(conn: &Connection) -> Map<String, Value> {
-    match crate::update::get_app_meta(conn, K_LIST_VIEW)
+    match crate::app_meta::get_app_meta(conn, K_LIST_VIEW)
         .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
     {
         Some(Value::Object(map)) => map,
@@ -122,7 +122,7 @@ pub fn store(conn: &Connection, section: &str, view: &str) -> Result<(), String>
     views.insert(section.to_owned(), Value::from(view));
     let json = serde_json::to_string(&Value::Object(views))
         .map_err(|e| format!("could not save the list layout: {e}"))?;
-    crate::update::set_app_meta(conn, K_LIST_VIEW, &json)
+    crate::app_meta::set_app_meta(conn, K_LIST_VIEW, &json)
         .map_err(|e| format!("could not save the list layout: {e}"))
 }
 
@@ -193,7 +193,7 @@ mod tests {
     #[test]
     fn a_missing_row_remembers_nothing() {
         let conn = db();
-        assert_eq!(crate::update::get_app_meta(&conn, K_LIST_VIEW), None);
+        assert_eq!(crate::app_meta::get_app_meta(&conn, K_LIST_VIEW), None);
         assert!(stored(&conn).is_empty());
     }
 
@@ -220,11 +220,11 @@ mod tests {
     #[test]
     fn an_unknown_section_survives_a_write_beside_it() {
         let conn = db();
-        crate::update::set_app_meta(&conn, K_LIST_VIEW, r#"{"binders":"grid"}"#).unwrap();
+        crate::app_meta::set_app_meta(&conn, K_LIST_VIEW, r#"{"binders":"grid"}"#).unwrap();
 
         store(&conn, "collection", TABLE).unwrap();
 
-        let raw = crate::update::get_app_meta(&conn, K_LIST_VIEW).unwrap();
+        let raw = crate::app_meta::get_app_meta(&conn, K_LIST_VIEW).unwrap();
         let map: Map<String, Value> = serde_json::from_str(&raw).unwrap();
         assert_eq!(
             map.get("binders").and_then(Value::as_str),
@@ -256,7 +256,7 @@ mod tests {
             r#"{"":"grid"}"#,
             r#"{"collection":"Grid"}"#,
         ] {
-            crate::update::set_app_meta(&conn, K_LIST_VIEW, junk).unwrap();
+            crate::app_meta::set_app_meta(&conn, K_LIST_VIEW, junk).unwrap();
             assert!(
                 !stored(&conn).contains_key("collection"),
                 "`{junk}` must read as nothing stored, not as a layout and not as a failure"
@@ -276,7 +276,7 @@ mod tests {
                 "`{junk}` must be refused rather than stored"
             );
         }
-        assert_eq!(crate::update::get_app_meta(&conn, K_LIST_VIEW), None);
+        assert_eq!(crate::app_meta::get_app_meta(&conn, K_LIST_VIEW), None);
     }
 
     /// A blank section is a bug in the caller, not a list. Refused for [`crate::zoom`]'s reason:
@@ -292,7 +292,7 @@ mod tests {
     #[test]
     fn a_write_over_a_junk_row_takes_effect() {
         let conn = db();
-        crate::update::set_app_meta(&conn, K_LIST_VIEW, "not json").unwrap();
+        crate::app_meta::set_app_meta(&conn, K_LIST_VIEW, "not json").unwrap();
         assert!(stored(&conn).is_empty());
 
         store(&conn, "collection", GRID).unwrap();

@@ -19,8 +19,10 @@
 //!
 //! See `docs/superpowers/specs/2026-08-12-card-marketplace-pricing-design.md`.
 
+#[cfg(not(target_family = "wasm"))]
 use crate::sync::AppState;
 use rusqlite::Connection;
+#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// Every marketplace id this build recognises, in the order the picker lists them.
@@ -61,7 +63,7 @@ pub fn is_known(id: &str) -> bool {
 /// row (`get_app_meta` swallows the error), and a row holding an id this build does not
 /// recognise. None of them is worth failing a price query over.
 pub fn stored(conn: &Connection) -> String {
-    crate::update::get_app_meta(conn, K_MARKETPLACE)
+    crate::app_meta::get_app_meta(conn, K_MARKETPLACE)
         .filter(|id| is_known(id))
         .unwrap_or_else(|| DEFAULT_MARKETPLACE.to_owned())
 }
@@ -78,7 +80,7 @@ pub fn store(conn: &Connection, id: &str) -> Result<(), String> {
             MARKETPLACE_IDS.join(", ")
         ));
     }
-    crate::update::set_app_meta(conn, K_MARKETPLACE, id)
+    crate::app_meta::set_app_meta(conn, K_MARKETPLACE, id)
         .map_err(|e| format!("could not save the marketplace: {e}"))
 }
 
@@ -93,6 +95,7 @@ pub fn store(conn: &Connection, id: &str) -> Result<(), String> {
 /// IPC thread, and this one takes `db_read`'s mutex, which a search may hold for tens of
 /// milliseconds. It is not an `async fn` because Tauri requires a `Result` from one that
 /// borrows `State`, and a `Result` here would be a failure mode this call does not have.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command(async)]
 pub fn get_marketplace(state: tauri::State<'_, Arc<AppState>>) -> String {
     stored(&crate::sync::lock_db_read(state.inner()))
@@ -100,6 +103,7 @@ pub fn get_marketplace(state: tauri::State<'_, Arc<AppState>>) -> String {
 
 /// Choose a marketplace. Rejects an unknown id, and answers [`crate::db::BUSY`] if a
 /// sync holds the write connection — the bound every write command in this crate takes.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn set_marketplace(
     state: tauri::State<'_, Arc<AppState>>,
@@ -126,6 +130,11 @@ pub async fn set_marketplace(
 /// Only on success, and only where [`store`] accepted the id: a refusal changed nothing on disk
 /// and must not cost a full render. This is the shape
 /// [`crate::mirror::settings::set_root_now`] already has.
+/// **Desktop and Android only, because it marks the plain-text mirror.** `AppState` has no
+/// `mirror` field on wasm — there is no mirror there, by §6.3 — so this is gated while
+/// [`store`] and [`stored`] beside it are not: the *setting* is every target's, and telling a
+/// mirror about it is not. `deck_meta`'s readback quotes `stored` on the web the same way.
+#[cfg(not(target_family = "wasm"))]
 pub fn set_marketplace_now(state: &AppState, id: &str) -> Result<(), String> {
     let saved = crate::sync::with_write(state, |conn| store(conn, id));
     if saved.is_ok() {
@@ -158,7 +167,7 @@ mod tests {
     #[test]
     fn a_missing_row_reads_as_the_default() {
         let conn = db();
-        assert_eq!(crate::update::get_app_meta(&conn, K_MARKETPLACE), None);
+        assert_eq!(crate::app_meta::get_app_meta(&conn, K_MARKETPLACE), None);
         assert_eq!(stored(&conn), "tcgplayer");
     }
 
@@ -169,7 +178,7 @@ mod tests {
     fn a_value_this_build_does_not_know_reads_as_the_default_rather_than_failing() {
         let conn = db();
         for junk in ["ebay", "", "TCGPLAYER", "tcgplayer ", "null"] {
-            crate::update::set_app_meta(&conn, K_MARKETPLACE, junk).unwrap();
+            crate::app_meta::set_app_meta(&conn, K_MARKETPLACE, junk).unwrap();
             assert_eq!(
                 stored(&conn),
                 "tcgplayer",
@@ -195,7 +204,7 @@ mod tests {
 
         assert_eq!(stored(&conn), "cardmarket");
         assert_eq!(
-            crate::update::get_app_meta(&conn, K_MARKETPLACE).as_deref(),
+            crate::app_meta::get_app_meta(&conn, K_MARKETPLACE).as_deref(),
             Some("cardmarket"),
             "nothing was written to `app_meta`"
         );

@@ -777,7 +777,7 @@ pub(crate) fn note_database(state: &AppState, operation: &str, message: &str) {
 fn persist_penalty(state: &Arc<AppState>) {
     let until = state.client.penalty_until_unix();
     if let Some(conn) = crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
-        let _ = crate::update::set_app_meta(&conn, K_SCRYFALL_PENALTY_UNTIL, &until.to_string());
+        let _ = crate::app_meta::set_app_meta(&conn, K_SCRYFALL_PENALTY_UNTIL, &until.to_string());
     }
 }
 

@@ -73,7 +73,7 @@ const EXPANDED: &str = "0";
 /// differently leaves behind. None of them is worth failing over, and all of them mean the same
 /// thing to the caller: draw the rail.
 pub fn stored(conn: &Connection) -> bool {
-    crate::update::get_app_meta(conn, K_NAV_COLLAPSED).as_deref() == Some(COLLAPSED)
+    crate::app_meta::get_app_meta(conn, K_NAV_COLLAPSED).as_deref() == Some(COLLAPSED)
 }
 
 /// Remember whether the rail is collapsed.
@@ -88,7 +88,7 @@ pub fn stored(conn: &Connection) -> bool {
 /// not withdrawn the first.
 pub fn store(conn: &Connection, collapsed: bool) -> Result<(), String> {
     let value = if collapsed { COLLAPSED } else { EXPANDED };
-    crate::update::set_app_meta(conn, K_NAV_COLLAPSED, value)
+    crate::app_meta::set_app_meta(conn, K_NAV_COLLAPSED, value)
         .map_err(|e| format!("could not save the navigation state: {e}"))
 }
 
@@ -154,7 +154,7 @@ mod tests {
     #[test]
     fn a_missing_row_reads_as_expanded() {
         let conn = db();
-        assert_eq!(crate::update::get_app_meta(&conn, K_NAV_COLLAPSED), None);
+        assert_eq!(crate::app_meta::get_app_meta(&conn, K_NAV_COLLAPSED), None);
         assert!(!stored(&conn));
     }
 
@@ -171,7 +171,7 @@ mod tests {
         store(&conn, false).unwrap();
         assert!(!stored(&conn), "expanding must undo a stored collapse");
         assert_eq!(
-            crate::update::get_app_meta(&conn, K_NAV_COLLAPSED).as_deref(),
+            crate::app_meta::get_app_meta(&conn, K_NAV_COLLAPSED).as_deref(),
             Some(EXPANDED),
             "the row is rewritten, not left standing with the old value"
         );
@@ -187,7 +187,7 @@ mod tests {
     fn an_unreadable_row_reads_as_expanded_rather_than_failing() {
         let conn = db();
         for junk in ["", "not json", "true", "yes", "2", "null", " 1", "1\n"] {
-            crate::update::set_app_meta(&conn, K_NAV_COLLAPSED, junk).unwrap();
+            crate::app_meta::set_app_meta(&conn, K_NAV_COLLAPSED, junk).unwrap();
             assert!(
                 !stored(&conn),
                 "`{junk}` must read as expanded, not as collapsed and not as a failure"
@@ -204,13 +204,13 @@ mod tests {
 
         store(&conn, true).unwrap();
         assert_eq!(
-            crate::update::get_app_meta(&conn, K_NAV_COLLAPSED).as_deref(),
+            crate::app_meta::get_app_meta(&conn, K_NAV_COLLAPSED).as_deref(),
             Some("1")
         );
 
         store(&conn, false).unwrap();
         assert_eq!(
-            crate::update::get_app_meta(&conn, K_NAV_COLLAPSED).as_deref(),
+            crate::app_meta::get_app_meta(&conn, K_NAV_COLLAPSED).as_deref(),
             Some("0")
         );
     }
@@ -220,7 +220,7 @@ mod tests {
     #[test]
     fn a_write_over_a_junk_row_takes_effect() {
         let conn = db();
-        crate::update::set_app_meta(&conn, K_NAV_COLLAPSED, "yes").unwrap();
+        crate::app_meta::set_app_meta(&conn, K_NAV_COLLAPSED, "yes").unwrap();
         assert!(!stored(&conn));
 
         store(&conn, true).unwrap();

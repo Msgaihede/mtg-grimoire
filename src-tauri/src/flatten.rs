@@ -51,7 +51,7 @@ const NO_SECTION: &str = "A flatten section cannot be blank.";
 /// that is not JSON, a row holding an array or a bare `true`. None of those is worth failing over,
 /// and all of them mean one thing to a caller — nothing has been stored.
 fn stored_object(conn: &Connection) -> Map<String, Value> {
-    match crate::update::get_app_meta(conn, K_FLATTEN)
+    match crate::app_meta::get_app_meta(conn, K_FLATTEN)
         .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
     {
         Some(Value::Object(map)) => map,
@@ -101,7 +101,7 @@ pub fn store(conn: &Connection, section: &str, flattened: bool) -> Result<(), St
     flags.insert(section.to_owned(), Value::from(flattened));
     let json = serde_json::to_string(&Value::Object(flags))
         .map_err(|e| format!("could not save the flatten state: {e}"))?;
-    crate::update::set_app_meta(conn, K_FLATTEN, &json)
+    crate::app_meta::set_app_meta(conn, K_FLATTEN, &json)
         .map_err(|e| format!("could not save the flatten state: {e}"))
 }
 
@@ -170,7 +170,7 @@ mod tests {
     #[test]
     fn a_missing_row_remembers_nothing() {
         let conn = db();
-        assert_eq!(crate::update::get_app_meta(&conn, K_FLATTEN), None);
+        assert_eq!(crate::app_meta::get_app_meta(&conn, K_FLATTEN), None);
         assert!(stored(&conn).is_empty());
     }
 
@@ -207,11 +207,11 @@ mod tests {
     #[test]
     fn an_unknown_section_survives_a_write_beside_it() {
         let conn = db();
-        crate::update::set_app_meta(&conn, K_FLATTEN, r#"{"binders":true}"#).unwrap();
+        crate::app_meta::set_app_meta(&conn, K_FLATTEN, r#"{"binders":true}"#).unwrap();
 
         store(&conn, "collection", true).unwrap();
 
-        let raw = crate::update::get_app_meta(&conn, K_FLATTEN).unwrap();
+        let raw = crate::app_meta::get_app_meta(&conn, K_FLATTEN).unwrap();
         let map: Map<String, Value> = serde_json::from_str(&raw).unwrap();
         assert_eq!(
             map.get("binders").and_then(Value::as_bool),
@@ -240,7 +240,7 @@ mod tests {
             "1",
             "\"collection\"",
         ] {
-            crate::update::set_app_meta(&conn, K_FLATTEN, junk).unwrap();
+            crate::app_meta::set_app_meta(&conn, K_FLATTEN, junk).unwrap();
             assert!(
                 stored(&conn).is_empty(),
                 "`{junk}` must read as nothing stored, not as a state and not as a failure"
@@ -255,7 +255,7 @@ mod tests {
     #[test]
     fn a_stringy_or_numeric_entry_is_dropped_and_its_neighbour_survives() {
         let conn = db();
-        crate::update::set_app_meta(
+        crate::app_meta::set_app_meta(
             &conn,
             K_FLATTEN,
             r#"{"collection":"true","tags":1,"decks":null,"":true,"wishlist":true}"#,
@@ -287,7 +287,7 @@ mod tests {
         let conn = db();
         assert_eq!(store(&conn, "", true).unwrap_err(), NO_SECTION);
         assert_eq!(
-            crate::update::get_app_meta(&conn, K_FLATTEN),
+            crate::app_meta::get_app_meta(&conn, K_FLATTEN),
             None,
             "a refused write touches nothing"
         );
@@ -298,7 +298,7 @@ mod tests {
     #[test]
     fn a_write_over_a_junk_row_takes_effect() {
         let conn = db();
-        crate::update::set_app_meta(&conn, K_FLATTEN, "not json").unwrap();
+        crate::app_meta::set_app_meta(&conn, K_FLATTEN, "not json").unwrap();
         assert!(stored(&conn).is_empty());
 
         store(&conn, "collection", true).unwrap();

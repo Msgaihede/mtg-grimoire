@@ -25,7 +25,7 @@
 //!   release page. Guessing is how a user ends up with two copies of the app.
 
 use crate::sync::AppState;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::io::Write;
@@ -292,27 +292,14 @@ impl Updater {
 // `app_meta`
 // ---------------------------------------------------------------------------------------
 
-/// Read `app_meta`. A missing row and an unreadable one both read as `None`: this is cache
-/// metadata, and the right response to losing it is to ask again.
-pub fn get_app_meta(conn: &Connection, key: &str) -> Option<String> {
-    conn.query_row(
-        "SELECT value FROM app_meta WHERE key = ?1",
-        params![key],
-        |r| r.get(0),
-    )
-    .optional()
-    .ok()
-    .flatten()
-}
-
-pub fn set_app_meta(conn: &Connection, key: &str, value: &str) -> rusqlite::Result<()> {
-    conn.execute(
-        "INSERT INTO app_meta (key, value) VALUES (?1, ?2)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value",
-        params![key, value],
-    )?;
-    Ok(())
-}
+/// **The store itself lives in [`crate::app_meta`], which compiles for every target.**
+///
+/// It was moved there on 2026-08-29 because eleven modules read and write `app_meta` and
+/// only this one updates the app: `deck` keeps the search column's state in it, `zoom`,
+/// `nav`, `listview` and `flatten` keep their view state, and all of them are wanted on the
+/// web target where an `.exe` swap is meaningless. Re-exported rather than renamed so the
+/// sixty existing `crate::app_meta::get_app_meta` call sites keep reading the way they read.
+pub use crate::app_meta::{get_app_meta, set_app_meta};
 
 fn clear_app_meta(conn: &Connection, key: &str) -> rusqlite::Result<()> {
     conn.execute("DELETE FROM app_meta WHERE key = ?1", params![key])?;

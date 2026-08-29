@@ -53,9 +53,11 @@ use crate::collection::{EntryChange, ENTRY_FINISH, GONE};
 // second copy of a refusal is a second thing to drift.
 use crate::deck_meta::{FOLDER_CYCLE, FOLDER_GONE};
 use crate::sorting::Marketplace;
+#[cfg(not(target_family = "wasm"))]
 use crate::sync::{lock_db_read, with_write, AppState};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
+#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// What every write here says about a folder that is the **app's** rather than the reader's —
@@ -926,11 +928,13 @@ pub fn folder_summary(
 /// What a write here says when its worker thread died under it — never a user's problem, the
 /// write itself answers [`crate::db::BUSY`] when the database is busy.
 /// [`crate::wishlist_folders`]'s helper of the same name, named for this table instead.
+#[cfg(not(target_family = "wasm"))]
 fn unfinished(e: tauri::Error) -> String {
     format!("the collection's folders could not be written: {e}")
 }
 
 /// **Read-only** connection, like every list in the app.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_folder_list(
     state: tauri::State<'_, Arc<AppState>>,
@@ -941,6 +945,7 @@ pub async fn collection_folder_list(
         .map_err(|e| format!("the collection folders could not be read: {e}"))?
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_folder_create(
     state: tauri::State<'_, Arc<AppState>>,
@@ -955,6 +960,7 @@ pub async fn collection_folder_create(
     .map_err(unfinished)?
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_folder_rename(
     state: tauri::State<'_, Arc<AppState>>,
@@ -969,6 +975,7 @@ pub async fn collection_folder_rename(
     .map_err(unfinished)?
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_folder_move(
     state: tauri::State<'_, Arc<AppState>>,
@@ -991,6 +998,7 @@ pub async fn collection_folder_move(
 /// **`with_write` and not `with_write_owned`**, [`collection_folder_delete`]'s reasoning in its
 /// simplest form: this touches no `collection_entries` row at all, so no card moves in or out of
 /// the reader's ownership and the facet index's `owned` dimension already holds the answer.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_folder_reorder(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1013,6 +1021,7 @@ pub async fn collection_folder_reorder(
 /// names, so the set of *cards* the reader owns cannot move. The facet index's `owned` dimension
 /// is one rowid per owned card ([`crate::collection_source::owned_rowids`]), and rebuilding it
 /// here would be a full copy to arrive at the answer it already holds.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_folder_delete(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1030,6 +1039,7 @@ pub async fn collection_folder_delete(
 /// **[`crate::collection_source::with_write_owned`], where the four folder writes above take
 /// `sync::with_write`**: filing a row changes which rows exist — a merge deletes one — and the
 /// facet index's `owned` dimension is built by counting them.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_set_folder(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1046,6 +1056,7 @@ pub async fn collection_set_folder(
 
 /// **Read-only**, and priced at the marketplace the caller names — anything the app does not
 /// know is TCGplayer, [`crate::sorting::Marketplace::from_opt`]'s rule for every list query.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn collection_folder_summary(
     state: tauri::State<'_, Arc<AppState>>,
