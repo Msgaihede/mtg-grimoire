@@ -247,18 +247,42 @@ Every device already keeps precisely that bookkeeping. `sync_peers` means *"ever
 below this has been applied"*, and the claim was read from tables written by those applications.
 
 So a baseline carries a **horizon**: the emitter's `sync_peers` map, plus the emitter's own
-highest stamp. The receiver, before it filters anything, raises each of its own watermarks to
-`max(own, horizon)`. Every op already inside the claim is then dropped by `apply_in`'s existing
-first step — counted as `skipped`, the mechanism that exists and is tested — and everything above
-it is genuinely new and lands on the claim honestly.
+highest stamp. An op in the same batch at or below the horizon is already inside the claim, so it
+is not counted again.
 
 This is what makes the arithmetic exact for **any** number of devices rather than approximately
 right for two.
 
-**Raising a watermark is destructive and must be treated that way.** It permanently skips ops, so
-a horizon that was too high would lose data silently. Two guards: it is built only from the
-emitter's own `sync_peers`, which already carries exactly this meaning, and it is applied as
-`max`, so it can never walk a watermark backwards.
+### 9.1 It is a filter on one batch, and never a write to `sync_peers`
+
+The obvious implementation — raise the watermarks to `max(own, horizon)` and let `apply_in`'s
+existing first step do the rest — is wrong twice, and both failures are silent.
+
+**It would suppress the baseline itself.** The horizon includes the emitter's own highest stamp,
+and baseline ops are stamped from each row's `updated_at` (§10.2), which is *below* it by
+construction. A watermark raised to the horizon skips every op the baseline is made of.
+
+**It would lose a tombstone, permanently.** A watermark write is durable, so a `del` from a third
+device sitting below the horizon would be skipped on this pull and never re-offered. A baseline is
+a positive statement — "these rows exist, with these values" — and has no way to say "and this one
+is gone". Worked through: B holds a row A has deleted; A's baseline mentions it nowhere and A's
+horizon covers the tombstone, so B keeps a row the group deleted, and B's own baseline loses to
+A's local tombstone under add-wins. The two devices disagree for good.
+
+So the horizon is applied as a **filter over the ops in one batch**, and three exemptions fall out
+of the two failures above:
+
+| op | suppressed by the horizon? |
+| --- | --- |
+| a baseline op | **never** — it is what the horizon is describing |
+| a `del` | **never** — a claim cannot express a deletion, so a tombstone must still be judged by add-wins |
+| a `put` at or below the horizon | yes — its effect is already in the claim |
+| a `put` above the horizon | no — genuinely newer than the claim |
+
+Nothing is written to `sync_peers` by any of this. The watermark keeps its existing meaning and
+its existing single writer, `advance_watermarks`, so the horizon cannot make this device skip an
+op on some later pull. Re-applying a baseline op is harmless anyway — claims resolve by `max` and
+the grain finds the same row — which is why the first exemption costs nothing.
 
 ## 10. When a baseline is emitted
 
@@ -568,8 +592,9 @@ pairing flow and the deployed Worker:
 
 ## 19. How it will be verified
 
-- **Unit**: the counter rule under each row of §8.2's table, the horizon raising a watermark and
-  never lowering it, stamping from the row's own column, the emit order, the trigger's three
+- **Unit**: the counter rule under each row of §8.2's table, the horizon's three exemptions from
+  §9.1 — a baseline op, a `del`, and a `put` above it are each applied while a `put` below it is
+  not — and that `sync_peers` is untouched by it, stamping from the row's own column, the emit order, the trigger's three
   conditions including the revoked guard, the re-arm, and idempotence — each with a mutation that
   must go red, and **a mutation that survives is a finding to report rather than a test to
   adjust**.
