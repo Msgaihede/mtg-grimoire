@@ -893,12 +893,51 @@ twenty-three.
 
 **4.22× is above the plan's own stop-and-report threshold, and it is reported rather than worked
 around.** In absolute terms it is 1.34 s for fifty thousand rows, on the one operation spec §7.7
-names as the only one near a free-tier limit. The remedy the plan describes — run the importer
-inside `capture::suppressed` and seed its ops in one pass afterwards — is available and not taken
-here; the breakdown above is a `#[ignore]` test
+names as the only one near a free-tier limit. The breakdown above is a `#[ignore]` test
 (`sync_engine::capture::tests::bulk_import_with_capture`) so the decision can be re-measured with
 one command. The row worth reading twice is the second: **an unpaired device**, which is every
 installation today, pays 2.23× for a feature it does not use.
+
+### Re-measured 2026-08-29, and then decided: nothing changes
+
+| | | |
+| --- | --- | --- |
+| no triggers at all | 318.98 ms | 1.00× |
+| triggers, unpaired — the uid mint alone | 718.48 ms | **2.25×**, 0 ops |
+| triggers, behind the apply guard | 490.59 ms | 1.54×, 0 ops |
+| triggers, paired | **1.3637 s** | **4.28×**, 50 000 ops → 250 relay writes |
+
+Within noise of the run above, a day later and on a different tree, so the figures are stable
+rather than a one-off.
+
+**Decomposing them is what settles it, and the plan's framing did not.** The third row is not a
+remedy's result — it is *the cost of a trigger firing and its `WHEN` short-circuiting*, which is
+**171 ms** per 50 000 rows. That is the floor of every guard-based approach, because each one
+still installs the trigger and still asks `sync_state` a question per row. The uid mint on top of
+it is only **228 ms**.
+
+So **the whole achievable win for an unpaired install is ~228 ms on a fifty-thousand-row
+import**, and no scheme reaches 1.00× while the triggers exist. "Gate the mint on paired-ness"
+— the obvious idea, and not one any plan here proposed — buys exactly that 228 ms and lands on
+the same 1.54× floor, in exchange for a new correctness obligation at the moment sync turns on:
+the uid backfill would have to complete before the first baseline is built, or a freshly paired
+device sends rows with no uid.
+
+**And the remedy the plan named has nothing to reuse.** "Run the importer inside
+`capture::suppressed` and seed its ops in one pass afterwards" was written before the baseline
+was designed; [the baseline design](../superpowers/specs/2026-08-29-sync-baseline-design.md) §5.1
+then decided, deliberately, that **baseline ops are never written to `sync_ops`** — they are built
+in memory, sealed, pushed and forgotten, so that `sync_ops.counters` keeps meaning *deltas*. A
+seeding pass therefore cannot borrow the baseline's machinery and would be **a second
+implementation of the capture rule**, which is the drift the golden fence exists to prevent one
+boundary over.
+
+**Decided by Markus on 2026-08-29: record the decomposition and change nothing.** 1.36 s for
+fifty thousand rows is not a user-visible problem; the paired remedy costs a second
+implementation of a rule the triggers already own; and the unpaired case — the one that is every
+install — is worth 228 ms. This paragraph is the answer to "the remedy is available and untaken",
+which had been sitting here as an open TODO with no number attached to it. Re-open it if a real
+import gets slow enough for somebody to notice, and re-measure with the one command above first.
 
 ### The v29 rung over a real user file — debug
 

@@ -28,6 +28,27 @@ Two workflows, and every rule below was measured live. Full detail, including th
   a wasm `TARGET`. Its `npm run build:wasm` step also greps the generated glue for every
   exported entry point, which is the one check no compiler can make: dropping a
   `#[wasm_bindgen]` attribute builds clean with no error and no warning.
+- **The `android` job exists for the `wasm` job's reason, one target over: `main` can stop
+  cross-compiling for Android and nothing goes red.** It already did — #270 fixed exactly that,
+  and an APK somebody built by hand was how anybody found out. It is
+  `cargo build --lib --locked --target aarch64-linux-android` and **not an APK build**: assembling
+  one needs Gradle, a full SDK and a signing story, while the cross-compile needs only the NDK and
+  catches the whole class of failure this is for. It proves nothing about the app *running* on a
+  phone; that is still a hardware pass. Linux, for the `wasm` job's reason — the NDK is the
+  compiler on every host and the runner image ships one.
+  - **`cargo` and `cc-rs` have never heard of `NDK_HOME`.** That variable is the Tauri CLI's, and
+    this job does not go through the CLI, so it sets two things by hand and **each failure names
+    something other than its cause**: clang on `PATH` (or `cc-rs` reports `failed to find tool
+    "clang"` while compiling `libsqlite3-sys` and `ring`) and an explicit linker (or `rustc`
+    reports ``linker `cc` not found``). The job checks both paths exist and says so plainly.
+  - **API 26 is `minSdk` in `gen/android/app/build.gradle.kts`, not a choice made in CI**, so the
+    linker binary is the `26` one. A Rust test already pins that number.
+  - **It needs the `dist/` stub and the `wasm` job does not.** `build.rs` returns early for a wasm
+    `TARGET`, so `tauri_build` never runs there; for the Android triple it does, and
+    `frontendDist: "../dist"` has to exist.
+  - **`src-tauri/gen/android/*` still routes nowhere**, which is correct: the cross-compile reads
+    no Gradle file. `build.gradle.kts` and `AndroidManifest.xml` keep routing to `rust` alone,
+    because they are `include_str!` test inputs rather than build inputs.
 - **The `powershell` job runs the repo's `.ps1` tests on `windows-latest`** — `lock.test.ps1`
   for the worktree locks and `pr-auto.test.ps1` for the auto-PR guard — and its `case` arm must
   stay **above** `src-tauri/*` and `scripts/*` — first-match-wins, and `scripts/` is on the
