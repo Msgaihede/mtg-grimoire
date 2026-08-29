@@ -577,7 +577,7 @@ Every remaining PR now has a task-level plan in `docs/superpowers/plans/`.
 | 9a | mobile layout: foundation + options | `2026-08-28-mobile-layout-9a-foundation-and-options.md` | **done** — #274 shipped Tasks 1–4 (the foundation); the four design rounds ran and **the decision was taken on 2026-08-29** |
 | 9b | implement the chosen layout | `2026-08-29-mobile-layout-9b.md` | **done 2026-08-29** — #294 and #295. All four layouts built; the device pass then **falsified the vertical budget**, which is what it was written to do. See 9c |
 | 9c | the vertical, re-opened | `2026-08-29-mobile-layout-9c.md` | **done 2026-08-29** — #297 through #300. Driven on the phone: the wall went **0.44 rows → 1.97**, two columns, two whole cards and 97%% of the next two |
-| **10** | **the rest of the command surface in wasm** | — | **decided 2026-08-29, not yet planned.** The web build routes **4 of 155**; one of six destinations works. All but ten, by destination, worst broken first |
+| **10** | **the rest of the command surface in wasm** | — | **decided 2026-08-29, not yet planned.** The web build routes **4 of 152**; one of six destinations works. All but ten, by destination, worst broken first |
 
 **Updated 2026-08-29.** Everything above 9a has shipped, and the phase is done end to end: the
 app runs on Windows, in a browser and on an Android phone, two devices pair with no account, and
@@ -676,7 +676,7 @@ rather than planned:
 > *visible* viewport** (696, matching `dvh` and `svh`, against `lvh`'s 752), so `Dialog`'s footer
 > never lands under the URL bar and it needs no change.
 
-> ## PR 10: the web build routes 4 of 155, and the phone layout is what made that matter
+> ## PR 10: the web build routes 4 of 152, and the phone layout is what made that matter
 >
 > **Reported by Markus on 2026-08-29, minutes after 9c shipped:** selecting a card on the phone
 > answers *"Could not read this card — unknown command `card_detail`"*. Surveyed on the device

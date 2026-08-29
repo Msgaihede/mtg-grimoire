@@ -928,7 +928,7 @@ mod tests {
             mask.clone(),
             Arc::new(crate::db::CrossFileFence::new()),
         );
-        crate::update::set_app_meta(&conn, "anything", "at all").unwrap();
+        crate::app_meta::set_app_meta(&conn, "anything", "at all").unwrap();
         assert_eq!(mask.take(), None);
     }
 
@@ -1126,7 +1126,7 @@ mod tests {
     /// Point the mirror at `root` without going through `set_root`'s validation.
     fn aim_at(state: &AppState, root: &Path) {
         let conn = crate::sync::lock_db(state);
-        crate::update::set_app_meta(&conn, settings::K_ROOT, root.to_str().unwrap()).unwrap();
+        crate::app_meta::set_app_meta(&conn, settings::K_ROOT, root.to_str().unwrap()).unwrap();
     }
 
     /// Spec §7's recovery contract. The mask was **taken** before the pass ran, so a failure

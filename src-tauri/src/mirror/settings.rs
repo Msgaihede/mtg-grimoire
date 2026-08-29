@@ -63,7 +63,7 @@ const OFF: &str = "0";
 /// neither [`ON`] nor [`OFF`]. None of them is worth stopping a background pass over, and
 /// none of them is worth failing the Settings panel's read over either.
 pub fn enabled(conn: &Connection) -> bool {
-    match crate::update::get_app_meta(conn, K_ENABLED).as_deref() {
+    match crate::app_meta::get_app_meta(conn, K_ENABLED).as_deref() {
         Some(ON) => true,
         Some(OFF) => false,
         _ => DEFAULT_ENABLED,
@@ -77,7 +77,7 @@ pub fn enabled(conn: &Connection) -> bool {
 /// copied from a machine whose drive letters differ — must not be able to point a pruning
 /// pass at a relative path. A value that fails the filter reads exactly as no value at all.
 pub fn root(conn: &Connection, data_dir: &Path) -> PathBuf {
-    crate::update::get_app_meta(conn, K_ROOT)
+    crate::app_meta::get_app_meta(conn, K_ROOT)
         .map(PathBuf::from)
         .filter(|p| p.is_absolute())
         .unwrap_or_else(|| data_dir.join(DEFAULT_ROOT_NAME))
@@ -86,7 +86,7 @@ pub fn root(conn: &Connection, data_dir: &Path) -> PathBuf {
 /// Switch the mirror on or off.
 pub fn set_enabled(conn: &Connection, on: bool) -> Result<(), String> {
     let value = if on { ON } else { OFF };
-    crate::update::set_app_meta(conn, K_ENABLED, value)
+    crate::app_meta::set_app_meta(conn, K_ENABLED, value)
         .map_err(|e| format!("could not save the mirror setting: {e}"))
 }
 
@@ -137,7 +137,7 @@ pub fn set_root(conn: &Connection, path: &Path) -> Result<(), String> {
             path.display()
         ));
     }
-    crate::update::set_app_meta(conn, K_ROOT, text)
+    crate::app_meta::set_app_meta(conn, K_ROOT, text)
         .map_err(|e| format!("could not save the mirror folder: {e}"))
 }
 
@@ -353,7 +353,7 @@ mod tests {
     #[test]
     fn an_unreadable_setting_reads_as_the_default_rather_than_failing() {
         let conn = migrated_memory_db();
-        crate::update::set_app_meta(&conn, K_ENABLED, "perhaps").unwrap();
+        crate::app_meta::set_app_meta(&conn, K_ENABLED, "perhaps").unwrap();
         assert!(
             enabled(&conn),
             "an unparseable setting is a fact about storage, not a refusal"
@@ -366,7 +366,7 @@ mod tests {
     fn an_unreadable_root_reads_as_the_default_rather_than_being_followed() {
         let conn = migrated_memory_db();
         for junk in ["export", "", "./export", "../export"] {
-            crate::update::set_app_meta(&conn, K_ROOT, junk).unwrap();
+            crate::app_meta::set_app_meta(&conn, K_ROOT, junk).unwrap();
             assert_eq!(
                 root(&conn, Path::new("D:/app/data")),
                 Path::new("D:/app/data/export"),
@@ -412,7 +412,7 @@ mod tests {
         set_root(&conn, &dir).unwrap();
         assert_eq!(root(&conn, Path::new("D:/app/data")), dir);
         assert_eq!(
-            crate::update::get_app_meta(&conn, K_ROOT).as_deref(),
+            crate::app_meta::get_app_meta(&conn, K_ROOT).as_deref(),
             dir.to_str(),
             "the path is stored verbatim"
         );

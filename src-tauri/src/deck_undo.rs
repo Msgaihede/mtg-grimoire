@@ -48,6 +48,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::collections::HashMap;
+#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// What an apply says when the id it was handed is not the deck's cursor.
@@ -1175,6 +1176,7 @@ pub struct DeckUndoState {
     pub redo: Option<crate::deck_audit::DeckAuditEntry>,
 }
 
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
 /// The `deck` payload an undo or a redo records, and the whole of what makes the pair legible.
 ///
 /// `of` is the history row being reversed, which is what lets `auditText.ts` render the undone
@@ -1183,6 +1185,7 @@ fn reversal_payload(field: &str, of: i64) -> Value {
     json!({ "field": field, "of": of })
 }
 
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
 /// One history row for the reversal itself.
 ///
 /// **`delta` is negated on an undo and carried straight on a redo**, so the day header's
@@ -1207,6 +1210,7 @@ fn record_reversal(
     Ok(())
 }
 
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
 /// Apply one step, in one transaction, and record the history row for having done it.
 ///
 /// `undoing` picks the direction. The id is checked against the cursor rather than trusted:
@@ -1262,6 +1266,7 @@ fn apply_reversal(
 /// dies with the window — the reader's position in a session is not a fact about the deck. This
 /// answers what that id names so the button can be labelled, and refuses nothing: a `redo` that
 /// has stopped being redoable simply comes back `None`.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_undo_state(
     state: tauri::State<'_, Arc<crate::sync::AppState>>,
@@ -1291,6 +1296,7 @@ pub async fn deck_undo_state(
 }
 
 /// Undo the named change. The id is the cursor's or the call is refused in words.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_undo_apply(
     state: tauri::State<'_, Arc<crate::sync::AppState>>,
@@ -1309,6 +1315,7 @@ pub async fn deck_undo_apply(
 }
 
 /// Put back a change that was undone.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_redo_apply(
     state: tauri::State<'_, Arc<crate::sync::AppState>>,

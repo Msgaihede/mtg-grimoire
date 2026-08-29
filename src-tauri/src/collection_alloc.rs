@@ -753,10 +753,13 @@ pub fn deck_to_collection(
 /// the crate. The alternative was the `add_entry`/`collection_add` split every other cabinet
 /// uses, which would have meant two words for one write in a module that has only two.
 pub mod commands {
+    #[cfg(not(target_family = "wasm"))]
     use super::{
         collection_to_deck as to_deck, deck_to_collection as to_collection, MoveOutcome, Pile,
     };
+    #[cfg(not(target_family = "wasm"))]
     use crate::sync::AppState;
+    #[cfg(not(target_family = "wasm"))]
     use std::sync::Arc;
 
     /// **[`crate::collection_source::with_write_owned`] and not bare `with_write`**: this moves
@@ -769,6 +772,7 @@ pub mod commands {
     /// [`Pile`] cannot hold both. Two nullable wire fields rather than one tagged value so that
     /// a caller sending `categoryId` alone — every caller written before the name arm existed —
     /// is unchanged: an absent field deserialises to `None`.
+    #[cfg(not(target_family = "wasm"))]
     #[tauri::command]
     pub async fn collection_to_deck(
         state: tauri::State<'_, Arc<AppState>>,
@@ -791,6 +795,7 @@ pub mod commands {
     }
 
     /// [`collection_to_deck`]'s wrapper, for [`collection_to_deck`]'s reason.
+    #[cfg(not(target_family = "wasm"))]
     #[tauri::command]
     pub async fn deck_to_collection(
         state: tauri::State<'_, Arc<AppState>>,

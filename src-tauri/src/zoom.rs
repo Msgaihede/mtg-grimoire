@@ -80,7 +80,7 @@ pub fn is_storable(zoom: f64) -> bool {
 /// that is not JSON, a row holding an array or a bare number. None of those is worth failing over,
 /// and all of them mean one thing to a caller — nothing has been stored.
 fn stored_object(conn: &Connection) -> Map<String, Value> {
-    match crate::update::get_app_meta(conn, K_CARD_ZOOM)
+    match crate::app_meta::get_app_meta(conn, K_CARD_ZOOM)
         .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
     {
         Some(Value::Object(map)) => map,
@@ -130,7 +130,7 @@ pub fn store(conn: &Connection, section: &str, zoom: f64) -> Result<(), String> 
     zooms.insert(section.to_owned(), Value::from(zoom));
     let json = serde_json::to_string(&Value::Object(zooms))
         .map_err(|e| format!("could not save the card zoom: {e}"))?;
-    crate::update::set_app_meta(conn, K_CARD_ZOOM, &json)
+    crate::app_meta::set_app_meta(conn, K_CARD_ZOOM, &json)
         .map_err(|e| format!("could not save the card zoom: {e}"))
 }
 
@@ -216,7 +216,7 @@ mod tests {
     #[test]
     fn a_missing_row_reads_as_nothing_stored() {
         let conn = db();
-        assert_eq!(crate::update::get_app_meta(&conn, K_CARD_ZOOM), None);
+        assert_eq!(crate::app_meta::get_app_meta(&conn, K_CARD_ZOOM), None);
         assert!(stored(&conn).is_empty());
     }
 
@@ -246,7 +246,7 @@ mod tests {
     fn an_unreadable_row_reads_as_nothing_rather_than_failing() {
         let conn = db();
         for junk in ["", "not json", "[1, 2]", "null", "7", "\"deck\""] {
-            crate::update::set_app_meta(&conn, K_CARD_ZOOM, junk).unwrap();
+            crate::app_meta::set_app_meta(&conn, K_CARD_ZOOM, junk).unwrap();
             assert!(
                 stored(&conn).is_empty(),
                 "`{junk}` must read as nothing stored, not fail"
@@ -259,7 +259,7 @@ mod tests {
     #[test]
     fn a_junk_entry_is_dropped_and_its_neighbours_survive() {
         let conn = db();
-        crate::update::set_app_meta(
+        crate::app_meta::set_app_meta(
             &conn,
             K_CARD_ZOOM,
             r#"{"deck": 1.25, "search": "big", "tags": 40, "wishlist": null, "": 1.5}"#,
@@ -318,12 +318,12 @@ mod tests {
     #[test]
     fn a_write_preserves_entries_this_build_cannot_use() {
         let conn = db();
-        crate::update::set_app_meta(&conn, K_CARD_ZOOM, r#"{"aWallFromLater": 1.5, "deck": 4}"#)
+        crate::app_meta::set_app_meta(&conn, K_CARD_ZOOM, r#"{"aWallFromLater": 1.5, "deck": 4}"#)
             .unwrap();
 
         store(&conn, "search", 1.1).unwrap();
 
-        let raw = crate::update::get_app_meta(&conn, K_CARD_ZOOM).unwrap();
+        let raw = crate::app_meta::get_app_meta(&conn, K_CARD_ZOOM).unwrap();
         let row: Value = serde_json::from_str(&raw).unwrap();
         assert_eq!(
             row["aWallFromLater"], 1.5,
@@ -345,11 +345,11 @@ mod tests {
     fn a_refused_write_rewrites_nothing() {
         let conn = db();
         store(&conn, "deck", 1.25).unwrap();
-        let before = crate::update::get_app_meta(&conn, K_CARD_ZOOM);
+        let before = crate::app_meta::get_app_meta(&conn, K_CARD_ZOOM);
 
         assert!(store(&conn, "search", 9.0).is_err());
         assert!(store(&conn, "", 1.0).is_err());
 
-        assert_eq!(crate::update::get_app_meta(&conn, K_CARD_ZOOM), before);
+        assert_eq!(crate::app_meta::get_app_meta(&conn, K_CARD_ZOOM), before);
     }
 }

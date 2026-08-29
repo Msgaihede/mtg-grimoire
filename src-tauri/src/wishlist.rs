@@ -18,9 +18,11 @@ use crate::collection::{valid_quantity, EntryChange};
 use crate::deck_meta::FOLDER_GONE;
 use crate::filters::{escape_like, LIKE_ESCAPE};
 use crate::schema::{FINISHES, WISHLIST_GRAIN};
+#[cfg(not(target_family = "wasm"))]
 use crate::sync::{with_write, AppState};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// One wish, as the UI sends it.
@@ -498,6 +500,7 @@ pub struct WishlistImportItem {
     pub notes: Option<String>,
 }
 
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
 /// One transaction for the whole file — `collection::commit_import`'s rule, and its reasons.
 ///
 /// `removed` is counted in the loop rather than derived, because a delete and an insert in one
@@ -976,6 +979,7 @@ pub fn list_wishes(conn: &Connection, q: &WishlistQuery) -> Result<WishlistPage,
     Ok(WishlistPage { items, total })
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn wishlist_add(
     state: tauri::State<'_, Arc<AppState>>,
@@ -987,6 +991,7 @@ pub async fn wishlist_add(
         .map_err(|e| format!("the wishlist could not be written: {e}"))?
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn wishlist_set_quantity(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1001,6 +1006,7 @@ pub async fn wishlist_set_quantity(
     .map_err(|e| format!("the wishlist could not be written: {e}"))?
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn wishlist_remove(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1014,6 +1020,7 @@ pub async fn wishlist_remove(
 
 /// "Use this printing", and "Any printing" — see [`set_wish_printing`] for the merge, which
 /// is why this answers an [`EntryChange`] whose `id` is not always the `id` it was given.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn wishlist_set_printing(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1030,6 +1037,7 @@ pub async fn wishlist_set_printing(
 
 /// One transaction for a whole imported file — see [`commit_import`] for the `set` arm's route
 /// through [`add_wish`] and why `removed` is counted rather than derived.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn wishlist_import_commit(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1045,6 +1053,7 @@ pub async fn wishlist_import_commit(
 }
 
 /// The wishlist. **Read-only** connection, blocking pool — as every read in this app is.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn wishlist_list(
     state: tauri::State<'_, Arc<AppState>>,

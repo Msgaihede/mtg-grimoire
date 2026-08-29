@@ -1,17 +1,53 @@
 //! The crate's module map, and nothing else.
 //!
-//! **The left column below compiles for `wasm32-unknown-unknown`; the right does not.**
+//! **The first block below compiles for `wasm32-unknown-unknown`; the second does not.**
 //! Four of the exclusions are permanent (spec §6.3): the plain-text `mirror`, the Rust
 //! `transfer` writer that exists only for it, the portable `update` swap, and `window`'s
 //! Win32 snap layouts. The rest are "not yet" — they are ported with the commands that
 //! need them. `images` is neither: on web the image cache is Cache Storage rather than a
 //! filesystem, so it is a rewrite and not a port.
+//!
+//! **A module's side is decided by what is *in* it, not by where its commands are, and that
+//! is what moved eleven of them on 2026-08-29.** The deck domain, the collection, the
+//! wishlist and both folder tables were on the right because each file ends in a block of
+//! `#[tauri::command]` wrappers — while everything above that block is `&Connection` in and
+//! a DTO out. Gating the *wrappers* and leaving the module puts the SQLite underneath them
+//! on both targets, which is the shape [`search`] has always had: two gated commands in an
+//! ungated module, and `run_search` reachable from [`web::route`] because of it.
+//!
+//! **Compiling for wasm is not the same as being reachable from a browser.** These modules
+//! build there; [`web::route`] answers four commands, and until a `match` arm names one the
+//! page still gets `unknown command`. The two halves are deliberately separate PRs — this
+//! one cannot change desktop behaviour, and the one that adds arms cannot fail to compile.
 
 // ── Every target ─────────────────────────────────────────────────────────────────
+/// **The `app_meta` key–value store, carved out of [`update`] so both targets have it.**
+/// Eleven modules keep view state in that one table and only `update` swaps an `.exe`; a
+/// re-export from there does not work, because a name re-exported from a gated module is
+/// invisible on wasm exactly when it is wanted.
+pub mod app_meta;
 pub mod card_row;
+/// **The deck domain, and the ten modules below it, moved here on 2026-08-29** — they were
+/// under "Desktop and Android" because of where their *commands* were, not because of
+/// anything in them. Every one is `&Connection` in and a DTO out, with no `tauri::`, no
+/// `tokio` and no filesystem: `deck.rs`'s 4 444 lines of real code contain no `tauri::`
+/// reference before line 3992, where its command wrappers begin in one block.
+///
+/// **The gate did not go away, it moved onto the wrappers** — the shape [`search`] has had
+/// all along, and the reason `run_search` is reachable from [`web::route`] while
+/// `list_decks` was not. Nothing here is routed by that module yet; PR 10 does that, and
+/// what this buys is that it *can* be.
+pub mod collection;
+pub mod collection_alloc;
+pub mod collection_folders;
 pub mod collection_source;
 pub mod combos;
 pub mod db;
+pub mod deck;
+pub mod deck_audit;
+pub mod deck_meta;
+pub mod deck_theory;
+pub mod deck_undo;
 pub mod errors;
 pub mod feed;
 pub mod filters;
@@ -25,6 +61,11 @@ pub mod index;
 pub mod ingest;
 pub mod legalities;
 pub mod maintenance;
+/// **The stored marketplace id is every target's; telling the mirror about a change is not.**
+/// `stored` and `store` are one settings row, and `deck_meta`'s readback quotes the first of
+/// them on every platform — so the module is here and `set_marketplace_now`, which calls
+/// `AppState.mirror` (a field wasm's `AppState` does not have), carries the gate instead.
+pub mod marketplace;
 pub mod schema;
 pub mod search;
 pub mod slug;
@@ -51,26 +92,12 @@ pub mod sync_engine;
 /// browser that could not open an envelope would be a browser that cannot sync.
 pub mod sync_pair;
 pub mod web;
+pub mod wishlist;
+pub mod wishlist_folders;
 
 // ── Desktop and Android ──────────────────────────────────────────────────────────
 #[cfg(not(target_family = "wasm"))]
 pub mod card;
-#[cfg(not(target_family = "wasm"))]
-pub mod collection;
-#[cfg(not(target_family = "wasm"))]
-pub mod collection_alloc;
-#[cfg(not(target_family = "wasm"))]
-pub mod collection_folders;
-#[cfg(not(target_family = "wasm"))]
-pub mod deck;
-#[cfg(not(target_family = "wasm"))]
-pub mod deck_audit;
-#[cfg(not(target_family = "wasm"))]
-pub mod deck_meta;
-#[cfg(not(target_family = "wasm"))]
-pub mod deck_theory;
-#[cfg(not(target_family = "wasm"))]
-pub mod deck_undo;
 #[cfg(not(target_family = "wasm"))]
 pub mod export;
 #[cfg(not(target_family = "wasm"))]
@@ -81,8 +108,6 @@ pub mod images;
 pub mod import;
 #[cfg(not(target_family = "wasm"))]
 pub mod listview;
-#[cfg(not(target_family = "wasm"))]
-pub mod marketplace;
 #[cfg(not(target_family = "wasm"))]
 pub mod marketplace_feed;
 #[cfg(not(target_family = "wasm"))]
@@ -115,10 +140,6 @@ pub mod update;
 // runs for a wasm `TARGET`, so nothing sets it there.
 #[cfg(desktop)]
 pub mod window;
-#[cfg(not(target_family = "wasm"))]
-pub mod wishlist;
-#[cfg(not(target_family = "wasm"))]
-pub mod wishlist_folders;
 #[cfg(not(target_family = "wasm"))]
 pub mod zoom;
 
