@@ -1266,6 +1266,31 @@ fn apply_reversal(
 /// dies with the window — the reader's position in a session is not a fact about the deck. This
 /// answers what that id names so the button can be labelled, and refuses nothing: a `redo` that
 /// has stopped being redoable simply comes back `None`.
+/// The answer itself, over a connection the caller already holds.
+///
+/// **Lifted out of the wrapper on 2026-08-29 so `web::route` can reach it.** It was the one
+/// read in the deck cluster whose logic lived *inside* the `#[tauri::command]` rather than in
+/// a function the command called — three lookups and a filter — and a `match` arm that
+/// re-spelled it would have been a second copy of the redo rule to drift.
+pub fn undo_state(
+    conn: &Connection,
+    deck_id: i64,
+    redo_id: Option<i64>,
+) -> Result<DeckUndoState, String> {
+    let undo = match next_undo(conn, deck_id)? {
+        Some(id) => crate::deck_audit::by_id(conn, id)?,
+        None => None,
+    };
+    let redo = match redo_id {
+        Some(id) => match read_step(conn, id)? {
+            Some((_, true)) => crate::deck_audit::by_id(conn, id)?.filter(|e| e.deck_id == deck_id),
+            _ => None,
+        },
+        None => None,
+    };
+    Ok(DeckUndoState { undo, redo })
+}
+
 #[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_undo_state(
@@ -1275,21 +1300,7 @@ pub async fn deck_undo_state(
 ) -> Result<DeckUndoState, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let conn = crate::sync::lock_db_read(&state);
-        let undo = match next_undo(&conn, deck_id)? {
-            Some(id) => crate::deck_audit::by_id(&conn, id)?,
-            None => None,
-        };
-        let redo = match redo_id {
-            Some(id) => match read_step(&conn, id)? {
-                Some((_, true)) => {
-                    crate::deck_audit::by_id(&conn, id)?.filter(|e| e.deck_id == deck_id)
-                }
-                _ => None,
-            },
-            None => None,
-        };
-        Ok(DeckUndoState { undo, redo })
+        undo_state(&crate::sync::lock_db_read(&state), deck_id, redo_id)
     })
     .await
     .map_err(|e| format!("the deck's undo state could not be read: {e}"))?
