@@ -1790,7 +1790,6 @@ describe("pairing", () => {
 
   it("reads the relay with no arguments", async () => {
     invoke.mockResolvedValue({
-      relayUrl: "",
       paired: false,
       pending: 0,
       lastSyncAt: null,
@@ -1801,33 +1800,74 @@ describe("pairing", () => {
     const status = await ipc.syncRelayStatus();
 
     expect(invoke).toHaveBeenCalledWith("sync_relay_status");
-    // An empty address is what "sync is off" looks like, and it is what every installation
-    // answers until a reader types one. Never a null: the panel has a text field to fill.
-    expect(status.relayUrl).toBe("");
+    expect(status.pending).toBe(0);
   });
 
-  it("sends the relay address under `url`", async () => {
+  /**
+   * **`sync_relay_set_url` is gone, and this is the assertion that says so rather than a gap.**
+   * The relay became one hosted service whose address is compiled into the crate, so there is
+   * nothing for a reader to set — and a mirror that kept the method would leave `ipc.ts`
+   * offering a command `desktop.rs` no longer registers, which fails at the IPC boundary and
+   * nowhere a type-checker looks. `relayUrl` left the same way and for the same reason: what
+   * makes sync on or off is now an entitlement.
+   */
+  it("no longer offers a way to set a relay address", () => {
+    expect(ipc).not.toHaveProperty("syncRelaySetUrl");
+  });
+
+  it("begins a Patreon connection with no arguments, and opens nothing itself", async () => {
+    invoke.mockResolvedValue("https://www.patreon.com/oauth2/authorize?client_id=x&state=y");
+
+    const url = await ipc.syncPatreonBegin();
+
+    expect(invoke).toHaveBeenCalledWith("sync_patreon_begin");
+    // A string and not a side effect: the browser hop belongs to the `opener` plugin, which is
+    // TypeScript's, so a panel that merely *offers* to connect has visited nothing.
+    expect(url).toMatch(/^https:\/\//);
+  });
+
+  it("sends the claim code under `code`", async () => {
     invoke.mockResolvedValue({
-      relayUrl: "https://relay.example.workers.dev",
-      paired: true,
-      pending: 3,
-      lastSyncAt: 1_787_000_000,
-      lastError: null,
-      reviewCount: 0,
+      connected: true,
+      status: "active",
+      since: 1_756_000_000,
+      groupBound: true,
     });
 
-    await ipc.syncRelaySetUrl("https://relay.example.workers.dev");
+    const supporter = await ipc.syncPatreonClaim("PQRS-TVWX-YZ01");
 
-    expect(invoke).toHaveBeenCalledWith("sync_relay_set_url", {
-      url: "https://relay.example.workers.dev",
+    expect(invoke).toHaveBeenCalledWith("sync_patreon_claim", { code: "PQRS-TVWX-YZ01" });
+    expect(supporter.connected).toBe(true);
+  });
+
+  /**
+   * **Four fields, `camelCase`, and `groupBound` is the one worth an assertion of its own.**
+   * The Rust is `group_bound` under `#[serde(rename_all = "camelCase")]`, and it is the only
+   * signal separating *Membership ended* from *Not connected* — a lapse clears the refresh
+   * secret **and** the date, so `connected`, `status` and `since` all read exactly as they do on
+   * a device out of the box. A mirror that misspelled this one field would leave every lapsed
+   * reader told they had never connected, with nothing red anywhere.
+   */
+  it("reads the supporter status with no arguments, and names groupBound in camelCase", async () => {
+    invoke.mockResolvedValue({
+      connected: false,
+      status: "dead",
+      since: null,
+      groupBound: true,
     });
+
+    const supporter = await ipc.syncSupporterStatus();
+
+    expect(invoke).toHaveBeenCalledWith("sync_supporter_status");
+    expect(supporter.groupBound).toBe(true);
+    expect(supporter.since).toBeNull();
   });
 
   it("syncs now with no arguments, and null is not a failure", async () => {
     invoke.mockResolvedValue(null);
 
-    // `null` means there was nothing to do — no relay address, or no pairing group — which
-    // is the state every existing installation is in and is not an error.
+    // `null` means there was nothing to do — no connected membership, or no pairing group —
+    // which is the state every existing installation is in and is not an error.
     expect(await ipc.syncNow()).toBeNull();
     expect(invoke).toHaveBeenCalledWith("sync_now");
   });

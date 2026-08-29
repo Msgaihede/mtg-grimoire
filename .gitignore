@@ -47,6 +47,16 @@ ds-bundle/
 # (never pipe it), and one got committed by a `git add -A` before this rule existed.
 *.log
 
+# `wrangler`'s local working files under `relay/`, and the first of them is the one that matters.
+# `.dev.vars` is wrangler's documented home for local secrets, which is exactly where
+# `PATREON_CLIENT_SECRET` and `RELAY_HMAC_KEY` land the first time anyone runs `wrangler dev` —
+# and this repo is public. `.wrangler/` is its local state directory (a miniflare D1 among other
+# things); it already exists on disk. Both are ignored everywhere rather than only under
+# `relay/`, because the habit here is `git add -A` and a secret only has to slip once.
+.dev.vars
+.dev.vars.*
+.wrangler/
+
 # Build transcripts from `tauri android build`, redirected so they can be grepped.
 apk*.txt
 devlog*.txt

@@ -17,6 +17,12 @@ Two devices become one pairing group with no account, no server-side identity an
 and **a man-in-the-middle sitting where the relay will later sit cannot join, because both
 readers compare a six-digit code that only the true pair can produce.**
 
+**That is a claim about the pairing protocol, and the auth gate the relay gained on 2026-08-29
+leaves it standing.** Reaching the relay now takes a Patreon membership, and the relay holds one
+entitlement row per group; the ceremony below neither knows nor asks about either, and there is
+still no password and nothing to log into. Which account does what is settled in
+[the relay section](#the-relay-three-endpoints-behind-an-auth-gate).
+
 PR 6 carries both of the blobs that protocol produces **by hand**: the invite as a QR code or a
 typed code, and the sealed group key as a second blob. There is no network of any kind. Two
 windows side by side, or a phone photographing a laptop, complete a pairing with the app
@@ -63,6 +69,37 @@ is the one the other side is identified by:
 **Both are public by construction.** [The plan](../superpowers/plans/2026-08-28-sync-pairing.md)
 had `respond` and `complete` parsing for those prefixes while `accept` and `confirm` wrote
 neither; nine of sixteen pairing tests fail against it as written.
+
+**Inside A's seal the layout is `<group_id>\0<epoch>\0<refresh>\0<32-byte key>`, and the field
+order is load-bearing.** The id and the epoch travel with the key because a key with no epoch
+cannot be compared against a later rotation, and the refresh secret travels with them so that
+**the joining device never opens a browser and never sees Patreon** — one membership, one group,
+every device the reader owns. It is **empty when the sealing device holds no membership**, which
+is a pairing rather than a refusal: a reader may pair two devices and connect Patreon afterwards,
+in either order.
+
+**The key is last because it is the only field that can hold a zero byte of its own.** `complete`
+reads with `splitn(4)` and takes everything left over as the key, so a field appended *after* it
+would be swallowed by any group key containing a zero — `1 - (255/256)^32` ≈ **12%**, about one
+pairing in eight. The refresh secret is safe as a **middle** field for the reason A's device id is
+safe as the prefix: the relay mints it base64url, which carries no zero byte at all.
+
+**That failure was measured rather than reasoned about, and the shape of it is the part worth
+remembering.** The dangerous variant — both ends appending after the key — was run five times
+on **2026-08-29, debug**. The deliberate all-zero-key test failed on every run; the *other*
+failures moved around, **one, three, two, two, one**, a different randomly-keyed test each
+time. Without a fixture that pins a zero into the key, this ships as a flake nobody can
+reproduce.
+
+⚠️ **The blob carries no version field, so a version skew reads as a broken key.** The layout
+above replaced `<group_id>\0<epoch>\0<32-byte key>` and its `splitn(3)`, and the two are mutually
+unreadable **in both directions**: an old `confirm` hands a new `complete` three fields where it
+wants four, and a new `confirm` hands an old `complete` a third field that is `<refresh>\0<key>`
+and fails the 32-byte length check. Either way the reader is told **"That pairing key is
+unreadable."** — a sentence about the bytes, when the cause is that one of the two devices has
+not been updated. There is nowhere in an unversioned blob to say so, and adding a version byte now
+would not help the build that already shipped without one. **Known limitation: pair two devices on
+the same build.**
 
 ### The pending offer is in memory and never in SQLite
 
@@ -783,7 +820,7 @@ wire and against that cap; base64 is four thirds and URL-safe.
 
 ---
 
-## The relay: three endpoints, and no authentication
+## The relay: three endpoints behind an auth gate
 
 `relay/` is a Cloudflare Worker with one SQLite-backed Durable Object per pairing group.
 
@@ -793,21 +830,98 @@ wire and against that cap; base64 is four thirds and URL-safe.
 | `GET {relay}/g/{group}/pull?since={cursor}&device={id}` | | 200 with `{ envelopes, cursor }` |
 | `POST {relay}/g/{group}/ack` | `{ device, cursor }` | 204 — what compaction reads |
 
-**There is no authentication and that is the design.** The relay cannot decrypt anything it
-stores; the group key is minted during pairing and lives only on the paired devices. What guards
-a group is that its id is 128 random bits, and what guards its contents is the key the relay has
-never seen. A stranger who guessed a group id could read ciphertext or append rows no device can
-open.
+**Two relays are described in this section and telling them apart is the first thing to do.** The
+**baseline relay** is the three endpoints in the table above — push, pull, ack, no authentication
+— and it is deployed, driven and measured: "The first end-to-end pass" below is two real devices
+converging over it. The **hosted relay** is what
+[the hosted relay design](../superpowers/specs/2026-08-29-hosted-relay-and-patreon-design.md)
+adds on top: the auth gate, `/claim`, `/token`, the Patreon callback, the webhook and the D1
+entitlement table. **All of that is now written and none of it is deployed — and the two relays share one address.**
+`relay/src/index.ts` carries the auth gate, `claim.ts` and `patreon.ts` the OAuth hop and the
+webhook, `token.ts`, `entitlement.ts` and `md5.ts` the pure decisions the root vitest tests
+without workerd, and `wrangler.jsonc` a D1 binding and a daily cron. **What has not happened is
+`wrangler deploy`**, and `relay/schema.sql` is DDL nobody has applied. So `RELAY_BASE` still
+names the Worker that is running, which is the baseline one: the hosted design replaces the code
+behind that address rather than moving it, and a device pointed there today reaches something
+live that answers push, pull and ack and **404s `/claim` and `/token`**. **The rest of this
+section describes the hosted design in the present tense**, which is how this repository writes a
+design that is agreed and not yet a deployment; where a sentence is about what has actually run,
+it says so.
+
+**The relay cannot decrypt anything it stores**, and that is still the load-bearing fact. The
+group key is minted during pairing and lives only on the paired devices; what the relay holds is
+ciphertext, a cursor and a 128-bit group id it never learns the meaning of. That is what the
+encryption buys and the gate below does not: if the guard failed completely, a stranger with a
+group id would still find only ciphertext, and could only append rows no device can open.
+
+**Every one of the three carries `Authorization: Bearer <access>`, verified before the Durable
+Object hop.** ⚠️ **Corrected 2026-08-29**: this section used to say there was no authentication
+and that the 128 random bits were the whole guard. That was true while each reader deployed their
+own Worker and paid their own bill, and it stops being true the moment one deployment serves
+everyone — the guard now has to keep a stranger from spending *Markus's* quota, not only from
+reading ciphertext they cannot open. It does not have to keep them from reading the data, because
+the key already does that and the relay was never handed it. **That is why none of this needs an
+account with the relay**: the token answers only *may this request cost a Durable Object*, and
+the relay keeps no directory of readers — one entitlement row bound to one group id, and nothing
+that a reader logs into.
+
+`access` is `base64url(payload) "." base64url(HMAC-SHA256(payload, RELAY_HMAC_KEY))` over
+`{sub, grp, exp}`, minted by the relay with a 24-hour TTL. The Worker checks signature, expiry
+and `payload.grp` against the path segment with **zero storage reads**, so a junk request is
+refused in microseconds and **never bills a Durable Object request** — which is the line that
+actually costs money. What mints the token is a Patreon membership resolved server-side;
+[the hosted relay design](../superpowers/specs/2026-08-29-hosted-relay-and-patreon-design.md)
+holds the claim flow, the lapse rules and the secrets that must stay out of this repository —
+**three of them**. §9 listed four until 2026-08-29 and says three now; the correction below
+records why.
 
 Compaction, the 30-day tail and the pull ordering are pure functions in `relay/src/log.ts`,
 tested by the root vitest. **`since` orders by `(hlcMs, hlcCtr, device)` and not by arrival**, and
 **a device with no ack at all holds everything** — a group whose third device has never connected
 keeps its log rather than compacting away the state that device has not seen.
 
-**Nothing is deployed.** The source is committed and type-checks; no Cloudflare account, Worker,
-Durable Object namespace or API token was created by any agent. The URL a deploy produces goes in
-each reader's own `sync_state.relay_url`, through Settings, and **never in this repository**,
-which is public.
+**The baseline relay is deployed, and Markus deployed it.**
+[The baseline design](../superpowers/specs/2026-08-29-sync-baseline-design.md) §1 records a live
+pass on 2026-08-29 — a desktop holding 275 entries and a OnePlus 12 holding none, "both pointed
+at a deployed relay" — and "The first end-to-end pass" below is that same relay driven to
+convergence. ⚠️ **"Nothing is deployed" is history, corrected 2026-08-29**; it was contradicted
+twice inside this document before it was corrected here. **That is the only relay that has ever
+run.** It is the unauthenticated three-endpoint Worker, pointed at by hand through
+`sync_state.relay_url`; the hosted one above it has never been deployed and its Worker has not
+been written. **What has not changed is who created it: nothing on Cloudflare is provisioned by
+an agent.** When a resource is needed, Markus is asked and Markus creates it — no account,
+Worker, Durable Object namespace or API token in this project has ever been made by one.
+
+**And the address is in this repository.** ⚠️ **Also corrected 2026-08-29**: this said the URL
+a deploy produces goes in each reader's own `sync_state.relay_url`, through Settings, and
+**"never in this repository"**. It is one deployment Markus runs rather than one each reader
+stands up, so it is compiled in as `RELAY_BASE` and is public in exactly the way every
+application's API base URL is public — nothing follows from reading it out of the binary, because
+**every `/g/…` sync route refuses a request without a token the relay minted**. ⚠️ That sentence
+read "**every** endpoint", **corrected 2026-08-29**, and `relay/src/index.ts`'s `CLAIM_ROUTES` doc
+says so in the code: **none of the four entitlement routes is behind the bearer gate**, and none
+of them could be — three of the four exist precisely because the caller has no token yet. Each is
+guarded by something else instead: `/oauth/patreon/callback` by the authorization code Patreon's
+redirect carries, `/claim` by a single-use code that expires in ten minutes, `/token` by the
+refresh secret it is presenting, `/webhook/patreon` by its HMAC. **The hostname is real and is
+committed with Markus's approval** — it is the baseline relay the 2026-08-29 pass ran against.
+**What is not deployed at it is this design's Worker code**: no auth gate, no `/claim`, no
+`/token`, no callback, no webhook, no D1. A device pointed there today reaches a live relay that
+answers push, pull and ack and does not speak the endpoints the app now calls.
+**`PATREON_CLIENT_ID` is not the same case and is still a placeholder** — public on the same
+terms, and not yet settled. `sync_state.relay_url` stays a
+**test/dev override with no UI**: `sync_engine/client/tests.rs` stands a server on localhost for
+the length of one test and points the client at it, and deleting the key would delete those
+tests. What must never be committed are the **three** secrets the Worker holds —
+`PATREON_CLIENT_SECRET`, `PATREON_WEBHOOK_SECRET`, `RELAY_HMAC_KEY` — in
+[the hosted relay design](../superpowers/specs/2026-08-29-hosted-relay-and-patreon-design.md) §9,
+and not in a committed `.dev.vars` either — which is why `.dev.vars` and `.wrangler/` are both in
+`.gitignore`. ⚠️ **Three and not four, corrected 2026-08-29 — in §9 itself as well as here.**
+That table **listed** a `PATREON_CREATOR_TOKEN` for the reconciliation cron; **the Worker that
+was written has no consumer for one**, because the cron refreshes each subject against *their
+own* stored token rather than querying the campaign with a creator-wide credential. §9 says three
+now, and so does `relay/README.md`'s **Deploying** section — this paragraph is the record of that
+fix, not a pointer to a table that still disagrees with it.
 
 ---
 
@@ -823,14 +937,54 @@ with the reason in the body — for the PR that adds it. Three reasons, in order
 2. **A WebSocket from the page would need the CSP widened.** `tauri.conf.json` grants
    `connect-src 'self' ipc: http://ipc.localhost` and nothing else. Widening it is a decision to
    take once, for all three targets.
-3. **Polling is comfortably inside the free tier.** Pull on open, pull every 60 s while the window
-   has focus, push 2 s after the write mask goes quiet — `mirror::watch`'s own debounce. Eight
-   hours is 28 800 / 60 = 480 pulls per device per day; three devices sharing one group is
-   **1 440**, which is 1.4% of 100 000.
+3. **Nothing polls, so nothing is being spent.** ⚠️ **Corrected 2026-08-29, and the old figure
+   was wrong twice.** This read "polling is comfortably inside the free tier": pull on open, pull
+   every 60 s while the window has focus, push 2 s after the write mask goes quiet — eight hours
+   at 28 800 / 60 = 480 pulls per device, three devices to a group, **1 440/day, 1.4% of
+   100 000**. It counted **pulls alone**, when a round trip is **two or three HTTP requests** —
+   `pull` and `ack` both fire once the device is in a group, and `push` short-circuits at `Ok(0)`
+   with nothing pending (`client.rs:291`). And it modelled **a poll that does not exist.** There
+   is no `setInterval`, no `refetchInterval` and no Rust timer: `round_trip` has exactly two
+   production callers — `sync_now` at `sync_engine/commands.rs:208` through `run_once`, and the
+   revoke path at `sync_pair/pairing.rs:543` through `run_once_without_baselines` — and in the
+   frontend `ipc.syncNow()` is called from one place, the mutation behind the **Sync now** button
+   at `SyncPanel.tsx:483`. **Sync today is manual.** `client.rs`'s module doc describes the poll
+   too, and it is describing a design rather than shipped code.
 
-What is lost is latency: a change made on a phone shows on the desktop within a minute rather
-than instantly. What is kept is a core that still compiles to wasm and a CSP that still grants
-nothing.
+   Recomputed 2026-08-29 against Cloudflare limits verified live the same day. **Every relay
+   request bills twice** — one Worker invocation and one Durable Object request — except one the
+   auth gate refuses, which bills only the Worker. Per group of three devices, plus about **four**
+   token refreshes a day — a 24-hour token with a six-hour margin refreshes a little over once per
+   device per *day*, so the figure is per device and not per group. ⚠️ This said three;
+   **corrected 2026-08-29**, and spec §8 carries the same correction. The difference is inside the
+   rounding of every figure below:
+
+   | Cadence | Requests/day/group | Groups on **free** (100 000/day) | 1 000 groups, **paid** |
+   | --- | --- | --- | --- |
+   | **Manual — what ships today**, ~10 syncs/device | ~70 | **~1 400** | **~$5.20** |
+   | 5-minute poll | ~580 | ~170 | ~$9.60 |
+   | 60-second poll | ~2 900 | **~34** | ~$41 |
+
+   **The cadence is the entire cost model.** Data volume is irrelevant; a 5× change in the
+   interval is a 5× change in the bill, and the free plan's 100 000/day is a hard wall that
+   errors for every reader at once. That is why the scheduler is now a decision of its own rather
+   than a detail of whichever PR happens to touch the transport —
+   [the hosted relay design](../superpowers/specs/2026-08-29-hosted-relay-and-patreon-design.md)
+   §8 is the table to take it with.
+
+   **The plan decision, taken 2026-08-29: stay on the free tier and add a ceiling alarm**, rather
+   than buying the $5 plan ahead of the first patron. Spec §8 argued the other way and this is the
+   decision taken against it, for a reason the table above makes and the spec agrees with: **the
+   free ceiling is a cliff and not a slope.** Past 100 000 requests in a day it does not
+   degrade — every reader starts erroring at once, together, and the first anybody hears of it is
+   complaints. So the alarm notifies at roughly **70% of the daily cap**, which turns that cliff
+   into a warning with a day's room to move. At the manual cadence that ships today ~70 requests
+   per group per day is nowhere near it; the alarm is there for the poll, and for the afternoon a
+   reader base grows faster than anybody was watching.
+
+What is lost is latency, and more of it than this used to say: with no poll, a change made on a
+phone reaches the desktop when someone presses **Sync now**, not within a minute. What is kept is
+a core that still compiles to wasm and a CSP that still grants nothing.
 
 **One correction to the plan, and it is the difference between a stall and a loss.** The plan says
 an envelope that will not open must not advance the cursor past it. That is right for exactly one
@@ -854,7 +1008,7 @@ of the two ways it happens:
 | `needs_review TEXT` on `deck_folders`, `wishlist_folders`, `collection_folders` | §7.4's second surfaced outcome had nowhere to go |
 | `sync_ops` | the op log: `tbl`, `uid`, `kind`, `fields`, `counters`, `parents`, the stamp, `pushed_at` |
 | `sync_clock` | one row: the hybrid logical clock, **seeded** |
-| `sync_state` | key/value: `relay_url`, `pull_cursor`, `last_sync_at`, the `applying` guard |
+| `sync_state` | key/value: `pull_cursor`, `last_sync_at`, the `applying` guard, the entitlement tokens the hosted relay design §10 adds, and `relay_url` — which is **a test/dev override with no UI**, not something a reader types |
 | `sync_peers` | per-device watermarks — what makes a counter idempotent |
 | `error_log` rebuilt | `source` gains `'relay'`, which is a table rebuild because the vocabulary is inside a `CHECK` |
 | `sync_devices.baselined_at INTEGER` (v30) | when this peer was last handed a baseline. NULL is "never", which is the trigger. **`sync_peers` is deliberately not consulted** — see the pairing-baseline design §10 |
@@ -1012,8 +1166,14 @@ clang on `PATH`; on this machine that is `C:\Program Files\LLVM\bin`.
 both debug builds off `main` at the pairing-baseline merge, both driven over CDP — 9222 for the
 desktop's WebView2, 9333 forwarded to `webview_devtools_remote_<pid>` on the phone.
 
-**The relay is deployed and its address is not in this repository and never will be.** It lives
-in each device's own `sync_state.relay_url`, typed by the reader. Nothing here names it.
+**The relay was deployed for this pass and each device was pointed at it by hand**, through
+`sync_state.relay_url` typed by the reader — which is what the app offered on 2026-08-29 and is
+the only thing about this pass that has since changed. ⚠️ This paragraph said the address "is not
+in this repository and never will be"; **corrected 2026-08-29** — one deployment now serves every
+reader, its address is compiled in as `RELAY_BASE`, and it is public. See the relay section above
+for why that costs nothing, and
+[the hosted relay design](../superpowers/specs/2026-08-29-hosted-relay-and-patreon-design.md) §9
+for the secrets that are not — **three of them**, per the correction in the relay section above.
 
 ### What was broken, and what it reads now
 
@@ -1105,8 +1265,13 @@ test.
 
 ## What is still owed
 
-- **The WebSocket fan-out**, with the CSP decision that comes with it. Until then §7.7's request
-  figure is the polled 1 440 rather than the ~150 an edit-driven relay would spend.
+- **The WebSocket fan-out**, with the CSP decision that comes with it — and, ⚠️ **corrected
+  2026-08-29**, the poll it was meant to replace, which was never built either. This bullet said
+  "until then §7.7's request figure is the polled 1 440 rather than the ~150 an edit-driven relay
+  would spend". There is no poll: `round_trip` is reached only from the **Sync now** button and
+  from the revoke path, so the cadence that ships is manual and costs ~70 requests a day per
+  group. The 1 440 was a poll's figure and it counted pulls alone besides; the corrected table is
+  under "What is not built: the WebSocket" above.
 - **A third device's tombstone against a third device's edit.** Add-wins reads this device's own
   history and the incoming batch; two *other* devices' ops only meet if they arrive together. A
   tombstone table would close it and is not built.

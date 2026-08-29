@@ -34,7 +34,7 @@
  *    {@link installWorld}.
  */
 import { QueryClient } from "@tanstack/react-query";
-import { allHandlers, errorLogSeed, mirrorFailedPass } from "./db";
+import { allHandlers, applySupporterFault, errorLogSeed, mirrorFailedPass } from "./db";
 import type { FakeDb, Fault } from "./db";
 import { installCorpus } from "./images";
 import {
@@ -97,6 +97,7 @@ export interface InstallOptions {
  * to it — and a snapshot taken then would restore that instead of the app's own defaults.
  */
 const PRISTINE_STORE = useAppStore.getState();
+
 
 /** Wrappers this file put on a `queryFn`/`mutationFn`, so a second pass over an
  *  already-defaulted options object does not wrap one twice. */
@@ -219,6 +220,11 @@ export function installWorld(
   // pressed — and `mirror_rebuild` must still refuse, or pressing the button would clear an
   // error by succeeding into a folder that is not there.
   if (db.fault === "mirrorRootUnwritable") mirrorFailedPass(db);
+
+  // The two supporter states no press can reach — a card Patreon is retrying, and a pledge that
+  // has ended. Both write the world rather than branching in a handler, for the reason above:
+  // neither is a refusal, and the panel has to draw the state with nothing having been pressed.
+  applySupporterFault(db);
 
   const scope = createScope(allHandlers(db));
   activateScope(scope);

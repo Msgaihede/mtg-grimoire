@@ -104,6 +104,8 @@ export class Group implements DurableObject {
         return this.ack(request);
       case "ws":
         return this.ws();
+      case "drop":
+        return this.drop();
       default:
         return json({ error: "not found" }, 404);
     }
@@ -246,6 +248,20 @@ export class Group implements DurableObject {
    */
   private ws(): Response {
     return json({ error: "websocket fan-out is not implemented; use pull" }, 501);
+  }
+
+  /**
+   * Empty this group's log. Called only by the entitlement layer when a membership ends
+   * (spec §7.1) — **never by a device**, which is why it is not on the router's public
+   * `ROUTE` regex but on an internal path the Worker builds itself.
+   *
+   * `acks` is emptied too. Leaving it would mean a reader who resubscribes has a compaction
+   * floor derived from cursors into a log that no longer exists.
+   */
+  private drop(): Response {
+    this.sql.exec(`DELETE FROM log`);
+    this.sql.exec(`DELETE FROM acks`);
+    return new Response(null, { status: 204 });
   }
 
   private rows(): Row[] {

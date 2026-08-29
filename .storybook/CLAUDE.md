@@ -30,24 +30,36 @@ deliberately**: no screenshots are stored.
 - **Seeds and faults are state, not response stubs**: `parameters: { fake: { seed, fault } }`.
   **Seven** seeds
   (`empty`/`starter`/`needsReview`/`large`/`bracketMismatch`/`combosMissing`/`paired`),
-  **twenty** faults
+  **twenty-two** faults
   (`busy`/`syncing`/`syncError`/`imageFailures`/`gone`/`indexCold`/`deckMeta`/`updateAvailable`/
   `updateError`/`errorLog`/`feedFetchError`/`oracleTagsMissing`/`oracleTagsFetchError`/
   `artTagsMissing`/`artTagsFetchError`/`imageUrisMissing`/`exportWriteError`/
-  `mirrorRootUnwritable`/`combosFetchError`/`pairingReadError`); saying
+  `mirrorRootUnwritable`/`combosFetchError`/`pairingReadError`/`patreonDeclined`/
+  `patreonLapsed`); saying
   nothing gets `starter` with no fault. A
   fault is set on the _world_, so a story shows what the **app** does with a refusal rather than
   what one mocked call returns. **`syncing` is `busy`'s neighbour and reaches exactly one
   command**: `cache_clear` refuses outright while a card update is in flight, because
   `data/tmp/` is where the corpus download puts 77 MB the ingest then reads back — and it is
   checked *before* the write connection is asked for, which is why it is not `busy`.
-  **Four of the twenty are not failures at all** — `indexCold` is
+  **Six of the twenty-two are not failures at all** — `indexCold` is
   the search index mid-build; `oracleTagsMissing` is the Oracle tag taxonomy having never
   been ingested, which is every install's first launch and the state the type-line fallback
   exists for; `artTagsMissing` is the same thing one dataset over, where the honest floor is a
   Tags page that says it has nothing yet; and `imageUrisMissing` is a corpus whose
   `cards.image_uris` is NULL throughout, so
   `card_image_uri` answers `null` for every printing and "Copy card image" copies nothing.
+  **`patreonDeclined` and `patreonLapsed` are the other two, and they are the two supporter
+  states no press can reach.** Connecting *is* reachable — paste a claim code, press Connect — so
+  there is neither fault nor seed for it; what a reader can never produce from this window is
+  Patreon declining their card (§7.2's grace window, where sync keeps working) or their pledge
+  ending. **The lapsed one is written out in `db.ts` because it is easy to get subtly wrong**:
+  `entitlement::revoke` is `clear` plus one row, so a lapsed device has no refresh secret, no
+  access token and **no `since`** — every field but `groupBound` reads exactly as a device out of
+  the box, and a fault carrying a plausible date would let a panel keyed on that date pass. It
+  did, for one wave. Both are assignments onto the world through `applySupporterFault`, which is
+  `mirrorFailedPass`'s shape and exported for its reason: `makeDb({ fault })` cannot stand up a
+  fault that writes rows.
   **The two taxonomy pairs are separate faults because the datasets are two files on two
   schedules** — either can be missing, or failing, while the other is fine, and the Tags page has
   to stand in all four of those worlds.

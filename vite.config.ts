@@ -79,12 +79,17 @@ export default defineConfig({
     // testing a component, which lives under `src/`.
     // The third glob is the Cloudflare relay's pure logic, and it is a *third* glob rather
     // than a widening of the first because `src/**` is anchored at the repo root and does not
-    // reach `relay/src/`. Only `log.ts` is testable this way and that is by design: the
-    // Durable Object itself would need `@cloudflare/vitest-pool-workers`, which drags wrangler
-    // and workerd into a tree pinned to vitest 4.1.10, so the compaction, ordering and
-    // retention rules live in a pure module this suite already knows how to run. `relay/` is
-    // absent from `coverage.include` for the same reason `src-tauri/` is: it is not app code
-    // and would move a number that is about the app.
+    // reach `relay/src/`. **The rule is that every pure decision in `relay/` is testable this
+    // way and the I/O is not**, which is by design rather than a limit: the Durable Object and
+    // the fetch handlers would need `@cloudflare/vitest-pool-workers`, which drags wrangler and
+    // workerd into a tree pinned to vitest 4.1.10 - so compaction, ordering, retention, token
+    // minting, the entitlement decision, claim-code normalisation and the HMAC-MD5 a Patreon
+    // signature is checked against all live in pure modules this suite already knows how to run.
+    // This comment read "only `log.ts` is testable this way", which was true when `log.ts` was
+    // the only pure module here and had stopped being true every time another one landed. A rule
+    // does not drift the way that sentence did.
+    // `relay/` is absent from `coverage.include` for the same reason `src-tauri/` is: it is not
+    // app code and would move a number that is about the app.
     include: ["src/**/*.test.{ts,tsx}", ".storybook/**/*.test.ts", "relay/src/**/*.test.ts"],
     // Vitest stubs CSS imports as empty strings by default, which would hand
     // `iconFont.test.ts` an empty `mana.css?raw` to assert against. No *component* imports

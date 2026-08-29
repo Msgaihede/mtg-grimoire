@@ -3,7 +3,12 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { PairingStatus, RelayOutcome, RelayStatus } from "@/lib/ipc";
+import type {
+  PairingStatus,
+  RelayOutcome,
+  RelayStatus,
+  SupporterStatus,
+} from "@/lib/ipc";
 
 const syncPairingStatus = vi.hoisted(() => vi.fn());
 const syncPairingBegin = vi.hoisted(() => vi.fn());
@@ -15,7 +20,9 @@ const syncPairingCancel = vi.hoisted(() => vi.fn());
 const syncDeviceRename = vi.hoisted(() => vi.fn());
 const syncDeviceRevoke = vi.hoisted(() => vi.fn());
 const syncRelayStatus = vi.hoisted(() => vi.fn());
-const syncRelaySetUrl = vi.hoisted(() => vi.fn());
+const syncPatreonBegin = vi.hoisted(() => vi.fn());
+const syncPatreonClaim = vi.hoisted(() => vi.fn());
+const syncSupporterStatus = vi.hoisted(() => vi.fn());
 const syncNow = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
@@ -30,7 +37,9 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     syncDeviceRename,
     syncDeviceRevoke,
     syncRelayStatus,
-    syncRelaySetUrl,
+    syncPatreonBegin,
+    syncPatreonClaim,
+    syncSupporterStatus,
     syncNow,
   },
 }));
@@ -45,6 +54,8 @@ import {
   outcomeText,
   relayNote,
   relayState,
+  supporterNote,
+  supporterState,
 } from "./SyncPanel";
 
 const ME = "aa".repeat(16);
@@ -80,11 +91,11 @@ const PAIRED: PairingStatus = {
 };
 
 /**
- * The relay switched off, which is what every installation is in until a reader types an
- * address. Empty is the whole of what "off" is — there is no second flag.
+ * No group, nothing waiting, nothing ever synced — what a device that has done none of this
+ * answers. **It no longer says anything about whether sync is on**: that moved to
+ * {@link SupporterStatus} with the address field, so a fixture here cannot switch it either way.
  */
 const RELAY_OFF: RelayStatus = {
-  relayUrl: "",
   paired: false,
   pending: 0,
   lastSyncAt: null,
@@ -92,14 +103,61 @@ const RELAY_OFF: RelayStatus = {
   reviewCount: 0,
 };
 
-/** An address, a group, four changes waiting, and a failure still on the record. */
+/** A group, four changes waiting, and a failure still on the record. */
 const RELAY_ON: RelayStatus = {
-  relayUrl: "https://relay.example.workers.dev",
   paired: true,
   pending: 4,
   lastSyncAt: 1_700_000_000,
   lastError: "the relay answered 502 to a push",
   reviewCount: 0,
+};
+
+/** A device that has never connected a membership. **`groupBound: false` is the whole of what
+ *  tells this apart from a membership that has ended** — `since` is null in both, because
+ *  `entitlement::revoke` deletes the date along with the refresh secret. */
+const NOT_CONNECTED: SupporterStatus = {
+  connected: false,
+  status: "dead",
+  since: null,
+  groupBound: false,
+};
+
+/**
+ * A membership that has ended, in the shape `entitlement::revoke` actually leaves.
+ *
+ * **Three of its four fields are `NOT_CONNECTED`'s**, which is the whole point: the revoke
+ * clears the date along with the refresh secret, so `groupBound` is the only thing on this
+ * object that remembers the reader was ever a supporter.
+ */
+const REVOKED: SupporterStatus = {
+  connected: false,
+  status: "dead",
+  since: null,
+  groupBound: true,
+};
+
+/**
+ * A device that was paired to a connected one, before its first token refresh.
+ *
+ * `store_grant` and `store_status` are two calls and pairing makes only the first (§6.2), so
+ * this device holds a live refresh secret with **no status row at all** — which
+ * `entitlement::supporter_state` reads back as the default `"dead"`. Every field but `connected`
+ * therefore looks like a lapse, which is why it is written out rather than derived from one of
+ * the two above.
+ */
+const PAIRED_IN: SupporterStatus = {
+  connected: true,
+  status: "dead",
+  since: null,
+  groupBound: true,
+};
+
+/** Connected and paid up. */
+const SUPPORTING: SupporterStatus = {
+  connected: true,
+  status: "active",
+  since: 1_756_000_000,
+  groupBound: true,
 };
 
 /** What one round trip did. Zero everywhere the panel says nothing about. */
@@ -152,7 +210,9 @@ beforeEach(() => {
   syncDeviceRename.mockReset().mockResolvedValue(undefined);
   syncDeviceRevoke.mockReset().mockResolvedValue(undefined);
   syncRelayStatus.mockReset().mockResolvedValue(RELAY_OFF);
-  syncRelaySetUrl.mockReset().mockResolvedValue(RELAY_OFF);
+  syncPatreonBegin.mockReset().mockResolvedValue("https://patreon.example/oauth2/authorize");
+  syncPatreonClaim.mockReset().mockResolvedValue(SUPPORTING);
+  syncSupporterStatus.mockReset().mockResolvedValue(NOT_CONNECTED);
   syncNow.mockReset().mockResolvedValue(null);
 });
 
@@ -387,61 +447,24 @@ describe("SyncPanel", () => {
  */
 describe("the relay half", () => {
   /**
-   * An empty address is sync being **off**, and the panel has to say so.
+   * No membership is sync being **off**, and the panel has to say so.
    *
-   * A blank field with nothing beside it is unreadable in exactly the place it matters: a
-   * reader cannot tell "off" from "not loaded yet", and off is the state every installation
-   * is in.
+   * A block with nothing beside it is unreadable in exactly the place it matters: a reader
+   * cannot tell "off" from "not loaded yet", and off is the state every installation is in.
    */
-  it("says sync is off when there is no relay address", async () => {
+  it("says sync is off when no membership is connected", async () => {
     render(<SyncPanel />, { wrapper: unpaired });
 
     expect(await screen.findByText(/sync is off/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/relay address/i)).toHaveValue("");
-    // No dead control: `sync_now` over an empty address answers `null` rather than refusing,
-    // so the press would be harmless — and a button that can only ever report
+    // No dead control: `sync_now` with no entitlement answers `null` rather than refusing, so
+    // the press would be harmless — and a button that can only ever report
     // "there was nothing to do" is one a reader learns to distrust.
     expect(screen.queryByRole("button", { name: /sync now/i })).not.toBeInTheDocument();
   });
 
-  it("saves an address the reader types, and then shows what was stored", async () => {
-    const user = userEvent.setup();
-    syncRelaySetUrl.mockResolvedValue(RELAY_ON);
-    render(<SyncPanel />, { wrapper: unpaired });
-
-    const field = await screen.findByLabelText(/relay address/i);
-    await user.type(field, "https://relay.example.workers.dev/");
-    await user.click(screen.getByRole("button", { name: "Save" }));
-
-    await waitFor(() =>
-      expect(syncRelaySetUrl).toHaveBeenCalledWith("https://relay.example.workers.dev/"),
-    );
-    // The backend normalises, so the field goes back to showing what was *stored* rather than
-    // what was typed — the trailing slash is gone.
-    await waitFor(() =>
-      expect(screen.getByLabelText(/relay address/i)).toHaveValue(
-        "https://relay.example.workers.dev",
-      ),
-    );
-  });
-
-  /** A refusal is a sentence to show, never an error to swallow: the crate's own words say
-   *  what to do about it, and "invalid URL" would not. */
-  it("shows the crate's own sentence when an address is refused", async () => {
-    const user = userEvent.setup();
-    syncRelaySetUrl.mockRejectedValue(
-      "A relay address has to start with https:// (or http:// for one on this machine).",
-    );
-    render(<SyncPanel />, { wrapper: unpaired });
-
-    await user.type(await screen.findByLabelText(/relay address/i), "relay.example");
-    await user.click(screen.getByRole("button", { name: "Save" }));
-
-    expect(await screen.findByText(/has to start with https/i)).toBeInTheDocument();
-  });
-
   it("draws what is waiting and the failure still on the record", async () => {
     syncRelayStatus.mockResolvedValue(RELAY_ON);
+    syncSupporterStatus.mockResolvedValue(SUPPORTING);
     render(<SyncPanel />, { wrapper: unpaired });
 
     expect(await screen.findByText(/4 changes waiting to go/i)).toBeInTheDocument();
@@ -459,6 +482,7 @@ describe("the relay half", () => {
   it("reports a null answer as nothing to do rather than as a failure", async () => {
     const user = userEvent.setup();
     syncRelayStatus.mockResolvedValue({ ...RELAY_ON, paired: false, pending: 0 });
+    syncSupporterStatus.mockResolvedValue(SUPPORTING);
     syncNow.mockResolvedValue(null);
     render(<SyncPanel />, { wrapper: unpaired });
 
@@ -471,6 +495,7 @@ describe("the relay half", () => {
   it("reports what a round trip did, and points its two outcomes at the queue", async () => {
     const user = userEvent.setup();
     syncRelayStatus.mockResolvedValue(RELAY_ON);
+    syncSupporterStatus.mockResolvedValue(SUPPORTING);
     syncNow.mockResolvedValue({ ...OUTCOME, resurrected: 1, cyclesBroken: 2 });
     render(<SyncPanel />, { wrapper: unpaired });
 
@@ -485,6 +510,7 @@ describe("the relay half", () => {
   it("says a refused sync lost nothing", async () => {
     const user = userEvent.setup();
     syncRelayStatus.mockResolvedValue(RELAY_ON);
+    syncSupporterStatus.mockResolvedValue(SUPPORTING);
     syncNow.mockRejectedValue("The database is busy right now.");
     render(<SyncPanel />, { wrapper: unpaired });
 
@@ -496,33 +522,270 @@ describe("the relay half", () => {
 });
 
 /**
+ * The supporter half — the block that replaced the address field.
+ *
+ * **Three sentences, and the whole value of this describe is that they cannot be swapped.** A
+ * reader who never connected, one whose pledge ended, and one whose card was declined are three
+ * states the relay deliberately separates, and each has a different fix: a button, a renewal, and
+ * nothing at all. Every test below asserts one sentence is present *and* another is absent,
+ * because a panel that drew a single generic line would satisfy any one of them alone.
+ */
+describe("the supporter half", () => {
+  it("offers Connect Patreon when nothing is connected", async () => {
+    syncSupporterStatus.mockResolvedValue({
+      connected: false, status: "dead", since: null, groupBound: false,
+    });
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    expect(await screen.findByRole("button", { name: /connect patreon/i })).toBeInTheDocument();
+    // ...and it says *Not connected*, which is the sentence a lapsed reader must never see.
+    expect(screen.getByText(/not connected/i)).toBeInTheDocument();
+    expect(screen.queryByText(/membership ended/i)).not.toBeInTheDocument();
+  });
+
+  it("says the membership ended without saying sync is broken", async () => {
+    // Spec 10: a lapse is a state, not a failure. "Could not reach the relay" points a reader
+    // at their network when the fix is their pledge.
+    syncSupporterStatus.mockResolvedValue({
+      connected: false, status: "dead", since: null, groupBound: true,
+    });
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    expect(await screen.findByText(/membership ended/i)).toBeInTheDocument();
+    expect(screen.queryByText(/could not|failed|error/i)).not.toBeInTheDocument();
+  });
+
+  it("tells a lapsed reader their own data is untouched", async () => {
+    // The one sentence that stops a lapse reading as data loss.
+    syncSupporterStatus.mockResolvedValue({
+      connected: false, status: "dead", since: null, groupBound: true,
+    });
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    expect(await screen.findByText(/stays on this device|nothing has been deleted/i))
+      .toBeInTheDocument();
+  });
+
+  /** The reassurance belongs to the lapse and to nothing else: drawn under *Not connected* it
+   *  would be an answer to a question a first-run reader has not asked. */
+  it("does not offer that reassurance to a reader who never connected", async () => {
+    syncSupporterStatus.mockResolvedValue({
+      connected: false, status: "dead", since: null, groupBound: false,
+    });
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    await screen.findByRole("button", { name: /connect patreon/i });
+    expect(screen.queryByText(/stays on this device|nothing has been deleted/i)).toBeNull();
+  });
+
+  /**
+   * **The other sentence with a placement rule, and it had none of these.**
+   *
+   * Connecting founds a group of one (§6.3's `ensure_group`) and `pairing::complete` refuses a
+   * differing `group_id`, so a reader who connects on their phone can never afterwards *join*
+   * their desktop's group — and this panel has no Leave to undo it. `CONNECT_ORDER` is drawn
+   * inside the `offering` block for that reason: it belongs to the press that causes the trap.
+   *
+   * **Asserted both ways, exactly as `LAPSE_REASSURANCE` above is**, because the placement is the
+   * whole claim. Moving the paragraph one level out — up beside `supporterNote`, where it would
+   * also greet a paid-up supporter — leaves every other test in this file green.
+   */
+  it("tells a first-run reader which device to connect on", async () => {
+    syncSupporterStatus.mockResolvedValue({
+      connected: false, status: "dead", since: null, groupBound: false,
+    });
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    expect(await screen.findByText(/pair this one to them first/i)).toBeInTheDocument();
+  });
+
+  it("says it to a lapsed reader too, who is offered the same press", async () => {
+    // `ended` is the second state with a Connect button on it, and reconnecting on the wrong
+    // device strands them the same way a first connect would.
+    syncSupporterStatus.mockResolvedValue({
+      connected: false, status: "dead", since: null, groupBound: true,
+    });
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    expect(await screen.findByText(/pair this one to them first/i)).toBeInTheDocument();
+  });
+
+  it("stops saying it once a membership is connected", async () => {
+    // The advice is about a press that is no longer on screen. Left drawn, it reads as an
+    // instruction to a reader with nothing left to do about it.
+    syncSupporterStatus.mockResolvedValue({
+      connected: true, status: "active", since: 1_756_000_000, groupBound: true,
+    });
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    await screen.findByText(/supporting since/i);
+    expect(screen.queryByText(/pair this one to them first/i)).toBeNull();
+  });
+
+  /**
+   * **Device B, which never opens a browser** (§6.2) — and whose three fields read as a lapse.
+   *
+   * A phone paired to a paid-up desktop is handed the refresh secret and nothing else, so it
+   * holds a live grant with no status row and no date. It is supporting; it has simply not been
+   * told when since. Drawing an ending here would tell that reader their membership stopped at
+   * the moment it started working, and the fields cannot tell you otherwise — only `connected`
+   * can.
+   */
+  it("draws a just-paired device as supporting rather than as a lapse", async () => {
+    syncSupporterStatus.mockResolvedValue({
+      connected: true, status: "dead", since: null, groupBound: true,
+    });
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    expect(await screen.findByText(/supporting/i)).toBeInTheDocument();
+    expect(screen.queryByText(/membership ended/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/not connected/i)).not.toBeInTheDocument();
+    // ...and it can sync, which is the whole of what pairing carried the secret across for.
+    expect(screen.getByRole("button", { name: /sync now/i })).toBeInTheDocument();
+  });
+
+  it("sends a pasted claim code and shows the connected state", async () => {
+    syncSupporterStatus.mockResolvedValue({
+      connected: false, status: "dead", since: null, groupBound: false,
+    });
+    syncPatreonClaim.mockResolvedValue({
+      connected: true, status: "active", since: 1_756_000_000, groupBound: true,
+    });
+    render(<SyncPanel />, { wrapper: unpaired });
+    const field = await screen.findByLabelText(/claim code/i);
+
+    await userEvent.type(field, "ABCD-EFGH-JKMN");
+    await userEvent.click(screen.getByRole("button", { name: /^connect$/i }));
+
+    await waitFor(() => expect(syncPatreonClaim).toHaveBeenCalledWith("ABCD-EFGH-JKMN"));
+    // The answer is the new state, so the block changes without a second read.
+    expect(await screen.findByText(/supporting since/i)).toBeInTheDocument();
+  });
+
+  /**
+   * **`aria-disabled` is a claim to a screen reader; the handler is the fence.** This is the
+   * pairing half's *Codes match* assertion one section down, and it survived a mutation that
+   * removed the guard: a press on an empty field would otherwise spend a claim on an empty
+   * string, and the far end's code is one-time.
+   *
+   * The trim is the other half of the same press. A code arrives on the clipboard from a web
+   * page, which is where a trailing space comes from, and a code that fails because of one is
+   * a reader who has to go back to Patreon for a second one.
+   */
+  it("sends nothing for an empty field, and trims what it does send", async () => {
+    syncSupporterStatus.mockResolvedValue(NOT_CONNECTED);
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    const field = await screen.findByLabelText(/claim code/i);
+    const connect = screen.getByRole("button", { name: /^connect$/i });
+    expect(connect).toHaveAttribute("aria-disabled", "true");
+
+    await userEvent.click(connect);
+    expect(syncPatreonClaim).not.toHaveBeenCalled();
+
+    await userEvent.type(field, "  PQRS-TVWX-YZ01  ");
+    await userEvent.click(connect);
+    await waitFor(() => expect(syncPatreonClaim).toHaveBeenCalledWith("PQRS-TVWX-YZ01"));
+  });
+
+  it("says a card was declined without saying the membership ended", async () => {
+    syncSupporterStatus.mockResolvedValue({
+      connected: true, status: "grace", since: 1_756_000_000, groupBound: true,
+    });
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    expect(await screen.findByText(/payment/i)).toBeInTheDocument();
+    expect(screen.queryByText(/membership ended/i)).not.toBeInTheDocument();
+  });
+
+  /** A declined card still mints tokens (spec 7.2), so the press that makes a round trip has to
+   *  stay on screen — hiding it would be the punishment the grace window exists to avoid. */
+  it("keeps sync working through a declined card", async () => {
+    syncRelayStatus.mockResolvedValue(RELAY_ON);
+    syncSupporterStatus.mockResolvedValue({
+      connected: true, status: "grace", since: 1_756_000_000, groupBound: true,
+    });
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    expect(await screen.findByRole("button", { name: /sync now/i })).toBeInTheDocument();
+  });
+});
+
+/**
+ * Four states, and the pair that share every field but one.
+ *
+ * `groupBound` is the whole of what tells *never connected* from *membership ended* — both are
+ * `connected: false, status: "dead"`, and both are `since: null`, because `entitlement::revoke`
+ * deletes the date with the secret. So it is asserted here rather than only through a render.
+ */
+describe("supporterState", () => {
+  it("tells a reader who never connected from one whose membership ended", () => {
+    expect(supporterState(null)).toBe("unknown");
+    expect(supporterState(NOT_CONNECTED)).toBe("never");
+    expect(supporterState(REVOKED)).toBe("ended");
+    expect(supporterState(SUPPORTING)).toBe("active");
+    expect(supporterState({ ...SUPPORTING, status: "grace" })).toBe("grace");
+    // **A `dead` status on a *connected* device is device B, not a lapse.** Pairing carries the
+    // refresh secret across with no status row beside it (§6.2), and `supporter_state` defaults
+    // an absent row to `"dead"` — so a phone paired to a paid-up desktop lands exactly here, and
+    // drawing it as an ending would tell that reader their membership stopped the moment it
+    // started working.
+    expect(supporterState(PAIRED_IN)).toBe("active");
+  });
+
+  /**
+   * **`groupBound` is the discriminator and `since` is not, and only a fixture that disagrees
+   * with itself can say so.** Every other lapsed fixture in this file carries both fields set,
+   * which is what a *live* membership leaves behind — so either field would satisfy them and
+   * the assertion would be about nothing. `entitlement::revoke` clears the date with the
+   * secret, so the shape a real lapse produces is `REVOKED`: dead, unbound-looking, and only
+   * `groupBound` remembering the reader was ever here.
+   */
+  it("reads a lapse off groupBound, not off since", () => {
+    // The shape the crate actually stores after a revoke — no date at all.
+    expect(supporterState({ ...NOT_CONNECTED, groupBound: true })).toBe("ended");
+    // ...and the mirror image: a date with nothing bound behind it is still nobody.
+    expect(supporterState({ ...NOT_CONNECTED, since: 1_756_000_000 })).toBe("never");
+  });
+
+  it("says nothing at all while the read is in flight", () => {
+    expect(supporterNote("unknown", null)).toBeNull();
+  });
+});
+
+/**
  * The ordering is the whole content of this state machine, so it is asserted directly rather
  * than through seven renders.
  */
 describe("relayState", () => {
   it("puts off first, then a trip in flight, then a failure before never", () => {
-    expect(relayState(null, false, false)).toBe("unknown");
-    // Off outranks a stale failure: the address that error was about has been cleared.
-    expect(relayState({ ...RELAY_ON, relayUrl: "" }, false, true)).toBe("off");
-    expect(relayState(RELAY_ON, true, true)).toBe("syncing");
-    expect(relayState(RELAY_ON, false, true)).toBe("failed");
-    expect(relayState({ ...RELAY_ON, paired: false }, false, false)).toBe("unpaired");
-    expect(relayState({ ...RELAY_ON, lastSyncAt: null }, false, false)).toBe("never");
-    expect(relayState(RELAY_ON, false, false)).toBe("synced");
+    expect(relayState(null, "active", false, false)).toBe("unknown");
+    // A membership still being read is unknown too, and not an "off" in disguise.
+    expect(relayState(RELAY_ON, "unknown", false, false)).toBe("unknown");
+    // Off outranks a stale failure: whatever that error was about, nothing can run now.
+    expect(relayState(RELAY_ON, "never", false, true)).toBe("off");
+    expect(relayState(RELAY_ON, "ended", false, true)).toBe("off");
+    expect(relayState(RELAY_ON, "active", true, true)).toBe("syncing");
+    expect(relayState(RELAY_ON, "active", false, true)).toBe("failed");
+    expect(relayState({ ...RELAY_ON, paired: false }, "active", false, false)).toBe("unpaired");
+    expect(relayState({ ...RELAY_ON, lastSyncAt: null }, "active", false, false)).toBe("never");
+    expect(relayState(RELAY_ON, "active", false, false)).toBe("synced");
+    // A declined card is not off: tokens are still minted, so the panel still draws a trip.
+    expect(relayState(RELAY_ON, "grace", false, false)).toBe("synced");
     // **The two cases the plan names, and the only ones that pin the order rather than the
     // arms.** Every assertion above is true of more than one ordering, because each fixture
     // reaches exactly one arm; these two reach `failed` *and* a later arm at once. A press that
     // failed on a device that has never finished a trip has to say so, because "we tried and it
     // did not work" is a different sentence from "nobody has tried" - and one on a device with
     // no group has to say so too, for the same reason one rung along.
-    expect(relayState({ ...RELAY_ON, lastSyncAt: null }, false, true)).toBe("failed");
-    expect(relayState({ ...RELAY_ON, paired: false }, false, true)).toBe("failed");
+    expect(relayState({ ...RELAY_ON, lastSyncAt: null }, "active", false, true)).toBe("failed");
+    expect(relayState({ ...RELAY_ON, paired: false }, "active", false, true)).toBe("failed");
   });
 
   /** `lastError` is a record and survives a later success, so it must never drive the state —
    *  a panel that read its state off it would say "failed" forever. */
   it("does not read failed off the stored error", () => {
-    expect(relayState(RELAY_ON, false, false)).toBe("synced");
+    expect(relayState(RELAY_ON, "active", false, false)).toBe("synced");
     expect(relayNote("synced", RELAY_ON, 1_700_000_060)).toBe("Last synced 1 minute ago.");
   });
 
@@ -536,7 +799,11 @@ describe("outcomeText", () => {
   /** Not a failure, and the sentence has to say what is missing rather than what went wrong. */
   it("explains a null answer instead of reporting an error", () => {
     expect(outcomeText(null)).toMatch(/nothing to sync/i);
-    expect(outcomeText(null)).toMatch(/relay address and a paired device/i);
+    // The two things it needs, and neither of them is an address any more: a reader who is told
+    // to type one has been sent after a field this build does not have.
+    expect(outcomeText(null)).toMatch(/membership/i);
+    expect(outcomeText(null)).toMatch(/paired device/i);
+    expect(outcomeText(null)).not.toMatch(/relay address/i);
   });
 
   it("names only the clauses that are true of this trip", () => {

@@ -17,9 +17,13 @@
      three programs are checked by `npm run verify` and none of them can see the others'
      ambient types.
 
-     `relay/src/log.test.ts` is deliberately inside this program rather than outside it. It is
-     the only file in `relay/` that the vitest suite runs, and a test that does not type-check
-     is a test that can drift from the function it is asserting about. */
+     `relay/`'s `*.test.ts` files are deliberately inside this program rather than outside it: a
+     test that does not type-check is a test that can drift from the function it is asserting
+     about. This read "`relay/src/log.test.ts` … is the only file in `relay/` that the vitest
+     suite runs", which was true when `log.ts` was the only pure module here and is not now — the
+     root vitest also runs `claim`, `entitlement`, `md5`, `patreon` and `token`'s tests. Rather
+     than keep a count in a comment, take the rule: **every pure decision in `relay/` is tested by
+     the root vitest, and every one of those tests type-checks here.** */
   "compilerOptions": {
     "target": "ES2022",
     /* No `DOM`: this is not a browser. `@cloudflare/workers-types` supplies the fetch, stream

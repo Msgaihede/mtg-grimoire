@@ -11,6 +11,7 @@ import {
   ART_TAGGED_PRINTINGS,
   ORACLE_TAGGED_NAMES,
   allHandlers,
+  applySupporterFault,
   artTagIllustrations,
   makeDb,
   mirrorFailedPass,
@@ -5567,7 +5568,15 @@ describe("the busy fault", () => {
     // `writeHandlers` here, which is the opposite call from `sync_pairing_status` one feature
     // over and for the opposite reason: that command's crate-side write has no counterpart in
     // this fake, and these two's refusal does.
-    expect(names).toHaveLength(85);
+    // The hosted relay then moved it by **two**, 85 -> 87, which is three added and one gone
+    // rather than a feature's handler count: `sync_relay_set_url` left with the address field
+    // the panel typed into, and `sync_supporter_status`, `sync_patreon_begin` and
+    // `sync_patreon_claim` arrived. **All three are here and none of them joined `unlocked`**,
+    // and for once that is the crate's own words rather than an inference — every one takes
+    // `sync::with_write`, and `sync_supporter_status`'s doc says why a *read* does: so that it
+    // cannot answer from beside the claim that has just written, which is the read the panel
+    // makes next. This is the fourth entry here whose delta and whose handler count differ.
+    expect(names).toHaveLength(87);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -5575,6 +5584,160 @@ describe("the busy fault", () => {
     }
     // Reads answer through every second of a sync, because they take `db_read`.
     expect(readHandlers(db).collection_list({ query: { limit: 10, offset: 0 } }).total).toBe(1);
+  });
+});
+
+/**
+ * The membership block — the three commands that replaced the relay-address field.
+ *
+ * **The whole value of this describe is that four states which share most of their fields cannot
+ * be folded into one another.** A device out of the box and a device whose pledge ended differ in
+ * exactly one boolean; a device paired *into* a group differs from a lapse in exactly one other.
+ * Every assertion here is chosen so that collapsing any pair would go red.
+ */
+describe("the membership", () => {
+  const lapsed = () => {
+    const db = makeDb({ fault: "patreonLapsed" });
+    applySupporterFault(db);
+    return db;
+  };
+  const declined = () => {
+    const db = makeDb({ fault: "patreonDeclined" });
+    applySupporterFault(db);
+    return db;
+  };
+
+  it("opens not connected, which is what every install answers", () => {
+    expect(writeHandlers(makeDb()).sync_supporter_status()).toEqual({
+      connected: false,
+      status: "dead",
+      since: null,
+      groupBound: false,
+    });
+  });
+
+  /**
+   * **The shape `entitlement::revoke` actually leaves, asserted field by field.** `revoke` is
+   * `clear` plus one row, so it deletes the refresh secret *and* the date: three of these four
+   * fields are byte-identical to a device out of the box, and `groupBound` is the only thing
+   * that remembers. A fault that seeded a plausible `since` here would let a panel keyed on the
+   * date pass — which is not hypothetical, it is the bug this fault was written after.
+   */
+  it("leaves a lapse looking exactly like a fresh device but for groupBound", () => {
+    const status = writeHandlers(lapsed()).sync_supporter_status();
+
+    expect(status).toEqual({
+      connected: false,
+      status: "dead",
+      since: null,
+      groupBound: true,
+    });
+    // Said again as a difference rather than as a value, because the value is what rots: this is
+    // the assertion that fails if the fault is ever given a date "so the story reads better".
+    expect(status.since).toBeNull();
+  });
+
+  /** §7.2: a declined card is a state, not an ending — still connected, still dated, and the
+   *  one supporter state where sync is expected to keep working. */
+  it("keeps a declined card connected and dated", () => {
+    expect(writeHandlers(declined()).sync_supporter_status()).toMatchObject({
+      connected: true,
+      status: "grace",
+      groupBound: true,
+    });
+    expect(writeHandlers(declined()).sync_supporter_status().since).not.toBeNull();
+  });
+
+  it("answers a URL for Connect Patreon and opens nothing", () => {
+    expect(writeHandlers(makeDb()).sync_patreon_begin()).toMatch(/^https:\/\/www\.patreon\.com\//);
+  });
+
+  it("refuses a malformed claim code in the crate's own words", () => {
+    expect(() => writeHandlers(makeDb()).sync_patreon_claim({ code: "ABCD" })).toThrow(
+      /refused that claim code/i,
+    );
+  });
+
+  it("connects on a well-shaped code, and lower case is the reader's to get wrong", () => {
+    const db = makeDb();
+
+    expect(writeHandlers(db).sync_patreon_claim({ code: " pqrs-tvwx-yz01 " })).toMatchObject({
+      connected: true,
+      status: "active",
+      groupBound: true,
+    });
+  });
+
+  /** One-time at the far end, so the second press is the same refusal the first would have got
+   *  a minute later. A fake that accepted it would teach a story a code can be reused. */
+  it("refuses a second claim, because the relay has spent the code", () => {
+    const db = makeDb();
+    writeHandlers(db).sync_patreon_claim({ code: "PQRS-TVWX-YZ01" });
+
+    expect(() => writeHandlers(db).sync_patreon_claim({ code: "PQRS-TVWX-YZ01" })).toThrow(
+      /refused that claim code/i,
+    );
+  });
+
+  /**
+   * **Spec §6.3, and it is the reason the panel's *unpaired* sentence is not what a new
+   * supporter sees.** `ensure_group` runs before the request that has to name a group, so a
+   * claim on a device in no group founds one of one — which makes `RelayStatus.paired` true.
+   */
+  it("founds a group of one when the device is in none", () => {
+    const db = makeDb();
+    expect(readHandlers(db).sync_pairing_status().groupId).toBeNull();
+
+    writeHandlers(db).sync_patreon_claim({ code: "PQRS-TVWX-YZ01" });
+
+    expect(readHandlers(db).sync_pairing_status().groupId).not.toBeNull();
+    expect(writeHandlers(db).sync_relay_status().paired).toBe(true);
+  });
+
+  /** ...and it leaves a group that already exists alone, or a claim on a paired device would
+   *  throw the roster away — which is the one thing spec §6.3 has to not do. */
+  it("leaves an existing group alone", () => {
+    const db = seed("paired");
+    const before = readHandlers(db).sync_pairing_status();
+
+    writeHandlers(db).sync_patreon_claim({ code: "PQRS-TVWX-YZ01" });
+
+    const after = readHandlers(db).sync_pairing_status();
+    expect(after.groupId).toBe(before.groupId);
+    expect(after.devices).toHaveLength(before.devices.length);
+  });
+
+  /**
+   * **What replaced the empty address as "sync is off".** `sync_now` answered `null` for an
+   * unset URL; it answers `null` for no grant now, and the panel's "there was nothing to sync"
+   * sentence is drawn from exactly this.
+   */
+  it("has nothing to sync until a membership is connected", () => {
+    const db = seed("paired");
+    expect(writeHandlers(db).sync_now()).toBeNull();
+
+    writeHandlers(db).sync_patreon_claim({ code: "PQRS-TVWX-YZ01" });
+
+    expect(writeHandlers(db).sync_now()).toMatchObject({ pushed: 3 });
+  });
+
+  /** A declined card still mints tokens, so the trip still runs — the half of §7.2 that is
+   *  about behaviour rather than about a sentence. */
+  it("still syncs through a declined card", () => {
+    const db = seed("paired");
+    db.fault = "patreonDeclined";
+    applySupporterFault(db);
+
+    expect(writeHandlers(db).sync_now()).toMatchObject({ pushed: 3 });
+  });
+
+  /** ...and a lapse stops it, which is the same fact from the other side. */
+  it("stops syncing once the membership has ended", () => {
+    const db = seed("paired");
+    db.fault = "patreonLapsed";
+    applySupporterFault(db);
+
+    expect(writeHandlers(db).sync_now()).toBeNull();
   });
 });
 

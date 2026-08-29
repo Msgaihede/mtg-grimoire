@@ -21,9 +21,11 @@ const meta = {
     docs: {
       description: {
         component:
-          "Pairing two devices into one group, with no account, no password and — in this " +
-          "PR — no network at all. One device shows a code, the other reads it, and both then " +
-          "show the same six digits for the reader to compare.\n\n" +
+          "Two halves. **Devices** pairs two of them into one group with no account and no " +
+          "password: one device shows a code, the other reads it, and both then show the " +
+          "same six digits for the reader to compare. **Membership** is what pays for the " +
+          "server those devices hand changes through — a Patreon connection, a claim code " +
+          "pasted back, and one status line.\n\n" +
           "**The six digits are the whole security argument** (spec §7.5 step 3), and the " +
           "panel is built so that neither side can move past them without saying so: the " +
           "offering device's *Codes match* button carries `aria-disabled` until the digits " +
@@ -35,7 +37,11 @@ const meta = {
           "draws a QR-shaped picture rather than a readable code — see `FakePairing` in " +
           "`.storybook/fake/db.ts`. What is real is everything a panel is drawn against: the " +
           "two blobs carried by hand, the one number both readers compare, the roster that " +
-          "keeps a removed device on it, and every refusal in the crate's own words.",
+          "keeps a removed device on it, and every refusal in the crate's own words.\n\n" +
+          "**Nor is there a Patreon.** The fake mints a claim code's answer rather than " +
+          "exchanging one, so what these stories hold still is the thing that matters here: " +
+          "that *not connected*, *payment problem* and *membership ended* are three " +
+          "different sentences, and that only one of them takes sync away.",
       },
     },
   },
@@ -333,90 +339,195 @@ export const RemovingSaysWhatItCannotDo: Story = {
     await expect(canvas.getAllByText(/^removed$/i)).toHaveLength(2);
   },
 };
-/* ------------------------------------------------------------------ the relay ---------- */
+/* -------------------------------------------------------------- the membership ---------- */
 
 /**
- * The relay half, switched off — **which is what every installation opens on.**
+ * The claim code the relay's landing page shows, in the shape it shows it.
  *
- * An empty address is not a form waiting to be filled in, it is sync being off, and the panel
- * says so in words. A blank box with nothing beside it is unreadable in exactly the place it
- * matters: a reader cannot tell "off" from "not loaded yet".
+ * Crockford base32 with a positional checksum, reusing `sync_pair::invite`'s alphabet — which
+ * omits `I`, `L`, `O` and `U` precisely because this string is copied between two screens by a
+ * person. Twelve characters in three groups is short enough to type and long enough to be
+ * one-time; the ten-minute expiry at the far end does the rest.
+ */
+const A_CLAIM_CODE = "PQRS-TVWX-YZ01";
+
+/**
+ * Nothing connected — **which is what every installation opens on.**
  *
- * There is no *Sync now* either. `sync_now` over an empty address answers `null` rather than
+ * Two presses and one field: open Patreon, then paste back what its landing page gives you.
+ * *Not connected* is a state and not a fault, so it is said plainly and the reassurance a lapse
+ * gets is deliberately absent — a reader who has never connected has lost nothing, and telling
+ * them their collection is safe teaches them there is something to worry about.
+ *
+ * There is no *Sync now* either. `sync_now` with no entitlement answers `null` rather than
  * refusing, so the press would be harmless — and a control that can only ever report
  * "there was nothing to do" is one a reader learns to distrust.
  */
-export const RelayOff: Story = {
+export const NotConnected: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
-    await expect(await canvas.findByText(/sync is off/i)).toBeInTheDocument();
-    await expect(canvas.getByLabelText(/relay address/i)).toHaveValue("");
+    await expect(await canvas.findByText(/not connected/i)).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: /connect patreon/i })).toBeInTheDocument();
+    await expect(canvas.getByLabelText(/claim code/i)).toHaveValue("");
+    await expect(canvas.getByText(/sync is off/i)).toBeInTheDocument();
     await expect(canvas.queryByRole("button", { name: /sync now/i })).not.toBeInTheDocument();
+    // The lapse copy belongs to a lapse. This reader has not had one.
+    await expect(canvas.queryByText(/stays on this device/i)).not.toBeInTheDocument();
+    // **The one warning that does belong here**, because it is about the press below it:
+    // connecting founds a group of one, and a device in a group can never join another.
+    await expect(canvas.getByText(/pair this one to them first/i)).toBeInTheDocument();
   },
 };
 
 /**
- * An address with no scheme on it, refused in the crate's own words.
+ * The claim, pasted back — and the membership it switches on.
  *
- * **This refusal is reachable from a keyboard, which is why it is not a fault.** Pasting a
- * hostname without its `https://` is the commonest thing that goes wrong here, and the sentence
- * has to say *that* rather than "invalid URL" — a different sentence pointing at a
- * different fix.
+ * **The code is the whole of the hop back into the app.** Patreon's consent and the token
+ * exchange both happen where the `client_secret` can live, which is the relay; what returns to
+ * the reader is twelve characters on a page, and pasting them is the only step this window owns.
+ *
+ * Once it lands the block says *Supporting since …* with a date rather than "3 days ago": a
+ * start date is a fact about a subscription, where the app's relative-time rule is about
+ * freshness.
  */
-export const AddressWithoutAScheme: Story = {
+export const Supporting: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
-    await userEvent.type(await canvas.findByLabelText(/relay address/i), "relay.example");
-    await userEvent.click(canvas.getByRole("button", { name: "Save" }));
+    await userEvent.click(await canvas.findByLabelText(/claim code/i));
+    await userEvent.paste(A_CLAIM_CODE);
+    await userEvent.click(canvas.getByRole("button", { name: /^connect$/i }));
 
-    await expect(await canvas.findByText(/has to start with https/i)).toBeInTheDocument();
+    await expect(await canvas.findByText(/supporting since/i)).toBeInTheDocument();
+    // Connected, so the two presses that were the whole block are gone and sync has one.
+    await expect(canvas.queryByRole("button", { name: /connect patreon/i })).not.toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: /sync now/i })).toBeInTheDocument();
+    // ...and the advice about *which* device to connect on goes with the press it was about.
+    await expect(canvas.queryByText(/pair this one to them first/i)).not.toBeInTheDocument();
   },
 };
 
 /**
- * An address, and nothing to sync to yet.
+ * A code that has already been spent, refused in the crate's own words.
  *
- * **`null` is the backend's "there was nothing to do" and it is not a failure.** No relay
- * address, or no pairing group — and this device has the first and not the second. The
- * sentence says what is missing rather than reporting a fault, which is the difference between
- * a button that explains itself and one that looks broken on the first press of a fresh
- * install.
+ * **This refusal is reachable by an ordinary reader, which is why it is not a fault.** A claim
+ * code is one-time and expires in ten minutes, so pasting yesterday's — or the same one twice
+ * after a reinstall — is the commonest thing that goes wrong here, and the sentence has to say
+ * *that* rather than "claim failed": a different sentence pointing at a different fix, which is
+ * pressing Connect Patreon again.
  */
-export const NothingToSyncTo: Story = {
+export const ClaimCodeRefused: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
-    await userEvent.type(
-      await canvas.findByLabelText(/relay address/i),
-      "https://relay.example.workers.dev",
-    );
-    await userEvent.click(canvas.getByRole("button", { name: "Save" }));
+    await userEvent.type(await canvas.findByLabelText(/claim code/i), "ABCD");
+    await userEvent.click(canvas.getByRole("button", { name: /^connect$/i }));
 
-    // The address is stored, so there is somewhere for the press to go — and the panel now
-    // says what is still missing rather than that sync is off.
-    await expect(await canvas.findByText(/nowhere to sync to yet/i)).toBeInTheDocument();
-    await userEvent.click(canvas.getByRole("button", { name: /sync now/i }));
-    await expect(await canvas.findByText(/there was nothing to sync/i)).toBeInTheDocument();
+    await expect(await canvas.findByRole("alert")).toHaveTextContent(/code/i);
+    // Refused, so the reader is still where they were — including the code still in the field,
+    // because a code that was mistyped is one keystroke from being right. Only a claim that
+    // *worked* clears it.
+    await expect(canvas.getByLabelText(/claim code/i)).toHaveValue("ABCD");
+    await expect(canvas.getByRole("button", { name: /connect patreon/i })).toBeInTheDocument();
   },
 };
 
 /**
- * A group, an address, and one round trip.
+ * A card Patreon is still retrying — **and sync that keeps working through it.**
+ *
+ * Spec §7.2: `declined_patron` is a failed card, not a decision. It opens a seven-day grace
+ * window in which tokens are still minted, so the one thing this story exists to hold is the
+ * *Sync now* button being on screen. Taking sync away here would punish a reader for something
+ * they did not choose, and the sentence would be teaching them to cancel.
+ *
+ * It must also not read as a cancellation: *Membership ended* is a different state with a
+ * different fix, and the two are one field apart in the answer this panel is drawn from.
+ */
+export const PaymentProblem: Story = {
+  parameters: { fake: { seed: "paired", fault: "patreonDeclined" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await expect(await canvas.findByText(/payment problem/i)).toBeInTheDocument();
+    await expect(canvas.getByText(/keeps working/i)).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: /sync now/i })).toBeInTheDocument();
+    await expect(canvas.queryByText(/membership ended/i)).not.toBeInTheDocument();
+  },
+};
+
+/**
+ * The lapse — **the state this whole block is worth having for.**
+ *
+ * §7.1: cancelling drops the relay's log at once, and the relay's log is a transport buffer with
+ * a 30-day tail rather than anybody's collection. Every device already holds the whole thing in
+ * its own SQLite. So the panel says *Membership ended*, says in the next breath that nothing
+ * local was touched, and offers the connect button again.
+ *
+ * **What it must never say is that something went wrong.** "Could not reach the relay" points a
+ * reader at their network when the fix is their pledge, and a reader who lapses and reads it as
+ * data loss is the one failure in this design that cannot be undone by connecting again.
+ */
+export const MembershipEnded: Story = {
+  parameters: { fake: { seed: "paired", fault: "patreonLapsed" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await expect(await canvas.findByText(/membership ended/i)).toBeInTheDocument();
+    await expect(canvas.getByText(/stays on this device/i)).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: /connect patreon/i })).toBeInTheDocument();
+    await expect(canvas.queryByText(/could not|failed|error/i)).not.toBeInTheDocument();
+    // The devices stay paired through a lapse, which is what makes reconnecting one press.
+    await expect(canvas.getByText(/key version 2/i)).toBeInTheDocument();
+  },
+};
+
+/**
+ * Connecting before pairing — **which founds a group of one** (spec §6.3).
+ *
+ * `sync_patreon_claim` runs `ensure_group` before the request that has to name a group, so a
+ * reader who connects Patreon on a device that has never paired does not end up with an
+ * entitlement bound to nothing: they end up in a group of themselves, at key version 1, with a
+ * roster where the pairing offer was a moment ago.
+ *
+ * **That is why the panel's *nowhere to sync to yet* line is not what a new supporter sees.**
+ * `RelayStatus.paired` is `identity::group(conn).is_some()`, and a group of one satisfies it —
+ * so the sentence a fresh connection lands on is *Nothing has synced yet*, and the reader's next
+ * step is Pair a device rather than anything about the relay. The panel keeps the *unpaired*
+ * sentence for a state the shipped build can no longer reach; see this task's report.
+ */
+export const ConnectingBeforePairing: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await expect(await canvas.findByText(/not paired with anything yet/i)).toBeInTheDocument();
+
+    await userEvent.click(await canvas.findByLabelText(/claim code/i));
+    await userEvent.paste(A_CLAIM_CODE);
+    await userEvent.click(canvas.getByRole("button", { name: /^connect$/i }));
+
+    // A group of one, made by the claim rather than by a pairing press.
+    await expect(await canvas.findByText(/in a group of 1/i)).toBeInTheDocument();
+    await expect(canvas.getByText(/nothing has synced yet/i)).toBeInTheDocument();
+    await expect(canvas.queryByText(/nowhere to sync to yet/i)).not.toBeInTheDocument();
+  },
+};
+
+/**
+ * A group, a membership, and one round trip.
  *
  * The `paired` world has **three changes written and never handed over**, which is where a
- * reader stands after pairing and before typing an address, so the *waiting* line has something
- * true to say the moment the address is saved and the trip has something to send.
+ * reader stands after pairing and before connecting, so the *waiting* line has something true to
+ * say the moment the claim lands and the trip has something to send.
  *
  * There is no network in the workbench and this story does not pretend there is: what the fake
- * models is the shape of the answer — everything waiting goes, nothing comes back, and the
- * stamp moves. The two outcomes spec 7.4 surfaces are seeded rows in the `needsReview` world
- * rather than something a press invents; see `Settings/ReviewPanel`.
+ * models is the shape of the answer — everything waiting goes, nothing comes back, and the stamp
+ * moves. The two outcomes spec 7.4 surfaces are seeded rows in the `needsReview` world rather
+ * than something a press invents; see `Settings/ReviewPanel`.
  *
  * **This press is also this device's first exchange**, so the line carries the baseline's two
  * sentences as well — which is not a leak between stories but the shape of the real thing: a
- * reader's first press after pairing is both trips at once, and it is exactly the press the
+ * reader's first press after connecting is both trips at once, and it is exactly the press the
  * baseline clause exists to explain. `AFirstExchange` below is that half on its own, and takes
  * the second press to show the ordinary trip after it.
  */
@@ -425,11 +536,9 @@ export const OneRoundTrip: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
-    await userEvent.type(
-      await canvas.findByLabelText(/relay address/i),
-      "https://relay.example.workers.dev",
-    );
-    await userEvent.click(canvas.getByRole("button", { name: "Save" }));
+    await userEvent.click(await canvas.findByLabelText(/claim code/i));
+    await userEvent.paste(A_CLAIM_CODE);
+    await userEvent.click(canvas.getByRole("button", { name: /^connect$/i }));
     await expect(await canvas.findByText(/3 changes waiting to go/i)).toBeInTheDocument();
 
     await userEvent.click(canvas.getByRole("button", { name: /sync now/i }));
@@ -468,11 +577,9 @@ export const AFirstExchange: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
-    await userEvent.type(
-      await canvas.findByLabelText(/relay address/i),
-      "https://relay.example.workers.dev",
-    );
-    await userEvent.click(canvas.getByRole("button", { name: "Save" }));
+    await userEvent.click(await canvas.findByLabelText(/claim code/i));
+    await userEvent.paste(A_CLAIM_CODE);
+    await userEvent.click(canvas.getByRole("button", { name: /^connect$/i }));
     await userEvent.click(await canvas.findByRole("button", { name: /sync now/i }));
 
     const line = await canvas.findByText(/first exchange with a device/i);
@@ -491,20 +598,29 @@ export const AFirstExchange: Story = {
 };
 
 /**
- * A sync holding the write connection — the one way the relay's own read is refused.
+ * A sync holding the write connection — **and both of this block's reads refused at once.**
  *
- * `sync_relay_status` takes `sync::with_write` in the crate, because it counts unpushed rows of
- * `sync_ops` on the write connection, so it really does answer `BUSY` while a card update is in
- * flight. The panel says the relay could not be read rather than drawing an empty address
- * field, which would be the one sentence a reader must not be shown by accident: it reads
- * exactly like sync having been switched off.
+ * `sync_relay_status` and `sync_supporter_status` each take `sync::with_write` in the crate, so
+ * both really do answer `BUSY` while a card update is in flight — the second by the crate's own
+ * choice, so that it cannot answer from beside a claim that has just written. They are two
+ * queries over one connection, so in practice they fail together.
+ *
+ * **What the panel must not do is guess.** Drawing the block empty would read exactly like a
+ * membership that has never been connected — *Not connected*, with a Connect Patreon button
+ * inviting a reader who is already a supporter to claim a second time — and drawing "Nothing is
+ * waiting to go" over an unanswered count would be the same mistake one line down. Both are
+ * withheld here, and the one sentence on screen is what is true: nobody knows yet.
  */
-export const RelayCouldNotBeRead: Story = {
+export const TheReadsAreRefused: Story = {
   parameters: { fake: { seed: "paired", fault: "busy" } },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
     await expect(await canvas.findByText(/could not be read/i)).toBeInTheDocument();
-    await expect(canvas.queryByText(/sync is off/i)).not.toBeInTheDocument();
+    await expect(canvas.queryByText(/not connected/i)).not.toBeInTheDocument();
+    await expect(
+      canvas.queryByRole("button", { name: /connect patreon/i }),
+    ).not.toBeInTheDocument();
+    await expect(canvas.queryByText(/nothing is waiting to go/i)).not.toBeInTheDocument();
   },
 };
