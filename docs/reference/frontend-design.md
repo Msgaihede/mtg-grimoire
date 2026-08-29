@@ -4212,14 +4212,22 @@ it found a coupling between two rounds that the 9a plan does not have.
 `useNavCollapsed`'s persisted state, and **nothing collapses it automatically at any width** — a
 390px window opens with the full 208px rail unless the reader has collapsed it before.
 
-| Rail | `nav` | `main` content | `columnsFor` @170 | @160 | @135 |
-| --- | --- | --- | --- | --- | --- |
-| Expanded — **today's default** | 208 | **142** | 1 | 1 | 1 |
-| Collapsed (`useNavCollapsed`) | 68 | **282** | 1 | **1** | 2 |
-| Gone entirely | — | 350 | 1 | **2** | 2 |
+⚠️ **`main`'s content box is not the wall, and the 26px between them is worth a column.** The
+`ResizeObserver` is on `rowsRef` (`CardGrid.tsx:646–648`), which sits **inside** the scroller's
+`border` and `p-3` (`:1020`) — 1px + 12px each side. `rowsRef`'s own comment says it, having no
+padding of its own, "is the honest answer to how wide a row of tiles may be." So the wall is
+`main` content **− 26**, and any arithmetic done on `main`'s width overstates the columns.
 
-The first two rows were driven; the third is `columnsFor`'s arithmetic on the width a missing rail
-leaves. `columnsFor` is `max(1, floor((width + 12) / (tile + 12)))` (`CardGrid.tsx:180`).
+| Rail | `nav` | `main` content | **wall** (`rowsRef`) | `columnsFor` @170 | @160 | @144 |
+| --- | --- | --- | --- | --- | --- | --- |
+| Expanded — **today's default** | 208 | **142** | **116** | 1 | 1 | 1 |
+| Collapsed (`useNavCollapsed`) | 68 | **282** | **256** | 1 | 1 | **1** |
+| Gone entirely | — | 350 | **324** | 1 | **1** | **2** |
+
+The first two `nav`/`main` rows were driven in the window; the wall column is those figures less
+the 26px inset read from the class string, and the column counts are `columnsFor` — `max(1,
+floor((width + 12) / (tile + 12)))` (`CardGrid.tsx:180`) — over them. A desktop scrollbar takes
+another ~15px off the wall; a phone's overlay scrollbar takes none.
 
 **At 142px the tile is narrower than one whole tile**, so `tileWidthFor`'s cap — its only
 arithmetic, and it covers exactly this case — draws the card at 142 rather than 170, and
@@ -4227,15 +4235,25 @@ arithmetic, and it covers exactly this case — draws the card at 142 rather tha
 
 ### The coupling, which is the finding
 
-**A 160px tile does not buy a second column while the rail is there.** At 282px of content,
-`columnsFor(282, 160)` is still **1**; the tile has to come down to **135px** before a 390px phone
-draws two columns with a 68px rail beside them. Without the rail, 160 is enough and so is anything
-up to 169.
+**Two columns need the rail gone *and* a tile well under 160.** Against the wall rather than
+against `main`: `columnsFor(324, 160)` is **1**, so 160 — the width the 9a plan suggests for a
+phone tile — draws a **single** column on a phone, which is the failure it was meant to fix. The
+largest round width that gives two columns at 324 is **144**; at 144 the leftover is 24 and the
+gutter is exactly `GAP`, so the margins and the inter-card gap become one measurement.
 
-So the wall's round and the chrome's round are not independent, and the option matrix is smaller
-than it looks: **a phone tile width only delivers two columns if the rail is gone** — a bottom bar
-or a drawer — **not if the collapsed rail is kept.** Keeping the rail and wanting two columns costs
-a 135px tile, which is a 21% shrink on the chin's type rather than the 6% a 160px tile costs.
+And 144 only holds if the rail has gone. With the collapsed 68px rail the wall is 256, where
+`columnsFor(256, 144)` is **1** again and the tile would have to fall to about 122.
+
+So the wall's round and the chrome's round are **not independent**, and the option matrix is
+smaller than it looks: **a phone tile width delivers two columns only if the rail is gone** — a
+bottom bar or a drawer — **not if the collapsed rail is kept.** That is one finding across two
+rounds, and either round decided on its own gets it wrong.
+
+**What a narrower tile does *not* do is shrink the chin's type.** `--mark-scale` and
+`--control-scale` come from `cardScaleVars(zoom)` and know nothing about `baseTileWidth`, so the
+chin stays 28px with 10px type at any base — a narrower tile makes the chin proportionally
+**taller** (10.7 % of tile height at 170, 12.4 % at 144), which is a cost in the other direction
+from the one "a 6 % shrink on the type" suggests.
 
 ### The vertical, on the same pass
 
