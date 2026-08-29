@@ -47,6 +47,11 @@ const meta = {
     onRefresh: fn(),
     activity: null,
     activityVisible: false,
+    // The desk shape, which is what the 1072px frame below is a picture of. `AppShell` answers
+    // this from `useNarrowWindow`; here it is an arg, so Controls can flip the row into the
+    // phone's shape — the title `sr-only` and both buttons down to their glyphs — without the
+    // workbench having to fake a viewport.
+    narrow: false,
   },
   decorators: [
     // The ribbon is `shrink-0` inside a flex column and stretches to whatever it is given, so a

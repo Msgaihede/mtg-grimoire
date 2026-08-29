@@ -2,13 +2,14 @@ import { useMemo, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as R
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import { dragData } from "@/features/decks/dnd";
-import { CardGrid, type GridCard } from "@/features/search/CardGrid";
+import { CardGrid, PHONE_TILE_WIDTH, type GridCard } from "@/features/search/CardGrid";
 import { isFinish, type Finish } from "@/lib/finish";
 import type { FolderNode } from "@/lib/folderTree";
 import type { WishlistFolder, WishRow } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
+import { useNarrowWindow } from "@/lib/useNarrowWindow";
 import { cn } from "@/lib/utils";
 import { EditWishButton } from "./EditWish";
 import { missingOf, printingOf, wishLabel } from "./wish";
@@ -294,6 +295,9 @@ export function WishlistGrid({
   // has to know whether one is open, only which card is in it.
   const selectCard = useAppStore((s) => s.setSelectedCardId);
   const selectedCardId = useAppStore((s) => s.selectedCardId);
+  // What the wall below is sized by — see its `baseTileWidth`. A consumer of the app's one
+  // viewport branch rather than a second one; the hook argues for itself at its own site.
+  const narrowWindow = useNarrowWindow();
   const tip = useTooltip();
 
   const tiles = useMemo(() => rows.map(toTile), [rows]);
@@ -310,6 +314,11 @@ export function WishlistGrid({
       rows={tiles}
       label="Your wishlist"
       listKey={listKey}
+      // **A phone gets a narrower card, so the list is two columns rather than one.** The same
+      // width the search and collection walls take and for the same arithmetic: 324px of wall at
+      // 390, where 170 floors to one column. `PHONE_TILE_WIDTH` carries the derivation, the 160
+      // that looks like a fix and is not, and the decision that the chin does not scale with it.
+      baseTileWidth={narrowWindow ? PHONE_TILE_WIDTH : undefined}
       // This wall's own zoom, kept apart from the collection's and the search's: the three lists
       // are read one after the other, and a size settled on one is not an answer about another.
       zoomSection="wishlist"

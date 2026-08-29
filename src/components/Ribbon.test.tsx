@@ -23,6 +23,10 @@ const props = (over: Partial<RibbonProps> = {}): RibbonProps => ({
   onRefresh: vi.fn(),
   activity: null,
   activityVisible: false,
+  // The desk shape, which is what every case above the phone block is about. `AppShell` answers
+  // this from `useNarrowWindow`; here it is stated, which is the whole benefit of the prop —
+  // both shapes are drivable without stubbing `matchMedia` into a component that never asks it.
+  narrow: false,
   ...over,
 });
 
@@ -227,5 +231,119 @@ describe("Ribbon", () => {
     render(<Ribbon {...props({ updateVersion: "0.3.0", updateInstallable: true, busy: true })} />);
     expect(screen.getByRole("button", { name: /refresh/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Update to 0.3.0" })).toBeEnabled();
+  });
+});
+
+/**
+ * The row at 390px, where the shell has drawn a tab bar instead of a rail and this is the whole
+ * width there is.
+ *
+ * **Every number this block argues from came from a browser and none of it can go red here.**
+ * jsdom lays nothing out, so what these cases pin is markup — a class, an attribute, an element's
+ * presence — while the widths that decided the arrangement (`Collection` at 125.75 against 78
+ * given, the status line at 243.95 against 89, `Refresh data` at 150.91 × 42) were measured in
+ * headless Edge over the built stylesheet with the real faces on 2026-08-29 and live in
+ * `Ribbon.tsx`'s own comment.
+ *
+ * The claim under all of it: **nothing here is unmounted at a width.** The title stops being
+ * painted and two buttons stop being lettered; the status line is the same element in both
+ * shapes, because a live region that only sometimes exists announces nothing.
+ */
+describe("the ribbon on a phone-width window", () => {
+  const phone = (over: Partial<RibbonProps> = {}) => props({ narrow: true, ...over });
+
+  /**
+   * `sr-only` and not a conditional render, which is two decisions in one class: the document
+   * keeps its only `<h1>`, and `.sr-only` is `position: absolute` so the title leaves the flex
+   * row without leaving a `gap-4` behind it.
+   */
+  it("keeps the heading in the document and stops painting it", () => {
+    render(<Ribbon {...phone()} />);
+
+    const heading = screen.getByRole("heading", { level: 1 });
+    expect(heading).toHaveTextContent("Search");
+    // `classList.contains`, not `className.includes` — a substring check passes on any class
+    // that merely contains the token, and this file has no layout engine to referee it with.
+    expect(heading.classList.contains("sr-only")).toBe(true);
+  });
+
+  /**
+   * The room the title gave up is the room this needed: 350 of content box, less the icon-only
+   * Refresh's 50 and one `gap-4`, is 284 against 243.95. Painted, and still `truncate` — what
+   * gives when the update button is also up is this line, and a truncated live region still
+   * announces the whole sentence.
+   */
+  it("paints the status line into the room the title gave up", () => {
+    render(<Ribbon {...phone()} />);
+
+    const line = screen.getByRole("status");
+    expect(line).toHaveTextContent("116,568 cards · data from 2026-08-03");
+    expect(line.classList.contains("sr-only")).toBe(false);
+    expect(line.classList.contains("truncate")).toBe(true);
+  });
+
+  /**
+   * **The one this task exists to defend.** A live region that only sometimes exists announces
+   * nothing, so shedding the row's contents at a width must not shed this element — narrow and
+   * with nothing to say it is still here and still empty, exactly as it is at desk width.
+   */
+  it("keeps the status line mounted when there is nothing to say", () => {
+    render(<Ribbon {...phone({ statusLine: null })} />);
+
+    expect(screen.getByRole("status")).toBeEmptyDOMElement();
+  });
+
+  /**
+   * The difference between a control that shed its label and one that lost it. 150.91px of
+   * `Refresh data` was 43% of the window and is the single reason nothing else fitted; the
+   * accessible name is untouched, which is why every `/refresh/i` query in this suite and in
+   * `AppShell.test.tsx` goes on working without knowing the shape it is in.
+   */
+  it("keeps Refresh named when it loses its word, and floors it for a finger", () => {
+    render(<Ribbon {...phone()} />);
+
+    const refresh = screen.getByRole("button", { name: "Refresh data" });
+    // Nothing painted: the glyph is `aria-hidden` and draws no text of its own.
+    expect(refresh.textContent).toBe("");
+    // The token, never a typed 44 — and an inline style rather than an arbitrary-value class,
+    // for `BottomTabBar`'s reason: a mistyped arbitrary value emits nothing at all, silently,
+    // with `tsc` and this suite both green.
+    expect(refresh).toHaveStyle({ minWidth: "var(--target-min)", minHeight: "var(--target-min)" });
+  });
+
+  /**
+   * Two labels are two different promises, and shedding the word must not turn them into four.
+   * The string is built once and used as the paint or as the name, never written twice.
+   */
+  it("keeps the update button's two promises when it loses its words", () => {
+    const { rerender } = render(
+      <Ribbon {...phone({ updateVersion: "0.3.0", updateInstallable: true })} />,
+    );
+
+    const installable = screen.getByRole("button", { name: "Update to 0.3.0" });
+    expect(installable.textContent).toBe("");
+    expect(installable).toHaveStyle({ minHeight: "var(--target-min)" });
+
+    rerender(<Ribbon {...phone({ updateVersion: "0.3.0", updateInstallable: false })} />);
+    expect(screen.getByRole("button", { name: "0.3.0 available" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Update to/ })).toBeNull();
+  });
+
+  /**
+   * The other half of every assertion above, and it is what makes the shedding a *choice* rather
+   * than a change: at desk width the title is painted, both buttons are lettered, and no touch
+   * floor is written — 1032px of row is not a place that has to decide any of this.
+   */
+  it("draws all of it at desk width", () => {
+    render(<Ribbon {...props({ updateVersion: "0.3.0", updateInstallable: true })} />);
+
+    expect(screen.getByRole("heading", { level: 1 }).classList.contains("sr-only")).toBe(false);
+    expect(screen.getByRole("button", { name: "Refresh data" })).toHaveTextContent("Refresh data");
+    expect(screen.getByRole("button", { name: "Update to 0.3.0" })).toHaveTextContent(
+      "Update to 0.3.0",
+    );
+    expect(screen.getByRole("button", { name: "Refresh data" })).not.toHaveStyle({
+      minHeight: "var(--target-min)",
+    });
   });
 });

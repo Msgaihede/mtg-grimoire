@@ -24,6 +24,7 @@ import {
 } from "@/components/useSidebarDrops";
 import { isAndroid } from "@/lib/platform";
 import { isWebTarget } from "@/pwa/target";
+import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
 import { useCardToDeckRefusal } from "@/features/card/cardMenu";
 import {
   ACTIVITY_DELAY_MS,
@@ -160,6 +161,18 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
    * owns the mount; this is the one place the sentence is drawn.
    */
   const cardToDeckRefusal = useCardToDeckRefusal();
+  /**
+   * What a drop on either sidebar target just did, for the eye — the phone's chrome has nowhere
+   * else to paint it, and the strip above `BottomTabBar` is where it lands.
+   *
+   * **One sentence, not a choice between two.** `useSidebarDrops` keeps a single
+   * `{ at, text }` for the whole sidebar ("one at a time, because one drop happens at a time"),
+   * so at most one of these is ever non-null and the `??` is reading the one there is. That is
+   * what distinguishes it from the `drops.decks.report ?? cardToDeckRefusal` the rail's alert
+   * comment refuses: those two have different lifetimes and would take turns hiding each other,
+   * where these two are the same sentence with the same `REPORT_MS` timer behind it.
+   */
+  const dropReport = drops.decks.report ?? drops.wishlist.report;
   // Here rather than in a view, because it is about the whole cache and this is the one
   // component that is always mounted — and it takes the progress event as a prop so the
   // app still registers exactly one `sync:progress` listener.
@@ -438,6 +451,12 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
             onRefresh={refresh}
             activity={activity}
             activityVisible={activityVisible}
+            // **`narrowWindow`, never the `narrow` two lines of this file up.** They are the same
+            // word for the same thing — *this drawing has no room for its words* — asked about two
+            // different drawings: `narrow` is a rail that is 68px wide, this is a window with no
+            // rail in it. The ribbon sheds its title at this width and gives the row to the status
+            // line; the reasoning and both measurements are in `Ribbon`'s own comment.
+            narrow={narrowWindow}
             updateVersion={update.status?.available?.version ?? null}
             updateInstallable={update.action !== "unavailable"}
             onOpenUpdate={() => setActiveView("settings")}
@@ -506,12 +525,59 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
             navigation is on screen. Two instances would be two live regions describing the same
             drop and disagreeing about which of them had just happened.
 
-            The rail's own two extras do not follow it here and that is recorded rather than
-            forgotten: the collapse toggle has no meaning for a bar that is not a column, and the
-            refused-add alert has no column to be drawn in — `BottomTabBar`'s own comment carries
-            that as owed to whoever assembles the phone's chrome. */}
+            Of the rail's own two extras, one does not follow it here and one does. The collapse
+            toggle has no meaning for a bar that is not a column and is gone for good. The two
+            *sentences* are answered by the strip immediately below this comment. */}
           {narrowWindow && (
-            <BottomTabBar activeView={activeView} onSelect={setActiveView} {...drops} />
+            <>
+              {/* **The two sentences the rail used to say, drawn directly above the bar that
+                replaced it.**
+
+                Both lived in the `<nav>` above — the drop report under the entry a card landed
+                on, the refused-add alert under all six of them — and below the phone width
+                there is no `<nav>` to be a line in. They go *here* rather than up beside the
+                ribbon because they are the **navigation's** sentences: both are about where a
+                card just went, the reader's thumb is already at the foot of the window, and the
+                tab that produced the report is 20px below this line instead of 700 above it.
+
+                **Zero height at rest, which is why it is a strip and not a second ribbon row.**
+                The vertical is the axis this whole layout is short of — ribbon 58 plus `main`'s
+                40 plus a shut filter bar leaves about one tile row — so this box is horizontal
+                padding and nothing else until one of the two has something to say, and it hands
+                the pixels back when they stop. `px-5` rather than nothing so the sentence lines
+                up with `main`'s own inset directly above it.
+
+                **The report is painted here and announced by the bar, and that split is
+                deliberate.** `BottomTabBar` mounts a `role="status"` per droppable tab, `sr-only`
+                for the app's standing reason — a live region that first appears with its
+                sentence already inside it announces nothing — and that region has to stay the
+                *only* one, because two live regions holding one drop say it twice. So this copy
+                is `aria-hidden`: the eye's and nothing else, exactly as the ribbon's activity
+                count is `aria-hidden` beside the phase that is announced.
+
+                **`decks.report ?? wishlist.report` is not the "two lifetimes in one slot" the
+                rail's alert comment refuses.** `useSidebarDrops` holds one `{ at, text }` for the
+                whole sidebar, so at most one of the two is ever non-null: the `??` picks the one
+                there is rather than choosing between two, and both halves clear on the same
+                `REPORT_MS` timer and on the next pick-up.
+
+                **The refusal is `CardMenuRefusal`**, the component every card surface already
+                draws, rather than a third copy of that box. The rail draws its own (`NavNote`)
+                because it has a geometry nothing else has — a 68px column with the sentence
+                floating beside it — and that argument does not survive the rail's removal: here
+                there is no column, so the shared banner is simply the right one. What does not
+                move is the half that must not: `role="alert"`, mounted only while there is
+                something to say, because announcing on insertion is what that role is for. */}
+              <div className="shrink-0 px-5">
+                {dropReport !== null && (
+                  <p aria-hidden="true" className="py-1 text-xs leading-tight text-dim">
+                    {dropReport}
+                  </p>
+                )}
+                <CardMenuRefusal error={cardToDeckRefusal} />
+              </div>
+              <BottomTabBar activeView={activeView} onSelect={setActiveView} {...drops} />
+            </>
           )}
         </div>
       </div>
