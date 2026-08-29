@@ -567,7 +567,7 @@ Every remaining PR now has a task-level plan in `docs/superpowers/plans/`.
 | 2 | Boundary A, the core interface | `2026-08-27-boundary-a-the-core-interface.md` | **done** — `boundary-a-core` |
 | 3a | dnd-kit foundation + the folder tree | `2026-08-27-dnd-kit-3a-foundation-and-folder-tree.md` | **done** — `dnd-kit-3a` |
 | 3b | the six remaining drag domains | `2026-08-28-dnd-kit-3b-remaining-domains.md` | **done** — #263 |
-| 3c | remove pragmatic-dnd, settle a11y | `2026-08-28-dnd-kit-3c-remove-pragmatic-dnd.md` | **partly** — #266 removed the library; Tasks 4–6 (what a drag is to a keyboard) wait on a decision, see below |
+| 3c | remove pragmatic-dnd, settle a11y | `2026-08-28-dnd-kit-3c-remove-pragmatic-dnd.md` | **partly** — #266 removed the library. **Tasks 4–6 are unblocked as of 2026-08-29**: the direction is **adopt dnd-kit's `Accessibility` plugin**, and they need re-planning against it because the original plan assumed one tab-reachable drag source to harden. The decision, its costs and its three traps are in [frontend-design.md](../../reference/frontend-design.md)'s "The decision: adopt dnd-kit's `Accessibility` plugin" |
 | **3.5** | **the user database — split user data out of the corpus** | `2026-08-28-the-user-database.md` | **done** — #261 |
 | 4 | the wasm core build | `2026-08-28-web-target-wasm-core.md` | **done** — #265, with #267 fixing the first run |
 | 5 | the PWA shell | `2026-08-28-web-target-pwa-shell.md` | **done** — #268 |
@@ -591,9 +591,17 @@ rather than planned:
   which no browser fetches, so PR 5's 256 MB image cache is correct and has nothing to intercept.
   `docs/reference/pwa-shell.md` scopes the fix.
 - **What a drag is to a keyboard** — 3c measured it rather than assuming: nothing is
-  tab-reachable except the category grip, which was never a drag, and there are zero `aria-live`
-  elements in the app. 3c's Tasks 4–6 were deliberately not run, because the plan assumed one
-  sensor to harden and the measurement showed the question is larger than that.
+  tab-reachable except the category grip, which was never a drag, and **every drop target is
+  unreachable**, so the drop half is pointer-only everywhere. 3c's Tasks 4–6 were deliberately not
+  run, because the plan assumed one sensor to harden and the measurement showed the question is
+  larger than that. **Decided 2026-08-29: adopt dnd-kit's `Accessibility` plugin**, which unblocks
+  those tasks and requires re-planning them — it stamps `role="button"` on the element it picks,
+  which takes the `listitem` role off every card wall and changes two pinned measurements.
+
+  ⚠️ This bullet used to say "there are zero `aria-live` elements in the app". **That was a
+  `querySelectorAll` on one page of a running window** — it counted what was *mounted*. The source
+  has four, in dialogs and pages that were not open, and none of them is about a drag. The finding
+  stands; the sentence did not.
 
 **9b had no plan on purpose, and now has a brief.** §6.1 says the layout options come to Markus
 before anything is built; naming the components 9b would create required a choice nobody had made.

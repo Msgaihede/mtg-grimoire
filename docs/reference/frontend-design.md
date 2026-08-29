@@ -3488,10 +3488,23 @@ PreventSelection` — **`Accessibility` is absent**. That is 3a's filter taking 
 tree rather than in an array literal.
 
 **Nothing in the document says anything about a drag, at rest or during one.** Zero
-`[id^=dnd-kit-]` elements, zero `[aria-live]` elements anywhere in the app, zero
-`aria-roledescription`, zero `aria-grabbed`. The app draws five `role="status"` regions; only the
-ribbon's carries text (`117,606 cards · data from 2026-08-28`) and none of them is written to by a
-drag.
+`[id^=dnd-kit-]` elements, zero `[aria-live]` elements, zero `aria-roledescription`, zero
+`aria-grabbed`. Five `role="status"` regions were in the document; only the ribbon's carried text
+(`117,606 cards · data from 2026-08-28`) and none of them is written to by a drag.
+
+> ⚠️ **"Zero `[aria-live]`" is a fact about the document that was measured, not about the app, and
+> the difference matters — corrected 2026-08-29.** It was a `querySelectorAll` on one page of a
+> running window, so it counted what was **mounted**. The source has **four** `aria-live="polite"`
+> elements — `DeckHistoryDialog.tsx:284`, `TheoryDiffDialog.tsx:620`,
+> `transfer/import/shared/CommitBar.tsx:88`, `web/BuildCorpus.tsx:62` — each inside a dialog or a
+> page that was not open, and **93** `role="status"`/`role="alert"` sites against the five that
+> were on screen.
+>
+> **None of the four is about a drag, so the finding this section rests on is unchanged.** What
+> changes is the cost of doing something about it: the app already has a live-region vocabulary to
+> reuse rather than one to invent. A reading like this one answers "what does a screen reader meet
+> on this page"; it cannot answer "what does this app contain", and the two were being conflated by
+> one sentence.
 
 **During a real in-flight drag**, a deck card's source `<li>` reads
 `tabindex="-1" data-deck-card-body data-dnd-source data-dnd-dragging popover` — no `role`, no
@@ -3553,6 +3566,59 @@ hears while dragging — the source's own name repeated, the pointer's target re
 virtual cursor, silence — is a different question and an unmeasured one. Doing it needs Narrator
 (`Ctrl+Win+Enter`, and it is already on the machine) against a `tauri build --debug --no-bundle`
 binary, and the answer written down verbatim including anything spoken twice.
+
+### The decision: adopt dnd-kit's `Accessibility` plugin
+
+**Taken by Markus on 2026-08-29**, against the measurements above and against two alternatives —
+"stay pointer-only and stop implying otherwise", and an app-owned keyboard flow scoped to the two
+surfaces that already have a caret. **No direction was recommended**: the evidence did not favour
+one, and which reader the app is for is not a question a measurement answers.
+
+**What it settles.** 3c's Tasks 4–6 are unblocked and get planned against this. The plugin brings
+its own instructions element, its own live region and its own keyboard drag, maintained upstream
+rather than hand-rolled — which is the whole of the case for it, given that the app's drop half is
+**pointer-only on every surface** and an app-owned flow would have had to invent a
+target-picking UI that does not exist.
+
+**What it costs, and none of this is a surprise — it is why 3a removed the plugin in the first
+place.** The plan that adopts it has to answer each of these at its own site:
+
+- **It stamps `role="button"` on the element it picks** — `draggable.handle ?? draggable.element`,
+  the same expression `dndAccessibility.test.tsx` reads the registry with. That takes the
+  `listitem` role off every folder card and every card-wall row, so **`getAllByRole("listitem")`
+  stops working on every wall in the app**. Two measurements in `dndAccessibility.test.tsx` pin
+  exactly that role today — `keeps every folder card a listitem, on both walls` and the wishlist
+  twin. **Those two are the specification changing, not tests to delete quietly:** they were
+  written as measurements, and the file's own header says a failure there is *news*.
+- **It adds a tab stop per row.** On a virtualised card wall that is a caret walk through the
+  whole result set, and it is the second reason 3a filtered the plugin out.
+- **`KeyboardSensor` answers Enter and Space with `preventDefault()` *and*
+  `stopImmediatePropagation()`.** From the moment every card became a drag source, that was Enter
+  no longer opening a card — the reason 3b removed the sensor, fenced by `dndManager.test.ts`.
+  Adopting the plugin without re-adding that sensor is coherent; re-adding both is not, unless the
+  activation key changes.
+
+**Three traps for whoever writes it, each already paid for once.**
+
+1. **`Accessibility.registerEffect` defers through `requestAnimationFrame`.** A synchronous
+   assertion that dnd-kit added nothing **passes whether the plugin is installed or not** — await a
+   frame, or the whole file is vacuous. `dndAccessibility.test.tsx` already does this and says why.
+2. **A per-source `sensors` list *replaces* the manager's rather than merging** —
+   `this.sensors ?? [...manager.sensors]`, `??` and not a merge. `useCategoryDragSource` passes its
+   own, so **the category grip is fenced by accident** and says nothing about what the manager is
+   configured with. Assert on a table row, which inherits.
+3. **A latent one, still true and still unfired**: `src/features/decks/dnd.ts`'s
+   `composedDraggable` builds a per-source sensor list *including* `KeyboardSensor` whenever a
+   caller narrows `notFrom` — and **no caller does** (confirmed 2026-08-29: every `notFrom`
+   occurrence in the tree is inside `dnd.ts` itself). The first surface that narrows its press
+   guard silently acquires a keyboard drag. Adopting the plugin is the moment to make that
+   deliberate rather than incidental.
+
+**The audit this does not remove.** The plugin answers the *drag*. It does not answer the app's
+other pointer-only affordances, which the phone census enumerated: `menuClick` — a plain-click door
+to a context menu — exists at exactly **two** surfaces in the whole app (the collection's and the
+wishlist's folder cards), and the ctrl+wheel card zoom has exactly one caller and no other door.
+Those stay open and belong to the mobile work rather than to this decision.
 
 ### The shipped CSP blocks a plugin dnd-kit cannot be told not to load — and the rules moved into `index.css`
 
