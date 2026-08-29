@@ -994,16 +994,23 @@ const phone = (Story: () => ReactElement) => {
  * the next two. ⚠️ **Not two rows** — that needs 474 — whatever the option story's 390px-frame
  * arithmetic said.
  *
- * **Every filter in `everything` is on and the strip says so with one digit**, which is exactly
- * the cost F3 accepted: the chips that stated a search in words are behind the same disclosure as
- * the controls that made it, and `6` is the whole of what a reader is told without pressing. What
- * the strip should say instead is the next task's question and is deliberately unanswered here.
+ * **Every filter in `everything` is on, and since 9c's Task 3 the strip says so in words**
+ * (2026-08-29). For one day it said `6` and nothing else — the cost F3 was costed at — and `4` is
+ * not a sentence: the failure that shape leaves standing is **Reset all counting a filter the
+ * reader cannot see**. So the chips came back, on a scrolling second line with `Reset all` pinned
+ * at the end of it, and the strip is **44 at rest and 96 with a filter on** — 1.84 tile rows of
+ * wall against 1.62, two whole cards either way.
  *
- * **What this frame cannot show is the pin.** The strip is `sticky top-0` with `-mx-5 px-5` and
- * `-mt-5 pt-5` against `AppShell`'s `main`, and the decorator below is a `contain: layout` box
- * with nothing scrolling inside it — so this is the strip at rest, which is where a reader meets
- * it. The `p-5` on the frame is `main`'s own, so the gutter those four classes exist to cover is
- * at least on screen.
+ * **This story is the 96**, since `everything` turns five kinds on; `PhoneSheet` below is the same
+ * strip with the sheet over it, and every unfiltered story on this page is the 44.
+ *
+ * **What this frame cannot show is the pin.** The strip is `sticky top-0` with `-mx-5 px-5`
+ * against `AppShell`'s `main` — and deliberately **without** the `-mt-5 pt-5` twin, which cannot
+ * engage in a layout where every page is `flex h-full flex-col` and would eat the last 8px, 4px
+ * and 4px of the box above it on three of the four pages that draw this bar. The decorator below
+ * is a `contain: layout` box with nothing scrolling inside it, so this is the strip at rest, which
+ * is where a reader meets it. The `p-5` on the frame is `main`'s own, so the gutter those classes
+ * exist to cover is at least on screen.
  */
 export const PhoneStrip: Story = {
   args: { preset: everything, width: "w-full" },
@@ -1017,21 +1024,39 @@ export const PhoneStrip: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
 
-    // The two that stay. The badge is on the button, so the count a reader gets is the count the
-    // chips used to spell out.
+    // The first line. The badge on the button is how much is on; the second line below is what.
     await expect(canvas.getByLabelText("Search cards")).toBeInTheDocument();
     await expect(canvas.getByRole("button", { name: /^Show filters/ })).toHaveTextContent(
       "Filters",
     );
 
-    // And nothing else — the colours, the mana values, the sort, the layout pair and the stated
-    // filters are all in the sheet. `queryByRole` searches the whole canvas, so a control that had
-    // merely moved would still be found.
+    // The second line, in the reader's own words — five chips against a badge of six, because the
+    // sixth kind is the text in the box and a chip would only repeat what is already on screen.
+    await expect(
+      canvas
+        .queryAllByRole("button", { name: /^Remove filter — / })
+        .map((b) => b.getAttribute("aria-label")!.replace("Remove filter — ", "")),
+    ).toEqual([
+      "Colour: White, Blue, Black",
+      "Mana value: 1",
+      "Set: LEA",
+      "Format: Modern",
+      "Owned",
+    ]);
+    // Pinned beside them, not behind the disclosure the chips are about — a Reset all a reader
+    // cannot see while looking at what it would undo is the same failure as a count they cannot
+    // read.
+    await expect(
+      canvas.getByRole("button", { name: "Reset all — 6 filters active" }),
+    ).toBeInTheDocument();
+
+    // And nothing else — the colours, the mana values, the sort and the layout pair are all in
+    // the sheet. `queryByRole` searches the whole canvas, so a control that had merely moved
+    // would still be found.
     await expect(canvas.queryByRole("group", { name: "Color identity" })).toBeNull();
     await expect(canvas.queryByRole("group", { name: "Mana value" })).toBeNull();
     await expect(canvas.queryByRole("group", { name: "Result layout" })).toBeNull();
     await expect(canvas.queryByRole("button", { name: "Sort results" })).toBeNull();
-    await expect(canvas.queryByRole("button", { name: /^Reset all/ })).toBeNull();
   },
 };
 
@@ -1077,14 +1102,23 @@ export const PhoneSheet: Story = {
     await expect(within(sheet).getByRole("button", { name: "All printings" })).toBeInTheDocument();
     await expect(canvas.getAllByRole("button", { name: "Format" })).toHaveLength(1);
     // And the controls the strip shed are in here with it — the colours, the mana values, the
-    // sort, the layout pair, and the chips that state what is on. One copy of each: the row is
-    // mounted here instead of in the flow, never in both.
+    // sort and the layout pair. One copy of each: the row is mounted here instead of in the flow,
+    // never in both.
     await expect(within(sheet).getByRole("group", { name: "Color identity" })).toBeInTheDocument();
     await expect(within(sheet).getByRole("group", { name: "Mana value" })).toBeInTheDocument();
     await expect(within(sheet).getByRole("group", { name: "Result layout" })).toBeInTheDocument();
     await expect(within(sheet).getByRole("button", { name: "Sort results" })).toBeInTheDocument();
-    await expect(within(sheet).getByRole("button", { name: /^Reset all/ })).toBeInTheDocument();
     await expect(canvas.getAllByRole("group", { name: "Color identity" })).toHaveLength(1);
+
+    // **The stated filters are not among them, since 9c's Task 3.** They are the strip's second
+    // line, on the other side of this scrim, and so is `Reset all` — one copy of each, because two
+    // mounted `ResetAll`s are two tab stops and two accessible names for one control. Asserting
+    // the *absence* here is the assertion: `canvas.getByRole` searches the whole frame, so the
+    // presence of a chip somewhere would pass in both worlds.
+    await expect(within(sheet).queryAllByRole("button", { name: /^Remove filter — / })).toEqual([]);
+    await expect(within(sheet).queryByRole("button", { name: /^Reset all/ })).toBeNull();
+    await expect(canvas.getAllByRole("button", { name: /^Reset all/ })).toHaveLength(1);
+    await expect(canvas.getAllByRole("button", { name: /^Remove filter — / })).toHaveLength(5);
     // The search box stays on the bar behind it — Task 2's strip is what it becomes, and this
     // story is what that task sheds into.
     await expect(sheet).not.toContainElement(canvas.getByLabelText("Search cards"));
