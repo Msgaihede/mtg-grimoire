@@ -4351,3 +4351,116 @@ measurement of *boxes* — `nav`, `main`, their padding — plus `columnsFor` ev
 measured content width in the same `eval`. That is the honest scope of it: the geometry is
 measured, the tile counts are arithmetic over a measured width, and **no card was on screen**. To
 read real tiles here, copy the main checkout's whole `data` folder into the worktree first.
+
+---
+
+## The phone layout on an actual phone — and the vertical does not work
+
+**Driven 2026-08-29 on the OnePlus (`adb` device `21755151`), Android, Chrome 152.0.7977.64, dpr 3,
+portrait**, against the production web build of 9b (`npm run build:wasm && npm run web:build`,
+served by `vite preview` on 4173, reached from the device through `adb reverse tcp:4173 tcp:4173`
+and driven over `adb forward tcp:9333 localabstract:chrome_devtools_remote`). Corpus built on the
+device: **117 606 cards**.
+
+**This is the measurement 9a could not take and 9b's plan is answerable to**, and it falsifies the
+budget the plan was written against. Two independent things went wrong, and neither is visible
+from a desktop.
+
+### The device is 360 CSS px wide, not 390 — and that alone costs the second column
+
+`src/lib/viewports.ts`'s `PHONE_PX` is **390**, chosen in 9a as "a hard case… the iPhone 12/13/14,
+within a pixel or two of the common Android flagship in CSS pixels". **This flagship is 360.**
+
+| | 390 (the design frame) | **360 (this device)** |
+| --- | --- | --- |
+| `main` content | 350 | **320** |
+| wall (`rowsRef`, less the scroller's `border` + `p-3`) | 324 | **294** |
+| `columnsFor(wall, 144)` | **2** | **1** |
+| largest tile giving two columns | 156 | **141** |
+
+Measured on the device rather than computed: the wall's rows are **226 px tall × 294 px wide and
+carry exactly one tile each**. **G1's 144 misses two columns by three pixels here.**
+
+`matchMedia('(max-width: 390px)')` still answers **true** at 360, so `useNarrowWindow` and the tab
+bar are correct — it is only the *tile* that was sized against a frame this hardware is narrower
+than.
+
+### The shut filter bar is 381 px, not 273 — and 108 px of that is the touch floor
+
+| | px |
+| --- | --- |
+| Visible viewport with the URL bar (`innerHeight` = `visualViewport.height`) | **696** |
+| Ribbon block (`h-14` + the 2px `ManaLine`) | 58 |
+| Tab bar | **53** — exactly as designed |
+| `main`'s `p-5`, top and bottom | 40 |
+| `main` content | **545** |
+| **Shut filter bar** | **381** |
+| **What is left for the wall** | **99** |
+
+58 + 585 + 53 = 696 exactly, so nothing is unaccounted for. **A tile row is 226 px and the wall is
+99**, which is 44 % of one row — the plan's own failure condition was "one tile row", and this is
+less than half of it.
+
+**The cause was isolated on the device rather than guessed**, by setting `--target-min: 0px` on the
+root and re-reading, then restoring:
+
+| | shut bar | wall |
+| --- | --- | --- |
+| With the 44 px floor (shipped) | **381** | **99** |
+| `--target-min: 0px` | **273** | **207** |
+| Restored | 381 | 99 |
+
+**The floor costs exactly 108 px of vertical and the wall gains exactly the same 108 back.**
+Note what the middle row is: **273 is precisely the figure the 9a plan predicted for the shut
+bar** — that measurement was taken before `coarse:` had a consumer, so the plan was right for its
+time and Task 7 added 108 px to it.
+
+**So 9b's two decisions are in direct conflict, and now the size of it is known.** F1 buys a
+reachable control on the axis that had room; it spends 108 px on the axis that had none. This is
+not an argument against the floor — every chip measured **44 × 44** on hardware where they were 32,
+and `(pointer: coarse)` really is `true` — it is the measured price of it, and the thing to spend
+next.
+
+### What works, measured on the device
+
+- **`(pointer: coarse)` is `true`** and `--target-min` resolves to `44px`. Every control checked is
+  at or above the floor: the mana-value and colour chips **44 × 44** (they are 32 on a desktop),
+  `Show filters` and `Reset all` 44 tall, a tab **60 × 52**. Task 7 does what it claimed.
+- **The tab bar is 53 px**, the figure it was designed to.
+- **No horizontal overflow** — `documentElement.scrollWidth` equals `innerWidth`.
+- **`h-dvh` is right**: `100dvh` reads **696**, the visible viewport, against `100lvh`'s **752**.
+
+### The dialog against a real URL bar — owed since PR #274, and the answer is that it was already right
+
+`Dialog`'s scrim is `fixed inset-0`, and the open question was whether that resolves against the
+**large** viewport on a mobile browser — which would make the grid area taller than the screen,
+`max-h-full` clamp to more than the window, and the panel's footer land under the URL bar.
+
+Measured directly, with a probe rather than through one dialog's markup, so the answer is about
+the browser rather than about one component:
+
+| | px |
+| --- | --- |
+| `position: fixed; inset: 0` box | **696** |
+| `visualViewport.height` | **696** |
+| `100dvh` / `100svh` | **696** |
+| `100lvh` | **752** |
+
+**A `fixed inset-0` box resolves against the *visible* viewport, not the large one.** `Dialog`
+needs no change, and this is recorded so the next person does not pay for the same measurement.
+
+### `--safe-b` is `0px` on this device, and that is not a bug
+
+The gesture bar reserves no inset here, so the tab bar's `paddingBottom: var(--safe-b)` costs
+nothing on this hardware. It is still correct to carry: the value is a property of the device, the
+`env()` fallback is what makes the declaration parse, and a phone with a reserved gesture area
+would put the bar's targets under it without this.
+
+### What this does not settle
+
+- **The drag from the search overlay into a hidden pile** (9b Task 8's recorded limitation) was not
+  driven. With a 99 px wall there is no honest gesture to make, and the question should be re-asked
+  once the vertical is fixed — a reader who cannot see a tile cannot drag one.
+- **One device, one browser.** Every figure here is this OnePlus in Chrome 152. A 390 px phone
+  would get the second column; the point is that this one does not, and `PHONE_PX` is the app's
+  own stated frame.

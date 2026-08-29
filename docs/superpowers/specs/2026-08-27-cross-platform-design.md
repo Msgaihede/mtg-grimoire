@@ -575,7 +575,8 @@ Every remaining PR now has a task-level plan in `docs/superpowers/plans/`.
 | 7 | the relay and conflict engine | `2026-08-28-sync-relay-and-engine.md` | **done** — #269 |
 | 8 | the Android target | `2026-08-28-android-target.md` | **done** — #262, with #270 fixing the cross-compile |
 | 9a | mobile layout: foundation + options | `2026-08-28-mobile-layout-9a-foundation-and-options.md` | **done** — #274 shipped Tasks 1–4 (the foundation); the four design rounds ran and **the decision was taken on 2026-08-29** |
-| 9b | implement the chosen layout | `2026-08-29-mobile-layout-9b.md` | **planned 2026-08-29**, against the four decisions. Nine tasks; the brief it argues from is [the options document](2026-08-28-mobile-layout-options.md)'s "What 9b has to do, per surface" |
+| 9b | implement the chosen layout | `2026-08-29-mobile-layout-9b.md` | **done 2026-08-29** — #294 and #295. All four layouts built; the device pass then **falsified the vertical budget**, which is what it was written to do. See 9c |
+| 9c | the vertical, re-opened | — | **needed, and now the only thing between this app and a usable phone.** The measurement is taken; the direction is not chosen |
 
 **Updated 2026-08-29.** Everything above 9a has shipped, and the phase is done end to end: the
 app runs on Windows, in a browser and on an Android phone, two devices pair with no account, and
@@ -602,6 +603,46 @@ rather than planned:
   `querySelectorAll` on one page of a running window** — it counted what was *mounted*. The source
   has four, in dialogs and pages that were not open, and none of them is about a drag. The finding
   stands; the sentence did not.
+
+> ## 9c: the vertical, and why 9b ends by asking for it
+>
+> **9b built all four chosen layouts and then measured the assembled stack on an actual phone,
+> which is the one thing 9a could not do. It does not work, and the numbers say precisely why.**
+> Full record: [frontend-design.md](../../reference/frontend-design.md), *"The phone layout on an
+> actual phone"*. On a OnePlus in Chrome 152, portrait, with a 117 606-card corpus built on the
+> device:
+>
+> - **The device is 360 CSS px wide, not `PHONE_PX`'s 390.** The wall is 294 rather than 324, so
+>   the chosen 144px tile draws **one** column — measured, rows of 226 × 294 carrying one tile
+>   each. It misses by three pixels; 141 would fit two.
+> - **The shut filter bar is 381px and the wall gets 99**, against a 226px row. **108px of that
+>   bar is the 44px touch floor**, isolated by zeroing `--target-min` on the device: the bar falls
+>   to exactly 273 — the figure this spec's own plan predicted, taken before `coarse:` had a
+>   consumer — and the wall rises to 207.
+>
+> **The two decisions Markus took are in direct conflict**, and 9b's value is that the conflict is
+> now a number rather than a worry. F1 buys a control a finger can hit on the axis that had room,
+> and spends 108px on the axis that had none. **Neither is wrong; the budget is.**
+>
+> **What 9c has to choose between**, and none of it should be picked without him:
+>
+> - **F2, already named and costed in [the options document](2026-08-28-mobile-layout-options.md)** —
+>   the filter tray as a sheet. It was the named follow-on for exactly this, conditional on
+>   somebody driving the open tray on a device. Somebody now has: the open tray measures **922px**
+>   against a 545px content box.
+> - **`PHONE_PX` itself.** 390 was chosen in 9a as "a hard case"; 360 is harder and is what the
+>   hardware in this room reports. Whether the frame moves, or the tile does, is a design call.
+> - **What the search page's chrome is on a phone at all** — 381 of 545 is 70 % of the content box
+>   spent before a card is drawn.
+>
+> **9b is not reverted and should not be.** Every piece of it is correct on its own terms and
+> measured so: the tab bar is exactly 53px, `h-dvh` reads 696 against `lvh`'s 752, there is no
+> horizontal overflow, and every touch target clears 44px on real hardware. What it lacks is room,
+> and room is 9c's subject.
+>
+> It also discharged a reading owed since PR #274: **a `fixed inset-0` box resolves against the
+> *visible* viewport** (696, matching `dvh` and `svh`, against `lvh`'s 752), so `Dialog`'s footer
+> never lands under the URL bar and it needs no change.
 
 **9b had no plan on purpose, and now has a brief.** §6.1 says the layout options come to Markus
 before anything is built; naming the components 9b would create required a choice nobody had made.
