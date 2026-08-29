@@ -162,6 +162,7 @@ number to compare against.
 | [live-ui-verification.md](docs/reference/live-ui-verification.md) | The CDP harness contract — `scripts/cdp.mjs` and its traps |
 | [tauri-mcp-bridge.md](docs/reference/tauri-mcp-bridge.md) | The other way to drive the window — its four pieces, three permissions, and the one tool that cannot reach an app command |
 | [ci-and-releases.md](docs/reference/ci-and-releases.md) | Both workflows, in full |
+| [hosted-relay-deploy.md](docs/reference/hosted-relay-deploy.md) | The deploy runbook — what exists and what does not, the order, and the nine things only a live deploy can settle |
 | [sync.md](docs/reference/sync.md) | Pairing **and** the relay — the protocol step by step, the six digits, the eleven synced tables, how a row is named across devices, §7.3's five rules against the test that proves each, the envelope measured, the auth gate on the three endpoints, and what is not built |
 | [test-coverage.md](docs/reference/test-coverage.md) | What both suites reach, and why the Rust figure needs a correction |
 
