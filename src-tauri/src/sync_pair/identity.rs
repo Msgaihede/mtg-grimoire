@@ -58,6 +58,14 @@ const FALLBACK_DESKTOP: &str = "Desktop";
 #[cfg(target_os = "android")]
 const FALLBACK_ANDROID: &str = "Android device";
 
+/// The one string every install used to share, and the only name [`ensure`] will overwrite.
+///
+/// Kept as a constant rather than spelled inline because two places must agree on it exactly:
+/// the upgrade in [`ensure`], and the tests that assert a minted name is not this. It is not a
+/// fallback and nothing mints it — a device that reads this today got it from a build before
+/// 2026-08-29.
+pub(crate) const PLACEHOLDER: &str = "This device";
+
 /// What a browser calls itself when there is no user agent to read.
 #[cfg(target_family = "wasm")]
 const FALLBACK_BROWSER: &str = "Browser";
@@ -256,7 +264,35 @@ const NOT_ON_THE_ROSTER: &str = "That device is not in this pairing group.";
 /// reader who renamed this device in Settings — and quietly rename every existing install the
 /// first time it launched a new build. A name is minted once and is the reader's from then on.
 pub fn ensure(conn: &Connection) -> rusqlite::Result<Identity> {
-    if let Some(id) = read(conn)? {
+    if let Some(mut id) = read(conn)? {
+        // **The placeholder is upgraded exactly once; a name a reader chose never is.**
+        //
+        // Minting only on absence reaches fresh installs and nothing else, which leaves every
+        // device that already exists called `PLACEHOLDER` for ever — and those are precisely the
+        // devices the duplicate-name bug was reported against. Driven on the real pair
+        // 2026-08-29: both devices updated, both still read "This device", because both already
+        // had an identity.
+        //
+        // The comparison is against the exact old default and nothing else. It was never a name
+        // anybody picked — it is what every install shared — so replacing it takes nothing from
+        // anyone, while a reader who renamed holds a different string and is not touched.
+        //
+        // **The far device does not learn the new name from this.** `sync_devices` never syncs
+        // (it holds keys), so a name crosses only at pairing, where `create_group`, `join_group`
+        // and `accept` carry it. Two devices already paired need to pair again for the roster to
+        // catch up — which is the same gap a later `rename_device` has always had.
+        if id.name == PLACEHOLDER {
+            let minted = mint_name();
+            conn.execute(
+                "UPDATE sync_identity SET name = ?1 WHERE id = 1",
+                params![minted],
+            )?;
+            conn.execute(
+                "UPDATE sync_devices SET name = ?1 WHERE device_id = ?2",
+                params![minted, id.device_id],
+            )?;
+            id.name = minted;
+        }
         return Ok(id);
     }
     let device_id = hex(&crypto::random_bytes::<16>());
@@ -513,7 +549,9 @@ mod tests {
     }
 
     /// The name every install used to mint, and the one thing a minted name may never be.
-    const OLD_SHARED_DEFAULT: &str = "This device";
+    /// The real constant, not a second copy of the string — a test asserting against its
+    /// own spelling would keep passing after the code stopped using it.
+    const OLD_SHARED_DEFAULT: &str = PLACEHOLDER;
 
     /// A minted name says which machine this is.
     ///
@@ -546,25 +584,40 @@ mod tests {
         assert_eq!(roster(&conn).unwrap()[0].name, me.name);
     }
 
-    /// **An install that already has an identity keeps the name it has**, whatever this build
-    /// would mint. The old default is the case that matters: a machine that paired before this
-    /// change is still called "This device" and is renamed by the reader, never by a launch.
+    /// **An install still carrying the shared placeholder is upgraded, and this is the case the
+    /// bug was actually reported against.** Minting on absence alone reaches fresh installs and
+    /// nothing else, so both of a reader's real devices stayed called "This device" after the
+    /// build meant to fix exactly that — driven on the live pair 2026-08-29.
+    ///
+    /// The identity itself must survive: re-minting the `device_id` would be a silent fork, with
+    /// two machines writing under one name.
     #[test]
-    fn an_existing_identity_is_never_renamed_by_ensure() {
+    fn the_shared_placeholder_is_upgraded_on_an_existing_install() {
         let conn = db();
         conn.execute(
             "INSERT INTO sync_identity (id, device_id, secret_key, public_key, name, created_at)
              VALUES (1, 'deadbeef', ?1, ?2, ?3, 0)",
-            params![
-                [1u8; 32].as_slice(),
-                [2u8; 32].as_slice(),
-                OLD_SHARED_DEFAULT
-            ],
+            params![[1u8; 32].as_slice(), [2u8; 32].as_slice(), PLACEHOLDER],
         )
         .unwrap();
+        add_device(&conn, "deadbeef", &[3u8; 32], PLACEHOLDER).unwrap();
 
-        assert_eq!(ensure(&conn).unwrap().name, OLD_SHARED_DEFAULT);
-        assert_eq!(ensure(&conn).unwrap().device_id, "deadbeef");
+        let upgraded = ensure(&conn).unwrap();
+        assert_ne!(
+            upgraded.name, PLACEHOLDER,
+            "the placeholder is what the reader could not tell apart"
+        );
+        assert!(!upgraded.name.trim().is_empty());
+        assert_eq!(
+            upgraded.device_id, "deadbeef",
+            "the identity is upgraded, never re-minted"
+        );
+
+        // The roster row moves with it, or this device's own row disagrees with its heading.
+        assert_eq!(roster(&conn).unwrap()[0].name, upgraded.name);
+
+        // ...and it settles: a second launch mints nothing new.
+        assert_eq!(ensure(&conn).unwrap().name, upgraded.name);
     }
 
     /// **A reader who renamed this device is never renamed back**, however many times `ensure`
