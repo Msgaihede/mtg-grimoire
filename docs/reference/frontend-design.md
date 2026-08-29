@@ -3685,3 +3685,574 @@ native HTML5 drag, so `pull` (a real press/move/release, and absent from that sc
 string) is the one to reach for; and **`tauri dev` cannot see any of this**, because Vite's dev
 server sends no CSP header at all and the HTML carries no meta, which makes `devCsp` irrelevant
 there rather than merely permissive.
+
+---
+
+## Three floors, and only one of them is the app's
+
+**`1024` is `src-tauri/tauri.conf.json`'s `minWidth`, so it is a promise the *desktop window*
+makes and nothing else in this repo makes** (2026-08-29, read out of the config in the
+`mobile-layout` worktree at `56e94c2`). Tauri hands it to the OS window manager, which refuses to
+drag the frame narrower; a browser tab honours nothing of the sort and neither does an Android
+webview, where the window is whatever the device is. Every measurement in this document that ends
+"which the 1024px floor forbids" is still true — a horizontal page scrollbar at 1024 is still the
+failure those passes were checking for — but it is true *about desktop*, and the phrasing that
+makes it sound universal is the thing being corrected here.
+
+**The three widths are now stated in one place, `src/lib/viewports.ts`**, and the reason it is a
+module rather than four numbers typed into four story files is that two options compared at two
+widths are not compared:
+
+| | | Why that number |
+| --- | --- | --- |
+| `DESKTOP_FLOOR_PX` / `DESKTOP_FLOOR_HEIGHT_PX` | 1024 × 700 | Quoted from `tauri.conf.json`'s `minWidth`/`minHeight`. Rust owns it; TypeScript only repeats it |
+| `PHONE_PX` / `PHONE_HEIGHT_PX` | 390 × 844 | A hard case rather than a device. `CardGrid.columnsFor(350, 170)` floors at **one** column at this width, which is the failure the wall's design round exists to answer |
+| `TABLET_PX` | 768 | Portrait tablet — the width at which the deck editor's two columns become possible again (`roomForPanel`'s threshold is 414) |
+
+**These are widths to look at, not breakpoints to branch on**, and the module's own doc comment
+says so at the top rather than leaving it to be inferred. Where a control row folds is a question
+about *that row's own box* — `FilterBar` answers it with `@container/fb` and `DeckEditor` with a
+`ResizeObserver` over its desk — because the same component is drawn in a 1500px bar and in a
+206px docked panel, and a viewport query answers about the wrong box. Nothing here may grow a
+`sm:`/`md:`/`lg:` layout branch off these constants without saying, at its own site, why the
+*window* is the thing it is asking about.
+
+**`src/lib/viewports.test.ts` is the fence, and it is the only thing in the build that compares
+the two files.** It reads `src-tauri/tauri.conf.json` through Vite's `?raw` — the same trick
+`tokens.test.ts` uses on `index.css`, because this project has no `@types/node` and cannot reach
+`node:fs` — parses it, and asserts the constants against `app.windows[0]`. Without it a floor
+raised in Rust and not in TypeScript would leave every story in the design round drawn at a width
+the app can no longer be, silently and forever. The second test only orders the three targets, and
+that is not decoration either: a phone width at or above the tablet width would make the design
+round's two frames one frame, and every option would be looked at once.
+
+**Proved by mutation, 2026-08-29, three of them, each reverted:** `DESKTOP_FLOOR_PX` → 1025 went
+red with `expected 1025 to be 1024` — and the *expected* side is the number that came out of the
+config, which is what proves the `?raw` import reached the real file rather than an empty string;
+`DESKTOP_FLOOR_HEIGHT_PX` → 701 went red the same way, because the first mutation alone leaves the
+height assertion unexercised; and `PHONE_PX` → 800 went red with `expected 800 to be less than
+768`. Two tests, 2 passed at rest.
+
+**No site was cross-linked to this section, and the grep is why.** `1024px floor|app's own
+floor|narrowest window this app` matches **43 lines across 22 files** — 38 lines across 20 once
+this plan's own text and `viewports.ts`'s doc comment are taken out. The possessive spelling
+alone, the one that actually misleads, is **13 sites**: `Dialog.tsx`, `Dialog.test.tsx`,
+`Dialog.stories.tsx`, `DeckSearchPanel.test.tsx`, `StackView.stories.tsx` (×3), `CardGrid.tsx`,
+`CardGrid.test.tsx`, `WishlistPage.stories.tsx`, `decks-live-findings.md`, `import-export.md`, and
+one site in this file. A prose-only edit routes to neither CI job, so touching twenty files would
+be twenty new chances for a document to rot with nothing going red; one paragraph that the next
+reader finds by searching the same phrase is the cheaper fence. **A note for whoever re-runs that
+grep:** it undercounts. `DeckSearchPanel.test.tsx:1413` wraps "the app's 1024px / floor" across a
+line break and the pattern misses it, so the real figure is a floor and not a count.
+
+**What web and Android have instead is nothing** — no enforced minimum at either target, which is
+precisely why the phone frame above had to be chosen rather than read off a config. `PHONE_PX` is
+a width the design round agrees to look through; it is not a width anything refuses to go below.
+
+---
+
+## The shell is as tall as the *visible* viewport, and the safe area is opted into
+
+Shipped 2026-08-29 (mobile-layout 9a, Task 2), measured against a production `npm run build` —
+`tsc && tsc -p .storybook && tsc -p tsconfig.sw.json && tsc -p tsconfig.relay.json && vite build`
+— in the `mobile-layout` worktree. Nothing here changes a layout. It changes what the shell's
+height *means* on a target this app does not yet ship to, and it makes four properties available
+for the one that will.
+
+**`h-screen` is `100vh`, and `100vh` on a mobile browser is the *large* viewport** — the height
+the page would have if the URL bar were hidden. An `h-screen` shell therefore reaches past the
+bottom of what the reader can see and puts its own last row under browser chrome. `h-dvh` is
+`100dvh`, the visible height, and it tracks the bar as it hides and returns. On desktop and in
+WebView2 there is no bar and the two are the same number, which is why this costs the shipped
+window nothing — **and that clause was then measured rather than believed.** Driven in the shipped
+WebView2 (`npm run tauri dev`, debug build, 2026-08-29), in **one** `eval` because a rect and a
+viewport height taken minutes apart can be at two different sizes:
+
+```
+{ href: "http://localhost:1420/",
+  cls: "flex h-dvh flex-col overflow-hidden bg-bg text-text",
+  h: 1080, top: 0, inner: 1080, client: 1080,
+  padTop: "0px", padLeft: "0px", padRight: "0px" }
+```
+
+The shell's height is `documentElement.clientHeight` exactly, which is what it was under
+`h-screen`: **desktop did not move.** `href` is in the payload deliberately — `cdp.mjs` takes the
+first `type: page` target and DevTools, if open, is one, so a probe can silently answer about the
+wrong DOM.
+
+**The three inset paddings resolving to `0px` is the second half of that reading**, and it is the
+one that could not be got from a test: it shows `env(safe-area-inset-*)` parsing and falling back
+rather than invalidating the declaration, on a desktop window where all four are zero. The block
+costs the shipped app nothing, measured.
+
+**`viewport-fit=cover` and the four `--safe-*` properties are one change, because either half
+alone is worse than neither.** `env(safe-area-inset-*)` resolves to `0px` in every context until
+`index.html`'s viewport meta carries `viewport-fit=cover`; without the meta the properties are
+dead code — green in the suite, zero in the window, findable only on hardware with a notch. With
+the meta and without the padding, the page is moved *under* the notch and the gesture bar. So
+`index.html` gained the attribute and `src/index.css` gained the block in the same commit.
+
+The insets reach the shell as an **inline style**, not as arbitrary-value classes. Tailwind scans
+source text for whole class names, and a mistyped arbitrary value emits *nothing* — silently, with
+`tsc` and the whole suite green. An inline style is what a computed length is already spelled as
+here, exactly as a column template is.
+
+**`--safe-b` is published and deliberately unapplied.** Nothing in this build is anchored to the
+window's bottom edge, and padding the shell there would inset a scroller against an indicator that
+is not over it. It exists for whatever 9b puts down there — a bottom tab bar, a sheet — and the
+absence is the decision rather than an oversight.
+
+The four properties sit in a `:root` block **of their own**, immediately after `.dark`, rather
+than in the palette's. That block and `.dark` carry identical values on purpose and the insets
+have no `.dark` twin to carry: they are not a colour, and a second theme would not move them.
+
+### The build proved the classes emit, which is not a formality here
+
+`h-dvh` is a core utility rather than an arbitrary value, so it *should* survive — but this repo
+has shipped a class that compiled to nothing, and the check is two greps against the built sheet
+(`dist/assets/index-*.css`, 159.09 kB / 28.95 kB gzipped):
+
+```
+$ grep -o "\.h-dvh{[^}]*}" dist/assets/*.css
+.h-dvh{height:100dvh}
+
+$ grep -o -- "--safe-t:[^;]*" dist/assets/*.css
+--safe-t:env(safe-area-inset-top,0px)
+```
+
+All four insets are in the sheet — `--safe-t`, `--safe-r`, `--safe-b`, `--safe-l` — and
+`dist/index.html` carries
+`content="width=device-width, initial-scale=1.0, viewport-fit=cover"`.
+
+`.h-screen{height:100vh}` is **still emitted**, and that is correct rather than leftover: three
+`src/web/` boot screens use `min-h-screen` and `PlacementProbe.stories.tsx` uses `h-screen`
+deliberately. What is no longer true is the *shell* being one.
+
+### The assertion that was green over its own regression
+
+Worth writing down, because it cost a mutation round and it is this repo's own trap read backwards.
+
+`AppShell.test.tsx` asserts `viewport-fit=cover` against `index.html` read through `?raw`, which is
+the only observable — no render reaches that file. Written as the obvious whole-file
+`expect(html).toMatch(/viewport-fit=cover/)`, **it passed with the attribute deleted from the
+tag**: the HTML comment written directly above the meta explains why the attribute and the four
+properties ship together, and that explanation names the attribute. The regex matched the prose.
+
+This is `tokens.test.ts`'s rule — Tailwind reads prose as eagerly as code — arriving from the other
+side: here the *test* read prose as eagerly as markup. The fence is anchored on the tag now:
+
+```ts
+const VIEWPORT_META = /<meta\s+name="viewport"[^>]*\scontent="([^"]*)"/;
+```
+
+and the assertion reads the captured `content`, with `expect(content).toBeDefined()` as its own
+assertion — a meta that has been renamed or removed makes `content` `undefined`, and
+`expect(undefined).toContain(…)` would report a missing *attribute* rather than a missing *tag*,
+which are two different repairs. Re-mutated after the repair it fails with
+`expected 'width=device-width, initial-scale=1.0' to contain 'viewport-fit=cover'`.
+
+**The general rule this earns:** a `?raw` assertion over a whole file is only a fence if the file
+cannot describe the thing it is being searched for. In a codebase whose comments are as long as
+this one's, most files can.
+
+### Two prose sites now stale, not repaired here
+
+Both name the shell as `h-screen` and neither is in this task's file set:
+
+- `src/components/AppShell.stories.tsx:291` — "The shell is `h-screen`, and in a docs page that is
+  the *docs* page's screen." The argument still holds; the class name in it no longer does.
+- `src/features/decks/DeckEditor.tsx:3141` — "…while `body.scrollHeight` and the `h-screen` shell
+  root both read 800…". This one is a **record of a 2026-08-15 measurement** and arguably should
+  keep the class the shell had on the day, but it reads as a present-tense claim.
+
+A prose-only edit routes to neither CI job, so nothing goes red for either.
+
+### The dialog against a real URL bar — deferred, with the recipe
+
+**This measurement was not taken, and the reading it needs cannot be emulated.** It is recorded
+here in full so the next person pays for it once.
+
+The question. `Dialog`'s scrim is `fixed inset-0 grid grid-rows-[minmax(0,1fr)]`
+(`src/components/Dialog.tsx:333`) and the panel's clamp is `max-h-full`
+(`src/components/Dialog.tsx:421`), a percentage of that grid area. If a `fixed` box's `bottom: 0`
+resolves against the **large** viewport on a mobile browser, the grid area is taller than the
+screen, `max-h-full` clamps to something bigger than the window, and the panel's footer buttons
+land under the URL bar — which is the 2963px failure this document already records, arriving by a
+different route and just as invisible to jsdom.
+
+This is genuinely two-way and must not be guessed. It needs a real device, because
+`scripts/cdp.mjs size` hardcodes `mobile: false` and emulates a narrow *desktop* — no URL bar, no
+`visualViewport` behaviour, no coarse pointer.
+
+**The recipe.**
+
+1. Take the Storybook lock (`.claude/skills/running-the-app/lock.ps1`), `npm run storybook`, then
+   `adb reverse tcp:6006 tcp:6006`. Storybook runs entirely on the fake, so this needs nothing
+   from the web or Android targets.
+2. On the phone, open the story **without the manager chrome**, which otherwise supplies its own
+   scroller and makes the reading about the wrong box:
+   `http://localhost:6006/iframe.html?id=decks-dialog-shell--long-body&viewMode=story`
+   (`Decks/Dialog shell → Long body`, whose 24-paragraph body is already the "more content than
+   fits" case). Repeat on
+   `http://localhost:6006/iframe.html?id=decks-categoriesdialog--default&viewMode=story` for a
+   panel that carries real footer controls — the `Dialog` shell itself renders header + body and
+   its hosts supply the footer, so the shell's own story has no footer to read.
+3. Evaluate, in one expression:
+
+```js
+(() => {
+  const panel = document.querySelector('[role="dialog"]');
+  const scrim = panel.parentElement;
+  const last = panel.lastElementChild;
+  return {
+    scrimHeight: scrim.getBoundingClientRect().height,
+    panelBottom: panel.getBoundingClientRect().bottom,
+    lastChildBottom: last.getBoundingClientRect().bottom,
+    visual: visualViewport.height,
+    inner: innerHeight,
+    client: document.documentElement.clientHeight,
+  };
+})();
+```
+
+`scrim` is `panel.parentElement` because that is exactly how `Dialog.test.tsx:226` reaches it;
+using the same expression keeps the live reading and the pinned assertion talking about one
+element.
+
+4. **If `panelBottom > visualViewport.height`** (equivalently, if `scrimHeight` exceeds it): add
+   `h-dvh` to the scrim's class string beside `inset-0` — a specified height wins over `bottom` on
+   a fixed box — and pin it in `Dialog.test.tsx` next to the existing
+   `expect(scrim).toHaveClass("grid-rows-[minmax(0,1fr)]")` at line 230, with a comment naming the
+   device, the browser and the three numbers, because jsdom can never see the failure.
+5. **If it does not:** change nothing, and **record the three numbers, the device and the browser
+   here.** "We looked and it was already right" is a result. Without it the next person pays for
+   the same measurement, and there is no cheaper way to take it.
+
+Until one branch or the other is written down, `Dialog.tsx` is unchanged and this question is
+open.
+
+---
+
+## One spelling of the coarse-pointer question, and a target-size floor
+
+Shipped 2026-08-29 (mobile-layout 9a, Task 3), against tailwindcss **4.3.3** and proved by a
+production `npm run build` in the `mobile-layout` worktree. Two lines of CSS and a sweep. **No
+control in the app uses either of them**, and that is the point of the task rather than an
+unfinished half of it.
+
+### The variant
+
+```css
+@custom-variant coarse (@media (pointer: coarse));
+```
+
+`coarse:min-h-[var(--target-min)]` is how a control says it grows for a finger. It is the shape
+`motion-reduce:` already has here — an environment preference expressed as a Tailwind variant, on
+a great many sites; grep it rather than quoting a count, which is a fact about a tree — so the
+vocabulary is one a reader of this codebase already has.
+
+**`pointer`, not `any-pointer`.** A laptop with a touchscreen has a fine pointer *and* a coarse
+one, so the `any-` spelling is true on that machine and would grow every control on it for a
+finger nobody is using. The near miss is the thing worth fencing, which is why
+`src/lib/touchTargets.test.ts` sweeps for both spellings and allows neither outside `index.css`.
+
+**One spelling, for `layers.test.ts`'s reason.** A raw media query written in a component is a
+second answer to a question the app should answer once, and the two drift the first time either
+moves.
+
+### The at-rule form is the one this Tailwind accepts, and it was proved by building
+
+This mattered more than it looks. **A `@custom-variant` Tailwind does not understand fails
+silently** — the utility simply never appears in the output, with `tsc` and the whole suite green.
+The only witness is the built sheet, and the check is: add a throwaway
+`coarse:min-h-[var(--target-min)]` to a component, rebuild, grep, remove.
+
+The at-rule form above is what 4.3.3 accepted, on the first attempt. The alternative — the
+selector form the neighbouring `@custom-variant dark (&:is(.dark *))` uses — was never needed. The
+emitted rule, in full:
+
+```
+$ grep -o "@media(pointer:coarse){[^{]*{[^}]*}}" dist/assets/*.css
+@media(pointer:coarse){.coarse\:min-h-\[var\(--target-min\)\]{min-height:var(--target-min)}}
+```
+
+**The obvious grep for it finds nothing, and it is wrong twice.** Written as
+`grep -o "@media (pointer:coarse){[^}]*}"` it exits 1 with no output over a sheet that plainly
+contains the rule: Tailwind's minifier emits `@media(pointer:coarse)` with **no space** after
+`@media`, and the rule **nests**, so a `[^}]*}` class stops at the inner brace and matches
+nothing. Both halves of that are properties of the minified output rather than of the variant, and
+either one alone reads exactly like "the variant did not compile" — which is the failure this
+check exists to detect, so the false negative is expensive. The corrected pattern is the one
+above.
+
+### The token
+
+```css
+--target-min: 44px;
+```
+
+**WCAG 2.5.5 (AAA) asks 44×44 CSS px; 2.5.8 (AA) asks 24×24**, which this app already clears
+everywhere — its control ladder is `h-9`/`size-9` (36px) for a control and `h-8`/`h-7` (32/28px)
+for a small one. 44 is the number because the AA floor is a floor for a *pointer*, and the
+surfaces this token is for have no pointer at all.
+
+**A plain custom property rather than a `@theme` entry.** It is a minimum, not a step on the
+spacing scale, and putting it in the spacing namespace would generate `p-target-min` and
+`gap-target-min` — two utilities that mean nothing and one that means this. It sits in the
+environment `:root` block beside the four `--safe-*` insets, which is the same argument: the
+palette's `:root` and `.dark` carry identical values on purpose, and this is not a colour.
+
+Published in the sheet as `--target-min:44px`.
+
+### Nothing uses either one, and that is 9b's decision to take
+
+**No `coarse:` variant and no `var(--target-min)` appears anywhere in `src/` outside the two
+places that declare and guard them** — `index.css`'s own comment and `touchTargets.test.ts`'s.
+Which control grows, and by how much, and on which surface, is a design decision: it is downstream
+of the four option rounds, and writing it now would be answering a question nobody has been asked.
+What is settled here is only that there is **one** way to ask the question, and a number to ask it
+with that comes from a standard rather than from taste.
+
+The consequence worth stating plainly: **the built sheet contains `--target-min` and no
+`(pointer: coarse)` rule at all.** A media query with no utility inside it is not emitted, so the
+variant costs the bundle nothing until something uses it.
+
+### A measured correction to the "prose is a class source" rule
+
+`src/index.css`'s comment for the variant names `coarse:min-h-[var(--target-min)]` verbatim, as a
+whole class name, to show the intended spelling. This repo's rule — stated in `src/CLAUDE.md`, in
+`tokens.test.ts` and in this plan's own constraints — is that **Tailwind scans source text for
+whole class names, so a class named in a doc comment emits a rule**. That rule is why `@source` was
+narrowed away from `docs/` in the first place.
+
+**It does not apply to the stylesheet's own comments, measured today.** With the throwaway class
+removed and that comment left in place verbatim, a full rebuild emits **no `coarse` rule and no
+occurrence of the string `coarse` anywhere in `dist/assets/index-*.css`** — `grep -o "coarse"`
+exits with nothing. So `src/index.css` can name a class in prose without shipping it, even though
+`@source "../src"` covers the directory it lives in.
+
+Do not generalise this to `.tsx`: those were not re-measured, the narrowing of `@source` was done
+because prose in `docs/` *was* emitting rules, and the safe habit is unchanged. What is now known
+is one specific exemption, and it is the one that lets the variant document itself at its own
+declaration site.
+
+---
+
+## What touch takes away
+
+**Read out of the source on 2026-08-29**, in the `mobile-layout` worktree at `56e94c2` with Tasks
+1–3's then-uncommitted edits in the tree. Nothing below was driven on a device, and nothing below
+is a proposal — the last paragraph of this section is the point of it.
+
+Line numbers are a fact about a tree, so every row names the symbol or the string beside the line
+and the line is the convenience rather than the identifier.
+
+### The sweeps, and what each one costs
+
+The plan's own three greps, run first:
+
+```
+grep -rn "group-hover:\|hover:opacity\|opacity-0" src --include=*.tsx | grep -v "\.test\." | grep -v "\.stories\."
+```
+
+**13 lines. Two of them are prose** — `features/decks/cardControl.tsx:942`, a doc comment
+explaining that `group-hover:` is the *wrong* question in a stack, and
+`features/decks/CardStack.tsx:1224`, a JSX comment saying the same thing. Tailwind scans prose as
+eagerly as code and emits a rule for a class named in either, which is why both are real hits for
+a token sweep and neither is an affordance. A census that counted them would be reporting a
+hover behaviour at two sites that deliberately do not have one.
+
+**The same sweep undercounts in the other direction, by eleven.** `REVEAL_ON_HOVER`
+(`features/collection/AddToCollection.tsx:36`) and `REVEALED_ON_CARD`
+(`features/decks/cardControl.tsx:933`) are shared constants, so the grep finds each definition
+once and none of its call sites. `REVEAL_ON_HOVER` alone is spread at **11 sites in 9 files**.
+Grepping the constants is what finds them; grepping the classes cannot.
+
+Widened to every `hover:` variant:
+
+```
+grep -rn "hover:" src --include=*.tsx --include=*.ts --include=*.css | grep -v "\.test\." | grep -v "\.stories\."
+```
+
+**190 lines in 83 files**, with **19 test and story files excluded**. At least six of the 190 are
+prose; the true figure is higher, because the filter that finds a prose line (`*` or `//` at the
+start) cannot see a JSX comment's continuation lines, which is exactly how `CardStack.tsx:1224`
+escapes it. Do not write a prose/markup split down as a number — classify at the site.
+
+Tooltips: **53 shipped files** bind `useTooltip()` (54 matches less the hook's own module),
+holding **81 `const tip = useTooltip()` bindings** and **98 `{...tip(…)}` spreads**; **26 test and
+story files excluded**. Of the 98, **11** pass `whenClipped: true`, and about 57 code lines pass
+`describes: false`.
+
+Right-click: `grep -rn "onContextMenu"` returns **37 shipped lines** — **14 JSX attachments**,
+**9 handler factories** (`onContextMenu: menu(build)` and its two inline twins), **5 type
+declarations**, and the balance prose — over one document-level suppressor at
+`components/menu/ContextMenuProvider.tsx:67`.
+
+**Six things the sweep found none of, each checked rather than assumed:** `onDoubleClick` and
+`dblclick`, **0**. `onWheel` as a React prop, **0** — the app's only `wheel` listener is
+`lib/useCardZoomGesture.ts:88`. `pointerType` in shipped code, **0** (five matches, all in stories
+and `src/test-drag.ts`, all synthesising `"mouse"`). `touchstart`/`touchend`/`TouchEvent`, **0**.
+Any long-press, **0**. `matchMedia` in shipped code, **0** — the two matches are the jsdom stub at
+`src/test-setup.ts:147`.
+
+**`title=` is 59 shipped lines and exactly one of them is a native attribute**, `components/AppShell.tsx:596`.
+Every other match is a component prop — a heading (`Dialog`, `Notice`, `SettingsSection`) or a
+prop the component turns into a `useTooltip()` binding itself (`Marker` at
+`features/decks/views/GroupHeader.tsx:143`, `ToggleChip` at `features/decks/DeckEditor.tsx:3752`).
+The shape `src/CLAUDE.md` describes is the shape the tree is in.
+
+**One correction worth recording before it is repeated: `touch-action` is not absent from this
+tree.** Two sites carry it — `src/index.css:434`, inside the block mirroring the rules
+`@dnd-kit/dom` injects at runtime, applying `touch-action: none` to whatever is mid-drag; and
+`features/decks/DeckSearchPanel.tsx:1072`, where the panel's resize strip carries Tailwind's
+`touch-none` with a comment saying why. Neither is a designed touch affordance and neither
+changes what follows, but a later sweep for "does anything here think about touch" will find them
+and should know what they are. `(pointer: coarse)` really is nowhere: every `coarse` in the tree
+is prose about something else.
+
+### Hover-only affordances
+
+| Site | What only a hover gives | Reached another way today |
+| --- | --- | --- |
+| `components/AppShell.tsx:614` — `{...tip(narrow && label, { side: "right", describes: false })}` | The nav entry's word while the rail is collapsed to `w-17`/68px. The label is `sr-only` there, so the button's accessible name is unchanged and a screen reader still has it; the eye has the icon and nothing else. | The expanded rail — `useNavCollapsed` persists the state in `app_meta`. At 390px the expanded rail is 208px of the window. |
+| `components/AppShell.tsx:822` — the same spread over a pinned deck or folder's name | Which deck or folder each pinned art crop is. | The same, and nothing else. |
+| `components/Ribbon.tsx:96` (`dataDir`) and `:97–98` (`imageStoreFailures`), bound at `:176` on the `role="status"` line | Which data folder is live, and how many card images could not be written to the cache. | **Nothing.** Each field reaches the UI at exactly one place, and it is this tooltip: `imageStoreFailures` is drawn in no other string and `dataDir` in no other expression. Settings names neither — `features/settings/SettingsPage.tsx:154` reads "Data folder and import. Coming in a later plan.", and `features/settings/DangerZonePanel.tsx:117` records that the folder is named nowhere on Settings. |
+| `features/collection/AddToCollection.tsx:36–38` — `REVEAL_ON_HOVER`, spread at 11 sites: `features/card/CardDetailPane.tsx:2034`, `features/collection/CollectionTable.tsx:349`, `features/decks/DeckTile.tsx:387`, `features/decks/FolderTree.tsx:581`, `features/search/CardGrid.tsx:1485`, `features/search/SearchPage.tsx:180` and `:637`, `features/tags/TagResults.tsx:301`, `features/wishlist/WishlistGrid.tsx:440`, `features/wishlist/WishlistTable.tsx:180` and `:290` | Where the quick-add `+` is, on every card surface in the app. | **The control is not gone; it is unaimable.** `opacity-0`, never `hidden` — deliberately, so it keeps its tab stop — and `CardGrid.tsx:1474` states in as many words that an `opacity-0` element is still a hit target. A finger that lands on it presses it. Nothing on screen says it is there. |
+| `features/decks/cardControl.tsx:933–936` — `REVEALED_ON_CARD` | The deck card's control bar on the three views that draw a card as a picture. | The same `opacity-0` answer. The stack has a second door: `revealedWhenOpen` (`cardControl.tsx:955–963`) drives the same bar off **which card is open** rather than off the pointer — see the flip-through row. |
+| `components/CardArt.tsx:210–213` — `group-hover:scale-[1.02]`, given `hoverZoom` by `features/search/CardGrid.tsx:1374` and `features/decks/views/GridView.tsx:404`; `features/decks/DeckTile.tsx:531–534` for a deck tile | Which tile the pointer is over. | Nothing equivalent, and nothing is missing: the lift answers a question a finger does not ask. The caret's answer is `FOCUS`, which is a different thing. |
+| `features/decks/DeckSearchPanel.tsx:1072` (`cursor-col-resize`) and `:1082–1086` (an `opacity-0 … group-hover:opacity-100` grip) | That the docked search panel's left edge can be dragged at all. Both signals belong to a pointer: a cursor a touchscreen does not have, and a grip revealed by `group-hover`. | The drag itself is pointer-based and the strip already carries `touch-none` (`:1072`); the keyboard reaches the same resize through arrows, Home and End (`:1055–1061`). Nothing **visible** reaches it without a pointer. |
+| `features/decks/CardStack.tsx:851` — `onPointerEnter={() => onArm(index)}`, `STACK_OPEN_DWELL_MS` 80 (`:271`); released at `:703` after `STACK_CLOSE_DELAY_MS` 180 (`:287`) | The deck builder's signature interaction: running a pointer down a pile to fan it. | **Yes, and by design.** The open card resolves to `openIndex ?? selectedIndex` (`CardStack.tsx:653–655`), so a card that was *pressed* stays lifted after the pointer has gone. A tap therefore fans one card. What a tap cannot do is fan the pile. |
+| `features/card/PrintingPreview.tsx:182–183` — `onMouseEnter`/`onMouseLeave`, `PREVIEW_DWELL_MS` 250 (`:25`) | One printing's art without swapping to that printing. | `onFocus` arms the same dwell when focus arrives in the row (`:185–187`), which is the keyboard's door. On touch, `onPointerDown: cancel` (`:201`) takes down whatever the tap's compatibility `mouseenter` armed. |
+| `components/menu/ContextMenu.tsx:730` — `onPointerOver`, `SUBMENU_HOVER_MS` 120 (`:48`) | Opening a submenu by resting on its row. | **Yes, at the site**: the submenu row's own `onClick` toggles it (`components/menu/Submenu.tsx:163`). Opening the parent menu is the gestures table's problem, not this one's. |
+| The other **98** `{...tip(…)}` spreads, across 53 shipped files | Everything this app says only in a hint. Two kinds, unequally lost: **11** pass `whenClipped: true`, where the words are the anchor's own truncated text — complete in the DOM and therefore in the accessibility tree, so only the *paint* is cut off; the rest are descriptions, and the ~57 lines passing `describes: false` are the ones whose words are the element's own name or already-visible text, drawn `aria-hidden`. | Nothing generic. Each of the 98 is its own question, and the two kinds have to be told apart before any of them is counted as lost. |
+| The marks on a card face — `components/CardArt.tsx:402`, `components/FinishMark.tsx:104`, `components/GameChangerMark.tsx:68`, `components/CountTag.tsx:212`, `components/OwnedBadge.tsx:55`, `components/RarityGem.tsx:54`, `features/decks/CardMarks.tsx:73`/`:319`/`:424`/`:458`/`:519`/`:578` | What a glyph means. Each binds `describes: false` because the panel carries the mark's *name* and the mark itself is `aria-hidden`. | Nothing on the card. The same facts are set in type in the card pane and in the three tables — a different surface, not the same one reached twice. |
+| `components/AppShell.tsx:596` — the app's one native `title` | Nothing at all, and it is in this table so it is not mistaken for a lead. | **The phone answer is never "put the `title` back."** `src/CLAUDE.md` requires a hint to be `useTooltip()`'s spread, and the reason holds twice over here: a native tooltip does not appear on touch either, so restoring one would trade a hint nobody sees for a hint nobody sees. This site survives precisely *because* its sentence is never shown to anybody — Chromium freezes `:hover` at a drag's origin for the whole drag — and is read through the accname spec's description fallback instead. |
+
+### Gestures with no touch equivalent
+
+| Gesture | What it is, and what it does | Reached another way today |
+| --- | --- | --- |
+| **Ctrl+wheel — the card zoom** | `lib/useCardZoomGesture.ts:82–88`: one native `wheel` listener at `{ passive: false }` that returns unless `e.ctrlKey`, then `preventDefault()`s and calls `zoomCards(section, e.deltaY < 0 ? 1 : -1)`. It steps the sixteen-stop ladder in `lib/cardZoom.ts:79–81` for one of the eight sections at `:125–134`. | **Nothing. The grep is below, and it is the finding this round rests on.** |
+| **Ctrl/⌘-click** | `readModifiers` (`lib/multiSelect.ts:70–79`) sets `toggle` from `ctrlKey \|\| metaKey`; `applySelect` (`:80` onward) toggles that one key in or out of the set. It reaches a surface through `useCardSelection`'s `pick` (`lib/useCardSelection.ts:79`, `:125`), which returns whether the press was a selection. | **Nothing.** There is no "Select all", no checkbox column and no selection mode anywhere in the tree — `grep -rni "select all\|selectAll\|selectRange"` outside tests and stories returns no lines. `CardGrid`'s arrow walk returns early on **any** modifier (`features/search/CardGrid.tsx:969`), so the wall's keyboard path offers no chord either. |
+| **Shift-click** | The same `readModifiers`, setting `range` from `shiftKey`; `applySelect` replaces the set with the run from the anchor, and Ctrl+Shift adds that run instead. Four cases and no others, Shift outranking Ctrl (`lib/multiSelect.ts:80–110`). | As above. |
+| **Right-click** | `useContextMenu`'s `menu(build)` (`components/menu/useContextMenu.ts:151`), spread as `onContextMenu` at 14 shipped attachments over 9 handler factories, above a document-level suppressor at `components/menu/ContextMenuProvider.tsx:67`. It is how a card, a table row, a folder, a deck tile, a pile heading and the card pane are acted on. | **Two doors, and neither belongs to touch.** `menuKey` answers Shift+F10 and the ContextMenu key (`useContextMenu.ts:153–162`) — a keyboard. `menuClick` opens the same menu from a plain click on a `⋯` trigger (`:182–185`) — and it exists at exactly **two** surfaces, the collection's and the wishlist's folder cards (`features/collection/CollectionPage.tsx:1322` and `features/wishlist/WishlistPage.tsx:862`, drawn at `CollectionFolderCard.tsx:244` and `WishFolderCard.tsx:229`). Every other menu in the app has no plain-click door. |
+| **Resting a pointer** | Four dwell timers, each keyed on a pointer that arrives and does not leave: `TOOLTIP_OPEN_MS` 400 (`components/tooltip/TooltipProvider.tsx:17`), `SUBMENU_HOVER_MS` 120 (`components/menu/ContextMenu.tsx:48`), `PREVIEW_DWELL_MS` 250 (`features/card/PrintingPreview.tsx:25`), `STACK_OPEN_DWELL_MS` 80 (`features/decks/CardStack.tsx:271`). | Per site, in the table above. **The tooltip's own mechanics deserve stating precisely, and they were not measured on hardware for this census.** The binding is `onPointerEnter`, not `onMouseEnter` (`components/tooltip/useTooltip.ts:113`), and a touch tap *does* dispatch `pointerenter` — so the 400ms timer is armed. What happens next has three parts: the provider's document-level `pointerdown` handler calls `hideNow` (`TooltipProvider.tsx:190–195`), which clears the *close* timer and hides what is open but does **not** clear the open timer; `pointerleave` at lift-off calls `leave`, which does clear it (`:155–160`); and the `focus` door is fenced on `anchor.matches(":focus-visible")` (`:141`), which a pointer press makes false. Whether a deliberate press-and-hold past 400ms puts a panel up is therefore a **reading somebody owes on a device**, and not a conclusion this census may draw from source. |
+
+### The zoom is the one with no other door
+
+`useCardZoomGesture(ref, section)` (`lib/useCardZoomGesture.ts:78–95`) attaches a single native
+`wheel` listener with `{ passive: false }` to the element it is handed — `CardGrid`'s scroller,
+`StackView`'s root, `GridView`'s root and `DecksPage`'s tile wall, four call sites. The handler
+returns unless `e.ctrlKey`, then `preventDefault()`s (which is what stops WebView2 zooming the
+whole window on top of the app, and the entire reason this is not React's passive `onWheel`) and
+calls `useAppStore.getState().zoomCards(section, e.deltaY < 0 ? 1 : -1)`.
+
+**A trackpad pinch works and a touchscreen pinch does not, and the difference is a kind rather
+than a degree.** A precision trackpad's pinch is delivered to the page as a stream of `wheel`
+events with `ctrlKey` set and no key held — that file says so at `:51–55` — so one branch serves
+two input devices, and the `preventDefault` is load-bearing on hardware where nobody is touching
+Ctrl. A touchscreen pinch produces **no wheel event at all**. It is a two-pointer gesture, and
+nothing in this app listens for one: no `touchstart`, no `TouchEvent`, no `pointerType` branch, no
+gesture library, nowhere in `src/`.
+
+**So on a phone `cardZoom` is frozen at whatever the last session left.** `ZOOM_STEPS` is
+**sixteen** stops from 0.5 to 2, ten points apart, written out as literals
+(`lib/cardZoom.ts:79–81`), walked independently for **eight** sections (`ZOOM_SECTIONS`, `:125–134`
+— `search`, `tags`, `collection`, `wishlist`, `deckSearch`, `deck`, `deckGallery`, `printings`).
+The value a phone opens on comes from `hydrateCardZoom` (`lib/store.ts:1029–1037`), called once
+from `lib/useCardZoomPersistence.ts:80` with whatever `ipc.cardZoom()` answered: it snaps each
+value to the ladder through `snapZoom`, **drops any key this build does not draw** (`isZoomSection`),
+bumps no pulse — a restored size is not a gesture — and returns unchanged if the reader zoomed
+during the round trip. A database that has never been zoomed and a read that fails both land at
+`DEFAULT_ZOOM` = 1 (`cardZoom.ts:88`, `:153–175`). The write half never runs either: the
+persistence effect subscribes on `zoomPulse`, and only `zoomCards` bumps it
+(`lib/store.ts:1020–1024`).
+
+**And the grep, because the claim above is the one thing the wall's design round argues from.**
+Asked on 2026-08-29:
+
+```
+grep -rn "zoomCards" src .storybook
+```
+
+**39 lines. Six sit outside test and story files**, and of those six, three are doc comments, one
+is the store's interface declaration (`lib/store.ts:400`) and one is the store's definition
+(`:1020`). **Exactly one is a call: `lib/useCardZoomGesture.ts:86`.** The pair of `−`/`+` buttons
+at `components/CardZoomIndicator.stories.tsx:69` and `:72` are the workbench's, in no build a
+reader sees. `stepZoom` tells the same story — 34 lines, one definition (`cardZoom.ts:234`), one
+import and one call, both in `store.ts`, the rest prose and tests. **Nothing anywhere in this app
+steps `cardZoom` but the wheel.**
+
+### This is a census and not a proposal
+
+What replaces any of the rows above belongs to the four design rounds and to 9b, and is
+deliberately absent from here. A census that quietly proposes a fix is a design decision taken
+without being asked for — it arrives dressed as a measurement, it is argued from nowhere, and by
+the time anybody notices it is a constraint rather than a finding. The rows are what a reader with
+no hover and no wheel loses, and the third column is what the tree offers **today**, not what it
+ought to offer.
+
+---
+
+## The phone frame, driven: the rail decides whether the wall can ever be two columns
+
+**Measured 2026-08-29 in the shipped WebView2** (`npm run tauri dev`, debug build, `mobile-layout`
+worktree), at `cdp.mjs size 390 844`. This is the reading the wall's design round argues from, and
+it found a coupling between two rounds that the 9a plan does not have.
+
+> ⚠️ **`cdp.mjs size` hardcodes `mobile: false`**, so this is a narrow *desktop* — no URL bar, no
+> `visualViewport` behaviour, no coarse pointer. It measures **width arithmetic**, which is
+> exactly what is wanted here, and it measures nothing about touch. WebView2 also **ignores
+> `clearDeviceMetricsOverride`**, so the window was put back with an explicit `size 1280 800`.
+
+### The three widths a 390px window actually leaves
+
+`main` is `p-5`, so it takes 40px off whatever the rail leaves. The rail's own width is
+`useNavCollapsed`'s persisted state, and **nothing collapses it automatically at any width** — a
+390px window opens with the full 208px rail unless the reader has collapsed it before.
+
+| Rail | `nav` | `main` content | `columnsFor` @170 | @160 | @135 |
+| --- | --- | --- | --- | --- | --- |
+| Expanded — **today's default** | 208 | **142** | 1 | 1 | 1 |
+| Collapsed (`useNavCollapsed`) | 68 | **282** | 1 | **1** | 2 |
+| Gone entirely | — | 350 | 1 | **2** | 2 |
+
+The first two rows were driven; the third is `columnsFor`'s arithmetic on the width a missing rail
+leaves. `columnsFor` is `max(1, floor((width + 12) / (tile + 12)))` (`CardGrid.tsx:180`).
+
+**At 142px the tile is narrower than one whole tile**, so `tileWidthFor`'s cap — its only
+arithmetic, and it covers exactly this case — draws the card at 142 rather than 170, and
+`sideGutterFor` returns 0. That is the state a phone opens in today.
+
+### The coupling, which is the finding
+
+**A 160px tile does not buy a second column while the rail is there.** At 282px of content,
+`columnsFor(282, 160)` is still **1**; the tile has to come down to **135px** before a 390px phone
+draws two columns with a 68px rail beside them. Without the rail, 160 is enough and so is anything
+up to 169.
+
+So the wall's round and the chrome's round are not independent, and the option matrix is smaller
+than it looks: **a phone tile width only delivers two columns if the rail is gone** — a bottom bar
+or a drawer — **not if the collapsed rail is kept.** Keeping the rail and wanting two columns costs
+a 135px tile, which is a 21% shrink on the chin's type rather than the 6% a 160px tile costs.
+
+### The vertical, on the same pass
+
+At 390×844 in WebView2: `TitleBar` **34**, ribbon + `ManaLine` **58** (56 + the 2px line, exactly
+as the plan states), `main` **752** of which **712** is content after `p-5`'s 20 top and bottom.
+
+**On web and Android the 34 comes back and roughly 144 goes away** — parity §5 says the browser and
+the OS own the frame, so `TitleBar` is absent, while a mobile browser's chrome takes the visible
+viewport to roughly 700. That leaves about **602px** of `main` content before the filter bar
+spends anything, and the bar's two or three lines at 36–40 take it to roughly **500** — one 170px
+tile plus its chin, and a sliver of the next row. The plan's vertical budget holds as written.
+
+### What this pass could not measure, and why
+
+**The wall was empty.** A worktree is a fresh install and its `corpus.db` has never synced, so
+`main li` returned zero tiles and no drawn tile width could be read. Every figure above is a
+measurement of *boxes* — `nav`, `main`, their padding — plus `columnsFor` evaluated against the
+measured content width in the same `eval`. That is the honest scope of it: the geometry is
+measured, the tile counts are arithmetic over a measured width, and **no card was on screen**. To
+read real tiles here, copy the main checkout's whole `data` folder into the worktree first.

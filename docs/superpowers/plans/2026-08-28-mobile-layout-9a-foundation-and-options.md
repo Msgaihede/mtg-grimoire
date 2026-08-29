@@ -68,7 +68,7 @@ Measured 2026-08-28 in this worktree at `8c924bb`, by reading the source. **Ever
 | Responsive variants in `src/` | **10** total (`sm:` ×2, `md:` ×1, `lg:` ×1 and four in `Dialog`); `@container` in 2 files; `matchMedia` in **0** | There is no breakpoint system to extend. There is a container-query rule and a strong precedent against viewport queries |
 | `motion-reduce:` variants | **145** | Media-query-driven Tailwind variants are already how this app expresses an environment preference |
 | Control heights | The app's ladder is `h-9`/`size-9` (36px) for a control, `h-8`/`size-8` (32px) and `h-7`/`size-7` (28px) for a small one — grep them rather than quoting a count, which is a fact about a tree | Everything below 36px is under every touch guideline. WCAG 2.5.5 (AAA) asks 44×44; 2.5.8 (AA) asks 24×24 |
-| `touch-action` / `pointer: coarse` | **0 occurrences in the whole tree** | — |
+| ~~`touch-action` / `pointer: coarse`~~ | ~~**0 occurrences in the whole tree**~~ — **half wrong, corrected 2026-08-29 by Task 4.** `(pointer: coarse)` really is nowhere. **`touch-action` is at two sites**: `src/index.css:434`, inside the block mirroring the rules `@dnd-kit/dom` injects at runtime, and `src/features/decks/DeckSearchPanel.tsx:1072`, where the panel's resize strip carries Tailwind's `touch-none` | Neither is a designed touch affordance, and neither changes what this plan does. It matters to **9b**: a plan that believes the tree has no `touch-action` will add a second registration to an element that already has one, which is the failure mode 3b and 3c both warn about |
 | `index.html` | `width=device-width, initial-scale=1.0` — **no `viewport-fit=cover`** | `env(safe-area-inset-*)` resolves to `0px` on every device today |
 | `AppShell` root | `h-screen` (= `100vh`) | On a mobile browser `100vh` is the **large** viewport, so the shell's bottom sits under the URL bar |
 
@@ -278,6 +278,17 @@ it("opts the document into the safe area", () => {
 
 Use whatever root selector `AppShell.test.tsx` already reaches for; if it has none, add a `data-testid` rather than inventing a class selector that a restyle breaks.
 
+> ⚠️ **The second assertion as written above is vacuous, measured 2026-08-29.** `expect(html).toMatch(/viewport-fit=cover/)` searches the *whole file*, and the HTML comment this task tells you to write above the meta — explaining why the attribute and the four `--safe-*` properties ship together — names the attribute. Deleting `viewport-fit=cover` from the tag left the string in the prose and **the test stayed green over the exact regression it exists to catch**. Anchor on the tag instead and read the captured group:
+>
+> ```ts
+> const VIEWPORT_META = /<meta\s+name="viewport"[^>]*\scontent="([^"]*)"/;
+> const content = html.match(VIEWPORT_META)?.[1];
+> expect(content).toBeDefined();
+> expect(content).toContain("viewport-fit=cover");
+> ```
+>
+> This is `tokens.test.ts`'s rule — Tailwind reads prose as eagerly as code — arriving from the other side: the *test* read prose as eagerly as markup. **The general rule it earns: a `?raw` assertion over a whole file is only a fence if the file cannot describe the thing it is being searched for**, and in a codebase whose comments are as long as this one's, most files can.
+
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `npm run test -- src/components/AppShell.test.tsx 2>&1 | tail -15`
@@ -361,6 +372,8 @@ Expected: the shell's height equals `clientHeight`, unchanged from before this t
   return { footerBottom: f.getBoundingClientRect().bottom, visual: visualViewport.height, inner: innerHeight };
 })()
 ```
+
+> ⚠️ **That selector finds nothing, corrected 2026-08-29.** The `Dialog` shell renders header + body only — **its hosts supply the footer** — so `[data-dialog-footer], footer, .justify-end` matches nothing on the shell's own stories and the expression throws on `f`. Read the panel's bottom instead, and reach the scrim as `panel.parentElement`, which is exactly how `Dialog.test.tsx:226` reaches it, so the live reading and the pinned assertion talk about one element. Open the story **without the manager chrome** (`iframe.html?id=…&viewMode=story`) or the manager's own scroller makes the reading about the wrong box. The full recipe, both branches, and where the `h-dvh` pin would go is in `docs/reference/frontend-design.md` under "The dialog against a real URL bar".
 
 - **If `footerBottom > visualViewport.height`:** add `h-dvh` to the scrim's class string beside `inset-0` — a specified height wins over `bottom` on a fixed box — and pin it in `Dialog.test.tsx` next to the existing `grid-rows-[minmax(0,1fr)]` assertion, with a comment saying the number came from a device.
 - **If it does not:** change nothing, and **record the reading**. "We looked and it was already right" is a result, and the next person will otherwise pay for the same measurement.
@@ -501,9 +514,11 @@ npm run build > /tmp/build.log 2>&1; tail -3 /tmp/build.log
 Then add a throwaway `<div className="coarse:min-h-[var(--target-min)]" />` to any component, rebuild, and grep:
 
 ```bash
-grep -o "@media (pointer:coarse){[^}]*}" dist/assets/*.css | head
+grep -o "@media(pointer:coarse){[^{]*{[^}]*}}" dist/assets/*.css | head
 ```
 Expected: a rule wrapping a `min-height: var(--target-min)`. **If nothing is emitted the variant syntax is wrong for this Tailwind version** — read `src/index.css`'s `@custom-variant dark` line, try the at-rule form the installed Tailwind documents, and record which one worked. Remove the throwaway.
+
+> ⚠️ **The pattern above was corrected on 2026-08-29, and the original was wrong twice in a way that reads exactly like the failure it detects.** It was written `"@media (pointer:coarse){[^}]*}"`, which exits 1 with no output over a sheet that plainly contains the rule: Tailwind 4.3.3's minifier emits `@media(pointer:coarse)` with **no space** after `@media`, and the rule **nests**, so a `[^}]*}` class stops at the inner brace. Answer: `@media(pointer:coarse){.coarse\:min-h-\[var\(--target-min\)\]{min-height:var(--target-min)}}`. The at-rule form worked on the first attempt.
 
 Now break each assertion:
 - Delete the `@custom-variant coarse` line → the first test must FAIL. Restore.
