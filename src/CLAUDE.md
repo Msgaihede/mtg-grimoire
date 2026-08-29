@@ -115,8 +115,11 @@ Every one of these has its measurement and its story in
   `fixed` panel mounts at the app root (`LAYER.tooltip`) because a virtualised row is both
   `position: absolute` and transformed, which caps a nested `z-index` *and* makes the row the
   containing block for a `fixed` descendant — root-mounting is what escapes both at once. **The
-  sweep is done**: every real tooltip in the app binds through `useTooltip()`. **One native
-  `title` survives on purpose** — `AppShell.tsx`'s drag-inert sidebar entry, because Chromium
+  sweep is done**: every real tooltip in the app binds through `useTooltip()`. **Two native
+  `title`s survive on purpose, and they are the same one drawn twice** — the drag-inert entry in
+  `AppShell.tsx`'s rail and its twin in `BottomTabBar.tsx` (added 2026-08-29 with the phone's tab
+  bar; the *row* is duplicated on purpose while the drop wiring is shared through
+  `useSidebarDropTarget`) — because Chromium
   freezes `:hover` at a drag's origin for the whole drag, so the attribute's sentence is never
   seen mid-drag and is read instead through the accname spec's description fallback. Everything
   else `title=` still finds in the tree is a component **prop** — drawn as a heading
@@ -496,6 +499,19 @@ Every one of these has its measurement and its story in
   and never on the box around the rows, which is what the `ResizeObserver` measures, so padding
   there feeds back into the width it is computed from. Driven in the shipped window; every figure
   is in [frontend-design.md](../docs/reference/frontend-design.md).
+- **`@container` makes a box the containing block for every `fixed` descendant under it, so a
+  modal may never be mounted inside one.** `container-type: inline-size` — which is what
+  `@container/fb` and every other container in this app compiles to — applies **layout
+  containment**, and a layout-contained box is the containing block for `position: fixed` just as
+  a `transform` is. `Dialog`'s scrim is a bare `fixed inset-0` and corrects for nothing, so a
+  dialog opened from inside a container box stretches to **that box** rather than to the window:
+  the scrim covers the row it came out of and the panel is clamped to a filter bar. Found
+  2026-08-29 building the phone's filter sheet, where `FilterBar`'s root became a **fragment** so
+  the sheet is the container box's *sibling*. **jsdom applies no stylesheet and computes no
+  containment**, so nothing in the suite can see the failure — pin the *structure* instead (the
+  dialog is not a descendant of the container), which is what `FilterBar.test.tsx` does. The
+  dropdowns escape this a different way and their own comment says so: `usePopupPlacement`
+  measures a zero-size frame precisely to subtract whatever containing block it landed in.
 - **A scroll container is `relative`, because a scroll container has to be the containing block
   for its own absolutely positioned content.** `overflow` clips a descendant only when the
   scroller lies between it and that descendant's **containing block** — and Tailwind's `.sr-only`

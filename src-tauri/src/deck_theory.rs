@@ -36,10 +36,12 @@
 //! list. Nothing in this module or in `deck.rs` deletes a `theory` row except the ordinary card
 //! writes the user makes against it.
 
+#[cfg(not(target_family = "wasm"))]
 use crate::sync::{with_write, AppState};
 use rusqlite::{params, Connection};
 use serde::Serialize;
 use std::collections::HashMap;
+#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// What is actually sleeved up — `DECK_VARIANTS[0]` by index, [`crate::deck`]'s discipline.
@@ -757,6 +759,7 @@ pub fn missing_to_wishlist(
 }
 
 /// What a write here says when its worker thread died under it.
+#[cfg(not(target_family = "wasm"))]
 fn unfinished(e: tauri::Error) -> String {
     format!("the deck could not be written: {e}")
 }
@@ -839,6 +842,7 @@ pub fn theory_slots(conn: &Connection, deck_id: i64) -> Result<Vec<TheorySlot>, 
 
 /// [`theory_slots`]'s command. **Read-only** connection, and no marketplace: nothing here is
 /// priced.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_theory_slots(
     state: tauri::State<'_, Arc<AppState>>,
@@ -853,6 +857,7 @@ pub async fn deck_theory_slots(
 }
 
 /// What the plan wants and the deck does not have. **Read-only** connection.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_theory_diff(
     state: tauri::State<'_, Arc<AppState>>,
@@ -869,6 +874,7 @@ pub async fn deck_theory_diff(
 }
 
 /// Seed the theory list from the live one. Answers how many rows were written.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_theory_copy_from_live(
     state: tauri::State<'_, Arc<AppState>>,
@@ -882,6 +888,7 @@ pub async fn deck_theory_copy_from_live(
 
 /// The one click: everything the plan is short of, onto the wishlist — or, with `only`, the
 /// rows the reader left ticked, as [`group_key`] strings. Absent means the whole difference.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_theory_missing_to_wishlist(
     state: tauri::State<'_, Arc<AppState>>,

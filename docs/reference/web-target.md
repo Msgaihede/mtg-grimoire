@@ -77,10 +77,16 @@ the real 43-column one, `raw` included**.
   `Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy: require-corp` and
   it passed both ways. **Do not add those headers**, and do not let a future service worker
   re-attach them.
-- **Four commands**, not 136: `sync_status`, `search_cards`, `list_sets`, `facet_cards`. That
-  is the browse, which is the read path spec §8 wanted measured in wasm rather than guessed.
-  Adding a fifth once its module is in the map is one line in `web::route::COMMANDS` and one
-  `match` arm.
+- **Seventeen commands of 152**, as of 2026-08-29. The first four are the browse —
+  `sync_status`, `search_cards`, `list_sets`, `facet_cards` — which is the read path spec §8
+  wanted measured in wasm rather than guessed. The other thirteen are the Decks destination's
+  reads (PR 10b). Adding one, once its module is in the map, is a line in
+  `web::route::COMMANDS` and a `match` arm.
+
+  ⚠️ **This is not the intended end state.** Decided 2026-08-29, after the phone layout made
+  the boundary visible: **all of them but ten**, by destination, worst broken first. The survey,
+  the ten that stay desktop-only and the reason each is a different feature rather than a port are
+  at the foot of this file.
 
 ## The module map
 
@@ -88,13 +94,22 @@ the real 43-column one, `raw` included**.
 
 | Compiled for wasm | Desktop/Android only |
 | --- | --- |
-| `card_row` · `collection_source` · `combos` · `db` · `errors` · `feed` · `filters` · `index` · `ingest` · `legalities` · `maintenance` · `schema` · `search` · `slug` · `sorting` · `split` · `sync` · `web` | `card` · `collection` · `collection_alloc` · `collection_folders` · `deck` · `deck_audit` · `deck_meta` · `deck_theory` · `deck_undo` · `export` · `flatten` · `images` · `import` · `listview` · `marketplace` · `marketplace_feed` · `mirror` · `nav` · `paths` · `picked` · `reconcile` · `reset` · `scryfall` · `tags` · `transfer` · `update` · `window` · `wishlist` · `wishlist_folders` · `zoom` |
+| `app_meta` · `card_row` · `collection` · `collection_alloc` · `collection_folders` · `collection_source` · `combos` · `db` · `deck` · `deck_audit` · `deck_meta` · `deck_theory` · `deck_undo` · `errors` · `feed` · `filters` · `image_uri` · `index` · `ingest` · `legalities` · `maintenance` · `marketplace` · `schema` · `search` · `slug` · `sorting` · `split` · `sync` · `sync_engine` · `sync_pair` · `web` · `wishlist` · `wishlist_folders` | `card` · `export` · `flatten` · `images` · `import` · `listview` · `marketplace_feed` · `mirror` · `nav` · `paths` · `picked` · `reconcile` · `reset` · `scryfall` · `tags` · `transfer` · `update` · `window` · `zoom` |
+
+**Eleven modules moved left on 2026-08-29** (PR 10a) — the deck domain, the collection, the
+wishlist, both folder tables and `marketplace`. Nothing in them changed: they were on the right
+because each file *ends* in a block of `#[tauri::command]` wrappers, and the gate sat on the
+module instead of on the wrappers. See the PR 10a section at the foot of this file.
 
 **Four of the exclusions are permanent** (spec §6.3): the plain-text `mirror`, the Rust
 `transfer` writer that exists only for it, the portable `update` swap, and `window`'s Win32
 snap layouts. The rest are "not yet" — they arrive with the commands that need them. `images`
 is neither: on web the image cache is Cache Storage rather than a filesystem, so it is a
 rewrite and not a port.
+
+**A module's column is a fact about its contents; being *routed* is a separate question.**
+Everything on the left compiles for the target. What the browser can actually call is
+`web::route::COMMANDS`, which is 17 of 152.
 
 `split` is the odd one in the left column. It compiles there and can never succeed —
 every path in it is `std::fs`, which builds for wasm and answers `Unsupported` — and gating it
@@ -321,3 +336,211 @@ desktop bundle and therefore out of the portable exe. Verified: `npm run build` 
   [data-and-sync.md](data-and-sync.md) is still owed a column.
 - **A run on a phone.** Every figure here is desktop Edge. The spike's phone column suggests
   roughly 3.5× slower, and the memory ceiling is lower there.
+
+---
+
+## One of six destinations works, and the phone layout is what made that visible
+
+**Surveyed on the device 2026-08-29** — OnePlus, Chrome 152, portrait, against the production build
+of `main` at PR #301 with a 117 606-card corpus. Each nav destination was opened in turn and its
+`main` scraped for `unknown command`.
+
+| Destination | Works | Missing |
+| --- | --- | --- |
+| **Search** | ✅ | — |
+| Tagger | ❌ | `tag_children` |
+| Decks | ❌ *(reads routed 2026-08-29 — see PR 10b below; not yet driven on the device)* | `deck_folder_list`, `deck_list` |
+| Collection | ❌ | `collection_list` |
+| Wishlist | ❌ | `wishlist_list` |
+| Settings | ❌ | `update_history`, `tags_muted`, `error_log_list` |
+| The card pane, from Search | ❌ | `card_detail` — *"Could not read this card — unknown command `card_detail`"* |
+
+**Nothing regressed.** `web/route.rs`'s own doc has always said so: *"This is a first slice and not
+the whole surface. The app has 152 commands; the four here are the browse."* The web target was
+built as a browse and it is exactly that.
+
+**What changed is that the browse became good enough to invite the next tap.** Before 9c the phone's
+search wall showed 0.44 of a tile row and nobody got as far as pressing a card. With two columns and
+two whole rows the natural next act is to open one — and that is where the slice ends. A layout that
+works is what turned a documented boundary into a reported bug.
+
+### The size of it, measured
+
+| | |
+| --- | --- |
+| `#[tauri::command]` in the crate | **152** |
+| Routed in `web::route::COMMANDS` | **4** (17 after PR 10b, below) |
+| Modules gated `cfg(not(target_family = "wasm"))` in `lib.rs` | **31** |
+
+The largest clusters are the deck domain — `deck.rs` 20, `deck_meta.rs` 19, `deck_theory.rs` 4,
+`deck_undo.rs` 3 — then `desktop.rs` 10, `sync_pair/pairing.rs` 9, `collection_folders.rs` 8,
+`wishlist_folders.rs` 8, `collection.rs` 7, `card.rs` 6.
+
+**That table read 155 and 36 files when it was written on 2026-08-29, and both were wrong** —
+corrected the same day. A `grep` for `#[tauri::command]` counts two things that are not
+commands: **the seven `#[tauri::command(async)]` attributes**, which the pattern misses because
+it wants the bracket immediately after `command`, and **the doc comments that mention the
+attribute in prose** while explaining why a particular command is `(async)`, which it
+over-counts. The two errors do not cancel. `route.rs`'s own header had said **152** all along
+and was right; the recount replaced a correct number with a wrong one, which is the argument
+for [not writing down a number a build already answers](../../CLAUDE.md). Counted properly by
+a script that skips comment lines and matches both spellings: **145 bare + 7 `(async)` = 152,
+across 32 files.**
+
+### Decided 2026-08-29: all of them except ten, by destination, worst-broken first
+
+**The ten that stay desktop-only are the ones §6.3 already named**, and the reason each is not a
+port but a different feature:
+
+- **`mirror/settings.rs`, 5.** The plain-text mirror writes a folder on disk *for other programs to
+  read*. In OPFS nothing else can read it, so a web mirror would be the feature's name without the
+  feature. `transfer` exists only to serve it and carries no commands of its own.
+- **`desktop.rs`'s updater, 5** — `update_check`, `update_download`, `update_apply`,
+  `update_history`, `update_open_release_page`. The portable updater swaps an `.exe`. **A PWA
+  already updates through its service worker**, which ships and works; routing these would be a
+  second answer to a question already answered.
+
+On web those ten are hidden rather than broken, through the seam `SettingsPage` already uses to
+hide the Backup panel on Android.
+
+**The remaining ~142 are ports, and most are one shape**: lift the pure function out of the `cfg`
+gate into a module that compiles everywhere, then add a `match` arm to `web::route`.
+[`image_uri.rs`](../../src-tauri/src/image_uri.rs) is the worked example — it was carved out of
+`images.rs` for exactly this reason when the search DTO needed it on web.
+
+## PR 10a: the gate was in the wrong place, and moving it cost almost nothing
+
+**Shipped 2026-08-29.** Eleven modules — `collection`, `collection_alloc`,
+`collection_folders`, the five deck modules, `marketplace`, `wishlist`, `wishlist_folders` —
+now compile for `wasm32-unknown-unknown`. **No command is routed by this change and no
+behaviour moved on any target**; what it buys is that the next PR can add `match` arms
+instead of arguing with the module system.
+
+**The finding that made it cheap: those modules were never desktop-only in their content.**
+Each file ends in a contiguous block of `#[tauri::command]` wrappers and is pure SQLite above
+it — `deck.rs` has **no `tauri::` reference in its first 3 991 lines**, and `deck_list` is six
+lines around `list_decks(&conn)`. The gate sat on the *module* because that is where the
+commands are. `search.rs` had the other arrangement all along: ungated module, gate on each of
+its two commands, which is exactly why `run_search` is reachable from `web::route` and
+`list_decks` was not. **So this was moving a gate, not writing a port.**
+
+### Measured, and reproducible by ungating a module and running `cargo check`
+
+| Ungated | wasm errors |
+| --- | --- |
+| The whole domain at once (22 modules) | **93** |
+| The deck cluster + collection + wishlist (11 modules) | **19** |
+| …after the `app_meta` carve-out | **13** |
+| …after gating five `unfinished` helpers and the covers seam | **0** |
+
+Of the 93, **44 were `cannot find module or crate 'tauri'`** — helpers *outside* a command
+wrapper, almost all of them the one-line `fn unfinished(e: tauri::Error) -> String`. Those are
+mechanical. The rest split into the four modules below and the cascade between siblings.
+
+### Three seams, and one of them was a module in the wrong place
+
+- **`app_meta` was inside `update.rs`.** `crate::update::get_app_meta` is a key–value settings
+  read that **eleven modules** call — `deck` keeps the search column's state in it, `zoom`,
+  `nav`, `listview` and `flatten` keep view state — and it was living in the module that swaps
+  an `.exe`. Now [`app_meta.rs`](../../src-tauri/src/app_meta.rs), ungated, with all **61** call
+  sites moved. **A `pub use` re-export from `update` was tried first and does not work**: a name
+  re-exported from a gated module is invisible on wasm exactly when it is needed.
+- **Covers.** `deck.rs` calls `images::{cover_file, write_cover, remove_cover, copy_cover}`,
+  every one reached through a `covers: Option<&Path>` that is `None` on web. Gated rather than
+  stubbed — a `write_cover` that silently did nothing would be a cover that looks saved and is
+  not. `copy_cover_file` was restructured into a two-arm `copied_cover` helper, which retired an
+  `.expect("a copy cannot have happened without a directory")` by putting that argument in the
+  return type instead of in a panic message.
+- **`marketplace::set_marketplace_now` reads `AppState.mirror`.** The *setting* is every
+  target's and `deck_meta`'s readback quotes it; telling a mirror about a change is not.
+
+### The compiler names the download/query seam through `AppState`
+
+**Four modules are a split rather than a port, and none is done**: `images.rs`, `update.rs`,
+`marketplace_feed.rs` and `tags/mod.rs`. Each mixes *downloading a thing* with *reading the
+thing already downloaded*, and the errors say so precisely — on wasm **`AppState` has no
+`client` field and no `mirror` field**, so every failure in those four is the download half
+asking for a capability the web target does not have (plus `tokio`, the `image` crate and
+`zip`). `image_uri.rs` and now `app_meta.rs` are both that split already done. **That is the
+map for the rest of PR 10 and should not have to be re-derived.**
+
+### What the two remaining dependency facts cost
+
+- **There are no leaf modules.** `collection` and `wishlist` import `deck_meta`, and
+  `collection_alloc` calls into `deck` and `deck_audit` — the cluster is mutually recursive, so
+  the eleven move as one atomic change or none do. A plan that plans to do the "leaves" first
+  is wrong, and this one did until the compiler said otherwise.
+- **`-D warnings` on the wasm clippy job makes a stranded import a red build**, and moving a
+  gate strands them constantly: **22 `use` statements** needed gating and **9 private helpers**
+  needed `#[cfg_attr(target_family = "wasm", allow(dead_code))]`. That attribute rather than a
+  `#[cfg]` is deliberate and follows `sync::with_write` — those helpers are what `web::route`
+  will call, so keeping them *compiling* is the point.
+
+## PR 10b: the Decks reads are routed — `COMMANDS` goes from 4 to 17
+
+**Shipped 2026-08-29**, on top of 10a. Thirteen `match` arms, one file, and **no frontend
+change at all** — `src/lib/ipc.ts` is a flat mirror calling `invoke("deck_list", …)` through
+`@/lib/core` with **no allowlist on the TS side**, so the Decks page had been asking for these
+commands and failing all along.
+
+```
+deck_list          deck_get            deck_folder_list   deck_category_list
+deck_tag_list      deck_tag_all        format_specs_list  deck_last_format
+deck_search_open   deck_audit_list     deck_theory_slots  deck_theory_diff
+deck_undo_state
+```
+
+**The write path is deliberately a separate PR.** A read that answers the wrong rows is visible
+on the page; a write that lands wrong is not.
+
+### Two things the arms had to get right that a type check cannot see
+
+- **The argument keys are camelCase, and the wrapper is the specification.** `invoke` matches a
+  command's parameters by name and `ipc.ts` sends `{ deckId, variant, marketplace }`, so an arm
+  reaching for the Rust spelling `deck_id` compiles, type-checks, and answers
+  `RouteError::Args` on every real call — which reads as a bug in the page.
+  `the_deck_arms_read_the_camel_case_keys_the_page_sends` pins both directions: the camelCase
+  key works *and* the snake_case one is refused, because a pin that only asserts the first is
+  satisfied by an arm that accepts everything.
+- **An omitted optional argument is the ordinary call.** `field` requires the key to be
+  present, and JavaScript sends an unset optional as a **missing key** rather than as `null` —
+  so every `marketplace`-taking arm built on `field` would refuse the default read with
+  "missing `marketplace`". Hence `optional`, which treats absent and `null` alike and still
+  errors on a value that is present and unreadable.
+
+### One command was not a thin wrapper
+
+**`deck_undo_state` held its logic inside the `#[tauri::command]`** — three lookups and a redo
+filter — rather than in a function the command called. It is the only read in the deck cluster
+shaped that way. Lifted to `deck_undo::undo_state(conn, deck_id, redo_id)`, which both the
+wrapper and the arm now call; a `match` arm that re-spelled it would have been a second copy of
+the redo rule waiting to drift.
+
+### `category_for_name` is not a command, and a grep says it is
+
+It appears in a `grep -A3 '#\[tauri::command\]'` of `deck_meta.rs` because **its own doc comment
+contains that string** — in the sentence *"never a command in its own right — it is not in this
+module's `#[tauri::command]` list."* Reading it as one would have produced an arm for a function
+the page never calls. This is the same over-count that made the command total read 155 instead
+of 152, and the same reason `deck_meta.rs` is **19** commands rather than 20.
+
+### Mutation-checked, three ways
+
+| Mutation | Caught by |
+| --- | --- |
+| A name in `COMMANDS` with no `match` arm | `every_advertised_command_is_actually_routed`, by name |
+| `"deckId"` → `"deck_id"` in an arm | `the_deck_arms_read_the_camel_case_keys_the_page_sends` |
+| `optional` made strict | `an_omitted_optional_argument_is_not_an_error`, plus two others |
+
+**The first attempt at the third mutation was worthless and is worth recording**: deleting the
+`None` pattern made the `match` non-exhaustive, so the *compiler* caught it and the test never
+ran. A mutation has to leave the code compiling, or it measures rustc rather than the suite.
+
+**Three families are not that shape** and need a browser mechanism that does not exist yet:
+`import`/`export`'s file handles (spec §6.2 already specifies `<input type=file>` and a `Blob`
+download), and `reset`'s OPFS deletion.
+
+**The order is by destination, worst broken first** — Decks, then Collection, Wishlist, the card
+pane, Tagger, Settings — so that every PR makes one nav destination genuinely work and can be
+driven on the phone. It front-loads the deck domain, which is the biggest cluster and where the
+surprises will be, and that is deliberate.

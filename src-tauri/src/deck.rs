@@ -36,12 +36,14 @@
 
 use crate::collection::{valid_quantity, EntryChange, ZERO_ADD};
 use crate::deck_meta::{DeckCategoryRow, DeckTagRow};
+#[cfg(not(target_family = "wasm"))]
 use crate::sync::{with_write, AppState};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
+#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// The variant this module means when it says "the deck": what is actually sleeved up.
@@ -126,7 +128,7 @@ pub const DEFAULT_DECK_SEARCH_OPEN: bool = true;
 /// or a differently-spelled build leaves behind. None of the three is worth failing over: the
 /// worst a wrong answer costs is one press of a disclosure that is on screen either way.
 pub fn stored_deck_search_open(conn: &Connection) -> bool {
-    match crate::update::get_app_meta(conn, K_DECK_SEARCH_OPEN).as_deref() {
+    match crate::app_meta::get_app_meta(conn, K_DECK_SEARCH_OPEN).as_deref() {
         Some("1") => true,
         Some("0") => false,
         _ => DEFAULT_DECK_SEARCH_OPEN,
@@ -139,7 +141,7 @@ pub fn stored_deck_search_open(conn: &Connection) -> bool {
 /// rather than a softer rule: a `bool` has arrived narrowed and there is no third value a caller
 /// could send for this one to reject.
 pub fn store_deck_search_open(conn: &Connection, open: bool) -> Result<(), String> {
-    crate::update::set_app_meta(conn, K_DECK_SEARCH_OPEN, if open { "1" } else { "0" })
+    crate::app_meta::set_app_meta(conn, K_DECK_SEARCH_OPEN, if open { "1" } else { "0" })
         .map_err(|e| format!("could not save the search column state: {e}"))
 }
 
@@ -1211,7 +1213,7 @@ pub fn create_deck(conn: &Connection, input: &DeckInput) -> Result<DeckRow, Stri
     // transaction, so a create that rolls back remembers nothing; and the error deliberately
     // dropped, unlike the `?` two lines above — losing a preference is not worth losing a deck
     // over. See this function's doc.
-    let _ = crate::update::set_app_meta(&tx, K_LAST_DECK_FORMAT, format_key);
+    let _ = crate::app_meta::set_app_meta(&tx, K_LAST_DECK_FORMAT, format_key);
     tx.commit().map_err(|e| e.to_string())?;
     read_deck(conn, id)?.ok_or_else(|| GONE.to_owned())
 }
@@ -1227,7 +1229,7 @@ pub fn create_deck(conn: &Connection, input: &DeckInput) -> Result<DeckRow, Stri
 /// display decision, while the fallback SQL would supply is [`DEFAULT_FORMAT`], which is the
 /// column's default and not anybody's preference. Neither belongs in this answer.
 pub fn last_deck_format(conn: &Connection) -> Option<String> {
-    crate::update::get_app_meta(conn, K_LAST_DECK_FORMAT)
+    crate::app_meta::get_app_meta(conn, K_LAST_DECK_FORMAT)
 }
 
 /// One `decks` row as it was before an edit — every column [`DeckPatch`] can reach, read
@@ -1942,6 +1944,7 @@ pub fn set_view_state(conn: &Connection, id: i64, state: &DeckViewState) -> Resu
 /// is gone, and refusing a delete that already happened because a picture of it survived would
 /// be an error the user can do nothing with. What is left behind in that case is one orphaned
 /// `<id>.webp` in a folder that is safe to delete — the cost of the softer failure.
+#[cfg_attr(target_family = "wasm", allow(unused_variables))]
 pub fn delete_deck(conn: &Connection, id: i64, covers: Option<&Path>) -> Result<(), String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     if let Some(group) = deck_group(&tx, id)? {
@@ -1995,6 +1998,11 @@ pub fn delete_deck(conn: &Connection, id: i64, covers: Option<&Path>) -> Result<
     tx.execute("DELETE FROM decks WHERE id = ?1", params![id])
         .map_err(|e| e.to_string())?;
     tx.commit().map_err(|e| e.to_string())?;
+    // **No cover directory on the web target**, so `covers` is always `None` there and this
+    // block is unreachable rather than skipped — `images` is the byte cache and a filesystem,
+    // which a browser has neither of. Gated rather than stubbed: a `remove_cover` that
+    // silently did nothing would be a deleted picture that is still on disk.
+    #[cfg(not(target_family = "wasm"))]
     if let Some(covers) = covers {
         if let Err(e) = crate::images::remove_cover(covers, id) {
             eprintln!("could not delete the cover image for deck {id}: {e}");
@@ -2027,6 +2035,10 @@ pub fn delete_deck(conn: &Connection, id: i64, covers: Option<&Path>) -> Result<
 /// route reads — `mtgimg://…/cover/<deckId>` resolves the covers directory itself, which is what
 /// keeps a portable app working after its folder is moved — it is the record of what was
 /// written, for a reader and for anything that ever has to clean up.
+/// **Desktop and Android only.** It takes a cover directory that is not `Option`, writes a file
+/// into it and stores that path — there is no web equivalent to gate down to, so the whole
+/// function goes rather than its middle. `deck_set_cover_image` is its only caller.
+#[cfg(not(target_family = "wasm"))]
 pub fn set_cover_image(
     conn: &Connection,
     covers: &Path,
@@ -2367,33 +2379,43 @@ fn copy_cover_file(
     from: i64,
     to: i64,
 ) -> Result<(), String> {
-    let copied = covers.is_some_and(|dir| match crate::images::copy_cover(dir, from, to) {
-        Ok(()) => true,
-        Err(e) => {
-            eprintln!("could not copy the cover image from deck {from} to deck {to}: {e}");
-            false
-        }
-    });
-    if copied {
-        tx.execute(
+    match copied_cover(covers, from, to) {
+        Some(path) => tx.execute(
             "UPDATE decks SET cover_image_path = ?2 WHERE id = ?1",
-            params![
-                to,
-                crate::images::cover_file(
-                    covers.expect("a copy cannot have happened without a directory"),
-                    to
-                )
-                .to_string_lossy()
-            ],
-        )
-    } else {
-        tx.execute(
+            params![to, path.to_string_lossy()],
+        ),
+        None => tx.execute(
             "UPDATE decks SET cover_kind = ?2, cover_image_path = NULL WHERE id = ?1",
             params![to, COVER_CARD_ART],
-        )
+        ),
     }
     .map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Where the duplicate's cover landed, or `None` if there was no directory to copy within or
+/// the copy failed. **Answering the path rather than a `bool` is what retires the `expect`**
+/// this used to carry: "a copy cannot have happened without a directory" was true and had to
+/// be argued in a panic message, where the `Option` now says it in the type.
+#[cfg(not(target_family = "wasm"))]
+fn copied_cover(covers: Option<&Path>, from: i64, to: i64) -> Option<std::path::PathBuf> {
+    let dir = covers?;
+    match crate::images::copy_cover(dir, from, to) {
+        Ok(()) => Some(crate::images::cover_file(dir, to)),
+        Err(e) => {
+            eprintln!("could not copy the cover image from deck {from} to deck {to}: {e}");
+            None
+        }
+    }
+}
+
+/// **The web target has no cover directory**, so a duplicate never copies a file and takes
+/// `copy_cover_file`'s second arm — the same one a desktop duplicate of a deck with no custom
+/// cover takes. Not a stub standing in for a missing feature: `covers` is `None` on every web
+/// call, so this is the answer the other arm would give.
+#[cfg(target_family = "wasm")]
+fn copied_cover(_covers: Option<&Path>, _from: i64, _to: i64) -> Option<std::path::PathBuf> {
+    None
 }
 
 /// The gallery, archived decks last and most recently touched first.
@@ -3989,10 +4011,12 @@ pub fn list_format_specs(conn: &Connection) -> Result<Vec<FormatSpecRow>, String
 
 /// What a deck write says when its worker thread died under it. Never a user's problem —
 /// the write itself answers [`crate::db::BUSY`] when the database is busy.
+#[cfg(not(target_family = "wasm"))]
 fn unfinished(e: tauri::Error) -> String {
     format!("the deck could not be written: {e}")
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_create(
     state: tauri::State<'_, Arc<AppState>>,
@@ -4004,6 +4028,7 @@ pub async fn deck_create(
         .map_err(unfinished)?
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_update(
     state: tauri::State<'_, Arc<AppState>>,
@@ -4027,6 +4052,7 @@ pub async fn deck_update(
 /// `AppHandle` is what resolves it and the task owns everything it touches. `None` — the app
 /// still starting, an unwritable data folder — is not a reason to refuse a delete: see
 /// [`delete_deck`].
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_delete(
     state: tauri::State<'_, Arc<AppState>>,
@@ -4054,6 +4080,7 @@ pub async fn deck_delete(
 /// mutex across it would put every collection edit in the app behind one file-picker. It is
 /// [`set_cover_image`]'s **signature** that keeps this true — it takes bytes and cannot
 /// encode — because the version of this that took a path had the doc and the wiring disagree.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_set_cover_image(
     state: tauri::State<'_, Arc<AppState>>,
@@ -4078,6 +4105,7 @@ pub async fn deck_set_cover_image(
 ///
 /// The covers directory is resolved before the blocking task, like [`deck_delete`]'s, and `None`
 /// is not a reason to refuse: the copy falls back to card art. See [`duplicate_deck`].
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_duplicate(
     state: tauri::State<'_, Arc<AppState>>,
@@ -4098,6 +4126,7 @@ pub async fn deck_duplicate(
 
 /// File a deck under a folder, or with `folderId: null` back at the root of the tree — the one
 /// thing [`DeckPatch`] cannot express. See [`set_folder`].
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_set_folder(
     state: tauri::State<'_, Arc<AppState>>,
@@ -4119,6 +4148,7 @@ pub async fn deck_set_folder(
 /// would read, because every other write changes something a gallery draws. This changes one
 /// thing the *editor* will read on its next open, and a caller that re-rendered a deck tile over
 /// it would be redrawing for a scroll position.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_set_view_state(
     state: tauri::State<'_, Arc<AppState>>,
@@ -4135,6 +4165,7 @@ pub async fn deck_set_view_state(
 
 /// The deck gallery. **Read-only** connection, blocking pool — as every read in this app
 /// is, so a gallery never queues behind a sync.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_list(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec<DeckRow>, String> {
     let state = state.inner().clone();
@@ -4145,6 +4176,7 @@ pub async fn deck_list(state: tauri::State<'_, Arc<AppState>>) -> Result<Vec<Dec
 
 /// One deck, one variant's cards, every category and tag, every fact the validator needs.
 /// **Read-only** connection.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_get(
     state: tauri::State<'_, Arc<AppState>>,
@@ -4167,6 +4199,7 @@ pub async fn deck_get(
 }
 
 /// The format rules as data, for the picker and the validation engine. **Read-only.**
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn format_specs_list(
     state: tauri::State<'_, Arc<AppState>>,
@@ -4186,6 +4219,7 @@ pub async fn format_specs_list(
 /// the picker no longer offers; see [`last_deck_format`]. The `Result` is `spawn_blocking`'s
 /// join and nothing else, because the read itself has no failure mode: `get_app_meta` reads an
 /// unreadable row as `None`.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_last_format(
     state: tauri::State<'_, Arc<AppState>>,
@@ -4205,6 +4239,7 @@ pub async fn deck_last_format(
 /// queued behind an ~80 s ingest on the write connection would hold the whole editor behind it.
 /// The `Result` is `spawn_blocking`'s join and nothing else — every way the read itself could go
 /// wrong is already a reason to answer [`DEFAULT_DECK_SEARCH_OPEN`].
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_search_open(state: tauri::State<'_, Arc<AppState>>) -> Result<bool, String> {
     let state = state.inner().clone();
@@ -4217,6 +4252,7 @@ pub async fn deck_search_open(state: tauri::State<'_, Arc<AppState>>) -> Result<
 
 /// Remember whether the search column is open. Answers [`crate::db::BUSY`] if a sync holds the
 /// write connection — the bound every write command in this crate takes.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn set_deck_search_open(
     state: tauri::State<'_, Arc<AppState>>,
@@ -4231,6 +4267,7 @@ pub async fn set_deck_search_open(
 }
 
 /// The one click: everything this deck is short of, onto the wishlist.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_missing_to_wishlist(
     state: tauri::State<'_, Arc<AppState>>,
@@ -4249,6 +4286,7 @@ pub async fn deck_missing_to_wishlist(
 
 /// Put copies into a category. **`categoryId` or `categoryName`, and at least one** — see
 /// [`add_card`] for which wins when both arrive.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn deck_add_card(
@@ -4283,6 +4321,7 @@ pub async fn deck_add_card(
     .map_err(unfinished)?
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_set_card_quantity(
     state: tauri::State<'_, Arc<AppState>>,
@@ -4316,6 +4355,7 @@ pub async fn deck_set_card_quantity(
 
 /// Answers the copies it removed, so the caller can say what happened without re-reading the
 /// deck to work it out.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_category_clear(
     state: tauri::State<'_, Arc<AppState>>,
@@ -4340,6 +4380,7 @@ pub async fn deck_category_clear(
 /// target, which is [`add_card`]'s arrangement and is documented on [`move_card`]. Answers the
 /// category the copies are now in, because the name arm's caller has no other way to learn what
 /// was found or made.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn deck_move_card(
@@ -4376,6 +4417,7 @@ pub async fn deck_move_card(
 
 /// The card pane's "Use this printing". `deckId` like every other card write's, because
 /// `decks.id` is an integer everywhere it is written.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_swap_printing(
     state: tauri::State<'_, Arc<AppState>>,
@@ -4410,6 +4452,7 @@ pub async fn deck_swap_printing(
 /// The deck card menu's `Set as foil` and the card pane's own button. `fromFinish` is the row
 /// being addressed and `toFinish` what it should become — both `null` for the regular copy,
 /// which is the only spelling of it that reaches the column.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
 pub async fn deck_set_card_finish(
@@ -6314,7 +6357,7 @@ mod tests {
         store_deck_search_open(&conn, true).unwrap();
         assert!(stored_deck_search_open(&conn));
 
-        crate::update::set_app_meta(&conn, K_DECK_SEARCH_OPEN, "true").unwrap();
+        crate::app_meta::set_app_meta(&conn, K_DECK_SEARCH_OPEN, "true").unwrap();
         assert_eq!(
             stored_deck_search_open(&conn),
             DEFAULT_DECK_SEARCH_OPEN,

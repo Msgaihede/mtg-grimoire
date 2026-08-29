@@ -1,12 +1,8 @@
 import { useRef, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
-  Heart,
   PanelLeftClose,
   PanelLeftOpen,
-  Search,
-  Settings,
-  Tags,
   TriangleAlert,
   type LucideIcon,
 } from "lucide-react";
@@ -15,17 +11,21 @@ import {
   useRegisterActivity,
   useTopActivity,
 } from "@/components/ActivityProvider";
+import { BottomTabBar } from "@/components/BottomTabBar";
 import { Ribbon } from "@/components/Ribbon";
 import { SyncProgress } from "@/components/SyncProgress";
 import { TitleBar } from "@/components/TitleBar";
-import { CabinetFiling, Cards } from "@/components/icons";
+import { NAV } from "@/components/nav";
 import { useTooltip } from "@/components/tooltip/useTooltip";
-import { useSidebarDrops, type SidebarDrop } from "@/components/useSidebarDrops";
+import {
+  useSidebarDrops,
+  useSidebarDropTarget,
+  type SidebarDrop,
+} from "@/components/useSidebarDrops";
 import { isAndroid } from "@/lib/platform";
 import { isWebTarget } from "@/pwa/target";
+import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
 import { useCardToDeckRefusal } from "@/features/card/cardMenu";
-import { readCards } from "@/features/decks/dnd";
-import { useDndDropTarget } from "@/lib/dndTarget";
 import {
   ACTIVITY_DELAY_MS,
   marketplaceFeedActivity,
@@ -36,13 +36,14 @@ import {
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { LAYER } from "@/lib/layers";
 import { DURATION, statusLine as statusLineMotion } from "@/lib/motion";
-import { useAppStore, type ViewId } from "@/lib/store";
+import { useAppStore } from "@/lib/store";
 import { usePrefetchDeckSearchOpen } from "@/features/decks/useDeckSearchOpen";
 import { useCardZoomPersistence } from "@/lib/useCardZoomPersistence";
 import { useListViewPersistence } from "@/lib/useListViewPersistence";
 import { useFlattenPersistence } from "@/lib/useFlattenPersistence";
 import { useDelayedFlag } from "@/lib/useDelayedFlag";
 import { useMarketplace, useMarketplaceProgress } from "@/lib/useMarketplace";
+import { useNarrowWindow } from "@/lib/useNarrowWindow";
 import { useNavCollapsed } from "@/lib/useNavCollapsed";
 import { useNavLabels } from "@/lib/useNavLabels";
 import { useOracleTagProgress } from "@/lib/useOracleTagProgress";
@@ -52,29 +53,6 @@ import { useSyncProgress } from "@/lib/useSyncProgress";
 import { useWebStorageLifecycle } from "@/pwa/useWebStorageLifecycle";
 import type { Update } from "@/lib/useUpdate";
 import { cn } from "@/lib/utils";
-
-/**
- * The six destinations, in the order the column draws them — and the order is the point.
- *
- * Two ways into the database first, then the three lists the reader owns, then Settings. Search
- * asks "which card is this"; Tagger asks "what is this card of", which is why it sits directly
- * under Search rather than among the lists. Below the pair the run is by how often a reader is
- * in it: Decks is where the app is used, Collection is what backs a deck, Wishlist is what is
- * not owned yet. Settings is last because it is not a destination in the same sense.
- *
- * **The label is also the ribbon's `<h1>`** — `Shell` looks the active view's title up in here,
- * so there is one word per view rather than two that can drift. "Tagger" is Scryfall's own name
- * for the taxonomy that view browses, and the page's own heading below it still says what it
- * does in a sentence.
- */
-const NAV: { id: ViewId; label: string; Icon: LucideIcon }[] = [
-  { id: "search", label: "Search", Icon: Search },
-  { id: "tags", label: "Tagger", Icon: Tags },
-  { id: "decks", label: "Decks", Icon: Cards },
-  { id: "collection", label: "Collection", Icon: CabinetFiling },
-  { id: "wishlist", label: "Wishlist", Icon: Heart },
-  { id: "settings", label: "Settings", Icon: Settings },
-];
 
 /**
  * The `<nav>`'s id, so the toggle at its foot can point `aria-controls` at the region it is
@@ -118,6 +96,25 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   // it the place a card can be dropped from any view — the Search wall and the deck editor
   // never coexist, so without this a card found in Search has nowhere to go.
   const drops = useSidebarDrops();
+  /**
+   * Whether there is room for a rail beside the content at all — and, below the phone width,
+   * there is not: the six destinations move to a bar across the foot of the window instead.
+   *
+   * **The one viewport branch in this app**, and `src/lib/viewports.ts` demands a reason wherever
+   * one appears. The reason is that *the shell is the window*: every other fold here is a
+   * container query or a `ResizeObserver` because the same component is drawn in more than one
+   * box — `FilterBar` is a 1500px bar and a 206px docked panel — and a viewport query would
+   * answer about the wrong one. This element is drawn in exactly one box and that box is the
+   * viewport, so "is there room for a rail" is a question about the window and nothing else. The
+   * whole argument, and the test to apply to any second such branch, is in
+   * [`useNarrowWindow`](../lib/useNarrowWindow.ts).
+   *
+   * **It is the rail's presence it decides, not its width.** `collapsed` below is a reader's
+   * choice about a rail that exists; this is whether one is drawn. Below the phone width the
+   * `<nav>` is not rendered at all rather than hidden — a rail off-screen is still six tab stops
+   * and six drop targets — and `BottomTabBar` takes its place after `<main>`.
+   */
+  const narrowWindow = useNarrowWindow();
   /**
    * Whether the rail is 68px of icons or 208px of labels (issue #177).
    *
@@ -164,6 +161,18 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
    * owns the mount; this is the one place the sentence is drawn.
    */
   const cardToDeckRefusal = useCardToDeckRefusal();
+  /**
+   * What a drop on either sidebar target just did, for the eye — the phone's chrome has nowhere
+   * else to paint it, and the strip above `BottomTabBar` is where it lands.
+   *
+   * **One sentence, not a choice between two.** `useSidebarDrops` keeps a single
+   * `{ at, text }` for the whole sidebar ("one at a time, because one drop happens at a time"),
+   * so at most one of these is ever non-null and the `??` is reading the one there is. That is
+   * what distinguishes it from the `drops.decks.report ?? cardToDeckRefusal` the rail's alert
+   * comment refuses: those two have different lifetimes and would take turns hiding each other,
+   * where these two are the same sentence with the same `REPORT_MS` timer behind it.
+   */
+  const dropReport = drops.decks.report ?? drops.wishlist.report;
   // Here rather than in a view, because it is about the whole cache and this is the one
   // component that is always mounted — and it takes the progress event as a prop so the
   // app still registers exactly one `sync:progress` listener.
@@ -345,77 +354,86 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
           the commit that starts it. Everything below is therefore handed `narrow` rather than
           `collapsed`: the width belongs to the rail's own state, and every question about
           whether there is room for a word belongs to the other. */}
-        <nav
-          id={NAV_ID}
-          aria-label="Views"
-          className={cn(
-            "relative flex shrink-0 flex-col gap-1.5 border-r border-border bg-surface p-3",
-            "transition-[width] duration-[var(--duration-base)] ease-standard",
-            "motion-reduce:transition-none",
-            collapsed ? "w-17" : "w-52",
-          )}
-        >
-          {NAV.map(({ id, label, Icon }) => (
-            <NavItem
-              key={id}
-              label={label}
-              Icon={Icon}
-              active={id === activeView}
+        {/* **Not drawn at all below the phone width, rather than hidden there.** A rail pushed
+          off-screen is still six tab stops, six drop targets and six accessible names for a
+          reader who cannot see any of them, and `BottomTabBar` after `<main>` is already
+          carrying that landmark's `aria-label`. Everything inside — the collapse toggle, the
+          refused-add alert, both floating notes — goes with it, which is the point: the width
+          question the whole block above answers only arises where there is a column to ask it
+          about. */}
+        {!narrowWindow && (
+          <nav
+            id={NAV_ID}
+            aria-label="Views"
+            className={cn(
+              "relative flex shrink-0 flex-col gap-1.5 border-r border-border bg-surface p-3",
+              "transition-[width] duration-[var(--duration-base)] ease-standard",
+              "motion-reduce:transition-none",
+              collapsed ? "w-17" : "w-52",
+            )}
+          >
+            {NAV.map(({ id, label, Icon }) => (
+              <NavItem
+                key={id}
+                label={label}
+                Icon={Icon}
+                active={id === activeView}
+                narrow={narrow}
+                onSelect={() => setActiveView(id)}
+                dragging={drops.dragging}
+                drop={id === "decks" || id === "wishlist" ? drops[id] : null}
+              />
+            ))}
+            {/* **A refused deck add from a card menu, and deliberately *not* folded into the Decks
+              entry's report line above.**
+
+              That line's subject is narrower than it looks: `SidebarDrop.report` is documented as
+              "what just happened **here**", and `useSidebarDrops` says "a drop reports where the
+              reader dropped it" — it is about a card let go *on this entry*, which is where the
+              reader's cursor was. A menu add happened at the card, several hundred pixels away,
+              and never touched this entry.
+
+              The mechanical objection is the decisive one. That report clears itself after
+              `REPORT_MS` and on the next drag; this one stands until the reader arms another add.
+              Two lifetimes in one slot — `drops.decks.report ?? cardToDeckRefusal` — would hide a
+              live refusal behind a drop's sentence and then **bring it back** four seconds later,
+              when the drop's timer expired. A sentence returning from the dead under a nav item is
+              worse than either message alone, and no ordering of the `??` fixes it: the other way
+              round, one refusal suppresses every drop report until the next menu add.
+
+              So: its own region, its own subject, and `role="alert"` rather than `status` because
+              this only ever holds a refusal.
+
+              **Mounted only when there is something to say, unlike the report line above it.**
+              That line is a `status` — polite, and a polite region that first appears with its
+              sentence already inside it announces nothing, which is why it is always there and
+              `sr-only` while empty. An `alert` is the other case: announcing on insertion is what
+              the role is for, and it is what the sync banner further down already relies on. It
+              also keeps `getByRole("alert")` meaning one thing — an always-mounted second alert
+              makes every such query in this app ambiguous whether or not it has any text in it.
+              The geometry is the report line's, which was measured for exactly this push.
+
+              **The wrapper is `relative` so the collapsed rail's floating form is positioned
+              against this sentence's own place in the column** rather than against the whole
+              `<nav>` — `left-full top-0` then needs no offset arithmetic and no re-measurement
+              when an entry above it moves. Collapsed, the wrapper is a zero-height flex item and
+              the panel hangs off it; expanded, it is the paragraph exactly where it has always
+              been. */}
+            {cardToDeckRefusal !== null && (
+              <div className="relative">
+                <NavNote role="alert" narrow={narrow} tone="text-destructive">
+                  {cardToDeckRefusal}
+                </NavNote>
+              </div>
+            )}
+
+            <NavToggle
+              collapsed={collapsed}
               narrow={narrow}
-              onSelect={() => setActiveView(id)}
-              dragging={drops.dragging}
-              drop={id === "decks" || id === "wishlist" ? drops[id] : null}
+              onToggle={() => setCollapsed(!collapsed)}
             />
-          ))}
-          {/* **A refused deck add from a card menu, and deliberately *not* folded into the Decks
-            entry's report line above.**
-
-            That line's subject is narrower than it looks: `SidebarDrop.report` is documented as
-            "what just happened **here**", and `useSidebarDrops` says "a drop reports where the
-            reader dropped it" — it is about a card let go *on this entry*, which is where the
-            reader's cursor was. A menu add happened at the card, several hundred pixels away,
-            and never touched this entry.
-
-            The mechanical objection is the decisive one. That report clears itself after
-            `REPORT_MS` and on the next drag; this one stands until the reader arms another add.
-            Two lifetimes in one slot — `drops.decks.report ?? cardToDeckRefusal` — would hide a
-            live refusal behind a drop's sentence and then **bring it back** four seconds later,
-            when the drop's timer expired. A sentence returning from the dead under a nav item is
-            worse than either message alone, and no ordering of the `??` fixes it: the other way
-            round, one refusal suppresses every drop report until the next menu add.
-
-            So: its own region, its own subject, and `role="alert"` rather than `status` because
-            this only ever holds a refusal.
-
-            **Mounted only when there is something to say, unlike the report line above it.**
-            That line is a `status` — polite, and a polite region that first appears with its
-            sentence already inside it announces nothing, which is why it is always there and
-            `sr-only` while empty. An `alert` is the other case: announcing on insertion is what
-            the role is for, and it is what the sync banner further down already relies on. It
-            also keeps `getByRole("alert")` meaning one thing — an always-mounted second alert
-            makes every such query in this app ambiguous whether or not it has any text in it.
-            The geometry is the report line's, which was measured for exactly this push.
-
-            **The wrapper is `relative` so the collapsed rail's floating form is positioned
-            against this sentence's own place in the column** rather than against the whole
-            `<nav>` — `left-full top-0` then needs no offset arithmetic and no re-measurement
-            when an entry above it moves. Collapsed, the wrapper is a zero-height flex item and
-            the panel hangs off it; expanded, it is the paragraph exactly where it has always
-            been. */}
-          {cardToDeckRefusal !== null && (
-            <div className="relative">
-              <NavNote role="alert" narrow={narrow} tone="text-destructive">
-                {cardToDeckRefusal}
-              </NavNote>
-            </div>
-          )}
-
-          <NavToggle
-            collapsed={collapsed}
-            narrow={narrow}
-            onToggle={() => setCollapsed(!collapsed)}
-          />
-        </nav>
+          </nav>
+        )}
 
         <div className="flex min-w-0 flex-1 flex-col">
           {/* The data directory is the app's one piece of hidden state — it silently falls
@@ -433,6 +451,12 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
             onRefresh={refresh}
             activity={activity}
             activityVisible={activityVisible}
+            // **`narrowWindow`, never the `narrow` two lines of this file up.** They are the same
+            // word for the same thing — *this drawing has no room for its words* — asked about two
+            // different drawings: `narrow` is a rail that is 68px wide, this is a window with no
+            // rail in it. The ribbon sheds its title at this width and gives the row to the status
+            // line; the reasoning and both measurements are in `Ribbon`'s own comment.
+            narrow={narrowWindow}
             updateVersion={update.status?.available?.version ?? null}
             updateInstallable={update.action !== "unavailable"}
             onOpenUpdate={() => setActiveView("settings")}
@@ -488,6 +512,73 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
             removing it (measured: `main.scrollHeight` 742 → 1646). This line is the same rule
             applied to the outermost scroller, so a view that grows cannot reach the document. */}
           <main className="relative min-h-0 flex-1 overflow-auto p-5">{children}</main>
+
+          {/* **After `<main>`, which is both where it is drawn and where it is read.** The bar
+            sits on the window's bottom edge, and in DOM order it comes after the view — so a
+            reader tabbing through the page reaches the content before the navigation, which is
+            the order the rail gives a pointer reader (rail, then view, left to right) mirrored
+            onto the axis a phone has.
+
+            **`{...drops}` and never a second `useSidebarDrops()`.** That hook holds a `dragging`
+            flag and one `report`, and its `decks`/`wishlist` are exactly this component's three
+            remaining props — so the shell's single instance is handed to whichever drawing of
+            navigation is on screen. Two instances would be two live regions describing the same
+            drop and disagreeing about which of them had just happened.
+
+            Of the rail's own two extras, one does not follow it here and one does. The collapse
+            toggle has no meaning for a bar that is not a column and is gone for good. The two
+            *sentences* are answered by the strip immediately below this comment. */}
+          {narrowWindow && (
+            <>
+              {/* **The two sentences the rail used to say, drawn directly above the bar that
+                replaced it.**
+
+                Both lived in the `<nav>` above — the drop report under the entry a card landed
+                on, the refused-add alert under all six of them — and below the phone width
+                there is no `<nav>` to be a line in. They go *here* rather than up beside the
+                ribbon because they are the **navigation's** sentences: both are about where a
+                card just went, the reader's thumb is already at the foot of the window, and the
+                tab that produced the report is 20px below this line instead of 700 above it.
+
+                **Zero height at rest, which is why it is a strip and not a second ribbon row.**
+                The vertical is the axis this whole layout is short of — ribbon 58 plus `main`'s
+                40 plus a shut filter bar leaves about one tile row — so this box is horizontal
+                padding and nothing else until one of the two has something to say, and it hands
+                the pixels back when they stop. `px-5` rather than nothing so the sentence lines
+                up with `main`'s own inset directly above it.
+
+                **The report is painted here and announced by the bar, and that split is
+                deliberate.** `BottomTabBar` mounts a `role="status"` per droppable tab, `sr-only`
+                for the app's standing reason — a live region that first appears with its
+                sentence already inside it announces nothing — and that region has to stay the
+                *only* one, because two live regions holding one drop say it twice. So this copy
+                is `aria-hidden`: the eye's and nothing else, exactly as the ribbon's activity
+                count is `aria-hidden` beside the phase that is announced.
+
+                **`decks.report ?? wishlist.report` is not the "two lifetimes in one slot" the
+                rail's alert comment refuses.** `useSidebarDrops` holds one `{ at, text }` for the
+                whole sidebar, so at most one of the two is ever non-null: the `??` picks the one
+                there is rather than choosing between two, and both halves clear on the same
+                `REPORT_MS` timer and on the next pick-up.
+
+                **The refusal is `CardMenuRefusal`**, the component every card surface already
+                draws, rather than a third copy of that box. The rail draws its own (`NavNote`)
+                because it has a geometry nothing else has — a 68px column with the sentence
+                floating beside it — and that argument does not survive the rail's removal: here
+                there is no column, so the shared banner is simply the right one. What does not
+                move is the half that must not: `role="alert"`, mounted only while there is
+                something to say, because announcing on insertion is what that role is for. */}
+              <div className="shrink-0 px-5">
+                {dropReport !== null && (
+                  <p aria-hidden="true" className="py-1 text-xs leading-tight text-dim">
+                    {dropReport}
+                  </p>
+                )}
+                <CardMenuRefusal error={cardToDeckRefusal} />
+              </div>
+              <BottomTabBar activeView={activeView} onSelect={setActiveView} {...drops} />
+            </>
+          )}
         </div>
       </div>
     </div>
@@ -554,34 +645,12 @@ function NavItem({
 }) {
   const ref = useRef<HTMLButtonElement>(null);
   const tip = useTooltip();
-  // **Every card the drag is carrying** (issue #214) — `readCards`, which answers with one
-  // payload for an ordinary drag, several for a multi-select one, and `null` for a drag this app
-  // did not put in the air. The entry's own rule is asked once for the whole gesture: both
-  // entries take every kind of card payload, so "may this land here" has never been a per-card
-  // question.
-  //
-  // No `getData`: what a drop writes is decided by the entry, and the entry is already here. An
-  // entry that cannot take a card never accepts one — so `over` is only ever true for a drop that
-  // will happen. `useDndDropTarget` reads `canDrop` and `onDrop` through a ref of its own, which
-  // is what keeps the registration standing while the shell re-renders mid-drag: the shell
-  // re-renders the moment a card is picked up — that is what raises the ring — and a drop target
-  // that unregisters mid-drag is a drop that never arrives.
-  //
-  // The three entries a card cannot land on (`drop === null`) register a droppable too and refuse
-  // every payload, which costs a registry entry and nothing else: `computeCollisions` skips a
-  // droppable whose `accepts()` is false before it measures it.
-  /** The card is over *this* entry: which one of the ringed pair is about to take it. */
-  const { over } = useDndDropTarget({
-    ref,
-    read: readCards,
-    canDrop: () => drop?.eligible === true,
-    onDrop: (payloads) => {
-      for (const payload of payloads) drop?.onDrop(payload);
-    },
-  });
-
-  const eligible = drop !== null && dragging && drop.eligible;
-  const inert = drop !== null && dragging && !drop.eligible;
+  // The registration, and the three facts drawn from it — `useSidebarDropTarget`, which is
+  // where the whole of the drag reasoning lives now. It moved out of this function on
+  // 2026-08-29, when `BottomTabBar` became the second drawing of navigation: the rail's row and
+  // the phone's tab are two drawings, but "which entries register, and what they accept" is one
+  // rule and had to stop being written twice.
+  const { over, eligible, inert } = useSidebarDropTarget({ ref, drop, dragging });
 
   return (
     // `relative` for the report line below: `.sr-only` is `position: absolute`, so the empty
@@ -610,7 +679,11 @@ function NavItem({
         // line below — a change that would announce it on *every* drag while no deck is open,
         // which is a product call and is written up in
         // `docs/superpowers/notes/plan-5-followups-note.md` rather than made here.
-        title={inert ? (drop.inertReason ?? undefined) : undefined}
+        // `drop?.` rather than `drop.`: `inert` is a hook's answer now rather than a `const`
+        // alias of `drop !== null && …` in this scope, so TypeScript's aliased-condition
+        // narrowing no longer reaches the field. The optional chain says the same thing and is
+        // the one line the lift cost.
+        title={inert ? (drop?.inertReason ?? undefined) : undefined}
         // **The word, for the eye, while the rail is 68px wide** — `useTooltip()` at side
         // `"right"`, which is the app's one hint mechanism, and never a native `title`.
         //

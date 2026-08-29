@@ -107,10 +107,13 @@ export default defineConfig({
       // number by exactly the files nobody tested.
       include: ["src/**/*.{ts,tsx}"],
       exclude: [
-        // Tests, and the two helpers that exist only for them.
+        // Tests, and the helpers that exist only for them. (Counted in prose here until
+        // 2026-08-29, when a third arrived and the sentence was wrong for the length of one
+        // edit — a list is a fact this file already states.)
         "src/**/*.test.{ts,tsx}",
         "src/test-setup.ts",
         "src/test-drag.ts",
+        "src/test-viewport.ts",
         // Stories are the Storybook workbench, not app code. They *do* run — through
         // `src/stories.test.tsx` — so leaving them in would count the workbench's own
         // coverage of itself as product coverage.

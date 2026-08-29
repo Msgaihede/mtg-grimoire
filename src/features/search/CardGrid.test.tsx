@@ -23,7 +23,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 // what the real function answers under vitest.
 vi.mock("@/pwa/target", () => ({ isWebTarget: vi.fn(() => false) }));
 
-import { CardGrid, columnsFor, sideGutterFor, tileWidthFor } from "./CardGrid";
+import { CardGrid, PHONE_TILE_WIDTH, columnsFor, sideGutterFor, tileWidthFor } from "./CardGrid";
 import { GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
 import { OwnedBadge } from "@/components/OwnedBadge";
 import { AddToCollectionButton, REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
@@ -39,6 +39,7 @@ import { isWebTarget } from "@/pwa/target";
 import { parseFinishes } from "@/lib/finish";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
+import { PHONE_PX } from "@/lib/viewports";
 
 /**
  * The tile's trailing control, as `SearchPage` builds it.
@@ -129,6 +130,25 @@ afterEach(() => {
 
 /** Long enough to cover the first dithered wait whatever `Math.random` returned. */
 const PAST_THE_RETRY = IMAGE_RETRY_FLOOR_MS + IMAGE_RETRY_SPREAD_MS;
+
+/**
+ * How much wall a 390px phone leaves this component, measured in the shipped WebView2 on
+ * 2026-08-29: the window, less the rail (**0** — the bottom tab bar replaced it), less
+ * `AppShell`'s `main` `p-5` (40), less this wall's own scroller `border` + `p-3` (26). **324.**
+ *
+ * Built from `PHONE_PX` rather than typed, so the frame the design round is drawn in and the wall
+ * inside it cannot come apart. jsdom lays nothing out, so this number can only ever be exercised
+ * on the exported functions — which is the same reason the deck panel's 330 is.
+ */
+const PHONE_WALL_PX = PHONE_PX - 40 - 26;
+/**
+ * The same arithmetic for the phone this was driven on, which is **360** rather than `PHONE_PX`'s
+ * 390 (OnePlus, Chrome 152, portrait, 2026-08-29). It is a literal because it is a fact about one
+ * device rather than a frame the app states — and it is the binding case, which is why it is here
+ * at all.
+ */
+const NARROW_WINDOW_PX = 360;
+const NARROW_WALL_PX = NARROW_WINDOW_PX - 40 - 26;
 
 /** For the tests that open a quick-add popup, which is a mutation and wants a client. */
 function wrap(ui: ReactElement) {
@@ -1040,6 +1060,45 @@ describe("CardGrid", () => {
     // The pair are 150 each and the column keeps the 18px they leave, 9 down each side.
     expect(tileWidthFor(330, 150)).toBe(150);
     expect(sideGutterFor(330, 150)).toBeCloseTo(9);
+  });
+
+  /**
+   * **The phone's wall, and why the number is 141.**
+   *
+   * The four page-width walls are handed {@link PHONE_TILE_WIDTH} below the phone width, and this
+   * is the arithmetic that chose it — asserted against the real `columnsFor` rather than restated,
+   * because a width that is right in a comment and wrong in the function is the failure the whole
+   * task exists to fix.
+   *
+   * **Both walls are pinned, and the narrower one is the binding case.** `PHONE_PX` is 390 and
+   * the device this was driven on is **360**, so the frame the app states and the hardware in the
+   * room disagree — and 144, chosen against 390, drew **one** column on that phone. Each wall is
+   * built from its window and the two insets rather than typed, so neither can come apart from
+   * the frame it describes.
+   */
+  it("fits two tiles on a phone's wall, at the stated frame and at a narrower real one", () => {
+    // Today's failure at the stated frame: one column, with 90px of margin either side of it.
+    expect(columnsFor(PHONE_WALL_PX)).toBe(1);
+    // **And 160 is the same failure one inset later** — the width 9a's draft suggested, which
+    // divides to 1.95 columns and floors to one. Pinned so nobody arrives at it a second time.
+    expect(columnsFor(PHONE_WALL_PX, 160)).toBe(1);
+    // **And 144 is that failure a third time, on the hardware rather than in the arithmetic.**
+    // Measured on the device: rows of 226 × 294 carrying one tile each. Three pixels short.
+    expect(columnsFor(NARROW_WALL_PX, 144)).toBe(1);
+
+    // 141 holds at both, which is the whole of why it is the number.
+    expect(columnsFor(PHONE_WALL_PX, PHONE_TILE_WIDTH)).toBe(2);
+    expect(columnsFor(NARROW_WALL_PX, PHONE_TILE_WIDTH)).toBe(2);
+    // Two columns at each, so `tileWidthFor`'s cap cannot bind and the tile is the size asked for.
+    expect(tileWidthFor(PHONE_WALL_PX, PHONE_TILE_WIDTH)).toBe(PHONE_TILE_WIDTH);
+    expect(tileWidthFor(NARROW_WALL_PX, PHONE_TILE_WIDTH)).toBe(PHONE_TILE_WIDTH);
+
+    // At the narrow wall the pair fills the row exactly, so there is no gutter — and that is
+    // fine rather than the reason 156 was rejected at 324: `sideGutterFor` pads the **row**,
+    // inside the box the `ResizeObserver` measures, and the scroller's own `p-3` sits outside
+    // it, so a tile with no gutter is still 12px from the scroller's border box.
+    expect(sideGutterFor(NARROW_WALL_PX, PHONE_TILE_WIDTH)).toBe(0);
+    expect(sideGutterFor(PHONE_WALL_PX, PHONE_TILE_WIDTH)).toBe(15);
   });
 
   /**

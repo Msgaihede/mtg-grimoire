@@ -114,10 +114,18 @@ export function DangerZonePanel({ danger }: { danger: DangerZone }): JSX.Element
   return (
     <SettingsSection id="danger" title="Clear data">
       {/* **No promise the page cannot keep.** This said "in the folder named on this page" until
-          it was read in the shipped window, where the data folder is named nowhere on Settings —
-          it is a tooltip on the ribbon's status line, and "Not here yet" is what this page says
-          about the folder. A sentence that sends a reader looking for something that is not
-          there is worse than the shorter one. */}
+          it was read in the shipped window, where the data folder was named nowhere on Settings
+          — it was a tooltip on the ribbon's status line, and "Not here yet" was what this page
+          said about the folder. A sentence that sends a reader looking for something that is not
+          there is worse than the shorter one.
+
+          **That premise expired on 2026-08-29**: `SettingsPage` draws a Data folder section
+          above `Backup` now, because a phone reader has no hover and the tooltip was the only
+          door to that fact. The longer sentence is therefore sayable again — and is deliberately
+          not being said. It would name a folder eight panels further up the page, at the one
+          moment a reader is being asked to slow down and read; the shorter sentence is the
+          better warning on its own merits, and it stopped being a compromise rather than
+          becoming wrong. Restoring it is a decision about this paragraph, not a rot fix. */}
       <p className="text-sm text-dim">
         Each of these empties one part of the app for good. There is no undo and no backup — the
         app keeps a single copy of your data, and these buttons delete it.

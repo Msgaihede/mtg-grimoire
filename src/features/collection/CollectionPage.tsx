@@ -21,7 +21,7 @@ import { listWalkStops, usePublishCardWalk } from "@/features/card/cardWalk";
 import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
 import { dragData } from "@/features/decks/dnd";
 import { MoveToFolder } from "@/features/decks/MoveToFolder";
-import { CardGrid, type GridCard } from "@/features/search/CardGrid";
+import { CardGrid, PHONE_TILE_WIDTH, type GridCard } from "@/features/search/CardGrid";
 import { FilterBar, type FilterLabels, type TrayCell } from "@/features/search/FilterBar";
 import { ExportDialog } from "@/features/transfer/export/ExportDialog";
 import { everythingLabel, scopeLabel, useExportScope } from "@/features/transfer/export/scope";
@@ -48,6 +48,7 @@ import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
 import { tileKeyOf } from "@/lib/tileKey";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
+import { useNarrowWindow } from "@/lib/useNarrowWindow";
 import { cn } from "@/lib/utils";
 import { writeFailure } from "@/lib/writes";
 import { CollectionBreadcrumb } from "./CollectionBreadcrumb";
@@ -507,6 +508,9 @@ export function CollectionPage() {
   const { query, summary, rows, total, marketplace, folderId, flatten } = collection;
   const view = useAppStore((s) => s.collectionView);
   const selectedCardId = useAppStore((s) => s.selectedCardId);
+  // What the wall below is sized by — see its `baseTileWidth`. A consumer of the app's one
+  // viewport branch rather than a second one; the hook argues for itself at its own site.
+  const narrowWindow = useNarrowWindow();
   /**
    * The wall's own opener, and the finish it last opened the pane as.
    *
@@ -2096,6 +2100,12 @@ export function CollectionPage() {
               rows={tiles}
               label="Your collection"
               listKey={collection.queryKeyString}
+              // **A phone gets a narrower card, so the binder is two columns rather than one.**
+              // The same width the search wall takes and for the same arithmetic: 324px of wall
+              // at 390, where 170 floors to one column. `PHONE_TILE_WIDTH` carries the
+              // derivation, the 160 that looks like a fix and is not, and the decision that the
+              // chin does not scale with it.
+              baseTileWidth={narrowWindow ? PHONE_TILE_WIDTH : undefined}
               // This wall's own zoom, kept apart from the search's: the two views are the same
               // component over different rows, and a reader who peers at one printing's art in
               // search is not asking for a binder at 2× as well. `CardGrid`'s `zoomSection`

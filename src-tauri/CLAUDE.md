@@ -1303,10 +1303,12 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
   `#[cfg(desktop)]`) and `focus_existing_window` (`unminimize()` likewise). Four more are gated
   because they **must not run**: the `--await-predecessor` handshake, the mirror's hook and
   thread, `update::clean_up` and the daily update check. **`mirror/`, `transfer/` and `update.rs`
-  still compile there and that is deliberate** — `AppState` names two mirror types and a dozen
-  modules call `get_app_meta`/`set_app_meta`, and in a library crate a `pub fn` in a `pub mod`
-  raises no `dead_code`, so not *running* them costs nothing where not *compiling* them costs a
-  six-file ripple. When adding a `cfg`, prefer a `bool` parameter over a `cfg!` inside a body —
+  still compile there and that is deliberate** — `AppState` names two mirror types, and in a
+  library crate a `pub fn` in a `pub mod` raises no `dead_code`, so not *running* them costs
+  nothing where not *compiling* them costs a six-file ripple. (**The `get_app_meta` half of that
+  argument moved out on 2026-08-29**: eleven modules called it and only `update.rs` swaps an
+  `.exe`, so the store is [`app_meta.rs`](src/app_meta.rs) now and compiles for every target.
+  The mirror half stands.) When adding a `cfg`, prefer a `bool` parameter over a `cfg!` inside a body —
   `paths::data_dir_for` and `update::install_kind_for` both do this, so both arms compile and are
   tested on every platform. Full record: [android-target.md](../docs/reference/android-target.md).
 - `tauri.conf.json` is embedded at **compile time** — editing it needs a Rust rebuild
@@ -1336,10 +1338,28 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
 ## The web target
 
 - **`src-tauri/src/lib.rs` is the module map, and the split in it is binding.** A module in the
-  "Every target" column must compile for `wasm32-unknown-unknown`, which means no `tauri::`, no
+  "Every target" block must compile for `wasm32-unknown-unknown`, which means no `tauri::`, no
   `tokio::fs`, no `std::thread` — and **no `SystemTime::now()` or `Instant::now()`, both of
   which panic there**. Those two imports are gated off the target in `sync.rs`, `combos.rs` and
   `db.rs` rather than only their callers, so the names are not even in scope to reach for.
+- **Gate the commands, not the module — a module's side is decided by what is _in_ it.** Eleven
+  modules moved to "Every target" on 2026-08-29 (the deck domain, the collection, the wishlist,
+  both folder tables, `marketplace`) and **not one line of their SQLite changed**: each file
+  ends in a contiguous block of `#[tauri::command]` wrappers and is `&Connection` in, DTO out,
+  above it — `deck.rs` has no `tauri::` reference in its first 3 991 lines. `search.rs` is the
+  pattern: ungated module, `#[cfg(not(target_family = "wasm"))]` on each of its two commands,
+  which is why `run_search` is reachable from `web::route` and `list_decks` was not until this
+  landed. **A new command goes in the module its data lives in, with the gate on the wrapper.**
+- **Compiling for wasm is not being reachable from a browser**, and conflating the two is how a
+  "ported" module still answers `unknown command`. [`web::route`] is a `match` on the command
+  *name*; a module can build for the target and route nothing. The two are deliberately separate
+  PRs — the gate move cannot change desktop behaviour, the routing cannot fail to compile.
+- **`-D warnings` on the wasm clippy job makes a stranded import a red build**, and moving a gate
+  strands them by the dozen. Gate the `use` line with the same attribute rather than deleting it;
+  desktop still needs it. For a **private helper** whose only callers were the commands, prefer
+  `#[cfg_attr(target_family = "wasm", allow(dead_code))]` over a `#[cfg]` — the precedent is
+  `sync::with_write`, and the reason is that those helpers are exactly what `web::route` will
+  call next, so keeping them compiling is the point.
 - **`npm run verify` cannot see any of this; the `wasm` CI job is what does.** Measured: with a
   `use tauri::Manager` added to `search.rs`, `cargo test` passes 1 495 and desktop
   `clippy -D warnings` is silent, while the wasm leg fails with `unresolved import tauri`.

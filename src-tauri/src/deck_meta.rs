@@ -36,10 +36,12 @@
 //! change what a pile is called and nothing about what is in it — now covers every write in the
 //! module.
 
+#[cfg(not(target_family = "wasm"))]
 use crate::sync::{with_write, AppState};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
 use serde_json::json;
+#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// What an *adjustment* to a category says when the id it names is not there — the same
@@ -1879,12 +1881,14 @@ pub fn delete_folder(conn: &Connection, id: i64) -> Result<(), String> {
 
 /// What a write here says when its worker thread died under it — never a user's problem, the
 /// write itself answers [`crate::db::BUSY`] when the database is busy.
+#[cfg(not(target_family = "wasm"))]
 fn unfinished(e: tauri::Error) -> String {
     format!("the deck's categories, tags or folders could not be written: {e}")
 }
 
 /// The category panel. **Read-only connection** — see [`list_categories`]'s doc: it backfills
 /// nothing any more, so this never needs to contend for the write mutex.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_category_list(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1906,6 +1910,7 @@ pub async fn deck_category_list(
     .map_err(|e| format!("the deck's categories could not be read: {e}"))?
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_category_create(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1920,6 +1925,7 @@ pub async fn deck_category_create(
     .map_err(unfinished)?
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_category_rename(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1934,6 +1940,7 @@ pub async fn deck_category_rename(
     .map_err(unfinished)?
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_category_set_active(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1948,6 +1955,7 @@ pub async fn deck_category_set_active(
     .map_err(unfinished)?
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_category_reorder(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1962,6 +1970,7 @@ pub async fn deck_category_reorder(
     .map_err(unfinished)?
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_category_delete(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1980,6 +1989,7 @@ pub async fn deck_category_delete(
 }
 
 /// **Read-only** connection, like every list in this module.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_tag_list(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1994,6 +2004,7 @@ pub async fn deck_tag_list(
     .map_err(|e| format!("the deck's tags could not be read: {e}"))?
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_tag_create(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2011,6 +2022,7 @@ pub async fn deck_tag_create(
 
 /// `deck_id` is where the reader was standing, not what is being changed — see
 /// [`update_tag`], which is app-wide.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_tag_update(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2028,6 +2040,7 @@ pub async fn deck_tag_update(
 }
 
 /// Deletes the tag **everywhere**, and answers nothing. `deck_id` is where the reader was.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_tag_delete(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2042,6 +2055,7 @@ pub async fn deck_tag_delete(
 
 /// Answers how many rows lost the label — see [`remove_tag_from_deck`], which leaves the tag
 /// itself alone.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_tag_remove_from_deck(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2061,6 +2075,7 @@ pub async fn deck_tag_remove_from_deck(
 
 /// **Read-only**, and the one command in this module with no deck id at all — see
 /// [`list_all_tags`]'s doc.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_tag_all(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2071,6 +2086,7 @@ pub async fn deck_tag_all(
         .map_err(|e| format!("the tag list could not be read: {e}"))?
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_card_set_tag(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2091,6 +2107,7 @@ pub async fn deck_card_set_tag(
 }
 
 /// **Read-only**, like every list in this module.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_folder_list(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2101,6 +2118,7 @@ pub async fn deck_folder_list(
         .map_err(|e| format!("the deck folders could not be read: {e}"))?
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_folder_create(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2115,6 +2133,7 @@ pub async fn deck_folder_create(
     .map_err(unfinished)?
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_folder_rename(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2129,6 +2148,7 @@ pub async fn deck_folder_rename(
     .map_err(unfinished)?
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_folder_move(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2147,6 +2167,7 @@ pub async fn deck_folder_move(
 /// write. It answers the **whole** folder list rather than the rows it moved, like
 /// [`deck_category_reorder`]: every sibling's number changed, so a caller handed only the moved
 /// rows would have to guess at the rest.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_folder_reorder(
     state: tauri::State<'_, Arc<AppState>>,
@@ -2161,6 +2182,7 @@ pub async fn deck_folder_reorder(
     .map_err(unfinished)?
 }
 
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_folder_delete(
     state: tauri::State<'_, Arc<AppState>>,

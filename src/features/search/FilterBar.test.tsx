@@ -1,13 +1,16 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { UserEvent } from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { MANA_VALUES } from "@/components/FilterChips";
 import { TOOLTIP_OPEN_MS, TOOLTIP_PANEL_ID, TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import type { FacetResponse, SearchSortKey } from "@/lib/ipc";
 import type { TagChip } from "@/features/tags/tagFilters";
 import type { SortSpec } from "@/lib/sort";
 import { openDropdown, pickOption } from "@/test-dropdown";
+import { DROP_MARK_ROOM } from "@/lib/dropMarks";
+import { LAYER } from "@/lib/layers";
+import { stubNarrowWindow } from "@/test-viewport";
 import type { TagToken } from "./tagQuery";
 import { FilterBar } from "./FilterBar";
 import { ANY_CARD, FORMATS } from "./useCardSearch";
@@ -1487,6 +1490,545 @@ describe("FilterBar, its tray", () => {
 
     await userEvent.click(screen.getByRole("button", { name: /^Hide filters/ }));
     expect(screen.queryByRole("button", { name: "Format" })).toBeNull();
+  });
+});
+
+/**
+ * The tray as a **sheet** below the phone width — 9c's Task 1.
+ *
+ * Measured on the device on 2026-08-29 (OnePlus, Chrome 152, portrait): the shut bar is 381px of
+ * a 545px content box and the wall gets 99, which is 0.42 of a tile row; the *open* tray is
+ * **922px**, four times the room there is. So on a phone the tray stops being a panel in the flow
+ * and becomes a `Dialog` — `src/CLAUDE.md`'s shape for a surface that is *consulted* rather than
+ * worked out of.
+ *
+ * **Every case here states a width, because none of them can measure one.** jsdom's `matchMedia`
+ * never matches (`src/test-setup.ts`), which is what silently puts every other case in this file
+ * in the desktop shape; `stubNarrowWindow` is how a case says otherwise. And jsdom applies no
+ * container query and loads no stylesheet, so nothing below is about a pixel — these are
+ * assertions about **which box a control is in**, which is the half of this change the suite can
+ * actually referee.
+ */
+describe("FilterBar, its tray as a sheet", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  /**
+   * Walk up to the nearest `@container/fb` box, by `classList` rather than by `closest()`.
+   *
+   * `@` and `/` are both characters a CSS selector has to escape, and a mis-escaped selector
+   * matches nothing and *raises nothing* — it reads exactly like the ancestor being absent, which
+   * is the very thing these cases exist to tell apart. `classList.contains` takes the literal
+   * token and cannot be got wrong.
+   */
+  const containerBox = (el: Element): HTMLElement | null => {
+    for (let node: Element | null = el; node !== null; node = node.parentElement) {
+      if (node.classList.contains("@container/fb")) return node as HTMLElement;
+    }
+    return null;
+  };
+
+  /** The tray panel itself, found the way assistive tech finds it: through the button's own
+   *  `aria-controls`. */
+  const trayPanel = (toggle: HTMLElement) =>
+    document.getElementById(toggle.getAttribute("aria-controls")!);
+
+  it("puts the tray's controls inside a dialog below the phone width", async () => {
+    stubNarrowWindow(true);
+    render(<FilterBar search={search()} />);
+
+    // Nothing is mounted until it is asked for — a sheet is a `Dialog`, and a closed `Dialog`
+    // renders no panel at all.
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    const toggle = await openTray();
+    const sheet = screen.getByRole("dialog");
+
+    expect(within(sheet).getByRole("button", { name: "Format" })).toBeInTheDocument();
+    expect(within(sheet).getByTestId("set-combobox")).toBeInTheDocument();
+    expect(within(sheet).getByRole("button", { name: /^Owned\b/ })).toBeInTheDocument();
+    expect(within(sheet).getByRole("button", { name: /^Rare cards\b/ })).toBeInTheDocument();
+    expect(within(sheet).getByLabelText("Lowest price")).toBeInTheDocument();
+    expect(within(sheet).getByRole("button", { name: "All printings" })).toBeInTheDocument();
+
+    // The panel the button names is the one in the sheet, not a second copy left in the flow —
+    // two mounted trays would be two tab stops and two accessible names per filter.
+    const panel = trayPanel(toggle);
+    expect(panel).not.toBeNull();
+    expect(sheet).toContainElement(panel);
+    expect(screen.getAllByRole("button", { name: "Format" })).toHaveLength(1);
+  });
+
+  /**
+   * **The half that guards the other four surfaces**, and the one this task's mutation step
+   * removes the gate to see fail. `FilterBar` is the one filter row for the search page, the Tags
+   * page, both tabs of the deck editor's docked panel, the collection and the wishlist — four of
+   * which have no phone in them. A sheet reaching a 1500px bar would take every control on it
+   * behind a modal nobody asked for, and every existing case in this file would still pass:
+   * `screen.getByRole` searches the whole document, so a control in a dialog is a control it
+   * finds. **The absence of the dialog is therefore the assertion**, not the presence of the
+   * controls.
+   */
+  it("leaves the tray in the flow at every other width", async () => {
+    stubNarrowWindow(false);
+    render(<FilterBar search={search()} />);
+
+    const toggle = await openTray();
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("button", { name: "Format" })).toBeInTheDocument();
+    expect(trayPanel(toggle)).not.toBeNull();
+  });
+
+  /**
+   * **The trap that has no other witness.** A container query resolves against the nearest
+   * ancestor carrying `container-type`, and a `Dialog` panel is not inside the bar's
+   * `@container/fb` box — so moving the tray into the sheet without giving the sheet a container
+   * of its own would leave four rules inside `FilterTray` with nothing to resolve against: the
+   * cell grid's one-to-two-to-three columns at 640 and 900, and the rarity and condition chips'
+   * grid-to-flow at 640. They would fall to their base arrangement **silently** — no error, no
+   * warning, and jsdom applies no container query, so not a red test either.
+   *
+   * What jsdom *can* see is an ancestor's class. That is the whole of what this pins, and it is
+   * enough: the query cannot be evaluated here, but the box it would be evaluated against can be
+   * shown to exist.
+   */
+  it("keeps the tray inside a named container box in both places", async () => {
+    stubNarrowWindow(true);
+    const { unmount } = render(<FilterBar search={search()} />);
+
+    const sheetPanel = trayPanel(await openTray())!;
+    const sheetContainer = containerBox(sheetPanel);
+    expect(sheetContainer).not.toBeNull();
+    // The sheet's own, not the bar's — a `Dialog` panel is nowhere near the bar's box, so an
+    // ancestor found here has to be one the sheet brought with it.
+    expect(screen.getByRole("dialog")).toContainElement(sheetContainer);
+
+    unmount();
+    stubNarrowWindow(false);
+    render(<FilterBar search={search()} />);
+
+    expect(containerBox(trayPanel(await openTray())!)).not.toBeNull();
+  });
+
+  /**
+   * **The scrim is `fixed inset-0` and carries no correction of its own**, unlike the dropdowns —
+   * whose `usePopupPlacement` measures a zero-size frame precisely so it can subtract whatever
+   * containing block it landed in. `container-type: inline-size` applies layout containment, and
+   * a layout-contained box is the containing block for every `fixed` descendant under it: a sheet
+   * mounted inside the bar would stretch to the *bar's* box rather than to the window, and would
+   * scrim the filter row it came out of instead of the view behind it.
+   *
+   * **jsdom computes no containment and would report this as working.** The structure is what
+   * can be asserted, so the structure is what is asserted.
+   */
+  it("mounts the sheet outside the bar's own container box", async () => {
+    stubNarrowWindow(true);
+    render(<FilterBar search={search()} />);
+    await openTray();
+
+    const sheet = screen.getByRole("dialog");
+    // The bar's box is the one holding the search field; the sheet must not be inside it.
+    const bar = containerBox(screen.getByPlaceholderText("Search cards…"))!;
+    expect(bar).not.toBeNull();
+    expect(bar).not.toContainElement(sheet);
+  });
+
+  /** The way out is the shell's, so it is worth one case that the shell is really carrying it:
+   *  Escape closes the sheet, and the bar's own button reads shut again afterwards. */
+  it("closes the sheet on Escape and says so on the bar", async () => {
+    stubNarrowWindow(true);
+    render(<FilterBar search={search()} />);
+    await openTray();
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("button", { name: /^Show filters/ })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
+  });
+});
+
+/**
+ * **The strip — the search box, one `Filters` button, and nothing else below the phone width.**
+ *
+ * Measured on the device on 2026-08-29 (OnePlus, Chrome 152, portrait): the shut bar was **381px
+ * of a 545px content box** and the wall got **99**, which is 0.42 of a tile row — a reader saw no
+ * whole card. With everything else in the sheet the bar is **44** and the wall gets **436**:
+ * **1.84** rows at the shipped 237px row, so two whole cards and most of the next two. ⚠️ It is
+ * deliberately **not** two rows, which would need 474.
+ *
+ * **Not one of those numbers was taken here and not one of them can be checked here.** jsdom has
+ * no layout engine, applies no container query and loads no stylesheet, so every case below is
+ * about *which box a control is in* or *which class it carries*. The pixels came from the phone
+ * and go back to it.
+ */
+describe("FilterBar, its strip", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  /**
+   * The box the search field is drawn in — the strip below the phone width, the bar's own wrapped
+   * row above it.
+   *
+   * Reached through the field rather than through a test id, because the field is one of the two
+   * controls that *are* the strip: a strip that had lost it fails here as a missing element rather
+   * than as a missing attribute on a box that should not have existed.
+   */
+  const fieldBox = () => screen.getByPlaceholderText("Search cards…").parentElement!;
+
+  /**
+   * Everything the strip sheds, each by the name a reader would address it with — and as an
+   * object, so a failure names the control rather than printing a wall of markup.
+   *
+   * **`Reset all` left this list on 2026-08-29 (9c's Task 3) and it is not an omission.** It is
+   * no longer shed: it is on the strip's *second* line, beside the chips it would undo, and it is
+   * drawn there only when there is something to undo. Both halves are asserted in "the filters
+   * its strip states" below — that it is on the strip with a filter on, that it is nowhere at all
+   * with none, and that the sheet does not draw a second copy.
+   */
+  const shed = () => ({
+    colours: screen.queryByRole("group", { name: "Color identity" }),
+    manaValues: screen.queryByRole("group", { name: "Mana value" }),
+    layout: screen.queryByRole("group", { name: "Result layout" }),
+    sort: screen.queryByRole("button", { name: "Sort results" }),
+    sortDirection: screen.queryByRole("button", { name: /^Sort direction/ }),
+    flatten: screen.queryByRole("button", { name: "Flatten" }),
+  });
+
+  const namesOf = (keep: (el: HTMLElement | null) => boolean) =>
+    Object.entries(shed())
+      .filter(([, el]) => keep(el))
+      .map(([name]) => name);
+
+  /**
+   * **`queryBy*` searches the whole document, not the strip** — which is what makes this the
+   * assertion rather than a `within(strip)` sweep: a control that had merely moved somewhere else
+   * on the page would still be found. With the sheet shut there is nowhere else for one to be.
+   *
+   * `flatten` is passed, or two of the seven would be absent for the ordinary reason that nothing
+   * asked for them and the case would pass on a bar that never drew them.
+   */
+  it("leaves the search box and Filters on the bar below the phone width, and nothing else", () => {
+    stubNarrowWindow(true);
+    render(<FilterBar search={search()} flatten={{ pressed: false, onToggle: vi.fn() }} />);
+
+    expect(screen.getByLabelText("Search cards")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Show filters/ })).toBeInTheDocument();
+    expect(namesOf((el) => el !== null)).toEqual([]);
+  });
+
+  /**
+   * The other half: shed is not lost. Every control is in the sheet, **and there is exactly one of
+   * each** — the arrangement is `order` and a `basis-full` break rather than a copy per place
+   * precisely because two mounted copies are two tab stops and two accessible names per filter.
+   */
+  it("hands every one of them to the sheet, one copy of each", async () => {
+    stubNarrowWindow(true);
+    render(<FilterBar search={search()} flatten={{ pressed: false, onToggle: vi.fn() }} />);
+
+    await openTray();
+    const sheet = screen.getByRole("dialog");
+
+    expect(namesOf((el) => el === null)).toEqual([]);
+    for (const control of Object.values(shed())) expect(sheet).toContainElement(control);
+
+    expect(screen.getAllByRole("group", { name: "Color identity" })).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "Sort results" })).toHaveLength(1);
+    // And the two that stay stayed: the strip is what the reader presses to get back here.
+    expect(sheet).not.toContainElement(screen.getByLabelText("Search cards"));
+    expect(sheet).not.toContainElement(screen.getByRole("button", { name: /^Hide filters/ }));
+  });
+
+  /**
+   * **The half that guards the other four surfaces.** This row is the search page's bar, the Tags
+   * page's, both tabs of the deck editor's docked panel, the collection's and the wishlist's —
+   * and four of those have no phone in them. A strip reaching a 1500px bar would take ten controls
+   * off it and put them behind a disclosure nobody asked for.
+   */
+  it("keeps every control on the bar at every other width", () => {
+    stubNarrowWindow(false);
+    render(<FilterBar search={search()} flatten={{ pressed: false, onToggle: vi.fn() }} />);
+
+    expect(namesOf((el) => el === null)).toEqual([]);
+    expect(screen.queryByRole("dialog")).toBeNull();
+    // One box holding the field *and* the colours, which is the row rather than the strip — and
+    // nothing about it is pinned. The class check is what would catch a strip whose gate leaked
+    // while its contents happened to look right.
+    expect(fieldBox()).toContainElement(screen.getByRole("group", { name: "Color identity" }));
+    expect(fieldBox().classList.contains("sticky")).toBe(false);
+  });
+
+  /**
+   * **The pin, as classes — because there is nothing else about it a test here can see.**
+   *
+   * `position: sticky` resolves against the **scroller's padding box**, and the scroller is
+   * `AppShell`'s `main`: `relative min-h-0 flex-1 overflow-auto p-5`. A strip pinned there sits
+   * flush against the top of that padding box, 20px above where the content begins at rest — so
+   * without `-mx-5 px-5` the wall would scroll through the 20px columns either side. `bg-bg` is
+   * the other half of the same requirement: a translucent strip is one the wall is legible
+   * through.
+   *
+   * **`-mt-5 pt-5` is deliberately absent, and its absence is the assertion.** The vertical bleed
+   * is the horizontal one's twin and it is *not* symmetric in cost: `-mx-5` paints `bg-bg` over
+   * `main`'s own `bg-bg` gutters and is invisible at rest, while `-mt-5` reaches 20px up and
+   * paints over whatever is above. On three of the four pages that carry this bar something is —
+   * `TagChips` at `gap-3`, the collection's summary header and the wishlist's `FigureRow` at
+   * `gap-4` — so it would eat the last 8px, 4px and 4px of those boxes. **And the pin cannot
+   * engage in this layout at all**: every page is `flex h-full flex-col`, so a section exactly
+   * fills `main` and `main` never scrolls. A cost with no matching benefit, so it is out until
+   * something makes `main` scroll — and it goes back in that commit, not before.
+   *
+   * **jsdom has no layout engine and applies no stylesheet**, so a strip missing any of this
+   * would be reported as working by every other case in this file. The numbers above were
+   * measured on the device on 2026-08-29 and the classes are what stands in for them here.
+   */
+  it("pins the strip against the scroller's padding box, opaquely", () => {
+    stubNarrowWindow(true);
+    render(<FilterBar search={search()} />);
+
+    const { classList } = fieldBox();
+    const wanted = ["sticky", "top-0", "-mx-5", "px-5", "bg-bg"];
+    expect(wanted.filter((cls) => !classList.contains(cls))).toEqual([]);
+    // The vertical bleed, pinned as absent for the reason above. Asserting the negative is the
+    // only way this decision survives somebody "completing the set" from the horizontal pair.
+    expect(classList.contains("-mt-5")).toBe(false);
+  });
+
+  /**
+   * **The rung, and it has to come from `LAYER`.**
+   *
+   * `src/lib/layers.ts` names `header` for exactly this pairing — a sticky header against the
+   * content scrolling under it — and its own doc's example is a table header against this filter
+   * bar. `layers.test.ts` sweeps `src/` for a literal `z-` class, so a bare number would be caught
+   * there; **a rung dropped outright would not be**, because a missing class is not a class the
+   * sweep can see. This is the case that catches that one.
+   */
+  it("draws the strip at the layer scale's header rung", () => {
+    stubNarrowWindow(true);
+    render(<FilterBar search={search()} />);
+
+    expect(fieldBox().classList.contains(LAYER.header)).toBe(true);
+  });
+
+  /**
+   * **44 is where the strip's height comes from, and no control on it says so at its own site.**
+   *
+   * Every one is built on `FILTER_SHAPE` — module-private to `@/components/FilterChips`, pinned
+   * by that file's own suite — whose `coarse:min-h-[var(--target-min)]` is the floor a finger
+   * gets and a pointer does not. The class is spelled out here because the constant cannot be
+   * imported; what this case is about is that **every** control that sets a line's height on the
+   * strip carries it.
+   *
+   * **The strip is two lines since 9c's Task 3 and its height is now two numbers**, so what this
+   * case used to say — "between them they are the whole of the strip's height" — is out of date
+   * rather than wrong, and the honest statement is here instead of on the old one. **44 at rest**:
+   * the search box and `Filters`, nothing else drawn. **44 + 8 + 44 = 96 with a filter on**: the
+   * second line arrives, and `Reset all` is what sets it, because a 26px `ActiveFilterChip` is
+   * shorter than the family's floor. That is 1.84 tile rows of wall at rest and **1.62** with a
+   * filter on, against the 436px and the 237px row measured on the device on 2026-08-29 —
+   * arithmetic on device numbers, and **not one of the four figures was or could be taken here**:
+   * jsdom has no layout engine and applies no stylesheet. The classes are the whole of what this
+   * can see.
+   */
+  it("keeps every control that sets a strip line's height at the finger's floor", () => {
+    stubNarrowWindow(true);
+    render(<FilterBar search={search({ colors: ["U"], activeCount: 1 })} />);
+
+    const floor = "coarse:min-h-[var(--target-min)]";
+    expect(screen.getByLabelText("Search cards").classList.contains(floor)).toBe(true);
+    expect(
+      screen.getByRole("button", { name: /^Show filters/ }).classList.contains(floor),
+    ).toBe(true);
+    // The second line's, and the reason it is 44 rather than the chips' own 26.
+    expect(
+      screen.getByRole("button", { name: /^Reset all/ }).classList.contains(floor),
+    ).toBe(true);
+  });
+});
+
+/**
+ * **What a phone reader is told without pressing anything — 9c's Task 3, and the shape Markus
+ * chose on 2026-08-29 out of the three the plan left open.**
+ *
+ * The strip's second line carries the real {@link ActiveFilterChip}s, scrolling sideways, with
+ * `Reset all` pinned at the end of the line beside them. The failure it is designed against is
+ * **Reset all counting a filter the reader cannot see**: with the chips in the sheet, a badge
+ * reading `4` was the whole of what a shut phone said, and which four was a press into a modal
+ * that covers the wall being asked about.
+ *
+ * **Two traps, and both have bitten this file before.**
+ *
+ * `screen.getByRole` searches the whole document, so a chip in the sheet and a chip on the strip
+ * are both "found" — every case below that is about *where* a control is therefore asserts an
+ * **absence** at the place it must not be, or it would pass in both worlds.
+ *
+ * And **jsdom lays nothing out and applies no stylesheet**: "it scrolls horizontally" can only be
+ * a class here. 26px, 44px, 436px and the 237px row all came off a device (OnePlus, Chrome 152,
+ * portrait, 2026-08-29) or off a constant, and they go back there.
+ */
+describe("FilterBar, the filters its strip states", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  /** A search with three kinds on, so the row has something to state and Reset all something to
+   *  undo. `activeCount` is stated rather than derived: the badge is the surface's number and the
+   *  chips are this row's, and the two agreeing is the point of them being one arithmetic. */
+  const filtered = () =>
+    search({ colors: ["U", "R"], rarities: ["rare"], owned: false, activeCount: 3 });
+
+  /** The strip — reached through the search field, which is one of the two controls that *are* it,
+   *  so a strip that had lost it fails as a missing element rather than as a missing ancestor. */
+  const strip = () => screen.getByPlaceholderText("Search cards…").parentElement!;
+
+  /** The box the chips are laid out in: their own parent, which is the scroller. */
+  const scroller = () =>
+    screen.getByRole("button", { name: "Remove filter — Colour: Blue, Red" }).parentElement!;
+
+  /**
+   * **The chips are on the strip, in words, with the sheet shut** — which is the whole of what
+   * this task buys and the thing the badge alone could not say.
+   *
+   * Removing them from the strip fails here by name: the case says which sentence a reader can no
+   * longer read.
+   */
+  it("states each filter on the strip, with the sheet shut", () => {
+    stubNarrowWindow(true);
+    render(<FilterBar search={filtered()} />);
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(chipLabels()).toEqual(["Colour: Blue, Red", "Rarity: Rare", "Missing"]);
+    // On the strip and not merely somewhere on the page — `queryBy*` would have found a chip left
+    // under the bar just as happily.
+    for (const label of ["Colour: Blue, Red", "Rarity: Rare", "Missing"]) {
+      expect(strip()).toContainElement(
+        screen.getByRole("button", { name: `Remove filter — ${label}` }),
+      );
+    }
+  });
+
+  /**
+   * **Each chip is still the control it is on a desktop**, not a caption of one: pressing it
+   * takes its whole kind off. That is the half of "read in a glance and undone one filter at a
+   * time" that the rejected `Filters · red, rare, +3` shape could not have kept.
+   */
+  it("takes a whole kind off when a chip on the strip is pressed", async () => {
+    stubNarrowWindow(true);
+    const toggleColor = vi.fn();
+    render(<FilterBar search={search({ colors: ["U", "R"], toggleColor, activeCount: 1 })} />);
+
+    await userEvent.click(
+      screen.getByRole("button", { name: "Remove filter — Colour: Blue, Red" }),
+    );
+
+    expect(toggleColor.mock.calls.map(([c]) => c)).toEqual(["U", "R"]);
+  });
+
+  /**
+   * **`Reset all` is on the strip beside the chips, and the sheet has no second copy.**
+   *
+   * The first half is the failure mode wearing its other hat — a Reset all the reader cannot see
+   * while looking at the chips it would undo is no better than a count they cannot read. The
+   * second is this file's standing rule: two mounted copies are two tab stops and two accessible
+   * names for one control, and `getByRole` would start throwing "found multiple".
+   *
+   * **Pinned outside the scroller**, or it would scroll away from exactly the chips it is about —
+   * which no assertion about the *document* could see, so the containment is asserted against the
+   * scrolling box itself.
+   */
+  it("keeps Reset all beside the chips, outside the scroller and out of the sheet", async () => {
+    stubNarrowWindow(true);
+    render(<FilterBar search={filtered()} />);
+
+    const reset = screen.getByRole("button", { name: /^Reset all/ });
+    expect(strip()).toContainElement(reset);
+    expect(scroller()).not.toContainElement(reset);
+
+    await openTray();
+    const sheet = screen.getByRole("dialog");
+    expect(within(sheet).queryByRole("button", { name: /^Reset all/ })).toBeNull();
+    expect(screen.getAllByRole("button", { name: /^Reset all/ })).toHaveLength(1);
+  });
+
+  /**
+   * The chips do not follow it either: they are the strip's line, not the sheet's block, and one
+   * copy of each. The sheet's own controls state their filters themselves — a gold border on a
+   * picker, two bright chips out of six — which is precisely what the chips stand in for when
+   * those controls are off screen.
+   */
+  it("leaves the chips on the strip when the sheet is open, one copy of each", async () => {
+    stubNarrowWindow(true);
+    render(<FilterBar search={filtered()} />);
+
+    await openTray();
+    const sheet = screen.getByRole("dialog");
+
+    expect(within(sheet).queryAllByRole("button", { name: /^Remove filter — / })).toEqual([]);
+    expect(chipLabels()).toEqual(["Colour: Blue, Red", "Rarity: Rare", "Missing"]);
+  });
+
+  /**
+   * **Nothing to state, no second line** — which is what keeps the shut, unfiltered phone at the
+   * 44px Task 2 measured, and is the one place this parts company with the row a desktop draws.
+   * That row is unconditional because an appearing `Reset all` used to take its width out of a
+   * `flex-1` search box and slide nine colour chips under the finger pressing one. Here it takes
+   * width from nothing: the line arrives *under* the strip and moves only the wall — the same
+   * answer that rule already reached for the desktop chips.
+   */
+  it("draws no second line at all until there is something to state", () => {
+    stubNarrowWindow(true);
+    render(<FilterBar search={search()} />);
+
+    expect(screen.queryByRole("button", { name: /^Remove filter — / })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Reset all/ })).toBeNull();
+    // And the first line is untouched, so this is an absent line rather than an absent strip.
+    expect(screen.getByLabelText("Search cards")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Show filters/ })).toBeInTheDocument();
+  });
+
+  /**
+   * **One scrolling line, never a wrapped one — as classes, because that is all there is here.**
+   *
+   * Wrapping is what made this row **151px** in the old bar, and a row that grows a line each
+   * time a filter goes on is the wall moving under a reader who is narrowing it. `overflow-x-auto`
+   * with no `flex-wrap` is the whole mechanism; the chips carry `shrink-0` themselves.
+   *
+   * **`p-1.5` is `DROP_MARK_ROOM` and it is not padding for looks.** A scroller clips at its
+   * **padding box**, and `FOCUS` stands 4px proud of a chip's border box — so without it the
+   * first and last chip of the row lose that side of their focus ring, which is a WCAG 2.4.7
+   * failure rather than a cosmetic one. `CardGrid`'s tile reaches the same 6px from the other side
+   * with `scroll-m-1.5`. **jsdom has no layout engine and therefore no clip**, so the class is the
+   * only witness there will ever be in this file.
+   */
+  it("scrolls the chips on one line, with room for a focus ring at both ends", () => {
+    stubNarrowWindow(true);
+    render(<FilterBar search={filtered()} />);
+
+    const { classList } = scroller();
+    expect(classList.contains("overflow-x-auto")).toBe(true);
+    expect(classList.contains("flex-wrap")).toBe(false);
+    expect(classList.contains(DROP_MARK_ROOM)).toBe(true);
+  });
+
+  /**
+   * **The half that guards the other four surfaces.** This row is the search page's bar, the Tags
+   * page's, both tabs of the deck editor's docked panel, the collection's and the wishlist's, and
+   * four of those have no phone in them. Above the phone width the chips are the wrapped block
+   * under a rule that they have always been — captioned, unconditional, and nowhere near a
+   * scroller or a sticky box.
+   */
+  it("leaves the stated filters exactly where they were at every other width", () => {
+    stubNarrowWindow(false);
+    render(<FilterBar search={filtered()} />);
+
+    expect(chipLabels()).toEqual(["Colour: Blue, Red", "Rarity: Rare", "Missing"]);
+    expect(screen.getByText("Filtering by")).toBeInTheDocument();
+
+    const { classList } = scroller();
+    expect(classList.contains("flex-wrap")).toBe(true);
+    expect(classList.contains("overflow-x-auto")).toBe(false);
+    // Not on the strip: the block is under the bar, and the bar is not pinned at this width.
+    expect(strip()).not.toContainElement(screen.getByRole("button", { name: /^Reset all/ }));
+    expect(strip().classList.contains("sticky")).toBe(false);
   });
 });
 

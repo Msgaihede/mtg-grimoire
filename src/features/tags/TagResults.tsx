@@ -9,7 +9,7 @@ import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
 import { listWalkStops, usePublishCardWalk } from "@/features/card/cardWalk";
 import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
 import { AddToCollectionButton, REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
-import { CardGrid } from "@/features/search/CardGrid";
+import { CardGrid, PHONE_TILE_WIDTH } from "@/features/search/CardGrid";
 import {
   cardTarget,
   columnsFor,
@@ -27,6 +27,7 @@ import { statusLine } from "@/lib/motion";
 import { pricesAsOf } from "@/lib/prices";
 import { priceRange } from "@/lib/priceRange";
 import { useAppStore } from "@/lib/store";
+import { useNarrowWindow } from "@/lib/useNarrowWindow";
 import { cn } from "@/lib/utils";
 
 /**
@@ -70,6 +71,9 @@ export function TagResults({ search }: { search: CardSearch }) {
   // has to know whether one is open, only which card is in it.
   const selectCard = useAppStore((s) => s.setSelectedCardId);
   const selectedCardId = useAppStore((s) => s.selectedCardId);
+  // What the wall below is sized by — see its `baseTileWidth`. A consumer of the app's one
+  // viewport branch rather than a second one; the hook argues for itself at its own site.
+  const narrowWindow = useNarrowWindow();
 
   /**
    * Warm the images for the page that just landed, so its first paint is not a wall of empty
@@ -229,6 +233,12 @@ export function TagResults({ search }: { search: CardSearch }) {
           <CardGrid
             rows={rows}
             listKey={searchKey}
+            // **A phone gets a narrower card, so the wall is two columns rather than one.** The
+            // same width the other three page-width walls take and for the same arithmetic: 324px
+            // of wall at 390, where 170 floors to one column. `PHONE_TILE_WIDTH` carries the
+            // derivation, the 160 that looks like a fix and is not, and the decision that the
+            // chin does not scale with it.
+            baseTileWidth={narrowWindow ? PHONE_TILE_WIDTH : undefined}
             // Named, because `CardGrid` defaults to `Search results` — the wall it was written
             // for. Two walls announcing the same name is the kind of thing only a reader who
             // cannot see them ever notices, and the table beside it already says `Tag results`.

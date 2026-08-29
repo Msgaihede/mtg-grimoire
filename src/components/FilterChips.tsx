@@ -40,8 +40,31 @@ export const FILTER_FOCUS = FOCUS;
  * {@link FILTER_FIELD} have in common, and a chip 2px off the line is the failure the family
  * exists to prevent. Tailwind reads source text, so the four names live here once and both
  * recipes are built from this.
+ *
+ * **36px for a pointer, 44 for a finger** — the first consumer of the `coarse:` variant and
+ * `--target-min`, both of which shipped in PR #274 declared and deliberately unapplied so this
+ * decision could take them. WCAG 2.5.5 (AAA) asks 44×44 CSS px and 2.5.8 (AA) asks 24×24; this
+ * row clears AA everywhere and clears neither floor *for a finger*, because both floors below 44
+ * are floors for a pointer and a phone has none. The 36 stays where there is a pointer: a
+ * desktop row that grew for touch would be 44px of chrome above every list in the app.
+ *
+ * **`min-h`, not `h`, and that is what makes the variant order stop mattering.** 9a's finding
+ * was that a `coarse:` *size* has no specificity answer against the container-query size the
+ * filter bar already writes — each is one class inside one at-rule, so source order in the
+ * emitted sheet decides and the spelling is a coin toss. (Neither class is named here in full:
+ * Tailwind scans prose as eagerly as code, and a rule this file does not use is a rule in the
+ * sheet nothing asks for. It emitted one before this sentence was rewritten.) A *minimum* is
+ * not in that contest at all: `min-height` beats `height` in the cascade whatever order they are
+ * emitted in, so this floor holds against `FILTER_CONTROL`'s own `h-9`, against
+ * `TagQueryRow`'s `h-7` and against the `size-8` the filter bar hands the mana-value group in
+ * its narrowest column, without any of them having to know it exists.
+ *
+ * A square chip needs the other axis said too — `min-h` alone leaves a 36px-wide button 44 tall
+ * — so {@link ManaChip}, {@link ValueChip} and {@link LayoutToggle} each add
+ * `coarse:min-w-[var(--target-min)]` at their own site. Everything else in the family is
+ * captioned and is already wider than 44.
  */
-const FILTER_SHAPE = "h-9 rounded-md border text-sm";
+const FILTER_SHAPE = "h-9 coarse:min-h-[var(--target-min)] rounded-md border text-sm";
 
 /**
  * Every control in the row is 36px tall, so the chips and the text controls share a line —
@@ -191,6 +214,12 @@ export function ManaChip({
       style={{ backgroundColor: `var(--color-mana-${symbol.toLowerCase()})` }}
       className={cn(
         "grid size-9 place-items-center rounded-full text-lg leading-none text-black",
+        // 44×44 for a finger. This chip writes its own property list rather than taking
+        // `FILTER_SHAPE`, so it says the floor itself — both axes, because it is a circle and
+        // a height alone would make it an ellipse. See `FILTER_SHAPE` for why it is a
+        // *minimum* rather than a size: a minimum is not in the specificity contest that made
+        // 9a call a conditional `coarse:` spelling a coin toss.
+        "coarse:min-h-[var(--target-min)] coarse:min-w-[var(--target-min)]",
         // Its own property list rather than `FILTER_CONTROL`'s, because this chip's on state
         // is a ring and a ring is a box shadow — but `transform` joins it so the colour chips
         // depress like every other chip in the row, and a row where half the chips answer a
@@ -262,6 +291,14 @@ function ValueChip({
         FILTER_CONTROL,
         FILTER_FOCUS,
         "size-9 font-mono text-xs tabular-nums",
+        // The other axis of `FILTER_SHAPE`'s floor: this chip is a square, and a height alone
+        // would leave it 36 wide and 44 tall for a finger. **It costs the group no extra line.**
+        // Ten chips at `gap-1` in a 350px content box (390px window less `main`'s `p-5`) wrap to
+        // two rows either way: at the filter bar's narrow `size-8` nine fit on the first row
+        // (9 × 32 + 8 × 4 = 320) and the tenth drops, and at 44 seven fit (7 × 44 + 6 × 4 = 332)
+        // and three drop. The `flex-wrap` the group already carries — put there when the X chip
+        // made ten chips 396px against the docked panel's ~371 — is what makes that free.
+        "coarse:min-w-[var(--target-min)]",
         filterChipState(pressed, disabled),
         // Last, so tailwind-merge resolves a size clash in the caller's favour — which is the
         // whole of what this prop is for. It must not be spent on the state classes above it: a
@@ -546,7 +583,14 @@ export function LayoutToggle({
           aria-label={label}
           // `describes: false`: identical to the `aria-label` above.
           {...tip(label, { describes: false })}
-          className={cn(FILTER_CONTROL, FILTER_FOCUS, "size-9", filterChipState(view === id))}
+          className={cn(
+            FILTER_CONTROL,
+            FILTER_FOCUS,
+            // A square, so it says the width half of `FILTER_SHAPE`'s floor itself — see
+            // {@link ValueChip}, which carries the same pair for the same reason.
+            "size-9 coarse:min-w-[var(--target-min)]",
+            filterChipState(view === id),
+          )}
         >
           <Icon className="mx-auto size-4" aria-hidden="true" />
         </button>
@@ -808,6 +852,20 @@ export function RarityChip({
  * **The whole chip is the button** rather than a pill with a ✕ inside it. An 11px glyph is an
  * 11px target; the label is already the thing the reader is looking at, so one press on the whole
  * pill is both a bigger target and a shorter sentence than "the close button of the Colour chip".
+ *
+ * **This is where the 44px floor and the stated design conflict, and the *target* grows rather
+ * than the chip.** 26px is the whole argument for this band existing — it is what tells "a filter
+ * you are narrowed by" from "a control that sets one" at a glance, and every other control in
+ * this file is 36. A 44px chip would put the two bands at one height and wreck that reading; a
+ * 26px chip is under WCAG 2.5.5's 44 *and* under 2.5.8's 24 once the row's own gap is counted.
+ * So the hit area is a transparent `::before` centred on the chip — 44 tall, and at least 44
+ * wide for a chip whose statement is short — while the drawn pill stays 26. WCAG 2.5.5 measures
+ * the target, not the ink, which is exactly the seam this uses.
+ *
+ * **The cost is stated rather than hidden**: a 44px box on a 26px chip reaches 9px above and
+ * below the pill, so in a wrapped row the targets of two chips on adjacent lines can meet. That
+ * is a real overlap and it is the lesser one — the alternative is a band of controls no finger
+ * can aim at.
  */
 export function ActiveFilterChip({
   label,
@@ -831,6 +889,18 @@ export function ActiveFilterChip({
         FILTER_FOCUS,
         "inline-flex h-[1.625rem] max-w-full shrink-0 items-center gap-1.5 rounded-full border",
         "border-accent pr-1.5 pl-2.5 text-xs text-accent hover:bg-accent/10",
+        // `relative` unconditionally so the pseudo-element below has a containing block to be
+        // centred in; it changes nothing on its own. The `::before` is the target and the chip
+        // is the ink — see the doc comment for why this one control grows its hit area instead
+        // of its height. `content-['']` is written out rather than relied on: a pseudo-element
+        // with no `content` is not generated at all, and the failure would be a chip that is
+        // simply still 26px with nothing on screen or in the suite saying so.
+        "relative",
+        "coarse:before:absolute coarse:before:top-1/2 coarse:before:left-1/2",
+        "coarse:before:h-[var(--target-min)] coarse:before:w-full",
+        "coarse:before:min-w-[var(--target-min)]",
+        "coarse:before:-translate-x-1/2 coarse:before:-translate-y-1/2",
+        "coarse:before:content-['']",
       )}
     >
       <span className="truncate">{label}</span>

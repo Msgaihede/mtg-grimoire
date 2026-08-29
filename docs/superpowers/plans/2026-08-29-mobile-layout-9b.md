@@ -87,6 +87,14 @@ describe("the navigation census", () => {
 });
 ```
 
+> ⚠️ **`toBeTypeOf("function")` is wrong and fails on all six — corrected 2026-08-29 while executing this step.** Under `lucide-react` 1.x a `LucideIcon` is a `forwardRef` **object** (`$$typeof: Symbol(react.forward_ref)`, keys `["$$typeof", "render"]`), and that is true of lucide's own icons and of `icons.ts`'s `createLucideIcon` copies alike. **Do not weaken it to `"object"`** — that is equally true of the `null` the case exists to catch. **Draw the glyph instead**, which is the only assertion here that tells one from anything else:
+>
+> ```ts
+> const { container, unmount } = render(createElement(entry.Icon));
+> expect(container.querySelector("svg")).not.toBeNull();
+> unmount();
+> ```
+
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `npm run test -- src/components/nav.test.ts 2>&1 | tail -15`
@@ -109,7 +117,9 @@ export interface NavEntry {
 
 and type the const `export const NAV: readonly NavEntry[] = [...]`.
 
-In `AppShell.tsx`, delete the const and add `import { NAV } from "@/components/nav";`. **Nothing else in that file changes.**
+In `AppShell.tsx`, delete the const and add `import { NAV } from "@/components/nav";`.
+
+> ⚠️ **"Nothing else in that file changes" is not achievable, corrected 2026-08-29.** Deleting the const orphans six imports — `Heart`, `Search`, `Settings`, `Tags`, the whole `@/components/icons` line, and `type ViewId` — and an unused import is a **TS6133 error** in this repo, so removing them is entailed by the move rather than scope creep. `LucideIcon` stays: `NavItem`'s props still use it. The true diff is **2 insertions, 29 deletions**, and no rail markup, no `NavItem` and no class string is touched. That is the claim to check.
 
 - [ ] **Step 4: Run, and prove the move changed no behaviour**
 
@@ -143,7 +153,9 @@ the glyph, and those are two drawings rather than one component with a flag."
 
 **Interfaces:**
 - Consumes: `NAV` from Task 1; `SidebarDrop` and `useSidebarDrops`'s return from `@/components/useSidebarDrops`.
-- Produces: `<BottomTabBar activeView onSelect dragging drops />` for Task 3.
+- Produces: `<BottomTabBar activeView onSelect dragging decks wishlist />` for Task 3 — five props, spreading `useSidebarDrops()`'s return directly.
+
+  > ⚠️ **This line first read `… dragging drops`, which disagreed with this task's own test code and with the Self-Review — corrected 2026-08-29.** `useSidebarDrops()` returns `{ dragging, decks, wishlist }`, so the spread shape is the right one and there is no `drops` object to pass. Worth noting as a plan-writing failure rather than a typo: **the Interfaces block is the only thing a task's implementer sees of its neighbours**, so a name that disagrees with the code beside it is exactly the kind of error it exists to prevent.
 
 **Read first:** `src/components/AppShell.tsx`'s `NavItem` (`:514` onward) in full — particularly the `useDndDropTarget` block and its long comment about registrations standing while the shell re-renders mid-drag — and `src/components/useSidebarDrops.ts`.
 
@@ -326,7 +338,9 @@ Expected: FAIL — the module does not exist.
 
 - [ ] **Step 3: Implement the hook**
 
-`useNarrowWindow` subscribes to `matchMedia(\`(max-width: ${PHONE_PX}px)\`)` with `useSyncExternalStore`, which is the React-19 way to read an external source without an effect that sets state — and `src/lib/CLAUDE.md`'s rule against `setState` inside an effect makes the alternative a lint failure at `npm run verify`, not at edit time.
+`useNarrowWindow` subscribes to `matchMedia(\`(max-width: ${PHONE_PX}px)\`)` with `useSyncExternalStore`, which is the React-19 way to read an external source without an effect that sets state — and the rule against `setState` inside an effect makes the alternative a lint failure at `npm run verify`, not at edit time.
+
+> ⚠️ **This step first cited `src/lib/CLAUDE.md`, which does not exist — corrected 2026-08-29.** That rule lives in `src/CLAUDE.md`. A plan that cites a file by a plausible path nobody checked is the same failure class as a prop inferred from a naming convention, and it is worth naming as one.
 
 - [ ] **Step 4: Wire the shell**
 
@@ -367,14 +381,27 @@ saying different things."
 **Cinzel never goes below 18px**, so the 20px title cannot be shrunk to fit: it stays or it goes.
 
 - **The status line must stay mounted.** It is a permanently-mounted `role="status"` whose number is `aria-hidden`, and **a live region that only sometimes exists announces nothing**. Moving it off the row means `sr-only` on the row and the sentence drawn somewhere the reader can see it — not unmounting it.
-- `RibbonProps` has ten members and **no slot, no `children`, no `onStatusPress`** (`Ribbon.tsx:9–53`). This task adds whatever it needs; it is the task that is allowed to.
+
+> ⚠️ **This task has three sentences to place, not one — the other two were found by Tasks 2 and 3 and are recorded at their call sites.** All three are live regions that the phone's chrome currently has no column to draw:
+>
+> 1. **The status line** — above.
+> 2. **The sidebar's drop report** (`SidebarDrop.report`). `BottomTabBar` mounts a `role="status"` per droppable tab so the sentence is *announced*, but a 65px tab has no room to *paint* it. A drop on a phone therefore says nothing to the eye.
+> 3. **The card-menu refusal `role="alert"`** (`cardToDeckRefusal`). It lives on the rail, so **it disappears entirely below the phone width** — the one of the three that is currently lost rather than merely unpainted. That makes it the most urgent.
+>
+> The collapse toggle also goes with the rail, and that one is *correct* — a bar has nothing to collapse. Do not put it back.
+- `RibbonProps` has **thirteen** members and **no slot, no `children`, no `onStatusPress`** (`Ribbon.tsx:9–53`). This task adds whatever it needs; it is the task that is allowed to.
+
+  > ⚠️ **This said "ten" — corrected 2026-08-29 by counting.** It is a fact about a tree and this repo's own rule is not to write one down where a build can answer it. A count that is wrong in a *constraint* is worse than one that is merely stale: an implementer reading "ten" and finding thirteen has to decide whether the plan is out of date or they are looking at the wrong file.
+  >
+  > Also worth carrying: **a required prop forces two files this task's list omits** — `Ribbon.stories.tsx` needs the new prop in its meta args or `tsc -p .storybook` goes red, and `AppShell.test.tsx` moves with `AppShell.tsx`.
 
 - [ ] **Step 1: Write the failing test** — the live region is still in the document when the ribbon is narrow, and the title is not truncated by CSS but genuinely absent or genuinely whole.
 - [ ] **Step 2: Run to verify it fails.**
 - [ ] **Step 3: Implement.** Decide *at this site* what the narrow ribbon holds and write the reason down; the brief does not decide it for you, because 9a measured that no arrangement fits and left the choice to whoever sees the assembled stack.
 - [ ] **Step 4: Run.**
 - [ ] **Step 5 — mutation:** unmount the status line when narrow. The test must FAIL. Restore.
-- [ ] **Step 6: Commit.**
+- [ ] **Step 6 — one comment Task 5 could not reach.** `Ribbon.tsx:93` still reads *"A settings screen (Plan 6) is where this graduates to a visible number."* **That has now happened** — Task 5 gave `imageStoreFailures` and `dataDir` a home in Settings' `Data folder` section — so the sentence is a promise that has been kept and reads as one still outstanding. Point it at the section instead. Task 5 was fenced out of this file and flagged it rather than reaching in, which is why it is here.
+- [ ] **Step 7: Commit.**
 
 ---
 
@@ -399,6 +426,14 @@ saying different things."
 **Files:**
 - Modify: the wall's call sites — `src/features/search/SearchPage.tsx`, `src/features/collection/CollectionPage.tsx`, `src/features/wishlist/WishlistGrid.tsx`, `src/features/tags/TagResults.tsx`
 - Modify: `src/features/search/CardGrid.test.tsx`
+
+> ⚠️ **Three corrections from executing this, 2026-08-29.**
+>
+> - **`SearchPage`'s `<CardGrid>` is inside the module-private `Results` component, not in the exported page.** Putting the hook in `SearchPage` **compiles and type-checks** and then throws at runtime — 24 failures, `ReferenceError: narrowWindow is not defined`. The hook belongs beside `Results`' own `view`.
+> - **There is no `TagResults.test.tsx`.** The tag wall is covered by `src/features/tags/TagsPage.test.tsx`.
+> - **`CardGrid.test.tsx` alone cannot hold this task's assertion.** "The wall is given 144" is a fact about a *call site*, so the wiring tests belong in the four walls' own suites; `CardGrid.test.tsx` keeps the **arithmetic**, on the exported functions, exactly as the deck panel's 150 already does.
+>
+> And a landmine worth knowing about: `TagsPage.test.tsx` has a zoom case that leaves `cardZoom.tags` at **1.1** with no reset anywhere in the file. 1.1 × 144 = 158, which reads as a wrong tile width rather than as leaked state — the [store-state-leaks](../../../CLAUDE.md) hazard in its most confusing form. Reset the section zooms in any describe that asserts a drawn width.
 
 **Interfaces:** Consumes `useNarrowWindow` from Task 3 and `baseTileWidth` on `CardGrid` (`CardGrid.tsx:617`, `number | undefined`, defaulting to the module-private `TILE_BASE_WIDTH = 170`).
 
@@ -429,14 +464,22 @@ saying different things."
 **Four things measured in 9a and each of which shapes the edit:**
 
 - **`ManaChip` and `LayoutToggle` have no `className` or size prop**, so the edit lives inside `FilterChips.tsx` rather than at a call site.
-- **`coarse:` must come last and unconditional.** Stacking it onto a container variant (`@min-[640px]/fb:coarse:size-11`) has **no specificity answer** — source order decides, so a conditional spelling is a coin toss.
+- ~~**`coarse:` must come last and unconditional.**~~ Stacking a `coarse:` **size** onto a container variant (`@min-[640px]/fb:coarse:size-11`) has no specificity answer — source order decides, so a conditional spelling is a coin toss.
+
+  > ✅ **Answered better than this asked, 2026-08-29.** Express the floor as `min-height`/`min-width`, not as a size. Those are **not in that contest at all** — a `min-*` beats a `height`/`width` in the cascade whatever order the two are emitted in — so the coin toss is *removed* rather than won. It then holds against `FILTER_CONTROL`'s `h-9`, `TagQueryRow`'s `h-7` and the bar's `size-8 @min-[640px]/fb:size-9` without any of them knowing, and `ManaValueChips`' `chipClass` — which `FilterBar.tsx:1021` merges **last**, the one place the floor could have been silently dropped — cannot drop it either. **A floor is a minimum, not a size, and saying so in CSS is what makes the ordering question disappear.**
 - **`ActiveFilterChip` at 26px is where the 44px floor and the app's stated design conflict.** Grow the **target** with a `::before`, not the chip.
 - The ten mana-value chips **already wrap at 350px** (`10×32 + 9×4 = 356`), which is why raising them costs no extra line.
 
 - [ ] **Step 1: Write the failing test** — the chips carry a `coarse:` rule reaching `var(--target-min)`, and the sweep in `src/lib/touchTargets.test.ts` still passes (no raw `(pointer: coarse)` anywhere in `src/`).
 - [ ] **Step 2: Run to verify it fails.**
 - [ ] **Step 3: Implement.**
-- [ ] **Step 4: Prove the rules emit.** A `coarse:` utility that Tailwind does not accept fails **silently**. Build and grep the built sheet — and note the pattern: Tailwind minifies to `@media(pointer:coarse)` with **no space**, and the rule **nests**, so `grep -o "@media(pointer:coarse){[^{]*{[^}]*}}" dist/assets/*.css` is the shape that works. The obvious pattern finds nothing and reads exactly like "it did not compile".
+- [ ] **Step 4: Prove the rules emit.** A `coarse:` utility that Tailwind does not accept fails **silently**. Build and grep the built sheet. Tailwind minifies to `@media(pointer:coarse)` with **no space**, and the rules **nest** — and once the block holds more than one utility the single-rule pattern exits 1 with no output, which reads exactly like "it did not compile". Use the repeating form:
+
+  ```
+  grep -oE "@media\(pointer:coarse\)\{(\.[^{]*\{[^}]*\})*\}" dist/assets/*.css
+  ```
+
+  ⚠️ **And do not name a full class in a doc comment in a `.tsx` while doing it.** Measured on 2026-08-29: a comment explaining the specificity argument named `coarse:size-11` verbatim and the build emitted a live `.coarse\:size-11{…}` rule nothing used. `frontend-design.md`'s 9a note exempts **`index.css`'s own** comments and says not to generalise that to `.tsx` — this is that warning measured true.
 - [ ] **Step 5 — mutation:** remove the `coarse:` variant from one chip. The test must FAIL naming it. Restore.
 - [ ] **Step 6: Commit.**
 
@@ -474,9 +517,43 @@ saying different things."
 
 > **Nothing in 9a measured this**, because until one option per surface was chosen there was no stack to measure. Every task above spends or saves on the vertical, and the vertical is the scarce axis: ribbon 58 + `main`'s 40 + a 273px shut filter bar left ≈**329px** of wall against a ~700px visible viewport *before* the bar's 53px. **If the assembled answer is one tile row, this plan has not succeeded**, and the thing to re-open is what the chrome spends vertically rather than which layout won.
 
+> ### ✅ Done 2026-08-29, and the answer is that it has not succeeded
+>
+> Driven on the OnePlus in Chrome 152, portrait, against the production web build with a
+> 117 606-card corpus built on the device. **Both halves of the budget were wrong, independently,
+> and neither is visible from a desktop.** The full record with every figure is in
+> [frontend-design.md](../../reference/frontend-design.md) under *"The phone layout on an actual
+> phone"*; the two results are:
+>
+> 1. **The device is 360 CSS px wide, not `PHONE_PX`'s 390.** The wall is **294** rather than 324,
+>    so `columnsFor(294, 144)` is **1** — measured, not computed: the rows are 226 × 294 carrying
+>    **one tile each**. G1 misses its second column by **three pixels** on this hardware. The
+>    largest tile that gives two at 360 is **141**.
+> 2. **The shut filter bar is 381px, not 273, and the wall gets 99** against a 226px row — 44 % of
+>    one. **108px of that is Task 7's touch floor**, isolated on the device by setting
+>    `--target-min: 0px` and re-reading: the bar falls to **exactly 273** — the plan's own
+>    predicted figure, because that measurement predates `coarse:` having a consumer — and the
+>    wall rises to 207. Restored, it returns to 381/99.
+>
+> **So 9b's two decisions are in direct conflict and the size of it is now known.** F1 buys a
+> reachable control on the axis that had room and spends 108px on the axis that had none. That is
+> not an argument against the floor — every chip measures 44 × 44 on hardware where it is 32, and
+> `(pointer: coarse)` is genuinely `true` — it is the price, and **it is what 9c spends next**.
+>
+> **What did work, measured:** the tab bar is exactly 53px, there is no horizontal overflow,
+> `100dvh` is 696 against `100lvh`'s 752 so `h-dvh` is right, and every touch target clears 44px.
+>
+> **Step 4's owed dialog reading is discharged with the good outcome**: a `fixed inset-0` box
+> resolves to **696** — `visualViewport`, `dvh` and `svh` alike — against `lvh`'s 752. `Dialog`
+> already clamps to the visible viewport and its footer never lands under the URL bar. No change.
+>
+> **Step 3b is not settled and was not driven.** With a 99px wall there is no honest drag to make;
+> a reader who cannot see a tile cannot drag one. Re-ask it once the vertical is fixed.
+
 - [ ] **Step 1** — Build the web target and serve it (`npm run build:wasm`, `npm run web:build`, then `vite preview --config vite.web.config.ts`). **`npm run web:dev` registers no service worker at all**, so a dev-server reading answers nothing about caching — and it cost a pass on 2026-08-29.
 - [ ] **Step 2** — `adb reverse tcp:4173 tcp:4173` and open it on the phone. **This is the only instrument where the URL bar, the safe area and a coarse pointer are real rather than emulated**: `cdp.mjs size` hardcodes `mobile: false` and emulates a narrow *desktop*.
 - [ ] **Step 3** — In one expression, read `visualViewport.height`, the ribbon's box, `main`'s content box, the filter bar's height, the bar's height, and how many tile rows are visible. One expression because a rect and a viewport taken minutes apart can be at two different sizes.
+- [ ] **Step 3b — the one thing Task 8 could not settle without a device, and it is the sharpest open question in this plan.** **dnd-kit hit-tests by rect, not by DOM hit-testing**, so the deck's piles *underneath* the search overlay stay droppable while invisible. A drag begun from a search tile at 390px can therefore land in a pile the reader cannot see. `QuickZones` (`LAYER.dragTray`) and the remove tray both paint **above** the overlay, so those four targets stay visible and usable — it is the piles that are the hazard. Task 8 recorded this rather than fencing it, correctly: a `canDrop` fence means touching drop registrations, and a second registration on one element silently replaces the first. **Drive it on the device and decide.** Three outcomes are legitimate — it is unreachable in practice (a finger starting on a tile inside a full-width overlay has nowhere to travel that is not the overlay); it wants a fence; or the overlay wants to not cover the piles at all. Do not leave it undecided a second time.
 - [ ] **Step 4** — Take the **dialog** reading that has been owed since PR #274: whether `Dialog`'s `fixed inset-0` scrim resolves against the large or the small viewport. The recipe, both branches and where the `h-dvh` pin would go are in `frontend-design.md` under "The dialog against a real URL bar". **Record the numbers either way** — "we looked and it was already right" is a result, and without it the next person pays for the same measurement.
 - [ ] **Step 5** — Write all of it into `frontend-design.md` with the device, the build and the date. Commit.
 

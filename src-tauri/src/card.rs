@@ -726,7 +726,7 @@ pub fn is_known_group_by(mode: &str) -> bool {
 /// opened it to look at a card. A stale preference may cost them the grouping they picked; it
 /// must never cost them the printings list.
 pub fn stored_group_by(conn: &Connection) -> String {
-    crate::update::get_app_meta(conn, K_PRINTING_GROUP_BY)
+    crate::app_meta::get_app_meta(conn, K_PRINTING_GROUP_BY)
         .filter(|mode| is_known_group_by(mode))
         .unwrap_or_else(|| DEFAULT_PRINTING_GROUP_BY.to_owned())
 }
@@ -744,7 +744,7 @@ pub fn store_group_by(conn: &Connection, mode: &str) -> Result<(), String> {
             PRINTING_GROUP_BY_MODES.join(", ")
         ));
     }
-    crate::update::set_app_meta(conn, K_PRINTING_GROUP_BY, mode)
+    crate::app_meta::set_app_meta(conn, K_PRINTING_GROUP_BY, mode)
         .map_err(|e| format!("could not save the printing grouping: {e}"))
 }
 
@@ -1568,7 +1568,7 @@ mod tests {
     fn a_missing_grouping_row_reads_as_the_default() {
         let conn = meta_db();
         assert_eq!(
-            crate::update::get_app_meta(&conn, K_PRINTING_GROUP_BY),
+            crate::app_meta::get_app_meta(&conn, K_PRINTING_GROUP_BY),
             None
         );
         assert_eq!(stored_group_by(&conn), "artist");
@@ -1582,7 +1582,7 @@ mod tests {
     fn a_grouping_this_build_does_not_know_reads_as_the_default_rather_than_failing() {
         let conn = meta_db();
         for junk in ["rarity", "", "Artist", "artist ", "null", "released_at"] {
-            crate::update::set_app_meta(&conn, K_PRINTING_GROUP_BY, junk).unwrap();
+            crate::app_meta::set_app_meta(&conn, K_PRINTING_GROUP_BY, junk).unwrap();
             assert_eq!(
                 stored_group_by(&conn),
                 "artist",
@@ -1608,7 +1608,7 @@ mod tests {
 
         assert_eq!(stored_group_by(&conn), "price");
         assert_eq!(
-            crate::update::get_app_meta(&conn, K_PRINTING_GROUP_BY).as_deref(),
+            crate::app_meta::get_app_meta(&conn, K_PRINTING_GROUP_BY).as_deref(),
             Some("price"),
             "nothing was written to `app_meta`"
         );

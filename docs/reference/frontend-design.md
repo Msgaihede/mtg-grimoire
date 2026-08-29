@@ -4042,6 +4042,17 @@ $ grep -o "@media(pointer:coarse){[^{]*{[^}]*}}" dist/assets/*.css
 @media(pointer:coarse){.coarse\:min-h-\[var\(--target-min\)\]{min-height:var(--target-min)}}
 ```
 
+> ⚠️ **That pattern only works while the block holds exactly one rule, and it stopped being true
+> on 2026-08-29** when 9b's Task 7 gave the variant eleven utilities. `{[^{]*{[^}]*}}` matches one
+> `.selector{…}` and then demands the closing brace, so over a multi-rule block it **exits 1 with
+> no output** — which reads exactly like "the variant did not compile", the failure this check
+> exists to detect. It is the same false negative the paragraph below warns about, one consumer
+> later. Repeat the rule group instead:
+>
+> ```
+> $ grep -oE "@media\(pointer:coarse\)\{(\.[^{]*\{[^}]*\})*\}" dist/assets/*.css
+> ```
+
 **The obvious grep for it finds nothing, and it is wrong twice.** Written as
 `grep -o "@media (pointer:coarse){[^}]*}"` it exits 1 with no output over a sheet that plainly
 contains the rule: Tailwind's minifier emits `@media(pointer:coarse)` with **no space** after
@@ -4340,3 +4351,190 @@ measurement of *boxes* — `nav`, `main`, their padding — plus `columnsFor` ev
 measured content width in the same `eval`. That is the honest scope of it: the geometry is
 measured, the tile counts are arithmetic over a measured width, and **no card was on screen**. To
 read real tiles here, copy the main checkout's whole `data` folder into the worktree first.
+
+---
+
+## The phone layout on an actual phone — and the vertical does not work
+
+**Driven 2026-08-29 on the OnePlus (`adb` device `21755151`), Android, Chrome 152.0.7977.64, dpr 3,
+portrait**, against the production web build of 9b (`npm run build:wasm && npm run web:build`,
+served by `vite preview` on 4173, reached from the device through `adb reverse tcp:4173 tcp:4173`
+and driven over `adb forward tcp:9333 localabstract:chrome_devtools_remote`). Corpus built on the
+device: **117 606 cards**.
+
+**This is the measurement 9a could not take and 9b's plan is answerable to**, and it falsifies the
+budget the plan was written against. Two independent things went wrong, and neither is visible
+from a desktop.
+
+### The device is 360 CSS px wide, not 390 — and that alone costs the second column
+
+`src/lib/viewports.ts`'s `PHONE_PX` is **390**, chosen in 9a as "a hard case… the iPhone 12/13/14,
+within a pixel or two of the common Android flagship in CSS pixels". **This flagship is 360.**
+
+| | 390 (the design frame) | **360 (this device)** |
+| --- | --- | --- |
+| `main` content | 350 | **320** |
+| wall (`rowsRef`, less the scroller's `border` + `p-3`) | 324 | **294** |
+| `columnsFor(wall, 144)` | **2** | **1** |
+| largest tile giving two columns | 156 | **141** |
+
+Measured on the device rather than computed: the wall's rows are **226 px tall × 294 px wide and
+carry exactly one tile each**. **G1's 144 misses two columns by three pixels here.**
+
+`matchMedia('(max-width: 390px)')` still answers **true** at 360, so `useNarrowWindow` and the tab
+bar are correct — it is only the *tile* that was sized against a frame this hardware is narrower
+than.
+
+### The shut filter bar is 381 px, not 273 — and 108 px of that is the touch floor
+
+| | px |
+| --- | --- |
+| Visible viewport with the URL bar (`innerHeight` = `visualViewport.height`) | **696** |
+| Ribbon block (`h-14` + the 2px `ManaLine`) | 58 |
+| Tab bar | **53** — exactly as designed |
+| `main`'s `p-5`, top and bottom | 40 |
+| `main` content | **545** |
+| **Shut filter bar** | **381** |
+| **What is left for the wall** | **99** |
+
+58 + 585 + 53 = 696 exactly, so nothing is unaccounted for. **A tile row is 226 px and the wall is
+99**, which is 44 % of one row — the plan's own failure condition was "one tile row", and this is
+less than half of it.
+
+**The cause was isolated on the device rather than guessed**, by setting `--target-min: 0px` on the
+root and re-reading, then restoring:
+
+| | shut bar | wall |
+| --- | --- | --- |
+| With the 44 px floor (shipped) | **381** | **99** |
+| `--target-min: 0px` | **273** | **207** |
+| Restored | 381 | 99 |
+
+**The floor costs exactly 108 px of vertical and the wall gains exactly the same 108 back.**
+Note what the middle row is: **273 is precisely the figure the 9a plan predicted for the shut
+bar** — that measurement was taken before `coarse:` had a consumer, so the plan was right for its
+time and Task 7 added 108 px to it.
+
+**So 9b's two decisions are in direct conflict, and now the size of it is known.** F1 buys a
+reachable control on the axis that had room; it spends 108 px on the axis that had none. This is
+not an argument against the floor — every chip measured **44 × 44** on hardware where they were 32,
+and `(pointer: coarse)` really is `true` — it is the measured price of it, and the thing to spend
+next.
+
+### What works, measured on the device
+
+- **`(pointer: coarse)` is `true`** and `--target-min` resolves to `44px`. Every control checked is
+  at or above the floor: the mana-value and colour chips **44 × 44** (they are 32 on a desktop),
+  `Show filters` and `Reset all` 44 tall, a tab **60 × 52**. Task 7 does what it claimed.
+- **The tab bar is 53 px**, the figure it was designed to.
+- **No horizontal overflow** — `documentElement.scrollWidth` equals `innerWidth`.
+- **`h-dvh` is right**: `100dvh` reads **696**, the visible viewport, against `100lvh`'s **752**.
+
+### The dialog against a real URL bar — owed since PR #274, and the answer is that it was already right
+
+`Dialog`'s scrim is `fixed inset-0`, and the open question was whether that resolves against the
+**large** viewport on a mobile browser — which would make the grid area taller than the screen,
+`max-h-full` clamp to more than the window, and the panel's footer land under the URL bar.
+
+Measured directly, with a probe rather than through one dialog's markup, so the answer is about
+the browser rather than about one component:
+
+| | px |
+| --- | --- |
+| `position: fixed; inset: 0` box | **696** |
+| `visualViewport.height` | **696** |
+| `100dvh` / `100svh` | **696** |
+| `100lvh` | **752** |
+
+**A `fixed inset-0` box resolves against the *visible* viewport, not the large one.** `Dialog`
+needs no change, and this is recorded so the next person does not pay for the same measurement.
+
+### `--safe-b` is `0px` on this device, and that is not a bug
+
+The gesture bar reserves no inset here, so the tab bar's `paddingBottom: var(--safe-b)` costs
+nothing on this hardware. It is still correct to carry: the value is a property of the device, the
+`env()` fallback is what makes the declaration parse, and a phone with a reserved gesture area
+would put the bar's targets under it without this.
+
+### What this does not settle
+
+- **The drag from the search overlay into a hidden pile** (9b Task 8's recorded limitation) was not
+  driven. With a 99 px wall there is no honest gesture to make, and the question should be re-asked
+  once the vertical is fixed — a reader who cannot see a tile cannot drag one.
+- **One device, one browser.** Every figure here is this OnePlus in Chrome 152. A 390 px phone
+  would get the second column; the point is that this one does not, and `PHONE_PX` is the app's
+  own stated frame.
+
+---
+
+## 9c on the phone: the wall shows cards
+
+**Driven 2026-08-29 on the OnePlus, Chrome 152, portrait, `innerWidth` 360**, against the
+production web build of `main` at the merge of PR #300, with the 117 606-card corpus already in
+OPFS. Same instrument as 9b's pass — the recipe is in *"The phone layout on an actual phone"*
+above.
+
+**The prediction was 436px of wall and it came back at exactly 436.** The one figure that was off
+was the row height, and it was off in the app's favour.
+
+| | 9b (measured) | 9c predicted | **9c measured** |
+| --- | --- | --- | --- |
+| shut bar / strip | 381 | 44 | **44** |
+| wall | 99 | 436 | **436** |
+| tile row | 226 | 237 | **221** |
+| complete rows | **0** | 1.84 | **1.97** |
+| tiles per row | **1** | 2 | **2** |
+
+**0.44 of a row to 1.97.** A reader sees two whole cards and 97 % of the next two — **two whole
+rows are 442 and the wall is 436, short by six pixels.** Nothing else changed: the ribbon block is
+still 58, the tab bar still 53, `main`'s content still 545, and `documentElement.scrollWidth`
+still equals `innerWidth`.
+
+**The row is 221 rather than the projected 237** because the projection added `GAP` to the row
+box; the virtualiser's row *is* the tile and the gap sits between rows in the total. A 16px error
+that made the estimate pessimistic — worth naming so the next projection uses the measured shape.
+
+### Filtered, which is where the strip's second line appears
+
+| | px |
+| --- | --- |
+| strip, no filters | **44** |
+| strip, one filter on | **96** — 44 + 8 + 44 |
+| wall, filtered | **384** — 1.74 rows |
+
+The chip is on the strip and it is the real one: `Remove filter — Colour: Red`, with its own ✕.
+`Reset all` is beside it at **44px**, and `resetInScroller` reads **false** — it is outside the
+horizontal scroller, so it cannot scroll away from the chips it undoes. Both were designed that
+way and both are confirmed on hardware rather than in jsdom, which can see neither.
+
+**The second line is 44 and not 26**, because `ResetAll` sets it at the coarse floor. That is the
+figure this plan quoted as 34 when the decision was taken — see the plan's Task 3 for the
+correction and why the decision survives it.
+
+### What the whole screen is now
+
+One frame, top to bottom: the ribbon shed to a card count and Refresh; the strip's search box and
+`Filters · 1`; the stated `Colour: Red ×` beside `Reset all · 1`; four cards in two columns; the
+bottom tab bar with **Search** marked. Every decision from 9a's four rounds and 9c's two is
+visible at once, and the horizontal overflow is zero.
+
+### What is still owed, and it is the same question as before
+
+**9b's Step 3b — whether a drag from the deck editor's search overlay can land in a pile hidden
+behind it — was still not driven.** dnd-kit hit-tests by **rect**, so the piles stay droppable
+while invisible. The blocker is no longer a 99px wall: it is that the question needs a deck with
+categories on the device and a synthesised pointer drag, which is its own pass rather than a step
+in this one. **It is now answerable for the first time** — record that, because the reason it was
+deferred has changed.
+
+### One operational note for the next pass
+
+**The one-tab guard is a real obstacle to repeat measurement.** A tab left open from an earlier
+pass makes the next one render *"MTG Grimoire is already open"* and nothing else — correct
+behaviour, and indistinguishable from a broken build if you are not expecting it. Close the stale
+tab through `http://localhost:9333/json/close/<id>` before reloading, and take the ids from
+`/json/list` so the reader's own tabs are left alone.
+
+**And `vite preview` needs `--host`.** Without it the PC gets 200 and the phone gets `000` through
+`adb reverse` — the server binds too narrowly for the tunnel to reach, and the failure looks like
+a broken tunnel rather than a bound socket.

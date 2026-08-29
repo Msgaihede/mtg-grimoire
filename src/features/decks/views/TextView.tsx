@@ -64,6 +64,27 @@ const GROUP_GAP = 16;
  * only in the narrow window nobody develops in. It stays an **inline style** rather than a
  * Tailwind class for the usual reason: the scanner reads source text, so a class built from a
  * constant emits no rule.
+ *
+ * ## It overhangs a phone-width desk by 14px, and that is accepted rather than fixed
+ *
+ * Decided 2026-08-29, with the deck search rail's overlay. At a 350px desk the deck side is 350
+ * less the search panel's 36px rail and the desk's 16px gap — 298 — and less this view's own
+ * {@link DROP_MARK_ROOM} (`p-1.5`, 6px a side) it is a **286px** box holding a 300px column. The
+ * 14px is contained by the root's `overflow-x-auto` below, which is exactly the case that class
+ * is kept for: one column wider than the desk is a scrollbar the reader asked for, and clipping
+ * the line is worse.
+ *
+ * **Narrowing the column is the fix that breaks the view.** 300 is a card name plus its cost with
+ * nothing truncated; this is the densest of the four views and the whole of what it is for is the
+ * unclipped line, so trading 14px of scroll for a truncated name on every row of a phone's
+ * decklist is paying in the one currency this view has.
+ *
+ * **Making it a prop is the fix that puts the decision at the wrong site.** It is one constant
+ * read four times — the column, both halves of that column's `flex`, the flowing area's
+ * `minWidth` (which is what decides whether the rail fits beside the columns) and the rail's own
+ * width — so a prop either threads through all of them or lets them drift, and it hands a caller
+ * that knows only how wide a box is the question of how wide a readable decklist line is. The
+ * overhang is a fact about a 350px desk; the 300 is a fact about a card name.
  */
 const COLUMN_WIDTH = "18.75rem";
 

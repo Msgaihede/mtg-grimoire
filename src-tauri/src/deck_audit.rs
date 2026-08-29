@@ -40,9 +40,11 @@
 //!
 //! [`payload`]: DeckAuditEntry::payload
 
+#[cfg(not(target_family = "wasm"))]
 use crate::sync::AppState;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
+#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// The nine kinds, named rather than indexed at every call site.
@@ -259,6 +261,7 @@ fn entry_from_row(r: &rusqlite::Row) -> rusqlite::Result<DeckAuditEntry> {
     })
 }
 
+#[cfg_attr(target_family = "wasm", allow(dead_code))]
 /// One history row by id, or `None` if there is no such row.
 ///
 /// [`crate::deck_undo`]'s, for the state command and for the delta a reversal negates. `None`
@@ -304,6 +307,7 @@ pub fn list(conn: &Connection, deck_id: i64, limit: i64) -> Result<Vec<DeckAudit
 
 /// One deck's history. **Read-only** connection, blocking pool — as every read in this app is,
 /// so opening the history drawer never queues behind a sync.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_audit_list(
     state: tauri::State<'_, Arc<AppState>>,

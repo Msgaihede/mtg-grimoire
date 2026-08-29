@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactElement } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 import { TOOLTIP_OPEN_MS, TOOLTIP_PANEL_ID } from "@/components/tooltip/TooltipProvider";
 import { openDropdown } from "@/test-dropdown";
+import { PHONE_HEIGHT_PX, PHONE_PX } from "@/lib/viewports";
 import { FilterBar } from "./FilterBar";
 import { useCardSearch, type CardSearch } from "./useCardSearch";
 
@@ -920,5 +921,206 @@ export const StatedFilters: Story = {
     await expect(
       canvas.getByRole("button", { name: "Reset all — 5 filters active" }),
     ).toBeInTheDocument();
+  },
+};
+
+/**
+ * The phone frame, and the two things it has to fake for the sheet to be drawn at all.
+ *
+ * **`matchMedia`, because the sheet is gated on the *window* rather than on a box.**
+ * `useNarrowWindow` asks `window.matchMedia("(max-width: 390px)")` at read time — deliberately,
+ * so that a caller can state the width — and a 390px `<div>` inside a 1200px canvas is not a
+ * 390px window. Every other query keeps the platform's answer, which is `src/test-viewport.ts`'s
+ * rule and not fastidiousness: `motion`'s `useReducedMotion` reads this same API, and a blanket
+ * `true` would also tell it the reader had asked for reduced motion.
+ *
+ * It is patched **in the render body** because `useNarrowWindow` is read during the render of a
+ * descendant — a layout effect runs a whole render too late, and the stub reports no `change`
+ * event to re-render on. The mount effect re-applies it for `StrictMode`, whose mount → cleanup →
+ * mount would otherwise leave the original restored and the story drawn as a desktop; the
+ * cleanup is what keeps this out of the next story's world.
+ *
+ * **`contain: layout`, because `Dialog`'s scrim is a bare `fixed inset-0`.** A layout-contained
+ * box is the containing block for every `fixed` descendant under it, so this is what makes the
+ * sheet resolve against the phone rather than against the whole canvas. It is the same rule
+ * `FilterBar` obeys from the other side — the sheet is mounted *outside* the bar's
+ * `@container/fb` precisely so this does not happen by accident there — spent here on purpose.
+ *
+ * `p-5` is `AppShell`'s `main`, so the 40px of vertical the plan's budget charges is on screen.
+ */
+const phone = (Story: () => ReactElement) => {
+  const original = useRef<typeof window.matchMedia | null>(null);
+  const narrow = useRef(((query: string) => {
+    if (!query.includes(`${PHONE_PX}px`)) return original.current!(query);
+    return {
+      matches: true,
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    } as unknown as MediaQueryList;
+  }) as typeof window.matchMedia);
+  if (original.current === null) {
+    original.current = window.matchMedia;
+    window.matchMedia = narrow.current;
+  }
+  useEffect(() => {
+    const before = original.current!;
+    window.matchMedia = narrow.current;
+    return () => {
+      window.matchMedia = before;
+    };
+  }, []);
+  return (
+    <div
+      className="shrink-0 overflow-hidden bg-bg p-5 text-text"
+      style={{ width: PHONE_PX, height: PHONE_HEIGHT_PX, contain: "layout" }}
+    >
+      <Story />
+    </div>
+  );
+};
+
+/**
+ * **The strip — what this row is on a phone with the sheet shut, and the whole of 9c's Task 2.**
+ *
+ * Measured on the device on 2026-08-29 (OnePlus, Chrome 152, portrait): the bar below drew
+ * **381px of a 545px content box** and left the wall **99** — 0.42 of a tile row, so a reader saw
+ * no whole card. With everything but the box and one button in the sheet it is **44**, and the
+ * wall gets **436**: **1.84** rows at the shipped 237px row, which is two whole cards and most of
+ * the next two. ⚠️ **Not two rows** — that needs 474 — whatever the option story's 390px-frame
+ * arithmetic said.
+ *
+ * **Every filter in `everything` is on, and since 9c's Task 3 the strip says so in words**
+ * (2026-08-29). For one day it said `6` and nothing else — the cost F3 was costed at — and `4` is
+ * not a sentence: the failure that shape leaves standing is **Reset all counting a filter the
+ * reader cannot see**. So the chips came back, on a scrolling second line with `Reset all` pinned
+ * at the end of it, and the strip is **44 at rest and 96 with a filter on** — 1.84 tile rows of
+ * wall against 1.62, two whole cards either way.
+ *
+ * **This story is the 96**, since `everything` turns five kinds on; `PhoneSheet` below is the same
+ * strip with the sheet over it, and every unfiltered story on this page is the 44.
+ *
+ * **What this frame cannot show is the pin.** The strip is `sticky top-0` with `-mx-5 px-5`
+ * against `AppShell`'s `main` — and deliberately **without** the `-mt-5 pt-5` twin, which cannot
+ * engage in a layout where every page is `flex h-full flex-col` and would eat the last 8px, 4px
+ * and 4px of the box above it on three of the four pages that draw this bar. The decorator below
+ * is a `contain: layout` box with nothing scrolling inside it, so this is the strip at rest, which
+ * is where a reader meets it. The `p-5` on the frame is `main`'s own, so the gutter those classes
+ * exist to cover is at least on screen.
+ */
+export const PhoneStrip: Story = {
+  args: { preset: everything, width: "w-full" },
+  decorators: [phone],
+  parameters: {
+    // Its own iframe, for `PhoneSheet`'s reason: this story patches `window.matchMedia` for the
+    // length of its own life, and rendered inline that patch would be live while every other
+    // story on the docs page rendered.
+    docs: { story: { inline: false, height: `${PHONE_HEIGHT_PX + 40}px` } },
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    // The first line. The badge on the button is how much is on; the second line below is what.
+    await expect(canvas.getByLabelText("Search cards")).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: /^Show filters/ })).toHaveTextContent(
+      "Filters",
+    );
+
+    // The second line, in the reader's own words — five chips against a badge of six, because the
+    // sixth kind is the text in the box and a chip would only repeat what is already on screen.
+    await expect(
+      canvas
+        .queryAllByRole("button", { name: /^Remove filter — / })
+        .map((b) => b.getAttribute("aria-label")!.replace("Remove filter — ", "")),
+    ).toEqual([
+      "Colour: White, Blue, Black",
+      "Mana value: 1",
+      "Set: LEA",
+      "Format: Modern",
+      "Owned",
+    ]);
+    // Pinned beside them, not behind the disclosure the chips are about — a Reset all a reader
+    // cannot see while looking at what it would undo is the same failure as a count they cannot
+    // read.
+    await expect(
+      canvas.getByRole("button", { name: "Reset all — 6 filters active" }),
+    ).toBeInTheDocument();
+
+    // And nothing else — the colours, the mana values, the sort and the layout pair are all in
+    // the sheet. `queryByRole` searches the whole canvas, so a control that had merely moved
+    // would still be found.
+    await expect(canvas.queryByRole("group", { name: "Color identity" })).toBeNull();
+    await expect(canvas.queryByRole("group", { name: "Mana value" })).toBeNull();
+    await expect(canvas.queryByRole("group", { name: "Result layout" })).toBeNull();
+    await expect(canvas.queryByRole("button", { name: "Sort results" })).toBeNull();
+  },
+};
+
+/**
+ * **The tray as a sheet — every width at or below the phone's, and nowhere else.**
+ *
+ * Measured on the device on 2026-08-29 (OnePlus, Chrome 152, portrait): the shut bar is 381px of
+ * a 545px content box, the wall gets 99 — 0.42 of a tile row — and the *open* tray is **922px**,
+ * four times the room there is. So on a phone the tray stops being a panel in the flow and
+ * becomes a `Dialog`: `src/CLAUDE.md`'s shape for a surface that is **consulted** rather than
+ * worked out of, which is exactly what this one is — a reader opens it, sets a filter, and goes
+ * back to the wall.
+ *
+ * **The height is the shell's existing clamp, not a new prop.** `Dialog`'s only geometry prop is
+ * `width`, and the height rule it would be reaching for is already written: the panel's
+ * `max-h-full` against the scrim's `grid-rows-[minmax(0,1fr)]`. The tray scrolls inside the panel
+ * rather than the panel growing off the bottom of the phone.
+ *
+ * Every other story on this page is the same component above the phone width, where nothing about
+ * this branch renders at all — the row is drawn on five surfaces and four of them have no phone in
+ * them.
+ */
+export const PhoneSheet: Story = {
+  args: { preset: everything, width: "w-full" },
+  decorators: [phone],
+  parameters: {
+    // **Its own iframe, and the frame above is why it needs one.** This story patches
+    // `window.matchMedia` for the length of its own life; rendered inline, that patch would be
+    // live in the preview window while every other story on this docs page rendered, and the
+    // whole page would be drawn as a phone. `inline: false` is this repo's answer to exactly that
+    // — the `useAppStore` rule in `.storybook/CLAUDE.md`, and `Dialog.stories.tsx`'s scrim — and
+    // it is what keeps a world belonging to a story.
+    docs: { story: { inline: false, height: `${PHONE_HEIGHT_PX + 40}px` } },
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await openTray(canvas);
+
+    const sheet = await canvas.findByRole("dialog");
+    // The controls are in the sheet and not in the flow — one tray, mounted in one of two places,
+    // never two copies.
+    await expect(within(sheet).getByRole("button", { name: "Format" })).toBeInTheDocument();
+    await expect(within(sheet).getByRole("button", { name: "All printings" })).toBeInTheDocument();
+    await expect(canvas.getAllByRole("button", { name: "Format" })).toHaveLength(1);
+    // And the controls the strip shed are in here with it — the colours, the mana values, the
+    // sort and the layout pair. One copy of each: the row is mounted here instead of in the flow,
+    // never in both.
+    await expect(within(sheet).getByRole("group", { name: "Color identity" })).toBeInTheDocument();
+    await expect(within(sheet).getByRole("group", { name: "Mana value" })).toBeInTheDocument();
+    await expect(within(sheet).getByRole("group", { name: "Result layout" })).toBeInTheDocument();
+    await expect(within(sheet).getByRole("button", { name: "Sort results" })).toBeInTheDocument();
+    await expect(canvas.getAllByRole("group", { name: "Color identity" })).toHaveLength(1);
+
+    // **The stated filters are not among them, since 9c's Task 3.** They are the strip's second
+    // line, on the other side of this scrim, and so is `Reset all` — one copy of each, because two
+    // mounted `ResetAll`s are two tab stops and two accessible names for one control. Asserting
+    // the *absence* here is the assertion: `canvas.getByRole` searches the whole frame, so the
+    // presence of a chip somewhere would pass in both worlds.
+    await expect(within(sheet).queryAllByRole("button", { name: /^Remove filter — / })).toEqual([]);
+    await expect(within(sheet).queryByRole("button", { name: /^Reset all/ })).toBeNull();
+    await expect(canvas.getAllByRole("button", { name: /^Reset all/ })).toHaveLength(1);
+    await expect(canvas.getAllByRole("button", { name: /^Remove filter — / })).toHaveLength(5);
+    // The search box stays on the bar behind it — Task 2's strip is what it becomes, and this
+    // story is what that task sheds into.
+    await expect(sheet).not.toContainElement(canvas.getByLabelText("Search cards"));
   },
 };

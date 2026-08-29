@@ -2,11 +2,15 @@ import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import {
+  ActiveFilterChip,
   FILTER_CONTROL,
   FILTER_FOCUS,
   filterChipState,
   FiltersButton,
+  LayoutToggle,
+  ManaChip,
   ManaValueChips,
+  RarityChip,
   ResetAll,
   ToggleChip,
 } from "./FilterChips";
@@ -378,5 +382,169 @@ describe("FiltersButton", () => {
     rerender(<FiltersButton open count={2} onToggle={vi.fn()} controls="tray" />);
     expect(button()).toHaveAccessibleName("Hide filters — 2 active");
     expect(button()).toHaveTextContent("2");
+  });
+});
+
+/**
+ * **Controls a finger can hit** — the first consumer of the `coarse:` variant and
+ * `--target-min`, which shipped in PR #274 declared and deliberately unapplied so this decision
+ * could take them.
+ *
+ * **Every assertion here is a class pin and none of them is a pixel.** jsdom applies no media
+ * query and loads no stylesheet, so nothing about a rendered *size* can go red in this file —
+ * and worse, a `coarse:` utility Tailwind does not accept emits **nothing at all**, silently,
+ * with `tsc` and this suite both green. The sufficient check is a `grep` of `dist/assets/*.css`
+ * after a production build, recorded with its output in `docs/reference/frontend-design.md`;
+ * this suite's job is to hold the classes still once that grep has said they compile.
+ *
+ * `classList.contains` and never `className.includes`: a substring test over a class list passes
+ * on a prefix of some other class and reads as a rule that is present when it is not.
+ */
+const FLOOR_H = "coarse:min-h-[var(--target-min)]";
+const FLOOR_W = "coarse:min-w-[var(--target-min)]";
+
+/** The filter bar's own narrow-column spelling, quoted from `FilterBar.tsx:1021`. */
+const BAR_CHIP_CLASS = "size-8 @min-[640px]/fb:size-9";
+
+describe("the filter row grows for a finger", () => {
+  /**
+   * The floor is on `FILTER_SHAPE`, so every control built out of the family carries it rather
+   * than each one remembering to — which is the same argument that put the 36px there.
+   *
+   * **A minimum, not a size, and that is the load-bearing half.** 9a's finding was that
+   * stacking `coarse:` onto a container variant has no specificity answer: two classes, each
+   * one class deep, each inside one at-rule, so source order in the emitted sheet decides and a
+   * conditional spelling is a coin toss. `min-height` is not in that contest — it beats `height`
+   * in the cascade whatever order the two are emitted in — so the floor holds against
+   * `FILTER_CONTROL`'s `h-9` and against the `size-8` the bar hands the mana-value group without
+   * either of them knowing it exists.
+   */
+  it("puts the 44px floor on every control in the family", () => {
+    render(
+      <>
+        <ToggleChip label="Owned" pressed={false} onClick={vi.fn()} />
+        <RarityChip rarity="mythic" pressed={false} onClick={vi.fn()} />
+        <ManaChip symbol="W" pressed={false} onClick={vi.fn()} />
+        <ManaValueChips
+          selected={[]}
+          onToggle={vi.fn()}
+          onToggleX={vi.fn()}
+          chipClass={BAR_CHIP_CLASS}
+        />
+        <LayoutToggle view="grid" onChange={vi.fn()} />
+        <ResetAll count={1} onReset={vi.fn()} />
+        <FiltersButton open={false} count={0} onToggle={vi.fn()} controls="tray" />
+      </>,
+    );
+
+    const controls = screen.getAllByRole("button");
+    // A sweep over nothing is a green test over an unswept row — the seven elements above draw
+    // 1 + 1 + 1 + 10 + 2 + 1 + 1 buttons.
+    expect(controls).toHaveLength(17);
+    for (const control of controls) {
+      expect(control.classList.contains(FLOOR_H), control.getAttribute("aria-label") ?? "").toBe(
+        true,
+      );
+    }
+  });
+
+  /**
+   * A square chip needs the other axis said too: a height alone leaves a 36px-wide button 44
+   * tall, which is a target that clears WCAG 2.5.5 on one side and fails it on the other.
+   *
+   * **The mana-value chip is the one that could have lost it silently.** Its caller merges
+   * `chipClass` last, deliberately, so a size clash resolves the caller's way — and the bar's
+   * spelling is `size-8 @min-[640px]/fb:size-9`. This renders with that exact string to prove
+   * tailwind-merge does not treat the caller's `size-*` as conflicting with a `min-w-*` and drop
+   * the floor on the way through.
+   */
+  it("says both axes on the chips that are squares", () => {
+    render(
+      <>
+        <ManaChip symbol="U" pressed={false} onClick={vi.fn()} />
+        <ManaValueChips
+          selected={[]}
+          onToggle={vi.fn()}
+          onToggleX={vi.fn()}
+          chipClass={BAR_CHIP_CLASS}
+        />
+        <LayoutToggle view="grid" onChange={vi.fn()} />
+      </>,
+    );
+
+    const squares = screen.getAllByRole("button");
+    expect(squares).toHaveLength(13);
+    for (const square of squares) {
+      expect(square.classList.contains(FLOOR_W), square.getAttribute("aria-label") ?? "").toBe(
+        true,
+      );
+    }
+
+    // The caller's own size survives beside it — the floor is added to that argument, not
+    // instead of it, so the chip is still 32px where there is a pointer.
+    const mana = screen.getByRole("button", { name: "Mana value 3" });
+    expect(mana.classList.contains("size-8")).toBe(true);
+  });
+
+  /**
+   * **Raising the mana-value group costs it no extra line**, which is why it can be raised at
+   * all. Arithmetic, not a measurement: jsdom lays nothing out. In a 350px content box — a 390px
+   * window less `main`'s `p-5` — ten chips at `gap-1` wrap to two rows either way. At the bar's
+   * narrow 32 the first row holds nine (9 × 32 + 8 × 4 = 320, and ten would be 356); at 44 it
+   * holds seven (7 × 44 + 6 × 4 = 332, and eight would be 380).
+   */
+  it("costs the mana-value group no extra line", () => {
+    render(
+      <ManaValueChips
+        selected={[]}
+        onToggle={vi.fn()}
+        onToggleX={vi.fn()}
+        chipClass={BAR_CHIP_CLASS}
+      />,
+    );
+
+    const group = screen.getByRole("group", { name: "Mana value" });
+    expect(group).toHaveClass("flex-wrap");
+
+    const chips = within(group).getAllByRole("button").length;
+    const GAP = 4;
+    const WALL = 350;
+    const rows = (chip: number) => {
+      const perRow = Math.max(1, Math.floor((WALL + GAP) / (chip + GAP)));
+      return Math.ceil(chips / perRow);
+    };
+    expect(rows(32)).toBe(2);
+    expect(rows(44)).toBe(rows(32));
+  });
+
+  /**
+   * **The one place the floor and the stated design conflict, and the target grows rather than
+   * the chip.** 26px is the whole argument for this band existing — it is what tells "a filter
+   * you are narrowed by" from "a control that sets one" — so the pill stays 26 and a transparent
+   * `::before` centred on it carries the 44. WCAG 2.5.5 measures the target, not the ink.
+   *
+   * `content-['']` is pinned with the rest: a pseudo-element with no `content` is not generated,
+   * and the failure would be a chip that is quietly still 26px with nothing on screen or in this
+   * file saying so.
+   */
+  it("grows the stated-filter chip's target without growing the chip", () => {
+    render(<ActiveFilterChip label="Colour: Blue, Red" onRemove={vi.fn()} />);
+
+    const chip = screen.getByRole("button", { name: "Remove filter — Colour: Blue, Red" });
+
+    // The drawn pill is untouched — 26px, and not the family's 36 or the finger's 44.
+    expect(chip.classList.contains("h-[1.625rem]")).toBe(true);
+    expect(chip.classList.contains(FLOOR_H)).toBe(false);
+
+    // The target is the pseudo-element, and it needs every one of these to exist at all.
+    for (const cls of [
+      "relative",
+      "coarse:before:absolute",
+      "coarse:before:h-[var(--target-min)]",
+      "coarse:before:min-w-[var(--target-min)]",
+      "coarse:before:content-['']",
+    ]) {
+      expect(chip.classList.contains(cls), cls).toBe(true);
+    }
   });
 });

@@ -127,6 +127,65 @@ const TILE_BASE_WIDTH = 170;
 const GAP = 12;
 
 /**
+ * How wide a tile is on a phone, in px — what the four page-width walls pass as
+ * {@link CardGrid}'s `baseTileWidth` below `PHONE_PX`, and nothing else does.
+ *
+ * **The arithmetic, measured in the shipped WebView2 at 390×844 on 2026-08-29.** A 390px window
+ * with the bottom tab bar drawn instead of the rail spends nothing on a rail, 40 on `AppShell`'s
+ * `main` `p-5` and 26 on this wall's own scroller `border` + `p-3`: **324px of wall**. Then
+ * {@link columnsFor}, which is the only arbiter here:
+ *
+ * - `columnsFor(324, 170)` is **1** — the standard tile, one column with 90px of margin either
+ *   side of it. That is the failure this width exists to answer.
+ * - `columnsFor(324, 160)` is **1** as well, and it is the trap: 160 looks like a fix, divides to
+ *   1.95 columns and floors to the same single card. It is what the 9a round's draft suggested,
+ *   and it is the same failure arriving one inset later.
+ * - `columnsFor(324, 144)` is **2**, and the leftover is exactly 24 — so {@link sideGutterFor}
+ *   splits it into 12 either side and the gutter is {@link GAP}. That is why 144 rather than
+ *   156, which is the largest tile two of which fit at 324.
+ *
+ * ⚠️ **All of the above is about a 390px window, and the phone this was driven on is 360 — which
+ * is why the number is 141 and not 144.** Measured on the device 2026-08-29 (OnePlus, Chrome 152,
+ * portrait): `innerWidth` **360**, so `main`'s content is 320 and this wall is **294**, and
+ * `columnsFor(294, 144)` is **1**. The rows came back 226 × 294 carrying one tile each — 144
+ * missed its second column by **three pixels** on real hardware, against a `PHONE_PX` of 390 that
+ * 9a picked as "a hard case… within a pixel or two of the common Android flagship". It was not
+ * the hard case.
+ *
+ * **141 is the largest tile two of which fit at 294**, and it holds at both widths: two columns at
+ * 294 and at 324. Its gutter at 294 is **0** — the pair exactly fills the row — and that is
+ * acceptable here where 156's zero gutter at 324 was not the reason 144 won: {@link sideGutterFor}
+ * pads the **row**, inside the box the `ResizeObserver` measures, and the scroller's own `p-3`
+ * sits *outside* that, so a tile with no gutter is still 12px from the scroller's border box. The
+ * wall does not scroll horizontally — `documentElement.scrollWidth` equalled `innerWidth` on the
+ * device — so nothing here reaches the scrollport's edge. At 324 the gutter is 15.
+ *
+ * **Below about 320px of window even 141 floors at one column** (a 254px wall), and nothing
+ * reasonable fixes that: two columns of *readable* card art stops existing somewhere, and this is
+ * roughly where.
+ *
+ * A `grid` image is 488px wide, so this is a deeper downscale and never a blowup — the same thing
+ * the deck panel's 150 already relies on. The reader's zoom scales *this*, exactly as it scales
+ * {@link TILE_BASE_WIDTH}, so a phone at 2× draws one 288px card and the gesture keeps its meaning.
+ *
+ * **What this does not fix, and the decision that goes with it: the chin does not scale with the
+ * tile, and that is accepted.** `--mark-scale`/`--control-scale` are published by
+ * `cardScaleVars(zoom)` and know nothing about this prop, so the chin stays 28px of 10px type and
+ * becomes proportionally *taller* on a narrower card — 12.6% of tile height here against 10.7% at
+ * 170. It is accepted because the chin's contents are **type at the app's floor**: 10px is already
+ * the smallest interface size in the chrome ladder, and 141/170 would put it at 8.3px, which is
+ * not a smaller chin but an unreadable one. The proportion is the wrong measurement to optimise —
+ * the readable size is. Tying the marks to `baseTileWidth` instead would also silently redraw the
+ * deck panel's 150px wall, a shipped surface with no phone in it. A reader who wants the chin
+ * smaller relative to the art already has the control that does it: the zoom scales both.
+ *
+ * **And what stays open**: the quick-add trigger over the art is `24 × CONTROL_SHRINK` = 20.4px,
+ * under WCAG 2.5.8's 24, and `opacity-0` — see the `action` strip below, where the rest of that
+ * note is.
+ */
+export const PHONE_TILE_WIDTH = 141;
+
+/**
  * A tile's **absolute** position in `rows`, published on its own root element.
  *
  * The DOM is the caret's data structure here, exactly as it is for the context menu's rows
@@ -1506,6 +1565,24 @@ function Tile<T extends GridCard>({
           // across the foot of the picture that simply does not respond. jsdom has no layout
           // engine and therefore no hit testing, so nothing in the suite can go red for the
           // behaviour; the two classes are pinned instead.
+          //
+          // **Open, on a touch screen: the control this strip holds is invisible and still
+          // pressable, and it is 20.4px.** `AnchoredPopup`'s trigger is 24px × `CONTROL_SHRINK`,
+          // under WCAG 2.5.8's 24×24 floor — and the sentence above is what makes that more than
+          // a sizing complaint: `opacity-0` is a hit target, and a finger has no hover to reveal
+          // it with. So a reader tapping the bottom-right of a card to open it opens a quick-add
+          // popup instead, with nothing on screen having said the control was there.
+          //
+          // **Growing the target under `coarse:` was tried and rejected** (2026-08-29, G1's
+          // round). It is the shape `ActiveFilterChip` uses — a transparent `::before` carrying
+          // `var(--target-min)` over smaller ink — and it is the wrong medicine here, twice over:
+          // the target is already the problem rather than the cure, so 44px would make the
+          // invisible trap 44px; and centred on a control in this strip it would reach up over
+          // the art and down past the chin, which on a 144px phone tile is a third of the card's
+          // width. What this actually wants is a decision about *visibility* on a coarse pointer
+          // — always drawn, or not drawn at all — and that is a design round rather than a
+          // measurement, since "a wall of art is not a wall of plus signs" is `REVEAL_ON_HOVER`'s
+          // own argument for the reveal.
           <span
             className={cn(
               "pointer-events-none absolute inset-x-0 bottom-0 flex justify-end",
