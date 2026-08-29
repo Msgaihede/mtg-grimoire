@@ -147,6 +147,30 @@ function Digits({ sas }: { sas: string }): JSX.Element {
   );
 }
 
+/**
+ * The mark on the row for the machine the reader is sitting at.
+ *
+ * **It became a pill when the names became real.** While every install minted "This device" the
+ * roster's rows were identical and this word was the only thing telling them apart. Now that
+ * they read `MAIN-PC` and `OnePlus 12` it answers a different and still necessary question —
+ * which of these real machines is *here* — and it has to be findable by shape rather than read
+ * for.
+ *
+ * **`Removed` beside it stayed plain text, deliberately, and that is the decision worth
+ * recording.** Two tokens of equal weight in one row would make history look like status: a
+ * removed row already says what it is three times over — the struck-through name, the dim text,
+ * and both presses gone — while this one is *orientation*, the only thing on the row a reader
+ * actually scans for. One pill per row, and it is this one.
+ *
+ * **No colour**, because the panel's own comment two lines down still holds: `border-border`
+ * over `text-dim` is what this app uses for a fact stated beside a name (`LangBadge`, the card
+ * pane's `In deck`), and `accent` in Settings means something you can press. What makes it a
+ * token rather than a word is the `bg-bg` fill against the section's `bg-surface` and the full
+ * round.
+ */
+const THIS_DEVICE_PILL =
+  "shrink-0 rounded-full border border-border bg-bg px-2 py-px text-[0.6875rem] leading-4 text-dim";
+
 /** One row of the roster. */
 function DeviceRow({
   device,
@@ -164,37 +188,54 @@ function DeviceRow({
 
   return (
     <li className="flex flex-wrap items-center gap-2 border-t border-border py-2 first:border-t-0">
-      {editing === null ? (
-        <span className={cn("min-w-0 flex-1 text-sm", removed && "text-dim line-through")}>
-          {device.name}
-        </span>
-      ) : (
-        <input
-          value={editing}
-          autoFocus
-          onChange={(e) => setEditing(e.target.value)}
-          onBlur={() => setEditing(null)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && editing.trim() !== "") {
-              onRename(editing.trim());
-              setEditing(null);
-            }
-            if (e.key === "Escape") setEditing(null);
-          }}
-          aria-label={`Name for ${device.name}`}
-          className={cn(
-            "h-8 min-w-0 flex-1 rounded-md border border-border bg-bg px-2.5 text-sm",
-            "focus:border-accent focus:outline-none",
-          )}
-        />
-      )}
+      {/* **The name and its marks are one group, and the group is what takes `flex-1`.** The
+          name carried it until the names became real, which ate the row's free space and pushed
+          both marks to the far edge against the buttons — so the word that says "this is the
+          machine you are at" read as part of the controls rather than as part of the name.
+          Here the name sizes to its content, the marks sit directly against the end of it, and
+          the presses stay right-aligned however short the name is.
 
-      {/* Two facts a name cannot carry: which of these is the machine you are looking at, and
+          **`min-w-0` is on the group *and* on the name.** `min-width: auto` is the flex default,
+          so a long hostname refuses to shrink and pushes the buttons off the row instead of
+          truncating; one of the two alone is not enough.
+
+          Two facts a name cannot carry: which of these is the machine you are looking at, and
           which one was taken off. Words rather than colour — a removed device is not an error,
           it is a row of history. */}
-      {isThisDevice && <span className="text-[0.6875rem] text-dim">This device</span>}
-      {removed && <span className="text-[0.6875rem] text-dim">Removed</span>}
+      <span className="flex min-w-0 flex-1 items-center gap-2">
+        {editing === null ? (
+          <span className={cn("min-w-0 truncate text-sm", removed && "text-dim line-through")}>
+            {device.name}
+          </span>
+        ) : (
+          <input
+            value={editing}
+            autoFocus
+            onChange={(e) => setEditing(e.target.value)}
+            onBlur={() => setEditing(null)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && editing.trim() !== "") {
+                onRename(editing.trim());
+                setEditing(null);
+              }
+              if (e.key === "Escape") setEditing(null);
+            }}
+            aria-label={`Name for ${device.name}`}
+            className={cn(
+              "h-8 min-w-0 flex-1 rounded-md border border-border bg-bg px-2.5 text-sm",
+              "focus:border-accent focus:outline-none",
+            )}
+          />
+        )}
+        {isThisDevice && <span className={THIS_DEVICE_PILL}>This device</span>}
+        {removed && <span className="shrink-0 text-[0.6875rem] text-dim">Removed</span>}
+      </span>
 
+      {/* **Rename stays on every row that is not removed, this device's own included, and it
+          matters more now than it did.** The name a device mints is its hostname, which travels
+          to every device in the group at the next pairing — so this press is the reader's way
+          out of sending one they would rather not. The pill does not replace it and must not
+          crowd it out. */}
       {!removed && (
         <button
           type="button"
