@@ -96,7 +96,11 @@ Measured 2026-08-28 in this worktree at `8c924bb`, by reading the source. **Ever
 - **After changing anything that alters how the UI looks, call `preview-stories` and put every returned URL in the report.** A shared file has no stories of its own — preview its consumers'.
 - **Tailwind scans source text for whole class names, so a class named in a doc comment emits a rule** and a class built by interpolation emits nothing. Both bite this plan: Task 3's sweep reads prose, and Task 2's tokens are arbitrary values that can silently compile to nothing.
 - **jsdom has no layout engine.** Nothing in Tasks 1–3 that is about *pixels* can go red in the suite; the tests here pin classes and constants, and the numbers come from a browser. Say which is which at each site.
-- **Tasks 5–8 produce no test that can judge a design.** Their deliverable is a set of Storybook previews Markus can open plus a written argument. `src/stories.test.tsx` will render each option and go red if it throws — that proves the option *renders*, and nothing else. Do not dress that up as coverage.
+- **Tasks 5–8 produce no test that can judge a design.** Their deliverable is a set of Storybook previews Markus can open plus a written argument. Do not dress that up as coverage.
+
+> ⚠️ **And the claim that used to stand here — "`src/stories.test.tsx` will render each option and go red if it throws" — is false for these files, corrected 2026-08-29.** `src/stories.test.tsx:277` reads `if (plays.length === 0) continue;`, and these options are specified to carry **no `play` functions**, so **not one of the twelve is ever rendered by the suite.** What still bites is `composeStories` at module scope (`:253`), which runs for every story file at collection — so an import-time or compose-time break goes red, and a render-time one does not. `npm run build-storybook` compiles them and never plays them either.
+>
+> **So opening each of the twelve URLs in Task 9 Step 1 is not a courtesy — it is the only thing in this plan that proves an option renders at all.** Treat a URL that 404s or throws in the preview as a red build.
 
 ---
 
