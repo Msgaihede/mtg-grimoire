@@ -356,6 +356,12 @@ export const NothingToSyncTo: Story = {
  * models is the shape of the answer — everything waiting goes, nothing comes back, and the
  * stamp moves. The two outcomes spec 7.4 surfaces are seeded rows in the `needsReview` world
  * rather than something a press invents; see `Settings/ReviewPanel`.
+ *
+ * **This press is also this device's first exchange**, so the line carries the baseline's two
+ * sentences as well — which is not a leak between stories but the shape of the real thing: a
+ * reader's first press after pairing is both trips at once, and it is exactly the press the
+ * baseline clause exists to explain. `AFirstExchange` below is that half on its own, and takes
+ * the second press to show the ordinary trip after it.
  */
 export const OneRoundTrip: Story = {
   parameters: { fake: { seed: "paired" } },
@@ -377,6 +383,53 @@ export const OneRoundTrip: Story = {
     // The pile is empty and the stamp has moved, so both lines change together.
     await expect(canvas.getByText(/nothing is waiting to go/i)).toBeInTheDocument();
     await expect(canvas.getByText(/last synced just now/i)).toBeInTheDocument();
+  },
+};
+
+/**
+ * The first exchange with a device that had not heard from this one — and the ordinary trip
+ * right behind it.
+ *
+ * **A baseline is three orders of magnitude larger than the sync around it** (baseline spec §13:
+ * 1 069 rows against the four or nine a press usually carries), so a number that size with no
+ * sentence attached reads as a fault. The panel says what it is instead, and names the
+ * `deck_audit` rows on their own — §7's reason: history is the one synced table with no ceiling,
+ * so it is the part of the total that can surprise, and a reader told only the sum cannot tell a
+ * large collection from a long one.
+ *
+ * **The second press is the whole point of the first two clauses being conditional.** A baseline
+ * goes to each peer once, so every sync a reader ever makes but one says nothing about it — and
+ * a panel that kept the sentence would teach them the number was about this trip.
+ *
+ * There is no relay here and no peer to have never been heard from, so the fake stands the state
+ * up out of the one fact the world does hold: a device that has never completed a round trip.
+ * The counts are the world's own eleven synced tables read back rather than figures written for
+ * the sentence, which is why nothing here asserts a particular one.
+ */
+export const AFirstExchange: Story = {
+  parameters: { fake: { seed: "paired" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await userEvent.type(
+      await canvas.findByLabelText(/relay address/i),
+      "https://relay.example.workers.dev",
+    );
+    await userEvent.click(canvas.getByRole("button", { name: "Save" }));
+    await userEvent.click(await canvas.findByRole("button", { name: /sync now/i }));
+
+    const line = await canvas.findByText(/first exchange with a device/i);
+    await expect(line).toHaveTextContent(/everything here went across — \d+ rows/i);
+    await expect(line).toHaveTextContent(/\d+ of those are deck history/i);
+
+    await userEvent.click(canvas.getByRole("button", { name: /sync now/i }));
+
+    // The pile went with the first press, so the second is a trip with nothing in it — which is
+    // what makes the absence below an assertion about the clause rather than about the render.
+    await waitFor(async () => {
+      await expect(canvas.getByText(/sent 0 changes and received 0 changes/i)).toBeInTheDocument();
+    });
+    await expect(canvas.queryByText(/first exchange/i)).not.toBeInTheDocument();
   },
 };
 

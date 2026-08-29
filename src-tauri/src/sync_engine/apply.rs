@@ -54,7 +54,7 @@
 
 use crate::sync_engine::capture::{self, Absent, Parent, Spec};
 use crate::sync_engine::hlc::Hlc;
-use crate::sync_engine::merge::{fold, Kind, Op, Resolved};
+use crate::sync_engine::merge::{fold, Horizon, Kind, Op, Resolved};
 use rusqlite::types::Value as Sql;
 use rusqlite::{Connection, OptionalExtension};
 use std::collections::BTreeMap;
@@ -346,6 +346,16 @@ fn meta_of(table: &str) -> Option<&'static Meta> {
     META.iter().find(|m| m.table == table)
 }
 
+/// A synced table's parents-first rank, so [`super::baseline`] emits in the order this module
+/// sorts by and a first sync is one pass rather than several.
+///
+/// The rank is [`Meta::order`] and there is deliberately no second list: a baseline emitted in
+/// an order this module disagrees with would defer every child on the first pull, which is
+/// slow rather than wrong and therefore the kind of thing nobody reports.
+pub(crate) fn order_of(table: &str) -> Option<u8> {
+    meta_of(table).map(|m| m.order)
+}
+
 fn spec_of(table: &str) -> Option<&'static Spec> {
     capture::TABLES.iter().find(|s| s.table == table)
 }
@@ -409,6 +419,21 @@ fn apply_in(conn: &Connection, ops: &[Op]) -> Result<ApplyReport, String> {
         .map_err(|e| e.to_string())?;
     let watermarks = read_watermarks(conn)?;
 
+    // **The horizon filters this batch and writes nothing.** Spec §9.1: raising `sync_peers`
+    // instead is wrong twice — it would suppress the baseline itself, whose ops are stamped
+    // from each row's `updated_at` and therefore sit BELOW the emitter's own top stamp; and a
+    // watermark write is durable, so a `del` below the horizon would be skipped now and never
+    // offered again, leaving this device holding a row the group deleted.
+    //
+    // Only the first op of each baseline batch carries one (§9), and a page can hold two
+    // batches, so whatever is found is unioned.
+    let mut horizon = Horizon::default();
+    for op in ops {
+        if let Some(h) = &op.horizon {
+            horizon.absorb(h);
+        }
+    }
+
     // 1. Everything already seen, and everything this device wrote itself.
     //
     // **Our own ops are dropped rather than applied**, and the relay is not trusted to have
@@ -420,7 +445,10 @@ fn apply_in(conn: &Connection, ops: &[Op]) -> Result<ApplyReport, String> {
         let seen = watermarks
             .get(&op.at.device)
             .is_some_and(|w| stamp(op) <= *w);
-        if mine || seen {
+        // Exemptions in spec §9.1's table: a baseline op describes the horizon rather than
+        // being described by it, and a tombstone is the one thing a claim cannot express.
+        let inside = op.kind == Kind::Put && !op.baseline && horizon.covers(&op.at);
+        if mine || seen || inside {
             report.skipped += 1;
         } else {
             fresh.push(op);
@@ -1027,11 +1055,19 @@ fn insert_row(
     // **A counter's initial value is the sum of every delta, local ones included**, because a
     // row being created here holds none of them yet. On an update it is the incoming deltas
     // alone — the local ones are already in the row.
+    //
+    // §8.2's rule with `local_current` at zero, because the row does not exist here: the claim
+    // can only RAISE the sum, never join it. **The no-claim arm is the sum untouched and not
+    // `sum.max(0)`** — "where the fold contains no baseline, `next = local_current + Σ deltas`,
+    // exactly as today" — so a negative sum goes on failing its own `CHECK` and deferring the
+    // group rather than quietly becoming a row holding nothing.
     for (name, _) in meta.counters {
+        let sum = combined.counters.get(*name).copied().unwrap_or(0);
         cols.push((*name).to_owned());
-        vals.push(Sql::Integer(
-            combined.counters.get(*name).copied().unwrap_or(0),
-        ));
+        vals.push(Sql::Integer(match combined.claims.get(*name).copied() {
+            Some(claim) => sum.max(claim),
+            None => sum,
+        }));
     }
     if meta.timestamps {
         cols.push("created_at".to_owned());
@@ -1089,10 +1125,11 @@ fn update_row(
     }
 
     for (name, floor) in meta.counters {
-        let Some(delta) = g.resolved.counters.get(*name) else {
-            continue;
-        };
-        if *delta == 0 {
+        let delta = g.resolved.counters.get(*name).copied().unwrap_or(0);
+        let claim = g.resolved.claims.get(*name).copied();
+        // A zero delta with no claim is nothing to do. **With a claim it is not** — the claim
+        // may still raise the row, which is the whole of §8.2.
+        if delta == 0 && claim.is_none() {
             continue;
         }
         let current: i64 = conn
@@ -1102,7 +1139,18 @@ fn update_row(
                 |r| r.get(0),
             )
             .map_err(|e| e.to_string())?;
-        let next = current + delta;
+        // §8.2. Deltas apply to what this device already holds — the existing, correct op-path
+        // answer — and the claim can only RAISE that floor. It can therefore never over-count,
+        // which is the direction that invents a card.
+        //
+        // **A claim above zero is also a floor the row cannot fall through**, so a concurrent
+        // "remove the last copy" loses to it and `Floor::DeleteAtZero` below does not fire.
+        // That is §8's named consequence rather than an oversight: add-wins in flavour, and
+        // the same direction §7.3 already takes for row existence.
+        let next = match claim {
+            Some(c) => (current + delta).max(c),
+            None => current + delta,
+        };
         match floor {
             Floor::Clamp => {
                 conn.execute(

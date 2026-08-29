@@ -25,6 +25,7 @@
 
 use crate::errors::{self, Kind, Source};
 use crate::sync_engine::apply::{self, ApplyReport};
+use crate::sync_engine::baseline;
 use crate::sync_engine::capture;
 use crate::sync_engine::merge::Op;
 use crate::sync_engine::wire::{self, Envelope, WireError};
@@ -63,6 +64,13 @@ pub struct RelayOutcome {
     pub cycles_broken: usize,
     pub skipped: usize,
     pub deferred: usize,
+    /// Ops sent as a first-contact baseline. Spec §13 — the panel names this separately,
+    /// because a first exchange is larger than an ordinary sync and must not read as a hang.
+    pub baseline_ops: usize,
+    /// The `deck_audit` rows among them, named separately because they can surprise: history is
+    /// the one synced table with no ceiling, growing with what the reader has *done* rather than
+    /// with what they own. Spec §7 and §13.
+    pub baseline_history: usize,
 }
 
 impl RelayOutcome {
@@ -211,6 +219,65 @@ fn unpushed(conn: &Connection) -> Result<Vec<(i64, Op)>, String> {
     Ok(out)
 }
 
+/// Seal one batch of ops and hand it to the relay, **touching `sync_ops` not at all**.
+///
+/// Factored out of [`push`], which keeps its own `pushed_at` bookkeeping and calls this for the
+/// bytes. The second caller is [`emit_baselines`], which has nothing to file: a baseline is
+/// built in memory, sealed, pushed and forgotten (spec §5.1), so a function that both sent the
+/// bytes *and* stamped a row could not have served it.
+///
+/// Every failure is recorded under the operation `push`, because that is what it is from the
+/// relay's side and from the reader's — one endpoint, one `error_log` row to fold onto.
+async fn post_ops(
+    conn: &Connection,
+    base: &str,
+    group: &Group,
+    device: &str,
+    ops: &[Op],
+) -> Result<(), String> {
+    let url = format!("{base}/g/{}/push", group.group_id);
+    let envelope = match wire::seal_batch(group, device, ops) {
+        Ok(e) => e,
+        Err(e) => {
+            note(conn, "push", Kind::Other, &e.to_string(), None);
+            return Err(e.to_string());
+        }
+    };
+    let body = serde_json::to_string(&envelope).map_err(|e| e.to_string())?;
+    let response = http()
+        .post(&url)
+        .header("content-type", "application/json")
+        .body(body)
+        .send()
+        .await;
+    let response = match response {
+        Ok(r) => r,
+        Err(e) => {
+            note(conn, "push", kind_of(&e), &e.to_string(), Some(&url));
+            return Err(e.to_string());
+        }
+    };
+    let status = response.status().as_u16();
+    if !(200..300).contains(&status) {
+        let message = format!("the relay answered {status} to a push");
+        note(conn, "push", Kind::Http, &message, Some(&url));
+        return Err(message);
+    }
+    match response.text().await {
+        Ok(text) => {
+            if let Err(e) = serde_json::from_str::<PushReceipt>(&text) {
+                note(conn, "push", Kind::Parse, &e.to_string(), Some(&url));
+                return Err(e.to_string());
+            }
+        }
+        Err(e) => {
+            note(conn, "push", kind_of(&e), &e.to_string(), Some(&url));
+            return Err(e.to_string());
+        }
+    }
+    Ok(())
+}
+
 /// Hand every unpushed op to the relay.
 ///
 /// **`pushed_at` is stamped only on a 200**, so the next attempt sends the same ops and a
@@ -224,51 +291,12 @@ pub async fn push(conn: &Connection, base: &str) -> Result<usize, String> {
     if pending.is_empty() {
         return Ok(0);
     }
-    let url = format!("{base}/g/{}/push", group.group_id);
     let mut sent = 0usize;
     let seqs: Vec<i64> = pending.iter().map(|(seq, _)| *seq).collect();
     let ops: Vec<Op> = pending.into_iter().map(|(_, op)| op).collect();
 
     for (i, chunk) in wire::batches(&ops).enumerate() {
-        let envelope = match wire::seal_batch(&group, &device, chunk) {
-            Ok(e) => e,
-            Err(e) => {
-                note(conn, "push", Kind::Other, &e.to_string(), None);
-                return Err(e.to_string());
-            }
-        };
-        let body = serde_json::to_string(&envelope).map_err(|e| e.to_string())?;
-        let response = http()
-            .post(&url)
-            .header("content-type", "application/json")
-            .body(body)
-            .send()
-            .await;
-        let response = match response {
-            Ok(r) => r,
-            Err(e) => {
-                note(conn, "push", kind_of(&e), &e.to_string(), Some(&url));
-                return Err(e.to_string());
-            }
-        };
-        let status = response.status().as_u16();
-        if !(200..300).contains(&status) {
-            let message = format!("the relay answered {status} to a push");
-            note(conn, "push", Kind::Http, &message, Some(&url));
-            return Err(message);
-        }
-        match response.text().await {
-            Ok(text) => {
-                if let Err(e) = serde_json::from_str::<PushReceipt>(&text) {
-                    note(conn, "push", Kind::Parse, &e.to_string(), Some(&url));
-                    return Err(e.to_string());
-                }
-            }
-            Err(e) => {
-                note(conn, "push", kind_of(&e), &e.to_string(), Some(&url));
-                return Err(e.to_string());
-            }
-        }
+        post_ops(conn, base, &group, &device, chunk).await?;
 
         // Only now, and one chunk at a time: a run that dies between two chunks has handed the
         // first over and is honest about it.
@@ -410,15 +438,106 @@ pub async fn ack(conn: &Connection, base: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// One complete round trip: push, pull, ack.
+// ---------------------------------------------------------------------------------------
+// The baseline
+// ---------------------------------------------------------------------------------------
+
+/// Hand a full baseline to every peer that needs one. Spec §10.
+///
+/// **Built, sealed and pushed without ever touching `sync_ops`** (§5.1). The outbox's contract
+/// is "deltas, never values" and a baseline holds values; it is also a table scan away at any
+/// moment, so there is nothing worth filing.
+///
+/// Answers `(ops, history)` — the second is the `deck_audit` share of the first, which the
+/// panel names on its own (§13).
+///
+/// **One emission per peer, which on a group with two new peers is the same rows broadcast
+/// twice.** The relay's log is group-wide, so a single push would in fact reach both — but the
+/// marker is per peer and records *that peer's* push having landed, and a shared push that
+/// failed half way would then have to say which peers it had covered. The ordinary case is one
+/// peer; the case that pays for this is two devices having joined between two syncs, and it
+/// pays in bandwidth rather than in correctness — claims resolve by `max`, the grain finds the
+/// same row and the horizon filters, so a second copy changes nothing anywhere (§10).
+async fn emit_baselines(conn: &Connection, base: &str) -> Result<(usize, usize), String> {
+    let Some((device, group)) = me(conn)? else {
+        return Ok((0, 0));
+    };
+    let mut emitted = 0usize;
+    let mut history = 0usize;
+    for peer in baseline::peers_needing(conn)? {
+        let mut ops = baseline::build(conn, &device)?;
+        // A device holding nothing has still answered the question, so the marker is stamped
+        // and the peer is not asked again next minute. There is no envelope to send: an empty
+        // batch is `WireError::Empty`, deliberately, because a relay row holding no ops is a
+        // row nobody can act on.
+        if ops.is_empty() {
+            baseline::mark_sent(conn, &peer)?;
+            continue;
+        }
+        let horizon = baseline::horizon(conn, &device)?;
+        // **The horizon rides `chunk[0]` of EVERY chunk, not merely of the first.** Spec §9:
+        // each chunk becomes its own stored relay row and they are pulled independently, so a
+        // receiver handed only the second would union no horizon at all and count deltas that
+        // are already inside the claims — §8.1's `+1`, silently. `chunks_mut` rather than
+        // [`wire::batches`], which hands out shared slices; both cut on the one `wire::BATCH`,
+        // so the two cannot drift.
+        for chunk in ops.chunks_mut(wire::BATCH) {
+            chunk[0].horizon = Some(horizon.clone());
+            post_ops(conn, base, &group, &device, chunk).await?;
+        }
+        // **Only after every chunk has landed.** Spec §13: a half-sent baseline must leave the
+        // marker NULL so the next sync starts it over. Stamping above the loop instead turns
+        // one failed push into a peer that is never offered a baseline again — a device empty
+        // for ever, which is the whole failure this feature exists to remove.
+        baseline::mark_sent(conn, &peer)?;
+        emitted += ops.len();
+        history += baseline::history_count(&ops);
+    }
+    Ok((emitted, history))
+}
+
+// ---------------------------------------------------------------------------------------
+// The round trip
+// ---------------------------------------------------------------------------------------
+
+/// One complete round trip: push, pull, emit baselines, ack.
 ///
 /// **Push first**, so a device that is about to be told about somebody else's change has
 /// already said what it did — which keeps a two-device group converging in one round rather
 /// than two.
 ///
+/// **The baseline goes out behind the pull** (spec §10.2). The pull is what makes this device
+/// current, and a device that is behind must not speak for the group: a host emitting first
+/// would hand a joiner the state it held before it heard what everybody else had done, in a
+/// voice the joiner has no way to know is out of date.
+///
 /// Answers `Ok(None)` when there is nothing to do: no relay URL, or no group. That is the
 /// state every existing installation is in, and it is not an error.
 pub async fn run_once(conn: &Connection) -> Result<Option<RelayOutcome>, String> {
+    round_trip(conn, true).await
+}
+
+/// The same round trip **with no baseline emission**: push, pull, ack.
+///
+/// # Why this exists
+///
+/// `sync_pair::pairing::sync_device_revoke` completes a round trip before it rotates the group
+/// key, so the departing device's last push is absorbed before the epoch moves and nothing it
+/// said is thrown away at the boundary (spec §12.4). Behind [`run_once`] that trip would also
+/// **emit a full baseline to the device that is about to be revoked** — on the live pair, 1 069
+/// ops — pushed one statement before that peer is marked gone, and unreadable to it the moment
+/// the key rotates.
+///
+/// The push and the pull are why the trip is there and both are kept: this device's own pending
+/// ops must reach the relay before the epoch moves, or the devices that *stay* cannot read them.
+/// Only the emission is dropped, and the peers that need one are baselined by the very next
+/// ordinary sync — which the revocation has just re-armed for every device that remains.
+pub async fn run_once_without_baselines(conn: &Connection) -> Result<Option<RelayOutcome>, String> {
+    round_trip(conn, false).await
+}
+
+/// The body both of the above share. `baselines` is the only difference between them.
+async fn round_trip(conn: &Connection, baselines: bool) -> Result<Option<RelayOutcome>, String> {
     let Some(base) = relay_url(conn) else {
         return Ok(None);
     };
@@ -433,6 +552,11 @@ pub async fn run_once(conn: &Connection) -> Result<Option<RelayOutcome>, String>
     outcome.unreadable = unreadable;
     outcome.pulled = report.applied + report.skipped + report.deferred;
     outcome.absorb(report);
+    if baselines {
+        let (ops, history) = emit_baselines(conn, &base).await?;
+        outcome.baseline_ops = ops;
+        outcome.baseline_history = history;
+    }
     ack(conn, &base).await?;
     set_state(
         conn,

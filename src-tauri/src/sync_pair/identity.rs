@@ -243,6 +243,15 @@ pub fn rename_device(conn: &Connection, device_id: &str, name: &str) -> rusqlite
 /// **And an id nobody on the roster answers to rotates nothing.** A rotation locks every
 /// remaining device out of what came before it, so one with nobody removed is a cost with no
 /// cause and nothing on any screen to explain it.
+///
+/// **What it does not do is withdraw anything the removed device contributed** — spec §12.3.
+/// The collection is one object the whole group has been writing, and a phone's cards, decks
+/// and folders are rows in every device's tables by the time it leaves. Removing a device ends
+/// its ability to keep *writing*; nothing here deletes, re-parents or re-counts a row it wrote,
+/// and `removing_a_device_changes_no_row_it_contributed` is what holds that true. Note the
+/// consequence for anyone tempted to add such a sweep later: a row carries no author. Its
+/// `sync_uid` is `lower(hex(randomblob(16)))` and `apply` records no ops of its own, so on the
+/// remaining devices there is nothing that even *says* which device a row came from.
 pub fn revoke_device(conn: &Connection, device_id: &str) -> Result<Group, String> {
     let me = ensure(conn).map_err(|e| e.to_string())?;
     if me.device_id == device_id {
@@ -262,6 +271,20 @@ pub fn revoke_device(conn: &Connection, device_id: &str) -> Result<Group, String
     if marked == 0 {
         return Err(NOT_ON_THE_ROSTER.to_owned());
     }
+    // **A rotation re-arms the baseline for everybody who stays.** Spec §12.4: the new epoch
+    // makes every op written before it unreadable, and `client::pull` steps over a lower-epoch
+    // envelope rather than stalling on it — so a peer's last words can be lost at the boundary.
+    // Re-baselining under the new key carries them across as ordinary rows. Claims resolve by
+    // `max` and a horizon only filters, so this cannot double-count.
+    //
+    // **After the mark, not before**, which is what `WHERE revoked_at IS NULL` is reading: the
+    // departed device keeps its marker, so re-arming cannot hand a full baseline to a peer that
+    // is never going to answer.
+    tx.execute(
+        "UPDATE sync_devices SET baselined_at = NULL WHERE revoked_at IS NULL",
+        [],
+    )
+    .map_err(|e| e.to_string())?;
     let rotated = Group {
         group_id: current.group_id,
         epoch: current.epoch + 1,
@@ -293,6 +316,9 @@ fn bytes32(v: Vec<u8>) -> [u8; 32] {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sync_engine::merge::Op;
+    use crate::sync_engine::{apply, capture};
+    use std::collections::BTreeMap;
 
     /// A pair, not `Connection::open_in_memory` plus a ladder — `schema::memory_pair`'s own
     /// doc says why, and it is the shape the running app has.
@@ -516,5 +542,286 @@ mod tests {
             "{json}"
         );
         assert!(json.contains("deviceId"), "{json}");
+    }
+
+    // -------------------------------------------------------------------------------------
+    // Revocation — spec §12
+    // -------------------------------------------------------------------------------------
+
+    /// The two tables a removal is *supposed* to change, named rather than skipped.
+    ///
+    /// `sync_devices` carries the revoked mark and the re-armed `baselined_at`; `sync_group`
+    /// carries the bumped epoch and the new key. Those two changing **is** the removal. A skip
+    /// list of "whatever happens to fail" would eventually grow to cover a real regression;
+    /// naming these two is what makes every other table in the user database a hard assertion.
+    const CHANGED_BY_A_REMOVAL: [&str; 2] = ["sync_devices", "sync_group"];
+
+    /// Every other table in the user database, every row rendered whole and sorted.
+    ///
+    /// **Rows and not counts, `sync_uid` included.** A rule that deleted a departed device's
+    /// contributions and one that quietly re-parented or re-counted them leave the same number
+    /// of rows behind, and only the first is visible to a `count(*)`.
+    fn snapshot(conn: &Connection) -> BTreeMap<String, Vec<String>> {
+        let mut listing = conn
+            .prepare(
+                "SELECT name FROM main.sqlite_master
+                  WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
+            )
+            .unwrap();
+        let tables: Vec<String> = listing
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+
+        let mut out = BTreeMap::new();
+        for table in tables {
+            if CHANGED_BY_A_REMOVAL.contains(&table.as_str()) {
+                continue;
+            }
+            let mut stmt = conn
+                .prepare(&format!("SELECT * FROM main.{table}"))
+                .unwrap();
+            let names: Vec<String> = stmt
+                .column_names()
+                .iter()
+                .map(|n| (*n).to_owned())
+                .collect();
+            let mut rows: Vec<String> = stmt
+                .query_map([], |r| {
+                    let mut cells = Vec::new();
+                    for (i, name) in names.iter().enumerate() {
+                        cells.push(format!("{name}={:?}", r.get_ref(i)?));
+                    }
+                    Ok(cells.join("|"))
+                })
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            rows.sort();
+            out.insert(table, rows);
+        }
+        out
+    }
+
+    /// Two databases in one group, both with the capture triggers armed.
+    ///
+    /// The group is minted on `a` and joined by `b` through the real functions, so the two hold
+    /// one `group_id` and one key and differ in `device_id` — which is what makes their ops
+    /// distinguishable and their stamps orderable against each other.
+    fn pair_of_devices() -> (Connection, Connection, Identity, Identity) {
+        let (a, b) = (db(), db());
+        let me_a = ensure(&a).unwrap();
+        let me_b = ensure(&b).unwrap();
+        let g = create_group(&a, &me_a).unwrap();
+        join_group(&b, &g.group_id, g.epoch, &g.group_key, &me_b).unwrap();
+        add_device(&a, &me_b.device_id, &me_b.keypair.public, "Phone").unwrap();
+        add_device(&b, &me_a.device_id, &me_a.keypair.public, "Desk").unwrap();
+        capture::install(&a).unwrap();
+        capture::install(&b).unwrap();
+        (a, b, me_a, me_b)
+    }
+
+    /// Everything a device has said since `mark`, oldest first.
+    fn since(conn: &Connection, mark: &mut i64) -> Vec<Op> {
+        let sql = format!("{} WHERE seq > ?1 ORDER BY seq", capture::OPS_SELECT);
+        let mut stmt = conn.prepare(&sql).unwrap();
+        let rows: Vec<(i64, Op)> = stmt
+            .query_map([*mark], capture::op_from_row)
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        if let Some((seq, _)) = rows.last() {
+            *mark = *seq;
+        }
+        rows.into_iter().map(|(_, op)| op).collect()
+    }
+
+    fn count(conn: &Connection, table: &str) -> i64 {
+        conn.query_row(&format!("SELECT count(*) FROM {table}"), [], |r| r.get(0))
+            .unwrap()
+    }
+
+    /// A collection, a deck and a folder — one row in each synced table a device can fill on
+    /// its own.
+    fn build_a_collection_a_deck_and_a_folder(conn: &Connection) {
+        for sql in [
+            "INSERT INTO collection_folders (name, kind, sort_order, created_at, updated_at)
+             VALUES ('Binder', 'user', 1, unixepoch(), unixepoch())",
+            "INSERT INTO collection_entries
+                (card_id,set_code,collector_number,lang,finish,condition,quantity,folder_id,
+                 created_at,updated_at)
+             VALUES ('c1','lea','1','en','nonfoil','NM',2,
+                     (SELECT id FROM collection_folders WHERE name = 'Binder'),
+                     unixepoch(),unixepoch())",
+            "INSERT INTO deck_folders (name, sort_order, created_at, updated_at)
+             VALUES ('Shelf', 0, unixepoch(), unixepoch())",
+            "INSERT INTO decks (name, format_key, folder_id, notes, created_at, updated_at)
+             VALUES ('Atraxa', 'commander',
+                     (SELECT id FROM deck_folders WHERE name = 'Shelf'),
+                     'a plan', unixepoch(), unixepoch())",
+            "INSERT INTO deck_categories
+                (deck_id, name, kind, is_active, sort_order, created_at, updated_at)
+             VALUES ((SELECT id FROM decks WHERE name = 'Atraxa'),
+                     'Ramp', 'main', 1, 1, unixepoch(), unixepoch())",
+            "INSERT INTO deck_cards
+                (deck_id, category_id, variant, card_id, set_code, collector_number, lang,
+                 name, quantity, created_at, updated_at)
+             VALUES ((SELECT id FROM decks WHERE name = 'Atraxa'),
+                     (SELECT id FROM deck_categories WHERE name = 'Ramp'),
+                     'live', 'c1', 'cmr', '1', 'en', 'Sol Ring', 1, unixepoch(), unixepoch())",
+            "INSERT INTO deck_audit (deck_id, at, kind, payload, delta)
+             VALUES ((SELECT id FROM decks WHERE name = 'Atraxa'), 100, 'add', '{}', 1)",
+            "INSERT INTO wishlist_folders (name, sort_order, created_at, updated_at)
+             VALUES ('To buy', 0, unixepoch(), unixepoch())",
+            "INSERT INTO wishlist_entries
+                (oracle_id, name, quantity, folder_id, created_at, updated_at)
+             VALUES ('o1', 'Rhystic Study', 1,
+                     (SELECT id FROM wishlist_folders WHERE name = 'To buy'),
+                     unixepoch(), unixepoch())",
+        ] {
+            conn.execute(sql, []).unwrap();
+        }
+    }
+
+    /// What the second device adds *into* what the first one built — the same deck, the same
+    /// pile, the same binder — so the shared object is genuinely shared rather than two
+    /// disjoint halves sitting in one database.
+    fn add_to_what_the_other_device_built(conn: &Connection) {
+        for sql in [
+            "INSERT INTO collection_entries
+                (card_id,set_code,collector_number,lang,finish,condition,quantity,folder_id,
+                 created_at,updated_at)
+             VALUES ('c2','lea','2','en','foil','NM',3,
+                     (SELECT id FROM collection_folders WHERE name = 'Binder'),
+                     unixepoch(),unixepoch())",
+            "INSERT INTO deck_cards
+                (deck_id, category_id, variant, card_id, set_code, collector_number, lang,
+                 name, quantity, created_at, updated_at)
+             VALUES ((SELECT id FROM decks WHERE name = 'Atraxa'),
+                     (SELECT id FROM deck_categories WHERE name = 'Ramp'),
+                     'live', 'c2', 'cmr', '2', 'en', 'Cultivate', 1, unixepoch(), unixepoch())",
+            // `deck_tags` is the app-wide palette and names no deck — `decks.tag_id` is the
+            // side that points. Read off the head schema, not off the migration-era CREATE.
+            "INSERT INTO deck_tags (name, name_key, color, created_at, updated_at)
+             VALUES ('Brewing', 'brewing', 'green', unixepoch(), unixepoch())",
+            "INSERT INTO muted_tags (namespace, tag_id, slug, muted_at)
+             VALUES ('oracle', 't1', 'ramp', unixepoch())",
+        ] {
+            conn.execute(sql, []).unwrap();
+        }
+    }
+
+    /// **Spec §12.3, and the one test in this module whose failure is a reader losing cards.**
+    ///
+    /// A device's contributions outlive it. Removing a phone does not withdraw the cards it
+    /// added, the decks it built or the folders it made — the collection is one object the
+    /// whole group has been writing, and revocation ends a device's ability to keep writing
+    /// rather than unwinding what it wrote.
+    #[test]
+    fn removing_a_device_changes_no_row_it_contributed() {
+        let (a, b, me_a, _me_b) = pair_of_devices();
+        let (mut ma, mut mb) = (0, 0);
+
+        // A builds the shared object, B takes it and adds to it, A takes B's half back.
+        build_a_collection_a_deck_and_a_folder(&a);
+        assert_eq!(apply::apply(&b, &since(&a, &mut ma)).unwrap().deferred, 0);
+        let _ = since(&b, &mut mb);
+        add_to_what_the_other_device_built(&b);
+        assert_eq!(apply::apply(&a, &since(&b, &mut mb)).unwrap().deferred, 0);
+
+        // **The fixture is checked before it is trusted.** A convergence that quietly deferred
+        // everything would leave B holding nothing of A's, and the comparison below would then
+        // pass over an empty snapshot — which is how this test would fail vacuously.
+        for table in [
+            "collection_folders",
+            "collection_entries",
+            "deck_folders",
+            "decks",
+            "deck_categories",
+            "deck_cards",
+            "deck_audit",
+            "deck_tags",
+            "wishlist_folders",
+            "wishlist_entries",
+            "muted_tags",
+        ] {
+            assert!(count(&b, table) > 0, "{table} did not cross to B");
+        }
+        assert_eq!(
+            count(&b, "collection_entries"),
+            2,
+            "one row from each device"
+        );
+        assert_eq!(count(&b, "deck_cards"), 2, "one pile, two contributors");
+        let a_copies: i64 = b
+            .query_row(
+                "SELECT quantity FROM collection_entries WHERE card_id = 'c1'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(a_copies, 2, "A's two copies are B's rows now");
+
+        let before = snapshot(&b);
+        let key_before = group(&b).unwrap().unwrap().group_key;
+
+        revoke_device(&b, &me_a.device_id).unwrap();
+
+        // The removal really happened — otherwise the comparison below is about nothing.
+        assert_ne!(group(&b).unwrap().unwrap().group_key, key_before);
+        let departed = roster(&b)
+            .unwrap()
+            .into_iter()
+            .find(|d| d.device_id == me_a.device_id)
+            .expect("the removed device stays on the roster");
+        assert!(departed.revoked_at.is_some());
+
+        let after = snapshot(&b);
+        assert_eq!(
+            before.keys().collect::<Vec<_>>(),
+            after.keys().collect::<Vec<_>>(),
+            "a removal dropped or created a table"
+        );
+        for (table, rows) in &before {
+            assert_eq!(
+                after.get(table),
+                Some(rows),
+                "removing a device changed {table}, which holds rows it contributed"
+            );
+        }
+    }
+
+    /// §12.4: a rotation re-arms the baseline for the devices that remain, so the next sync
+    /// repairs whatever the epoch boundary swallowed — and leaves the departed device's marker
+    /// alone, because re-arming it would hand a full baseline to a peer that will never answer.
+    #[test]
+    fn a_rotation_re_arms_the_baseline_for_the_devices_that_remain() {
+        let conn = db();
+        let me = ensure(&conn).unwrap();
+        create_group(&conn, &me).unwrap();
+        add_device(&conn, "phone", &[9u8; 32], "Phone").unwrap();
+        add_device(&conn, "tablet", &[8u8; 32], "Tablet").unwrap();
+        conn.execute("UPDATE sync_devices SET baselined_at = 1000", [])
+            .unwrap();
+        assert_eq!(count(&conn, "sync_devices"), 3, "three on the roster");
+
+        revoke_device(&conn, "tablet").unwrap();
+
+        let marker = |id: &str| -> Option<i64> {
+            conn.query_row(
+                "SELECT baselined_at FROM sync_devices WHERE device_id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .unwrap()
+        };
+        assert_eq!(marker(&me.device_id), None, "this device was not re-armed");
+        assert_eq!(marker("phone"), None, "the surviving peer was not re-armed");
+        assert_eq!(
+            marker("tablet"),
+            Some(1000),
+            "the removed device's marker must be left where it was"
+        );
     }
 }
