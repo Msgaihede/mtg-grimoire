@@ -47,6 +47,39 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   point the Worker imports, which is **the one check no compiler can make**: deleting that
   attribute was run as a mutation on 2026-08-28 and compiled clean with no error and no
   warning, because the function stays `pub` in a `pub mod`.
+- **The `android` job cross-compiles the crate for `aarch64-linux-android`, added 2026-08-29,
+  and it exists because `main` can stop cross-compiling with nothing going red.** It already
+  had: **#270 fixed exactly that break, and the way anybody found out was building an APK by
+  hand** — which is not something CI has ever done and not something anybody does on a
+  schedule. The crate is one crate with three targets, and a green `npm run verify` proves the
+  host alone.
+
+  **It is `cargo build --lib --locked --target aarch64-linux-android` and deliberately not an
+  APK build.** Assembling an APK needs Gradle, a full SDK and a signing story; the
+  cross-compile needs only the NDK, and it catches the class of failure this is for — a
+  desktop-only `use`, a dependency that will not build for the triple, a `cfg` that leaves a
+  module unreachable. **It proves nothing about the app running on a phone**; that is still a
+  hardware pass, and no measured figure in this repo has ever come off a Linux build.
+
+  **Two environment facts, and each fails as something other than itself.** `cargo` and
+  `cc-rs` have never heard of `NDK_HOME` — that is the Tauri CLI's variable and this job does
+  not go through the CLI — so it puts the NDK's `bin` on `PATH` (without it `cc-rs` reports
+  ``failed to find tool "clang"`` while compiling `libsqlite3-sys` and `ring`) and sets
+  `CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER` explicitly (without it `rustc` reports
+  ``linker `cc` not found``). Both paths are checked and named before the build runs, because
+  neither error mentions the NDK. The linker is the **API 26** binary, which is `minSdk` in
+  `gen/android/app/build.gradle.kts` rather than a choice made in CI.
+
+  **It needs the `dist/` stub that the `wasm` job does not.** `build.rs` returns early for a
+  wasm `TARGET` so `tauri_build` never runs there; for the Android triple it does, and
+  `frontendDist: "../dist"` has to exist.
+
+  **The routing was tested against the workflow's own `case` block rather than a copy of it**
+  (2026-08-29, ten paths): `src-tauri/*` → `rust`, `wasm`, `android`; `src-tauri/gen/android/*`
+  → nothing, which stays correct because the cross-compile reads no Gradle file;
+  `build.gradle.kts` and `AndroidManifest.xml` → `rust` alone, because they are `include_str!`
+  test inputs rather than build inputs; a `.ps1` → `powershell` alone; an unrecognised path →
+  every build job including this one.
 - **The `powershell` job runs `.claude/skills/running-the-app/lock.test.ps1` on
   `windows-latest`, and its routing arm has two constraints that are not stylistic.**
   It must sit **above** `src-tauri/*` and `scripts/*` in the `case`, which is first-match-wins:
