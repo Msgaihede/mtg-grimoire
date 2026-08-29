@@ -87,6 +87,14 @@ describe("the navigation census", () => {
 });
 ```
 
+> ⚠️ **`toBeTypeOf("function")` is wrong and fails on all six — corrected 2026-08-29 while executing this step.** Under `lucide-react` 1.x a `LucideIcon` is a `forwardRef` **object** (`$$typeof: Symbol(react.forward_ref)`, keys `["$$typeof", "render"]`), and that is true of lucide's own icons and of `icons.ts`'s `createLucideIcon` copies alike. **Do not weaken it to `"object"`** — that is equally true of the `null` the case exists to catch. **Draw the glyph instead**, which is the only assertion here that tells one from anything else:
+>
+> ```ts
+> const { container, unmount } = render(createElement(entry.Icon));
+> expect(container.querySelector("svg")).not.toBeNull();
+> unmount();
+> ```
+
 - [ ] **Step 2: Run to verify it fails**
 
 Run: `npm run test -- src/components/nav.test.ts 2>&1 | tail -15`
@@ -109,7 +117,9 @@ export interface NavEntry {
 
 and type the const `export const NAV: readonly NavEntry[] = [...]`.
 
-In `AppShell.tsx`, delete the const and add `import { NAV } from "@/components/nav";`. **Nothing else in that file changes.**
+In `AppShell.tsx`, delete the const and add `import { NAV } from "@/components/nav";`.
+
+> ⚠️ **"Nothing else in that file changes" is not achievable, corrected 2026-08-29.** Deleting the const orphans six imports — `Heart`, `Search`, `Settings`, `Tags`, the whole `@/components/icons` line, and `type ViewId` — and an unused import is a **TS6133 error** in this repo, so removing them is entailed by the move rather than scope creep. `LucideIcon` stays: `NavItem`'s props still use it. The true diff is **2 insertions, 29 deletions**, and no rail markup, no `NavItem` and no class string is touched. That is the claim to check.
 
 - [ ] **Step 4: Run, and prove the move changed no behaviour**
 
@@ -374,7 +384,8 @@ saying different things."
 - [ ] **Step 3: Implement.** Decide *at this site* what the narrow ribbon holds and write the reason down; the brief does not decide it for you, because 9a measured that no arrangement fits and left the choice to whoever sees the assembled stack.
 - [ ] **Step 4: Run.**
 - [ ] **Step 5 — mutation:** unmount the status line when narrow. The test must FAIL. Restore.
-- [ ] **Step 6: Commit.**
+- [ ] **Step 6 — one comment Task 5 could not reach.** `Ribbon.tsx:93` still reads *"A settings screen (Plan 6) is where this graduates to a visible number."* **That has now happened** — Task 5 gave `imageStoreFailures` and `dataDir` a home in Settings' `Data folder` section — so the sentence is a promise that has been kept and reads as one still outstanding. Point it at the section instead. Task 5 was fenced out of this file and flagged it rather than reaching in, which is why it is here.
+- [ ] **Step 7: Commit.**
 
 ---
 
@@ -429,14 +440,22 @@ saying different things."
 **Four things measured in 9a and each of which shapes the edit:**
 
 - **`ManaChip` and `LayoutToggle` have no `className` or size prop**, so the edit lives inside `FilterChips.tsx` rather than at a call site.
-- **`coarse:` must come last and unconditional.** Stacking it onto a container variant (`@min-[640px]/fb:coarse:size-11`) has **no specificity answer** — source order decides, so a conditional spelling is a coin toss.
+- ~~**`coarse:` must come last and unconditional.**~~ Stacking a `coarse:` **size** onto a container variant (`@min-[640px]/fb:coarse:size-11`) has no specificity answer — source order decides, so a conditional spelling is a coin toss.
+
+  > ✅ **Answered better than this asked, 2026-08-29.** Express the floor as `min-height`/`min-width`, not as a size. Those are **not in that contest at all** — a `min-*` beats a `height`/`width` in the cascade whatever order the two are emitted in — so the coin toss is *removed* rather than won. It then holds against `FILTER_CONTROL`'s `h-9`, `TagQueryRow`'s `h-7` and the bar's `size-8 @min-[640px]/fb:size-9` without any of them knowing, and `ManaValueChips`' `chipClass` — which `FilterBar.tsx:1021` merges **last**, the one place the floor could have been silently dropped — cannot drop it either. **A floor is a minimum, not a size, and saying so in CSS is what makes the ordering question disappear.**
 - **`ActiveFilterChip` at 26px is where the 44px floor and the app's stated design conflict.** Grow the **target** with a `::before`, not the chip.
 - The ten mana-value chips **already wrap at 350px** (`10×32 + 9×4 = 356`), which is why raising them costs no extra line.
 
 - [ ] **Step 1: Write the failing test** — the chips carry a `coarse:` rule reaching `var(--target-min)`, and the sweep in `src/lib/touchTargets.test.ts` still passes (no raw `(pointer: coarse)` anywhere in `src/`).
 - [ ] **Step 2: Run to verify it fails.**
 - [ ] **Step 3: Implement.**
-- [ ] **Step 4: Prove the rules emit.** A `coarse:` utility that Tailwind does not accept fails **silently**. Build and grep the built sheet — and note the pattern: Tailwind minifies to `@media(pointer:coarse)` with **no space**, and the rule **nests**, so `grep -o "@media(pointer:coarse){[^{]*{[^}]*}}" dist/assets/*.css` is the shape that works. The obvious pattern finds nothing and reads exactly like "it did not compile".
+- [ ] **Step 4: Prove the rules emit.** A `coarse:` utility that Tailwind does not accept fails **silently**. Build and grep the built sheet. Tailwind minifies to `@media(pointer:coarse)` with **no space**, and the rules **nest** — and once the block holds more than one utility the single-rule pattern exits 1 with no output, which reads exactly like "it did not compile". Use the repeating form:
+
+  ```
+  grep -oE "@media\(pointer:coarse\)\{(\.[^{]*\{[^}]*\})*\}" dist/assets/*.css
+  ```
+
+  ⚠️ **And do not name a full class in a doc comment in a `.tsx` while doing it.** Measured on 2026-08-29: a comment explaining the specificity argument named `coarse:size-11` verbatim and the build emitted a live `.coarse\:size-11{…}` rule nothing used. `frontend-design.md`'s 9a note exempts **`index.css`'s own** comments and says not to generalise that to `.tsx` — this is that warning measured true.
 - [ ] **Step 5 — mutation:** remove the `coarse:` variant from one chip. The test must FAIL naming it. Restore.
 - [ ] **Step 6: Commit.**
 

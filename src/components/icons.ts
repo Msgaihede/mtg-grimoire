@@ -14,7 +14,7 @@ import { createLucideIcon, type IconNode } from "lucide-react";
  *
  * **`createLucideIcon` rather than a hand-written `<svg>`, because the callers must not be able
  * to tell.** The factory returns exactly the `LucideIcon` that `import { Heart }` returns, so
- * `AppShell`'s `NAV` keeps its type, `className="size-5"` still sizes it, `aria-hidden` still
+ * `nav.ts`'s `NAV` keeps its type, `className="size-5"` still sizes it, `aria-hidden` still
  * lands on the `<svg>`, and a `strokeWidth` set anywhere up the tree still reaches it. The two
  * source files are already drawn on lucide's terms — a 24 grid, 2px strokes, round caps and
  * joins — so nothing here is redrawn or rescaled; only the wrapper changed.

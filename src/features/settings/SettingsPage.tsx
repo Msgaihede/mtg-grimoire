@@ -1,3 +1,4 @@
+import { useQuery } from "@tanstack/react-query";
 import { BackupPanel } from "@/features/settings/BackupPanel";
 import { isAndroid } from "@/lib/platform";
 import { CachePanel } from "@/features/settings/CachePanel";
@@ -12,17 +13,44 @@ import { UpdatePanel } from "@/features/settings/UpdatePanel";
 import { WebStoragePanel, useWebStorage } from "@/features/settings/WebStoragePanel";
 import { useDangerZone, useLocalCache } from "@/features/settings/useDataReset";
 import { useHiddenTags } from "@/features/settings/useHiddenTags";
+import { SettingsSection } from "@/features/settings/panelChrome";
+import { count } from "@/lib/counts";
+import { ipc } from "@/lib/ipc";
 import type { Update } from "@/lib/useUpdate";
 import { useErrorLog } from "@/lib/useErrorLog";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { useReleaseHistory } from "@/lib/useReleaseHistory";
+import { cn } from "@/lib/utils";
 import { isWebTarget } from "@/pwa/target";
+
+/**
+ * What the Data folder section says about card images that could not be written to the cache.
+ *
+ * **One string, count and words together, rather than a number in a span beside a word.** Two
+ * elements compute to a single accessible name with no space between them — `Missing2` — and
+ * jsdom cannot referee it, so a test would have to hedge with `\s*` and would then pass either
+ * way. Sentence-shaped for the same reason `ErrorLogPanel` keeps its own line in plain text:
+ * nothing here is an alarm.
+ *
+ * `undefined` is "the read has not answered yet", never zero. `imageStoreFailures` is a counter
+ * in the running process rather than a database read, so the backend answers it on every poll
+ * that comes back at all — the only way to have no number is to have no answer.
+ */
+export function imageFailureLine(failures: number | undefined): string {
+  if (failures === undefined) return "Checking whether any card images failed to save…";
+  if (failures === 0) return "No card images have failed to save this session.";
+  return (
+    `${count(failures)} card image${failures === 1 ? "" : "s"} could not be saved there ` +
+    "this session — the folder may be read-only or full."
+  );
+}
 
 /**
  * Settings.
  *
- * The data folder and import/export are still a later plan's — the blurb near the foot stands in
- * for the part that is genuinely still missing, rather than hiding panels that exist.
+ * Import is still a later plan's — the blurb near the foot stands in for the part that is
+ * genuinely still missing, rather than hiding panels that exist. **The data folder left that
+ * blurb on 2026-08-29** and has a section of its own now; the reason is at that section.
  *
  * **Ordered by what a press costs**, which is the one rule about this page's shape: updates,
  * prices, combos and errors first, since none of them throws anything away; then the cache,
@@ -68,6 +96,19 @@ export function SettingsPage({ update }: { update: Update }) {
   // Called unconditionally, `useLocalCache`'s shape, and inert on desktop: every read inside
   // it is behind `isWebTarget()`, which is a build-time constant.
   const webStorage = useWebStorage();
+  /**
+   * The two facts the Data folder section below draws, read here rather than through a second
+   * `useSync()`.
+   *
+   * **A query and not that hook**, which is `useErrorLog`'s shape and its argument: `useSync`
+   * runs a chained poll of its own — 30 s idle, 1 s mid-sync — and a second instance would be
+   * two loops describing one database, which is the reason `useWebStorageLifecycle` gives at
+   * its own site for not calling it either. Nothing here needs a loop: the folder cannot move
+   * while the process runs, and the counter only moves while the reader is looking at cards
+   * rather than at this page. It loads when Settings opens, and `query.ts`'s 30 s `staleTime`
+   * is what a reader who leaves and comes back is re-reading against.
+   */
+  const folder = useQuery({ queryKey: ["syncStatus"], queryFn: () => ipc.syncStatus() });
 
   return (
     <div className="mx-auto max-w-2xl space-y-8 py-2">
@@ -111,6 +152,43 @@ export function SettingsPage({ update }: { update: Update }) {
 
       <ErrorLogPanel log={log} />
 
+      {/* **The two facts that reached the reader at exactly one place each, and that place was a
+          hover tooltip** on the ribbon's status line — `Ribbon.tsx:96` names the folder and
+          `:97–98` appends the failure count. A phone has no hover, and 9a's touch census found
+          by grep that there was no second door to either. This is that second door and not a
+          move: the tooltip stays exactly as it was, so a pointer reader loses nothing.
+
+          **Here rather than inside `Local cache` below**, which was the other candidate. The
+          count's own sentence blames the *folder* — read-only, or full — and Clear cache's text
+          says in as many words that the collection, the decks and the covers kept in that folder
+          are **not** what it sweeps; a path printed under that heading would read as the cache's
+          own directory rather than as the place everything lives. It sits above `Backup` and
+          `Local cache` because those two are this page's other panels about that folder and this
+          one is what names it, and directly below the error log because a failed image *fetch*
+          is a row in that log while a failed image *write* is this line — the two halves of one
+          question a reader arrives with. It presses nothing at all, so the page's "ordered by
+          what a press costs" rule leaves it free to sit wherever it reads best.
+
+          **No platform gate, because every target answers `dataDir`**: the web build reports
+          `OPFS:/…` (`src-tauri/src/web/glue.rs:92`), which is still the true answer to "where
+          does this keep my data". */}
+      <SettingsSection id="data-folder" title="Data folder">
+        <p className="text-sm text-dim">
+          Where this app keeps everything: the card database, your collection, your decks, and
+          the card images it has cached.
+        </p>
+        {/* `break-all` because a Windows path has nothing to break at and this column is 42rem
+            on a desk and ~350px on a phone — the surface this whole plan is for. */}
+        <p className="break-all font-mono text-sm">{folder.data?.dataDir ?? "Not known yet."}</p>
+        {/* Plain text when there is something to report rather than the destructive red, which
+            is `ErrorLogPanel`'s tone and its reason: every affected image still displays — the
+            bytes were in hand when the write failed — so nothing on screen is broken. Dim when
+            the answer is "none", because a settled question should not draw the eye. */}
+        <p className={cn("text-sm", folder.data?.imageStoreFailures ? "text-text" : "text-dim")}>
+          {imageFailureLine(folder.data?.imageStoreFailures)}
+        </p>
+      </SettingsSection>
+
       {/* Still in the group that throws nothing away, and beside the cache because the two are
           this page's only panels about the folder on disk — one says what is kept there and the
           other what can be swept out of it. Above it rather than below for the ordering rule:
@@ -150,8 +228,12 @@ export function SettingsPage({ update }: { update: Update }) {
             Sync behaviour left it when the relay landed: an address, what is waiting and a
             press that makes a round trip are on this page now, in the Sync panel above. A
             "coming later" line for something a reader can scroll up and use is the kind of rot
-            neither CI job can see. */}
-        <p className="text-sm text-dim">Data folder and import. Coming in a later plan.</p>
+            neither CI job can see.
+
+            The data folder left it on 2026-08-29 for exactly that reason — the section above
+            names it, and a phone reader had no other way to that fact at all. Import is what is
+            left, and it is genuinely still the dialog's alone. */}
+        <p className="text-sm text-dim">Import. Coming in a later plan.</p>
       </section>
 
       {/* **Last on the page, under the blurb about what is still missing, and deliberately so.**

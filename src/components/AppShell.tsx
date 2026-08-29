@@ -1,12 +1,8 @@
 import { useRef, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
-  Heart,
   PanelLeftClose,
   PanelLeftOpen,
-  Search,
-  Settings,
-  Tags,
   TriangleAlert,
   type LucideIcon,
 } from "lucide-react";
@@ -18,7 +14,7 @@ import {
 import { Ribbon } from "@/components/Ribbon";
 import { SyncProgress } from "@/components/SyncProgress";
 import { TitleBar } from "@/components/TitleBar";
-import { CabinetFiling, Cards } from "@/components/icons";
+import { NAV } from "@/components/nav";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { useSidebarDrops, type SidebarDrop } from "@/components/useSidebarDrops";
 import { isAndroid } from "@/lib/platform";
@@ -36,7 +32,7 @@ import {
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { LAYER } from "@/lib/layers";
 import { DURATION, statusLine as statusLineMotion } from "@/lib/motion";
-import { useAppStore, type ViewId } from "@/lib/store";
+import { useAppStore } from "@/lib/store";
 import { usePrefetchDeckSearchOpen } from "@/features/decks/useDeckSearchOpen";
 import { useCardZoomPersistence } from "@/lib/useCardZoomPersistence";
 import { useListViewPersistence } from "@/lib/useListViewPersistence";
@@ -52,29 +48,6 @@ import { useSyncProgress } from "@/lib/useSyncProgress";
 import { useWebStorageLifecycle } from "@/pwa/useWebStorageLifecycle";
 import type { Update } from "@/lib/useUpdate";
 import { cn } from "@/lib/utils";
-
-/**
- * The six destinations, in the order the column draws them — and the order is the point.
- *
- * Two ways into the database first, then the three lists the reader owns, then Settings. Search
- * asks "which card is this"; Tagger asks "what is this card of", which is why it sits directly
- * under Search rather than among the lists. Below the pair the run is by how often a reader is
- * in it: Decks is where the app is used, Collection is what backs a deck, Wishlist is what is
- * not owned yet. Settings is last because it is not a destination in the same sense.
- *
- * **The label is also the ribbon's `<h1>`** — `Shell` looks the active view's title up in here,
- * so there is one word per view rather than two that can drift. "Tagger" is Scryfall's own name
- * for the taxonomy that view browses, and the page's own heading below it still says what it
- * does in a sentence.
- */
-const NAV: { id: ViewId; label: string; Icon: LucideIcon }[] = [
-  { id: "search", label: "Search", Icon: Search },
-  { id: "tags", label: "Tagger", Icon: Tags },
-  { id: "decks", label: "Decks", Icon: Cards },
-  { id: "collection", label: "Collection", Icon: CabinetFiling },
-  { id: "wishlist", label: "Wishlist", Icon: Heart },
-  { id: "settings", label: "Settings", Icon: Settings },
-];
 
 /**
  * The `<nav>`'s id, so the toggle at its foot can point `aria-controls` at the region it is
