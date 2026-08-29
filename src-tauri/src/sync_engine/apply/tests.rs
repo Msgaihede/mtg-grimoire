@@ -1305,3 +1305,372 @@ fn an_empty_batch_does_nothing() {
     let report = apply(&b, &[]).unwrap();
     assert_eq!(report, ApplyReport::default());
 }
+
+// ---------------------------------------------------------------------------------------
+// The baseline: §8's counter rule and §9's horizon, over the same two databases
+// ---------------------------------------------------------------------------------------
+
+/// A collection row with a known quantity and a known `updated_at`.
+///
+/// The stamp matters as much as the count here: a baseline op is stamped from the row's own
+/// modification time (§10.2), so a fixture that let `unixepoch()` decide it would be a test
+/// whose ordering changes with the second it ran in.
+fn stash(conn: &Connection, card_id: &str, quantity: i64, updated_at: i64) {
+    conn.execute(
+        "INSERT INTO collection_entries
+            (card_id,set_code,collector_number,lang,finish,condition,quantity,
+             created_at,updated_at)
+         VALUES (?1,'lea','1','en','nonfoil','NM',?2,?3,?3)",
+        rusqlite::params![card_id, quantity, updated_at],
+    )
+    .unwrap();
+}
+
+/// `sync_peers`, as rows a test can compare byte for byte.
+fn peers(conn: &Connection) -> Vec<(String, i64, i64)> {
+    let mut stmt = conn
+        .prepare("SELECT device_id, last_ms, last_ctr FROM sync_peers ORDER BY device_id")
+        .unwrap();
+    let rows = stmt
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap();
+    rows.map(Result::unwrap).collect()
+}
+
+/// §9's horizon as the emitter builds it: everything it has already applied (`sync_peers`),
+/// plus its own highest stamp.
+fn emitter_horizon(conn: &Connection, device: &str) -> Horizon {
+    let mut out = Horizon::default();
+    let mut stmt = conn
+        .prepare("SELECT device_id, last_ms, last_ctr FROM sync_peers")
+        .unwrap();
+    let watermarks: Vec<Hlc> = stmt
+        .query_map([], |r| {
+            Ok(Hlc {
+                ms: r.get(1)?,
+                ctr: r.get(2)?,
+                device: r.get(0)?,
+            })
+        })
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    for w in watermarks {
+        out.seen.insert(w.device.clone(), w);
+    }
+    let own: Option<(i64, i64)> = conn
+        .query_row(
+            "SELECT hlc_ms, hlc_ctr FROM sync_ops WHERE device_id = ?1
+              ORDER BY hlc_ms DESC, hlc_ctr DESC LIMIT 1",
+            [device],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .unwrap();
+    if let Some((ms, ctr)) = own {
+        out.seen.insert(
+            device.to_owned(),
+            Hlc {
+                ms,
+                ctr,
+                device: device.to_owned(),
+            },
+        );
+    }
+    out
+}
+
+/// Every `collection_entries` row as a baseline `put`.
+///
+/// **Task 4's `baseline::build` does not exist yet**, so this is the hand-written stand-in the
+/// tests below are driven from, narrowed to the one table every rule in §8 is about. It keeps
+/// the three things those rules turn on: `baseline` is set, `counters` hold **values** rather
+/// than deltas, and the stamp is the row's own `updated_at` (§10.2) — never "now", which is
+/// what puts a claim BELOW the emitter's own top stamp and makes §9.1's first exemption
+/// necessary rather than decorative.
+///
+/// The horizon rides on the first op, which is where the wire puts it (§9), and `ctr` is a
+/// running index so two rows sharing a second still get distinct stamps — `merge::fold` treats
+/// two ops with one stamp as one op and would silently drop the second.
+fn baseline_ops(conn: &Connection, device: &str) -> Vec<Op> {
+    const TEXT: [&str; 8] = [
+        "card_id",
+        "set_code",
+        "collector_number",
+        "lang",
+        "finish",
+        "condition",
+        "serial_number",
+        "grading",
+    ];
+    const FLAGS: [&str; 4] = ["altered", "signed", "proxy", "misprint"];
+    let mut stmt = conn
+        .prepare(
+            "SELECT e.sync_uid, e.card_id, e.set_code, e.collector_number, e.lang, e.finish,
+                    e.condition, e.serial_number, e.grading,
+                    e.altered, e.signed, e.proxy, e.misprint,
+                    e.quantity, e.tradelist_quantity, e.updated_at,
+                    (SELECT f.sync_uid FROM collection_folders f WHERE f.id = e.folder_id)
+               FROM collection_entries e
+              ORDER BY e.id",
+        )
+        .unwrap();
+    let mut ops: Vec<Op> = stmt
+        .query_map([], |r| {
+            let mut fields: BTreeMap<String, serde_json::Value> = BTreeMap::new();
+            for (i, name) in TEXT.iter().enumerate() {
+                let v: Option<String> = r.get(i + 1)?;
+                fields.insert(
+                    (*name).to_owned(),
+                    v.map_or(serde_json::Value::Null, serde_json::Value::String),
+                );
+            }
+            for (i, name) in FLAGS.iter().enumerate() {
+                let v: i64 = r.get(i + 9)?;
+                fields.insert((*name).to_owned(), serde_json::Value::from(v));
+            }
+            let mut counters: BTreeMap<String, i64> = BTreeMap::new();
+            counters.insert("quantity".to_owned(), r.get(13)?);
+            counters.insert("tradelist_quantity".to_owned(), r.get(14)?);
+            let mut parents: BTreeMap<String, Option<String>> = BTreeMap::new();
+            parents.insert("folder".to_owned(), r.get(16)?);
+            let stamp_secs: i64 = r.get(15)?;
+            Ok(Op {
+                table: "collection_entries".to_owned(),
+                uid: r.get(0)?,
+                kind: Kind::Put,
+                fields,
+                counters,
+                parents,
+                at: Hlc {
+                    ms: stamp_secs * 1000,
+                    ctr: 0,
+                    device: device.to_owned(),
+                },
+                baseline: true,
+                horizon: None,
+            })
+        })
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    for (i, op) in ops.iter_mut().enumerate() {
+        op.at.ctr = i as i64;
+    }
+    if let Some(first) = ops.first_mut() {
+        first.horizon = Some(emitter_horizon(conn, device));
+    }
+    ops
+}
+
+/// §1's live scenario, over two real databases. A pours its collection into B while its own
+/// `+1` is still in the same page. B must land on 5 and not 6.
+#[test]
+fn a_claim_and_the_delta_already_inside_it_do_not_both_count() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    add_copy(&a);
+    a.execute("UPDATE collection_entries SET quantity = 5", [])
+        .unwrap();
+    let mut page: Vec<Op> = outbox(&a); // the ordinary ops, including the +1
+    assert_eq!(
+        page.len(),
+        2,
+        "the +1 and the step to five are both on the log"
+    );
+    let mut base = baseline_ops(&a, "dev-a"); // claims quantity = 5, horizon covers them
+    assert_eq!(
+        base[0].counters.get("quantity"),
+        Some(&5),
+        "a claim carries the VALUE, not a delta"
+    );
+    page.append(&mut base);
+    let report = apply(&b, &page).unwrap();
+    assert_eq!(qty(&b), (1, 5), "the claim already held the delta");
+    assert_eq!(
+        report.skipped, 2,
+        "both ordinary ops are inside the claim and are dropped"
+    );
+}
+
+/// §8.2 row 2 end to end: overlapping stashes converge on the larger, never the sum.
+#[test]
+fn two_devices_that_both_baseline_converge_on_the_larger_count() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    stash(&a, "c1", 4, 1_700_000_000);
+    stash(&b, "c1", 3, 1_700_000_001);
+    let from_a = baseline_ops(&a, "dev-a");
+    let from_b = baseline_ops(&b, "dev-b");
+    apply(&b, &from_a).unwrap();
+    apply(&a, &from_b).unwrap();
+    for (name, c) in [("a", &a), ("b", &b)] {
+        assert_eq!(
+            qty(c),
+            (1, 4),
+            "{name} did not land on the larger of the two claims"
+        );
+    }
+}
+
+/// The founding constraint, through the new arm: no baseline anywhere, +1 each, ends at 2.
+#[test]
+fn an_ordinary_exchange_still_lands_at_two() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    add_copy(&a);
+    add_copy(&b);
+    let from_a = outbox(&a);
+    let from_b = outbox(&b);
+    assert!(
+        from_a.iter().all(|o| !o.baseline && o.horizon.is_none()),
+        "the outbox never holds a baseline op"
+    );
+    apply(&b, &from_a).unwrap();
+    apply(&a, &from_b).unwrap();
+    for (name, c) in [("a", &a), ("b", &b)] {
+        assert_eq!(qty(c), (1, 2), "{name} lost a card to the claim arm");
+    }
+}
+
+/// §9.1's fourth row, which is the filter's other direction: a put ABOVE the horizon is
+/// genuinely newer than the claim and still applies. A filter that suppressed everything would
+/// pass every test above this one.
+#[test]
+fn a_put_above_the_horizon_is_still_applied() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    stash(&a, "c1", 4, 1_700_000_000);
+    let mut page = baseline_ops(&a, "dev-a"); // the horizon is A's top stamp, right now
+    stash(&a, "c2", 1, 1_700_000_002); // ...and this row was written after it
+    page.extend(outbox(&a));
+    let report = apply(&b, &page).unwrap();
+    assert_eq!(
+        qty(&b),
+        (2, 5),
+        "the row written after the horizon was dropped"
+    );
+    assert_eq!(
+        report.skipped, 1,
+        "only the op the horizon actually covers is dropped"
+    );
+}
+
+/// §9.1, exemption one: a baseline op is NEVER suppressed by the horizon it travels with —
+/// the horizon covers the emitter's own top stamp, which is above every backdated claim.
+#[test]
+fn a_horizon_does_not_suppress_the_baseline_it_arrived_with() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    stash(&a, "c1", 4, 1_700_000_000);
+    let page = baseline_ops(&a, "dev-a");
+    let horizon = page[0].horizon.clone().unwrap();
+    assert!(
+        horizon.covers(&page[0].at),
+        "the claim is not below its own horizon, so this fixture proves nothing"
+    );
+    let report = apply(&b, &page).unwrap();
+    assert_eq!(qty(&b), (1, 4), "the baseline suppressed itself");
+    assert_eq!(report.skipped, 0);
+}
+
+/// §9.1, exemption two, and the one whose failure is permanent: a tombstone below the horizon
+/// is still applied, because a claim cannot say "and this row is gone".
+#[test]
+fn a_tombstone_below_the_horizon_is_still_applied() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let mut ma = 0;
+    stash(&a, "c1", 1, 1_700_000_000);
+    stash(&a, "c2", 1, 1_700_000_001);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    assert_eq!(qty(&b), (2, 2), "the fixture did not converge");
+
+    a.execute("DELETE FROM collection_entries WHERE card_id = 'c1'", [])
+        .unwrap();
+    let mut page = since(&a, &mut ma); // the tombstone
+    page.extend(baseline_ops(&a, "dev-a")); // claims c2 alone; c1 is mentioned nowhere
+    let horizon = page.iter().find_map(|o| o.horizon.clone()).unwrap();
+    assert!(
+        horizon.covers(&page[0].at),
+        "the tombstone is not below the horizon, so this fixture proves nothing"
+    );
+    apply(&b, &page).unwrap();
+
+    let mut stmt = b
+        .prepare("SELECT card_id FROM collection_entries ORDER BY card_id")
+        .unwrap();
+    let left: Vec<String> = stmt
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert_eq!(
+        left,
+        vec!["c2".to_owned()],
+        "B is holding a row the group deleted"
+    );
+}
+
+/// §8.2 at the **insert**, where "what this device already holds" is zero but its own history
+/// is not: a baseline that resurrects a row lands on the claim, never on the claim plus the
+/// deltas already inside it.
+#[test]
+fn a_baseline_that_resurrects_a_row_lands_on_the_claim_alone() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let (mut ma, mut mb) = (0, 0);
+    stash(&a, "c1", 3, 1_700_000_000);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    b.execute("UPDATE collection_entries SET quantity = quantity + 2", [])
+        .unwrap();
+    apply(&a, &since(&b, &mut mb)).unwrap();
+    assert_eq!(qty(&a), (1, 5), "the fixture did not converge on five");
+
+    // B loses the row; A, which had already absorbed B's `+2`, claims five with a later stamp,
+    // so add-wins brings the row back.
+    b.execute("DELETE FROM collection_entries", []).unwrap();
+    a.execute("UPDATE collection_entries SET updated_at = 4000000000", [])
+        .unwrap();
+    apply(&b, &baseline_ops(&a, "dev-a")).unwrap();
+    assert_eq!(
+        qty(&b),
+        (1, 5),
+        "the claim was added to the deltas already inside it"
+    );
+}
+
+/// §9.1: and none of it writes a watermark. `sync_peers` keeps its existing meaning and its
+/// existing single writer, so the horizon cannot make this device skip an op on a later pull.
+#[test]
+fn the_horizon_never_writes_to_sync_peers() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    add_copy(&a);
+    let batch = outbox(&a);
+    apply(&b, &batch).unwrap();
+    let before = peers(&b);
+    assert_eq!(before.len(), 1, "the fixture left no watermark to compare");
+
+    // The same ops again — every one of them already seen — carrying a horizon that names a
+    // third device B has never heard from, at a stamp far above anything in the page.
+    let mut page = batch.clone();
+    let mut horizon = Horizon::default();
+    horizon.seen.insert(
+        "dev-c".to_owned(),
+        Hlc {
+            ms: 9_000_000_000_000,
+            ctr: 0,
+            device: "dev-c".to_owned(),
+        },
+    );
+    page[0].horizon = Some(horizon);
+    apply(&b, &page).unwrap();
+
+    let after = peers(&b);
+    assert_eq!(after, before, "the horizon was written as a watermark");
+    assert!(
+        after.iter().all(|(d, _, _)| d != "dev-c"),
+        "a device with no ops in the page got a watermark"
+    );
+}
+
+/// Emitting order agrees with the order `apply` sorts by, so a first sync is one pass.
+#[test]
+fn every_synced_table_has_a_parents_first_rank() {
+    for spec in &capture::TABLES {
+        assert!(order_of(spec.table).is_some(), "{} has no rank", spec.table);
+    }
+}

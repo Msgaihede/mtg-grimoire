@@ -1,12 +1,13 @@
 //! Keeping a pairing group's databases in step.
 //!
-//! Six layers, and only two of them touch SQLite:
+//! Seven layers, and only three of them touch SQLite:
 //!
 //! * [`hlc`] — the hybrid logical clock. Pure.
 //! * [`capture`] — the triggers that turn a local write into a row in `sync_ops`, inside the
 //!   caller's own transaction.
 //! * [`merge`] — spec §7.3's five rules, as pure functions over ops.
 //! * [`apply`] — writing a merged result back: uid resolution, cycle-breaking, `needs_review`.
+//! * [`baseline`] — a whole database as claim ops, for a peer that has never heard from it.
 //! * [`wire`] — the encrypted envelope, batched at 200 ops per stored row.
 //! * [`client`] — push and pull over `reqwest`.
 //!
@@ -24,6 +25,7 @@
 //! that module's five crates moved into `Cargo.toml`'s every-target block.
 
 pub mod apply;
+pub mod baseline;
 pub mod capture;
 pub mod client;
 /// The IPC surface, and the one module here that is not every-target: a `#[tauri::command]`

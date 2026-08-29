@@ -219,6 +219,9 @@ mod tests {
                 ctr: 0,
                 device: "0123456789abcdef".into(),
             },
+            // The ordinary op this file measures: a delta out of the outbox, not a claim.
+            baseline: false,
+            horizon: None,
         }
     }
 

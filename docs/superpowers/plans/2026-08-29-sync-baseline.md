@@ -206,7 +206,7 @@ fn the_roster_learns_when_a_peer_was_baselined() {
 
 - [ ] **Step 2: Run it and watch it fail**
 
-`cd src-tauri && cargo test --lib schema::tests::the_roster_learns_when_a_peer_was_baselined`
+`cd src-tauri && cargo test --lib -- schema::tests::the_roster_learns_when_a_peer_was_baselined`
 Expected: FAIL, `assert_eq!(n, 1)` — left `0`, right `1`.
 
 - [ ] **Step 3: Bump the constant**
@@ -434,7 +434,9 @@ column read.
 
 - [ ] **Step 6: Run the module and the wire suite**
 
-`cd src-tauri && cargo test --lib sync_engine::merge sync_engine::wire`
+`cd src-tauri && cargo test --lib -- sync_engine::merge sync_engine::wire`
+
+**Note the bare `--`.** `cargo test --lib a b` exits 1 with `unexpected argument 'b' found` — cargo takes one positional TESTNAME and the rest must go to the harness. Found by Task 2.
 Expected: all pass. Report the selected count.
 
 - [ ] **Step 7: Mutate, for real**
@@ -942,6 +944,23 @@ it("says nothing about a baseline on an ordinary sync", () => {
   produce.
 - [ ] `cargo build --lib --target aarch64-linux-android` — **CI has no Android job**, so `main`
   can stop cross-compiling with nothing going red.
+
+  **Two clangs are on this machine and only one of them works, for each leg.** Measured
+  2026-08-29:
+
+  | leg | needs | symptom of the wrong one |
+  | --- | --- | --- |
+  | wasm clippy | `C:\Program Files\LLVMin` | `failed to find tool "clang": program not found` |
+  | Android | the **NDK's** toolchain bin, first on PATH | `ring`'s `check.h`: `fatal error: 'assert.h' file not found` |
+
+  The Android failure names a missing C header and the real cause is that LLVM's clang was found
+  before the NDK's and has no Android sysroot. Put
+  `C:\Android\Sdk
+dk.3.13750724	oolchains\llvm\prebuilt\windows-x86_64in` first and
+  set `CC_aarch64_linux_android`, `AR_aarch64_linux_android` and
+  `CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER` to the `aarch64-linux-android21-clang.cmd` /
+  `llvm-ar.exe` in it. Neither clang is on PATH by default, which is why both subagents reported
+  the wasm leg as unverifiable.
 - [ ] `npm run verify > verify.log 2>&1` **once, serially**, then grep the log. Never pipe it to
   `tail` — you get the pipe's exit code and a failing run reads as green.
 - [ ] Verify each agent's mutation claims by re-running one of them yourself. This session has

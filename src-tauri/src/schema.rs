@@ -295,9 +295,10 @@ pub const LEGACY_SINGLE_FILE_VERSION: i64 = 26;
 /// 28 is the first rung above it — pairing's three tables, spec §7.5 — and it is the rung
 /// that turned [`migrate_user`] from a version check into a ladder. 29 is sync's own: a
 /// `sync_uid` on every synced table, `needs_review` on the three folder tables, and the op
-/// log. The user's ladder can never restart, because its rungs describe rows nothing else
-/// can produce.
-pub const USER_SCHEMA_VERSION: i64 = 29;
+/// log. 30 is the pairing baseline's one column, `sync_devices.baselined_at` — when this
+/// device last handed that peer a full copy of its rows. The user's ladder can never restart,
+/// because its rungs describe rows nothing else can produce.
+pub const USER_SCHEMA_VERSION: i64 = 30;
 
 /// `corpus.db`'s version, on a number line of its own.
 ///
@@ -3591,7 +3592,7 @@ CREATE TABLE {schema}.sync_devices (
                  -- off and when, and so a rotation can be explained rather than merely
                  -- happening.
                  revoked_at INTEGER
-             ) WITHOUT ROWID;
+             , baselined_at INTEGER) WITHOUT ROWID;
 
 CREATE TABLE {schema}.sync_ops (
                  -- Local insertion order, and the push cursor. Never sent: another device's
@@ -4508,6 +4509,27 @@ fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
         // Literal `29`, for the reason every step before it writes its own: this step is what
         // *makes* a database version 29.
         tx.execute_batch("PRAGMA main.user_version = 29;")?;
+        tx.commit()?;
+    }
+
+    // v30: the roster learns when each peer was last handed a baseline.
+    //
+    // **`ADD COLUMN` and never a rebuild.** `sync_devices` is `WITHOUT ROWID` on a TEXT primary
+    // key, and measured with `node:sqlite` on 2026-08-29 the ALTER replaces the closing paren
+    // and leaves the table option where it was: `revoked_at INTEGER\n             ,
+    // baselined_at INTEGER) WITHOUT ROWID`. [`USER_SCHEMA_SQL`] wears that exact shape, which is
+    // what `the_user_schema_is_byte_identical_to_what_the_ladder_builds` compares.
+    //
+    // NULL means "never baselined", which is the state every existing row is in and the state
+    // the trigger reads. No seed, no repair, and nothing for [`crate::split::convert`] to miss —
+    // deliberately, because a control row that only a rung seeds is the bug that cost a
+    // shipping week (see this function's `sync_clock` paragraph below).
+    if v < 30 {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch("ALTER TABLE sync_devices ADD COLUMN baselined_at INTEGER;")?;
+        // Literal `30`, for the reason every step before it writes its own: this step is what
+        // *makes* a database version 30.
+        tx.execute_batch("PRAGMA main.user_version = 30;")?;
         tx.commit()?;
     }
 
@@ -5588,13 +5610,31 @@ pub(crate) mod tests {
              ON error_log (source, operation, kind, message);
          CREATE INDEX IF NOT EXISTS idx_error_log_recent ON error_log (last_at DESC);";
 
+    /// And v30's marker column.
+    ///
+    /// Owed for [`UNDO_V13`]'s **loud** reason rather than [`UNDO_V14`]'s quiet one:
+    /// `ALTER TABLE sync_devices ADD COLUMN baselined_at` is not idempotent, so a fixture that
+    /// kept the column dies at `duplicate column name` on the way back up — a failure no real
+    /// upgrade can produce. [`user_file_at_28`] is where that bites, because its rewind stops
+    /// above [`UNDO_V28`] and leaves `sync_devices` standing.
+    ///
+    /// **It runs first, before [`UNDO_V29`]**, for that constant's stated reason: a rewind walks
+    /// the ladder backwards. [`user_file_at_27`] would survive without it — [`UNDO_V28`] drops
+    /// the whole table — and spells it anyway, so that one chain is not the odd one out.
+    ///
+    /// **No index needs a line of its own**, [`UNDO_V20`]'s rule: the rung creates none, and
+    /// `DROP COLUMN` would refuse a column an index named.
+    const UNDO_V30: &str = "ALTER TABLE sync_devices DROP COLUMN baselined_at;";
+
     /// A user file at 28 — the shape every machine that upgraded before sync landed carries,
     /// and the only population the v29 rung is *for*.
     fn user_file_at_28() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
-        conn.execute_batch(&format!("{UNDO_V29} PRAGMA main.user_version = 28;"))
-            .unwrap();
+        conn.execute_batch(&format!(
+            "{UNDO_V30} {UNDO_V29} PRAGMA main.user_version = 28;"
+        ))
+        .unwrap();
         conn
     }
 
@@ -5608,7 +5648,7 @@ pub(crate) mod tests {
         let conn = Connection::open_in_memory().unwrap();
         create_user_schema(&conn, "main").unwrap();
         conn.execute_batch(&format!(
-            "{UNDO_V29} {UNDO_V28} PRAGMA main.user_version = 27;"
+            "{UNDO_V30} {UNDO_V29} {UNDO_V28} PRAGMA main.user_version = 27;"
         ))
         .unwrap();
         conn
@@ -5936,6 +5976,28 @@ pub(crate) mod tests {
         .expect("the CHECK must permit 'relay'");
     }
 
+    /// v30's column exists on an UPGRADED file, and the ladder is what put it there.
+    #[test]
+    fn the_roster_learns_when_a_peer_was_baselined() {
+        let conn = Connection::open_in_memory().unwrap();
+        migrate_single_file(&conn).unwrap();
+        migrate_user(&conn).unwrap();
+        let n: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM pragma_table_info('sync_devices')
+                  WHERE name = 'baselined_at'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(n, 1, "the ladder did not add baselined_at");
+        let version: i64 = conn
+            .query_row("PRAGMA main.user_version", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(version, USER_SCHEMA_VERSION);
+        assert_eq!(USER_SCHEMA_VERSION, 30);
+    }
+
     /// A v28 file walks up keeping every row it had, and twice is the same as once.
     #[test]
     fn migrating_a_v28_user_file_keeps_its_rows_and_is_idempotent() {
@@ -5985,10 +6047,10 @@ pub(crate) mod tests {
     ///
     /// Point `MTG_SPLIT_FIXTURE` at a **copy** of a real `mtg.db` — the escape hatch
     /// [`crate::split::tests::the_real_database_converts_with_every_row_intact`] already uses —
-    /// and this converts it, winds the user file back to 28 with [`UNDO_V29`], and climbs the
-    /// rung over the reader's own rows. **Winding back is the whole trick**: `split::convert`
-    /// stamps head, so a converted file never climbs anything and a test that only converted
-    /// would prove nothing about the rung.
+    /// and this converts it, winds the user file back to 28 with [`UNDO_V30`] and [`UNDO_V29`],
+    /// and climbs the rungs over the reader's own rows. **Winding back is the whole trick**:
+    /// `split::convert` stamps head, so a converted file never climbs anything and a test that
+    /// only converted would prove nothing about the rung.
     ///
     /// `cargo test --lib -- --ignored migrate_the_real_database --nocapture`
     #[test]
@@ -6003,8 +6065,10 @@ pub(crate) mod tests {
         crate::split::convert(dir.path()).unwrap();
 
         let conn = crate::db::open_write(dir.path()).unwrap();
-        conn.execute_batch(&format!("{UNDO_V29} PRAGMA main.user_version = 28;"))
-            .unwrap();
+        conn.execute_batch(&format!(
+            "{UNDO_V30} {UNDO_V29} PRAGMA main.user_version = 28;"
+        ))
+        .unwrap();
         let before: Vec<(String, i64)> = SYNCED_TABLES
             .iter()
             .map(|t| {
@@ -6022,7 +6086,9 @@ pub(crate) mod tests {
         let version: i64 = conn
             .query_row("PRAGMA main.user_version", [], |r| r.get(0))
             .unwrap();
-        assert_eq!(version, 29);
+        // Head rather than a literal `29`: the rewind stops at 28 and `migrate_user` climbs
+        // every rung above it, so this number moves with the ladder.
+        assert_eq!(version, USER_SCHEMA_VERSION);
         eprintln!("the v29 rung over a real user file took {elapsed:?}");
         for (table, rows) in &before {
             let (now, uids): (i64, i64) = conn
