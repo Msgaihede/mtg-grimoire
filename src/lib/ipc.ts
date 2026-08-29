@@ -3948,12 +3948,12 @@ export interface PairingSealedKey {
 /**
  * What the Sync panel draws about the relay.
  *
- * `relayUrl` is **empty when sync is off**, which is the state every installation is in until
- * a reader types an address. There is no relay address anywhere in this repository and there
- * must never be one: it is the reader's own Worker, and it lives in their `sync_state`.
+ * **There is no `relayUrl` here and there is no longer a field to type one into.** The relay is
+ * one hosted Worker whose address is compiled into the crate, so "sync is off" stopped being
+ * *no URL* and became *no entitlement* — {@link SupporterStatus} is the field that answers it,
+ * and this struct is only ever about what is waiting and how the last trip went.
  */
 export interface RelayStatus {
-  relayUrl: string;
   paired: boolean;
   /** Changes this device has written and not yet handed over. */
   pending: number;
@@ -3966,6 +3966,34 @@ export interface RelayStatus {
   lastError: string | null;
   /** Rows carrying a `needs_review` sentence, across all six tables that can hold one. */
   reviewCount: number;
+}
+
+/**
+ * The membership that unlocks the relay, as this device last heard it.
+ *
+ * **`connected` and `status` are two different questions and the panel must never fold them
+ * into one.** `connected` is local — does this device hold a refresh secret — while `status` is
+ * the relay's own last word about the membership behind it. A device that has never connected
+ * and a reader whose pledge has ended are both `connected: false, status: "dead"`, and they get
+ * different sentences: *Not connected* points at a button, *Membership ended* points at a
+ * renewal and has to say that nothing local was touched (spec §7.1).
+ *
+ * `since` is what tells them apart. It is `null` on a device that has never been told a start
+ * date, and a stamp on one that has — including one whose membership has since stopped.
+ *
+ * **`grace` is a third thing again, not a softer `dead`** (spec §7.2): a card Patreon is still
+ * retrying, where tokens are still minted and sync keeps working. Drawing it as a cancellation
+ * would punish a reader for something they did not decide.
+ */
+export interface SupporterStatus {
+  /** This device holds a refresh secret — the local half, and the only one it owns. */
+  connected: boolean;
+  /** `"active"`, `"grace"` or `"dead"`, as the relay last answered. */
+  status: string;
+  /** Unix **seconds** the membership began, or null for never having been told one. */
+  since: number | null;
+  /** The entitlement is bound to this device's pairing group. */
+  groupBound: boolean;
 }
 
 /**
@@ -5566,17 +5594,27 @@ export const ipc = {
    */
   syncRelayStatus: () => invoke<RelayStatus>("sync_relay_status"),
   /**
-   * Point this device at a relay, or at none.
+   * Start connecting a membership. Answers the Patreon authorize URL to open.
    *
-   * An empty string switches sync off and is always accepted. Anything else has to start with
-   * `https://` or `http://`, refused with a sentence rather than a constraint failure.
+   * **Nothing has happened when this returns.** The URL is a string until something opens it,
+   * and the reader consents on Patreon's own page — so a panel that merely *offers* to connect
+   * has visited nothing.
    */
-  syncRelaySetUrl: (url: string) => invoke<RelayStatus>("sync_relay_set_url", { url }),
+  syncPatreonBegin: () => invoke<string>("sync_patreon_begin"),
+  /**
+   * Hand over the code the relay's landing page showed, and become connected.
+   *
+   * One-time and short-lived at the far end, so a refusal is ordinary rather than exceptional —
+   * a code pasted twice, or ten minutes late, is the commonest thing that goes wrong here.
+   */
+  syncPatreonClaim: (code: string) => invoke<SupporterStatus>("sync_patreon_claim", { code }),
+  /** The membership as this device last heard it. Local read; it opens no connection. */
+  syncSupporterStatus: () => invoke<SupporterStatus>("sync_supporter_status"),
   /**
    * One round trip now: push, then pull, then ack.
    *
-   * Answers `null` when there is nothing to do — no relay address, or no pairing group. That
-   * is not an error, it is the state every existing installation is in.
+   * Answers `null` when there is nothing to do — no connected membership, or no pairing group.
+   * That is not an error, it is the state every existing installation is in.
    */
   syncNow: () => invoke<RelayOutcome | null>("sync_now"),
   /** Every row carrying a sentence, from all six tables that can hold one. */

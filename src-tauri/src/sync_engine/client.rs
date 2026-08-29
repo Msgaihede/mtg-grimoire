@@ -27,15 +27,19 @@ use crate::errors::{self, Kind, Source};
 use crate::sync_engine::apply::{self, ApplyReport};
 use crate::sync_engine::baseline;
 use crate::sync_engine::capture;
+use crate::sync_engine::entitlement;
 use crate::sync_engine::merge::Op;
 use crate::sync_engine::wire::{self, Envelope, WireError};
 use crate::sync_pair::identity::{self, Group};
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
-/// The `sync_state` key holding the relay's base URL. **Empty by default**, and empty means
-/// sync is off — which is the state every existing installation is in and the state an agent
-/// leaves it in. The URL is the reader's own; it is never in this repository.
+/// The `sync_state` key holding the relay's base URL — now a **test/dev override with no UI**,
+/// read by [`entitlement::base`], which falls back to the compiled-in [`entitlement::RELAY_BASE`].
+///
+/// It is empty on every installation that predates the hosted relay, and a blank is not an
+/// override. **"Sync is off" has moved off this key**: it is now "no entitlement", which
+/// [`entitlement::access_token`] answers `Ok(None)` to.
 pub const RELAY_URL: &str = "relay_url";
 
 /// How far this device has consumed the relay's log. The relay's `seq`, not a clock.
@@ -120,15 +124,18 @@ pub fn set_state(conn: &Connection, key: &str, value: &str) -> rusqlite::Result<
     .map(|_| ())
 }
 
-/// The relay's base URL, with trailing slashes trimmed, or `None` when sync is off.
+/// The relay's base URL, with trailing slashes trimmed.
 ///
-/// A blank value is `None` rather than an empty base, because "" would build the URL `/g/…`
-/// and a relative request is a failure with a confusing message rather than a feature nobody
-/// switched on.
+/// **This never answers `None` any more**, and the `Option` survives only so `commands.rs`
+/// compiles unchanged: the relay is one hosted service rather than one deployment per reader,
+/// so an address stopped being a setting and [`entitlement::base`] is the whole of the answer —
+/// the [`RELAY_URL`] override if there is one, [`entitlement::RELAY_BASE`] otherwise.
+///
+/// What this used to spell — a `None` meaning "sync is off" — is now
+/// [`entitlement::access_token`] answering `Ok(None)` for a device holding no grant, and
+/// [`round_trip`] asks it there instead.
 pub fn relay_url(conn: &Connection) -> Option<String> {
-    let url = get_state(conn, RELAY_URL)?;
-    let trimmed = url.trim().trim_end_matches('/');
-    (!trimmed.is_empty()).then(|| trimmed.to_owned())
+    Some(entitlement::base(conn))
 }
 
 /// Who this device is and which group it is in, or `None` when it is in none.
@@ -198,6 +205,33 @@ fn note(conn: &Connection, operation: &str, kind: Kind, message: &str, detail: O
     errors::record(conn, Source::Relay, operation, kind, message, detail);
 }
 
+/// What a **401 on a sync route** costs: the grant, and deliberately nothing else.
+///
+/// The relay stopped honouring this device's token, and on push, pull and ack — unlike on
+/// `/token`, where [`entitlement::access_token`] can re-mint — there is nothing left to try. So
+/// the membership has ended, and two rules follow, each the opposite of what the surrounding
+/// code does with every other status:
+///
+/// * **[`entitlement::revoke`] and never [`entitlement::clear`].** The two are different by
+///   design: `clear` is the reader pressing *Disconnect* and deliberately leaves no mark, while
+///   `revoke` leaves the row [`entitlement::membership_ended`] reads. Calling `clear` here shows
+///   a lapsed reader *Not connected* instead of *Membership ended*, which loses the one sentence
+///   (spec §7.1) that tells them their local data is untouched.
+/// * **No [`note`] call.** An `error_log` row is how this window says "your sync is broken", and
+///   a reader whose pledge lapsed sent to look at their network is being pointed at the wrong
+///   fix. Spec §10, and `entitlement.rs`'s module doc makes the same argument at length.
+///
+/// The 401 is still an `Err`, because the round trip did not happen.
+fn lapsed(conn: &Connection, what: &str) -> String {
+    let message = format!("the relay answered 401 to {what}; the membership has ended");
+    match entitlement::revoke(conn) {
+        Ok(()) => message,
+        // A database that will not take the revoke is a second, different failure — but the 401
+        // is what happened first and is what the reader has to hear.
+        Err(e) => format!("{message} (the grant could not be cleared: {e})"),
+    }
+}
+
 // ---------------------------------------------------------------------------------------
 // Push
 // ---------------------------------------------------------------------------------------
@@ -227,10 +261,12 @@ fn unpushed(conn: &Connection) -> Result<Vec<(i64, Op)>, String> {
 /// bytes *and* stamped a row could not have served it.
 ///
 /// Every failure is recorded under the operation `push`, because that is what it is from the
-/// relay's side and from the reader's — one endpoint, one `error_log` row to fold onto.
+/// relay's side and from the reader's — one endpoint, one `error_log` row to fold onto. The one
+/// exception is a 401, which [`lapsed`] handles and does not record at all.
 async fn post_ops(
     conn: &Connection,
     base: &str,
+    token: &str,
     group: &Group,
     device: &str,
     ops: &[Op],
@@ -247,6 +283,7 @@ async fn post_ops(
     let response = http()
         .post(&url)
         .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {token}"))
         .body(body)
         .send()
         .await;
@@ -258,6 +295,9 @@ async fn post_ops(
         }
     };
     let status = response.status().as_u16();
+    if status == 401 {
+        return Err(lapsed(conn, "a push"));
+    }
     if !(200..300).contains(&status) {
         let message = format!("the relay answered {status} to a push");
         note(conn, "push", Kind::Http, &message, Some(&url));
@@ -283,7 +323,7 @@ async fn post_ops(
 /// **`pushed_at` is stamped only on a 200**, so the next attempt sends the same ops and a
 /// network blip costs a retry rather than the reader's changes. The far side's second receipt
 /// is free: [`apply`]'s `sync_peers` watermark drops an op it has already applied.
-pub async fn push(conn: &Connection, base: &str) -> Result<usize, String> {
+pub async fn push(conn: &Connection, base: &str, token: &str) -> Result<usize, String> {
     let Some((device, group)) = me(conn)? else {
         return Ok(0);
     };
@@ -296,7 +336,7 @@ pub async fn push(conn: &Connection, base: &str) -> Result<usize, String> {
     let ops: Vec<Op> = pending.into_iter().map(|(_, op)| op).collect();
 
     for (i, chunk) in wire::batches(&ops).enumerate() {
-        post_ops(conn, base, &group, &device, chunk).await?;
+        post_ops(conn, base, token, &group, &device, chunk).await?;
 
         // Only now, and one chunk at a time: a run that dies between two chunks has handed the
         // first over and is honest about it.
@@ -335,7 +375,11 @@ pub async fn push(conn: &Connection, base: &str) -> Result<usize, String> {
 ///   rotation, or altered**. No key this device will ever hold opens it, so refusing to advance
 ///   would stall the stream for the thirty days the relay keeps a tail, for nothing. It is
 ///   counted, written to `error_log`, and stepped over.
-pub async fn pull(conn: &Connection, base: &str) -> Result<(usize, ApplyReport), String> {
+pub async fn pull(
+    conn: &Connection,
+    base: &str,
+    token: &str,
+) -> Result<(usize, ApplyReport), String> {
     let Some((device, group)) = me(conn)? else {
         return Ok((0, ApplyReport::default()));
     };
@@ -346,7 +390,12 @@ pub async fn pull(conn: &Connection, base: &str) -> Result<(usize, ApplyReport),
         "{base}/g/{}/pull?since={cursor}&device={device}",
         group.group_id
     );
-    let response = match http().get(&url).send().await {
+    let response = match http()
+        .get(&url)
+        .header("authorization", format!("Bearer {token}"))
+        .send()
+        .await
+    {
         Ok(r) => r,
         Err(e) => {
             note(conn, "pull", kind_of(&e), &e.to_string(), Some(&url));
@@ -354,6 +403,9 @@ pub async fn pull(conn: &Connection, base: &str) -> Result<(usize, ApplyReport),
         }
     };
     let status = response.status().as_u16();
+    if status == 401 {
+        return Err(lapsed(conn, "a pull"));
+    }
     if !(200..300).contains(&status) {
         let message = format!("the relay answered {status} to a pull");
         note(conn, "pull", Kind::Http, &message, Some(&url));
@@ -404,7 +456,7 @@ pub async fn pull(conn: &Connection, base: &str) -> Result<(usize, ApplyReport),
 }
 
 /// Tell the relay how far this device has consumed, which is what compaction reads.
-pub async fn ack(conn: &Connection, base: &str) -> Result<(), String> {
+pub async fn ack(conn: &Connection, base: &str, token: &str) -> Result<(), String> {
     let Some((device, group)) = me(conn)? else {
         return Ok(());
     };
@@ -419,6 +471,7 @@ pub async fn ack(conn: &Connection, base: &str) -> Result<(), String> {
     let response = match http()
         .post(&url)
         .header("content-type", "application/json")
+        .header("authorization", format!("Bearer {token}"))
         .body(body)
         .send()
         .await
@@ -430,6 +483,9 @@ pub async fn ack(conn: &Connection, base: &str) -> Result<(), String> {
         }
     };
     let status = response.status().as_u16();
+    if status == 401 {
+        return Err(lapsed(conn, "an ack"));
+    }
     if !(200..300).contains(&status) {
         let message = format!("the relay answered {status} to an ack");
         note(conn, "ack", Kind::Http, &message, Some(&url));
@@ -458,7 +514,11 @@ pub async fn ack(conn: &Connection, base: &str) -> Result<(), String> {
 /// peer; the case that pays for this is two devices having joined between two syncs, and it
 /// pays in bandwidth rather than in correctness — claims resolve by `max`, the grain finds the
 /// same row and the horizon filters, so a second copy changes nothing anywhere (§10).
-async fn emit_baselines(conn: &Connection, base: &str) -> Result<(usize, usize), String> {
+async fn emit_baselines(
+    conn: &Connection,
+    base: &str,
+    token: &str,
+) -> Result<(usize, usize), String> {
     let Some((device, group)) = me(conn)? else {
         return Ok((0, 0));
     };
@@ -483,7 +543,7 @@ async fn emit_baselines(conn: &Connection, base: &str) -> Result<(usize, usize),
         // so the two cannot drift.
         for chunk in ops.chunks_mut(wire::BATCH) {
             chunk[0].horizon = Some(horizon.clone());
-            post_ops(conn, base, &group, &device, chunk).await?;
+            post_ops(conn, base, token, &group, &device, chunk).await?;
         }
         // **Only after every chunk has landed.** Spec §13: a half-sent baseline must leave the
         // marker NULL so the next sync starts it over. Stamping above the loop instead turns
@@ -511,8 +571,9 @@ async fn emit_baselines(conn: &Connection, base: &str) -> Result<(usize, usize),
 /// would hand a joiner the state it held before it heard what everybody else had done, in a
 /// voice the joiner has no way to know is out of date.
 ///
-/// Answers `Ok(None)` when there is nothing to do: no relay URL, or no group. That is the
-/// state every existing installation is in, and it is not an error.
+/// Answers `Ok(None)` when there is nothing to do: **no entitlement**, or no group. That is the
+/// state every existing installation is in, and it is not an error. (It used to read "no relay
+/// URL"; the address is compiled in now and "sync is off" has moved onto the grant.)
 pub async fn run_once(conn: &Connection) -> Result<Option<RelayOutcome>, String> {
     round_trip(conn, true).await
 }
@@ -537,27 +598,35 @@ pub async fn run_once_without_baselines(conn: &Connection) -> Result<Option<Rela
 }
 
 /// The body both of the above share. `baselines` is the only difference between them.
+///
+/// **The token is fetched once, above everything else, and the four requests below share it.**
+/// Asking [`entitlement::access_token`] per request would be three refresh checks where one will
+/// do, and a trip whose push carried one token and whose ack carried the next is a seam nothing
+/// needs. It is fetched **above** the `me` check as well: `Ok(None)` there means no grant, which
+/// is the same silence a device in no group answers with, and a membership that ended while this
+/// device happened to be unpaired must still clear itself rather than wait for a pairing.
 async fn round_trip(conn: &Connection, baselines: bool) -> Result<Option<RelayOutcome>, String> {
-    let Some(base) = relay_url(conn) else {
+    let Some(token) = entitlement::access_token(conn).await? else {
         return Ok(None);
     };
     if me(conn)?.is_none() {
         return Ok(None);
     }
+    let base = entitlement::base(conn);
     let mut outcome = RelayOutcome {
-        pushed: push(conn, &base).await?,
+        pushed: push(conn, &base, &token).await?,
         ..RelayOutcome::default()
     };
-    let (unreadable, report) = pull(conn, &base).await?;
+    let (unreadable, report) = pull(conn, &base, &token).await?;
     outcome.unreadable = unreadable;
     outcome.pulled = report.applied + report.skipped + report.deferred;
     outcome.absorb(report);
     if baselines {
-        let (ops, history) = emit_baselines(conn, &base).await?;
+        let (ops, history) = emit_baselines(conn, &base, &token).await?;
         outcome.baseline_ops = ops;
         outcome.baseline_history = history;
     }
-    ack(conn, &base).await?;
+    ack(conn, &base, &token).await?;
     set_state(
         conn,
         LAST_SYNC_AT,

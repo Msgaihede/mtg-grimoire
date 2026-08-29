@@ -1,0 +1,793 @@
+import { decide, type Status } from "./entitlement";
+import { hex } from "./md5";
+import {
+  exchangeCode,
+  fetchIdentity,
+  type Identity,
+  readMember,
+  refreshTokens,
+  required,
+  verifyWebhook,
+} from "./patreon";
+import { mint, TOKEN_TTL_MS } from "./token";
+// **`import type` and never a value import**, because `index.ts` imports this file: a value
+// import would close a runtime cycle, and a cycle in which one side builds a route table out of
+// the other side's functions at module-evaluation time is exactly the shape that resolves to
+// `undefined` under one bundler and throws under another. `import type` is erased outright, so
+// there is no edge at all.
+import type { Env } from "./index";
+
+/**
+ * The entitlement layer's four routes and the daily reconciliation: the OAuth landing page,
+ * `/claim`, `/token` and the Patreon webhook.
+ *
+ * **Everything in this file counts in milliseconds, and the wire counts in seconds.** `decide`
+ * takes a `nowMs`, `TOKEN_TTL_MS` is milliseconds, `grace_until` is compared against `nowMs`,
+ * and so every timestamp this module stores in D1 is milliseconds too — one unit inside, so
+ * there is no column whose reading depends on which handler wrote it. The single conversion is
+ * `unixSeconds`, at the two places a grant is built, **because the app counts in seconds**:
+ * `sync_engine::entitlement` compares `expires` against `unixepoch()` exactly as `last_sync_at`
+ * already does. Milliseconds crossing that boundary do not fail loudly — they make
+ * `expires - now` about 1.8e12, forever larger than the six-hour refresh margin, so the app
+ * never refreshes, and twenty-four hours later the relay 401s every *sync* request, on a route
+ * that cannot re-mint. Sync dies silently and permanently. The app holds a magnitude guard for
+ * the same reason; this is the half that has to be right.
+ *
+ * **`/claim` carries the group id in its body and there is no second channel.** The access
+ * token's payload is `{sub, grp, exp}` and the gate compares `grp` against the `/g/{group}/…`
+ * path segment before the Durable Object hop — so the relay must be told which group to bind
+ * and to stamp. `/claim` carries no `Authorization` header (the whole point of the call is that
+ * the device has no token yet) and `claim_codes` has no group column. A claim without it mints
+ * a token matching no group: Patreon connects, and every later push, pull and ack 401s for
+ * ever.
+ */
+
+/**
+ * Crockford base32, in encode order. No `I`, `L`, `O` or `U`.
+ *
+ * The same alphabet `sync_pair::invite` uses, and for the same reason: it folds the confusions
+ * a person makes copying characters between two screens, which is the entire job of a code the
+ * reader reads off a browser page and types into an app.
+ */
+const ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+/**
+ * The characters a minted group uid can contain, as one source for two patterns.
+ *
+ * `index.ts` builds its `ROUTE` from this string and this file anchors it for the group id that
+ * arrives in a `/claim` body. **It lives here rather than with the router because the binding is
+ * the write that cannot be taken back**: a path segment the router refuses is a 404, while a
+ * group id bound to an entitlement mints tokens whose `grp` names a segment `ROUTE` rejects —
+ * a claim that succeeds and a sync that can never work, with nothing to say why. Two patterns
+ * that must agree eventually will not, and this is the direction the disagreement is expensive
+ * in.
+ */
+export const GROUP_SEGMENT = "[A-Za-z0-9_-]{1,128}";
+
+/** The same rule, anchored, for a group id that arrives in a body rather than in a path. */
+export const GROUP_ID = new RegExp(`^${GROUP_SEGMENT}$`);
+
+/** Characters in a claim code, before the separators. Twelve, as three groups of four. */
+const CODE_CHARS = 12;
+
+/** Characters per hyphen-separated group. Cosmetic — `normaliseCode` strips every separator. */
+const CODE_GROUP = 4;
+
+/**
+ * Ten minutes (spec §6.1). The window is short because the code is carried by hand between a
+ * browser and an app that are both already open; anything longer is a code sitting in a
+ * screenshot.
+ */
+const CODE_TTL_MS = 10 * 60 * 1000;
+
+/** Bytes in a refresh secret. 32, so it is a key rather than a password. */
+const SECRET_BYTES = 32;
+
+/**
+ * How many entitlement rows the daily reconciliation reads at once, and how many pages it will
+ * walk before it stops. The product is the ceiling on one pass, and it is deliberate: a cron
+ * invocation has a wall-clock budget and each row costs two Patreon round trips, so a pass that
+ * tried to walk an unbounded table would be killed part-way with no record of where it stopped.
+ * A relay with more rows than this reconciles the rest tomorrow, which is what a backstop is
+ * allowed to do — the webhook is the primary (spec §7.3).
+ */
+const RECONCILE_PAGE = 50;
+const RECONCILE_PAGES = 20;
+
+/** The entitlement row, in SQLite's snake_case. Every timestamp is milliseconds. */
+type EntitlementRow = {
+  subject: string;
+  status: string;
+  grace_until: number | null;
+  group_id: string | null;
+  refresh_secret: string | null;
+  patreon_refresh: string | null;
+  created_at: number;
+};
+
+/**
+ * What `/claim` and `/token` both answer, and it is five fields rather than the two the design
+ * sketch carried. `sync_engine::entitlement::Grant` deserialises exactly this shape: a name
+ * that disagrees, or a sixth field where `since` should be, is a body serde refuses at runtime
+ * while every test on both sides stays green.
+ */
+interface Grant {
+  access: string;
+  refresh: string;
+  expires: number;
+  status: Status;
+  since: number;
+}
+
+function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
+}
+
+// ---------------------------------------------------------------------------------------
+// The decisions, kept out of the handlers so they can be read and tested on their own
+// ---------------------------------------------------------------------------------------
+
+/**
+ * A millisecond instant as the unix **second** the wire carries. See this module's doc for
+ * what a millisecond reaching the app costs.
+ */
+export function unixSeconds(ms: number): number {
+  return Math.floor(ms / 1000);
+}
+
+/**
+ * What a **stored** row means *now*, as against what it meant when it was written.
+ *
+ * This is not `decide` and cannot be: `decide` maps a fresh `patron_status` from Patreon, and
+ * this maps a status this relay already wrote plus the clock. The one thing it adds is the
+ * question no webhook ever asks — **has a grace window closed?** A window opens on a decline
+ * and closes seven days later with nothing to announce it, so every path that serves off a
+ * stored row has to ask, or a declined reader syncs for ever.
+ *
+ * **`nowMs > graceUntil` mirrors `decide`'s comparison deliberately**: the deadline instant is
+ * the last one *inside* the window, and the two functions must agree at it or a reader's status
+ * would depend on which of them the request happened to go through.
+ *
+ * A `grace` row with no deadline is `dead`. `decide` never writes that pair, but a window with
+ * no closing time is worse than a closed one, and this is the fail-closed direction.
+ */
+export function settle(status: string, graceUntil: number | null, nowMs: number): Status {
+  if (status === "active") return "active";
+  if (status !== "grace") return "dead";
+  if (graceUntil === null || graceUntil <= 0) return "dead";
+  return nowMs > graceUntil ? "dead" : "grace";
+}
+
+/**
+ * Twelve random bytes as a displayed claim code, `XXXX-XXXX-XXXX`.
+ *
+ * **`byte & 31` is uniform and a modulo would not be.** A byte is 0–255 and 256 is exactly
+ * eight times 32, so masking the low five bits leaves every character equally likely; `% 32`
+ * happens to be the same arithmetic here, but the mask says why it is safe and survives
+ * somebody changing the alphabet's size.
+ *
+ * Sixty bits of entropy over a ten-minute window, against codes that are single-use and only
+ * ever redeemed by a reader who already holds one.
+ */
+export function codeFrom(bytes: Uint8Array): string {
+  if (bytes.length < CODE_CHARS) {
+    throw new Error(`a claim code needs ${CODE_CHARS} random bytes`);
+  }
+
+  let out = "";
+  for (let i = 0; i < CODE_CHARS; i += 1) {
+    if (i > 0 && i % CODE_GROUP === 0) out += "-";
+    out += ALPHABET[bytes[i] & 31];
+  }
+  return out;
+}
+
+/**
+ * The stored form of a claim code: separators gone, upper case, and Crockford's three
+ * substitutions folded.
+ *
+ * **`codeFrom`'s output normalises to itself minus the hyphens**, because the alphabet contains
+ * none of `I`, `L`, `O` or `U` — so what is stored at mint time and what is looked up at claim
+ * time are the same function of the same string, and the mint side needs no second spelling.
+ *
+ * `I` and `L` fold to `1` and `O` to `0`, which is Crockford's own rule and `invite.rs`'s. `U`
+ * is *dropped* rather than folded, because it stands for nothing: a code containing one is a
+ * code that was mistyped into a different length, and a length that does not match is a lookup
+ * that finds nothing — which is the right answer, arrived at without inventing a substitution
+ * Crockford does not define.
+ */
+export function normaliseCode(input: string): string {
+  const cleaned = input.replace(/[^0-9A-Za-z]/g, "").toUpperCase();
+
+  let out = "";
+  for (const character of cleaned) {
+    if (character === "I" || character === "L") out += "1";
+    else if (character === "O") out += "0";
+    else if (ALPHABET.includes(character)) out += character;
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------------------
+// The grant
+// ---------------------------------------------------------------------------------------
+
+/** A fresh refresh secret. `hex` is `md5.ts`'s, so the relay has one hex writer rather than two. */
+function randomSecret(): string {
+  return hex(crypto.getRandomValues(new Uint8Array(SECRET_BYTES)));
+}
+
+/**
+ * Mint an access token and dress it as the five-field answer both endpoints give.
+ *
+ * The signing key is fetched through `required` rather than passed as `env.RELAY_HMAC_KEY` or,
+ * worse, `String(env.RELAY_HMAC_KEY)`: an unset binding spelled that way signs every token with
+ * the literal text `"undefined"`, and every token then verifies — for anyone who guesses that
+ * the binding is unset. Unset has to be a loud 500.
+ */
+async function grantFor(
+  env: Env,
+  subject: string,
+  group: string,
+  refresh: string,
+  status: Status,
+  createdAtMs: number,
+): Promise<Grant> {
+  const exp = Date.now() + TOKEN_TTL_MS;
+  const access = await mint(
+    { sub: subject, grp: group, exp },
+    required(env.RELAY_HMAC_KEY, "RELAY_HMAC_KEY"),
+  );
+  return {
+    access,
+    refresh,
+    expires: unixSeconds(exp),
+    status,
+    since: unixSeconds(createdAtMs),
+  };
+}
+
+/**
+ * Spec §7.1, in one place because it is reached from four: the webhook, the daily
+ * reconciliation, `/token` when a grace window has closed, and the OAuth callback when a reader
+ * who has already lapsed connects again.
+ *
+ * The refresh secret goes first and it is what actually revokes: deleting it is instantaneous,
+ * while an `access` already issued dies of old age within the day. Then the group's log is
+ * dropped — **the reader loses no data by it**, because every device holds the whole collection
+ * in its own SQLite and the log is a transport buffer with a thirty-day tail.
+ *
+ * **It is allowed to throw, and each caller decides what that costs.** A failed drop must not
+ * turn `/token`'s 401 into a 500, and must not stop the callback rendering its page; but it
+ * *should* fail the webhook, because Patreon retries a non-2xx and the whole operation is
+ * idempotent — which is a free second attempt at the one thing in this design that leaves a
+ * reader's ciphertext sitting on the relay.
+ */
+async function revoke(env: Env, subject: string, groupId: string | null): Promise<void> {
+  await env.DB.prepare(
+    `UPDATE entitlements
+        SET status = 'dead', grace_until = NULL, refresh_secret = NULL, checked_at = ?
+      WHERE subject = ?`,
+  )
+    .bind(Date.now(), subject)
+    .run();
+
+  if (groupId !== null) await dropGroup(env, groupId);
+}
+
+/**
+ * Empty a group's relay log.
+ *
+ * **The path is one the Worker builds and no device can reach.** `index.ts`'s `ROUTE` matches
+ * `push|pull|ack|ws` and nothing else, so `/g/{group}/drop` is a 404 from the outside; the only
+ * way to it is this function, which is called by the entitlement layer alone. That is the whole
+ * of the authorisation — a `drop` behind the auth gate would still be a route a device holding
+ * a valid token could aim at its own group.
+ */
+async function dropGroup(env: Env, group: string): Promise<void> {
+  // A group id that could not have come from `ROUTE` names an object no device ever wrote to,
+  // and interpolating it into a URL is the one place a stray character could address something
+  // else. `/claim` refuses such an id before binding it, so this is a second fence on a value
+  // that is already stored.
+  if (!GROUP_ID.test(group)) return;
+
+  const stub = env.GROUP.get(env.GROUP.idFromName(group));
+  const response = await stub.fetch(`https://relay.internal/g/${group}/drop`, { method: "POST" });
+  if (!response.ok) {
+    throw new Error(`the group object answered ${response.status} to drop`);
+  }
+}
+
+// ---------------------------------------------------------------------------------------
+// GET /oauth/patreon/callback
+// ---------------------------------------------------------------------------------------
+
+/**
+ * Where Patreon sends the reader after they consent: exchange the code, read the membership,
+ * write the entitlement, and show one code to type into the app.
+ *
+ * **The `state` parameter is received and not checked, and that is worth saying out loud
+ * rather than leaving as an absence.** The app mints `state` and opens the authorize URL, but
+ * the redirect lands *here* rather than back in the app, so the app never sees it again and
+ * nothing carries it to `/claim`. The relay cannot check it either — it holds no record of a
+ * flow it did not start. What actually binds this page to the reader is that the claim code is
+ * shown only to the browser session that completed the consent, is single-use, and expires in
+ * ten minutes.
+ */
+export async function handleCallback(request: Request, env: Env): Promise<Response> {
+  const code = new URL(request.url).searchParams.get("code");
+  if (code === null || code === "") {
+    return page("Patreon sent no authorization code", "Start again from the app.", 400);
+  }
+
+  // **The bindings are asked for here, ahead of the `try` below, and that ordering is the
+  // point.** Everything inside the exchange is caught and rendered as "try again in a minute",
+  // which is the right sentence for a Patreon outage and exactly the wrong one for a relay
+  // deployed without its client secret — a reader would retry that for ever. `required`
+  // throwing out here is a 500 that names the binding in the Worker's log.
+  required(env.RELAY_BASE, "RELAY_BASE");
+  required(env.PATREON_CLIENT_ID, "PATREON_CLIENT_ID");
+  required(env.PATREON_CLIENT_SECRET, "PATREON_CLIENT_SECRET");
+  required(env.PATREON_CAMPAIGN_ID, "PATREON_CAMPAIGN_ID");
+
+  const connected = await connectPatreon(code, env);
+  if (connected === null) {
+    return page("Patreon could not be reached", "Try connecting again in a minute.", 502);
+  }
+  const { identity, refreshToken } = connected;
+
+  const now = Date.now();
+  const existing = await env.DB.prepare(
+    `SELECT subject, grace_until, group_id
+       FROM entitlements
+      WHERE source = 'patreon' AND external_id = ?`,
+  )
+    .bind(identity.userId)
+    .first<{ subject: string; grace_until: number | null; group_id: string | null }>();
+
+  const decision = decide(identity.patronStatus, now, existing?.grace_until ?? null);
+
+  // `created_at` is written on the insert and never on the conflict: it is what the app shows
+  // as "supporting since", and a reader who reconnects has not started supporting today.
+  //
+  // `grace_until` is written **unconditionally from the decision, `dead` included**. Leaving a
+  // stale deadline behind is picked up by `decide` the next time the subject flaps to
+  // `declined_patron`, and hands them a window that was already spent.
+  //
+  // `RETURNING subject` and not the bound parameter: the insert arm mints a uuid and the
+  // conflict arm keeps the subject the row already had, so which of the two is the reader's is
+  // not knowable from what was sent. Spec §5 makes that indirection the whole point — the
+  // Patreon id lives in one column of one table and everything downstream names the subject —
+  // so writing a claim code against the wrong one would hand a reader somebody else's grant.
+  const upserted = await env.DB.prepare(
+    `INSERT INTO entitlements
+       (subject, source, external_id, status, grace_until, patreon_refresh, created_at, checked_at)
+     VALUES (?, 'patreon', ?, ?, ?, ?, ?, ?)
+     ON CONFLICT (source, external_id) DO UPDATE SET
+       status = excluded.status,
+       grace_until = excluded.grace_until,
+       patreon_refresh = excluded.patreon_refresh,
+       checked_at = excluded.checked_at
+     RETURNING subject`,
+  )
+    .bind(
+      existing?.subject ?? crypto.randomUUID(),
+      identity.userId,
+      decision.status,
+      decision.graceUntil,
+      refreshToken,
+      now,
+      now,
+    )
+    .first<{ subject: string }>();
+  if (upserted === null) {
+    return page("The relay could not record that membership", "Try again in a minute.", 500);
+  }
+  const subject = upserted.subject;
+
+  if (decision.status === "dead") {
+    // A reader who was serving and has since lapsed reaches §7.1 here rather than waiting for
+    // a webhook that may never have been delivered. `existing === null` is somebody who has
+    // never connected at all: the upsert already wrote them dead and there is no group to drop,
+    // so there is nothing left to revoke. The drop must not stop the page rendering — the
+    // reader is standing in front of it, and the daily pass will try again.
+    try {
+      if (existing !== null) await revoke(env, subject, existing.group_id);
+    } catch (error) {
+      console.error("callback revoke", error);
+    }
+    return page(
+      "That Patreon account is not supporting",
+      "Nothing on your devices has been touched. Start a pledge and connect again.",
+    );
+  }
+
+  const claimCode = codeFrom(crypto.getRandomValues(new Uint8Array(CODE_CHARS)));
+  await env.DB.prepare(`INSERT INTO claim_codes (code, subject, expires_at) VALUES (?, ?, ?)`)
+    .bind(normaliseCode(claimCode), subject, now + CODE_TTL_MS)
+    .run();
+
+  return page(
+    "You are connected",
+    "Paste this into MTG Grimoire within ten minutes:",
+    200,
+    claimCode,
+  );
+}
+
+/**
+ * The two Patreon round trips the callback makes, as one answer or `null`.
+ *
+ * `null` folds three failures the reader can do nothing different about — Patreon unreachable,
+ * Patreon refusing the code, Patreon answering a document with no user in it — into the one
+ * sentence that fits all three. **It does not fold a missing binding**: the callback asks for
+ * those ahead of this call, so a relay deployed without its client secret is a 500 that names
+ * the binding rather than a "try again in a minute" a reader would retry for ever.
+ */
+async function connectPatreon(
+  code: string,
+  env: Env,
+): Promise<{ identity: Identity; refreshToken: string } | null> {
+  try {
+    const tokens = await exchangeCode(code, env);
+    const identity = await fetchIdentity(tokens.accessToken, env);
+    if (identity === null) return null;
+    return { identity, refreshToken: tokens.refreshToken };
+  } catch (error) {
+    console.error("patreon callback", error);
+    return null;
+  }
+}
+
+// ---------------------------------------------------------------------------------------
+// POST /claim
+// ---------------------------------------------------------------------------------------
+
+/**
+ * Trade the code the reader pasted for a grant, and bind the entitlement to their group.
+ *
+ * **A 401 here is a refusal of this press and not a lapse**, which is the distinction the app
+ * depends on: `sync_engine::entitlement::claim` shows the sentence and clears nothing, where
+ * the same status from `/token` means the membership is over and the grant is revoked. A reader
+ * mistyping a code must not lose an entitlement they already hold.
+ */
+export async function handleClaim(request: Request, env: Env): Promise<Response> {
+  let body: { code?: unknown; group?: unknown };
+  try {
+    body = (await request.json()) as { code?: unknown; group?: unknown };
+  } catch {
+    return json({ error: "unreadable body" }, 400);
+  }
+  if (typeof body?.code !== "string" || typeof body.group !== "string") {
+    return json({ error: "malformed claim" }, 400);
+  }
+
+  // A group id the router could never carry is refused before it is bound, not after. Bound, it
+  // would mint tokens whose `grp` names a path segment `ROUTE` rejects — a claim that succeeds
+  // and a sync that can never work.
+  const group = body.group;
+  if (!GROUP_ID.test(group)) return json({ error: "that is not a sync group id" }, 400);
+
+  const now = Date.now();
+
+  // **`DELETE … RETURNING`, in one statement, is what makes the code single-use.** D1 has no
+  // interactive transaction, so a read followed by a delete is two round trips with a window
+  // between them, and two requests racing that window both see the code and both claim. One
+  // statement is atomic by construction, and it carries the ten-minute expiry with it —
+  // `claim_codes` enforces neither, which is why both live here.
+  const claimed = await env.DB.prepare(
+    `DELETE FROM claim_codes WHERE code = ? AND expires_at > ? RETURNING subject`,
+  )
+    .bind(normaliseCode(body.code), now)
+    .first<{ subject: string }>();
+  if (claimed === null) return json({ error: "that claim code is not valid" }, 401);
+
+  const row = await env.DB.prepare(
+    `SELECT subject, status, grace_until, group_id, refresh_secret, patreon_refresh, created_at
+       FROM entitlements
+      WHERE subject = ?`,
+  )
+    .bind(claimed.subject)
+    .first<EntitlementRow>();
+  if (row === null) return json({ error: "that membership no longer exists" }, 403);
+
+  const status = settle(row.status, row.grace_until, now);
+  if (status === "dead") return json({ error: "that membership is not active" }, 403);
+
+  if (row.group_id !== null && row.group_id !== group) {
+    return json({ error: "that membership is already bound to another sync group" }, 409);
+  }
+
+  // The binding is trust-on-first-use (spec §6.3) and the `WHERE` is what keeps it so under two
+  // requests at once: the second one changes no rows and is refused, rather than overwriting a
+  // binding the first just made.
+  const refresh = row.refresh_secret ?? randomSecret();
+  let bound: D1Result;
+  try {
+    bound = await env.DB.prepare(
+      `UPDATE entitlements
+          SET group_id = ?, refresh_secret = ?, status = ?, checked_at = ?
+        WHERE subject = ? AND (group_id IS NULL OR group_id = ?)`,
+    )
+      .bind(group, refresh, status, now, row.subject, group)
+      .run();
+  } catch {
+    // `entitlements_group` is unique, so this is another *subject* holding that group id — a
+    // shared subscription wearing two names. The same 409 as the mismatch above, because to the
+    // reader it is the same sentence.
+    return json({ error: "that sync group is bound to another membership" }, 409);
+  }
+  if (bound.meta.changes === 0) {
+    return json({ error: "that membership is already bound to another sync group" }, 409);
+  }
+
+  return json(await grantFor(env, row.subject, group, refresh, status, row.created_at));
+}
+
+// ---------------------------------------------------------------------------------------
+// POST /token
+// ---------------------------------------------------------------------------------------
+
+/**
+ * Trade the long-lived refresh secret for a fresh access token.
+ *
+ * **A 401 here is a lapse**, and the app reads it as one: the grant is cleared and the panel
+ * offers the connect button again. So every refusal on this route has to be a real one — which
+ * is why a closed grace window is resolved here and not merely reported. A window closes with
+ * nothing to announce it, and this is one of only two places that ever asks.
+ */
+export async function handleToken(request: Request, env: Env): Promise<Response> {
+  let body: { refresh?: unknown };
+  try {
+    body = (await request.json()) as { refresh?: unknown };
+  } catch {
+    return json({ error: "unreadable body" }, 400);
+  }
+  if (typeof body?.refresh !== "string" || body.refresh === "") {
+    return json({ error: "malformed refresh" }, 400);
+  }
+
+  const row = await env.DB.prepare(
+    `SELECT subject, status, grace_until, group_id, refresh_secret, patreon_refresh, created_at
+       FROM entitlements
+      WHERE refresh_secret = ?`,
+  )
+    .bind(body.refresh)
+    .first<EntitlementRow>();
+
+  // No row is a revoked or never-issued secret; a row with no group has never been claimed and
+  // there is nothing to stamp into `grp`. Both are the same sentence to the app.
+  if (row === null || row.group_id === null) return json({ error: "unauthorized" }, 401);
+
+  const now = Date.now();
+  const status = settle(row.status, row.grace_until, now);
+  if (status === "dead") {
+    // The window closed. §7.1 runs here rather than being left to tomorrow's cron, because the
+    // alternative is a row this pass has already decided is dead whose log nothing will ever
+    // drop — the reconciliation skips `dead` rows by design. A failure must not change the
+    // answer: the token is refused either way, and the cron's local settle will try again.
+    try {
+      await revoke(env, row.subject, row.group_id);
+    } catch (error) {
+      console.error("token revoke", error);
+    }
+    return json({ error: "unauthorized" }, 401);
+  }
+
+  await env.DB.prepare(`UPDATE entitlements SET checked_at = ? WHERE subject = ?`)
+    .bind(now, row.subject)
+    .run();
+
+  // `body.refresh` rather than `row.refresh_secret`: the same string, already narrowed to
+  // `string` by the guard above, and the secret is not rotated here — the app stores whatever
+  // comes back, and rotating on every refresh would break a second device that holds the same
+  // secret from the sealed pairing blob (spec §6.2).
+  return json(
+    await grantFor(env, row.subject, row.group_id, body.refresh, status, row.created_at),
+  );
+}
+
+// ---------------------------------------------------------------------------------------
+// POST /webhook/patreon
+// ---------------------------------------------------------------------------------------
+
+/**
+ * Patreon telling us a membership changed. The primary signal; the cron is the backstop.
+ *
+ * **The signature is checked before the body is read as anything but text**, and an unverified
+ * body is refused with 401 without being parsed at all. An unverified `members:pledge:delete`
+ * deletes a reader's log, which is the one failure in this design that destroys data.
+ *
+ * Everything that is not a refusal answers `204`, including a body about somebody who never
+ * connected. Patreon retries a non-2xx, and retrying a message we will never act on is a loop
+ * with no exit.
+ */
+export async function handleWebhook(request: Request, env: Env): Promise<Response> {
+  // Once, as text. Re-serialising the parsed JSON changes the bytes the signature covers.
+  const body = await request.text();
+  const signature = request.headers.get("x-patreon-signature");
+  const secret = required(env.PATREON_WEBHOOK_SECRET, "PATREON_WEBHOOK_SECRET");
+  if (!verifyWebhook(body, signature, secret)) {
+    return new Response("unauthorized", { status: 401 });
+  }
+
+  let payload: unknown;
+  try {
+    payload = JSON.parse(body);
+  } catch {
+    return new Response("unreadable body", { status: 400 });
+  }
+
+  const member = readMember(payload);
+  if (member === null) return new Response(null, { status: 204 });
+
+  const row = await env.DB.prepare(
+    `SELECT subject, grace_until, group_id
+       FROM entitlements
+      WHERE source = 'patreon' AND external_id = ?`,
+  )
+    .bind(member.userId)
+    .first<{ subject: string; grace_until: number | null; group_id: string | null }>();
+  if (row === null) return new Response(null, { status: 204 });
+
+  const now = Date.now();
+
+  // **A `pledge:delete` is dead whatever the payload's `patron_status` says**, and the event
+  // is read rather than the attribute because the two answer different questions: the event
+  // names what happened, while the attribute is a snapshot of a membership that is in the act
+  // of being removed. Spec §7.1 makes `pledge:delete` dead immediately, so trusting the
+  // attribute alone would leave a cancelled reader serving on any payload that still reads
+  // `active_patron` — a possibility nothing here has ruled out, on a path where being wrong
+  // costs a free subscription until the next daily pass.
+  const event = request.headers.get("x-patreon-event") ?? "";
+  const decision = event.endsWith(":delete")
+    ? { status: "dead" as Status, graceUntil: null }
+    : decide(member.patronStatus, now, row.grace_until);
+
+  await env.DB.prepare(
+    `UPDATE entitlements SET status = ?, grace_until = ?, checked_at = ? WHERE subject = ?`,
+  )
+    .bind(decision.status, decision.graceUntil, now, row.subject)
+    .run();
+
+  // Allowed to throw: Patreon retries a non-2xx and every statement above is idempotent, so a
+  // failed drop gets a second attempt rather than leaving a dead subject's log on the relay.
+  if (decision.status === "dead") await revoke(env, row.subject, row.group_id);
+
+  return new Response(null, { status: 204 });
+}
+
+// ---------------------------------------------------------------------------------------
+// The daily reconciliation
+// ---------------------------------------------------------------------------------------
+
+/**
+ * The cron's work: re-ask Patreon about every subject that is not already dead, and close the
+ * grace windows that have run out.
+ *
+ * **Two things only this pass can catch.** A webhook Patreon failed to deliver would otherwise
+ * leave a cancelled membership syncing for ever; and a grace window closing is not an event at
+ * all — nothing happens on the seventh day, so nothing fires.
+ *
+ * **Keyset paging, not `LIMIT/OFFSET`.** The window is `status <> 'dead'` and this pass writes
+ * rows *to* dead, so under `OFFSET` the surviving rows shift left underneath it and every page
+ * boundary skips one. Ordering by the primary key and asking for what is after the last subject
+ * seen cannot skip.
+ *
+ * A row that fails is logged and the pass continues: one reader's revoked OAuth grant must not
+ * stop everybody else's reconciliation.
+ */
+export async function reconcile(env: Env): Promise<void> {
+  let after = "";
+
+  for (let page = 0; page < RECONCILE_PAGES; page += 1) {
+    const rows = (
+      await env.DB.prepare(
+        `SELECT subject, status, grace_until, group_id, refresh_secret, patreon_refresh, created_at
+           FROM entitlements
+          WHERE status <> 'dead' AND subject > ?
+          ORDER BY subject
+          LIMIT ?`,
+      )
+        .bind(after, RECONCILE_PAGE)
+        .all<EntitlementRow>()
+    ).results;
+    if (rows.length === 0) return;
+
+    for (const row of rows) {
+      try {
+        await reconcileOne(env, row);
+      } catch (error) {
+        console.error(`reconcile ${row.subject}`, error);
+      }
+    }
+
+    after = rows[rows.length - 1].subject;
+    if (rows.length < RECONCILE_PAGE) return;
+  }
+}
+
+/**
+ * One row: refresh the reader's Patreon token, re-read the membership, decide, apply.
+ *
+ * **A row with no stored Patreon token still gets its window settled.** There is nothing to ask
+ * Patreon with, but the question a closing grace window asks is local, and skipping such a row
+ * entirely would leave a declined reader in an open window for ever.
+ *
+ * **An unreadable identity document throws rather than deciding.** `decide(null, …)` is `dead`,
+ * and that is right for a reader Patreon says has no membership — but a document this code
+ * cannot parse is the *absence* of an answer, and turning that into a cancellation is how one
+ * shape change on Patreon's side becomes a mass revocation in a job nobody is watching.
+ */
+async function reconcileOne(env: Env, row: EntitlementRow): Promise<void> {
+  const now = Date.now();
+
+  if (row.patreon_refresh === null || row.patreon_refresh === "") {
+    if (settle(row.status, row.grace_until, now) === "dead") {
+      await revoke(env, row.subject, row.group_id);
+    }
+    return;
+  }
+
+  const tokens = await refreshTokens(row.patreon_refresh, env);
+  const identity = await fetchIdentity(tokens.accessToken, env);
+  if (identity === null) {
+    throw new Error("patreon answered an identity document with no user id");
+  }
+
+  const decision = decide(identity.patronStatus, now, row.grace_until);
+  await env.DB.prepare(
+    `UPDATE entitlements
+        SET status = ?, grace_until = ?, patreon_refresh = ?, checked_at = ?
+      WHERE subject = ?`,
+  )
+    .bind(decision.status, decision.graceUntil, tokens.refreshToken, now, row.subject)
+    .run();
+
+  if (decision.status === "dead") await revoke(env, row.subject, row.group_id);
+}
+
+// ---------------------------------------------------------------------------------------
+// The landing page
+// ---------------------------------------------------------------------------------------
+
+/**
+ * The one page this relay renders. Self-contained by necessity — a Worker response has no
+ * asset pipeline behind it — and deliberately plain: it exists to be read once and copied from.
+ *
+ * Nothing interpolated here is attacker-supplied. `code` comes from `codeFrom`, whose output is
+ * twelve characters of a thirty-two character alphabet plus two hyphens, and the headings and
+ * bodies are literals in this file. **A future edit that renders anything off the request must
+ * escape it**; there is no template engine standing between this string and the browser.
+ */
+function page(heading: string, body: string, status = 200, code?: string): Response {
+  const shown =
+    code === undefined
+      ? ""
+      : `<p class="code" role="status" aria-label="Your claim code">${code}</p>`;
+
+  return new Response(
+    `<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MTG Grimoire</title>
+<style>
+  :root { color-scheme: light dark; --ink: #17171a; --paper: #fbfbfd; --dim: #55555e; }
+  @media (prefers-color-scheme: dark) {
+    :root { --ink: #f2f2f5; --paper: #131316; --dim: #a0a0aa; }
+  }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center;
+         background: var(--paper); color: var(--ink);
+         font: 16px/1.55 ui-sans-serif, system-ui, "Segoe UI", sans-serif; }
+  main { max-width: 32rem; padding: 2rem 1.5rem; text-align: center; }
+  h1 { font-size: 1.4rem; margin: 0 0 0.75rem; }
+  p { margin: 0 0 1rem; color: var(--dim); }
+  .code { font: 700 clamp(1.5rem, 7vw, 2.4rem)/1.2 ui-monospace, "Cascadia Mono", monospace;
+          letter-spacing: 0.12em; color: var(--ink); word-break: break-all; }
+</style></head>
+<body><main><h1>${heading}</h1><p>${body}</p>${shown}</main></body></html>`,
+    { status, headers: { "content-type": "text/html; charset=utf-8" } },
+  );
+}

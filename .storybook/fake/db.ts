@@ -173,6 +173,7 @@ import type {
   SearchRequest,
   SearchSortKey,
   SetSummary,
+  SupporterStatus,
   SwapResult,
   SyncOutcome,
   SyncStatus,
@@ -834,6 +835,25 @@ export interface FakeUpdate {
  * authenticate: nothing a person types produces a *well-formed* blob that will not decrypt. So
  * this fault sits on `sync_pairing_respond` and nowhere else.
  *
+ * **`patreonDeclined`** and **`patreonLapsed`** are the two supporter states a story cannot
+ * press its way into, and the split from *supporting* is `pairingReadError`'s exactly. Connecting
+ * **is** reachable by typing — paste a claim code, press Connect — so there is no fault and no
+ * seed for it; what a reader can never produce from this window is Patreon declining their card
+ * or their pledge ending, because both are decided at the other end of a webhook.
+ *
+ * `patreonDeclined` is spec §7.2's grace window: a failed card Patreon is still retrying, where
+ * tokens are still minted and **sync keeps working**. The story it exists for is the *Sync now*
+ * button still being on screen, because taking sync away would punish a reader for something
+ * they did not decide.
+ *
+ * **`patreonLapsed` is the one that is easy to get subtly wrong, so the shape is written out
+ * here**: `entitlement::revoke` is `clear` plus one row, so a lapsed device has **no refresh
+ * secret, no access token and no `since`** — its `supporter_status` row is the only thing left,
+ * and `group_bound` is that row crossing the wire. Every other field it carries is identical to
+ * a device fresh out of the box, which is why a fault that set `since` to a plausible date would
+ * story the panel against a state the crate cannot produce and let a `since`-keyed panel pass.
+ * That is not hypothetical: the panel shipped keyed on `since` for exactly one wave.
+ *
  * **Being paired is not here, and that is `combosMissing`'s argument the other way up**: it is not
  * something that has gone wrong with a world, it is where a reader arrives after two presses. It
  * is the `paired` **seed** in `seeds.ts`.
@@ -865,7 +885,9 @@ export type Fault =
   | "exportWriteError"
   | "mirrorRootUnwritable"
   | "combosFetchError"
-  | "pairingReadError";
+  | "pairingReadError"
+  | "patreonDeclined"
+  | "patreonLapsed";
 
 /**
  * What the picture cache costs, as the Settings page's one button sees it.
@@ -1239,6 +1261,16 @@ export interface FakeDb {
    * grouping and their reason: one feature answered by one command in one round trip.
    */
   relay: FakeRelay;
+  /**
+   * The membership that unlocks the relay — what `sync_supporter_status` answers.
+   *
+   * Separate from {@link FakeRelay} because they are two commands over two `sync_state` groups
+   * and the panel draws them as two things: one says whether sync may run at all, the other says
+   * what is waiting and how the last trip went. Folding them would also lose the state this
+   * whole object exists for — a lapse, where the membership has an answer and the figures are
+   * still perfectly readable.
+   */
+  supporter: FakeSupporter;
   fault: Fault | null;
 }
 
@@ -1248,13 +1280,17 @@ export interface FakeDb {
  * **There is no relay in this workbench and this object does not pretend there is.** The fake
  * has no network, no envelope and no `sync_ops` table, so {@link pending} is a number a story
  * sets rather than a count of rows — and `sync_now` moves it to zero rather than encrypting
- * anything. What the fake models faithfully is what the panel is drawn against: an empty
- * address meaning sync is *off*, a `null` outcome meaning there was nothing to do, and an error
- * that survives a later success because the log is the record.
+ * anything. What the fake models faithfully is what the panel is drawn against: a `null` outcome
+ * meaning there was nothing to do, and an error that survives a later success because the log is
+ * the record.
+ *
+ * **There is no `url` here any more and its absence is the change rather than an omission.** The
+ * relay became one hosted service whose address is compiled into the crate, so `sync_relay_set_url`
+ * went with the field the panel typed into; what makes sync on or off is {@link FakeSupporter}.
+ * The crate keeps `sync_state.relay_url` as a test/dev override with no UI, and a fake with no
+ * network has nothing to override.
  */
 export interface FakeRelay {
-  /** `sync_state.relay_url`. **Empty is off**, and it is what every world starts in. */
-  url: string;
   /** Ops written and not yet handed over. A stored number here — see above. */
   pending: number;
   /** `sync_state.last_sync_at`, unix seconds, or `null` for a device that never finished one. */
@@ -1262,6 +1298,40 @@ export interface FakeRelay {
   /** The newest `error_log` row whose source is `relay`. **Not cleared by a later success**,
    *  which is the crate's rule and the one thing about this field worth modelling. */
   lastError: string | null;
+}
+
+/**
+ * The five `sync_state` rows `entitlement` owns, as the one command that reads them sees them.
+ *
+ * **Four fields for three sentences, and no two of them are spare.** `connected` is the local
+ * fact — this device holds a refresh secret — and it is what *both* endings clear, so it is the
+ * field that says a device is supporting. `groupBound` is `entitlement::membership_ended`
+ * crossing the wire, and it is the only thing separating a lapse from a device out of the box:
+ * `revoke` deletes the date along with the secret, so **`since` cannot tell them apart** and a
+ * fake that implied it could would let a wrong panel pass.
+ *
+ * The four states this fake can be in, and what leaves each of them in the crate:
+ *
+ * | | `connected` | `status` | `since` | `groupBound` |
+ * | --- | --- | --- | --- | --- |
+ * | out of the box (no keys), or after `clear` | `false` | `"dead"` | `null` | `false` |
+ * | claimed — `store_grant` + `store_status` | `true` | `"active"` | a stamp | `true` |
+ * | a declined card (§7.2) | `true` | `"grace"` | a stamp | `true` |
+ * | lapsed — `revoke`, which is `clear` plus one row | `false` | `"dead"` | **`null`** | `true` |
+ *
+ * A fifth is reachable and is deliberately **not** a fault, because a story presses its way
+ * there: a device paired *into* a group is handed the refresh secret with no status row beside
+ * it (§6.2), so it reads `connected: true` with the default `"dead"` and no date.
+ */
+export interface FakeSupporter {
+  /** `entitlement::refresh_secret(conn).is_some()` — the whole of what "connected" means. */
+  connected: boolean;
+  /** `sync_state.supporter_status`, defaulting to `"dead"` when the row has never been written. */
+  status: "active" | "grace" | "dead";
+  /** `sync_state.supporter_since`, unix seconds. **Deleted rather than kept** by a revoke. */
+  since: number | null;
+  /** `connected || membership_ended` — see the table above. */
+  groupBound: boolean;
 }
 
 /** One row of `marketplace_prices`: what one feed quotes for one printing in one finish. */
@@ -1542,6 +1612,43 @@ function isStorableZoom(zoom: number): boolean {
  * `errorLogSeed` uses one table over — so a story in this state can press Rebuild now and watch
  * it refuse rather than watching a handler quietly answer something else.
  */
+/**
+ * When the two supporter faults say the membership began — 2025-08-24, in unix seconds.
+ *
+ * A fixed date and not `Date.now()` minus something: the panel draws this one **absolutely**,
+ * because a start date is a fact about a subscription rather than a freshness reading, so a
+ * relative seed would print a different sentence every day the workbench was opened.
+ */
+export const SUPPORTING_SINCE = 1_756_000_000;
+
+/**
+ * The two supporter states no press can reach, written onto the world.
+ *
+ * `mirrorFailedPass`'s shape and its reason — an assignment rather than a branch in the handlers,
+ * so that the panel draws the state with nothing having been clicked. Neither of these is a
+ * *refusal*: `sync_supporter_status` answers perfectly in both, and what differs is the answer.
+ *
+ * **The two are written out rather than spread from one another, because the interesting thing
+ * about them is how nearly identical they are not.** A declined card is still connected and
+ * still dated; a lapse is neither. `entitlement::revoke` is `clear` plus one row, so it takes the
+ * refresh secret **and** the date together and leaves `groupBound` as the only field that
+ * remembers there was ever a membership — which is exactly the distinction the panel has to
+ * draw, and exactly the one a convenient fixture erases. A `patreonLapsed` world carrying a
+ * plausible `since` would story the panel against a state the crate cannot produce, and let a
+ * `since`-keyed panel pass; that panel existed for one wave.
+ *
+ * Exported so `db.test.ts` can stand the state up the way `installWorld` does, which is the one
+ * thing `makeDb({ fault })` cannot do for a fault that writes rows.
+ */
+export function applySupporterFault(db: FakeDb): void {
+  if (db.fault === "patreonDeclined") {
+    db.supporter = { connected: true, status: "grace", since: SUPPORTING_SINCE, groupBound: true };
+  }
+  if (db.fault === "patreonLapsed") {
+    db.supporter = { connected: false, status: "dead", since: null, groupBound: true };
+  }
+}
+
 export function mirrorFailedPass(db: FakeDb, now: number = Math.floor(Date.now() / 1000)): void {
   const root = "E:\\Backups\\MTG";
   db.mirror.root = root;
@@ -1711,10 +1818,15 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
       devices: [],
       pending: null,
     },
-    // **Sync off, which is what every installation is in until a reader types an address.**
-    // There is no relay address in this repository and there must never be one: it is the
-    // reader's own server. A story that wants the syncing states passes its own.
-    relay: { url: "", pending: 0, lastSyncAt: null, lastError: null },
+    // Nothing waiting and nothing ever synced. **This no longer says whether sync is on** —
+    // that moved to `supporter` below with the address field, so a world switches sync on by
+    // connecting a membership rather than by holding a URL.
+    relay: { pending: 0, lastSyncAt: null, lastError: null },
+    // **Not connected, which is what every installation is in until somebody presses Connect
+    // Patreon.** All four fields are the crate's out-of-the-box read: no keys written at all,
+    // so the status defaults to `dead`, there is no date, and `membership_ended` is false
+    // because there is no `supporter_status` row to have been left behind.
+    supporter: { connected: false, status: "dead", since: null, groupBound: false },
     fault: null,
     ...init,
   };
@@ -12074,31 +12186,80 @@ export function writeHandlers(db: FakeDb) {
     },
 
     /**
-     * `sync_relay_set_url` - point this device at a relay, or at none.
+     * `sync_supporter_status` - the membership, and which of spec 10's three sentences to say.
+     *
+     * **In `writeHandlers` for `sync_relay_status`'s reason, and this one is the crate's own
+     * choice rather than an inference**: the command takes `sync::with_write` so that it cannot
+     * answer from beside the claim that has just written, which is the read the panel makes
+     * next. It touches nothing here; it is refusable because the shipped one is.
+     */
+    sync_supporter_status: (): SupporterStatus => {
+      refuseIfBusy(db);
+      return supporterStatus(db);
+    },
+
+    /**
+     * `sync_patreon_begin` - where **Connect Patreon** sends the reader.
+     *
+     * **It answers a URL and opens nothing**, which is the crate's split too: the page belongs
+     * to the `opener` plugin, and in this workbench that is `plugin:opener|open_url`, which is
+     * already faked. So a story can press the button and nothing navigates.
+     *
+     * The `state` is sixteen bytes of randomness in the crate. Here it is a fixed string,
+     * because the one thing a story could assert about it is that it is *there* - and a value
+     * that changed per press would make a URL assertion flaky for no gain. Nothing in this fake
+     * ever compares it back: spec 6.1 has Patreon hand `state` to the **relay**, not to this
+     * device.
+     */
+    sync_patreon_begin: (): string => {
+      refuseIfBusy(db);
+      return `${PATREON_AUTHORIZE}?client_id=${FAKE_CLIENT_ID}&state=${FAKE_STATE}`;
+    },
+
+    /**
+     * `sync_patreon_claim` - trade the code the reader pasted for a grant.
      *
      * **The refusal is the crate's own sentence and it is reachable by typing**, which is why
-     * it is a handler branch rather than a fault: an address pasted without its scheme is the
-     * commonest thing that goes wrong here, and the crate's sentence says what to do about it
-     * where "invalid URL" would not. The empty string is always accepted, because it is how
-     * sync is switched off.
+     * it is a handler branch rather than a fault - `sync_relay_set_url`'s argument, inherited by
+     * the control that replaced it. A claim code is one-time and dies in ten minutes, so a code
+     * pasted twice or pasted late is the commonest thing that goes wrong here.
      *
-     * The trailing-slash trim is the crate's too, and it is what makes the field snap back to
-     * a normalised address after a save rather than showing what was typed.
+     * **What the fake checks is the *shape*, and the crate checks nothing at all**, which is the
+     * one place this handler is not a mirror. In the crate the code goes to the relay and the
+     * relay refuses it; there is no relay here, so the honest stand-in is the only thing this
+     * process can decide for itself - twelve Crockford characters in three groups - answered
+     * with the crate's own words so the sentence a story asserts on is the shipped one.
+     *
+     * **It founds a group of one when this device is in none** (spec 6.3), exactly as
+     * `ensure_group` does before the request that has to name it. That is not decoration: it is
+     * why `RelayStatus.paired` is true after a claim on a fresh device, and therefore why the
+     * panel's *unpaired* sentence is not what a new supporter is shown.
      */
-    sync_relay_set_url: (args: { url: string }): RelayStatus => {
+    sync_patreon_claim: (args: { code: string }): SupporterStatus => {
       refuseIfBusy(db);
-      const trimmed = args.url.trim().replace(/\/+$/, "");
-      if (trimmed !== "" && !/^https?:\/\//.test(trimmed)) throw refuse(RELAY_SCHEME);
-      db.relay.url = trimmed;
-      return relayStatus(db);
+      const code = args.code.trim().toUpperCase();
+      if (!CLAIM_CODE.test(code)) throw refuse(CLAIM_REFUSED);
+      // One-time, at the far end. A second press with a well-formed code is the same refusal,
+      // because the relay has already spent it.
+      if (db.supporter.connected) throw refuse(CLAIM_REFUSED);
+      if (db.pairing.group === null) foundGroupOfOne(db);
+      db.supporter = {
+        connected: true,
+        status: "active",
+        since: Math.floor(Date.now() / 1000),
+        groupBound: true,
+      };
+      return supporterStatus(db);
     },
 
     /**
      * `sync_now` - one round trip.
      *
-     * **`null` is the answer with nothing to do, and it is not a failure** - no relay address,
-     * or no pairing group. That is the state every world here starts in, and the panel's
-     * sentence about it is the one this handler exists to make reachable.
+     * **`null` is the answer with nothing to do, and it is not a failure** - no connected
+     * membership, or no pairing group. That is the state every world here starts in, and the
+     * panel's sentence about it is the one this handler exists to make reachable. The first of
+     * those two moved with the address field: it used to be an empty `relay.url`, and the crate
+     * now answers `Ok(None)` when there is no refresh secret.
      *
      * There is no network, so a trip that *can* run reports what the pile it just cleared would
      * have produced: everything waiting is sent, nothing comes back, and the stamp moves. A
@@ -12116,7 +12277,7 @@ export function writeHandlers(db: FakeDb) {
      */
     sync_now: (): RelayOutcome | null => {
       refuseIfBusy(db);
-      if (db.relay.url === "" || db.pairing.group === null) return null;
+      if (!db.supporter.connected || db.pairing.group === null) return null;
       const pushed = db.relay.pending;
       const first = db.relay.lastSyncAt === null;
       db.relay.pending = 0;
@@ -12173,16 +12334,17 @@ export function writeHandlers(db: FakeDb) {
 /* ------------------------------------------------------------------ review queue ------- */
 
 /**
- * What the Sync panel draws about the relay - the one builder the read and the write share.
+ * What the Sync panel draws about the relay.
  *
- * Shared rather than re-spelled because `sync_relay_set_url` answers a whole status, exactly as
- * the crate's does: a save that returned nothing would leave the panel re-reading a value it
- * had just written, and two constructions of one DTO is how a field comes to be right in one of
- * them.
+ * **One caller now, where it had two, and it stays a named builder anyway.** It was shared with
+ * `sync_relay_set_url`, which answered a whole status so that a save could not leave the panel
+ * re-reading a value it had just written; that command went with the address field. What is left
+ * is the argument {@link supporterStatus} still makes on the other side of this panel - a DTO
+ * built in two places is how a field comes to be right in one of them - so the shape keeps a
+ * name rather than being spelled inline the day something wants it again.
  */
 function relayStatus(db: FakeDb): RelayStatus {
   return {
-    relayUrl: db.relay.url,
     paired: db.pairing.group !== null,
     pending: db.relay.pending,
     lastSyncAt: db.relay.lastSyncAt,
@@ -12191,9 +12353,57 @@ function relayStatus(db: FakeDb): RelayStatus {
   };
 }
 
-/** The crate's own sentence for an address with no scheme on it. */
-const RELAY_SCHEME =
-  "A relay address has to start with https:// (or http:// for one on this machine).";
+/**
+ * What the supporter block draws - the one builder the read and the claim share.
+ *
+ * Shared for {@link relayStatus}'s reason: `sync_patreon_claim` answers a whole status exactly as
+ * the crate's does, so that the panel is not left re-reading a value it has just been handed, and
+ * two constructions of one DTO is how a field comes to be right in only one of them.
+ *
+ * It is a straight copy of the four stored fields rather than a derivation, because the crate's
+ * own `supporter_status` derives only one of them - `group_bound`, from
+ * `connected || membership_ended` - and this store already holds that answer. Deriving it here
+ * from a `status` string would be inventing the very distinction the field exists to carry.
+ */
+function supporterStatus(db: FakeDb): SupporterStatus {
+  return { ...db.supporter };
+}
+
+/**
+ * Spec 6.3: a claim on a device in no group founds a group of one, and only then binds.
+ *
+ * The roster it leaves is this device alone at key version 1, which is what
+ * `identity::create_group` writes - and the reason a reader who connects before pairing sees a
+ * roster rather than the pairing offer they saw a moment earlier.
+ */
+function foundGroupOfOne(db: FakeDb): void {
+  db.pairing.group = { groupId: "e7".repeat(16), epoch: 1 };
+  db.pairing.devices = [
+    {
+      deviceId: db.pairing.deviceId,
+      name: db.pairing.deviceName,
+      addedAt: Math.floor(Date.now() / 1000),
+      revokedAt: null,
+    },
+  ];
+}
+
+/** Patreon's real authorize endpoint, which is the one part of the URL that is not invented. */
+const PATREON_AUTHORIZE = "https://www.patreon.com/oauth2/authorize";
+
+/** Not the crate's `PATREON_CLIENT_ID`, deliberately: nothing in the workbench may send a
+ *  reader at a consent screen, and a story asserting on this string wants a stable one. */
+const FAKE_CLIENT_ID = "storybook-fake-client-id";
+
+/** Fixed rather than random - see the handler. */
+const FAKE_STATE = "0123456789abcdef0123456789abcdef";
+
+/** Twelve Crockford characters in three groups, which is the shape the relay's landing page
+ *  prints. The alphabet omits `I`, `L`, `O` and `U`, because this code is copied by a person. */
+const CLAIM_CODE = /^[0-9ABCDEFGHJKMNPQRSTVWXYZ]{4}-[0-9ABCDEFGHJKMNPQRSTVWXYZ]{4}-[0-9ABCDEFGHJKMNPQRSTVWXYZ]{4}$/;
+
+/** The crate's own sentence, from `entitlement::claim`. */
+const CLAIM_REFUSED = "the relay refused that claim code";
 
 /**
  * The crate's sentence for a table that is not on its census.

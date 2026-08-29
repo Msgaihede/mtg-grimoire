@@ -755,8 +755,11 @@ Six layers and five commands; the whole record, with every measurement, is
   each added one copy and the row must end at +2" is a statement about *rows*, not about Magic —
   the second kind of question, which is this crate's. `reconcile.rs` already merges two versions
   of the reader's own rows and writes `needs_review` sentences from Rust. What stays TypeScript's
-  is the pairing panel, the relay-address setting, the review queue's presentation and the query
-  invalidation after a pull.
+  is the pairing panel, the supporter block, the review queue's presentation and the query
+  invalidation after a pull. **This line named "the relay-address setting" until the hosted relay
+  landed, and there is no such setting any more**: `sync_relay_set_url` and `valid_relay_url` are
+  deleted, `RelayStatus` no longer carries a `relayUrl`, and what the panel draws in its place is
+  `sync_supporter_status`'s answer.
 - **Eleven tables sync and `schema::SYNCED_TABLES` is the census.** The spec says twelve and names
   `deck_allocations`, which schema v25 dropped. `capture::TABLES` is held to that constant by a
   test, and a second test asserts every column a capture spec names exists on its table — a

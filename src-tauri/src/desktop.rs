@@ -507,11 +507,15 @@ pub fn run() {
             sync_pair::pairing::sync_pairing_cancel,
             sync_pair::pairing::sync_device_rename,
             sync_pair::pairing::sync_device_revoke,
-            // The relay and the review queue (spec §7.2–§7.4, §7.7). Five: the panel's read, the
-            // relay address, one round trip now, the rows carrying a sentence, and clearing
-            // one of them.
+            // The relay, the membership and the review queue (spec §6.1, §7.2–§7.4, §7.7 and
+            // §10). Seven: the panel's two reads, the Connect press, the claim code the reader
+            // pastes back, one round trip now, the rows carrying a sentence, and clearing one
+            // of them. **`sync_relay_set_url` is gone** — the relay is one hosted service, so
+            // its address is compiled in and stopped being a setting.
             sync_engine::commands::sync_relay_status,
-            sync_engine::commands::sync_relay_set_url,
+            sync_engine::commands::sync_supporter_status,
+            sync_engine::commands::sync_patreon_begin,
+            sync_engine::commands::sync_patreon_claim,
             sync_engine::commands::sync_now,
             sync_engine::commands::sync_review_list,
             sync_engine::commands::sync_review_clear

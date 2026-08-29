@@ -1,10 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QueryKey } from "@tanstack/react-query";
-import { Copy, Link2, RefreshCw, ShieldCheck, X } from "lucide-react";
+import { Copy, Heart, Link2, RefreshCw, ShieldCheck, X } from "lucide-react";
 import { useState, type JSX } from "react";
 import { copyText } from "@/lib/clipboard";
 import { count, plural } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
+import { openExternal } from "@/lib/externalLinks";
 import {
   ipc,
   ipcError,
@@ -13,6 +14,7 @@ import {
   type PairingStatus,
   type RelayOutcome,
   type RelayStatus,
+  type SupporterStatus,
 } from "@/lib/ipc";
 import { RELAY_KEY, SYNC_KEY } from "@/lib/query";
 import { ago } from "@/lib/relativeTime";
@@ -268,20 +270,20 @@ function DeviceRow({
  *
  * `CombosPanel`'s `comboState` one feature over, and the ordering is again the whole content:
  *
- * * **`off` first among the settled states** — no address means nothing can run, so a stale
- *   `lastError` from an address the reader has since cleared must not out-shout it.
+ * * **`off` first among the settled states** — no membership means nothing can run, so a stale
+ *   `lastError` from before it lapsed must not out-shout it.
  * * **`syncing` before `failed`** — a round trip in flight is happening *now*, and a press over
  *   a previous failure is not "failed".
  * * **`failed` before `never`** — "we tried and it did not work" is a different sentence from
  *   "nobody has tried", and only one of them is worth a retry. This is the ordering the plan
  *   named and it is `comboState`'s and `feedState`'s before it.
- * * **`unpaired` after `failed`, before `never`** — an address with no group is a real state a
+ * * **`unpaired` after `failed`, before `never`** — a membership with no group is a real state a
  *   reader can sit in for a whole session, and it has its own fix (pair a device) rather than
  *   being a sync that has not happened yet.
  *
- * `unknown` is the read still in flight or refused, and it is a state of its own rather than an
- * `off` in disguise: drawing "sync is off" over an unanswered read would tell a reader whose
- * devices are syncing perfectly that nothing is.
+ * `unknown` is **either** read still in flight or refused, and it is a state of its own rather
+ * than an `off` in disguise: drawing "sync is off" over an unanswered read would tell a reader
+ * whose devices are syncing perfectly that nothing is.
  *
  * **`failed` is the press this window made, never `RelayStatus.lastError`.** The stored error is
  * a *record* — it survives a later success on purpose, because the log is the record — so a
@@ -299,11 +301,16 @@ export type RelayState =
 
 export function relayState(
   status: RelayStatus | null,
+  supporter: SupporterState,
   syncing: boolean,
   failed: boolean,
 ): RelayState {
-  if (status === null) return "unknown";
-  if (status.relayUrl === "") return "off";
+  // **Two reads, and either one still in flight is `unknown`.** Drawing "sync is off" over an
+  // unanswered membership would tell a reader whose devices are syncing perfectly that nothing
+  // is — and the membership answers a moment after the figures do, so that flash is reachable
+  // rather than theoretical.
+  if (status === null || supporter === "unknown") return "unknown";
+  if (supporter === "ended" || supporter === "never") return "off";
   if (syncing) return "syncing";
   if (failed) return "failed";
   if (!status.paired) return "unpaired";
@@ -339,8 +346,8 @@ export function relayNote(
       return null;
     case "off":
       return (
-        "Sync is off. Nothing about your collection leaves this device until you give it a " +
-        "relay address."
+        "Sync is off. Nothing about your collection leaves this device until a membership is " +
+        "connected above."
       );
     case "failed":
       return (
@@ -349,7 +356,7 @@ export function relayNote(
       );
     case "unpaired":
       return (
-        "There is nowhere to sync to yet. Pair a second device above, and this address starts " +
+        "There is nowhere to sync to yet. Pair a second device above, and the relay starts " +
         "carrying changes between them."
       );
     case "never":
@@ -363,8 +370,8 @@ export function relayNote(
  * What one press of Sync now did, in the reader's terms.
  *
  * **`null` is not a failure and must never read as one.** It is what the backend answers when
- * there was nothing to do — no relay address, or no pairing group — which is the state every
- * existing installation is in. A sentence saying so is the whole difference between a button
+ * there was nothing to do — no connected membership, or no pairing group — which is the state
+ * every existing installation is in. A sentence saying so is the whole difference between a button
  * that explains itself and one that looks broken.
  *
  * The rest is `RelayOutcome`'s counts, and only the ones that are true of this trip: a sentence
@@ -391,8 +398,8 @@ export function relayNote(
 export function outcomeText(outcome: RelayOutcome | null): string {
   if (outcome === null) {
     return (
-      "There was nothing to sync. This device needs a relay address and a paired device " +
-      "before anything can be sent."
+      "There was nothing to sync. This device needs a connected membership and a paired " +
+      "device before anything can be sent."
     );
   }
   const parts = [
@@ -437,31 +444,148 @@ export function outcomeText(outcome: RelayOutcome | null): string {
 }
 
 /**
- * The relay: the address, what is waiting, and the one press that makes a round trip.
+ * This device's membership, under one key.
  *
- * **The address is the whole switch.** There is no relay in this repository and there must never
- * be one — it is a small server the reader runs themselves, and it lives in their own
- * `sync_state`. Empty means off, and the panel says so in words rather than leaving a blank box
- * to be read as a form nobody filled in.
+ * Local for {@link PAIRING_KEY}'s reason and under the same standing offer: nothing else in the
+ * window reads it, and the moment a second surface does the literal moves to `@/lib/query`, so
+ * that two features cannot spell one prefix two ways. It sits **under** `SYNC_KEY`, which is
+ * what makes a finished round trip re-read it — a trip refused with a 401 is how a lapse
+ * reaches a reader who never opened Patreon.
+ */
+export const SUPPORTER_KEY: QueryKey = ["sync", "supporter"];
+
+/**
+ * The membership in one word — and the three that must never be spelled the same way.
+ *
+ * `never` and `ended` arrive from the backend as the **same two fields**: `connected: false`
+ * with `status: "dead"`. They are not the same state and they do not get the same sentence. A
+ * reader who has not connected is looking at a button; a reader whose pledge stopped is looking
+ * at a renewal and at a paragraph saying their collection is untouched (spec §7.1), and telling
+ * them *Not connected* would be this panel forgetting they were ever here.
+ *
+ * **`groupBound` is the whole of what separates them, and `since` cannot do it.** That is the
+ * trap the Rust names at `SupporterStatus::group_bound` and it was worth one bug here before
+ * this comment existed: `entitlement::revoke` stores `("dead", None)`, so a lapsed device and a
+ * device out of the box read the *same three fields* — `connected: false`, `status: "dead"`,
+ * `since: null`. `group_bound` is `entitlement::membership_ended` crossing the wire, and it is
+ * the only signal that remembers this device was ever bound to an entitlement.
+ *
+ * **A `"dead"` status on a *connected* device is not an ending either**, and that is the second
+ * trap: `store_grant` and `store_status` are separate calls, so a device that was paired to a
+ * connected one (§6.2) holds a live refresh secret with no status row beside it, and an absent
+ * row defaults to `"dead"`. It is supporting; it simply has not been told a date yet, which is
+ * what {@link supporterNote}'s dateless *Supporting* line is for.
+ *
+ * **`grace` is a third thing and not a gentler `dead`** (spec §7.2). Patreon is retrying a card;
+ * tokens are still minted and sync still works. Drawn as a cancellation it would punish a reader
+ * for something they did not decide, and hiding *Sync now* would make that punishment real.
+ *
+ * `unknown` is the read in flight or refused, and it is why {@link relayState} takes this rather
+ * than a boolean: `false` for "not answered yet" and `false` for "not a supporter" are the same
+ * value and very different sentences.
+ */
+export type SupporterState = "unknown" | "active" | "grace" | "ended" | "never";
+
+export function supporterState(status: SupporterStatus | null): SupporterState {
+  if (status === null) return "unknown";
+  // **`connected` is asked first, and the order is load-bearing rather than tidy.** It is the
+  // local fact, and it is the one thing *both* endings clear — `entitlement::revoke` and
+  // `clear` each take the refresh secret — so a device holding one has not ended anything. A
+  // build that asked `status` first read device B as lapsed: pairing carries the grant across
+  // with no status row beside it (§6.2), `supporter_state` defaults an absent row to `"dead"`,
+  // and a phone that had just been paired to a paid-up desktop drew *Membership ended*.
+  if (status.connected) return status.status === "grace" ? "grace" : "active";
+  // `groupBound`, never `since` — see above. A revoked grant deletes the date with the secret.
+  return status.groupBound ? "ended" : "never";
+}
+
+/** A date rather than "3 days ago": a start date is a fact about a subscription, where `ago`'s
+ *  coarsest-unit-still-true rule is about freshness. `en-US` is `DeckHistoryDialog`'s stamp. */
+const SINCE_FORMAT = new Intl.DateTimeFormat("en-US", { dateStyle: "long" });
+
+/**
+ * The one line above the buttons, per state.
+ *
+ * One sentence each rather than one sentence with a status in it, which is {@link relayNote}'s
+ * shape and its reason: these are not degrees of the same thing, and the whole job of this
+ * function is that no two of them can be reached by the same fixture.
+ *
+ * **The grace sentence says what is still true, not only what went wrong.** "Payment problem"
+ * on its own is a reader cancelling something that has not stopped working; the second clause
+ * is the half that stops them.
+ *
+ * `unknown` says nothing at all — the block draws its own reading line, and a second sentence
+ * under it would be the panel talking over itself.
+ */
+export function supporterNote(
+  state: SupporterState,
+  status: SupporterStatus | null,
+): string | null {
+  switch (state) {
+    case "unknown":
+      return null;
+    case "active":
+      return status?.since == null
+        ? "Supporting. Thank you."
+        : `Supporting since ${SINCE_FORMAT.format(status.since * 1000)}.`;
+    case "grace":
+      return "Payment problem — Patreon is retrying, and sync keeps working for now.";
+    case "ended":
+      return "Membership ended.";
+    default:
+      return "Not connected.";
+  }
+}
+
+/**
+ * The sentence a lapse owes, and the one this whole block is worth having for.
+ *
+ * §7.1: cancelling drops the relay's log at once — and the relay's log is a transport buffer
+ * with a 30-day tail, not anybody's collection. Every device already holds the whole thing in
+ * its own SQLite. A panel that said "Membership ended" and stopped there would leave a reader to
+ * guess which of those two it meant, and the wrong guess is that their cards are gone.
+ *
+ * **Drawn beside `ended` and never beside `never`.** A reader who has not connected has lost
+ * nothing and has not asked; a reassurance there answers a question they did not have, and
+ * teaches them there is something to worry about.
+ */
+const LAPSE_REASSURANCE =
+  "Your collection stays on this device. Nothing has been deleted, and connecting again picks " +
+  "up where you left off — your devices stay paired.";
+
+/**
+ * The membership, the relay it pays for, and the one press that makes a round trip.
+ *
+ * **The relay is one hosted server now and its address is compiled into the crate**, which
+ * reverses what this file said until 2026-08-29 — there *is* a relay in this repository, under
+ * `relay/`, and the reader no longer types anything to reach it. What replaced the address field
+ * is a membership: press Connect Patreon, consent on Patreon's own page, and paste back the code
+ * its landing page shows. "Sync is off" stopped meaning *no URL* and started meaning *no
+ * entitlement*.
  *
  * **Nothing here reads what the relay stores, because nothing can.** The group key never leaves
  * the paired devices (§7.5), so what that server holds is ciphertext and who sent it — which is
- * the sentence the opening paragraph spends its length on, because it is the only reason typing
- * a URL into a settings panel is a reasonable thing to ask of anyone.
+ * the sentence the opening paragraph spends its length on, because it is the only reason a
+ * server somebody else runs is a reasonable thing to sync through. It is also why the membership
+ * is an account with **Patreon** and never one with the relay: the relay is told a subject and a
+ * group, and is never told a person.
  *
- * **Sync now is drawn only once there is an address**, which is `DeviceRow`'s rule about the
- * missing Remove button in a friendlier case: `sync_now` over an empty address answers `null`
- * rather than refusing, so the press would be harmless — and a control that can only ever
- * report "there was nothing to do" is a control that teaches a reader to distrust it. With an
- * address and no group it *is* drawn, because that reader is one pairing away and the sentence
- * is worth having.
+ * **Only one device ever opens a browser.** `refresh` rides to the second inside the sealed
+ * pairing blob (§6.2), so a phone paired to a connected desktop is connected without meeting any
+ * of this.
+ *
+ * **Sync now is drawn only once a membership is connected**, which is `DeviceRow`'s rule about
+ * the missing Remove button in a friendlier case: `sync_now` with no entitlement answers `null`
+ * rather than refusing, so the press would be harmless — and a control that can only ever report
+ * "there was nothing to do" is a control that teaches a reader to distrust it. On a `grace`
+ * membership it *is* drawn, and that is the whole of §7.2 in one control: the card is being
+ * retried, so the sync still works.
  */
-function RelaySection(): JSX.Element {
+function SupporterSection(): JSX.Element {
   const client = useQueryClient();
-  /** What the reader has typed, or `null` while the field is showing what is stored. Not
-   *  seeded from the query: a field initialised once from an answer that arrives later would
-   *  stay empty on the render that matters. */
-  const [draft, setDraft] = useState<string | null>(null);
+  /** The code the reader is pasting back from the relay's landing page. Cleared by a claim that
+   *  worked, and deliberately not by one that was refused — a refused code may be retypable. */
+  const [code, setCode] = useState("");
   /** The last round trip's report, kept until the next press. `undefined` is "no press yet" and
    *  `null` is the backend's own "there was nothing to do", which are different sentences. */
   const [outcome, setOutcome] = useState<RelayOutcome | null | undefined>(undefined);
@@ -469,13 +593,31 @@ function RelaySection(): JSX.Element {
   const read = useQuery({ queryKey: RELAY_KEY, queryFn: () => ipc.syncRelayStatus() });
   const status: RelayStatus | null = read.data ?? null;
 
-  const save = useMutation({
-    mutationFn: (url: string) => ipc.syncRelaySetUrl(url),
+  const supporterRead = useQuery({
+    queryKey: SUPPORTER_KEY,
+    queryFn: () => ipc.syncSupporterStatus(),
+  });
+  const supporter: SupporterStatus | null = supporterRead.data ?? null;
+  const membership = supporterState(supporter);
+
+  const connect = useMutation({
+    // **Both halves in one `mutationFn`, so a browser that refuses to open is a refusal this
+    // panel reports.** Split across `onSuccess` the open would be a floating promise, and the
+    // press would look like it had worked while nothing happened on screen or off it.
+    mutationFn: async () => {
+      await openExternal(await ipc.syncPatreonBegin());
+    },
+  });
+
+  const claim = useMutation({
+    mutationFn: (pasted: string) => ipc.syncPatreonClaim(pasted),
     onSuccess: (next) => {
-      // The backend trims and normalises, so the field goes back to showing what was *stored*
-      // rather than what was typed — `https://relay.example/` saved is `https://relay.example`.
-      client.setQueryData(RELAY_KEY, next);
-      setDraft(null);
+      client.setQueryData(SUPPORTER_KEY, next);
+      setCode("");
+      // A claim founds a group of one if this device is in none, and switches sync on either
+      // way, so both of the other reads on this panel are stale the moment it answers.
+      void client.invalidateQueries({ queryKey: RELAY_KEY });
+      void client.invalidateQueries({ queryKey: PAIRING_KEY });
     },
   });
 
@@ -492,80 +634,121 @@ function RelaySection(): JSX.Element {
   });
 
   const syncing = sync.isPending;
-  const state = relayState(status, syncing, sync.isError);
+  const state = relayState(status, membership, syncing, sync.isError);
   // One clock for the whole render — `CombosPanel`'s rule and its reason: a settings panel that
   // repainted on a timer to keep a relative date current would be motion without information,
   // and `react-hooks/purity` refuses a bare `Date.now()` in a render body.
   const note = relayNote(state, status, nowSeconds());
-  const value = draft ?? status?.relayUrl ?? "";
-  const dirty = draft !== null && draft.trim() !== (status?.relayUrl ?? "");
+  /** Connected enough for the relay to answer: `grace` counts, which is §7.2's whole point. */
+  const on = membership === "active" || membership === "grace";
+  /** The two states with a press to offer. `unknown` has none — a Connect button drawn over an
+   *  unanswered read is one a connected reader would see flash on every visit. */
+  const offering = membership === "never" || membership === "ended";
   const submit = () => {
-    if (dirty && !save.isPending) save.mutate(draft ?? "");
+    if (code.trim() !== "" && !claim.isPending) claim.mutate(code.trim());
   };
 
   return (
     <div className="space-y-3 border-t border-border pt-4">
-      <h3 className="font-heading text-sm leading-none">Relay</h3>
+      <h3 className="font-heading text-sm leading-none">Membership</h3>
 
       <p className="text-sm text-dim">
-        Your devices hand changes to each other through one small server you run yourself. It
-        never gets the key the group shares, so what it holds is unreadable to it &mdash; and
-        with no address here, nothing is sent anywhere at all.
+        Your devices hand changes to each other through one small server. It never gets the key
+        the group shares, so what it holds is unreadable to it &mdash; which is why none of this
+        needs an account with the server itself. What it does need is somebody to pay for it, so
+        it is open to supporters on Patreon.
       </p>
 
-      {/* **No field at all while the read is unanswered, which is the pairing half's rule one
-          rung up and is load-bearing here rather than tidy.** An address box drawn empty over an
-          answer nobody has is indistinguishable from sync being off — and worse, Save over it
-          would write that empty string and switch off a relay the reader had set. */}
-      {status === null ? (
+      {/* **No controls at all while the read is unanswered**, which is the pairing half's rule
+          one rung up and is load-bearing here rather than tidy: a Connect Patreon button drawn
+          over an answer nobody has yet is one a supporter sees flash on every visit to this
+          page, and it invites a second claim that would be refused. */}
+      {supporter === null ? (
         <p className="text-sm text-dim">
-          {read.isError ? "The relay could not be read." : "Reading the relay…"}
+          {supporterRead.isError
+            ? "Your membership could not be read."
+            : "Reading your membership…"}
         </p>
       ) : (
-        <div className="space-y-1">
-          {/* A written `id` rather than `useId()`, `SettingsSection`'s rule: a generated `:r7:`
-              moves with the render order of the page, and these are readable in the shipped
-              window. */}
-          <label htmlFor="relay-url" className="block text-[0.6875rem] text-dim">
-            Relay address
-          </label>
-          <div className="flex flex-wrap items-center gap-2">
-            <input
-              id="relay-url"
-              value={value}
-              onChange={(e) => setDraft(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") submit();
-              }}
-              spellCheck={false}
-              autoComplete="off"
-              inputMode="url"
-              placeholder="https://"
-              className={cn(
-                "h-8 min-w-0 flex-1 rounded-md border border-border bg-bg px-2.5",
-                // An address is data, and data is Geist Mono — the role prices, versions and
-                // collector numbers already carry in this window.
-                "font-mono text-xs",
-                "focus:border-accent focus:outline-none",
-              )}
-            />
-            <button
-              type="button"
-              onClick={submit}
-              disabled={!dirty || save.isPending}
-              className={cn(BUTTON, "border-border hover:bg-bg disabled:hover:bg-transparent")}
-            >
-              Save
-            </button>
-          </div>
+        <div className="space-y-3">
+          <p className="text-sm">{supporterNote(membership, supporter)}</p>
+
+          {membership === "ended" && <p className="text-sm text-dim">{LAPSE_REASSURANCE}</p>}
+
+          {offering && (
+            <div className="space-y-3">
+              <button
+                type="button"
+                onClick={() => connect.mutate()}
+                disabled={connect.isPending}
+                className={cn(BUTTON, "border-accent text-accent hover:bg-bg")}
+              >
+                <Heart aria-hidden="true" className="size-4" />
+                Connect Patreon
+              </button>
+
+              <div className="space-y-1">
+                {/* A written `id` rather than `useId()`, `SettingsSection`'s rule: a generated
+                    `:r7:` moves with the render order of the page, and these are readable in
+                    the shipped window. */}
+                <label htmlFor="patreon-claim" className="block text-[0.6875rem] text-dim">
+                  Claim code
+                </label>
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    id="patreon-claim"
+                    value={code}
+                    onChange={(e) => setCode(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") submit();
+                    }}
+                    spellCheck={false}
+                    autoComplete="off"
+                    placeholder="XXXX-XXXX-XXXX"
+                    className={cn(
+                      "h-8 min-w-0 flex-1 rounded-md border border-border bg-bg px-2.5",
+                      // A code is data, and data is Geist Mono — the role prices, versions and
+                      // collector numbers already carry in this window.
+                      "font-mono text-xs tracking-[0.1em] uppercase",
+                      "focus:border-accent focus:outline-none",
+                    )}
+                  />
+                  {/* `aria-disabled` and a no-op handler, not `disabled`: this button greys as
+                      the reader *types*, and the app's rule is that such a control keeps its
+                      place in the tab order rather than vanishing from under a caret. */}
+                  <button
+                    type="button"
+                    aria-disabled={code.trim() === "" || claim.isPending}
+                    onClick={submit}
+                    className={cn(
+                      BUTTON,
+                      "border-border hover:bg-bg",
+                      code.trim() === "" && "cursor-not-allowed opacity-50 active:scale-100",
+                      FOCUS,
+                    )}
+                  >
+                    Connect
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       )}
 
-      {status !== null && status.relayUrl !== "" && (
+      {/* **An unanswered relay read is not "nothing is waiting".** The two reads are separate
+          queries over one write connection, so a refused one leaves `status` null while the
+          membership answers perfectly — and "Nothing is waiting to go." over an answer nobody
+          has is the pairing half's blank-field trap in a sentence. */}
+      {on && (
         <p className="text-sm text-dim">
-          {status.pending === 0
-            ? "Nothing is waiting to go."
-            : `${plural(status.pending, "change")} waiting to go.`}
+          {status === null
+            ? read.isError
+              ? "What is waiting to go could not be read."
+              : "Reading the relay…"
+            : status.pending === 0
+              ? "Nothing is waiting to go."
+              : `${plural(status.pending, "change")} waiting to go.`}
         </p>
       )}
 
@@ -583,7 +766,7 @@ function RelaySection(): JSX.Element {
         {/* `min-w-0` so the sentence gives way rather than the button: a flex item cannot shrink
             below its own min-content unless it is told it may. */}
         <p className="min-w-0 flex-1 text-sm text-dim">{note}</p>
-        {status !== null && status.relayUrl !== "" && (
+        {on && (
           // `disabled` rather than `aria-disabled` — `controls.ts`'s family, and correct here
           // for its reason: a trip already in flight has genuinely nothing for a second press
           // to do, and `disabled:active:scale-100` holds the box at full size so a greyed
@@ -609,9 +792,15 @@ function RelaySection(): JSX.Element {
       </PanelAlert>
 
       {/* The refusal itself, in the app's destructive red — a press the reader made did not
-          happen. One line, because only one of the two is ever in flight here. */}
+          happen. One line, because only one of the three is ever in flight here. */}
       <PanelAlert tone="problem">
-        {save.error ? ipcError(save.error) : sync.error ? ipcError(sync.error) : null}
+        {connect.error
+          ? ipcError(connect.error)
+          : claim.error
+            ? ipcError(claim.error)
+            : sync.error
+              ? ipcError(sync.error)
+              : null}
       </PanelAlert>
     </div>
   );
@@ -634,8 +823,8 @@ function RelaySection(): JSX.Element {
  * it: the crypto, the digits, the roster and the rotation are all still the hand-carried
  * exchange's.
  *
- * **{@link RelaySection} is the second half**, under a rule of its own: the address changes go,
- * what is waiting, and the one press that makes a round trip now. It is a separate query and a
+ * **{@link SupporterSection} is the second half**, under a rule of its own: the membership
+ * that unlocks the relay, what is waiting, and the one press that makes a round trip now. It is a separate query and a
  * separate set of presses — the two halves share only the `["sync"]` root, which is what makes
  * a finished trip refresh the roster as well as the figures.
  *
@@ -917,7 +1106,7 @@ export function SyncPanel(): JSX.Element {
 
       <PanelAlert tone="problem">{error ? ipcError(error) : null}</PanelAlert>
 
-      <RelaySection />
+      <SupporterSection />
 
       <ConfirmDialog
         open={removing !== null}

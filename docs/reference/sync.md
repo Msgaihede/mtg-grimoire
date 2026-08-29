@@ -70,6 +70,37 @@ is the one the other side is identified by:
 had `respond` and `complete` parsing for those prefixes while `accept` and `confirm` wrote
 neither; nine of sixteen pairing tests fail against it as written.
 
+**Inside A's seal the layout is `<group_id>\0<epoch>\0<refresh>\0<32-byte key>`, and the field
+order is load-bearing.** The id and the epoch travel with the key because a key with no epoch
+cannot be compared against a later rotation, and the refresh secret travels with them so that
+**the joining device never opens a browser and never sees Patreon** — one membership, one group,
+every device the reader owns. It is **empty when the sealing device holds no membership**, which
+is a pairing rather than a refusal: a reader may pair two devices and connect Patreon afterwards,
+in either order.
+
+**The key is last because it is the only field that can hold a zero byte of its own.** `complete`
+reads with `splitn(4)` and takes everything left over as the key, so a field appended *after* it
+would be swallowed by any group key containing a zero — `1 - (255/256)^32` ≈ **12%**, about one
+pairing in eight. The refresh secret is safe as a **middle** field for the reason A's device id is
+safe as the prefix: the relay mints it base64url, which carries no zero byte at all.
+
+**That failure was measured rather than reasoned about, and the shape of it is the part worth
+remembering.** The dangerous variant — both ends appending after the key — was run five times
+on **2026-08-29, debug**. The deliberate all-zero-key test failed on every run; the *other*
+failures moved around, **one, three, two, two, one**, a different randomly-keyed test each
+time. Without a fixture that pins a zero into the key, this ships as a flake nobody can
+reproduce.
+
+⚠️ **The blob carries no version field, so a version skew reads as a broken key.** The layout
+above replaced `<group_id>\0<epoch>\0<32-byte key>` and its `splitn(3)`, and the two are mutually
+unreadable **in both directions**: an old `confirm` hands a new `complete` three fields where it
+wants four, and a new `confirm` hands an old `complete` a third field that is `<refresh>\0<key>`
+and fails the 32-byte length check. Either way the reader is told **"That pairing key is
+unreadable."** — a sentence about the bytes, when the cause is that one of the two devices has
+not been updated. There is nowhere in an unversioned blob to say so, and adding a version byte now
+would not help the build that already shipped without one. **Known limitation: pair two devices on
+the same build.**
+
 ### The pending offer is in memory and never in SQLite
 
 `AppState.pairing`, a `Mutex<Option<Pending>>`. An offer that survived a restart would be an
@@ -799,23 +830,23 @@ wire and against that cap; base64 is four thirds and URL-safe.
 | `GET {relay}/g/{group}/pull?since={cursor}&device={id}` | | 200 with `{ envelopes, cursor }` |
 | `POST {relay}/g/{group}/ack` | `{ device, cursor }` | 204 — what compaction reads |
 
-**Two relays are described in this section and telling them apart is the first thing to do.**
-The **baseline relay** is the three endpoints in the table above — push, pull, ack, no
-authentication — and it is deployed, driven and measured: "The first end-to-end pass" below is
-two real devices converging over it. The **hosted relay** is what
+**Two relays are described in this section and telling them apart is the first thing to do.** The
+**baseline relay** is the three endpoints in the table above — push, pull, ack, no authentication
+— and it is deployed, driven and measured: "The first end-to-end pass" below is two real devices
+converging over it. The **hosted relay** is what
 [the hosted relay design](../superpowers/specs/2026-08-29-hosted-relay-and-patreon-design.md)
 adds on top: the auth gate, `/claim`, `/token`, the Patreon callback, the webhook and the D1
-entitlement table. **None of that is built and none of it is deployed — and the two share one
-address.** `RELAY_BASE` names the Worker that is running, which is the baseline one; the hosted
-design replaces the code behind that address rather than moving it, so a device pointed there
-today reaches something live that answers push, pull and ack and **404s `/claim` and `/token`**
-(`relay/src/index.ts` returns 404 for any path its `/g/{group}/{action}` route does not match).
-What exists today is the pure half — `relay/src/token.ts`, `entitlement.ts` and `md5.ts`, each a
-decision the root vitest can test without workerd, plus `relay/schema.sql` as unapplied DDL —
-while `index.ts` is still the bare router the baseline shipped. **The rest of this section
-describes the hosted design in the present tense**, which is how this repository writes a design
-that is agreed and not yet a deployment; where a sentence is about what has actually run, it says
-so.
+entitlement table. **All of that is now written and none of it is deployed — and the two relays share one address.**
+`relay/src/index.ts` carries the auth gate, `claim.ts` and `patreon.ts` the OAuth hop and the
+webhook, `token.ts`, `entitlement.ts` and `md5.ts` the pure decisions the root vitest tests
+without workerd, and `wrangler.jsonc` a D1 binding and a daily cron. **What has not happened is
+`wrangler deploy`**, and `relay/schema.sql` is DDL nobody has applied. So `RELAY_BASE` still
+names the Worker that is running, which is the baseline one: the hosted design replaces the code
+behind that address rather than moving it, and a device pointed there today reaches something
+live that answers push, pull and ack and **404s `/claim` and `/token`**. **The rest of this
+section describes the hosted design in the present tense**, which is how this repository writes a
+design that is agreed and not yet a deployment; where a sentence is about what has actually run,
+it says so.
 
 **The relay cannot decrypt anything it stores**, and that is still the load-bearing fact. The
 group key is minted during pairing and lives only on the paired devices; what the relay holds is

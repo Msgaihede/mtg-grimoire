@@ -27,9 +27,10 @@
  *   combo list draws every branch at once — a definite `R`, a *possible* `R` the app cannot
  *   check, a `P`, a `C` and an `E` that raises nothing.
  * * **`paired`** — `starter` with this device in a group of three, one of them removed, at
- *   key version 2 — and **three changes waiting to go** with the relay still switched off,
- *   which is where a reader stands after pairing and before typing an address. Nothing here
- *   knows a relay address and nothing here may: it is the reader's own server.
+ *   key version 2 — and **three changes waiting to go** with **no membership connected**, which
+ *   is where a reader stands after pairing and before connecting Patreon. It is deliberately not
+ *   seeded as a supporter: connecting is two presses a story can make, so a world that arrived
+ *   already connected would take the claim flow away from every story that wants to show it.
  * * **`combosMissing`** — `starter` with the combo tables never fetched. A **seed** and not a
  *   fault, where the two taxonomies each get a fault for the same state, because
  *   `combos::refresh_if_due` deliberately never fetches this file uninvited: it is not something
@@ -1809,12 +1810,12 @@ function pairedSeed(): FakeDb {
     ],
     pending: null,
   };
-  // **Three changes written and never handed over, and the relay still switched off.** That is
-  // the honest state of a device that has paired and gone no further: the address is the
-  // reader's own and nothing in this repository knows one, so a paired world cannot come with a
-  // relay already set — but it can come with something to send, which is the whole of what
-  // the Sync panel's *waiting* line and its first round trip are drawn against.
-  db.relay = { url: "", pending: 3, lastSyncAt: null, lastError: null };
+  // **Three changes written and never handed over, and no membership connected.** That is the
+  // honest state of a device that has paired and gone no further — pairing carries a grant only
+  // when the *other* device had one (§6.2), and nothing in this world did. What it can come with
+  // is something to send, which is the whole of what the Sync panel's *waiting* line and its
+  // first round trip are drawn against.
+  db.relay = { pending: 3, lastSyncAt: null, lastError: null };
   return db;
 }
 
