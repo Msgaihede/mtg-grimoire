@@ -9,7 +9,7 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeckDetail, SyncOutcome, SyncProgressEvent, SyncStatus } from "@/lib/ipc";
 /**
  * The shipped page shell, as text. `viewport-fit=cover` lives in a file no component imports and
@@ -131,6 +131,7 @@ import { DURATION } from "@/lib/motion";
 import type { Update } from "@/lib/useUpdate";
 import { cardDraggable, type DragPayload } from "@/features/decks/dnd";
 import { queryClient } from "@/lib/query";
+import { PHONE_PX } from "@/lib/viewports";
 import { useAppStore } from "@/lib/store";
 import { boxed, startPointerDrag } from "@/test-drag";
 
@@ -1357,5 +1358,104 @@ describe("the card menu's deck write", () => {
     // lifetimes would hide this sentence and then bring it back when the other's timer expired.
     expect(await screen.findByRole("alert")).toHaveTextContent("That deck is not there any more");
     expect(decksReport()).toBeEmptyDOMElement();
+  });
+});
+
+/**
+ * The one viewport branch in this app: below the phone width the six destinations are a bar
+ * across the foot of the window, and there is no rail at all. The argument for asking the
+ * *window* here rather than a container — the shell is the only component drawn in exactly one
+ * box, and that box is the viewport — is in `useNarrowWindow`'s own doc comment.
+ *
+ * **jsdom's `matchMedia` is a stub that never matches** (`src/test-setup.ts`), which is what puts
+ * every other test in this file in the desktop shape without any of them saying so; the width is
+ * stated by hand here. **Only for the width query**, and that is not fastidiousness: `motion`'s
+ * `useReducedMotion` reads this same API through this shell, so a blanket `matches: true` would
+ * also tell it the reader had asked for reduced motion — which changes `useNavLabels`' timing
+ * inside a test that is not about it.
+ */
+describe("the shell's choice of navigation", () => {
+  function stubWindowWidth(narrow: boolean) {
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: query.includes(`${PHONE_PX}px`) ? narrow : false,
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    }));
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("draws the bar and no rail below the phone width", async () => {
+    stubWindowWidth(true);
+    render(
+      <AppShell update={noUpdate}>
+        <div>content</div>
+      </AppShell>,
+    );
+
+    // Both drawings carry the same `aria-label`, because there is one navigation landmark in
+    // this window and the shell draws one of the two — never both. So the landmark is found the
+    // same way in either direction and what tells them apart is what only one of them has:
+    // `--safe-b` as an inline style is `BottomTabBar`'s, and the `id` below is the rail's.
+    const bar = screen.getByRole("navigation", { name: "Views" });
+    expect(bar).toHaveStyle({ paddingBottom: "var(--safe-b)" });
+    expect(bar).not.toHaveAttribute("id");
+    expect(within(bar).getAllByRole("button").map((b) => b.textContent)).toEqual([
+      "Search",
+      "Tagger",
+      "Decks",
+      "Collection",
+      "Wishlist",
+      "Settings",
+    ]);
+
+    // **Absent rather than hidden**, which is the half a class assertion could not tell: a rail
+    // pushed off-screen would still answer this query, and would still be six tab stops and six
+    // drop targets for a reader who cannot see it. The collapse toggle is the thing only the
+    // rail draws.
+    expect(screen.queryByRole("button", { name: /collapse/i })).toBeNull();
+
+    // `useSidebarDrops()` reached the bar — it is called once in the shell and spread into
+    // whichever drawing is on screen, and the Decks tab's live region is what a passed `drop`
+    // produces. Two instances of that hook would be two regions describing one drop.
+    const decks = within(bar).getByRole("button", { name: "Decks" });
+    expect(within(decks.parentElement as HTMLElement).getByRole("status")).toBeInTheDocument();
+
+    // Everything else the shell draws is unchanged: this is a swap of one navigation for
+    // another and not a second layout.
+    expect(await screen.findByRole("button", { name: /refresh/i })).toBeInTheDocument();
+    expect(screen.getByText("content")).toBeInTheDocument();
+  });
+
+  it("draws the rail and no bar above it", async () => {
+    stubWindowWidth(false);
+    render(
+      <AppShell update={noUpdate}>
+        <div>content</div>
+      </AppShell>,
+    );
+
+    const rail = screen.getByRole("navigation", { name: "Views" });
+    expect(rail).toHaveAttribute("id", "app-nav");
+    expect(rail).not.toHaveStyle({ paddingBottom: "var(--safe-b)" });
+    // The seventh button is the collapse toggle, and its presence is the whole assertion that
+    // this is the rail: the six words above are the same six either way.
+    expect(within(rail).getAllByRole("button").map((b) => b.textContent)).toEqual([
+      "Search",
+      "Tagger",
+      "Decks",
+      "Collection",
+      "Wishlist",
+      "Settings",
+      "Collapse",
+    ]);
+    expect(await screen.findByRole("button", { name: /refresh/i })).toBeInTheDocument();
   });
 });

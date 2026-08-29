@@ -338,7 +338,9 @@ Expected: FAIL — the module does not exist.
 
 - [ ] **Step 3: Implement the hook**
 
-`useNarrowWindow` subscribes to `matchMedia(\`(max-width: ${PHONE_PX}px)\`)` with `useSyncExternalStore`, which is the React-19 way to read an external source without an effect that sets state — and `src/lib/CLAUDE.md`'s rule against `setState` inside an effect makes the alternative a lint failure at `npm run verify`, not at edit time.
+`useNarrowWindow` subscribes to `matchMedia(\`(max-width: ${PHONE_PX}px)\`)` with `useSyncExternalStore`, which is the React-19 way to read an external source without an effect that sets state — and the rule against `setState` inside an effect makes the alternative a lint failure at `npm run verify`, not at edit time.
+
+> ⚠️ **This step first cited `src/lib/CLAUDE.md`, which does not exist — corrected 2026-08-29.** That rule lives in `src/CLAUDE.md`. A plan that cites a file by a plausible path nobody checked is the same failure class as a prop inferred from a naming convention, and it is worth naming as one.
 
 - [ ] **Step 4: Wire the shell**
 
@@ -379,6 +381,14 @@ saying different things."
 **Cinzel never goes below 18px**, so the 20px title cannot be shrunk to fit: it stays or it goes.
 
 - **The status line must stay mounted.** It is a permanently-mounted `role="status"` whose number is `aria-hidden`, and **a live region that only sometimes exists announces nothing**. Moving it off the row means `sr-only` on the row and the sentence drawn somewhere the reader can see it — not unmounting it.
+
+> ⚠️ **This task has three sentences to place, not one — the other two were found by Tasks 2 and 3 and are recorded at their call sites.** All three are live regions that the phone's chrome currently has no column to draw:
+>
+> 1. **The status line** — above.
+> 2. **The sidebar's drop report** (`SidebarDrop.report`). `BottomTabBar` mounts a `role="status"` per droppable tab so the sentence is *announced*, but a 65px tab has no room to *paint* it. A drop on a phone therefore says nothing to the eye.
+> 3. **The card-menu refusal `role="alert"`** (`cardToDeckRefusal`). It lives on the rail, so **it disappears entirely below the phone width** — the one of the three that is currently lost rather than merely unpainted. That makes it the most urgent.
+>
+> The collapse toggle also goes with the rail, and that one is *correct* — a bar has nothing to collapse. Do not put it back.
 - `RibbonProps` has ten members and **no slot, no `children`, no `onStatusPress`** (`Ribbon.tsx:9–53`). This task adds whatever it needs; it is the task that is allowed to.
 
 - [ ] **Step 1: Write the failing test** — the live region is still in the document when the ribbon is narrow, and the title is not truncated by CSS but genuinely absent or genuinely whole.
