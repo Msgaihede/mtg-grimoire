@@ -9,7 +9,7 @@ import {
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DeckDetail, SyncOutcome, SyncProgressEvent, SyncStatus } from "@/lib/ipc";
 /**
  * The shipped page shell, as text. `viewport-fit=cover` lives in a file no component imports and
@@ -131,6 +131,7 @@ import { DURATION } from "@/lib/motion";
 import type { Update } from "@/lib/useUpdate";
 import { cardDraggable, type DragPayload } from "@/features/decks/dnd";
 import { queryClient } from "@/lib/query";
+import { PHONE_PX } from "@/lib/viewports";
 import { useAppStore } from "@/lib/store";
 import { boxed, startPointerDrag } from "@/test-drag";
 
@@ -209,6 +210,35 @@ function deferred<T>() {
 /** The cache every write here settles through, spied once and cleared per test rather than
  *  re-wrapped in each one. */
 const invalidate = vi.spyOn(queryClient, "invalidateQueries");
+
+/**
+ * Put the window either side of the phone width, for the one viewport branch in this app.
+ *
+ * **jsdom's `matchMedia` is a stub that never matches** (`src/test-setup.ts`), which is what puts
+ * every test in this file that does not call this into the desktop shape without any of them
+ * saying so; the width is stated by hand here.
+ *
+ * **Only the width query is answered**, and that is not fastidiousness: `motion`'s
+ * `useReducedMotion` reads this same API through this shell, so a blanket `matches: true` would
+ * also tell it the reader had asked for reduced motion — which changes `useNavLabels`' timing
+ * inside tests that are not about it.
+ *
+ * At module scope rather than inside one block, because two describes need it now: the shell's
+ * choice of navigation, and what a drop says when the navigation it landed on is a 65px tab.
+ * Every caller pairs it with `vi.unstubAllGlobals()` in its own `afterEach`.
+ */
+function stubWindowWidth(narrow: boolean) {
+  vi.stubGlobal("matchMedia", (query: string) => ({
+    matches: query.includes(`${PHONE_PX}px`) ? narrow : false,
+    media: query,
+    onchange: null,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    addListener: () => {},
+    removeListener: () => {},
+    dispatchEvent: () => false,
+  }));
+}
 
 beforeEach(() => {
   // The open deck decides whether the Decks entry can take a card, so it is reset with the
@@ -1273,6 +1303,60 @@ describe("the sidebar's drop targets", () => {
     await waitFor(() => expect(report("Wishlist")).toHaveTextContent("Added to wishlist."));
     expect(report("Wishlist")).toHaveClass("pointer-events-none", LAYER.popup);
   });
+
+  /**
+   * **Below the phone width there is no rail to be a line in at all**, and a 65px tab has no
+   * column for one either — so the sentence is announced by the bar and *painted* by the shell,
+   * in the strip immediately above it.
+   *
+   * The split is the assertion. `BottomTabBar` mounts the `role="status"` per droppable tab and
+   * keeps it `sr-only` for the app's standing reason, and that region has to stay the only one:
+   * two live regions holding one drop say it twice. So the painted copy carries `aria-hidden`
+   * and no role of its own — the eye's copy and nothing else, exactly as the ribbon's activity
+   * count is `aria-hidden` beside the phase that is announced.
+   *
+   * **Painted where the reader's thumb already is**, rather than up beside the ribbon: this is
+   * navigation's sentence and navigation is at the foot of the window now. jsdom lays nothing
+   * out, so that half is a fact about DOM order and the strip's own comment, not about pixels.
+   */
+  it("paints a drop's sentence above the bar, which has no column to draw it in", async () => {
+    stubWindowWidth(true);
+    const held = await pickUp();
+
+    await held.over(boxedEntry("Wishlist"));
+    await held.drop();
+
+    // The bar's region — announced, and still the only thing announcing.
+    await waitFor(() => expect(report("Wishlist")).toHaveTextContent("Added to wishlist."));
+    expect(report("Wishlist")).toHaveClass("sr-only");
+
+    // …and exactly one painted copy of it, which is not a live region.
+    const painted = screen
+      .getAllByText("Added to wishlist.")
+      .filter((el) => el.getAttribute("aria-hidden") === "true");
+    expect(painted).toHaveLength(1);
+    expect(painted[0]).not.toHaveAttribute("role");
+    // Outside the bar, so the announcement and the paint cannot be the same element read twice.
+    expect(screen.getByRole("navigation", { name: "Views" }).contains(painted[0])).toBe(false);
+  });
+
+  /** The strip is the phone's, and the rail draws both of its sentences itself. */
+  it("paints no second copy where there is a rail to say it in", async () => {
+    stubWindowWidth(false);
+    const held = await pickUp();
+
+    await held.over(boxedEntry("Wishlist"));
+    await held.drop();
+
+    await waitFor(() => expect(report("Wishlist")).toHaveTextContent("Added to wishlist."));
+    expect(screen.getAllByText("Added to wishlist.")).toHaveLength(1);
+  });
+
+  afterEach(() => {
+    // Only the two cases above stub it; the rest of this block runs in jsdom's own
+    // never-matching shape, which is the desktop one.
+    vi.unstubAllGlobals();
+  });
 });
 
 /**
@@ -1357,5 +1441,144 @@ describe("the card menu's deck write", () => {
     // lifetimes would hide this sentence and then bring it back when the other's timer expired.
     expect(await screen.findByRole("alert")).toHaveTextContent("That deck is not there any more");
     expect(decksReport()).toBeEmptyDOMElement();
+  });
+
+  /**
+   * **The one of the phone's three homeless sentences that was actually being lost.** The other
+   * two are announced and merely unpainted; this one lived inside the `<nav>`, and below the
+   * phone width the shell draws no `<nav>` at all — so a refused add said nothing to anybody,
+   * in a window where the reader cannot hover anything to find out why.
+   *
+   * It is `CardMenuRefusal`, the component every card surface already draws, rather than a third
+   * copy of that box: the rail keeps its own (`NavNote`) because it has a geometry nothing else
+   * has, and that argument does not survive the rail's removal. What must not move is the
+   * mounting rule — `role="alert"`, present only while there is something to say, because
+   * announcing on insertion is what the role is for — and that is what the second half of this
+   * case pins.
+   */
+  it("says a refused add above the bar when there is no rail to say it in", async () => {
+    stubWindowWidth(true);
+    const user = userEvent.setup();
+    deckAddCard.mockRejectedValue(new Error("That deck is not there any more"));
+    render(
+      <AppShell update={noUpdate}>
+        <AddProbe />
+      </AppShell>,
+    );
+
+    // Nothing before the refusal: an alert is mounted on insertion, which is the whole of how
+    // it announces, and a permanently-mounted second alert would make `getByRole("alert")`
+    // ambiguous everywhere in this app.
+    expect(screen.queryByRole("alert")).toBeNull();
+
+    await user.click(screen.getByRole("button", { name: "add to Burn" }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("That deck is not there any more");
+    // Outside the bar — it is the shell's strip, drawn above it, not a seventh tab.
+    expect(screen.getByRole("navigation", { name: "Views" }).contains(alert)).toBe(false);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+});
+
+/**
+ * The one viewport branch in this app: below the phone width the six destinations are a bar
+ * across the foot of the window, and there is no rail at all. The argument for asking the
+ * *window* here rather than a container — the shell is the only component drawn in exactly one
+ * box, and that box is the viewport — is in `useNarrowWindow`'s own doc comment.
+ *
+ * **jsdom's `matchMedia` is a stub that never matches** (`src/test-setup.ts`), which is what puts
+ * every other test in this file in the desktop shape without any of them saying so; the width is
+ * stated by hand here. **Only for the width query**, and that is not fastidiousness: `motion`'s
+ * `useReducedMotion` reads this same API through this shell, so a blanket `matches: true` would
+ * also tell it the reader had asked for reduced motion — which changes `useNavLabels`' timing
+ * inside a test that is not about it.
+ */
+describe("the shell's choice of navigation", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("draws the bar and no rail below the phone width", async () => {
+    stubWindowWidth(true);
+    render(
+      <AppShell update={noUpdate}>
+        <div>content</div>
+      </AppShell>,
+    );
+
+    // Both drawings carry the same `aria-label`, because there is one navigation landmark in
+    // this window and the shell draws one of the two — never both. So the landmark is found the
+    // same way in either direction and what tells them apart is what only one of them has:
+    // `--safe-b` as an inline style is `BottomTabBar`'s, and the `id` below is the rail's.
+    const bar = screen.getByRole("navigation", { name: "Views" });
+    expect(bar).toHaveStyle({ paddingBottom: "var(--safe-b)" });
+    expect(bar).not.toHaveAttribute("id");
+    expect(within(bar).getAllByRole("button").map((b) => b.textContent)).toEqual([
+      "Search",
+      "Tagger",
+      "Decks",
+      "Collection",
+      "Wishlist",
+      "Settings",
+    ]);
+
+    // **Absent rather than hidden**, which is the half a class assertion could not tell: a rail
+    // pushed off-screen would still answer this query, and would still be six tab stops and six
+    // drop targets for a reader who cannot see it. The collapse toggle is the thing only the
+    // rail draws.
+    expect(screen.queryByRole("button", { name: /collapse/i })).toBeNull();
+
+    // The ribbon is told the same width and sheds with it — the title stops being painted so the
+    // status line can have the row, and `Refresh data` goes down to its glyph. **Asserted here as
+    // well as in `Ribbon.test.tsx`**, because those two are different claims: that file proves the
+    // shed is drawn correctly, and this one proves the shell asks for it. A shed nothing asks for
+    // is a shed that never happens, with every one of its own tests green.
+    expect(screen.getByRole("heading", { level: 1 })).toHaveClass("sr-only");
+    expect((await screen.findByRole("button", { name: "Refresh data" })).textContent).toBe("");
+
+    // `useSidebarDrops()` reached the bar — it is called once in the shell and spread into
+    // whichever drawing is on screen, and the Decks tab's live region is what a passed `drop`
+    // produces. Two instances of that hook would be two regions describing one drop.
+    const decks = within(bar).getByRole("button", { name: "Decks" });
+    expect(within(decks.parentElement as HTMLElement).getByRole("status")).toBeInTheDocument();
+
+    // Everything else the shell draws is unchanged: this is a swap of one navigation for
+    // another and not a second layout.
+    expect(await screen.findByRole("button", { name: /refresh/i })).toBeInTheDocument();
+    expect(screen.getByText("content")).toBeInTheDocument();
+  });
+
+  it("draws the rail and no bar above it", async () => {
+    stubWindowWidth(false);
+    render(
+      <AppShell update={noUpdate}>
+        <div>content</div>
+      </AppShell>,
+    );
+
+    const rail = screen.getByRole("navigation", { name: "Views" });
+    expect(rail).toHaveAttribute("id", "app-nav");
+    expect(rail).not.toHaveStyle({ paddingBottom: "var(--safe-b)" });
+    // The seventh button is the collapse toggle, and its presence is the whole assertion that
+    // this is the rail: the six words above are the same six either way.
+    expect(within(rail).getAllByRole("button").map((b) => b.textContent)).toEqual([
+      "Search",
+      "Tagger",
+      "Decks",
+      "Collection",
+      "Wishlist",
+      "Settings",
+      "Collapse",
+    ]);
+    // …and the ribbon keeps every word it has, which is what makes the shedding above a choice
+    // rather than a change: the row has about 1032px here and nothing has to be given up.
+    expect(screen.getByRole("heading", { level: 1 })).not.toHaveClass("sr-only");
+    expect(await screen.findByRole("button", { name: /refresh/i })).toHaveTextContent(
+      "Refresh data",
+    );
   });
 });

@@ -12,6 +12,8 @@ import { MARKETPLACES } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
 import { boxed, recordDrags, startPointerDrag } from "@/test-drag";
 import { pickOption } from "@/test-dropdown";
+import { stubNarrowWindow } from "@/test-viewport";
+import { PHONE_TILE_WIDTH } from "./CardGrid";
 
 const searchCards = vi.hoisted(() => vi.fn());
 // The set picker mounts with the page and asks for the set list on the way up, so the
@@ -1332,6 +1334,53 @@ describe("the result layout toggle", () => {
     await userEvent.click(screen.getByRole("button", { name: "Table view" }));
 
     expect(screen.getByText(/card database is empty/i)).toBeInTheDocument();
+  });
+});
+
+/**
+ * **G1 — the tile a phone is handed, and the proof this wall is wired to ask.**
+ *
+ * A 390px window with the bottom tab bar instead of the rail leaves this wall **324px** once
+ * `main`'s `p-5` and the scroller's own `border` + `p-3` are off it, and at the standard 170 that
+ * is a single column with 90px of margin either side. `PHONE_TILE_WIDTH` and the arithmetic that
+ * chose it live in `CardGrid.tsx`; what is asserted here is only that this call site asks the
+ * question at all — a width that is right in a constant and never passed is the failure mode.
+ *
+ * **The prop, not a pixel.** jsdom lays nothing out, so the wall measures itself at 0 and
+ * `tileWidthFor` answers a zero-width wall with the size it was asked for — which is what makes
+ * the tile's own inline width a faithful reading of the prop and nothing else. How many columns
+ * that buys is `CardGrid.test.tsx`'s arithmetic, on the exported functions.
+ */
+describe("the tile the wall is given at the phone width", () => {
+  // The whole store, not two fields: `cardZoom` scales this width and lives in a module-level
+  // store that outlives a render, so a sibling suite that left `search` at 2× would be measured
+  // here.
+  beforeEach(() => useAppStore.setState({ ...useAppStore.getInitialState(), searchView: "grid" }));
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  /** The tile's root — the box the width is set on, not the art button that takes the caret. */
+  const tileOf = (art: HTMLElement) => art.closest("[data-grid-index]");
+
+  it("hands the wall the phone's narrower tile below the phone width", async () => {
+    stubNarrowWindow(true);
+    wrap(<SearchPage />);
+
+    expect(tileOf(await screen.findByRole("button", { name: "Lightning Bolt" }))).toHaveStyle({
+      width: `${PHONE_TILE_WIDTH}px`,
+    });
+  });
+
+  it("leaves the wall's own default standing at every other width", async () => {
+    stubNarrowWindow(false);
+    wrap(<SearchPage />);
+
+    // 170 is `CardGrid`'s `TILE_BASE_WIDTH`, which is module-private and pinned by that
+    // component's own suite. Spelled here because what this case is about is that the prop is
+    // *absent* — a wall passing 144 unconditionally would pass the case above.
+    expect(tileOf(await screen.findByRole("button", { name: "Lightning Bolt" }))).toHaveStyle({
+      width: "170px",
+    });
   });
 });
 

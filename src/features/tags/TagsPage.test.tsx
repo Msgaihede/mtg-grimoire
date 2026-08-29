@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { DND_SOURCE_ATTR } from "@/lib/dndTarget";
 import userEvent from "@testing-library/user-event";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ReactElement } from "react";
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
@@ -18,6 +18,7 @@ import type {
 import { MARKETPLACES } from "@/lib/marketplace";
 import { pricesAsOf } from "@/lib/prices";
 import { boxed, recordDrags, startPointerDrag } from "@/test-drag";
+import { stubNarrowWindow } from "@/test-viewport";
 
 const searchCards = vi.hoisted(() => vi.fn());
 /** Hoisted so a test can read what the *facet* request carried — see
@@ -113,7 +114,8 @@ import { GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { CardToDeckProvider } from "@/features/card/cardMenu";
 import { HIDDEN_TAGS_KEY } from "@/features/settings/useHiddenTags";
-import { DEFAULT_ZOOM, ZOOM_SECTIONS } from "@/lib/cardZoom";
+import { PHONE_TILE_WIDTH } from "@/features/search/CardGrid";
+import { DEFAULT_SECTION_ZOOMS, DEFAULT_ZOOM, ZOOM_SECTIONS } from "@/lib/cardZoom";
 import { WALL_CARD_VARIANT } from "@/lib/images";
 import { queryClient } from "@/lib/query";
 import { useAppStore } from "@/lib/store";
@@ -1386,5 +1388,49 @@ describe("the walk it publishes for the printings modal", () => {
     unmount();
 
     expect(useAppStore.getState().cardWalk.stops).toEqual([]);
+  });
+});
+
+/**
+ * **G1 — the tile a phone is handed, and the proof this wall is wired to ask for it.**
+ *
+ * A 390px window with the bottom tab bar instead of the rail leaves this wall **324px** once
+ * `main`'s `p-5` and the scroller's own `border` + `p-3` are off it, and at the standard 170 that
+ * is a single column with 90px of margin either side. `PHONE_TILE_WIDTH` and the arithmetic that
+ * chose it live in `CardGrid.tsx`; what is asserted here is only that this call site asks the
+ * question at all — a width that is right in a constant and never passed is the failure mode.
+ *
+ * **The prop, not a pixel.** jsdom lays nothing out, so the wall measures itself at 0 and
+ * `tileWidthFor` answers a zero-width wall with the size it was asked for — which is what makes
+ * the tile's own inline width a faithful reading of the prop and nothing else.
+ */
+describe("the tile the tag wall is given at the phone width", () => {
+  // **`cardZoom` is reset here and nowhere else in this file, and it has to be**: the zoom case
+  // above leaves `tags` at 1.1 in a module-level store that outlives a render, and 1.1 × 144 is
+  // 158 — a number that looks like a wrong tile width rather than like a leaked gesture.
+  beforeEach(() => useAppStore.setState({ cardZoom: { ...DEFAULT_SECTION_ZOOMS } }));
+
+  afterEach(() => vi.unstubAllGlobals());
+
+  /** The tile's root — the box the width is set on, not the art button that takes the caret. */
+  const tileOf = (art: HTMLElement) => art.closest("[data-grid-index]");
+
+  it("hands the wall the phone's narrower tile below the phone width", async () => {
+    stubNarrowWindow(true);
+    wrap(<TagsPage />);
+
+    const art = await screen.findByRole("button", { name: "Lightning Bolt" });
+    expect(tileOf(art)).toHaveStyle({ width: `${PHONE_TILE_WIDTH}px` });
+  });
+
+  it("leaves the wall's own default standing at every other width", async () => {
+    stubNarrowWindow(false);
+    wrap(<TagsPage />);
+
+    // 170 is `CardGrid`'s `TILE_BASE_WIDTH`, module-private and pinned by that component's own
+    // suite. Spelled here because what this case is about is that the prop is *absent* — a wall
+    // passing 144 unconditionally would pass the case above.
+    const art = await screen.findByRole("button", { name: "Lightning Bolt" });
+    expect(tileOf(art)).toHaveStyle({ width: "170px" });
   });
 });

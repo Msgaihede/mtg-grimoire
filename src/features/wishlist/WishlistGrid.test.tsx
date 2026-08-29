@@ -1,7 +1,7 @@
 import { render, screen, within } from "@testing-library/react";
 import { DND_SOURCE_ATTR } from "@/lib/dndTarget";
 import userEvent from "@testing-library/user-event";
-import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { readDragData } from "@/features/decks/dnd";
 import { DEFAULT_SECTION_ZOOMS } from "@/lib/cardZoom";
 import type { FolderNode } from "@/lib/folderTree";
@@ -9,6 +9,8 @@ import type { WishlistFolder, WishRow } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
 import { useAppStore } from "@/lib/store";
 import { boxed, recordDrags, startPointerDrag } from "@/test-drag";
+import { stubNarrowWindow } from "@/test-viewport";
+import { PHONE_TILE_WIDTH } from "@/features/search/CardGrid";
 import { WishlistGrid } from "./WishlistGrid";
 import { WishlistTable } from "./WishlistTable";
 import { readWishDrag } from "./wishDrag";
@@ -479,5 +481,42 @@ describe("the printing line", () => {
 
     expect(screen.getAllByText("Any printing")).toHaveLength(2);
     expect(screen.queryByText("Any printing · Foil")).toBeNull();
+  });
+});
+
+/**
+ * **G1 — the tile a phone is handed, and the proof this wall is wired to ask for it.**
+ *
+ * A 390px window with the bottom tab bar instead of the rail leaves this wall **324px** once
+ * `main`'s `p-5` and the scroller's own `border` + `p-3` are off it, and at the standard 170 that
+ * is a single column with 90px of margin either side. `PHONE_TILE_WIDTH` and the arithmetic that
+ * chose it live in `CardGrid.tsx`; what is asserted here is only that this call site asks the
+ * question at all — a width that is right in a constant and never passed is the failure mode.
+ *
+ * **The prop, not a pixel.** jsdom lays nothing out, so the wall measures itself at 0 and
+ * `tileWidthFor` answers a zero-width wall with the size it was asked for — which is what makes
+ * the tile's own inline width a faithful reading of the prop and nothing else.
+ */
+describe("the tile the wishlist's wall is given at the phone width", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  /** The tile's root — the box the width is set on, not the art button that takes the caret. */
+  const tileOf = (container: HTMLElement) => container.querySelector("[data-grid-index]");
+
+  it("hands the wall the phone's narrower tile below the phone width", () => {
+    stubNarrowWindow(true);
+    const { container } = wall([BOLT]);
+
+    expect(tileOf(container)).toHaveStyle({ width: `${PHONE_TILE_WIDTH}px` });
+  });
+
+  it("leaves the wall's own default standing at every other width", () => {
+    stubNarrowWindow(false);
+    const { container } = wall([BOLT]);
+
+    // 170 is `CardGrid`'s `TILE_BASE_WIDTH`, module-private and pinned by that component's own
+    // suite. Spelled here because what this case is about is that the prop is *absent* — a wall
+    // passing 144 unconditionally would pass the case above.
+    expect(tileOf(container)).toHaveStyle({ width: "170px" });
   });
 });

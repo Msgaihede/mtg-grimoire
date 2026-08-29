@@ -338,7 +338,9 @@ Expected: FAIL — the module does not exist.
 
 - [ ] **Step 3: Implement the hook**
 
-`useNarrowWindow` subscribes to `matchMedia(\`(max-width: ${PHONE_PX}px)\`)` with `useSyncExternalStore`, which is the React-19 way to read an external source without an effect that sets state — and `src/lib/CLAUDE.md`'s rule against `setState` inside an effect makes the alternative a lint failure at `npm run verify`, not at edit time.
+`useNarrowWindow` subscribes to `matchMedia(\`(max-width: ${PHONE_PX}px)\`)` with `useSyncExternalStore`, which is the React-19 way to read an external source without an effect that sets state — and the rule against `setState` inside an effect makes the alternative a lint failure at `npm run verify`, not at edit time.
+
+> ⚠️ **This step first cited `src/lib/CLAUDE.md`, which does not exist — corrected 2026-08-29.** That rule lives in `src/CLAUDE.md`. A plan that cites a file by a plausible path nobody checked is the same failure class as a prop inferred from a naming convention, and it is worth naming as one.
 
 - [ ] **Step 4: Wire the shell**
 
@@ -379,7 +381,19 @@ saying different things."
 **Cinzel never goes below 18px**, so the 20px title cannot be shrunk to fit: it stays or it goes.
 
 - **The status line must stay mounted.** It is a permanently-mounted `role="status"` whose number is `aria-hidden`, and **a live region that only sometimes exists announces nothing**. Moving it off the row means `sr-only` on the row and the sentence drawn somewhere the reader can see it — not unmounting it.
-- `RibbonProps` has ten members and **no slot, no `children`, no `onStatusPress`** (`Ribbon.tsx:9–53`). This task adds whatever it needs; it is the task that is allowed to.
+
+> ⚠️ **This task has three sentences to place, not one — the other two were found by Tasks 2 and 3 and are recorded at their call sites.** All three are live regions that the phone's chrome currently has no column to draw:
+>
+> 1. **The status line** — above.
+> 2. **The sidebar's drop report** (`SidebarDrop.report`). `BottomTabBar` mounts a `role="status"` per droppable tab so the sentence is *announced*, but a 65px tab has no room to *paint* it. A drop on a phone therefore says nothing to the eye.
+> 3. **The card-menu refusal `role="alert"`** (`cardToDeckRefusal`). It lives on the rail, so **it disappears entirely below the phone width** — the one of the three that is currently lost rather than merely unpainted. That makes it the most urgent.
+>
+> The collapse toggle also goes with the rail, and that one is *correct* — a bar has nothing to collapse. Do not put it back.
+- `RibbonProps` has **thirteen** members and **no slot, no `children`, no `onStatusPress`** (`Ribbon.tsx:9–53`). This task adds whatever it needs; it is the task that is allowed to.
+
+  > ⚠️ **This said "ten" — corrected 2026-08-29 by counting.** It is a fact about a tree and this repo's own rule is not to write one down where a build can answer it. A count that is wrong in a *constraint* is worse than one that is merely stale: an implementer reading "ten" and finding thirteen has to decide whether the plan is out of date or they are looking at the wrong file.
+  >
+  > Also worth carrying: **a required prop forces two files this task's list omits** — `Ribbon.stories.tsx` needs the new prop in its meta args or `tsc -p .storybook` goes red, and `AppShell.test.tsx` moves with `AppShell.tsx`.
 
 - [ ] **Step 1: Write the failing test** — the live region is still in the document when the ribbon is narrow, and the title is not truncated by CSS but genuinely absent or genuinely whole.
 - [ ] **Step 2: Run to verify it fails.**
@@ -412,6 +426,14 @@ saying different things."
 **Files:**
 - Modify: the wall's call sites — `src/features/search/SearchPage.tsx`, `src/features/collection/CollectionPage.tsx`, `src/features/wishlist/WishlistGrid.tsx`, `src/features/tags/TagResults.tsx`
 - Modify: `src/features/search/CardGrid.test.tsx`
+
+> ⚠️ **Three corrections from executing this, 2026-08-29.**
+>
+> - **`SearchPage`'s `<CardGrid>` is inside the module-private `Results` component, not in the exported page.** Putting the hook in `SearchPage` **compiles and type-checks** and then throws at runtime — 24 failures, `ReferenceError: narrowWindow is not defined`. The hook belongs beside `Results`' own `view`.
+> - **There is no `TagResults.test.tsx`.** The tag wall is covered by `src/features/tags/TagsPage.test.tsx`.
+> - **`CardGrid.test.tsx` alone cannot hold this task's assertion.** "The wall is given 144" is a fact about a *call site*, so the wiring tests belong in the four walls' own suites; `CardGrid.test.tsx` keeps the **arithmetic**, on the exported functions, exactly as the deck panel's 150 already does.
+>
+> And a landmine worth knowing about: `TagsPage.test.tsx` has a zoom case that leaves `cardZoom.tags` at **1.1** with no reset anywhere in the file. 1.1 × 144 = 158, which reads as a wrong tile width rather than as leaked state — the [store-state-leaks](../../../CLAUDE.md) hazard in its most confusing form. Reset the section zooms in any describe that asserts a drawn width.
 
 **Interfaces:** Consumes `useNarrowWindow` from Task 3 and `baseTileWidth` on `CardGrid` (`CardGrid.tsx:617`, `number | undefined`, defaulting to the module-private `TILE_BASE_WIDTH = 170`).
 

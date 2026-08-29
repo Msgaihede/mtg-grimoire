@@ -24,8 +24,9 @@ import { statusLine } from "@/lib/motion";
 import { pricesAsOf } from "@/lib/prices";
 import { priceRange } from "@/lib/priceRange";
 import { useAppStore } from "@/lib/store";
+import { useNarrowWindow } from "@/lib/useNarrowWindow";
 import { cn } from "@/lib/utils";
-import { CardGrid } from "./CardGrid";
+import { CardGrid, PHONE_TILE_WIDTH } from "./CardGrid";
 import { FilterBar } from "./FilterBar";
 import { useCardSearch, type CardSearch } from "./useCardSearch";
 
@@ -419,6 +420,10 @@ function Results({ search }: { search: CardSearch }) {
   // never has to know whether one is open, only which card is in it.
   const selectCard = useAppStore((s) => s.setSelectedCardId);
   const selectedCardId = useAppStore((s) => s.selectedCardId);
+  // What the wall below is sized by — see its `baseTileWidth`. Read here for `view`'s reason:
+  // how wide a card is drawn is the result area's own business. A consumer of the app's one
+  // viewport branch rather than a second one; the hook argues for itself at its own site.
+  const narrowWindow = useNarrowWindow();
 
   /**
    * These results as a **walk**, so the printings modal's chevrons and arrow keys step along them.
@@ -534,6 +539,16 @@ function Results({ search }: { search: CardSearch }) {
           <CardGrid
             rows={rows}
             listKey={searchKey}
+            // **A phone gets a narrower card, so the wall is two columns rather than one.** At
+            // 390px this wall is 324 wide and the standard 170px tile floors to a single column
+            // with 90px of margin either side of it; 144 fits two with the leftover split into
+            // the same 12px the gap between them is. `undefined` at every other width, so the
+            // component's own default is what stands and nothing about a desk changed.
+            //
+            // `PHONE_TILE_WIDTH` carries the whole derivation, including 160 — which looks like
+            // the fix and is the same single column — and the decision that the chin does *not*
+            // scale with this. The other three page-width walls pass it the same way.
+            baseTileWidth={narrowWindow ? PHONE_TILE_WIDTH : undefined}
             // Which zoom is this wall's. The search is its own section, so a reader who sizes
             // the results up here has not touched the collection or the deck editor's column —
             // see `CardGrid`'s `zoomSection` for why it is required rather than defaulted.
