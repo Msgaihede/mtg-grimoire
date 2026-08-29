@@ -25,6 +25,7 @@ import { keepCaretForCard } from "@/lib/caretWalk";
 import type { Finish } from "@/lib/finish";
 import type { Treatment } from "@/lib/treatment";
 import { FOCUS } from "@/lib/focus";
+import { WALL_CARD_VARIANT, type ImageVariant } from "@/lib/images";
 import { LAYER } from "@/lib/layers";
 import { useAppStore } from "@/lib/store";
 import { NO_SELECTION, suppressRangeSelection, useCardSelection } from "@/lib/useCardSelection";
@@ -64,6 +65,26 @@ export interface GridCard {
   setCode: string;
   collectorNumber: string;
   rarity: string | null;
+  /**
+   * The front face's picture on `cards.scryfall.io`, by variant — **the only art a browser can
+   * reach**, and absent on every wall but the search's.
+   *
+   * `search_cards` is the one card-bearing command the web build routes, so it is the one row
+   * shape that carries this; the collection's, the wishlist's and the deck editor's walls do not
+   * function in a browser at all and widening their DTOs would cost three payloads on desktop to
+   * change nothing anywhere. Optional for exactly that reason, and `undefined` is a real answer
+   * rather than a gap.
+   *
+   * `Partial`, and the tile must read the one variant it draws and treat a miss as "no art":
+   * a printing whose only URL is Scryfall's `soon.jpg` placeholder carries **nothing** here,
+   * because the backend refuses a URI it cannot version or one from a host that does not serve
+   * card art. Never build a URL of your own from a missing entry.
+   *
+   * What decides whether it is *used* is `cardArtSrc` in `@/lib/images`, through `CardArt`'s
+   * `imageUrl`: on desktop the local cache wins and this is ignored. Nothing in this file knows
+   * which build it is in.
+   */
+  imageUris?: Partial<Record<ImageVariant, string>> | null;
 }
 
 /**
@@ -1367,6 +1388,14 @@ function Tile<T extends GridCard>({
             // frame with its name, which is what `CardArt` draws for an orphan everywhere else.
             cardId={card.id || null}
             name={card.name}
+            // The picture a browser can reach, where the row carries one — see
+            // {@link GridCard.imageUris}. `WALL_CARD_VARIANT` and not a size of this wall's own:
+            // the constant's own comment is the argument (the wall zooms and the variant does
+            // not, and `SearchPage`'s pre-warm has to be asking for the same key), and it is the
+            // same constant `CardArt` defaults `variant` to — which this tile passes nothing for
+            // — so the protocol URL and this one name one size and the two builds draw the same
+            // picture.
+            imageUrl={card.imageUris?.[WALL_CARD_VARIANT]}
             selected={selected}
             finish={tileFinish}
             treatments={tileTreatments}

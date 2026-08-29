@@ -18,6 +18,11 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
   ipc: { collectionAdd: vi.fn(), wishlistAdd },
 }));
 
+// Which build the wall is drawing in. It is a `define` folded away at build time, so mocking
+// this module is the only way a suite can see the web branch — desktop by default, which is
+// what the real function answers under vitest.
+vi.mock("@/pwa/target", () => ({ isWebTarget: vi.fn(() => false) }));
+
 import { CardGrid, columnsFor, sideGutterFor, tileWidthFor } from "./CardGrid";
 import { GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
 import { OwnedBadge } from "@/components/OwnedBadge";
@@ -30,6 +35,7 @@ import {
   type ZoomSection,
 } from "@/lib/cardZoom";
 import { consumeCaretNote } from "@/lib/caretWalk";
+import { isWebTarget } from "@/pwa/target";
 import { parseFinishes } from "@/lib/finish";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
@@ -108,6 +114,7 @@ beforeAll(() => {
 });
 
 beforeEach(() => {
+  vi.mocked(isWebTarget).mockReturnValue(false);
   wishlistAdd.mockReset().mockResolvedValue({ id: 1, quantity: 1, removed: false });
   // The wall's tile size is the reader's, and it lives in a module-level store that outlives a
   // render — so a test that zooms would hand the next one a 2× wall to measure. **Every**
@@ -150,6 +157,96 @@ describe("CardGrid", () => {
     // plus two, so the browser's own intersection gate has nothing left to save on a 117 k-row
     // browse — it only delays the two dozen images that are about to be looked at.
     expect(bolt).not.toHaveAttribute("loading");
+  });
+
+  /**
+   * **The one wall that works in a browser, and the two pictures of one card.**
+   *
+   * `search_cards` is the only card-bearing command the web build routes, so a search row is the
+   * only row that carries `imageUris` — the front face's URLs on `cards.scryfall.io`, which is
+   * the only art a browser can reach: `mtgimg://` is a Tauri custom protocol registered natively
+   * with the webview, and wasm cannot register a URL scheme with a browser.
+   *
+   * The branch itself is `cardArtSrc`'s, in `@/lib/images`, and nothing in this file or in
+   * `CardArt` knows which build it is in. These three tests are what say the wall is wired to it.
+   */
+  const SCRYFALL = {
+    thumb: "https://cards.scryfall.io/small/front/a/a/aaa.jpg?1706230661",
+    grid: "https://cards.scryfall.io/normal/front/a/a/aaa.jpg?1706230661",
+    display: "https://cards.scryfall.io/large/front/a/a/aaa.jpg?1706230661",
+    art: "https://cards.scryfall.io/art_crop/front/a/a/aaa.jpg?1706230661",
+  } as const;
+
+  /**
+   * The row carries the URLs on **both** builds — one DTO, one shape — so the desktop claim is
+   * that the local cache still wins, not that nothing was passed. A wall that preferred the
+   * supplied URL would refetch a screenful of art the cache already holds, over the network, on
+   * every scroll, at Scryfall's expense — and it would still draw cards, so there is nothing on
+   * screen to catch it.
+   */
+  it("keeps drawing the cached protocol picture on desktop for a row that carries URLs", () => {
+    render(
+      <CardGrid
+        rows={[{ ...card("aaa", "Lightning Bolt"), imageUris: SCRYFALL }]}
+        onSelect={vi.fn()}
+        onNeedNextPage={vi.fn()}
+        listKey="k"
+        zoomSection="search"
+      />,
+    );
+
+    const bolt = screen.getByAltText("Lightning Bolt");
+    expect(bolt).toHaveAttribute("src", expect.stringContaining(`/${WALL_CARD_VARIANT}/aaa/0`));
+    expect(bolt.getAttribute("src")).not.toContain("scryfall.io");
+  });
+
+  /**
+   * All four variants are on the row and exactly one of them is this wall's. `display` rather
+   * than `grid` is `WALL_CARD_VARIANT`'s own argument — the wall zooms and the variant does not,
+   * so a 488px source is a 39 % upscale at the top of the ladder — and it is also what
+   * `SearchPage`'s pre-warm asks the cache for; the two must name one key or every tile warms
+   * one URL and fetches another.
+   */
+  it("draws the row's own picture in a browser, at the variant this wall zooms", () => {
+    vi.mocked(isWebTarget).mockReturnValue(true);
+    render(
+      <CardGrid
+        rows={[{ ...card("aaa", "Lightning Bolt"), imageUris: SCRYFALL }]}
+        onSelect={vi.fn()}
+        onNeedNextPage={vi.fn()}
+        listKey="k"
+        zoomSection="search"
+      />,
+    );
+
+    expect(screen.getByAltText("Lightning Bolt")).toHaveAttribute(
+      "src",
+      SCRYFALL[WALL_CARD_VARIANT],
+    );
+  });
+
+  /**
+   * A printing whose only picture is Scryfall's `soon.jpg` placeholder reaches the page with no
+   * URL at all — the backend refuses a URI it cannot version or one from a host that does not
+   * serve card art. The tile is still a card: the name is what the reader came for, and it is
+   * known without the art. What must not happen is the platform's broken-image icon, which is
+   * what falling back to `mtgimg://` in a browser would draw.
+   */
+  it("draws the no-art frame in a browser for a printing with no picture", () => {
+    vi.mocked(isWebTarget).mockReturnValue(true);
+    render(
+      <CardGrid
+        rows={[card("aaa", "Lightning Bolt")]}
+        onSelect={vi.fn()}
+        onNeedNextPage={vi.fn()}
+        listKey="k"
+        zoomSection="search"
+      />,
+    );
+
+    expect(screen.queryByAltText("Lightning Bolt")).not.toBeInTheDocument();
+    expect(screen.getByText("Lightning Bolt")).toBeInTheDocument();
+    expect(screen.getByText("No image")).toBeInTheDocument();
   });
 
   /**

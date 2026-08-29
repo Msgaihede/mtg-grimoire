@@ -1,7 +1,16 @@
 import { act, fireEvent, render, screen } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TOOLTIP_OPEN_MS, TOOLTIP_PANEL_ID, TooltipProvider } from "@/components/tooltip/TooltipProvider";
+import { isWebTarget } from "@/pwa/target";
 import { CardArt } from "./CardArt";
+
+/** Which build this frame is drawing in — a build-time `define`, so a mock is the only way to
+ *  see the web branch. Desktop by default, which is what the real module answers here. */
+vi.mock("@/pwa/target", () => ({ isWebTarget: vi.fn(() => false) }));
+
+beforeEach(() => {
+  vi.mocked(isWebTarget).mockReturnValue(false);
+});
 
 const mount = (ui: React.ReactNode) => render(<TooltipProvider>{ui}</TooltipProvider>);
 const advance = (ms: number) => act(() => void vi.advanceTimersByTime(ms));
@@ -193,6 +202,49 @@ describe("CardArt", () => {
       </button>,
     );
     expect(screen.getByRole("button")).toHaveAccessibleName("Rhystic Study");
+  });
+
+  /**
+   * **The frame takes a URL and never asks what platform it is on**, which is the whole
+   * arrangement: `cardArtSrc` in `@/lib/images` owns the branch, and these three tests are what
+   * say the frame is wired to it rather than to a check of its own.
+   *
+   * A row carries `imageUris` on **both** builds — one DTO, one shape — so the desktop half is
+   * "the local cache still wins", not "nothing was passed". Preferring the supplied URL there
+   * would refetch a screenful of art the cache already holds, over the network, on every scroll,
+   * and it would still draw cards: there is nothing on screen to catch it.
+   */
+  const SUPPLIED = "https://cards.scryfall.io/large/front/0/0/0000419b.jpg?1706230661";
+
+  it("keeps drawing the cached protocol picture on desktop when a row hands it a URL", () => {
+    render(<CardArt cardId="bolt" name="Lightning Bolt" imageUrl={SUPPLIED} />);
+
+    const img = screen.getByRole("img", { name: "Lightning Bolt" });
+    expect(img).toHaveAttribute("src", expect.stringContaining("/display/bolt/0"));
+    expect(img.getAttribute("src")).not.toContain("scryfall.io");
+  });
+
+  it("draws the URL it was handed on the web build, where there is no protocol to ask", () => {
+    vi.mocked(isWebTarget).mockReturnValue(true);
+    render(<CardArt cardId="bolt" name="Lightning Bolt" imageUrl={SUPPLIED} />);
+
+    expect(screen.getByRole("img", { name: "Lightning Bolt" })).toHaveAttribute("src", SUPPLIED);
+  });
+
+  /**
+   * The failure this prevents is a *broken image*, not a missing one: a browser handed
+   * `mtgimg://` for a printing Scryfall has no picture of would draw the platform's own broken
+   * icon under the card's name. The frame already knows how to say "No image", and it is still
+   * a card — the name is what the reader came for.
+   */
+  it("draws the no-art frame on web for a card whose row carries no picture", () => {
+    vi.mocked(isWebTarget).mockReturnValue(true);
+    render(<CardArt cardId="bolt" name="Lightning Bolt" />);
+
+    expect(screen.queryByRole("img")).not.toBeInTheDocument();
+    expect(screen.getByText("Lightning Bolt")).toBeInTheDocument();
+    // "No image" and not "No card": the printing exists, its picture does not.
+    expect(screen.getByText("No image")).toBeInTheDocument();
   });
 
   /** The face and the variant both reach the URL, which is what keys the image. */
