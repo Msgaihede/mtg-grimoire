@@ -43,3 +43,6 @@ ds-bundle/
 .design-sync/.cache/
 .design-sync/node_modules
 .design-sync/*.log
+# Transient run logs. `npm run verify > verify.log` is the documented way to read a run
+# (never pipe it), and one got committed by a `git add -A` before this rule existed.
+*.log
