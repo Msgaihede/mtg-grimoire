@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactElement } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 import { TOOLTIP_OPEN_MS, TOOLTIP_PANEL_ID } from "@/components/tooltip/TooltipProvider";
 import { openDropdown } from "@/test-dropdown";
+import { PHONE_HEIGHT_PX, PHONE_PX } from "@/lib/viewports";
 import { FilterBar } from "./FilterBar";
 import { useCardSearch, type CardSearch } from "./useCardSearch";
 
@@ -920,5 +921,112 @@ export const StatedFilters: Story = {
     await expect(
       canvas.getByRole("button", { name: "Reset all — 5 filters active" }),
     ).toBeInTheDocument();
+  },
+};
+
+/**
+ * The phone frame, and the two things it has to fake for the sheet to be drawn at all.
+ *
+ * **`matchMedia`, because the sheet is gated on the *window* rather than on a box.**
+ * `useNarrowWindow` asks `window.matchMedia("(max-width: 390px)")` at read time — deliberately,
+ * so that a caller can state the width — and a 390px `<div>` inside a 1200px canvas is not a
+ * 390px window. Every other query keeps the platform's answer, which is `src/test-viewport.ts`'s
+ * rule and not fastidiousness: `motion`'s `useReducedMotion` reads this same API, and a blanket
+ * `true` would also tell it the reader had asked for reduced motion.
+ *
+ * It is patched **in the render body** because `useNarrowWindow` is read during the render of a
+ * descendant — a layout effect runs a whole render too late, and the stub reports no `change`
+ * event to re-render on. The mount effect re-applies it for `StrictMode`, whose mount → cleanup →
+ * mount would otherwise leave the original restored and the story drawn as a desktop; the
+ * cleanup is what keeps this out of the next story's world.
+ *
+ * **`contain: layout`, because `Dialog`'s scrim is a bare `fixed inset-0`.** A layout-contained
+ * box is the containing block for every `fixed` descendant under it, so this is what makes the
+ * sheet resolve against the phone rather than against the whole canvas. It is the same rule
+ * `FilterBar` obeys from the other side — the sheet is mounted *outside* the bar's
+ * `@container/fb` precisely so this does not happen by accident there — spent here on purpose.
+ *
+ * `p-5` is `AppShell`'s `main`, so the 40px of vertical the plan's budget charges is on screen.
+ */
+const phone = (Story: () => ReactElement) => {
+  const original = useRef<typeof window.matchMedia | null>(null);
+  const narrow = useRef(((query: string) => {
+    if (!query.includes(`${PHONE_PX}px`)) return original.current!(query);
+    return {
+      matches: true,
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    } as unknown as MediaQueryList;
+  }) as typeof window.matchMedia);
+  if (original.current === null) {
+    original.current = window.matchMedia;
+    window.matchMedia = narrow.current;
+  }
+  useEffect(() => {
+    const before = original.current!;
+    window.matchMedia = narrow.current;
+    return () => {
+      window.matchMedia = before;
+    };
+  }, []);
+  return (
+    <div
+      className="shrink-0 overflow-hidden bg-bg p-5 text-text"
+      style={{ width: PHONE_PX, height: PHONE_HEIGHT_PX, contain: "layout" }}
+    >
+      <Story />
+    </div>
+  );
+};
+
+/**
+ * **The tray as a sheet — every width at or below the phone's, and nowhere else.**
+ *
+ * Measured on the device on 2026-08-29 (OnePlus, Chrome 152, portrait): the shut bar is 381px of
+ * a 545px content box, the wall gets 99 — 0.42 of a tile row — and the *open* tray is **922px**,
+ * four times the room there is. So on a phone the tray stops being a panel in the flow and
+ * becomes a `Dialog`: `src/CLAUDE.md`'s shape for a surface that is **consulted** rather than
+ * worked out of, which is exactly what this one is — a reader opens it, sets a filter, and goes
+ * back to the wall.
+ *
+ * **The height is the shell's existing clamp, not a new prop.** `Dialog`'s only geometry prop is
+ * `width`, and the height rule it would be reaching for is already written: the panel's
+ * `max-h-full` against the scrim's `grid-rows-[minmax(0,1fr)]`. The tray scrolls inside the panel
+ * rather than the panel growing off the bottom of the phone.
+ *
+ * Every other story on this page is the same component above the phone width, where nothing about
+ * this branch renders at all — the row is drawn on five surfaces and four of them have no phone in
+ * them.
+ */
+export const PhoneSheet: Story = {
+  args: { preset: everything, width: "w-full" },
+  decorators: [phone],
+  parameters: {
+    // **Its own iframe, and the frame above is why it needs one.** This story patches
+    // `window.matchMedia` for the length of its own life; rendered inline, that patch would be
+    // live in the preview window while every other story on this docs page rendered, and the
+    // whole page would be drawn as a phone. `inline: false` is this repo's answer to exactly that
+    // — the `useAppStore` rule in `.storybook/CLAUDE.md`, and `Dialog.stories.tsx`'s scrim — and
+    // it is what keeps a world belonging to a story.
+    docs: { story: { inline: false, height: `${PHONE_HEIGHT_PX + 40}px` } },
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await openTray(canvas);
+
+    const sheet = await canvas.findByRole("dialog");
+    // The controls are in the sheet and not in the flow — one tray, mounted in one of two places,
+    // never two copies.
+    await expect(within(sheet).getByRole("button", { name: "Format" })).toBeInTheDocument();
+    await expect(within(sheet).getByRole("button", { name: "All printings" })).toBeInTheDocument();
+    await expect(canvas.getAllByRole("button", { name: "Format" })).toHaveLength(1);
+    // The search box stays on the bar behind it — Task 2's strip is what it becomes, and this
+    // story is what that task sheds into.
+    await expect(sheet).not.toContainElement(canvas.getByLabelText("Search cards"));
   },
 };

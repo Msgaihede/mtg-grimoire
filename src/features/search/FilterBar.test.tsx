@@ -1,13 +1,14 @@
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { UserEvent } from "@testing-library/user-event";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { MANA_VALUES } from "@/components/FilterChips";
 import { TOOLTIP_OPEN_MS, TOOLTIP_PANEL_ID, TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import type { FacetResponse, SearchSortKey } from "@/lib/ipc";
 import type { TagChip } from "@/features/tags/tagFilters";
 import type { SortSpec } from "@/lib/sort";
 import { openDropdown, pickOption } from "@/test-dropdown";
+import { stubNarrowWindow } from "@/test-viewport";
 import type { TagToken } from "./tagQuery";
 import { FilterBar } from "./FilterBar";
 import { ANY_CARD, FORMATS } from "./useCardSearch";
@@ -1487,6 +1488,163 @@ describe("FilterBar, its tray", () => {
 
     await userEvent.click(screen.getByRole("button", { name: /^Hide filters/ }));
     expect(screen.queryByRole("button", { name: "Format" })).toBeNull();
+  });
+});
+
+/**
+ * The tray as a **sheet** below the phone width — 9c's Task 1.
+ *
+ * Measured on the device on 2026-08-29 (OnePlus, Chrome 152, portrait): the shut bar is 381px of
+ * a 545px content box and the wall gets 99, which is 0.42 of a tile row; the *open* tray is
+ * **922px**, four times the room there is. So on a phone the tray stops being a panel in the flow
+ * and becomes a `Dialog` — `src/CLAUDE.md`'s shape for a surface that is *consulted* rather than
+ * worked out of.
+ *
+ * **Every case here states a width, because none of them can measure one.** jsdom's `matchMedia`
+ * never matches (`src/test-setup.ts`), which is what silently puts every other case in this file
+ * in the desktop shape; `stubNarrowWindow` is how a case says otherwise. And jsdom applies no
+ * container query and loads no stylesheet, so nothing below is about a pixel — these are
+ * assertions about **which box a control is in**, which is the half of this change the suite can
+ * actually referee.
+ */
+describe("FilterBar, its tray as a sheet", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  /**
+   * Walk up to the nearest `@container/fb` box, by `classList` rather than by `closest()`.
+   *
+   * `@` and `/` are both characters a CSS selector has to escape, and a mis-escaped selector
+   * matches nothing and *raises nothing* — it reads exactly like the ancestor being absent, which
+   * is the very thing these cases exist to tell apart. `classList.contains` takes the literal
+   * token and cannot be got wrong.
+   */
+  const containerBox = (el: Element): HTMLElement | null => {
+    for (let node: Element | null = el; node !== null; node = node.parentElement) {
+      if (node.classList.contains("@container/fb")) return node as HTMLElement;
+    }
+    return null;
+  };
+
+  /** The tray panel itself, found the way assistive tech finds it: through the button's own
+   *  `aria-controls`. */
+  const trayPanel = (toggle: HTMLElement) =>
+    document.getElementById(toggle.getAttribute("aria-controls")!);
+
+  it("puts the tray's controls inside a dialog below the phone width", async () => {
+    stubNarrowWindow(true);
+    render(<FilterBar search={search()} />);
+
+    // Nothing is mounted until it is asked for — a sheet is a `Dialog`, and a closed `Dialog`
+    // renders no panel at all.
+    expect(screen.queryByRole("dialog")).toBeNull();
+
+    const toggle = await openTray();
+    const sheet = screen.getByRole("dialog");
+
+    expect(within(sheet).getByRole("button", { name: "Format" })).toBeInTheDocument();
+    expect(within(sheet).getByTestId("set-combobox")).toBeInTheDocument();
+    expect(within(sheet).getByRole("button", { name: /^Owned\b/ })).toBeInTheDocument();
+    expect(within(sheet).getByRole("button", { name: /^Rare cards\b/ })).toBeInTheDocument();
+    expect(within(sheet).getByLabelText("Lowest price")).toBeInTheDocument();
+    expect(within(sheet).getByRole("button", { name: "All printings" })).toBeInTheDocument();
+
+    // The panel the button names is the one in the sheet, not a second copy left in the flow —
+    // two mounted trays would be two tab stops and two accessible names per filter.
+    const panel = trayPanel(toggle);
+    expect(panel).not.toBeNull();
+    expect(sheet).toContainElement(panel);
+    expect(screen.getAllByRole("button", { name: "Format" })).toHaveLength(1);
+  });
+
+  /**
+   * **The half that guards the other four surfaces**, and the one this task's mutation step
+   * removes the gate to see fail. `FilterBar` is the one filter row for the search page, the Tags
+   * page, both tabs of the deck editor's docked panel, the collection and the wishlist — four of
+   * which have no phone in them. A sheet reaching a 1500px bar would take every control on it
+   * behind a modal nobody asked for, and every existing case in this file would still pass:
+   * `screen.getByRole` searches the whole document, so a control in a dialog is a control it
+   * finds. **The absence of the dialog is therefore the assertion**, not the presence of the
+   * controls.
+   */
+  it("leaves the tray in the flow at every other width", async () => {
+    stubNarrowWindow(false);
+    render(<FilterBar search={search()} />);
+
+    const toggle = await openTray();
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("button", { name: "Format" })).toBeInTheDocument();
+    expect(trayPanel(toggle)).not.toBeNull();
+  });
+
+  /**
+   * **The trap that has no other witness.** A container query resolves against the nearest
+   * ancestor carrying `container-type`, and a `Dialog` panel is not inside the bar's
+   * `@container/fb` box — so moving the tray into the sheet without giving the sheet a container
+   * of its own would leave four rules inside `FilterTray` with nothing to resolve against: the
+   * cell grid's one-to-two-to-three columns at 640 and 900, and the rarity and condition chips'
+   * grid-to-flow at 640. They would fall to their base arrangement **silently** — no error, no
+   * warning, and jsdom applies no container query, so not a red test either.
+   *
+   * What jsdom *can* see is an ancestor's class. That is the whole of what this pins, and it is
+   * enough: the query cannot be evaluated here, but the box it would be evaluated against can be
+   * shown to exist.
+   */
+  it("keeps the tray inside a named container box in both places", async () => {
+    stubNarrowWindow(true);
+    const { unmount } = render(<FilterBar search={search()} />);
+
+    const sheetPanel = trayPanel(await openTray())!;
+    const sheetContainer = containerBox(sheetPanel);
+    expect(sheetContainer).not.toBeNull();
+    // The sheet's own, not the bar's — a `Dialog` panel is nowhere near the bar's box, so an
+    // ancestor found here has to be one the sheet brought with it.
+    expect(screen.getByRole("dialog")).toContainElement(sheetContainer);
+
+    unmount();
+    stubNarrowWindow(false);
+    render(<FilterBar search={search()} />);
+
+    expect(containerBox(trayPanel(await openTray())!)).not.toBeNull();
+  });
+
+  /**
+   * **The scrim is `fixed inset-0` and carries no correction of its own**, unlike the dropdowns —
+   * whose `usePopupPlacement` measures a zero-size frame precisely so it can subtract whatever
+   * containing block it landed in. `container-type: inline-size` applies layout containment, and
+   * a layout-contained box is the containing block for every `fixed` descendant under it: a sheet
+   * mounted inside the bar would stretch to the *bar's* box rather than to the window, and would
+   * scrim the filter row it came out of instead of the view behind it.
+   *
+   * **jsdom computes no containment and would report this as working.** The structure is what
+   * can be asserted, so the structure is what is asserted.
+   */
+  it("mounts the sheet outside the bar's own container box", async () => {
+    stubNarrowWindow(true);
+    render(<FilterBar search={search()} />);
+    await openTray();
+
+    const sheet = screen.getByRole("dialog");
+    // The bar's box is the one holding the search field; the sheet must not be inside it.
+    const bar = containerBox(screen.getByPlaceholderText("Search cards…"))!;
+    expect(bar).not.toBeNull();
+    expect(bar).not.toContainElement(sheet);
+  });
+
+  /** The way out is the shell's, so it is worth one case that the shell is really carrying it:
+   *  Escape closes the sheet, and the bar's own button reads shut again afterwards. */
+  it("closes the sheet on Escape and says so on the bar", async () => {
+    stubNarrowWindow(true);
+    render(<FilterBar search={search()} />);
+    await openTray();
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(screen.getByRole("button", { name: /^Show filters/ })).toHaveAttribute(
+      "aria-expanded",
+      "false",
+    );
   });
 });
 
