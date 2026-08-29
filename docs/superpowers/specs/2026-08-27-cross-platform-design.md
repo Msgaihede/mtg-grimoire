@@ -574,8 +574,8 @@ Every remaining PR now has a task-level plan in `docs/superpowers/plans/`.
 | 6 | pairing | `2026-08-28-sync-pairing.md` | **done** — #264 |
 | 7 | the relay and conflict engine | `2026-08-28-sync-relay-and-engine.md` | **done** — #269 |
 | 8 | the Android target | `2026-08-28-android-target.md` | **done** — #262, with #270 fixing the cross-compile |
-| 9a | mobile layout: foundation + options | `2026-08-28-mobile-layout-9a-foundation-and-options.md` | **planned, not started** — the only original PR still wholly outstanding |
-| 9b | implement the chosen layout | — | **deliberately unplanned** |
+| 9a | mobile layout: foundation + options | `2026-08-28-mobile-layout-9a-foundation-and-options.md` | **done** — #274 shipped Tasks 1–4 (the foundation); the four design rounds ran and **the decision was taken on 2026-08-29** |
+| 9b | implement the chosen layout | — | **now writable.** The brief is [the options document](2026-08-28-mobile-layout-options.md)'s "What 9b has to do, per surface" |
 
 **Updated 2026-08-29.** Everything above 9a has shipped, and the phase is done end to end: the
 app runs on Windows, in a browser and on an Android phone, two devices pair with no account, and
@@ -595,10 +595,27 @@ rather than planned:
   elements in the app. 3c's Tasks 4–6 were deliberately not run, because the plan assumed one
   sensor to harden and the measurement showed the question is larger than that.
 
-**9b has no plan on purpose.** §6.1 says the layout options come to Markus before anything is
-built; naming the components 9b would create requires a choice nobody has made, and writing them
-now would be placeholders. 9a produces the options and the design-independent foundation; 9b gets
-planned once a direction is chosen.
+**9b had no plan on purpose, and now has a brief.** §6.1 says the layout options come to Markus
+before anything is built; naming the components 9b would create required a choice nobody had made.
+That choice was taken on **2026-08-29**, from twelve options built on the real components at
+390×844 and looked at in Storybook:
+
+| Round | Chosen |
+| --- | --- |
+| the chrome | **R2** — a bottom tab bar; the rail goes below `PHONE_PX` and the status line moves |
+| the wall | **G1** — a 144px phone tile, two columns on a 324px wall |
+| the deck editor | **D1** — the search rail's open state becomes a full-width overlay |
+| the filter bar | **F1** — raise the target sizes and change nothing else |
+
+[2026-08-28-mobile-layout-options.md](2026-08-28-mobile-layout-options.md) is the record: the
+decision, the per-surface brief 9b is planned from, and the eight rejected options kept with their
+wireframes and their costs.
+
+> ⚠️ **It also corrects this spec's assumption that the four surfaces are four questions.** They
+> are not — the chrome decides how much width the wall and the deck editor have to spend, and
+> `main`'s content box is 26px wider than what `CardGrid` actually measures. Between them those two
+> facts mean the obvious 160px phone tile draws a **single** column. The options document leads
+> with this.
 
 **PR 3.5 was added 2026-08-28 and must land before PR 4.** `mtg.db` holds the derived corpus and
 the user's own data in one file, so an OPFS eviction on the web target takes the collection with
