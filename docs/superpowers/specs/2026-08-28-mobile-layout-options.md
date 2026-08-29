@@ -14,6 +14,125 @@ reader needs and the thing that always gets thrown away.
 > nobody had made. That choice is what this document holds.
 
 ---
+## The decision
+
+**Taken by Markus on 2026-08-29**, through the option cards, with all twelve stories live in
+Storybook at the moment of choosing. The chrome and the filter bar were put first because the
+filter bar is independent and the chrome constrains everything else; the wall and the deck editor
+were then asked against a settled 324px wall and 350px desk rather than against a range.
+
+| Round | Chosen | What it commits the app to |
+| --- | --- | --- |
+| 1 — chrome | **R2 — a bottom tab bar** | The rail goes below `PHONE_PX`; the six `NAV` entries move to the thumb zone inside `--safe-b`; the ribbon becomes one title row and **the status line moves** |
+| 2 — the wall | **G1 — a 144px phone tile** | `baseTileWidth={144}` below `PHONE_PX`: two columns on a 324px wall, gutter exactly `GAP`, the zoom ladder untouched |
+| 3 — deck editor | **D1 — the rail opens a full-width overlay** | The search panel's rail keeps its fallback and its open state becomes a full-width overlay over the deck, the pattern #183 already established |
+| 4 — filter bar | **F1 — raise the target sizes and nothing else** | The `coarse:` variant and `--target-min` get their first consumer; the four-band container layout is otherwise untouched |
+
+**The through-line is that three of the four are the cheapest option in their round**, and that is
+a result rather than a compromise: the tree turned out to have more of the phone answer in it than
+the spec assumed — a collapsed rail already built, a search panel that already falls back, a filter
+bar whose narrow band was designed for a box half a phone's width. The one place the expensive
+option won is the chrome, and it won on a number: the rail is half the card art on screen.
+
+---
+
+## What 9b has to do, per surface
+
+**This is the brief 9b's plan is written from. It is not that plan.**
+
+### R2 — the bottom tab bar
+
+- **`NAV`, `NavItem`, `NavNote` and `NavToggle` are module-private** — `AppShell.tsx` has exactly
+  one `export`, at line 100. A bar begins by exporting or rebuilding the 44px row, its gold
+  hairline, its `aria-current` and its `useDndDropTarget` registration. **The plan costed none of
+  this**, and `NAV`'s own comment says it exists so there is one word per view rather than two that
+  can drift — so copying the list is the wrong repair.
+- **The bar sits inside `--safe-b`.** That token shipped in PR #274 published and deliberately
+  unapplied; this is the consumer it was published for.
+- **`useSidebarDrops` follows the bar**, which is possible only because `@dnd-kit/dom` is
+  pointer-based. **Nothing in 9a proved it** — these stories carry no `play`, so no drag was
+  driven. R2's frame draws the shipped `DROP_RING` under a `dragging` control so it can be looked
+  at; that is a picture, not a proof, and re-verifying the drop is 9b's first job on this surface.
+- **The status line has to go somewhere.** It does not fit on a 390px ribbon row in any option —
+  89px of the 244 it needs, with the whole window and no rail. It is a permanently-mounted
+  `role="status"` live region whose number is `aria-hidden`, and **a live region that only
+  sometimes exists announces nothing**, so it must stay mounted wherever it lands.
+- **Two facts live *only* in the ribbon's tooltip and have no other door**: which data folder is
+  live, and how many card images could not be cached (`Ribbon.tsx:96` and `:97–98`). A phone reader
+  has no hover. Settings names **neither** today (`SettingsPage.tsx:154`, `DangerZonePanel.tsx:117`),
+  and it is the obvious home.
+- Cost accepted: 53px of height, on the axis that turned out to be the scarce one.
+
+### G1 — the 144px tile
+
+- Pass `baseTileWidth={144}` at the wall's call sites below `PHONE_PX`. The prop exists and already
+  has a caller (the deck panel passes 150), so this is one argument at one call site per wall.
+- **Do not use 160.** On the real wall — `rowsRef`, inside the scroller's `border` and `p-3` —
+  `columnsFor(324, 160)` is **1**. The plan's suggested 160 is the failure it was meant to fix,
+  arriving one inset later.
+- **The chin does not scale with the tile.** `--mark-scale` and `--control-scale` come from
+  `cardScaleVars(zoom)`, so the chin stays 28px with 10px type and becomes proportionally taller —
+  12.4 % of tile height at 144 against 10.7 % at 170. 9b decides whether that is accepted or
+  whether the chin earns a phone treatment of its own.
+- **Nothing steps `cardZoom` on a touchscreen, and G1's answer is that the default size is right.**
+  That is a legitimate answer and it was chosen knowingly, but record the consequence: the sixteen
+  stops of `ZOOM_STEPS` stay unreachable on a phone and `cardZoom` is frozen at whatever
+  `hydrateCardZoom` restored. The one caller is `useCardZoomGesture.ts:86`.
+- **The quick-add trigger is unaimable and G1 does not fix it.** `--control-scale` does not move,
+  so it stays `24 × 0.85 = 20.4px` — under WCAG 2.5.8's 24×24 before 2.5.5's 44 is discussed — and
+  it is `opacity-0`, which `CardGrid.tsx:1474` says in as many words is **still a hit target**. A
+  finger that lands on it presses it, and nothing on screen says it is there. G3 was the only
+  option with room to fix it; that room was not taken, so this is now an open item.
+
+### D1 — the rail opens a full-width overlay
+
+- **`roomForPanel`'s consequence has to change first.** At 390 the disclosure is `aria-disabled`
+  and refuses — `onClick={() => roomy && setOpen(!open)}` (`DeckSearchPanel.tsx:580`) — so today
+  the rail **cannot be pressed at all**. The fallback exists; the door out of it does not.
+- The open state is a full-width overlay over the deck, drawn the way the card pane already is
+  (`PANE_OVER_ATTR`, issue #183).
+- **`TextView` overflows by 14px** and no option could fix it from outside: `COLUMN_WIDTH` is a
+  module constant of 300px (`TextView.tsx:68`) against a 286px view box, contained by the view's
+  own `overflow-x-auto`. Either it becomes a prop or the overhang is accepted deliberately.
+- **Accepted cost: while the overlay covers the deck there is nothing to drag into**, so adding a
+  card from search is a tap and dragging is for rearranging within the deck. Every in-deck drag is
+  unaffected — dnd-kit's `PointerSensor` delivers those regardless.
+- Re-measure the header's `deskWidth` ladder (1400 / 1100 / 900) at phone widths; a fourth rung is
+  a smaller change than a new mechanism.
+
+### F1 — raised targets
+
+- Apply `coarse:` and `var(--target-min)` to the controls below 36px. **First consumer of both**,
+  which shipped unapplied in PR #274 precisely so this decision could take them.
+- **`ManaChip` and `LayoutToggle` have no `className` or size prop**, so this edit lives inside
+  `FilterChips.tsx` rather than at a call site.
+- **`coarse:` must come last and unconditional.** Stacking it onto a container variant
+  (`@min-[640px]/fb:coarse:size-11`) has **no specificity answer** — source order decides.
+- **`ActiveFilterChip` at 26px is where the 44px floor and the app's stated design conflict.** Grow
+  the *target* with a `::before`, not the chip.
+- The ten mana-value chips **already wrap at 350px** (`10×32 + 9×4 = 356`), which is why raising
+  them costs no extra line.
+- **F2 is the named follow-on for the one state F1 leaves bad** — the open tray is 493px in flow,
+  774px against a 602px column — and it is conditional on somebody driving the open tray on a
+  device first. It is not part of 9b unless that reading says so.
+
+### Cross-cutting, and the thing to measure before anything else
+
+- **The vertical is tighter than the horizontal.** Ribbon 58 + `main`'s 40 + a 273px shut filter
+  bar leaves roughly **329px** of wall against a ~700px visible viewport — one tile row and a
+  sliver. Every option above spends or saves on that axis, and **nothing in 9a measured the
+  assembled stack**, because until one option per surface was chosen there was no stack to measure.
+  **9b's first measurement is the whole chrome end to end on a device**, not any single surface.
+- **`touch-action` already exists at two sites** — `index.css:464` (the mirrored `@dnd-kit/dom`
+  rules) and `DeckSearchPanel.tsx:1072`. A second registration on one element silently replaces the
+  first, so 9b must check before adding.
+- **Re-verify every shipped drag at touch sizes**, and remember that a working new drop is never
+  evidence the old one survived.
+- **The dialog against a real URL bar is still owed** — the recipe is in
+  `docs/reference/frontend-design.md`, and it needs hardware because `cdp.mjs size` hardcodes
+  `mobile: false`.
+
+---
 
 ## Read this first: the four rounds are not independent
 
