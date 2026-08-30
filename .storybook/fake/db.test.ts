@@ -5577,7 +5577,13 @@ describe("the busy fault", () => {
     // `sync::with_write`, and `sync_supporter_status`'s doc says why a *read* does: so that it
     // cannot answer from beside the claim that has just written, which is the read the panel
     // makes next. This is the fourth entry here whose delta and whose handler count differ.
-    expect(names).toHaveLength(87);
+    // Leaving a group then added **one**, 87 -> 88: `sync_group_leave` takes `sync::with_write`
+    // like the seven pairing writes beside it, because it empties `sync_devices` and `sync_group`
+    // and deletes the five grant rows. It is refusable at the door for the ordinary reason, and
+    // that is worth this loop's attention rather than in spite of it: everything *after* the door
+    // in that command is best effort by design (spec §2.1), so `refuseIfBusy` is the one refusal
+    // it has and a handler that forgot it would look identical from outside.
+    expect(names).toHaveLength(88);
     for (const name of names) {
       expect(() => (w as unknown as Record<string, (a: unknown) => unknown>)[name](args)).toThrow(
         /busy/i,
@@ -5619,6 +5625,44 @@ describe("the roster", () => {
     expect(readHandlers(db).sync_pairing_status().devices.map((d) => d.name)).toEqual(["Desk"]);
     // The rotation is the removal, so the epoch moves with it.
     expect(readHandlers(db).sync_pairing_status().epoch).toBe(3);
+  });
+
+  /**
+   * Leaving — **the whole roster goes, and the grant goes with it** (spec §2.1 and §2.3).
+   *
+   * The two halves are asserted together because either alone passes against a real bug. A
+   * handler that cleared the group and kept the refresh secret leaves a device that reads
+   * *Supporting* with nowhere to sync; one that cleared the grant with `revoke` rather than
+   * `clear` leaves `groupBound: true`, and the panel draws *Membership ended* at a reader whose
+   * pledge is untouched. Both are one field away from correct and neither shows up in the
+   * roster.
+   */
+  it("takes this device out of the group and clears the grant with it", () => {
+    const db = seed("paired");
+    writeHandlers(db).sync_patreon_claim({ code: "PQRS-TVWX-YZ01" });
+    expect(writeHandlers(db).sync_supporter_status().entitled).toBe(true);
+
+    writeHandlers(db).sync_group_leave();
+
+    // No group, and the roster is emptied rather than stamped: `identity::leave_group` is a
+    // DELETE on both tables, where a removal is an UPDATE on one.
+    expect(db.pairing.group).toBeNull();
+    expect(db.pairing.devices).toEqual([]);
+    expect(readHandlers(db).sync_pairing_status().groupId).toBeNull();
+    // A device out of the box, field by field — and `groupBound` is the one that separates
+    // `clear` from `revoke`, so it is spelled out rather than folded into a truthiness check.
+    expect(writeHandlers(db).sync_supporter_status()).toEqual({
+      entitled: false,
+      status: "dead",
+      since: null,
+      groupBound: false,
+    });
+  });
+
+  /** The one refusal `leave_group_now` has, in the crate's own sentence. Everything after that
+   *  check is best effort, so this is the only way the press can answer no. */
+  it("refuses to leave a group this device is not in", () => {
+    expect(() => writeHandlers(makeDb()).sync_group_leave()).toThrow(/not in a pairing group/i);
   });
 });
 

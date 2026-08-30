@@ -1,9 +1,11 @@
 import { GROUP_SEGMENT } from "./claim";
 import {
+  MAX_GROUP_DEVICES,
   authIsCurrent,
   authIsRecent,
   currentManifest,
   equalsConstantTime,
+  keepOnly,
   recordRotation,
 } from "./groupauth";
 // **`import type` and never a value import**, for `groupauth.ts`'s reason: `index.ts` imports
@@ -70,15 +72,21 @@ const DEVICE_ID = new RegExp(`^${GROUP_SEGMENT}$`);
 const CREDENTIAL = /^[0-9a-f]{64}$/;
 
 /**
- * The largest group a rotation may publish, and the largest one blob may be.
+ * The largest one blob may be.
  *
- * **This is the one place a caller chooses how much the relay stores.** `keys` is written whole
- * into a single D1 column, so an unbounded object here is an unbounded row — and the caller
- * choosing its size has already authenticated, which makes this a bill rather than an attack.
- * 64 devices is far past any real pairing group and 4 KB is far past a sealed 32-byte key with
- * its nonce and tag; both are ceilings that say "something is wrong" rather than budgets.
+ * **This and the device cap are the only places a caller chooses how much the relay stores.**
+ * `keys` is written whole into a single D1 column, so an unbounded object here is an unbounded
+ * row — and the caller choosing its size has already authenticated, which makes this a bill
+ * rather than an attack. 4 KB is far past a sealed 32-byte key with its nonce and tag: a ceiling
+ * that says "something is wrong" rather than a budget.
+ *
+ * **The device half is [`MAX_GROUP_DEVICES`] and is imported rather than spelled again here.** It
+ * used to be a local `64`, chosen as an absurdity nobody would reach; it is now the real cap the
+ * `/token` door admits devices against, and the two must be one constant. A manifest bound above
+ * the admission cap would let a rotation publish a group larger than the relay will ever issue
+ * tokens for; one below it would refuse a rotation that names devices the relay itself admitted.
+ * Either way the disagreement only becomes visible at somebody's fifth device.
  */
-const MAX_DEVICES = 64;
 const MAX_BLOB_CHARS = 4096;
 
 /**
@@ -136,16 +144,17 @@ async function refreshSecretMatches(env: Env, group: string, presented: string):
  * What is wrong with this manifest, as the sentence to answer with, or `null` for one the relay
  * will store.
  *
- * Every key is a device id and every value a non-empty blob under [`MAX_BLOB_CHARS`]. The blob
- * itself is never decoded — it is sealed to a key the relay does not hold, and a relay that
- * checked its shape would be claiming to know something about it that it must not.
+ * Every key is a device id and every value a non-empty blob under [`MAX_BLOB_CHARS`], and there
+ * are at most [`MAX_GROUP_DEVICES`] of them. The blob itself is never decoded — it is sealed to a
+ * key the relay does not hold, and a relay that checked its shape would be claiming to know
+ * something about it that it must not.
  */
 function manifestProblem(keys: unknown): string | null {
   if (typeof keys !== "object" || keys === null || Array.isArray(keys)) {
     return "malformed rotation";
   }
   const entries = Object.entries(keys as Record<string, unknown>);
-  if (entries.length > MAX_DEVICES) return "that rotation names too many devices";
+  if (entries.length > MAX_GROUP_DEVICES) return "that rotation names too many devices";
   for (const [device, blob] of entries) {
     if (!DEVICE_ID.test(device)) return "that is not a device id";
     if (typeof blob !== "string" || blob === "") return "malformed rotation";
@@ -172,6 +181,9 @@ function manifestProblem(keys: unknown): string | null {
  * credential's shape and the body's are decided in the Worker's own memory; the credential's
  * *value* and the epoch's are two round trips to D1. A caller who gets the body wrong pays for
  * neither.
+ *
+ * **And the manifest is the roster, so publishing one settles who holds a device slot** — the
+ * `keepOnly` below the 409, which is spec §4.4's whole implementation.
  */
 export async function handleRotate(request: Request, env: Env, group: string): Promise<Response> {
   const presented = presentedCredential(request);
@@ -210,6 +222,18 @@ export async function handleRotate(request: Request, env: Env, group: string): P
   if (!(await recordRotation(env, group, epoch, auth, keys))) {
     return json({ error: "that rotation does not advance the group's key" }, 409);
   }
+
+  // **After the record and never before it: a refused rotation must free nothing.** The two
+  // statements are not a transaction, so the order is the whole of the guarantee — `keepOnly`
+  // ahead of the 409 above would let a device presenting a stale-but-live auth hand back four
+  // slots by publishing an epoch the group then declines to move to. Behind it, the only caller
+  // who can free a slot is one whose manifest the group has already adopted.
+  //
+  // **This is where a removal and a departure each give their slot back**, with no mechanism of
+  // their own: both publish a manifest, #307 made the manifest the roster, and `keepOnly`
+  // reconciles the device roll against it. `Object.keys` and not the object, because the roll
+  // counts devices and holds no key material.
+  await keepOnly(env, group, Object.keys(keys));
 
   // The caller reads the status and nothing else, but naming the epoch the relay is now standing
   // on is what makes a log line from a failed removal say something.

@@ -259,6 +259,13 @@ pub fn confirm(conn: &Connection, pending: &mut Option<Pending>) -> Result<Seale
         return Err("The other device has not answered yet.".to_owned());
     };
 
+    // **The sixth device is refused here, before a group is minted or a row written** — spec
+    // §4.3. The relay is the fence and this is the message: `/token` refuses the sixth device a
+    // token whatever this build does, and what the check buys is that a reader meets the limit
+    // at the press rather than at a sync three minutes later. It excludes `peer_id`, so
+    // re-running the ceremony with a device already in the group is never what fills it.
+    identity::room_for(conn, &peer_id)?;
+
     let group = identity::create_group(conn, &me).map_err(err)?;
     identity::add_device(
         conn,
@@ -353,6 +360,13 @@ pub fn complete(
             );
         }
     }
+
+    // **The same cap from the joining side** — spec §4.3. On a device joining for the first time
+    // the roster is empty and this can refuse nothing, which is honest: B has never seen the
+    // group it is being let into, so the count that matters is A's. What it does catch is the
+    // asymmetric case — a device already in this group whose roster no longer names the
+    // initiator, where completing would file a sixth row.
+    identity::room_for(conn, &peer_id)?;
 
     identity::join_group(conn, &group_id, epoch, &key, &me).map_err(err)?;
     identity::add_device(
@@ -452,6 +466,11 @@ fn from_hex16(s: &str) -> Option<[u8; 16]> {
 use crate::sync::{self, AppState};
 use crate::sync_engine::client;
 use crate::sync_engine::commands;
+// **Reachable from this module again since spec §2.1, and for one call only.** A *pairing* still
+// asks the membership nothing and writes it nothing — §2.2's rule, and the block of tests at the
+// bottom of this file asserts exactly that. What reaches it is [`leave_group_now`], which is not
+// a pairing: a device that has left the group must not keep a credential that still opens it.
+use crate::sync_engine::entitlement;
 
 /// What [`sync_device_revoke`] says when the round trip it makes first does not complete.
 ///
@@ -628,13 +647,88 @@ pub async fn sync_device_revoke(
     .map_err(|e| format!("could not remove that device: {e}"))?
 }
 
+/// Leave the group this device is in. **Three steps, and the third runs whatever the second
+/// said** — spec §2.1.
+///
+/// 1. [`identity::plan_departure`], which writes nothing and names everyone *but* this device.
+/// 2. [`client::post_rotation`], **best effort**. A 500, a timeout, a plane — none of them is a
+///    reason a reader cannot leave.
+/// 3. [`identity::leave_group`] **and** [`entitlement::clear`], unconditionally.
+///
+/// **Step 3 running whatever step 2 answered is the whole of "leaving is always possible"**, and
+/// it is the reader's own instruction rather than a convenience. The cost is stated rather than
+/// hidden: when the relay could not be reached the remaining devices go on listing a device that
+/// has gone, and the panel's copy says so before the press.
+///
+/// **`clear` and never `revoke`.** The two differ by the mark [`entitlement::membership_ended`]
+/// reads, and nothing ended — this device left a group, and the reader's pledge is untouched.
+/// `revoke` would draw *Membership ended* at somebody whose membership is fine.
+/// `client::check_keys` makes the same choice for a device that was removed, one file over.
+///
+/// **The grant goes at all because a leaver keeping its refresh secret keeps a working credential
+/// for the group it left** — spec §2.3. The refresh door mints a token whose `grp` is that group
+/// and `/g/{group}/push` honours it, so a device that walked out could go on spending the
+/// group's requests.
+///
+/// **No round trip in front of it, unlike [`remove_device`].** That one absorbs the *departing*
+/// device's last push before the key moves; here the departing device is this one, and what it
+/// has not yet pushed it keeps — the rows are already in its own database. Nor is there a
+/// membership check: a removal is refused without one because it must reach the other devices to
+/// mean anything, and a departure means something locally whether or not it publishes.
+async fn leave_group_now(conn: &Connection) -> Result<(), String> {
+    // **A device in no group has nothing to leave, and that is the one refusal.** It is not a
+    // failure of the press so much as an answer to it, and it is the only thing between here and
+    // the clear below.
+    if identity::group(conn).map_err(|e| e.to_string())?.is_none() {
+        return Err(identity::NOT_IN_A_GROUP.to_owned());
+    }
+
+    // **Everything from here is best effort, planning included, and that breadth is the
+    // feature.** The reader asked that leaving always be possible, and a chain that gave up on
+    // its first `?` is only *usually* possible: `plan_departure` reads every peer's public key
+    // and seals a blob to each, so one roster row an older build wrote badly is a device that can
+    // never get out of its group. Publishing is best effort for the plainer reason — offline, or
+    // a membership that has lapsed, are exactly the cases a reader most wants this press in.
+    //
+    // What is lost when planning fails is the *courtesy*, never the departure: the group does not
+    // close behind this device, so the others go on listing it until somebody removes it by hand.
+    // The panel's copy says so, because a reader who leaves over a dead relay has to know that
+    // their other devices have not heard.
+    if let Ok(plan) = identity::plan_departure(conn) {
+        let _ = client::post_rotation(conn, &plan).await;
+    }
+
+    identity::leave_group(conn)?;
+    entitlement::clear(conn)
+}
+
+/// Leave the group. See [`leave_group_now`] for the order and why the last step is unconditional.
+///
+/// **On the blocking pool with a runtime of its own**, for [`sync_device_revoke`]'s reason: the
+/// write connection is behind a `Mutex`, a guard on it cannot cross an `await` on a
+/// multi-threaded runtime, and `spawn_blocking` moves the whole trip to a thread where a
+/// `block_on` is legal.
+#[tauri::command]
+pub async fn sync_group_leave(state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| e.to_string())?;
+        sync::with_write(&state, |conn| runtime.block_on(leave_group_now(conn)))
+    })
+    .await
+    .map_err(|e| format!("could not leave that group: {e}"))?
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    // **Test-only since spec §2.2.** Nothing above this module asks `entitlement` anything any
-    // more: a pairing neither reads this device's membership nor writes the joiner's. What the
-    // tests below do with it is assert exactly that.
-    use crate::sync_engine::entitlement;
+    // `entitlement` arrives through `super::*`. **It was a test-only import from spec §2.2 until
+    // §2.1's departure landed** — a pairing still neither reads this device's membership nor
+    // writes the joiner's, which the block at the bottom of this file asserts; `leave_group_now`
+    // is the one thing above that reaches it, and leaving is not a pairing.
     use httpmock::prelude::*;
 
     fn db() -> Connection {
@@ -1226,6 +1320,320 @@ mod tests {
         never.assert_calls(0);
         assert_eq!(identity::group(&conn).unwrap().unwrap(), before);
         assert_eq!(identity::roster(&conn).unwrap().len(), 2);
+    }
+
+    // -----------------------------------------------------------------------------------
+    // Leaving — spec §2.1, and the two halves that have to be written together
+    // -----------------------------------------------------------------------------------
+
+    /// **A `/rotate` the relay refuses does not stop this device leaving.**
+    ///
+    /// This is the whole of *"leaving is always possible"*: the reader on a plane, and the reader
+    /// whose membership lapsed, both get out of the group. Red if the local clear is put behind
+    /// the POST's success — which is `remove_device`'s correct order, and exactly the wrong one
+    /// here.
+    ///
+    /// **`rotate.assert()` is what stops this test being satisfied by never publishing at all**,
+    /// and its sibling below is the other half of that fence.
+    #[tokio::test]
+    async fn leaving_clears_the_group_even_when_the_relay_refuses() {
+        let server = MockServer::start_async().await;
+        let (conn, _me, group) = removable(&server, true);
+        let rotate = server.mock(|when, then| {
+            when.method(POST).path(format!("/g/{group}/rotate"));
+            then.status(500).body("nope");
+        });
+        assert!(
+            identity::group(&conn).unwrap().is_some(),
+            "the fixture is about a group"
+        );
+
+        leave_group_now(&conn)
+            .await
+            .expect("a 500 on /rotate is not a reason a reader cannot leave");
+
+        rotate.assert();
+        assert!(
+            identity::group(&conn).unwrap().is_none(),
+            "the group survived a departure the relay refused"
+        );
+        assert_eq!(
+            identity::roster(&conn).unwrap().len(),
+            0,
+            "the roster survived a departure the relay refused"
+        );
+    }
+
+    /// **A roster this device cannot seal to is still a group it can leave**, and that is the
+    /// literal reading of "always possible".
+    ///
+    /// `plan_departure` reads every peer's public key and seals the new group key to each, so a
+    /// single bad row — a key an older build wrote short, a column somebody edited by hand — makes
+    /// the *plan* fail. Chained behind a `?`, that is a device which can never get out of its
+    /// group, and the reader asked for the opposite. Planning is therefore best effort exactly as
+    /// publishing is.
+    ///
+    /// **What is lost is the courtesy, never the departure.** Nothing is published, so the other
+    /// devices go on listing this one until somebody removes it by hand. The panel says so.
+    ///
+    /// A 32-byte public key of zeroes is the fixture: `bytes32` answers zeroes for a column of the
+    /// wrong length, so this is also what a hand-edited database looks like from here.
+    #[tokio::test]
+    async fn leaving_works_even_when_the_departure_cannot_be_planned() {
+        let server = MockServer::start_async().await;
+        let (conn, _me, _group) = removable(&server, true);
+        // **This device is not on its own roster.** `plan` looks for the departing id among
+        // the members and answers `NOT_ON_THE_ROSTER` when it is absent, and that shape is
+        // reachable rather than invented: `commit_rotation` and `adopt_epoch` both DELETE
+        // roster rows, so a pass interrupted between the sweep and the group write leaves
+        // exactly this.
+        //
+        // **An all-zero public key is not the fixture, and that is worth recording**:
+        // x25519 accepts one and `wrap_group_key` seals to it perfectly happily, so a test
+        // built on that asserts nothing at all. The anti-vacuity line below is what caught
+        // it, which is the whole reason it is there.
+        conn.execute(
+            "DELETE FROM sync_devices WHERE device_id = \
+             (SELECT device_id FROM sync_identity WHERE id = 1)",
+            [],
+        )
+        .expect("take this device off its own roster");
+
+        assert!(
+            identity::plan_departure(&conn).is_err(),
+            "the fixture must be one that cannot be planned, or this test is about nothing"
+        );
+
+        leave_group_now(&conn)
+            .await
+            .expect("a roster that cannot be sealed to is still a group a reader may leave");
+
+        assert!(
+            identity::group(&conn).unwrap().is_none(),
+            "the group survived a departure that could not be planned"
+        );
+        assert!(
+            !entitlement::membership_ended(&conn),
+            "leaving used revoke rather than clear"
+        );
+    }
+
+    /// ...and one the relay accepts publishes a manifest that closes the group behind the leaver.
+    ///
+    /// ⚠️ **Written because the test above cannot see this.** "Always possible" is satisfiable by
+    /// never publishing at all, and an implementation that dropped `post_rotation` entirely would
+    /// leave every remaining device listing a device that has gone, for ever. Red if the manifest
+    /// names the leaver (the group never closes), if it omits a device that stays (a departure
+    /// would evict somebody else), or if a 200 leaves the group standing.
+    #[tokio::test]
+    async fn leaving_clears_the_group_when_the_relay_accepts() {
+        let server = MockServer::start_async().await;
+        let (conn, me, group) = removable(&server, true);
+        let seen: std::sync::Arc<std::sync::Mutex<Vec<String>>> = Default::default();
+        let recorder = seen.clone();
+        let rotate = server.mock(|when, then| {
+            when.method(POST)
+                .path(format!("/g/{group}/rotate"))
+                .is_true(move |req: &httpmock::prelude::HttpMockRequest| {
+                    recorder.lock().unwrap().push(req.body_string());
+                    true
+                });
+            then.status(200)
+                .json_body(serde_json::json!({ "epoch": 1 }));
+        });
+        let before = identity::group(&conn).unwrap().unwrap();
+
+        leave_group_now(&conn).await.expect("left");
+
+        rotate.assert();
+        let body: serde_json::Value =
+            serde_json::from_str(&seen.lock().unwrap()[0]).expect("a JSON body");
+        assert_eq!(body["epoch"], serde_json::json!(before.epoch + 1));
+        let keys = body["keys"].as_object().expect("a manifest object");
+        assert!(
+            keys.contains_key("deadbeef"),
+            "the device that stays is not on the manifest, so a departure evicts it too"
+        );
+        assert!(
+            !keys.contains_key(&me.device_id),
+            "the leaver named itself, so the group never closes behind it"
+        );
+        assert!(identity::group(&conn).unwrap().is_none());
+        assert_eq!(identity::roster(&conn).unwrap().len(), 0);
+    }
+
+    /// **Leaving clears the grant — `clear`, never `revoke`** — spec §2.3.
+    ///
+    /// The grant has to go, because a leaver keeping its refresh secret keeps a working
+    /// credential for the group it left. But nothing *ended*: the reader's pledge is untouched,
+    /// and `revoke`'s mark would draw *Membership ended* and its reassurance at somebody whose
+    /// membership is fine. Red if `revoke` is called instead — `membership_ended` reads true
+    /// afterwards, because that call leaves a `dead` status row behind — and red if the grant is
+    /// left in place at all.
+    #[tokio::test]
+    async fn leaving_clears_the_grant() {
+        let server = MockServer::start_async().await;
+        let (conn, _me, group) = removable(&server, true);
+        entitlement::store_status(&conn, "active", Some(1_700_000_000)).unwrap();
+        server.mock(|when, then| {
+            when.method(POST).path(format!("/g/{group}/rotate"));
+            then.status(200)
+                .json_body(serde_json::json!({ "epoch": 1 }));
+        });
+        assert!(
+            entitlement::refresh_secret(&conn).is_some(),
+            "the fixture is about a device that holds a grant"
+        );
+
+        leave_group_now(&conn).await.expect("left");
+
+        assert_eq!(
+            entitlement::refresh_secret(&conn),
+            None,
+            "a leaver kept a credential that still opens the group it left"
+        );
+        assert_eq!(client::get_state(&conn, entitlement::ACCESS_TOKEN), None);
+        assert_eq!(
+            client::get_state(&conn, entitlement::SUPPORTER_STATUS),
+            None
+        );
+        assert!(
+            !entitlement::membership_ended(&conn),
+            "`revoke` was called instead of `clear`, so the panel now tells a paying reader \
+             their membership ended"
+        );
+    }
+
+    // -----------------------------------------------------------------------------------
+    // The device cap at the ceremony — spec §4.3
+    //
+    // **The relay is the fence and this is the message.** These refusals are advisory by
+    // construction: this repository is public and a modified build simply would not ask. What
+    // they buy is that a reader meets the limit at the press rather than at a sync three minutes
+    // later.
+    // -----------------------------------------------------------------------------------
+
+    /// Live rows on a roster — the count the cap is taken over.
+    fn live(conn: &Connection) -> usize {
+        identity::roster(conn)
+            .unwrap()
+            .into_iter()
+            .filter(|d| d.revoked_at.is_none())
+            .count()
+    }
+
+    /// A whole ceremony from A's side, up to the sealed key A hands back.
+    fn offer_to(a: &Connection, b: &Connection) -> Result<SealedKey, String> {
+        let (mut pa, mut pb) = (None, None);
+        let offer = begin(a, &mut pa).unwrap();
+        let acc = accept(b, &mut pb, &offer.code).unwrap();
+        respond(a, &mut pa, &acc.response).unwrap();
+        confirm(a, &mut pa)
+    }
+
+    /// **The initiator refuses the sixth device, counts live rows only, and is not off by one.**
+    ///
+    /// Three readings, each a different way to get it wrong:
+    /// * at four live devices plus a **tombstone** an older build stamped, the fifth is admitted
+    ///   — red if the guard counts revoked rows, which would cost a reader a slot for a device
+    ///   that left last year;
+    /// * at five, the sixth is refused and **nothing is written** — red if the guard is off by
+    ///   one at five, or if it refuses after `add_device` rather than before it;
+    /// * at five, a device **already in the group** still pairs — red if the joiner is counted
+    ///   against the cap it is being measured for, which would mean a full group could never
+    ///   repair a pairing.
+    #[test]
+    fn pairing_refuses_a_sixth_device() {
+        let a = db();
+        let me = identity::ensure(&a).unwrap();
+        identity::create_group(&a, &me).unwrap();
+        for n in 1..=3u8 {
+            identity::add_device(&a, &format!("peer{n}"), &[n; 32], "Peer").unwrap();
+        }
+        // A row a build that stamped rather than deleted left behind. It is not a member.
+        identity::add_device(&a, "ghost", &[9u8; 32], "Ghost").unwrap();
+        a.execute(
+            "UPDATE sync_devices SET revoked_at = unixepoch() WHERE device_id = 'ghost'",
+            [],
+        )
+        .unwrap();
+        assert_eq!(live(&a), 4, "four live devices and one tombstone");
+
+        let fifth = db();
+        offer_to(&a, &fifth).expect("a stale tombstone cost the reader a slot");
+        assert_eq!(live(&a), 5, "the group is full");
+
+        let sixth = db();
+        let refused = offer_to(&a, &sixth).expect_err("a sixth device was let into the group");
+        assert_eq!(refused, identity::GROUP_IS_FULL);
+        assert_eq!(
+            live(&a),
+            5,
+            "the refused device was filed on the roster anyway"
+        );
+
+        // ...and the device already in it is not a sixth of anything.
+        offer_to(&a, &fifth).expect("re-pairing a device already in a full group was refused");
+        assert_eq!(live(&a), 5);
+    }
+
+    /// **The joining side refuses one too**, for the asymmetric case the initiator's check cannot
+    /// see: a device still in the group whose own roster no longer names the initiator, where
+    /// completing files a sixth row.
+    ///
+    /// Red if `complete` writes the row without asking, and red if the guard counts the peer it
+    /// is about to admit — the second half drives the same ceremony against a roster of four and
+    /// requires it to succeed.
+    #[test]
+    fn completing_refuses_a_sixth_device() {
+        let a = db();
+        let b = db();
+        let (mut pa, mut pb) = (None, None);
+        let offer = begin(&a, &mut pa).unwrap();
+        let acc = accept(&b, &mut pb, &offer.code).unwrap();
+        respond(&a, &mut pa, &acc.response).unwrap();
+        let sealed = confirm(&a, &mut pa).unwrap();
+        complete(&b, &mut pb, &sealed.sealed_key).unwrap();
+
+        // B adopts an epoch whose manifest did not name A, and fills up with four others: five
+        // live rows, none of them the device it is about to be handed a key by.
+        let me_a = identity::ensure(&a).unwrap();
+        b.execute(
+            "DELETE FROM sync_devices WHERE device_id = ?1",
+            rusqlite::params![me_a.device_id],
+        )
+        .unwrap();
+        for n in 1..=3u8 {
+            identity::add_device(&b, &format!("peer{n}"), &[n; 32], "Peer").unwrap();
+        }
+        assert_eq!(live(&b), 4, "B and three others");
+
+        // At four, A is the fifth and completing works.
+        let (mut pa, mut pb) = (None, None);
+        let offer = begin(&a, &mut pa).unwrap();
+        let acc = accept(&b, &mut pb, &offer.code).unwrap();
+        respond(&a, &mut pa, &acc.response).unwrap();
+        let sealed = confirm(&a, &mut pa).unwrap();
+        complete(&b, &mut pb, &sealed.sealed_key).expect("the fifth device was refused");
+        assert_eq!(live(&b), 5);
+
+        // At five, with A off the roster again, it is refused.
+        b.execute(
+            "DELETE FROM sync_devices WHERE device_id = ?1",
+            rusqlite::params![me_a.device_id],
+        )
+        .unwrap();
+        identity::add_device(&b, "peer4", &[4u8; 32], "Peer").unwrap();
+        assert_eq!(live(&b), 5, "B and four others, none of them A");
+        let (mut pa, mut pb) = (None, None);
+        let offer = begin(&a, &mut pa).unwrap();
+        let acc = accept(&b, &mut pb, &offer.code).unwrap();
+        respond(&a, &mut pa, &acc.response).unwrap();
+        let sealed = confirm(&a, &mut pa).unwrap();
+        let refused = complete(&b, &mut pb, &sealed.sealed_key)
+            .expect_err("a sixth row was filed on the joining side");
+        assert_eq!(refused, identity::GROUP_IS_FULL);
+        assert_eq!(live(&b), 5, "the refused device was filed anyway");
     }
 
     /// The offer carries a QR of the code, and it is the code's own picture.

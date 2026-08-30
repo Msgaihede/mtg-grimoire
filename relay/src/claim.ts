@@ -1,5 +1,11 @@
 import { decide, type Status } from "./entitlement";
-import { authIsCurrent, seedGroup } from "./groupauth";
+import {
+  admitDevice,
+  authIsCurrent,
+  forgetGroup,
+  MAX_GROUP_DEVICES,
+  seedGroup,
+} from "./groupauth";
 import { hex } from "./md5";
 import {
   exchangeCode,
@@ -50,6 +56,18 @@ import type { Env } from "./index";
  * either column, so an `OR` would open a row to a caller presenting the *group id* — a value
  * that travels in the clear in every `/g/…` path — in the field that is supposed to hold a
  * secret.
+ *
+ * **Every one of the three bodies carries a `device`, and it is required rather than optional
+ * (spec §4.2).** A cap a caller can step round by leaving a field out is not a cap, and this
+ * repository is public — the point of a device limit is precisely the case where somebody has a
+ * reason to exceed it. `/token`'s *refresh* door carries one for a second reason: the connecting
+ * device reaches the relay through that door and never the group one, so a count that skipped it
+ * would never count the one device that is certainly signed in.
+ *
+ * ⚠️ **A full group is a 403 and never a 401.** `sync_engine::entitlement`'s 401 path clears the
+ * grant, so refusing the sixth device with one would tell a reader their membership had ended at
+ * the moment they added a laptop. The two statuses mean different things on this route and the
+ * app acts on the difference.
  */
 
 /**
@@ -92,6 +110,50 @@ export const GROUP_ID = new RegExp(`^${GROUP_SEGMENT}$`);
  * derives, and the group would be locked out of its own auth at the next `/token`.
  */
 export const RELAY_AUTH = /^[0-9a-f]{64}$/;
+
+/**
+ * A device id arriving in a body, anchored, from the character class `GROUP_SEGMENT` gives a
+ * group id. `sync_pair::identity::ensure` mints one as sixteen random bytes in lowercase hex.
+ *
+ * **It is checked with the care `group` is checked with, because it reaches the same kind of
+ * write.** An unchecked value lands in `group_devices.device_id` and is then compared against a
+ * manifest's key set by `keepOnly` and against `/keys`'s `?device=` by `rotate.ts` — so `%41` and
+ * `A` would be one device in the reader's head, two rows against the cap, and no later point at
+ * which the disagreement becomes visible.
+ *
+ * `rotate.ts` spells this same pattern from the same `GROUP_SEGMENT` rather than importing it,
+ * and that file's doc gives the reason: the shared thing worth sharing is the character class,
+ * and a constant named for one kind of id is a constant a later reader assumes is checking that
+ * kind. The duplication is two tokens wide and the class it is built from is single-sourced.
+ */
+export const DEVICE_ID = new RegExp(`^${GROUP_SEGMENT}$`);
+
+/**
+ * What a reader is told when their sixth device asks for a token.
+ *
+ * **It names the number rather than saying "too many devices"**, because the sentence has to be
+ * actionable from a panel that shows a roster: a reader who knows the limit is five can look at
+ * five rows and pick one to remove. `MAX_GROUP_DEVICES` is interpolated rather than typed out —
+ * a limit spelled twice is a limit that eventually disagrees with itself.
+ */
+const GROUP_FULL =
+  `this membership already has ${MAX_GROUP_DEVICES} devices signed in — ` +
+  `remove one from a device that is still in the group to make room`;
+
+/**
+ * The machine-readable half of the cap refusal, and the reason it exists is a near-miss.
+ *
+ * **A 403 already meant two other things on `/claim`** — *that membership no longer exists* and
+ * *that membership is not active*, both older than the cap — so an app branching on the status
+ * alone tells a reader whose pledge has lapsed that they have five devices. That is the wrong
+ * sentence about the wrong problem, and it was caught by reading the other side's file rather
+ * than by any test, because each suite asserts its own half and both were green.
+ *
+ * **A code rather than the sentence, because the sentence is copy.** `sync_engine::entitlement`
+ * matching on this string would break the app the day somebody improved the wording — which is
+ * exactly the kind of edit prose invites. The code is the contract; `error` stays free to change.
+ */
+const DEVICE_LIMIT = "device_limit";
 
 /** Characters in a claim code, before the separators. Twelve, as three groups of four. */
 const CODE_CHARS = 12;
@@ -334,6 +396,48 @@ async function revoke(env: Env, subject: string, groupId: string | null): Promis
  * of the authorisation — a `drop` behind the auth gate would still be a route a device holding
  * a valid token could aim at its own group.
  */
+/**
+ * The `device` field of a body, or `null` for "not a device id" — one reader for all three
+ * bodies, so the three cannot drift into three different ideas of what a device id is.
+ *
+ * Returning the *narrowed string* rather than a boolean is what stops a caller re-reading
+ * `body.device` afterwards as `unknown` and passing it on with a cast.
+ */
+function deviceIn(body: { device?: unknown }): string | null {
+  const device = body.device;
+  return typeof device === "string" && DEVICE_ID.test(device) ? device : null;
+}
+
+/**
+ * Everything the relay holds for a group a subject has just stopped being bound to: the key
+ * history, the device roll, and the log itself (spec §3).
+ *
+ * **Called after the new binding has been written and never before it**, which is the ordering
+ * the whole reversal turns on. A teardown that ran first would destroy the reader's working group
+ * on its way to a 409 — and the 409 that survives is *another subject holding this group id*,
+ * which is exactly the mistake a reader makes by pairing into somebody else's group and then
+ * pressing Connect. Refusals must destroy nothing; that is what
+ * "registers nothing when the binding is refused" already says about `group_keys`.
+ *
+ * **Every failure here is logged and swallowed, and the residue is harmless by construction.**
+ * The reader is standing in front of a Connect press whose binding has already moved, so a 500
+ * would report failure for an operation that succeeded. What can be left behind is rows in a
+ * group no subject is bound to: `group_devices` rows counted only by a per-group count nobody
+ * will take again, `group_keys` rows for a group whose entitlement is gone — and a log with a
+ * thirty-day tail, which is the only one holding bytes and is the one that expires on its own.
+ */
+async function releaseGroup(env: Env, group: string): Promise<void> {
+  try {
+    await env.DB.prepare(`DELETE FROM group_keys WHERE group_id = ?`).bind(group).run();
+    await forgetGroup(env, group);
+    // Last, because it is the only step that leaves D1 — a Durable Object that cannot be reached
+    // must not cost the two deletes above, which are what free the slots and retire the key.
+    await dropGroup(env, group);
+  } catch (error) {
+    console.error("claim release", error);
+  }
+}
+
 async function dropGroup(env: Env, group: string): Promise<void> {
   // A group id that could not have come from `ROUTE` names an object no device ever wrote to,
   // and interpolating it into a URL is the one place a stray character could address something
@@ -537,6 +641,12 @@ export async function handleClaim(request: Request, env: Env): Promise<Response>
   const group = body.group;
   if (!GROUP_ID.test(group)) return json({ error: "that is not a sync group id" }, 400);
 
+  // Ahead of the code lookup, because that lookup *spends* the code: a body refused after the
+  // `DELETE … RETURNING` has run costs the reader another trip through Patreon's consent page
+  // for a field the relay could have read without touching D1 at all.
+  const device = deviceIn(body);
+  if (device === null) return json({ error: "that is not a device id" }, 400);
+
   const now = Date.now();
 
   // **`DELETE … RETURNING`, in one statement, is what makes the code single-use.** D1 has no
@@ -563,13 +673,28 @@ export async function handleClaim(request: Request, env: Env): Promise<Response>
   const status = settle(row.status, row.grace_until, now);
   if (status === "dead") return json({ error: "that membership is not active" }, 403);
 
-  if (row.group_id !== null && row.group_id !== group) {
-    return json({ error: "that membership is already bound to another sync group" }, 409);
-  }
+  // **A subject that already holds a *different* group is rebound rather than refused, and this
+  // reverses what this handler used to do (spec §3).** The 409 that stood here was a dead end
+  // with no press that helped: the paying device leaves its group — which #307's departure makes
+  // an ordinary thing to do — and its entitlement is still bound to the group it left, so the
+  // next Connect is refused for ever and the only repair is a hand edit of D1.
+  //
+  // **The invariant the refusal was actually protecting is kept.** Trust-on-first-use existed to
+  // stop one subscription serving two groups at once; *moving* a binding leaves the subject
+  // serving exactly one. Only the first stops being the latest.
+  //
+  // ⚠️ **And it silently orphans whatever devices remain in the old group** — their manifest and
+  // their log are gone and they fail their next key check. They are already orphaned when the
+  // payer has left, but a reader who re-claims *without* leaving can do this to a working group
+  // by accident, so `SyncPanel` says so beside the claim-code field before the press.
+  const previous = row.group_id;
 
-  // The binding is trust-on-first-use (spec §6.3) and the `WHERE` is what keeps it so under two
-  // requests at once: the second one changes no rows and is refused, rather than overwriting a
-  // binding the first just made.
+  // **The `WHERE` is a compare-and-swap on the binding this request read**, which is what the
+  // trust-on-first-use clause becomes once a binding is allowed to move: `previous` rather than
+  // `group`, so a second claim racing this one — onto any group, this one included — finds the
+  // row already moved, changes nothing and is refused instead of overwriting the first's work.
+  // Spelled `(group_id IS NULL OR group_id = ?)` because SQL's `=` is never true against a NULL,
+  // and a first claim is exactly the case where `previous` is one.
   const refresh = row.refresh_secret ?? randomSecret();
   let bound: D1Result;
   try {
@@ -578,29 +703,48 @@ export async function handleClaim(request: Request, env: Env): Promise<Response>
           SET group_id = ?, refresh_secret = ?, status = ?, checked_at = ?
         WHERE subject = ? AND (group_id IS NULL OR group_id = ?)`,
     )
-      .bind(group, refresh, status, now, row.subject, group)
+      .bind(group, refresh, status, now, row.subject, previous)
       .run();
   } catch {
     // `entitlements_group` is unique, so this is another *subject* holding that group id — a
-    // shared subscription wearing two names. The same 409 as the mismatch above, because to the
-    // reader it is the same sentence.
+    // shared subscription wearing two names, which is the thing that constraint is really about
+    // and the one case the 409 still exists for. Reached by catching the failure rather than by
+    // asking a question first: D1 has no interactive transaction, so a `SELECT` and then an
+    // `UPDATE` is two round trips with a window between them.
     return json({ error: "that sync group is bound to another membership" }, 409);
   }
   if (bound.meta.changes === 0) {
     return json({ error: "that membership is already bound to another sync group" }, 409);
   }
 
+  // **After the binding succeeded, so a refusal above tears nothing down.** See `releaseGroup`.
+  if (previous !== null && previous !== group) await releaseGroup(env, previous);
+
   // **After the binding and never before.** Every refusal above leaves this group's key alone,
   // which is what a 409 has to mean: a claim that registered an auth for a group it did not bind
   // would hand the *next* device to claim that group a `group_auth` it cannot match, and no
-  // amount of re-claiming would clear it — `seedGroup` is `INSERT OR IGNORE` precisely so that a
-  // re-claim does not overwrite a live manifest.
+  // amount of re-claiming would clear it — `seedGroup` guards both of its statements on *this
+  // epoch being at least the highest the group has*, precisely so that a re-claim does not
+  // overwrite a live manifest or re-point the mirror backwards. `INSERT OR IGNORE` alone did not
+  // do that, because `group_keys` is keyed `(group_id, epoch)` and a device claiming from behind
+  // conflicts with nothing; see that function's doc.
   //
   // Allowed to throw. The alternative is answering a grant while the group's first auth was
   // never registered, which is a device that syncs today and cannot rotate ever; a 500 is the
   // loud version of the same failure and the reader's next press re-claims the same group,
   // because `row.group_id === group` by then.
   await seedGroup(env, group, epoch, auth);
+
+  // **Last, because a claim issues a token and the cap is a fence around tokens (spec §4.2).**
+  // A claim that registered nothing would hand a sixth device a grant here and 403 it at its
+  // next `/token` a day later — a Connect that reported success and a sync that never worked.
+  //
+  // **And after `seedGroup` rather than before it**, which only matters on the one path that
+  // reaches this refusal with the binding unchanged: re-claiming a group already holding five
+  // devices from a wiped reinstall. Seeding first leaves that group able to rotate, which is how
+  // the reader frees a slot and gets out; refusing ahead of it would leave a bound group with no
+  // registered auth, and every retry would refuse in the same place for ever.
+  if (!(await admitDevice(env, group, device, now))) return json({ error: GROUP_FULL, code: DEVICE_LIMIT }, 403);
 
   // Annotated rather than inferred, so a mis-spelled field is a type error here instead of a
   // serde failure in `sync_engine::entitlement` that no test on either side can see.
@@ -617,6 +761,7 @@ interface ClaimBody {
   group?: unknown;
   epoch?: unknown;
   auth?: unknown;
+  device?: unknown;
 }
 
 // ---------------------------------------------------------------------------------------
@@ -630,6 +775,11 @@ interface ClaimBody {
  * offers the connect button again. So every refusal on this route has to be a real one — which
  * is why a closed grace window is resolved here and not merely reported. A window closes with
  * nothing to announce it, and this is one of only two places that ever asks.
+ *
+ * **Which is also why the device cap is a 403 and is asked last.** Both doors admit their device
+ * only once the entitlement has settled to something that would be served, so a membership on
+ * its way to a 401 never spends one of the reader's five slots — and the reader who *is* serving
+ * and has simply run out of devices is told that, rather than being told they had stopped paying.
  */
 export async function handleToken(request: Request, env: Env): Promise<Response> {
   let body: TokenBody;
@@ -647,7 +797,13 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
     if (typeof body.refresh !== "string" || body.refresh === "") {
       return json({ error: "malformed refresh" }, 400);
     }
-    return refreshDoor(env, body.refresh);
+    // **Required on this door too, and it is the door it would be easiest to leave off.** The
+    // device that pressed Connect never reaches the group door, so a `device` that were optional
+    // here would leave the one device certainly signed in permanently uncounted — and would hand
+    // every other caller a one-field way out of the cap besides.
+    const device = deviceIn(body);
+    if (device === null) return json({ error: "that is not a device id" }, 400);
+    return refreshDoor(env, body.refresh, device);
   }
 
   if (typeof body?.group !== "string" || !GROUP_ID.test(body.group)) {
@@ -656,7 +812,9 @@ export async function handleToken(request: Request, env: Env): Promise<Response>
   if (typeof body.auth !== "string" || !RELAY_AUTH.test(body.auth)) {
     return json({ error: "malformed token request" }, 400);
   }
-  return groupDoor(env, body.group, body.auth);
+  const device = deviceIn(body);
+  if (device === null) return json({ error: "that is not a device id" }, 400);
+  return groupDoor(env, body.group, body.auth, device);
 }
 
 /** The `/token` body, before any of it has been checked. Either shape arrives here. */
@@ -664,6 +822,7 @@ interface TokenBody {
   refresh?: unknown;
   group?: unknown;
   auth?: unknown;
+  device?: unknown;
 }
 
 /**
@@ -672,7 +831,7 @@ interface TokenBody {
  * **Looked up by `refresh_secret`, and that column alone.** See this module's doc for why this
  * query and `groupDoor`'s are not one query with an `OR`.
  */
-async function refreshDoor(env: Env, refresh: string): Promise<Response> {
+async function refreshDoor(env: Env, refresh: string, device: string): Promise<Response> {
   const row = await env.DB.prepare(
     `SELECT subject, status, grace_until, group_id, refresh_secret, patreon_refresh, created_at
        FROM entitlements
@@ -687,6 +846,10 @@ async function refreshDoor(env: Env, refresh: string): Promise<Response> {
 
   const status = await serveOrRevoke(env, row);
   if (status === null) return json({ error: "unauthorized" }, 401);
+
+  if (!(await admitDevice(env, row.group_id, device, Date.now()))) {
+    return json({ error: GROUP_FULL, code: DEVICE_LIMIT }, 403);
+  }
 
   // The caller's own string rather than `row.refresh_secret`: the same value, and the secret is
   // not rotated here — the app stores whatever comes back, and rotating on every refresh would
@@ -711,7 +874,12 @@ async function refreshDoor(env: Env, refresh: string): Promise<Response> {
  * **The answer omits `refresh` and nothing here has one to omit.** `grantFor` is not given the
  * secret, so the omission is structural rather than a deletion somebody could forget.
  */
-async function groupDoor(env: Env, group: string, auth: string): Promise<Response> {
+async function groupDoor(
+  env: Env,
+  group: string,
+  auth: string,
+  device: string,
+): Promise<Response> {
   // A stale auth lands here after a rotation this device has not caught up with, which is not a
   // lapse — spec §2.5 has the app re-check `/keys` once before concluding anything from a 401 on
   // this door. The relay cannot tell the two apart and does not try: it answers the same
@@ -732,6 +900,13 @@ async function groupDoor(env: Env, group: string, auth: string): Promise<Respons
 
   const status = await serveOrRevoke(env, row);
   if (status === null) return json({ error: "unauthorized" }, 401);
+
+  // **A device that inherited its sign-in from another grouped device is counted like any other,
+  // which is item 3 of the request in the reader's own words.** This is the only door such a
+  // device ever reaches.
+  if (!(await admitDevice(env, group, device, Date.now()))) {
+    return json({ error: GROUP_FULL, code: DEVICE_LIMIT }, 403);
+  }
 
   const grant: GroupGrant = await grantFor(env, row.subject, group, status, row.created_at);
   return json(grant);

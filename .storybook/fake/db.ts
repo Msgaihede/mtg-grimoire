@@ -12225,6 +12225,42 @@ export function writeHandlers(db: FakeDb) {
     },
 
     /**
+     * `sync_group_leave` — this device walks out of its group, and **always succeeds**.
+     *
+     * **The one refusal is a device in no group**, which is the crate's whole list here:
+     * `leave_group_now` checks that and nothing else, then plans, publishes *best effort*, and
+     * clears locally whatever the relay answered. There is no relay in the workbench, so what
+     * this fake models is the half that survives an unreachable one — which is, deliberately,
+     * every step that changes anything. A handler that could fail would be a fake of a
+     * different feature.
+     *
+     * **Three tables go, not one.** `identity::leave_group` empties `sync_devices` and
+     * `sync_group`; `entitlement::clear` deletes the five grant rows beside them (spec §2.3),
+     * because a leaver keeping its refresh secret keeps a working credential for the group it
+     * left. So the world this leaves is a device out of the box: no group, no roster, and the
+     * `refreshSecret`/`"dead"`/`null`/`false` row of {@link FakeSupporter}'s table.
+     *
+     * **`groupBound: false` is the field this handler would be wrong to get right by accident.**
+     * `clear` is not `revoke` — it leaves no `SUPPORTER_STATUS` row behind, so
+     * `membership_ended` reads false and the panel says *Not connected* rather than
+     * *Membership ended*. Nothing ended; this device left a group. A fake that spelled `revoke`
+     * here would draw a lapse at a reader whose pledge is untouched, and every field but this
+     * one would still agree.
+     *
+     * **What it does not touch is `db.relay`.** The pile of unpushed ops is this device's own
+     * rows and it keeps them — `leave_group_now` makes no round trip in front of itself, unlike
+     * `remove_device`, because the departing device is this one and what it has not pushed is
+     * already in its own database.
+     */
+    sync_group_leave: (): void => {
+      refuseIfBusy(db);
+      if (db.pairing.group === null) throw refuse(PAIRING_NOT_IN_A_GROUP);
+      db.pairing.group = null;
+      db.pairing.devices = [];
+      db.supporter = { refreshSecret: false, status: "dead", since: null, groupBound: false };
+    },
+
+    /**
      * `sync_engine::commands::sync_relay_status` — the address, what is waiting, and
      * what wants looking at.
      *

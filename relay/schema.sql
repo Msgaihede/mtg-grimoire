@@ -81,6 +81,46 @@ CREATE TABLE IF NOT EXISTS group_keys (
 -- `currentManifest`, which is `ORDER BY epoch DESC LIMIT 1` and is the hottest read here.
 CREATE INDEX IF NOT EXISTS group_keys_by_group ON group_keys (group_id, epoch DESC);
 
+-- The device roll: which devices have presented a token for this group, and when they last did.
+--
+-- **One table answers both caps, because a subject holds exactly one group.** Five devices per
+-- Patreon account and five devices per sync group are the same count asked twice — `/claim` binds
+-- a subject to one group and a re-claim *moves* that binding rather than adding a second — so
+-- counting rows here answers either question without the relay ever having to join a device to a
+-- subscription.
+--
+-- **It holds ids and timestamps and nothing else, deliberately.** What a device is called is
+-- `device_names`, which is synced end-to-end between the devices; the relay never sees it. A
+-- roster the reader can read is a job for the app, and giving this table a `name` column would
+-- hand the relay a fact it currently cannot learn.
+--
+-- **`last_seen` is what stops a reinstall costing a slot for ever.** A device whose data folder
+-- is wiped mints a *new* id at `identity::ensure`, so its old row is named by no manifest and
+-- freed by no rotation: five reinstalls would exhaust a reader's own account permanently. A row
+-- unseen for `DEVICE_TTL_MS` (90 days) is not counted and is deleted by the same read that
+-- counts. Ninety days is chosen against the case it must not break — a laptop put in a drawer for
+-- a season and brought back — and against the one it must: a machine sold a year ago.
+--
+-- **`first_seen` is written and never read.** It is here because the row is cheap and the
+-- question "when did this device join" is one a support conversation asks and nothing else can
+-- answer once `last_seen` has moved.
+CREATE TABLE IF NOT EXISTS group_devices (
+  group_id   TEXT    NOT NULL,
+  device_id  TEXT    NOT NULL,
+  first_seen INTEGER NOT NULL,
+  last_seen  INTEGER NOT NULL,
+  PRIMARY KEY (group_id, device_id)
+);
+
+-- **No second index, unlike `group_keys` above, and the difference is not an oversight.** Every
+-- read here names one group and nothing else: the count, the TTL prune, the manifest sweep and
+-- the whole-group drop are all `WHERE group_id = ?` or that plus an equality on `device_id`.
+-- SQLite builds an automatic index for the `PRIMARY KEY` of a rowid table, `group_id` is its
+-- leading column, and `(group_id, device_id)` covers the only column the count reads — so a
+-- `group_devices_by_group` would serve no query the primary key does not already serve, at the
+-- cost of a second b-tree write on every `/token`, which is the hottest route the relay has. The
+-- implementation plan asked for one; spec §4.1's table does not, and this follows the spec.
+
 -- Added 2026-08-30. `ALTER TABLE` and not an edit to the CREATE above: that statement is
 -- `IF NOT EXISTS` and does nothing at all on a database that already holds the table, so a new
 -- column written there reaches a fresh deploy and never an existing one.

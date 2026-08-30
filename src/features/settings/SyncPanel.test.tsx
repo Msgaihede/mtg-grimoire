@@ -19,6 +19,7 @@ const syncPairingComplete = vi.hoisted(() => vi.fn());
 const syncPairingCancel = vi.hoisted(() => vi.fn());
 const syncDeviceRename = vi.hoisted(() => vi.fn());
 const syncDeviceRevoke = vi.hoisted(() => vi.fn());
+const syncGroupLeave = vi.hoisted(() => vi.fn());
 const syncRelayStatus = vi.hoisted(() => vi.fn());
 const syncPatreonBegin = vi.hoisted(() => vi.fn());
 const syncPatreonClaim = vi.hoisted(() => vi.fn());
@@ -36,6 +37,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     syncPairingCancel,
     syncDeviceRename,
     syncDeviceRevoke,
+    syncGroupLeave,
     syncRelayStatus,
     syncPatreonBegin,
     syncPatreonClaim,
@@ -48,6 +50,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 vi.mock("@/lib/clipboard", () => ({ copyText: vi.fn().mockResolvedValue(undefined) }));
 
 import {
+  LEAVE_WARNING,
   PAIRING_KEY,
   REMOVAL_WARNING,
   SyncPanel,
@@ -246,6 +249,7 @@ beforeEach(() => {
   syncPairingCancel.mockReset().mockResolvedValue(undefined);
   syncDeviceRename.mockReset().mockResolvedValue(undefined);
   syncDeviceRevoke.mockReset().mockResolvedValue(undefined);
+  syncGroupLeave.mockReset().mockResolvedValue(undefined);
   syncRelayStatus.mockReset().mockResolvedValue(RELAY_OFF);
   syncPatreonBegin.mockReset().mockResolvedValue("https://patreon.example/oauth2/authorize");
   syncPatreonClaim.mockReset().mockResolvedValue(SUPPORTING);
@@ -459,6 +463,121 @@ describe("SyncPanel", () => {
     await user.click(await screen.findByRole("button", { name: /pair a device/i }));
     expect(await screen.findByRole("alert")).toHaveTextContent(/busy/i);
     expect(screen.queryByTestId("pairing-qr")).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * Leaving — the press §2.1 added, and the sentence in front of it.
+ *
+ * **`identity::CANNOT_REMOVE_SELF` has said *"Use Leave group instead"* since it was written and
+ * pointed at nothing**; this is what it now points at. The three claims worth asserting are the
+ * two ends of the gate (drawn on a paired device, never on an unpaired one) and the confirmation
+ * between them, and each is asserted so that the obvious mutation goes red rather than merely
+ * looking different.
+ */
+describe("leaving the group", () => {
+  it("offers Leave group on a paired device", async () => {
+    render(<SyncPanel />, { wrapper: paired });
+
+    expect(await screen.findByRole("button", { name: "Leave group" })).toBeInTheDocument();
+  });
+
+  /**
+   * **The other end of the gate, and the half a mutation reaches first.** `leave_group_now`
+   * refuses a device in no group in as many words, so a press drawn here could only ever be
+   * refused — `DeviceRow`'s missing Remove one rung up. Dropping the `paired &&` guard is what
+   * makes this red; nothing else in the file notices.
+   */
+  it("offers no Leave group to a device that is in no group", async () => {
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    // Anchored on a press that *is* drawn here, so the absence below is about the guard rather
+    // than about a render that has not happened yet.
+    await screen.findByRole("button", { name: /pair a device/i });
+    expect(screen.queryByRole("button", { name: "Leave group" })).not.toBeInTheDocument();
+  });
+
+  /**
+   * **The confirmation, and the two things its copy has to carry.**
+   *
+   * A reader cannot guess either of them. That this device keeps its own collection is the
+   * reassurance `REMOVAL_WARNING` gives from the other side of the same act — leaving is the one
+   * press on this panel that sounds like it throws cards away. That the other devices may never
+   * hear is the honest cost of *"always possible"*: `leave_group_now` publishes best effort and
+   * clears locally whatever the relay answered, so a reader who leaves offline leaves for real
+   * while their desktop goes on listing this phone.
+   *
+   * **Red three ways**: dropping the dialog (the first press would reach the command), dropping
+   * the reassurance clause, or dropping the unreachable-relay clause.
+   */
+  it("asks first, and says what leaving does and does not do", async () => {
+    const user = userEvent.setup();
+    render(<SyncPanel />, { wrapper: paired });
+
+    await user.click(await screen.findByRole("button", { name: "Leave group" }));
+    expect(syncGroupLeave).not.toHaveBeenCalled();
+
+    const body = await screen.findByText(/your collection stays on this device/i);
+    // 1. Nothing local is deleted.
+    expect(body).toHaveTextContent(/nothing here is deleted/i);
+    // 2. The others may go on listing this device, because the relay may not have heard.
+    expect(body).toHaveTextContent(/relay cannot be reached/i);
+    expect(body).toHaveTextContent(/go on listing this one until somebody removes it there/i);
+    // The two claims again against the exported string, so a rewrite that kept the shape and
+    // lost a meaning names which meaning it lost — `REMOVAL_WARNING`'s pair, one act over.
+    expect(LEAVE_WARNING).toMatch(/collection stays on this device/i);
+    expect(LEAVE_WARNING).toMatch(/will not hear/i);
+
+    await user.click(screen.getByRole("button", { name: "Leave the group" }));
+    await waitFor(() => expect(syncGroupLeave).toHaveBeenCalled());
+  });
+
+  /**
+   * **The re-read, and it is the sync *root* rather than the roster.**
+   *
+   * Leaving runs `entitlement::clear` as well as `identity::leave_group` (spec §2.3), so the
+   * membership block is as stale as the roster the moment this answers — a panel that
+   * invalidated `PAIRING_KEY` alone would drop the group and go on drawing *Supporting* over a
+   * device with nothing to sync to.
+   *
+   * **Red if the invalidation is dropped**, and not vacuously so: the harness seeds
+   * `PAIRING_KEY` with `staleTime: Infinity`, so nothing re-reads the pairing status on mount
+   * and the call below can only come from the invalidation. Its answer is the sentence asserted
+   * after it, so a refetch that happened and changed nothing on screen would fail too.
+   */
+  it("re-reads the whole sync root once the departure lands", async () => {
+    const user = userEvent.setup();
+    render(<SyncPanel />, { wrapper: paired });
+
+    await user.click(await screen.findByRole("button", { name: "Leave group" }));
+    expect(syncPairingStatus).not.toHaveBeenCalled();
+
+    // What the backend answers after a departure: no group, no roster.
+    syncPairingStatus.mockResolvedValue({ ...UNPAIRED, deviceName: "Desk" });
+    await user.click(screen.getByRole("button", { name: "Leave the group" }));
+
+    await waitFor(() => expect(syncPairingStatus).toHaveBeenCalled());
+    expect(await screen.findByText(/not paired with anything yet/i)).toBeInTheDocument();
+    expect(screen.queryByText("Phone")).not.toBeInTheDocument();
+    // ...and the press that opened the dialog goes with the group it was about.
+    expect(screen.queryByRole("button", { name: "Leave group" })).not.toBeInTheDocument();
+  });
+
+  /** A refusal is the panel's one line, exactly as every other press here reports one. The only
+   *  refusal the command has is a device in no group — which this panel does not draw the press
+   *  for, so it is reachable only by a race, and a press that answered nothing at all would look
+   *  identical to one that worked. */
+  it("says so when a departure is refused", async () => {
+    const user = userEvent.setup();
+    syncGroupLeave.mockRejectedValue("This device is not in a pairing group.");
+    render(<SyncPanel />, { wrapper: paired });
+
+    await user.click(await screen.findByRole("button", { name: "Leave group" }));
+    await user.click(screen.getByRole("button", { name: "Leave the group" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(/not in a pairing group/i);
+    // Refused, so the reader is still where they were and can press again.
+    expect(screen.getByRole("button", { name: "Leave group" })).toBeInTheDocument();
   });
 });
 
@@ -683,6 +802,57 @@ describe("the supporter half", () => {
 
     await screen.findByText(/supporting since/i);
     expect(screen.queryByText(/pair this one to them first/i)).toBeNull();
+  });
+
+  /**
+   * **Spec §3's load-bearing sentence, and the only thing between a reader and a group they did
+   * not mean to break.**
+   *
+   * `/claim` used to refuse a subject that already held a group with a 409, which stranded the
+   * payer who had just left one — there was no press anywhere that re-bound their membership. So
+   * a re-claim **moves** the binding now, and the devices left in the old group lose their relay
+   * log and their rows with it. A reader who leaves first has already orphaned that group; a
+   * reader who simply pastes a fresh code on a second machine can do it by accident, and this
+   * paragraph is the only warning they get.
+   *
+   * **It is drawn at the claim field rather than at *Connect Patreon*** — opening a browser
+   * moves nothing and pasting a code is the write — which is what the sibling assertion pins:
+   * the block the field sits in is the paragraph's own next element, so a copy edit that hoisted
+   * this one level out (where it would also greet a paid-up supporter) fails here rather than
+   * merely reading oddly.
+   */
+  it("warns that a re-claim moves the membership off the group it is on", async () => {
+    syncSupporterStatus.mockResolvedValue(NOT_CONNECTED);
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    const line = await screen.findByText(/one membership covers one group/i);
+    // The reversal itself, and what it costs the group that is left — both, because "it moves"
+    // with no consequence attached is a sentence a reader skips.
+    expect(line).toHaveTextContent(/claiming it here moves it/i);
+    expect(line).toHaveTextContent(/stop syncing with each other/i);
+    // ...and what it does *not* cost, which is the half that stops this reading as data loss.
+    expect(line).toHaveTextContent(/own collections are untouched/i);
+
+    expect(line.nextElementSibling?.contains(screen.getByLabelText(/claim code/i))).toBe(true);
+  });
+
+  it("says it to a lapsed reader too, whose re-claim is the likelier one", async () => {
+    // `ended` is the second state with a claim field on it, and a reader reconnecting after a
+    // lapse is exactly the one who may have claimed for a different group before.
+    syncSupporterStatus.mockResolvedValue(REVOKED);
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    expect(await screen.findByText(/one membership covers one group/i)).toBeInTheDocument();
+  });
+
+  it("stops warning about a re-claim once there is no claim to make", async () => {
+    // The paragraph is about a press that is no longer on screen. Left drawn, it tells a
+    // connected supporter their own group is at risk from a field they cannot see.
+    syncSupporterStatus.mockResolvedValue(SUPPORTING);
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    await screen.findByText(/supporting since/i);
+    expect(screen.queryByText(/one membership covers one group/i)).toBeNull();
   });
 
   /**

@@ -5675,6 +5675,21 @@ export const ipc = {
    * says so in those words rather than implying a lost phone has been cleaned.
    */
   syncDeviceRevoke: (deviceId: string) => invoke<void>("sync_device_revoke", { deviceId }),
+  /**
+   * Leave the group this device is in — and **always succeed**, short of being in no group.
+   *
+   * The far end plans a departure, publishes it **best effort**, and then clears this device's
+   * group *and* its grant whatever the relay answered (spec §2.1). So a reader on a plane leaves
+   * too; what they lose is the courtesy, never the departure — the other devices go on listing
+   * this one until somebody removes it there, which is why the dialog in front of this press
+   * says so. The one refusal is a device that is in no group, which has nothing to leave.
+   *
+   * **The grant goes with the group, and `clear` is not `revoke`** (§2.3): a leaver keeping its
+   * refresh secret keeps a working credential for the group it walked out of. Nothing *ended*,
+   * so no lapse is recorded — this device reads *Not connected* afterwards, not
+   * *Membership ended*.
+   */
+  syncGroupLeave: () => invoke<void>("sync_group_leave"),
 };
 
 /**

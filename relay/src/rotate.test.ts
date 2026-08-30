@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { fakeEnv } from "./fakeD1";
-import { authIsCurrent, currentManifest, recordRotation, seedGroup } from "./groupauth";
+import {
+  admitDevice,
+  authIsCurrent,
+  currentManifest,
+  recordRotation,
+  seedGroup,
+} from "./groupauth";
 import worker, { type Env } from "./index";
 
 /**
@@ -30,6 +36,15 @@ import worker, { type Env } from "./index";
 function hex64(n: number): string {
   return n.toString(16).padStart(64, "0");
 }
+
+/**
+ * The clock every `admitDevice` in this file is given.
+ *
+ * A fixed stamp rather than `Date.now()`, and one stamp for every call, because nothing here is
+ * about the TTL: `DEVICE_TTL_MS` is `groupauth.test.ts`'s subject and these tests would be
+ * asserting about the prune by accident if the rows they seed could age between two lines.
+ */
+const NOW = 1_700_000_000_000;
 
 /**
  * `fakeEnv` plus the two bindings the router itself reads.
@@ -73,6 +88,22 @@ function manifestOf(devices: number, blobChars = 8): Record<string, string> {
   const keys: Record<string, string> = {};
   for (let i = 0; i < devices; i += 1) keys[`d${i}`] = "b".repeat(blobChars);
   return keys;
+}
+
+/**
+ * The device ids `group_devices` is holding for one group, sorted so the assertion is about the
+ * set rather than about the order rows happened to be written in.
+ *
+ * **Read with SQL rather than through `liveDeviceCount`, because the number is not the question.**
+ * Which rows survived a rotation is: a count of two cannot tell the row that should have been
+ * freed from the row that should have been kept, and every mutation worth catching here swaps one
+ * for the other rather than changing how many there are.
+ */
+async function devicesOf(env: Env, group: string): Promise<string[]> {
+  const { results } = await env.DB.prepare(`SELECT device_id FROM group_devices WHERE group_id = ?`)
+    .bind(group)
+    .all<{ device_id: string }>();
+  return results.map((row) => row.device_id).sort();
 }
 
 // ---------------------------------------------------------------------------------------
@@ -225,8 +256,14 @@ describe("POST /rotate", () => {
       return (await worker.fetch(request, env)).status;
     };
 
-    expect(await status(manifestOf(64))).toBe(200);
-    expect(await status(manifestOf(65))).toBe(400);
+    // **Five and six as literals, never `MAX_GROUP_DEVICES` and `MAX_GROUP_DEVICES + 1`.** The
+    // cap is the thing under test, and an assertion written in terms of the constant it is
+    // checking moves with it — it would stay green at four devices and at forty. Five accepted
+    // is what fails if the cap is lowered; six refused is what fails if it is raised. This used
+    // to read 64 and 65, which was the manifest keeping a bound of its own; the manifest cap and
+    // the admission cap are now one constant, so the numbers here are the account's five.
+    expect(await status(manifestOf(5))).toBe(200);
+    expect(await status(manifestOf(6))).toBe(400);
     expect(await status({ desk: "b".repeat(4096) })).toBe(200);
     expect(await status({ desk: "b".repeat(4097) })).toBe(400);
 
@@ -254,6 +291,99 @@ describe("POST /rotate", () => {
 
     expect(response.status).toBe(401);
     expect(await currentManifest(env, "nope")).toBeNull();
+  });
+
+  // -------------------------------------------------------------------------------------
+  // The device roll (spec §4.4)
+  // -------------------------------------------------------------------------------------
+
+  it("frees the slots of the devices the new manifest omits", async () => {
+    // **The manifest is the roster, so publishing one is how a slot is given back** — a removal
+    // and a departure both come through here, and neither needs a mechanism of its own.
+    const env = relayEnv("g1");
+    await seedGroup(env, "g1", 0, hex64(0));
+    for (const device of ["desk", "phone", "tablet", "laptop", "watch"]) {
+      expect(await admitDevice(env, "g1", device, NOW)).toBe(true);
+    }
+    // The group is full before the rotation, which is what makes the last assertion below mean
+    // something: without it, "a sixth device is admitted" would be true of an untouched roll.
+    expect(await admitDevice(env, "g1", "newcomer", NOW)).toBe(false);
+
+    const response = await worker.fetch(
+      rotateRequest("g1", hex64(0), {
+        epoch: 1,
+        auth: hex64(1),
+        keys: { desk: "blob-desk", phone: "blob-phone" },
+      }),
+      env,
+    );
+
+    expect(response.status).toBe(200);
+    // Red two ways, and they are the two mistakes worth telling apart: no `keepOnly` at all
+    // leaves all five here, and a `keepOnly` that inverted its set would leave none.
+    expect(await devicesOf(env, "g1")).toEqual(["desk", "phone"]);
+    // And the freed slots are slots rather than bookkeeping: the device that was refused a
+    // moment ago is admitted now, against the same cap and the same clock.
+    expect(await admitDevice(env, "g1", "newcomer", NOW)).toBe(true);
+  });
+
+  it("frees nothing when it refuses the rotation", async () => {
+    const env = relayEnv("g1");
+    await seedGroup(env, "g1", 0, hex64(0));
+    for (const device of ["desk", "phone"]) {
+      expect(await admitDevice(env, "g1", device, NOW)).toBe(true);
+    }
+
+    // A 409: the epoch does not advance, so the manifest is never adopted. It names only `desk`,
+    // so a `keepOnly` placed **above** `recordRotation` would take `phone`'s row on the way to
+    // refusing the very rotation that named it — a device holding a live but non-advancing auth
+    // could then hand back every other slot in the group at will.
+    const stale = await worker.fetch(
+      rotateRequest("g1", hex64(0), { epoch: 0, auth: hex64(0x0b), keys: { desk: "blob-desk" } }),
+      env,
+    );
+    expect(stale.status).toBe(409);
+    expect(await devicesOf(env, "g1")).toEqual(["desk", "phone"]);
+
+    // A 401: an advancing epoch, but a credential this group has never held. A `keepOnly` above
+    // the authorisation check would let any caller empty the roll of any group id it can name.
+    const unauthorised = await worker.fetch(
+      rotateRequest("g1", hex64(0xdead), {
+        epoch: 1,
+        auth: hex64(1),
+        keys: { desk: "blob-desk" },
+      }),
+      env,
+    );
+    expect(unauthorised.status).toBe(401);
+    expect(await devicesOf(env, "g1")).toEqual(["desk", "phone"]);
+  });
+
+  it("frees no slot belonging to another group", async () => {
+    const env = relayEnv("g1", "g2");
+    await seedGroup(env, "g1", 0, hex64(0));
+    await seedGroup(env, "g2", 0, hex64(0x2a));
+    expect(await admitDevice(env, "g1", "desk", NOW)).toBe(true);
+    expect(await admitDevice(env, "g1", "phone", NOW)).toBe(true);
+
+    // ⚠️ **`phone` is a name g1's rotation *drops*, and that is the whole of this fixture.** The
+    // same test written with a foreign row named after a device g1 **keeps** passes against a
+    // group-blind `DELETE FROM group_devices WHERE device_id = ?`, because the only id such a
+    // delete is handed is one nothing was going to remove — there is nothing to observe. The
+    // foreign row has to carry a name from the doomed set. `tablet` is the second half: it is in
+    // neither g1's roll nor its manifest, so it is what a `keepOnly` called with the wrong group
+    // takes.
+    expect(await admitDevice(env, "g2", "phone", NOW)).toBe(true);
+    expect(await admitDevice(env, "g2", "tablet", NOW)).toBe(true);
+
+    const response = await worker.fetch(
+      rotateRequest("g1", hex64(0), { epoch: 1, auth: hex64(1), keys: { desk: "blob-desk" } }),
+      env,
+    );
+
+    expect(response.status).toBe(200);
+    expect(await devicesOf(env, "g1")).toEqual(["desk"]);
+    expect(await devicesOf(env, "g2")).toEqual(["phone", "tablet"]);
   });
 });
 

@@ -30,6 +30,14 @@
 //! **The two doors fail differently on the same status code**, which is the sharpest thing in
 //! this module: see [`STALE_GROUP_AUTH`].
 //!
+//! **Every request here also names this device, and a third status code answers that** (spec
+//! §4.2). One membership covers five devices, the relay is the fence, and it counts the ids on
+//! `/token`'s *both* doors and on `/claim` — because the device that pressed Connect reaches it
+//! through the refresh door and never the group one, so a roll fed by the group door alone would
+//! miss the one device that is certainly signed in. The refusal is a **403**, and it is
+//! [`GROUP_IS_FULL`] rather than anything the 401 machinery touches: read that constant before
+//! moving this line.
+//!
 //! **A 401 is a sentence, not an `error_log` row** (spec §10). When the relay refuses the refresh
 //! secret the membership has ended: the grant is cleared and the panel offers the connect button
 //! again. Routing it through `errors::record` like a network failure would tell the reader their
@@ -68,14 +76,21 @@ use serde::Deserialize;
 /// three secrets the relay holds. §9's table **listed** a fourth, `PATREON_CREATOR_TOKEN`, until
 /// 2026-08-29; nothing in the Worker consumes one, and that table says three now.
 ///
-/// **What is not on that host yet is this design's Worker, and the distinction matters.** The host
-/// is live — it is the relay the 2026-08-29 end-to-end pass ran against — but what is deployed
-/// there is the pre-entitlement code: no auth gate, no `/claim`, no `/token`, no `/g/…/rotate`,
-/// no `/g/…/keys`, no OAuth callback, no webhook, no D1 binding. **A device pointed at it today
-/// reaches a real relay that answers none of the endpoints this module calls.** That is Wave 2 and
-/// a deploy, not a placeholder, and it fails differently: a 404 from a server that is there,
-/// rather than a name that will not resolve. `docs/reference/hosted-relay-deploy.md`'s step 0 is
-/// how to check that claim against the host rather than against this comment.
+/// ⚠️ **This comment said "what is not on that host yet is this design's Worker" — no auth gate,
+/// no `/claim`, no `/token` — and it was false; corrected 2026-08-30.** It was one of five files
+/// that agreed the hosted relay was undeployed, and the agreement read as corroboration because
+/// nobody had asked the host. Probed that day: `/claim` and `/token` answer **405** to a GET and
+/// **400** to an empty POST body, `/oauth/patreon/callback` **400**, `/g/{group}/pull` **401**
+/// from the bearer gate, `/g/{group}/rotate` **401** to a POST, and `/g/{group}/keys` **401** to a
+/// GET carrying a well-formed bearer — while `/g/{group}/bogus` is still **404**, so those 401s
+/// are handlers refusing rather than a router shrugging. **A device pointed at this host today
+/// reaches the whole membership flow and the whole key distribution.**
+///
+/// **What is not deployed is the device roll this branch adds**, and it changes no route, so no
+/// path probe can see it: the tell is that the live `/token` accepts a body with **no `device`
+/// field**, where the code in this tree answers 400. `docs/reference/hosted-relay-deploy.md`'s
+/// step 0 is how to check any of this against the host rather than against this comment, and it
+/// exists because this comment was wrong.
 pub const RELAY_BASE: &str = "https://mtg-grimoire-relay.denmark-east.workers.dev";
 
 /// The OAuth client id, real since `a0eb0c6` (committed 2026-08-30, against the verification
@@ -185,6 +200,34 @@ pub const NO_GROUP: &str = "this device is in no sync group yet";
 /// **Named so `client` can act on it without matching a sentence.** The wording is a reader's
 /// sentence and may be reworded; the comparison is against this constant.
 pub const STALE_GROUP_AUTH: &str = "the relay did not recognise this device's group key";
+
+/// What a **403** from `/token` or `/claim` becomes: the account already holds its five devices.
+///
+/// ⚠️ **A 403 is the cap and must never be routed through the 401 path.** That path calls
+/// [`revoke`], which leaves the mark [`membership_ended`] reads — so a reader plugging in their
+/// sixth device would be told their **membership had ended**, and shown spec §7.1's reassurance
+/// that no local data was touched, over a pledge that is perfectly fine. The relay uses two
+/// statuses because these are two events: 401 is *there is nothing left to trade*, 403 is *there
+/// is, and this device may not have it*.
+///
+/// **Nothing is cleared on it**, for [`STALE_GROUP_AUTH`]'s reason arriving from a second
+/// direction: the grant is still good and the five devices that are in are unaffected — it is
+/// only *this* device that is one too many, and a refusal that threw the grant away would make a
+/// sixth machine plugged in for a minute cost the reader the five that were working.
+///
+/// It names the number, because a refusal a reader cannot count against is one they will press
+/// again, and it names both ways out. Each of them publishes a manifest, and a manifest is what
+/// frees a slot on the relay (spec §4.4).
+///
+/// **`identity::GROUP_IS_FULL` is the same limit in a different sentence, and the pair is
+/// deliberate rather than a duplication to fold.** That one is the *client's* refusal at the
+/// pairing ceremony — spec §4.3's "the client is the message" — and reaches a reader who has not
+/// paired yet. This one is the *relay's*, and reaches a device that is already paired and is
+/// asking for a token it cannot have, which is the case a modified build produces and the reason
+/// the fence is on the far side at all.
+pub const GROUP_IS_FULL: &str = "This membership already covers five devices, which is the \
+     limit. Remove one from the list of devices, or leave the group on a device you no longer \
+     use, and this one can join.";
 
 /// Every key this module owns. [`clear`] deletes the lot.
 const GRANT_KEYS: [&str; 5] = [
@@ -520,12 +563,57 @@ fn http() -> reqwest::Client {
     reqwest::Client::new()
 }
 
+/// This device's id, the `device` field every request here now carries (spec §4.2).
+///
+/// **[`identity::ensure`] rather than a bare read, and it is the call every pairing entrance
+/// already makes.** Nothing reaches this function without a group or a refresh secret, so an
+/// identity is there in practice — but `ensure` is what makes that a fact instead of an
+/// assumption, and the one thing it will not do is re-mint: a restored `user.db` is the device it
+/// was. That matters more here than anywhere, because the relay's roll is a count of device ids
+/// and a fork would spend one of the reader's five slots per restore.
+///
+/// **It is not on a hot path, which is the objection `ensure`'s own doc raises.** It runs only
+/// where a request is about to be made — the two doors and [`claim`] — and [`access_token`]
+/// answers a token with life left long before reaching either, so a device syncing every minute
+/// asks this about once a day.
+fn this_device(conn: &Connection) -> Result<String, String> {
+    identity::ensure(conn)
+        .map(|me| me.device_id)
+        .map_err(|e| e.to_string())
+}
+
+/// The relay's marker for the one 403 that is the device cap.
+///
+/// **It must equal `DEVICE_LIMIT` in `relay/src/claim.ts`.** Nothing checks that across the two
+/// languages — `ipc.ts` has the same problem one boundary over, and both were nearly shipped
+/// broken today — so the pair is named on both sides and asserted in this module's tests.
+pub const DEVICE_LIMIT: &str = "device_limit";
+
+/// A refusal body, as every route on the relay writes one.
+///
+/// `Default` so an unparseable or empty body is a refusal with no code and no sentence rather
+/// than an error of its own: a 403 whose body did not arrive is still a 403, and the caller
+/// needs a sentence more than it needs the parse failure.
+#[derive(Debug, Clone, Default, Deserialize)]
+struct Refusal {
+    #[serde(default)]
+    error: String,
+    #[serde(default)]
+    code: Option<String>,
+}
+
 /// `POST {base}{path}` with a JSON body, answering the grant the relay minted.
 ///
 /// `Ok(None)` is a **401 and nothing else**: the relay refused the credential. What that costs is
 /// the caller's decision, and no caller records it anywhere — and the three callers now disagree
 /// about that cost completely: `/claim`'s 401 is a refused press, `/token`'s refresh door is a
 /// lapse, and `/token`'s group door is [`STALE_GROUP_AUTH`], which is neither.
+///
+/// **A 403 is [`GROUP_IS_FULL`] and is answered here rather than by any caller**, which is the
+/// one place in this module where all three agree: the relay admits a device on every token it
+/// would issue, so the cap can refuse any of these routes and means the same thing on each. It is
+/// an `Err`, which is what keeps it out of the 401 machinery altogether — every caller's 401 arm
+/// clears something and no caller's `Err` arm clears anything.
 ///
 /// **Generic over the answer because `/token` has two doors that answer two shapes** — [`Grant`]
 /// and [`GroupGrant`] — and the difference is one absent field. A single struct with an
@@ -550,6 +638,31 @@ async fn post_for_grant<T: DeserializeOwned>(
     if status == 401 {
         return Ok(None);
     }
+    // ⚠️ **Above the generic arm and never folded into the one above it.** `Ok(None)` is what
+    // every caller's lapse handling hangs off; a 403 arriving there would `revoke` a grant that
+    // is still good and tell a reader at their sixth device that their membership had ended.
+    if status == 403 {
+        // ⚠️ **Not every 403 is the cap, and reading the status alone gets this wrong.**
+        // `/claim` answered 403 to *that membership no longer exists* and *that membership is
+        // not active* long before a device limit existed, so a bare `status == 403` tells a
+        // reader whose pledge has lapsed that they already have five devices — the wrong
+        // sentence about the wrong problem, and one that sends them to remove a device instead
+        // of to renew. The relay stamps `code: "device_limit"` on the three refusals that
+        // really are the cap; anything else 403 keeps the relay's own sentence, which is
+        // already written for a reader.
+        //
+        // **Matched on the code and never on `error`**, which is copy and is free to be
+        // improved: a string comparison here would break the app on a wording change.
+        let text = response.text().await.unwrap_or_default();
+        let refusal: Refusal = serde_json::from_str(&text).unwrap_or_default();
+        return Err(if refusal.code.as_deref() == Some(DEVICE_LIMIT) {
+            GROUP_IS_FULL.to_owned()
+        } else if refusal.error.trim().is_empty() {
+            format!("the relay answered {status} to {path}")
+        } else {
+            refusal.error
+        });
+    }
     if !(200..300).contains(&status) {
         return Err(format!("the relay answered {status} to {path}"));
     }
@@ -568,7 +681,7 @@ async fn post_for_grant<T: DeserializeOwned>(
 /// device holding both a secret and a group takes the refresh door, because that is the door
 /// that can also re-mint the secret.
 ///
-/// Four answers, and only two of them are errors:
+/// Five answers, and only three of them are errors:
 ///
 /// * **`Ok(None)`, no refresh secret *and* no group** — sync is off. Not an error; it is where
 ///   every existing installation stands.
@@ -577,6 +690,9 @@ async fn post_for_grant<T: DeserializeOwned>(
 ///   silences this is, and no `error_log` row is written (spec §10).
 /// * **`Err(STALE_GROUP_AUTH)`, a 401 from the group door** — which is *not* the same event, and
 ///   nothing is cleared. See that constant.
+/// * **`Err(GROUP_IS_FULL)`, a 403 from either door** — the account already holds five devices
+///   and this one is the sixth. Nothing is cleared, and the status is deliberately not the 401:
+///   see that constant.
 /// * **`Err`** — the relay could not be reached, or answered something else. A network failure is
 ///   a network failure and the caller reports it.
 pub async fn access_token(conn: &Connection) -> Result<Option<String>, String> {
@@ -612,8 +728,14 @@ pub async fn access_token(conn: &Connection) -> Result<Option<String>, String> {
 ///
 /// A 401 is a **lapse**: the relay deletes the refresh secret when a membership ends, so a
 /// refusal here is the relay saying there is nothing left to trade.
+///
+/// **`device` rides this door as well as the group one, and this is the door that makes the cap
+/// mean anything** (spec §4.2). The device that pressed Connect holds a refresh secret, so it
+/// takes this door and never the group one — a roll fed only by `group_door` would never count
+/// the one device that is certainly signed in, and the reader's own words are that the limit
+/// covers accounts inheriting the sign-in from another grouped device *too*.
 async fn refresh_door(conn: &Connection, refresh: &str) -> Result<Option<String>, String> {
-    let body = serde_json::json!({ "refresh": refresh }).to_string();
+    let body = serde_json::json!({ "refresh": refresh, "device": this_device(conn)? }).to_string();
     let Some(grant) = post_for_grant::<Grant>(conn, "/token", body).await? else {
         revoke(conn)?;
         return Ok(None);
@@ -639,7 +761,15 @@ async fn refresh_door(conn: &Connection, refresh: &str) -> Result<Option<String>
 /// secret in this answer and this device must not appear to hold one.
 async fn group_door(conn: &Connection, group: &identity::Group) -> Result<Option<String>, String> {
     let auth = crypto::relay_auth(&group.group_key, &group.group_id, group.epoch);
-    let body = serde_json::json!({ "group": group.group_id, "auth": auth }).to_string();
+    // **`device` is the only field here that names a machine.** The auth is derived from the
+    // group key, so every device in the group sends the identical string and the relay could not
+    // tell a fifth caller from a sixth without this (spec §4.2).
+    let body = serde_json::json!({
+        "group": group.group_id,
+        "auth": auth,
+        "device": this_device(conn)?,
+    })
+    .to_string();
     let Some(grant) = post_for_grant::<GroupGrant>(conn, "/token", body).await? else {
         return Err(STALE_GROUP_AUTH.to_owned());
     };
@@ -670,20 +800,26 @@ pub async fn claim(conn: &Connection, code: &str) -> Result<(), String> {
     let Some(group) = identity::group(conn).map_err(|e| e.to_string())? else {
         return Err(NO_GROUP.to_owned());
     };
-    // **Four fields, and the two new ones are what register the group's relay key** (spec §2.1).
-    // A claim is the only moment the relay is ever told about a group, so it is the only place
-    // the first `relay_auth` can be seeded — and `recordRotation` will accept nothing but a
+    // **The `group`, `epoch` and `auth` fields are what register the group's relay key** (spec
+    // §2.1). A claim is the only moment the relay is ever told about a group, so it is the only
+    // place the first `relay_auth` can be seeded — and `recordRotation` will accept nothing but a
     // *strictly higher* epoch afterwards, which means a claim that registered nothing leaves a
     // group whose auth no device can ever match and whose rotations are all refused.
     //
-    // **The relay refuses a body missing either one with a 400**, so this is not belt and braces:
-    // sending the old two-field body makes every Connect press fail with `malformed claim`, on a
-    // route whose whole job is the reader's first contact with the service.
+    // **The relay refuses a body missing one of them with a 400**, so this is not belt and
+    // braces: sending the old two-field body makes every Connect press fail with `malformed
+    // claim`, on a route whose whole job is the reader's first contact with the service.
+    //
+    // **`device` is the fifth and is here for `/token`'s reason** (spec §4.2): the relay admits a
+    // device on any token it would issue, and a claim issues one. It is also the *only* request
+    // the connecting device is guaranteed to make, since a claim that succeeds leaves a token
+    // with a day's life and no door is taken again until it nears the margin.
     let body = serde_json::json!({
         "code": code,
         "group": group.group_id,
         "epoch": group.epoch,
         "auth": crypto::relay_auth(&group.group_key, &group.group_id, group.epoch),
+        "device": this_device(conn)?,
     })
     .to_string();
     // `/claim` answers the **full** [`Grant`]: a claim is the one moment the refresh secret is
@@ -845,7 +981,7 @@ mod tests {
         let url = authorize_url("state-abc");
         // Spelled out rather than run through `encoded`, so this is an independent statement of
         // what the bytes must be. The host is the only part taken from the constant, because it
-        // is the one part that changes when the relay is really deployed.
+        // is the one part that would change if the relay ever moved.
         let host = RELAY_BASE.trim_start_matches("https://");
         let expected = format!("redirect_uri=https%3A%2F%2F{host}%2Foauth%2Fpatreon%2Fcallback");
 
@@ -1100,8 +1236,16 @@ mod tests {
 
     use httpmock::prelude::*;
 
-    /// The fixture plus the one row `identity::group` reads. Written out rather than climbing the
-    /// schema ladder, for `db`'s reason - and it is a *read* this module makes, never a write.
+    /// The device id every wire test below expects on the `device` field.
+    ///
+    /// **Seeded rather than minted, so the expectation can be a literal.** `identity::ensure`
+    /// mints sixteen random bytes on absence, and a test that read the id back out of the
+    /// database it had just handed to the code under test would agree with a body carrying the
+    /// wrong device just as happily as with the right one.
+    const DEVICE: &str = "dev-1";
+
+    /// The fixture plus the rows `identity::group` and `identity::ensure` read. Written out
+    /// rather than climbing the schema ladder, for `db`'s reason.
     fn db_with_no_group() -> rusqlite::Connection {
         // The table but no row, which is what a device that has never paired really looks like -
         // `prepare_database` creates it on every launch. A fixture missing the table entirely
@@ -1118,6 +1262,38 @@ mod tests {
              );",
         )
         .expect("sync_group");
+        // **An identity, because every request this module makes now names one** (spec 4.2).
+        // `device_names` comes with it: `identity::ensure`'s existing-identity arm files this
+        // device's name there if it never has, so a fixture without that table answers
+        // "no such table: device_names" from inside a network call.
+        //
+        // The name is deliberately NOT `identity::PLACEHOLDER` - that value sends `ensure` down
+        // its upgrade branch, which writes to `sync_devices` as well and would need a third
+        // table here for a reason that has nothing to do with this module.
+        conn.execute_batch(
+            "CREATE TABLE sync_identity (
+                 id INTEGER PRIMARY KEY CHECK (id = 1),
+                 device_id TEXT NOT NULL,
+                 secret_key BLOB NOT NULL,
+                 public_key BLOB NOT NULL,
+                 name TEXT NOT NULL,
+                 created_at INTEGER NOT NULL
+             );
+             CREATE TABLE device_names (
+                 device_id TEXT PRIMARY KEY,
+                 name TEXT NOT NULL,
+                 created_at INTEGER NOT NULL,
+                 updated_at INTEGER NOT NULL,
+                 sync_uid TEXT
+             ) WITHOUT ROWID;",
+        )
+        .expect("sync_identity");
+        conn.execute(
+            "INSERT INTO sync_identity (id, device_id, secret_key, public_key, name, created_at)
+             VALUES (1, ?1, zeroblob(32), zeroblob(32), 'Desk', 0)",
+            [DEVICE],
+        )
+        .expect("the identity row");
         conn
     }
 
@@ -1160,6 +1336,12 @@ mod tests {
                     "group": "grp-1",
                     "epoch": 0,
                     "auth": expected_auth,
+                    // **The fifth field, and `/claim` needs it for `/token`'s reason** (spec
+                    // 4.2): the relay upserts `(group, device)` on any token it would issue,
+                    // and a claim issues one. Without it the device that connected Patreon -
+                    // the one device that is certainly signed in - is the one the roll never
+                    // hears about.
+                    "device": DEVICE,
                 }));
             then.status(200).body(
                 r#"{"access":"a1","refresh":"r1","expires":1756000000,
@@ -1261,6 +1443,199 @@ mod tests {
         assert!(membership_ended(&conn));
     }
 
+    // -----------------------------------------------------------------------------------
+    // The device cap: a 403, which is NOT a 401
+    //
+    // The three tests below are one assertion made on three routes, because the relay admits a
+    // device on every token it would issue and all three of these issue one. What each is
+    // guarding against is the same single line: routing 403 into the 401 branch. That branch
+    // calls `revoke`, whose mark is what `membership_ended` reads, so the mutation's whole
+    // visible effect is a reader at their sixth device being told their *pledge* ended - and
+    // being shown 7.1's "your data is untouched" paragraph, which answers a question they did
+    // not ask about an event that did not happen.
+    // -----------------------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn a_403_on_the_refresh_door_is_the_device_cap_and_never_a_lapse() {
+        // **The one this task turns on.** A 401 here really is a lapse - the relay deletes the
+        // refresh secret when a membership ends - so this door is where the two statuses are
+        // most easily conflated and where conflating them costs the most.
+        //
+        // What makes it red: routing 403 through the 401 branch (which answers `Ok(None)`, so
+        // `expect_err` panics, and then fails all four assertions below); letting 403 fall
+        // through to `post_for_grant`'s generic arm (the sentence is then "the relay answered
+        // 403 to /token", which names nothing a reader can act on).
+        let server = MockServer::start_async().await;
+        let mock = server.mock(|when, then| {
+            when.method(POST).path("/token");
+            then.status(403)
+                .body(r#"{"error":"five devices already","code":"device_limit"}"#);
+        });
+        let conn = db_in_a_group(&server);
+        // A device that is really connected and whose token is past its margin, so the door is
+        // genuinely taken. Without the stored grant the deletion assertions would pass under the
+        // mutation anyway - `revoke`'s `clear` half deletes nothing from an empty row set.
+        store_grant(&conn, "a1", "r1", 0).expect("store");
+        store_status(&conn, "active", Some(1_740_000_000)).expect("status");
+
+        let error = access_token(&conn).await.expect_err("the cap, not a lapse");
+
+        mock.assert();
+        assert_eq!(error, GROUP_IS_FULL);
+        assert_eq!(
+            refresh_secret(&conn).as_deref(),
+            Some("r1"),
+            "a sixth device must not cost the reader the five that work"
+        );
+        assert_eq!(
+            client::get_state(&conn, ACCESS_TOKEN).as_deref(),
+            Some("a1")
+        );
+        assert_eq!(
+            supporter_state(&conn),
+            ("active".to_owned(), Some(1_740_000_000))
+        );
+        assert!(
+            !membership_ended(&conn),
+            "the panel would draw *Membership ended* at somebody whose pledge is fine"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_403_on_the_group_door_is_the_cap_rather_than_a_stale_auth() {
+        // The group door has its own 401 sentence, so a 403 landing in that branch here does not
+        // revoke - it answers STALE_GROUP_AUTH, which sends `client::check_keys` off to /keys to
+        // tell a rotation from a lapse. It would come back saying this device is on the manifest
+        // and healthy, and the sync would fail again next time with the same wrong sentence for
+        // ever, never once naming the limit the reader has actually hit.
+        //
+        // What makes it red: `assert_eq!(error, GROUP_IS_FULL)` fails under the 401 routing
+        // (STALE_GROUP_AUTH) and under the generic arm ("the relay answered 403 to /token").
+        let server = MockServer::start_async().await;
+        let mock = server.mock(|when, then| {
+            when.method(POST).path("/token");
+            then.status(403)
+                .body(r#"{"error":"five devices already","code":"device_limit"}"#);
+        });
+        let conn = db_in_a_group(&server);
+        store_access(&conn, "a1", 0).expect("a stale token");
+        store_status(&conn, "active", Some(1_740_000_000)).expect("status");
+
+        let error = access_token(&conn).await.expect_err("the cap");
+
+        mock.assert();
+        assert_eq!(error, GROUP_IS_FULL);
+        assert_ne!(error, STALE_GROUP_AUTH);
+        assert_eq!(
+            client::get_state(&conn, ACCESS_TOKEN).as_deref(),
+            Some("a1"),
+            "nothing was concluded about the membership, so nothing may be thrown away"
+        );
+        assert_eq!(
+            supporter_state(&conn),
+            ("active".to_owned(), Some(1_740_000_000))
+        );
+    }
+
+    /// **A 403 that is not the cap keeps the relay's own sentence**, and this is the near-miss
+    /// the `code` field exists for.
+    ///
+    /// `/claim` answered 403 to *that membership no longer exists* and *that membership is not
+    /// active* long before a device limit existed. Branching on the status alone — which is what
+    /// this module did for about an hour today — tells a reader whose pledge has lapsed that they
+    /// already have five devices: the wrong sentence about the wrong problem, and one that sends
+    /// them to remove a device instead of to renew.
+    ///
+    /// **Neither suite could see it.** The relay's tests assert the relay's half and the Rust
+    /// tests assert this half, and both were green; it was found by reading the other side's
+    /// file. That is the third contract in this repo that spans a boundary nothing checks.
+    #[tokio::test]
+    async fn a_403_that_is_not_the_cap_says_what_the_relay_said() {
+        let server = MockServer::start_async().await;
+        let mock = server.mock(|when, then| {
+            when.method(POST).path("/claim");
+            // Verbatim from `relay/src/claim.ts`'s pre-existing refusal - no `code` on it.
+            then.status(403)
+                .body(r#"{"error":"that membership is not active"}"#);
+        });
+        let conn = db_in_a_group(&server);
+
+        let error = claim(&conn, "ABCD-1234").await.expect_err("a refusal");
+
+        mock.assert();
+        assert_eq!(
+            error, "that membership is not active",
+            "a lapsed membership was reported as the device cap"
+        );
+        assert_ne!(
+            error, GROUP_IS_FULL,
+            "the cap sentence reached the wrong 403"
+        );
+    }
+
+    /// The two spellings of the marker are one contract across two languages, and **nothing
+    /// checks it** - the same shape that nearly shipped `connected`/`entitled` broken.
+    #[test]
+    fn the_device_limit_marker_is_the_one_the_relay_stamps() {
+        assert_eq!(DEVICE_LIMIT, "device_limit");
+    }
+
+    #[tokio::test]
+    async fn a_403_from_claim_names_the_limit_rather_than_the_code() {
+        // `/claim` issues a token, so it admits a device too - and its 401 already means
+        // something else again (the code was refused). A reader connecting Patreon on a sixth
+        // machine would otherwise be told to check the code they pasted, which is correct
+        // advice about the wrong problem: the code was fine, and re-pasting it will fail
+        // identically for ever.
+        //
+        // What makes it red: the 401 routing answers "the relay refused that claim code"; the
+        // generic arm answers "the relay answered 403 to /claim"; and clearing anything on the
+        // way out fails the three below - a `revoke` in `post_for_grant`'s 403 arm survived the
+        // first draft of this test, which stored no grant for it to take away.
+        let server = MockServer::start_async().await;
+        let mock = server.mock(|when, then| {
+            when.method(POST).path("/claim");
+            then.status(403)
+                .body(r#"{"error":"five devices already","code":"device_limit"}"#);
+        });
+        let conn = db_in_a_group(&server);
+        // A reader who already holds a membership and is connecting a sixth machine. The press
+        // is refused; what they hold is not.
+        store_grant(&conn, "a1", "r1", 1_900_000_000).expect("store");
+        store_status(&conn, "active", Some(1_740_000_000)).expect("status");
+
+        let error = claim(&conn, "ABCD-1234").await.expect_err("the cap");
+
+        mock.assert();
+        assert_eq!(error, GROUP_IS_FULL);
+        assert_eq!(refresh_secret(&conn).as_deref(), Some("r1"));
+        assert_eq!(
+            supporter_state(&conn),
+            ("active".to_owned(), Some(1_740_000_000))
+        );
+        assert!(!membership_ended(&conn));
+    }
+
+    #[test]
+    fn the_cap_sentence_counts_the_devices_and_names_a_way_out() {
+        // The three tests above compare against the constant, which pins *which* sentence is
+        // answered and nothing about what it says. This pins the part a reader depends on:
+        // a refusal they cannot count against is one they will press again, and a limit with no
+        // way out is a dead end rather than an instruction.
+        //
+        // What makes it red: a bare "Forbidden", a sentence that names the limit without a
+        // remedy, or one that reaches for the membership vocabulary - which is precisely the
+        // wrong story and the one the 401 path would have told.
+        assert!(GROUP_IS_FULL.contains("five"), "{GROUP_IS_FULL}");
+        assert!(GROUP_IS_FULL.contains("limit"), "{GROUP_IS_FULL}");
+        assert!(GROUP_IS_FULL.contains("Remove"), "{GROUP_IS_FULL}");
+        assert!(GROUP_IS_FULL.contains("leave the group"), "{GROUP_IS_FULL}");
+        assert!(
+            !GROUP_IS_FULL.to_lowercase().contains("membership ended"),
+            "the cap is not a lapse and must not read like one: {GROUP_IS_FULL}"
+        );
+    }
+
     #[tokio::test]
     async fn a_token_with_time_left_is_used_without_asking_the_relay() {
         // The margin's other half, and the half that fails silently: refreshing on every call
@@ -1299,7 +1674,12 @@ mod tests {
         let mock = server.mock(|when, then| {
             when.method(POST)
                 .path("/token")
-                .json_body(serde_json::json!({ "refresh": "r1" }));
+                // **`device` on the refresh door as well as the group one, and this is the
+                // door that made the cap possible at all** (spec 4.2). The device that
+                // pressed Connect reaches the relay here and never through the group door,
+                // so a roll fed only by the group door would never count the one device
+                // that is certainly signed in - and five would mean six.
+                .json_body(serde_json::json!({ "refresh": "r1", "device": DEVICE }));
             then.status(200).body(
                 r#"{"access":"a2","refresh":"r2","expires":1900000000,
                     "status":"active","since":1740000000}"#,
@@ -1350,7 +1730,15 @@ mod tests {
         let mock = server.mock(|when, then| {
             when.method(POST)
                 .path("/token")
-                .json_body(serde_json::json!({ "group": "grp-1", "auth": seeded_group_auth() }));
+                .json_body(serde_json::json!({
+                    "group": "grp-1",
+                    "auth": seeded_group_auth(),
+                    // The group auth is a fact about the *group* - every device in it derives
+                    // the same string - so it names nobody. `device` is the only thing on this
+                    // body that says which machine is asking, and the roll is a count of
+                    // machines.
+                    "device": DEVICE,
+                }));
             then.status(200).body(
                 r#"{"access":"a1","expires":1900000000,
                     "status":"active","since":1740000000}"#,

@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QueryKey } from "@tanstack/react-query";
-import { Copy, Heart, Link2, RefreshCw, ShieldCheck, X } from "lucide-react";
+import { Copy, Heart, Link2, LogOut, RefreshCw, ShieldCheck, X } from "lucide-react";
 import { useState, type JSX } from "react";
 import { copyText } from "@/lib/clipboard";
 import { count, plural } from "@/lib/counts";
@@ -47,6 +47,34 @@ export const REMOVAL_WARNING =
   "Removing a device changes the key your devices share, so it can read nothing new from now " +
   "on. It keeps whatever it already synced — this app cannot reach into it and take that " +
   "back, and no server has a copy to delete.";
+
+/**
+ * §2.1 and §2.3, and the two facts a reader cannot work out from the word *Leave*.
+ *
+ * **This wording is load-bearing and not copy**, for {@link REMOVAL_WARNING}'s reason arrived at
+ * from the other side of the same act. Two things have to be in it:
+ *
+ * 1. **This device keeps its own collection.** Leaving is the one press on this panel that
+ *    sounds like it throws something away, and what it actually throws away is a *membership in
+ *    a group* — every row is still in this device's own SQLite afterwards. A dialog that said
+ *    only "Leave group?" would be asking a reader to gamble their cards on a guess.
+ * 2. **The others may not hear.** `leave_group_now` publishes best effort and clears locally
+ *    whatever the relay answered, which is the whole of *"leaving is always possible"* — so a
+ *    reader who leaves offline leaves for real while the remaining devices go on listing this
+ *    one. That is the honest cost of the guarantee, and hiding it would let a reader believe the
+ *    group had closed behind them when it had not. §5's first row, in the reader's words.
+ *
+ * The middle clause is the third consequence and the only *visible* one: `entitlement::clear`
+ * runs unconditionally too, so a reader who pressed Connect on this device reads *Not connected*
+ * a moment later. Nothing ended — `clear`, never `revoke` — which is why the sentence offers the
+ * way back rather than apologising.
+ */
+export const LEAVE_WARNING =
+  "Your collection stays on this device. Nothing here is deleted — what goes is this device's " +
+  "place in the group, and the membership it was carrying with it. You can pair it again, or " +
+  "connect a membership again, whenever you like. And if the relay cannot be reached right now, " +
+  "your other devices will not hear that you have gone: they go on listing this one until " +
+  "somebody removes it there.";
 
 /** A pairing in flight on this screen, and which half of it this device is playing. */
 type Flow =
@@ -584,6 +612,33 @@ const CONNECT_ORDER =
   "one to them first — then a membership on any of them covers all of them.";
 
 /**
+ * The cost of a *re-claim*, said beside the field that makes one — spec §3, and its own words:
+ * **"the panel says so before the press, and that copy is load-bearing."**
+ *
+ * `/claim` used to refuse a subject that already held a group with a 409, which stranded the one
+ * reader it was worst for: the paying device leaves, and there is then no press anywhere that
+ * re-binds its membership. So a re-claim **moves** the binding instead — and the price is paid
+ * by whoever is still in the old group. Their relay log is dropped and their `group_devices`
+ * rows go with it, so they stop syncing with each other and fail their next key check.
+ *
+ * **The reader this is for has not left anything.** A payer who leaves first has already
+ * orphaned that group and this sentence tells them nothing new; a reader who simply pastes a
+ * fresh code on a second machine can take down a working group without any press ever saying so.
+ * That reader is the whole audience, which is why it is drawn at the claim field rather than at
+ * *Connect Patreon* — opening a browser costs nothing, and the claim is the write.
+ *
+ * **What it must not do is offer a way to keep both**, because there is not one: one
+ * subscription serves exactly one group, which is the invariant the 409 was protecting and the
+ * rebinding keeps. So the sentence names what the old group loses and what it does not, and
+ * stops.
+ */
+const RECLAIM_WARNING =
+  "One membership covers one group. If this membership was last claimed for a different group " +
+  "of devices, claiming it here moves it — and the devices left in that group stop syncing with " +
+  "each other, because the relay drops what it was holding for them. Their own collections are " +
+  "untouched, but they have no way back until they pair again.";
+
+/**
  * The membership, the relay it pays for, and the one press that makes a round trip.
  *
  * **The relay is one hosted server now and its address is compiled into the crate**, which
@@ -749,6 +804,13 @@ function SupporterSection(): JSX.Element {
                 Connect Patreon
               </button>
 
+              {/* **The re-claim warning, at the field that makes a re-claim** — spec §3, and
+                  the placement is the claim rather than the paragraph's subject: pressing
+                  Connect Patreon opens a browser and moves nothing, while pasting a code is the
+                  write that re-binds. Above the field rather than under it, so it is read on the
+                  way to the press instead of after it. */}
+              <p className="text-sm text-dim">{RECLAIM_WARNING}</p>
+
               <div className="space-y-1">
                 {/* A written `id` rather than `useId()`, `SettingsSection`'s rule: a generated
                     `:r7:` moves with the render order of the page, and these are readable in
@@ -888,6 +950,9 @@ export function SyncPanel(): JSX.Element {
   const client = useQueryClient();
   const [flow, setFlow] = useState<Flow>({ kind: "idle" });
   const [removing, setRemoving] = useState<PairedDevice | null>(null);
+  /** The Leave dialog is open. A bare boolean where {@link removing} carries a device, because
+   *  the device leaving is always this one — there is nothing to name. */
+  const [leaving, setLeaving] = useState(false);
 
   const read = useQuery({ queryKey: PAIRING_KEY, queryFn: () => ipc.syncPairingStatus() });
   const status: PairingStatus | null = read.data ?? null;
@@ -959,6 +1024,19 @@ export function SyncPanel(): JSX.Element {
       refresh();
     },
   });
+  const leave = useMutation({
+    mutationFn: () => ipc.syncGroupLeave(),
+    onSuccess: () => {
+      setLeaving(false);
+      // **`SYNC_KEY` rather than `refresh()`, and the difference is the membership.** Leaving
+      // runs `entitlement::clear` as well as `identity::leave_group` (spec §2.3), so the
+      // supporter block and the relay figures are as stale as the roster the moment this
+      // answers — `paired` goes false, *Sync now* leaves with it, and the block below has to
+      // stop saying *Supporting*. All three sit under this root, which is `complete`'s
+      // argument one press over.
+      void client.invalidateQueries({ queryKey: SYNC_KEY });
+    },
+  });
 
   /** Whichever press last refused. One line, because only one thing is ever in flight here. */
   const error =
@@ -969,6 +1047,7 @@ export function SyncPanel(): JSX.Element {
     complete.error ??
     rename.error ??
     revoke.error ??
+    leave.error ??
     null;
 
   const paired = status !== null && status.groupId !== null;
@@ -1049,6 +1128,28 @@ export function SyncPanel(): JSX.Element {
               >
                 Enter a code from another device
               </button>
+              {/* **Drawn on a paired device and on no other**, which is `DeviceRow`'s missing
+                  Remove one rung up and the same rule: `leave_group_now` refuses a device in no
+                  group in as many words, and a press that can only ever be refused is worse than
+                  no press at all.
+
+                  **Beside the two pairing presses rather than on the roster.** Leaving is not a
+                  row's action — the row for this device is the one row that has no Remove — it
+                  is the group's, and this is the row where the group's presses live.
+
+                  `text-dim` and no accent: this is `Cancel`'s treatment, for a press that steps
+                  back where its two neighbours step forward. The red belongs to the dialog's own
+                  confirm button, exactly as Remove's does. */}
+              {paired && (
+                <button
+                  type="button"
+                  onClick={() => setLeaving(true)}
+                  className={cn(BUTTON, "border-border text-dim hover:bg-bg")}
+                >
+                  <LogOut aria-hidden="true" className="size-4" />
+                  Leave group
+                </button>
+              )}
             </div>
           )}
 
@@ -1201,6 +1302,29 @@ export function SyncPanel(): JSX.Element {
         onClose={() => setRemoving(null)}
       >
         {REMOVAL_WARNING}
+      </ConfirmDialog>
+
+      {/* **`confirmLabel` is deliberately not the trigger's own words.** Two buttons reading
+          *Leave group* — one on the panel, one in the dialog over it — is an ambiguity for a
+          reader scanning back to check what they pressed, and for every `getByRole` that has to
+          tell them apart. Remove's pair makes the same split (*Remove Phone* / *Remove device*).
+
+          `typeToConfirm={false}`, which is this dialog's documented rule rather than laxness:
+          the word is for a clear whose subject is the reader's only copy of something, and
+          leaving deletes nothing at all — a typed word here would teach readers to type it
+          without reading the sentence, which is what would make it useless on the clears that
+          need it. */}
+      <ConfirmDialog
+        open={leaving}
+        title="Leave this group?"
+        confirmLabel="Leave the group"
+        typeToConfirm={false}
+        pending={leave.isPending}
+        onConfirm={() => leave.mutate()}
+        onDismiss={() => setLeaving(false)}
+        onClose={() => setLeaving(false)}
+      >
+        {LEAVE_WARNING}
       </ConfirmDialog>
     </SettingsSection>
   );

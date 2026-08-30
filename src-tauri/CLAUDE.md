@@ -682,8 +682,12 @@ with the measurements: [text-mirror.md](../docs/reference/text-mirror.md).
 ## Hard rules — pairing
 
 `sync_pair/` joins two devices into one group with no account and no server-side identity —
-spec §7.5 and §7.6. Four layers and nine commands; the whole record, with the arithmetic behind
-the 105-character code and the crate pins, is [sync.md](../docs/reference/sync.md).
+spec §7.5 and §7.6. Four layers — `crypto`, `identity`, `invite`, `pairing` — and **the commands
+are not counted here**: this line said *nine* while there were eight, and `sync_group_leave` has
+since made nine right by accident. A count is a fact about a tree and every open branch has a
+different one; `grep '#\[tauri::command\]' src/sync_pair/pairing.rs` answers it. The whole record,
+with the arithmetic behind the 105-character code and the crate pins, is
+[sync.md](../docs/reference/sync.md).
 
 - **The six-digit comparison is not optional and there is no path around it.** `crypto::sas` is
   computed over the *derived* key and both public keys **in role order**, so a relay that
@@ -742,12 +746,45 @@ the 105-character code and the crate pins, is [sync.md](../docs/reference/sync.m
   distribution cannot disagree with it, where a synced `device_removals` table could arrive late,
   arrive out of order, or arrive at a device that cannot decrypt it — which is precisely the state
   a rotation puts every peer in.
-- **Four refusals guard a removal**, each a sentence rather than a constraint failure: this device
-  cannot revoke itself; an id nobody on the roster answers to rotates nothing; a device already in
-  a group may only rejoin the one it is in; and **a group with no membership cannot remove a
-  device at all** (`identity::NO_MEMBERSHIP`, asked of `commands::entitled` before anything
-  moves). `/rotate` authenticates against an auth only `/claim` can seed, so an unentitled group
-  has no way to publish a rotation — and rotating locally anyway is the bug above.
+- **Five refusals**, each a sentence rather than a constraint failure: this device cannot revoke
+  itself; an id nobody on the roster answers to rotates nothing; a device already in a group may
+  only rejoin the one it is in; **a sixth device cannot be paired in** (`identity::GROUP_IS_FULL`
+  from `identity::room_for`, asked by `confirm` and by `complete`, counting live rows only and
+  excluding the joiner); and **a group with no membership cannot remove a device at all**
+  (`identity::NO_MEMBERSHIP`, asked of `commands::entitled` before anything moves). `/rotate`
+  authenticates against an auth only `/claim` can seed, so an unentitled group has no way to
+  publish a rotation — and rotating locally anyway is the bug above. ⚠️ **Re-counted 2026-08-30**:
+  three, then four when the membership check landed, five now.
+- **A device can leave its group, and "always possible" is literal.** `sync_group_leave` →
+  `pairing::leave_group_now` is `identity::plan_departure` (the manifest is everyone *but* this
+  device), `client::post_rotation` **best effort**, then `identity::leave_group` **and**
+  `entitlement::clear` **unconditionally**. ⚠️ **Everything after the in-a-group check is best
+  effort, planning included** — `plan_departure` seals a blob to every peer, so one bad roster row
+  would otherwise be a device that can never get out of its group. What a failed plan costs is the
+  courtesy, never the departure: nothing is published and the others go on listing this device
+  until somebody removes it, which `SyncPanel`'s `LEAVE_WARNING` says before the press.
+  **`plan_rotation` keeps its own self-refusal rather than being relaxed** — removing somebody
+  else and leaving yourself are different acts, and one entrance taking either would let a
+  mis-click on a roster row throw this device's key away. **`clear` and never `revoke`**: nothing
+  ended, so the panel draws *Not connected*. `identity::CANNOT_REMOVE_SELF`'s *"Use Leave group
+  instead"* finally names a real control.
+- **Five devices per group, and the relay is the fence while this side is the message.**
+  `identity::MAX_GROUP_DEVICES` is a second spelling of `groupauth.ts`'s constant **on purpose**:
+  this repository is public and readers build it, so a cap that lived only here would be a
+  suggestion. What it buys is a reader meeting the limit at the press rather than at a sync three
+  minutes later. `complete`'s copy is weak by construction — a joining device cannot know the
+  group's size — and `confirm`'s is the meaningful one. A slot frees through the manifest, which
+  is already the roster, so a removal and a departure each free one with no new mechanism.
+- ⚠️ **A 403 from `/token` or `/claim` is the device cap and must never take the 401 path.** That
+  path calls `entitlement::revoke`, which sets the mark `membership_ended` reads, so routing the
+  cap through it tells a reader at their sixth device that their membership ended. **And not every
+  403 is the cap**: `/claim` answered 403 to *that membership no longer exists* and *that
+  membership is not active* long before a limit existed, so the relay stamps
+  `code: "device_limit"` and `entitlement::access_token` matches **the code, never the sentence**.
+  `entitlement::DEVICE_LIMIT` and `claim.ts`'s `DEVICE_LIMIT` must stay byte-equal and **nothing
+  at either end can check that** — each suite asserts its own half and both were green while the
+  two disagreed. Both files pin the literal, which is the only fence a cross-language constant
+  gets.
 - **There is still no bare "rotate the key" command, and its old reason has expired.** `rotate_key`
   was written, tested and deleted on the argument that with no relay a rotation A performs cannot
   reach B — which is exactly what the rewrap hop now builds. The press is missing rather than
@@ -873,11 +910,19 @@ record, with every measurement, is
   and must not be read as one.** `RELAY_BASE` holds a real hostname, committed with Markus's
   approval, and **the hosted Worker is deployed at it** — which reverses what this paragraph said
   from the day `RELAY_BASE` landed until 2026-08-30, through four separate edits that each repeated
-  "no auth gate, no `/claim`, no `/token`" without anybody asking the host. Probed 2026-08-30: `/claim` and `/token` answer **405** (the route is there and wants POST), `/oauth/patreon/callback` **400**, `/g/{group}/pull` **401** from the bearer gate, and `/g/{group}/rotate` and `/g/{group}/keys` **404**. So the auth gate,
-  the OAuth callback, `/claim` and `/token` are live; **this PR's two routes are what is not there
-  yet**, and `wrangler.jsonc` carries a real `database_id`, so a D1 exists and may hold live
-  entitlement rows. That makes the next deploy an **update to a running service**, not a first
-  landing, and the `ALTER TABLE`s in `schema.sql` run against real data.
+  "no auth gate, no `/claim`, no `/token`" without anybody asking the host. Probed 2026-08-30,
+  after the group-key deploy: `/claim` and `/token` answer **405** to a GET (the route is there and
+  wants POST), `/oauth/patreon/callback` **400**, `/g/{group}/pull` **401** from the bearer gate,
+  `/g/{group}/rotate` **401** to a POST, `/g/{group}/keys` **401** to a GET carrying a well-formed
+  bearer, and `/g/{group}/bogus` **404**. So the auth gate, the OAuth callback, `/claim`, `/token`
+  **and the key distribution** are all live. ⚠️ **This line then said `/rotate` and `/keys` were
+  "the two routes not there yet", which was true for part of one day and was repeated into three
+  other files after it stopped being true** — the same failure as the paragraph above it, inside
+  twenty-four hours. **What is not deployed is the device roll**, and no route list can show it:
+  the tell is that the live `/token` accepts a body with **no `device` field**, where this tree's
+  code answers 400. `wrangler.jsonc` carries a real `database_id`, so the D1 holds live entitlement
+  rows. That makes the next deploy an **update to a running service**, not a first landing, and the
+  `ALTER TABLE`s in `schema.sql` run against real data.
   [hosted-relay-deploy.md](../docs/reference/hosted-relay-deploy.md)'s step 0 is those `curl`s
   written down: **ask the host, never a document** — this paragraph is the reason why.
   `PATREON_CLIENT_ID` is **real since 2026-08-30 and the two are a matched pair again** — it was
