@@ -179,6 +179,12 @@ Delete the whole `{status?.lastError != null && ( … )}` block at `SyncPanel.ts
 
 In `src/lib/ipc.ts`, delete `lastError` and its doc comment from `RelayStatus` (line 3962-3966).
 
+⚠️ **`ipc.ts` holds three `lastError` fields: line 3127, line 3892 and line 3966.** Only **3966** is `RelayStatus`. The other two are `SyncStatus` (Scryfall's) and `MirrorStatus` (the plain-text mirror's), and both have many consumers across the app. Delete by struct, never by grep.
+
+- [ ] **Step 5b: Fix the two doc comments that name the field**
+
+`SyncPanel.tsx:274` and `:288` both argue about `lastError` inside `relayState`'s doc comment — line 288 begins **"`failed` is the press this window made, never `RelayStatus.lastError`"**. The field is gone, so the paragraph now explains a distinction against something that does not exist. Rewrite both to argue the same point against what remains: a press that failed is this window's news, and the Errors panel further down the page is the record. **A field name in prose is not free** — this repo's token sweep reads doc comments as markup, so a comment naming a deleted field is a rot that no build catches.
+
 - [ ] **Step 6: Fix the fixtures and the moot test**
 
 `SyncPanel.test.tsx:102` and `:111` construct `RelayStatus` literals with `lastError`; remove the field. `RELAY_FAILED` at line 111 loses its only distinguishing field — if that fixture is now identical to another, delete it and point the new test at whichever fixture remains.
@@ -203,8 +209,9 @@ Do not commit. Report files changed, tests added, tests deleted and why, and bot
 ### Task 3: The fake, the stories and the reference doc
 
 **Files:**
-- Modify: `.storybook/fake/db.ts` — the `relay` state (line 1824), its `RelayStatus` handler (line 12170), the `lastError` at line 12351, and the `paired` seed's roster
-- Modify: `.storybook/fake/db.test.ts` — line 2250 and any relay assertion
+- Modify: `.storybook/fake/db.ts` — the `relay` state (line 1824), the `RelayStatus`-shaped interface at line 1298-1300, and the `lastError` in the `sync_relay_status` handler at line 12351
+- Modify: `.storybook/fake/seeds.ts` — line 1818, `db.relay = { pending: 3, lastSyncAt: null, lastError: null }`
+- Modify: `.storybook/fake/db.test.ts` — any assertion on the **relay's** `lastError`
 - Modify: `src/features/settings/SyncPanel.stories.tsx` — the `Paired` story (line 235-277)
 - Modify: `docs/reference/sync.md` — §7.6, around line 255-295
 
@@ -212,7 +219,9 @@ Do not commit. Report files changed, tests added, tests deleted and why, and bot
 - Consumes: `RelayStatus` from Task 2 has no `lastError`
 - Produces: nothing
 
-⚠️ **`db.ts` holds three different `lastError` fields.** `db.mirror.lastError` (line 934, 1663, 6378, 12013) is the plain-text mirror's and **must not be touched**. `sync_status().lastError` (line 6153) is Scryfall's and **must not be touched**. Only `db.relay.lastError` and the `sync_relay_status` handler are this task's. Grep for `db.relay` to bound your edit.
+⚠️ **`db.ts` holds three different `lastError` fields and you own exactly one of them.** `db.mirror.lastError` (lines 934, 1663, 6378, 12013) is the plain-text mirror's and **must not be touched**. `sync_status().lastError` (line 6153, and `db.test.ts:2250` and `:2253`) is Scryfall's and **must not be touched**. Only `db.relay.lastError` is this task's. **Bound your edit by grepping `db.relay`**, not by grepping `lastError`.
+
+⚠️ **`.storybook/fake/seeds.ts` also holds the `paired` seed's roster at lines 1799-1810, and that roster keeps its removed `Old laptop` unchanged.** The backend still holds the row; the panel filtering it is exactly what Task 3's story now proves. Deleting the seeded device would make the story pass against a fixture that cannot fail. Read it, change only line 1818.
 
 - [ ] **Step 1: Strip the fake**
 
