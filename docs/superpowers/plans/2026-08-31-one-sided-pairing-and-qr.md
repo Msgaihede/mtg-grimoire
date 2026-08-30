@@ -633,7 +633,7 @@ git commit -m "feat(sync): a rendezvous address, and a code that survives being 
 **Interfaces:**
 - Consumes: `Rotation { group, keys, auth }`, `plan(conn, removing)` — both already in this file.
 - Produces:
-  - `identity::plan_join(conn: &Connection, joining: &str) -> Result<Rotation, String>`
+  - `identity::plan_join(conn: &Connection) -> Result<Rotation, String>` — **no argument**
   - `identity::ROSTER_DIRTY: &str` (the `sync_state` key, value `"roster_dirty"`)
   - `identity::set_roster_dirty(conn: &Connection, dirty: bool) -> Result<(), String>`
   - `identity::roster_is_dirty(conn: &Connection) -> Result<bool, String>`
@@ -647,7 +647,7 @@ fn a_join_rotation_names_the_joiner_and_everybody_already_there() {
     let joining = "cccccccccccccccccccccccccccccccc";
     add_device(&conn, joining, &[3u8; 32], "Phone").expect("roster add");
 
-    let plan = plan_join(&conn, joining).expect("a join must plan");
+    let plan = plan_join(&conn).expect("a join must plan");
     let named: Vec<&str> = plan.keys.iter().map(|(d, _)| d.as_str()).collect();
 
     assert!(named.contains(&joining), "the joiner must be in the manifest it joins by");
@@ -662,9 +662,8 @@ fn a_join_rotation_names_the_joiner_and_everybody_already_there() {
 fn a_join_rotation_advances_the_epoch() {
     let conn = seeded_group_of_two();
     let before = group(&conn).unwrap().unwrap().epoch;
-    let joining = "cccccccccccccccccccccccccccccccc";
-    add_device(&conn, joining, &[3u8; 32], "Phone").unwrap();
-    assert_eq!(plan_join(&conn, joining).unwrap().group.epoch, before + 1);
+    add_device(&conn, "cccccccccccccccccccccccccccccccc", &[3u8; 32], "Phone").unwrap();
+    assert_eq!(plan_join(&conn).unwrap().group.epoch, before + 1);
 }
 
 #[test]
@@ -673,9 +672,8 @@ fn planning_a_join_writes_nothing() {
     // the group exactly as it was so the reader can press again.
     let conn = seeded_group_of_two();
     let before = group(&conn).unwrap().unwrap();
-    let joining = "cccccccccccccccccccccccccccccccc";
-    add_device(&conn, joining, &[3u8; 32], "Phone").unwrap();
-    let _ = plan_join(&conn, joining).unwrap();
+    add_device(&conn, "cccccccccccccccccccccccccccccccc", &[3u8; 32], "Phone").unwrap();
+    let _ = plan_join(&conn).unwrap();
     let after = group(&conn).unwrap().unwrap();
     assert_eq!(before.epoch, after.epoch);
     assert_eq!(before.group_key, after.group_key);
@@ -727,21 +725,26 @@ pub const ROSTER_DIRTY: &str = "roster_dirty";
 /// It costs an epoch, which the rotation machinery already absorbs: `sync_engine::baseline` clears
 /// `baselined_at` on a rotation precisely so the next sync carries every device's last words across
 /// the boundary — which is also, exactly, what a device that has just joined needs.
-pub fn plan_join(conn: &Connection, joining: &str) -> Result<Rotation, String> {
-    let Some(_me) = read(conn).map_err(|e| e.to_string())? else {
-        return Err(NOT_IN_A_GROUP.to_owned());
-    };
-    // `plan` takes the id to EXCLUDE. A join excludes nobody, and passing an id no device answers
-    // to is how that is spelled — the same shape `plan_departure` uses from the other side.
-    let _ = joining;
-    plan(conn, "")
+/// **It takes no argument, unlike its two siblings, and that is the shape rather than an
+/// omission.** A removal excludes one device and a departure excludes this one; a join excludes
+/// **nobody** — the joiner is already on the roster, because `pairing::confirm` calls
+/// [`add_device`] before it plans. There is no id to pass.
+pub fn plan_join(conn: &Connection) -> Result<Rotation, String> {
+    plan_excluding(conn, None)
 }
 ```
 
-⚠️ **Read `plan`'s body before finishing this.** It must (a) include every roster row, the joiner
-included, and (b) refuse nothing when `removing` matches no device. `plan_rotation`'s doc says an id
-nobody answers to "rotates nothing" — if `plan` *errors* on that, add a `plan_all(conn)` sibling
-rather than passing `""`, and name it in this task's report so Task 4 uses the right symbol.
+⚠️ **`plan` cannot be reused as it stands, and this was checked rather than assumed.** It answers
+`NOT_ON_THE_ROSTER` when `removing` matches no device (`identity.rs:733`), so `plan(conn, "")` is a
+refusal and not a no-op. Extract its body into:
+
+```rust
+fn plan_excluding(conn: &Connection, removing: Option<&str>) -> Result<Rotation, String>
+```
+
+`None` skips **both** the `NOT_ON_THE_ROSTER` check and the per-peer `continue` that drops the
+excluded device; the `revoked_at.is_some()` skip stays in every case. Then `plan(conn, removing)`
+becomes `plan_excluding(conn, Some(removing))` and its two existing callers are untouched.
 
 Then the two `sync_state` helpers, in the shape this file already uses for that table.
 
@@ -774,7 +777,7 @@ git commit -m "feat(sync): a join publishes the roster, so a paired device is no
 - Produces:
   - `client::post_rendezvous(conn: &Connection, rv: &str, slot: &str, blob: &str) -> Result<(), String>`
   - `client::get_rendezvous(conn: &Connection, rv: &str, slot: &str) -> Result<Option<String>, String>`
-  - `client::publish_join(conn: &Connection, joining: &str) -> Result<(), String>` — **`async`**
+  - `client::publish_join(conn: &Connection) -> Result<(), String>` — **`async`**, no argument
   - `pub const RENDEZVOUS_TAKEN: &str` — the sentence for a 409
 
   `post_rendezvous` and `get_rendezvous` are `async` too; every caller is already on the blocking
@@ -828,6 +831,16 @@ fn an_empty_rendezvous_is_none_and_never_an_error() {
 fn publish_join_marks_the_roster_dirty_when_the_relay_refuses() {
     // Mock /rotate 401 (a group with no membership). Assert publish_join is Ok — a first
     // pairing must not fail because nothing is syncing yet — and that roster_is_dirty is true.
+    // ALSO assert the local epoch did NOT move: a refused publish must leave the group exactly
+    // as it was, or the device is ahead of a relay that never accepted it.
+}
+
+#[test]
+fn publish_join_commits_the_epoch_it_published() {
+    // The severe one. Mock /rotate 200, then assert identity::group(&conn).epoch equals the
+    // epoch that was posted. A publish without a local commit leaves this device BEHIND its own
+    // rotation, and `check_keys` then reads a higher epoch with no blob for it — which is the
+    // removal notice. The device that pressed Codes match would leave its own group.
 }
 
 #[test]
@@ -876,22 +889,35 @@ a poll that treated "not yet" as an error would show the reader a failure every 
 /// the refresh secret, and a group that has never claimed has no entitlement row, so it answers
 /// 401. That is not an error the reader can act on — nothing is syncing yet, so there is no
 /// divergence to carry — so the debt is marked and paid on the first sync that has a membership.
-pub async fn publish_join(conn: &Connection, joining: &str) -> Result<(), String> {
-    let Ok(plan) = identity::plan_join(conn, joining) else {
+/// ⚠️ **`commit_rotation` after the relay accepts, and never before or not at all.** `plan`'s
+/// manifest names **peers only** — `roster()` reads `sync_devices`, which holds no row for this
+/// device — so a device that published epoch *N+1* without committing would sit at *N* and its very
+/// next `check_keys` would read a higher epoch with **`blob: null` for itself**, which
+/// `client::KeyOutcome::Removed` defines as the removal notice. **The device that pressed *Codes
+/// match* would dissolve its own group on its next sync.** Committing makes the epochs equal, so
+/// `check_keys` answers `Current` and never reads the manifest at all. This is `remove_device`'s
+/// order exactly.
+pub async fn publish_join(conn: &Connection) -> Result<(), String> {
+    let Ok(plan) = identity::plan_join(conn) else {
         identity::set_roster_dirty(conn, true)?;
         return Ok(());
     };
-    match post_rotation(conn, &plan).await {
-        Ok(()) => identity::set_roster_dirty(conn, false),
-        Err(_) => identity::set_roster_dirty(conn, true).map(|()| ()),
+    if post_rotation(conn, &plan).await.is_err() {
+        // Nothing committed, so the group is exactly as it was and the debt is recorded.
+        return identity::set_roster_dirty(conn, true);
     }
+    // `""` removes nobody: `commit_rotation`'s `DELETE … WHERE device_id = ?1` matches no row,
+    // which is what a join wants. Its `baselined_at = NULL` sweep is wanted in full — a joining
+    // device needs every peer's last words carried across the epoch boundary.
+    identity::commit_rotation(conn, "", &plan)?;
+    identity::set_roster_dirty(conn, false)
 }
 ```
 
 - [ ] **Step 4: Wire the retry into `round_trip`**
 
 Where `check_keys` already runs — above the token fetch — add: if `roster_is_dirty(conn)?` and this
-device is in a group, call `publish_join(conn, <this device's own id>)` once and ignore a failure.
+device is in a group, call `publish_join(conn)` once and ignore a failure.
 ⚠️ It publishes **from the local roster**, and must not read the relay's manifest to decide: a group
 that has claimed and never rotated answers `devices: []` at the claim epoch, and treating that as
 evidence would be exactly the "dissolve every device" bug `client.rs` already guards against by
@@ -1001,7 +1027,7 @@ After deriving, `client::post_rendezvous(conn, &rv, "join", &blob_encode(&blob))
 1. identity::room_for(conn, &peer_id)          // the cap, refused at the press, unchanged
 2. seal at the CURRENT epoch; post to /p/{rv}/offer   // fails => nothing has changed locally
 3. create_group + add_device(B)                       // commit
-4. client::publish_join(conn, &peer_id).await         // best effort; marks roster_dirty on failure
+4. client::publish_join(conn).await                   // best effort; marks roster_dirty on failure
 ```
 
 ⚠️ **Step 2 before step 3 is what makes a failed post cost nothing**, and sealing the *current* key
@@ -1205,7 +1231,9 @@ git commit -m "feat(sync): a QR scanner, camera to code"
 
 **Files:**
 - Create: `src-tauri/src/camera.rs`
-- Modify: `src-tauri/src/lib.rs`, `src-tauri/gen/android/app/src/main/AndroidManifest.xml`
+- Modify: `src-tauri/src/lib.rs`, `src-tauri/gen/android/app/src/main/AndroidManifest.xml`,
+  `src-tauri/tauri.conf.json` (only if Step 2's fallback is taken — but it is **this task's** file
+  either way, so no sibling touches it)
 
 **Interfaces:**
 - Produces: `camera::install(window: &tauri::WebviewWindow)` — called by Task 5 from `desktop.rs`.
