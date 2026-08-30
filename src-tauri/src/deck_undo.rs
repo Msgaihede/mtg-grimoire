@@ -1210,14 +1210,17 @@ fn record_reversal(
     Ok(())
 }
 
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
 /// Apply one step, in one transaction, and record the history row for having done it.
 ///
 /// `undoing` picks the direction. The id is checked against the cursor rather than trusted:
 /// the webview's toolbar can be a moment behind the deck, and undoing "the most recent change"
 /// when the most recent change is not the one on the button is exactly the surprise this
 /// feature must not produce.
-fn apply_reversal(
+///
+/// **`pub(crate)` since 2026-08-29**, and the `allow(dead_code)` it carried for one PR is gone:
+/// `web::route` is the second caller, so the direction flag now has two callers on every
+/// target rather than two `#[tauri::command]`s on one.
+pub(crate) fn apply_reversal(
     conn: &Connection,
     deck_id: i64,
     audit_id: i64,

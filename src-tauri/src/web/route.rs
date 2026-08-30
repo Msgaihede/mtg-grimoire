@@ -15,10 +15,11 @@ use serde_json::Value;
 
 /// Every command this build routes, in the order they were added.
 ///
-/// **This is still not the whole surface.** The app has 152 commands; the first four here are
-/// the browse, which is the read path spec 8 requires measured in wasm rather than guessed,
-/// and the thirteen after them are the Decks destination's reads. The rest arrive with their
-/// modules - see `lib.rs`'s module map for which are still desktop-only.
+/// **This is still not the whole surface.** The app has 152 commands. The first four here are
+/// the browse, which is the read path spec 8 requires measured in wasm rather than guessed;
+/// the thirteen after them are the Decks destination's reads and the thirty-three after those
+/// are its writes - the whole deck cluster except `deck_set_cover_image`. The rest arrive with
+/// their modules - see `lib.rs`'s module map for which are still desktop-only.
 ///
 /// **Compiling for wasm and being routed are two different things, and the deck cluster is
 /// the proof.** Those modules have compiled for the target since PR 10a; until a name
@@ -47,6 +48,42 @@ pub const COMMANDS: &[&str] = &[
     "deck_theory_slots",
     "deck_theory_diff",
     "deck_undo_state",
+    // Decks, write path. **`deck_set_cover_image` is not here and never will be**: it writes a
+    // file into a covers directory, so `deck::set_cover_image` does not compile for wasm at
+    // all. It is the eleventh name on §6.3's desktop-only list.
+    "deck_create",
+    "deck_update",
+    "deck_delete",
+    "deck_duplicate",
+    "deck_set_folder",
+    "deck_set_view_state",
+    "set_deck_search_open",
+    "deck_missing_to_wishlist",
+    "deck_add_card",
+    "deck_set_card_quantity",
+    "deck_category_clear",
+    "deck_move_card",
+    "deck_swap_printing",
+    "deck_set_card_finish",
+    "deck_category_create",
+    "deck_category_rename",
+    "deck_category_set_active",
+    "deck_category_reorder",
+    "deck_category_delete",
+    "deck_tag_create",
+    "deck_tag_update",
+    "deck_tag_delete",
+    "deck_tag_remove_from_deck",
+    "deck_card_set_tag",
+    "deck_folder_create",
+    "deck_folder_rename",
+    "deck_folder_move",
+    "deck_folder_reorder",
+    "deck_folder_delete",
+    "deck_theory_copy_from_live",
+    "deck_theory_missing_to_wishlist",
+    "deck_undo_apply",
+    "deck_redo_apply",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -278,6 +315,479 @@ pub fn call(state: &AppState, command: &str, args: &Value) -> Result<Value, Rout
             )
         }
 
+        // ── Decks, write path ───────────────────────────────────────────────────────
+        //
+        // **`with_write`, never `lock_db_read`.** That helper is ungated and was prepared for
+        // this before there was a web target to use it: its doc says the wasm arm "exists
+        // before the first web write rather than after it", because `Instant::now()` panics
+        // on `wasm32-unknown-unknown`.
+        //
+        // **And the test that catches a write on the read connection only catches it on the
+        // desktop**, which is worth knowing before trusting a green suite here. There
+        // `db_read` is `SQLITE_OPEN_READ_ONLY`, so the mutation fails loudly with "attempt to
+        // write a readonly database" — measured. On wasm `lock_db_read` *hands back the write
+        // connection* (see this module's header), so the same mistake would commit happily
+        // and cost only what `with_write` adds: the busy answer and the cross-file fence.
+        // `cargo test` runs on the desktop, so the guard is real; it is not the target the
+        // bug would ship to.
+        //
+        // **`deck_set_cover_image` is deliberately absent** and is the eleventh name on §6.3's
+        // desktop-only list. It writes a file into a covers directory, and a browser has none
+        // — `deck::set_cover_image` does not compile for wasm at all.
+        "deck_create" => {
+            let deck: crate::deck::DeckInput = field(command, args, "deck")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| crate::deck::create_deck(c, &deck))
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_update" => {
+            let id: i64 = field(command, args, "id")?;
+            let patch: crate::deck::DeckPatch = field(command, args, "patch")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| crate::deck::update_deck(c, id, &patch))
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        // `None` for the covers directory, on both of these and for the same reason: the
+        // desktop wrapper reads it off the `AppHandle` and the web target has no such folder.
+        // The parameter was already `Option<&Path>`, so this is the answer it was shaped for
+        // rather than a stub.
+        "deck_delete" => {
+            let id: i64 = field(command, args, "id")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| crate::deck::delete_deck(c, id, None))
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_duplicate" => {
+            let id: i64 = field(command, args, "id")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| crate::deck::duplicate_deck(c, id, None))
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_set_folder" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let folder_id: Option<i64> = optional(command, args, "folderId")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| crate::deck::set_folder(c, deck_id, folder_id))
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_set_view_state" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let view_state: crate::deck::DeckViewState = field(command, args, "viewState")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::deck::set_view_state(c, deck_id, &view_state)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "set_deck_search_open" => {
+            let open: bool = field(command, args, "open")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| crate::deck::store_deck_search_open(c, open))
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_missing_to_wishlist" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| crate::deck::missing_to_wishlist(c, deck_id))
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_add_card" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let card_id: String = field(command, args, "cardId")?;
+            let category_id: Option<i64> = optional(command, args, "categoryId")?;
+            let category_name: Option<String> = optional(command, args, "categoryName")?;
+            let variant: String = field(command, args, "variant")?;
+            let finish: Option<String> = optional(command, args, "finish")?;
+            let quantity: i64 = field(command, args, "quantity")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::deck::add_card(
+                        c,
+                        deck_id,
+                        &card_id,
+                        category_id,
+                        category_name.as_deref(),
+                        &variant,
+                        finish.as_deref(),
+                        quantity,
+                    )
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_set_card_quantity" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let card_id: String = field(command, args, "cardId")?;
+            let category_id: i64 = field(command, args, "categoryId")?;
+            let variant: String = field(command, args, "variant")?;
+            let finish: Option<String> = optional(command, args, "finish")?;
+            let quantity: i64 = field(command, args, "quantity")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::deck::set_card_quantity(
+                        c,
+                        deck_id,
+                        &card_id,
+                        category_id,
+                        &variant,
+                        finish.as_deref(),
+                        quantity,
+                    )
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_category_clear" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let category_id: i64 = field(command, args, "categoryId")?;
+            let variant: String = field(command, args, "variant")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::deck::clear_category(c, deck_id, category_id, &variant)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_move_card" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let card_id: String = field(command, args, "cardId")?;
+            let from_category_id: i64 = field(command, args, "fromCategoryId")?;
+            let to_category_id: Option<i64> = optional(command, args, "toCategoryId")?;
+            let to_category_name: Option<String> = optional(command, args, "toCategoryName")?;
+            let variant: String = field(command, args, "variant")?;
+            let finish: Option<String> = optional(command, args, "finish")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::deck::move_card(
+                        c,
+                        deck_id,
+                        &card_id,
+                        from_category_id,
+                        to_category_id,
+                        to_category_name.as_deref(),
+                        &variant,
+                        finish.as_deref(),
+                    )
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_swap_printing" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let from_card_id: String = field(command, args, "fromCardId")?;
+            let to_card_id: String = field(command, args, "toCardId")?;
+            let category_id: i64 = field(command, args, "categoryId")?;
+            let variant: String = field(command, args, "variant")?;
+            let finish: Option<String> = optional(command, args, "finish")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::deck::swap_printing(
+                        c,
+                        deck_id,
+                        &from_card_id,
+                        &to_card_id,
+                        category_id,
+                        &variant,
+                        finish.as_deref(),
+                    )
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_set_card_finish" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let card_id: String = field(command, args, "cardId")?;
+            let category_id: i64 = field(command, args, "categoryId")?;
+            let variant: String = field(command, args, "variant")?;
+            let from_finish: Option<String> = optional(command, args, "fromFinish")?;
+            let to_finish: Option<String> = optional(command, args, "toFinish")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::deck::set_card_finish(
+                        c,
+                        deck_id,
+                        &card_id,
+                        category_id,
+                        &variant,
+                        from_finish.as_deref(),
+                        to_finish.as_deref(),
+                    )
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        // ── Categories, tags and folders ────────────────────────────────────────────
+        "deck_category_create" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let name: String = field(command, args, "name")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::deck_meta::create_category(c, deck_id, &name)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_category_rename" => {
+            let id: i64 = field(command, args, "id")?;
+            let name: String = field(command, args, "name")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| crate::deck_meta::rename_category(c, id, &name))
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_category_set_active" => {
+            let id: i64 = field(command, args, "id")?;
+            let is_active: bool = field(command, args, "isActive")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::deck_meta::set_category_active(c, id, is_active)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_category_reorder" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let ids: Vec<i64> = field(command, args, "ids")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::deck_meta::reorder_categories(c, deck_id, &ids)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_category_delete" => {
+            let id: i64 = field(command, args, "id")?;
+            let move_to: Option<i64> = optional(command, args, "moveToCategoryId")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::deck_meta::delete_category(c, id, move_to)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_tag_create" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let name: String = field(command, args, "name")?;
+            let color: String = field(command, args, "color")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::deck_meta::create_tag(c, deck_id, &name, &color)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_tag_update" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let id: i64 = field(command, args, "id")?;
+            let name: String = field(command, args, "name")?;
+            let color: String = field(command, args, "color")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::deck_meta::update_tag(c, deck_id, id, &name, &color)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_tag_delete" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let id: i64 = field(command, args, "id")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| crate::deck_meta::delete_tag(c, deck_id, id))
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_tag_remove_from_deck" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let tag_id: i64 = field(command, args, "tagId")?;
+            let variant: String = field(command, args, "variant")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::deck_meta::remove_tag_from_deck(c, deck_id, tag_id, &variant)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_card_set_tag" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let card_id: String = field(command, args, "cardId")?;
+            let category_id: i64 = field(command, args, "categoryId")?;
+            let variant: String = field(command, args, "variant")?;
+            let tag_id: Option<i64> = optional(command, args, "tagId")?;
+            encode(
+                command,
+                // `None` for the finish, exactly as the wrapper passes: `finish` reaches this
+                // command and is not forwarded, which is the desktop's behaviour and not a
+                // dropped argument to be "fixed" here.
+                crate::sync::with_write(state, |c| {
+                    crate::deck_meta::set_card_tag(
+                        c,
+                        deck_id,
+                        &card_id,
+                        category_id,
+                        &variant,
+                        None,
+                        tag_id,
+                    )
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_folder_create" => {
+            let parent_id: Option<i64> = optional(command, args, "parentId")?;
+            let name: String = field(command, args, "name")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::deck_meta::create_folder(c, parent_id, &name)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_folder_rename" => {
+            let id: i64 = field(command, args, "id")?;
+            let name: String = field(command, args, "name")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| crate::deck_meta::rename_folder(c, id, &name))
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_folder_move" => {
+            let id: i64 = field(command, args, "id")?;
+            let parent_id: Option<i64> = optional(command, args, "parentId")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| crate::deck_meta::move_folder(c, id, parent_id))
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_folder_reorder" => {
+            let parent_id: Option<i64> = optional(command, args, "parentId")?;
+            let ids: Vec<i64> = field(command, args, "ids")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::deck_meta::reorder_folders(c, parent_id, &ids)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_folder_delete" => {
+            let id: i64 = field(command, args, "id")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| crate::deck_meta::delete_folder(c, id))
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        // ── Theory list and undo ────────────────────────────────────────────────────
+        "deck_theory_copy_from_live" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| crate::deck_theory::copy_from_live(c, deck_id))
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_theory_missing_to_wishlist" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let only: Option<Vec<String>> = optional(command, args, "only")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::deck_theory::missing_to_wishlist(c, deck_id, only.as_deref())
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        // The `true`/`false` is which direction the reversal runs, and it is the whole
+        // difference between these two commands on the desktop as well.
+        "deck_undo_apply" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let audit_id: i64 = field(command, args, "auditId")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::deck_undo::apply_reversal(c, deck_id, audit_id, true)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_redo_apply" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let audit_id: i64 = field(command, args, "auditId")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::deck_undo::apply_reversal(c, deck_id, audit_id, false)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
         other => Err(RouteError::Unknown(other.to_owned())),
     }
 }
@@ -485,6 +995,65 @@ mod tests {
         assert_eq!(out["redo"], json!(null), "no redo id was sent");
     }
 
+    /// **A write must land, and reading it back through the route is what says so.**
+    ///
+    /// The mutation this is aimed at is an arm built on `lock_db_read` instead of
+    /// [`crate::sync::with_write`]: on the desktop that connection is `SQLITE_OPEN_READ_ONLY`
+    /// and the write fails loudly, but the assertion has to be a *read-back* rather than
+    /// `is_ok()` — a command that answered `Ok` and committed nothing would satisfy the
+    /// weaker one forever.
+    #[test]
+    fn a_deck_created_through_the_route_is_there_when_the_route_is_asked_again() {
+        let s = state("web-route-write-round-trip");
+        let created = call(
+            &s,
+            "deck_create",
+            &json!({ "deck": { "name": "Written On The Web", "formatKey": "commander" } }),
+        )
+        .expect("deck_create is routed");
+        let id = created["id"].as_i64().expect("the new deck's id");
+
+        let listed = call(&s, "deck_list", &json!({})).unwrap();
+        assert_eq!(listed.as_array().unwrap().len(), 1, "the write must commit");
+        assert_eq!(listed[0]["name"], json!("Written On The Web"));
+        assert_eq!(listed[0]["id"], json!(id));
+    }
+
+    /// A rename through the route, read back through the route. `deck_update` takes a whole
+    /// `DeckPatch`, so this also pins that a nested camelCase DTO survives the hop.
+    #[test]
+    fn a_write_that_takes_a_dto_reaches_the_row() {
+        let s = state("web-route-write-patch");
+        let id = make_deck(&s, "Before");
+        call(
+            &s,
+            "deck_update",
+            &json!({ "id": id, "patch": { "name": "After" } }),
+        )
+        .expect("deck_update is routed");
+
+        let listed = call(&s, "deck_list", &json!({})).unwrap();
+        assert_eq!(listed[0]["name"], json!("After"));
+    }
+
+    /// **A refusal keeps its own words.** `deck_update` on an id nobody answers to is
+    /// `RouteError::Failed` carrying the command's sentence, not an `Unknown` and not a panic
+    /// — the page shows that string, so it has to survive the route unchanged.
+    #[test]
+    fn a_command_that_refuses_comes_back_as_failed_with_its_own_sentence() {
+        let s = state("web-route-write-refused");
+        let err = call(
+            &s,
+            "deck_update",
+            &json!({ "id": 9_999_999, "patch": { "name": "Nobody" } }),
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&err, RouteError::Failed(_)),
+            "a refusal is not an unknown command: {err:?}"
+        );
+    }
+
     /// **`mirror_rebuild`, and the choice of name is the point.** This used to reach for
     /// `deck_list`, which stopped being unknown the moment the Decks reads were routed — so
     /// the example is now one of the ten §6.3 names that are *permanently* desktop-only. A
@@ -522,7 +1091,7 @@ mod tests {
         }
         assert_eq!(
             COMMANDS.len(),
-            17,
+            50,
             "update this number when a command is added"
         );
     }
