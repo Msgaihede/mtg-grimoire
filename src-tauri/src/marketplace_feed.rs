@@ -45,6 +45,7 @@
 //! marketplace id: the fetch, the dedupe, the replace, the meta row, the status command and
 //! the progress event are all written once against the trait.
 
+#[cfg(not(target_family = "wasm"))]
 use crate::sync::AppState;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::de::{DeserializeOwned, DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor};
@@ -52,9 +53,18 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::Read;
 use std::marker::PhantomData;
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::path::Path;
+use std::sync::Mutex;
+#[cfg(not(target_family = "wasm"))]
+use std::time::Duration;
+// The download half's names. `Duration` above is shared: the query half uses it for staleness.
+#[cfg(not(target_family = "wasm"))]
+use std::path::PathBuf;
+#[cfg(not(target_family = "wasm"))]
+use std::sync::{Arc, OnceLock};
+#[cfg(not(target_family = "wasm"))]
+use std::time::{SystemTime, UNIX_EPOCH};
+#[cfg(not(target_family = "wasm"))]
 use tauri::Emitter;
 
 /// The event a refresh reports itself through — the ribbon's `Activity` line reads it, the
@@ -70,6 +80,7 @@ pub const PROGRESS_EVENT: &str = "marketplace:progress";
 /// Mirrored by hand on the other side of the IPC boundary.
 pub const FEED_PHASES: [&str; 4] = ["downloading", "ingesting", "done", "error"];
 
+#[cfg(not(target_family = "wasm"))]
 /// Bytes of download between progress events. reqwest's chunk callback fires thousands of
 /// times over 63.7 MiB, which is far more than a progress bar can use — [`crate::sync`]'s
 /// number, for its reason.
@@ -101,9 +112,11 @@ const BATCH: usize = 5_000;
 /// selected is pure waste.
 pub const REFRESH_INTERVAL_SECS: i64 = 86_400;
 
+#[cfg(not(target_family = "wasm"))]
 /// The connect timeout. These are ordinary web hosts, not a CDN this app has measured.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(30);
 
+#[cfg(not(target_family = "wasm"))]
 /// The longest gap between two chunks of a feed body before the connection is called dead.
 /// Deliberately *not* an overall timeout: 63.7 MiB legitimately runs for a minute on a slow
 /// line, and a `timeout()` would kill it partway every time — [`crate::scryfall`]'s rule.
@@ -753,6 +766,7 @@ fn note_failure(db: &Mutex<Connection>, provider: &dyn FeedProvider, err: &FeedE
 // The network
 // ---------------------------------------------------------------------------------------
 
+#[cfg(not(target_family = "wasm"))]
 /// The HTTP client these two hosts are talked to with.
 ///
 /// **Deliberately not [`crate::scryfall::Client`].** That one paces itself against Scryfall's
@@ -773,6 +787,7 @@ fn client() -> &'static reqwest::Client {
     })
 }
 
+#[cfg(not(target_family = "wasm"))]
 /// The host in a URL, for a message a person can act on. Falls back to the whole URL.
 fn host_of(url: &'static str) -> &'static str {
     url.split("://")
@@ -781,6 +796,7 @@ fn host_of(url: &'static str) -> &'static str {
         .unwrap_or(url)
 }
 
+#[cfg(not(target_family = "wasm"))]
 /// Stream a feed to `dest`, reporting `(done, total)` as it goes.
 ///
 /// To a file and not into memory, for [`crate::sync`]'s reason: the parse wants a `Read` and
@@ -838,6 +854,7 @@ pub async fn download(
     Ok(())
 }
 
+#[cfg(not(target_family = "wasm"))]
 /// Where a feed is downloaded to. Beside the bulk file's `tmp/`, and deleted either way.
 fn temp_path(state: &AppState, provider: &dyn FeedProvider) -> PathBuf {
     state
@@ -858,11 +875,13 @@ fn temp_path(state: &AppState, provider: &dyn FeedProvider) -> PathBuf {
 /// fine and are allowed.
 static REFRESHING: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
 
+#[cfg(not(target_family = "wasm"))]
 /// Clears the claim however the refresh ends — an early return, an error, a dropped future.
 /// `sync::SyncingGuard`'s shape, for its reason: a latched flag locks the user out until they
 /// restart the app.
 struct RefreshGuard(&'static str);
 
+#[cfg(not(target_family = "wasm"))]
 impl RefreshGuard {
     /// Claim `marketplace`, or `None` if a refresh of it is already running.
     fn claim(marketplace: &'static str) -> Option<RefreshGuard> {
@@ -875,6 +894,7 @@ impl RefreshGuard {
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
 impl Drop for RefreshGuard {
     fn drop(&mut self) {
         crate::db::lock_plain(&REFRESHING).retain(|m| *m != self.0);
@@ -886,6 +906,7 @@ fn is_refreshing(marketplace: &str) -> bool {
     crate::db::lock_plain(&REFRESHING).contains(&marketplace)
 }
 
+#[cfg(not(target_family = "wasm"))]
 /// Fetch a marketplace's feed and replace its prices.
 ///
 /// `progress` is called with `(phase, done, total)`; the command below turns that into the
@@ -1004,6 +1025,10 @@ pub fn is_stale(fetched_at: Option<i64>, now: i64) -> bool {
 }
 
 /// One marketplace's feed state, read through the read-only connection.
+/// **Desktop-only: its one caller is [`refresh`], which downloads.** The status *command*
+/// does not come through here at all - it maps [`PROVIDERS`] over [`read_status`] itself, so
+/// `web::route` does the same rather than reaching for this.
+#[cfg(not(target_family = "wasm"))]
 fn status_of(state: &AppState, provider: &dyn FeedProvider) -> FeedStatus {
     let conn = crate::sync::lock_db_read(state);
     read_status(&conn, provider, unix_now())
@@ -1035,6 +1060,7 @@ pub fn read_status(conn: &Connection, provider: &dyn FeedProvider, now: i64) -> 
     }
 }
 
+#[cfg(not(target_family = "wasm"))]
 /// Seconds since the Unix epoch. A clock before 1970 reads as 0, which makes every feed
 /// stale — the same choice [`crate::sync`] makes, and for the same reason.
 fn unix_now() -> i64 {
@@ -1064,6 +1090,7 @@ pub struct FeedProgress {
 /// Long-running by nature (63.7 MiB), so it reports itself through [`PROGRESS_EVENT`] for the
 /// ribbon's activity line. A failure leaves the previous prices in place, and the reason is in
 /// the error log.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn marketplace_feed_refresh(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1099,6 +1126,7 @@ pub async fn marketplace_feed_refresh(
 ///
 /// `async`, and answered on the blocking pool, because a sync command body runs inline on the
 /// IPC thread and this takes `db_read`'s mutex.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn marketplace_feed_status(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1116,6 +1144,7 @@ pub async fn marketplace_feed_status(
     .map_err(|e| format!("could not read the price feed status: {e}"))
 }
 
+#[cfg(not(target_family = "wasm"))]
 /// Refresh the selected marketplace's feed if it is feed-backed and due, at startup.
 ///
 /// **Only the selected one, and only when it is due.** Nobody downloads 63.7 MiB for a

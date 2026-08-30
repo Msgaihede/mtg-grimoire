@@ -114,9 +114,7 @@ pub mod zoom;
 pub mod export;
 #[cfg(not(target_family = "wasm"))]
 pub mod images;
-#[cfg(not(target_family = "wasm"))]
 pub mod import;
-#[cfg(not(target_family = "wasm"))]
 pub mod marketplace_feed;
 #[cfg(not(target_family = "wasm"))]
 pub mod mirror;

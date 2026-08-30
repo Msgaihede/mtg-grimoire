@@ -74,11 +74,13 @@
 //! Nothing here reads `raw`: every fact an import needs has had a column since schema v5, and
 //! `raw` is a gzip BLOB that `json_extract` refuses (CLAUDE.md).
 
+#[cfg(not(target_family = "wasm"))]
 use crate::sync::{lock_db_read, AppState};
 use rusqlite::{params, Connection, OptionalExtension, Params, Row, Statement};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
+#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// The largest decklist file this app will read, in bytes.
@@ -701,6 +703,7 @@ pub fn resolve_lines(
 /// is six prepared statements and a few hundred index lookups — 11.6 ms for a 105-line
 /// commander list, measured over the live corpus — which is small but not free, and it must
 /// never queue behind an ingest.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn import_resolve(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1132,6 +1135,7 @@ pub fn commit_import(
 ///
 /// The **write** connection through [`crate::sync::with_write`], answering [`crate::db::BUSY`]
 /// if it cannot be had.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn deck_import_commit(
     state: tauri::State<'_, Arc<AppState>>,
@@ -1153,6 +1157,7 @@ pub async fn deck_import_commit(
     .map_err(|e| format!("the decklist could not be imported: {e}"))?
 }
 
+#[cfg(not(target_family = "wasm"))]
 /// A decklist file the reader picked, as text.
 ///
 /// **It takes a path, not bytes** — the page asks the OS for a name and Rust opens the file,
@@ -1181,6 +1186,7 @@ fn read_import_file(app: &tauri::AppHandle, picked: &str) -> Result<String, Stri
         .and_then(read_bounded)
 }
 
+#[cfg(not(target_family = "wasm"))]
 /// What a source this app cannot open says, keeping the OS's own reason.
 ///
 /// A free function rather than an inline `format!` so the tests can assert the sentence without
@@ -1190,6 +1196,7 @@ fn open_failed(e: String) -> String {
     format!("That file could not be opened — {e}")
 }
 
+#[cfg(not(target_family = "wasm"))]
 /// The cap and the lossy decode, over anything readable.
 ///
 /// Separate from the open because that is where the platforms differ and this is where they do
@@ -1229,6 +1236,7 @@ fn read_bounded(mut reader: impl std::io::Read) -> Result<String, String> {
 ///
 /// On the blocking pool like its two siblings, because a file on a network share or a slow
 /// stick is a disk wait, and the async runtime is not where a disk wait belongs.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn import_read_file(app: tauri::AppHandle, path: String) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || read_import_file(&app, &path))
