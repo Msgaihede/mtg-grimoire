@@ -9,7 +9,7 @@ import {
   settle,
   unixSeconds,
 } from "./claim";
-import { fakeEnv } from "./fakeD1";
+import { fakeEnv, fakeEnvOver, fakeTables, type Tables } from "./fakeD1";
 import { recordRotation, seedGroup } from "./groupauth";
 import { verify } from "./token";
 import type { Env } from "./index";
@@ -526,13 +526,12 @@ const WELL_FORMED = { code: "0123-4567-89AB", group: "g1", epoch: 0, auth: AUTH_
  * `epoch` and `auth` are checked before `handleClaim` touches D1 at all, which is what these
  * assert.
  *
- * ⚠️ **There is no test here for the seeding itself, and that is a harness gap rather than a
- * choice.** `handleClaim`'s claim-code lookup is `DELETE … RETURNING subject`, which `fakeD1`
- * answers with no rows rather than by throwing, so every claim against it stops at the 401
- * below; and the binding `UPDATE`'s `WHERE … AND (group_id IS NULL OR group_id = ?)` throws
- * `fake sql: expected select, found group_id`, because a `(` in a condition is read as the start
- * of a subquery. Until the harness grows both, "the claim seeds `group_keys`, and only after the
- * binding succeeds" is asserted nowhere.
+ * **The seeding itself is asserted below, since 2026-08-30.** It could not be while `fakeD1`
+ * answered `DELETE … RETURNING subject` with no rows rather than by throwing — every claim
+ * stopped at the 401 — and while the binding `UPDATE`'s
+ * `WHERE … AND (group_id IS NULL OR group_id = ?)` threw `expected select, found group_id`,
+ * because a `(` in a condition was read as the start of a subquery. The harness grew `RETURNING`,
+ * `OR`, parenthesised groups and `IS NULL`, so both statements now run.
  */
 describe("/claim — the group key's two body fields", () => {
   it("carries a well-formed body past every guard and into the code lookup", async () => {
@@ -573,5 +572,65 @@ describe("/claim — the group key's two body fields", () => {
     // The largest epoch integer arithmetic is still exact at is accepted, so the guard refuses
     // unsafe values rather than merely large ones.
     expect((await answer(await handleClaim(largest, fakeEnv()))).status).toBe(401);
+  });
+});
+
+/**
+ * The write a claim makes that nothing else can make, and the ordering that keeps it honest.
+ *
+ * **A claim is the only moment the relay is ever told a group exists.** `/rotate` authenticates
+ * against an auth only `seedGroup` can have written, so a claim that bound a group and registered
+ * nothing would leave a group whose auth no device can match and whose every rotation is refused
+ * — with the reader's Connect press having reported success. That is the failure this pair pins.
+ *
+ * **The second test is the one that survived a mutation before the harness could run these.**
+ * Moving `seedGroup` above the binding `UPDATE` leaves the first test green: the group is bound,
+ * the key is registered, everything looks right. Only a claim that is *refused* tells the two
+ * orders apart, which is why the 409 is here rather than filed with the other refusals.
+ */
+describe("/claim — registering the group's relay key", () => {
+  /** A live code for `WELL_FORMED`, against `sub-0`. `normaliseCode` strips the separators. */
+  function withCode(tables: Tables): Tables {
+    tables.claim_codes = [
+      { code: "0123456789AB", subject: "sub-0", expires_at: Date.now() + 60_000 },
+    ];
+    return tables;
+  }
+
+  it("binds the group and registers its first relay key", async () => {
+    // `bound: false` is the state a first claim finds: no group, no refresh secret. It is what
+    // makes the binding UPDATE take the `group_id IS NULL` arm rather than the re-claim arm.
+    const tables = withCode(fakeTables({ groups: ["g1"], bound: false }));
+
+    const env = { ...fakeEnvOver(tables), RELAY_HMAC_KEY: HMAC };
+
+    const { status } = await answer(await handleClaim(post("/claim", WELL_FORMED), env));
+
+    expect(status).toBe(200);
+    expect(tables.entitlements[0].group_id).toBe("g1");
+    // The manifest starts empty — a group of one has nobody to rewrap for — but the ROW has to
+    // exist, because `recordRotation` refuses an epoch that does not advance one.
+    expect(tables.group_keys).toHaveLength(1);
+    expect(tables.group_keys[0]).toMatchObject({ group_id: "g1", epoch: 0, auth: AUTH_ONE });
+    expect(JSON.parse(String(tables.group_keys[0].keys))).toEqual({});
+    // And the code is spent, which is the `DELETE … RETURNING` doing its other job.
+    expect(tables.claim_codes).toHaveLength(0);
+  });
+
+  it("registers nothing when the binding is refused", async () => {
+    // `sub-0` is unbound and holds the code; `sub-1` already owns `g1`. The binding UPDATE
+    // changes no row, `handleClaim` answers 409, and `group_keys` must still hold only the row
+    // `sub-1` put there — never a second one under `sub-0`'s auth.
+    const tables = withCode(fakeTables({ groups: ["taken", "g1"], bound: true }));
+    tables.entitlements[0].group_id = null;
+    tables.entitlements[0].refresh_secret = null;
+    const env = { ...fakeEnvOver(tables), RELAY_HMAC_KEY: HMAC };
+    await seedGroup(env, "g1", 4, AUTH_TWO);
+
+    const { status } = await answer(await handleClaim(post("/claim", WELL_FORMED), env));
+
+    expect(status).toBe(409);
+    expect(tables.group_keys).toHaveLength(1);
+    expect(tables.group_keys[0]).toMatchObject({ epoch: 4, auth: AUTH_TWO });
   });
 });
