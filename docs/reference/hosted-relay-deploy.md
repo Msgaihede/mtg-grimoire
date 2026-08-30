@@ -109,6 +109,27 @@ below settles it by asking the host rather than by reading any of us.**
    **500 means `group_keys` is missing.** A bare `curl` with *no* header answers 401 either way,
    because `handleKeys` refuses a missing credential before it touches D1 — so the header is what
    makes this probe worth running.
+
+   ⚠️ **Every group that synced before this deploy stops syncing until somebody reconnects
+   Patreon on it, and that is the migration.** `seedGroup` runs from `/claim` and nowhere else,
+   so a group claimed before `group_keys` existed has an entitlement with a NULL `group_auth` and
+   no manifest row. `client::check_keys` runs first in every round trip, `authIsRecent` finds
+   nothing, and the trip dies with a 401 before push, pull or ack.
+
+   **The relay cannot repair this itself, ever.** `relay_auth` is HKDF over the group key, which
+   the relay never sees and must never see — so there is no backfill to write, and the repair has
+   to be a press on a device that holds the key.
+
+   **The press is Connect Patreon, on the device the membership was connected on.** A re-claim of
+   a group that is already bound to the same subject passes `row.group_id === group`, and
+   `handleClaim` then calls `seedGroup` with that device's current epoch and auth. Every other
+   device in the group succeeds on its next trip, with nothing pressed on it.
+
+   **Measured 2026-08-30**, on the real pair and on the first press of the pass: a paid-up,
+   paired phone at epoch 2, `entitled: true`, `status: "active"` — and `sync_now` answering
+   *the relay did not recognise this device's group key*. **No suite could have caught it**:
+   every relay test starts from a group claimed under the new code, so "claimed before the
+   migration" is a state the fixtures cannot express. It took a device with real history.
 3. **Create the Patreon OAuth client** — **already done as of 2026-08-30**, and this step is now
    the two halves of it that are not. The client and its redirect URI
    `https://mtg-grimoire-relay.denmark-east.workers.dev/oauth/patreon/callback` are registered and

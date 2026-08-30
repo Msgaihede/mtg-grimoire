@@ -313,9 +313,22 @@ pub async fn check_keys(conn: &Connection) -> Result<KeyOutcome, String> {
     let status = response.status().as_u16();
     if !(200..300).contains(&status) {
         let message = if status == 401 {
-            "the relay did not recognise this device's group key: either this group has no \
+            // **The commonest cause is named first, and it is a migration rather than a
+            // fault.** A group claimed before the relay stored group keys has an entitlement
+            // with no manifest row and a NULL `group_auth`: `seedGroup` runs only from
+            // `/claim`, so nothing else has ever registered one. **The relay cannot fill it
+            // in on its own** — `relay_auth` is derived from the group key, which it never
+            // sees and must never see — so the repair has to be a press on a device.
+            // Reconnecting Patreon re-claims the same group (`row.group_id == group`
+            // passes) and seeds the manifest. Measured on the real pair 2026-08-30: a
+            // paid-up, paired phone at epoch 2 failed here on its first press, and no test
+            // could have found it — every relay suite starts from a group claimed under the
+            // new code, so a group claimed *before* it is a state the fixtures cannot spell.
+            "the relay did not recognise this device's group key. If your devices synced \
+             together before today, reconnect Patreon once on the device you connected it on \
+             - that registers the group with the relay again. Otherwise this group has no \
              membership connected to it yet, or this device has been offline across more key \
-             changes than the relay keeps"
+             changes than the relay keeps."
                 .to_owned()
         } else {
             format!("the relay answered {status} to a key check")
