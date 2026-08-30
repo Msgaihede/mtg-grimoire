@@ -365,20 +365,32 @@ device would put it back in the group on every device that adopts.
 **The filter in `pairing::status` stays** and is belt-and-braces now: it shipped one PR ahead of
 the delete, and what it still covers is rows written by builds that predate it.
 
-Four refusals, each a sentence rather than a constraint failure:
+**Five refusals**, each a sentence rather than a constraint failure. ⚠️ **Re-counted 2026-08-30:
+three until the group-wide design added the membership check, four until the device cap added
+the fifth.** The count is written here because the list is written here; it is not a fact about
+a tree.
 
 - **This device cannot revoke itself.** Leaving a group is a different act with different
   consequences — it throws this device's own copy of the key away — and collapsing the two would
-  let a mis-click cost the reader the group they are standing in. ⚠️ **The sentence the reader
-  gets says "Use Leave group instead", and there is no such control**: `identity::CANNOT_REMOVE_SELF`
-  names a press that has never existed, and this paragraph called it "a different press" until
-  2026-08-30. The refusal is right and its second sentence points at nothing.
+  let a mis-click cost the reader the group they are standing in. **The sentence the reader gets
+  says "Use Leave group instead", and since 2026-08-30 that names a real press**:
+  `identity::CANNOT_REMOVE_SELF` pointed at nothing from the day it was written until
+  `sync_group_leave` landed, and this paragraph carried a ⚠️ saying so. The guard did not move
+  when the press arrived — `plan_rotation` still refuses self and `plan_departure` is a second
+  entrance, for the reason "The departure" below gives.
 - **An id nobody on the roster answers to rotates nothing.** A rotation locks every remaining
   device out of what came before it, so one with nobody removed is a cost with no cause and
   nothing on any screen to explain it.
 - **A device already in a group may only rejoin the one it is in.** Joining a second group
   overwrites the key the first one syncs under, and nothing here can get it back. A re-pair after
   a revocation carries the same group id and is allowed by the same check.
+- **A sixth device cannot be paired in** (`identity::GROUP_IS_FULL`, from `identity::room_for`,
+  asked by both `pairing::confirm` and `pairing::complete`). It counts **live rows only** — a
+  `revoked_at` tombstone an older build wrote must not cost a reader a slot — and it **excludes
+  the device that is joining**, so re-running the ceremony with a device already on the roster is
+  never what fills the group. That matches `admitDevice`'s upsert at the relay end, and it is the
+  one case a reader runs the ceremony a second time for. See "Five devices" below for why this
+  refusal is a message and the relay is the fence.
 - **A group with no membership cannot remove a device** (`identity::NO_MEMBERSHIP`, checked by
   `commands::entitled` before anything moves):
 
@@ -412,14 +424,58 @@ performs cannot reach B at all — so a rotation with nobody removed would silen
 out of itself with no way back but re-pairing. **That is precisely what the rewrap hop above
 builds**, and a bare rotation would now reach every device on the manifest and cost them one
 `/keys` round trip each. So the press is missing rather than refused: nobody has asked for it, it
-is a fifth thing to explain on a panel that already carries four refusals, and the one event that
-genuinely needs a new key — a removal — rotates on its own. **Re-open it as a decision, not by
-citing this paragraph**, which no longer argues anything.
+is one more thing to explain on a panel that already carries the five refusals above, and the one
+event that genuinely needs a new key — a removal — rotates on its own. **Re-open it as a decision,
+not by citing this paragraph**, which no longer argues anything.
 
-**Nor is there a `Leave group` press.** A device can now be made to leave by being removed
-elsewhere — `identity::leave_group` exists and `client::check_keys` calls it — but there is no
-control for leaving on one's own initiative. That is a separate change and is listed under what is
-still owed.
+### The departure — *"leaving is always possible"*, taken literally
+
+**There is a `Leave group` press since 2026-08-30**, which reverses the paragraph that stood here.
+`pairing::sync_group_leave` → `pairing::leave_group_now` is three steps, and the third running
+whatever the second answered is the whole of the guarantee:
+
+1. `identity::plan_departure` — `plan_rotation`'s body with the self-check **inverted rather than
+   relaxed**, so the manifest is everyone *except* this device and the group closes behind the
+   leaver on every device that adopts, exactly as a removal does. Both entrances call one private
+   `plan`. **The guard stays on `plan_rotation`** because removing somebody else and leaving
+   yourself are different acts: a single entrance that took either would let a mis-click on a
+   roster row throw this device's own key away.
+2. `client::post_rotation` — **best effort**. A 500, a timeout or a plane is not a reason a reader
+   cannot leave.
+3. `identity::leave_group` **and** `entitlement::clear` — **unconditionally**.
+
+⚠️ **"Everything after the in-a-group check is best effort" includes the *planning*, and that
+breadth is the feature rather than sloppiness.** `plan_departure` reads every peer's public key
+and seals a blob to each, so one roster row an interrupted rotation left behind would otherwise be
+a device that could **never** get out of its group — a chain that gave up on its first `?` is only
+*usually* possible. The single refusal is a device that is in no group at all
+(`identity::NOT_IN_A_GROUP`, `pub` since 2026-08-30 so the panel and the command cannot spell one
+sentence twice). **What a failed plan costs is the courtesy, never the departure**: nothing is
+published, so the devices that stay go on listing this one until somebody removes it by hand.
+
+**The leaver mints the key the devices that stay will use, and that is not new exposure.** It
+reads badly on its own, and what makes it harmless is that leaving is *voluntary*: a device
+that wanted to go on reading the group would simply **not leave**, and would keep the key it
+already holds. The threat this would defend against is one the actor has already declined to be.
+What it buys is the honest half — when the relay is reachable the group closes behind the leaver
+on every remaining device's next trip. When it is not, the reader still leaves and the others go
+on listing a device that has gone, **and the panel's `LEAVE_WARNING` says so before the press**
+rather than hiding it.
+
+**`clear` and never `revoke`**, for the removed device's reason one section up: nothing ended, so
+`entitlement::membership_ended` must not read true and the panel draws *Not connected* rather than
+*Membership ended*. **The grant goes at all** because a leaver keeping its refresh secret keeps a
+*working credential for the group it left* — the refresh door mints a token whose `grp` is that
+group and `/g/{group}/push` honours it.
+
+**No round trip in front of it, unlike `remove_device`.** That one absorbs the *departing*
+device's last push before the key moves; here the departing device is this one, and what it has
+not pushed it keeps — the rows are already in its own database. Nor is there a membership check: a
+removal is refused without one because it must reach the other devices to mean anything, and a
+departure means something locally whether or not it publishes.
+
+**The one thing leaving costs that removal does not is the payer's binding**, and that is why
+`/claim` had to learn to rebind — "A re-claim moves the binding" below.
 
 ---
 
@@ -990,19 +1046,28 @@ driven and measured: "The first end-to-end pass" below is two real devices conve
 [the hosted relay design](../superpowers/specs/2026-08-29-hosted-relay-and-patreon-design.md)
 adds on top — the auth gate, `/claim`, `/token`, the Patreon callback, the webhook and the D1
 entitlement table — plus, since 2026-08-30, `/rotate`, `/keys` and `/token`'s group door.
-**All of that is written and none of it is deployed — and the two relays share one address.**
+⚠️ **This paragraph said "all of that is written and none of it is deployed" until 2026-08-30,
+and it was wrong in both halves by the end of that day.** The hosted Worker is deployed at
+`RELAY_BASE` and the two relays no longer share an address so much as an address that has moved
+on: the hosted design *replaces* the code behind it rather than standing beside it. Probed
+2026-08-30, after the deploy: `/claim` and `/token` **405** to a GET (the route is there and wants
+POST) and **400** to an empty POST body, `/g/{group}/pull` **401** from the bearer gate,
+`/g/{group}/rotate` **401** to a POST, and `/g/{group}/keys` **401** to a GET carrying a
+well-formed bearer — which is the runbook's own pass criterion for `group_keys` existing, since a
+missing table answers 500 there. `/g/{group}/bogus` **404**, so a 404 on this host still means
+"no such route" and the 401s are not a router accident.
 `relay/src/index.ts` carries the auth gate, `claim.ts` and `patreon.ts` the OAuth hop and the
 webhook, `token.ts`, `entitlement.ts` and `md5.ts` the pure decisions the root vitest tests
-without workerd, `groupauth.ts` and `rotate.ts` the group-key store and its two routes, and
-`wrangler.jsonc` a D1 binding and a daily cron. **What has not happened is `wrangler deploy`**,
-and `relay/schema.sql` is DDL nobody has applied. So `RELAY_BASE` still names the Worker that is
-running, which is the baseline one: the hosted design replaces the code behind that address rather
-than moving it, and a device pointed there today reaches something live that answers push, pull
-and ack and **404s `/claim`, `/token`, `/rotate` and `/keys`**. **The rest of this section
-describes the hosted design in the present tense**, which is how this repository writes a design
-that is agreed and not yet a deployment; where a sentence is about what has actually run, it says
-so. [hosted-relay-deploy.md](hosted-relay-deploy.md) is the runbook and the list of what only a
-deploy can settle.
+without workerd, `groupauth.ts` and `rotate.ts` the group-key store, its two routes and the device
+roll, and `wrangler.jsonc` a D1 binding and a daily cron.
+**What is *not* deployed is this change's half** — the device cap, `/claim`'s rebind and the
+`group_devices` table. Settled by the same kind of probe rather than by reading this file:
+`POST /token {group, auth}` **with no `device` field** answers 401 from the entitlement lookup,
+where the code in this tree answers **400 `that is not a device id`** before it reads anything.
+**The rest of this section describes the hosted design in the present tense**, which is how this
+repository writes a design that is agreed and not yet a deployment; where a sentence is about what
+has actually run, it says so. [hosted-relay-deploy.md](hosted-relay-deploy.md) is the runbook and
+the list of what only a deploy can settle.
 
 **The relay cannot decrypt anything it stores**, and that is still the load-bearing fact. The
 group key is minted during pairing and lives only on the paired devices; what the relay holds is
@@ -1040,8 +1105,17 @@ records why.
 
 | Body | Who sends it | Answer |
 | --- | --- | --- |
-| `{refresh}` | the device that pressed Connect | `{access, refresh, expires, status, since}` |
-| `{group, auth}` | **any device in the group** | `{access, expires, status, since}` — **no refresh secret, ever** |
+| `{refresh, device}` | the device that pressed Connect | `{access, refresh, expires, status, since}` |
+| `{group, auth, device}` | **any device in the group** | `{access, expires, status, since}` — **no refresh secret, ever** |
+
+⚠️ **`device` is required on *both* shapes since 2026-08-30, and the refresh door is the one it
+would have been easiest to leave off.** The device that pressed Connect never reaches the group
+door, so a cap that counted only the group door would never count the one device that is certainly
+signed in — and the reader's own words for the limit were *"this goes for accounts inheriting the
+sign-in from another grouped device too"*, which only means something if the device that did
+**not** inherit is counted as well. Required rather than used-if-present, because a field the
+relay merely reads when it is there is a cap any caller opts out of by omitting it: both doors
+answer **400 `that is not a device id`** to a body without one, before any lookup.
 
 The group door looks the entitlement up by `group_id`, compares `auth` against the stored one in
 constant time, settles the status exactly as the refresh door does — a closed grace window is
@@ -1113,14 +1187,152 @@ CREATE TABLE IF NOT EXISTS group_keys (
 it up.** Its auth is one epoch stale by definition, so an endpoint that accepted only the current
 one would refuse exactly the devices it exists to serve. `/rotate` prunes anything older than
 `EPOCH_HISTORY` — **eight** epochs — in the same statement that writes the new row, so the history
-is bounded without a sweep. A manifest is capped at **64 devices** and **4 KB per blob**: `keys` is
-written whole into a single D1 column, so an unbounded object is an unbounded row, and both are
-ceilings that say "something is wrong" rather than budgets.
+is bounded without a sweep. **A manifest is capped at `MAX_GROUP_DEVICES` and 4 KB per blob.**
+⚠️ **That cap was 64 until 2026-08-30**, which was a bound on what the relay would store rather
+than a policy; it is `groupauth.ts`'s five now, imported by `rotate.ts` rather than spelled a
+second time — a cap written twice is a cap that eventually disagrees with itself, and the two
+spellings would be a rotation the relay accepts naming more devices than the relay will admit. The
+4 KB stays what it was: `keys` is written whole into a single D1 column, so an unbounded object is
+an unbounded row, and it is a ceiling that says "something is wrong" rather than a budget.
 
-**`/claim` is the only place a group's first auth can come from.** It gains `epoch` and `auth` as
-body fields, writes them onto the entitlement and seeds `group_keys` with an *empty* manifest at
-that epoch. That is what "no membership, no removal" rests on: `/rotate` authenticates against a
-row only `/claim` can seed, so an unentitled group has no way to publish a rotation at all.
+**`/claim` is the only place a group's first auth can come from.** It carries `epoch`, `auth` and
+`device` as body fields beyond `code` and `group`, writes the first two onto the entitlement and
+seeds `group_keys` with an *empty* manifest at that epoch. That is what "no membership, no
+removal" rests on: `/rotate` authenticates against a row only `/claim` can seed, so an unentitled
+group has no way to publish a rotation at all.
+
+⚠️ **`seedGroup` refuses a *stale* epoch, and `INSERT OR IGNORE` alone did not — fixed
+2026-08-30.** `group_keys` is keyed `(group_id, epoch)` rather than `group_id`, so a device
+re-claiming **its own** group while it is *behind* conflicted with nothing: it inserted a second
+row at its own older epoch and then re-pointed `entitlements.group_auth` at an auth derived from a
+key the group had already rotated past. Every device that *was* caught up then failed
+`authIsCurrent` — a 401 on the group door — until somebody rotated again, while the stale row was
+meanwhile accepted by `authIsRecent`, so the one device that should have stopped was the one that
+kept working. **Both statements now carry the same guard — this epoch must be at least the highest
+the group has — and both halves are load-bearing**, since dropping either one alone turns the test
+red. Behind, the claim still succeeds and still mints a grant, because it is a legitimate press by
+a paying reader; it simply leaves the key registration where it already correctly pointed. **This
+is reachable through the ordinary repair rather than by contrivance**, and
+[hosted-relay-deploy.md](hosted-relay-deploy.md) step 2 is where that matters.
+
+### A re-claim moves the binding, because leaving would otherwise strand the payer
+
+**The dead end, in the order a reader meets it.** The paying device leaves its group — which the
+departure above makes an ordinary thing to do. Its entitlement is still bound to the group it
+left. It pairs elsewhere or founds a group of one, presses Connect, and `handleClaim` answers
+**409 — that membership is already bound to another sync group**. There is no press that helps and
+no way back short of editing D1 by hand.
+
+**So since 2026-08-30 a re-claim onto a *different* group moves the binding rather than refusing
+it**: bind the new group, `seedGroup` it, and then release the old one — `releaseGroup` deletes its
+`group_keys` rows, calls `forgetGroup` for its `group_devices` rows, and drops the Durable
+Object's log last, because a DO that cannot be reached must not cost the two deletes that free the
+slots and retire the key.
+
+**The invariant the 409 was actually protecting is kept.** Trust-on-first-use existed to stop one
+subscription serving two groups at once, and *moving* a binding leaves the subject serving exactly
+one. Only the first stops being the latest.
+
+⚠️ **The 409 survives, and what changed is which case it is for: another *subject* holding this
+group id.** That is a shared subscription wearing two names, which is what
+`entitlements_group` is really about, and it is still caught from the unique violation rather than
+by a question asked first — D1 has no interactive transaction, so a `SELECT` and then an `UPDATE`
+is two round trips with a window between them. **That unpredictability is exactly why the bind
+happens first and the teardown after.** A teardown-first ordering would destroy the reader's
+working group on the way to refusing the press that asked for it, and a refusal must destroy
+nothing. The `UPDATE`'s `WHERE` is a compare-and-swap on the binding this request read
+(`previous`, spelled `(group_id IS NULL OR group_id = ?)` because SQL's `=` is never true against
+a NULL), so a second claim racing this one finds the row already moved and changes nothing.
+
+⚠️ **The cost, stated rather than discovered: a re-claim silently orphans whatever devices remain
+in the old group.** Their manifest and their log are gone and they fail their next key check. They
+are *already* orphaned when the payer has left, and for that reader this tells them nothing new —
+but a reader who re-claims **without** leaving can do this to a working group by accident. That
+reader is the whole audience for `SyncPanel`'s `RECLAIM_WARNING`, which is why it is drawn beside
+the **claim-code field** rather than beside *Connect Patreon*: opening a browser moves nothing, and
+the claim is the write.
+
+### Five devices to an account, and one table that answers both caps
+
+The reader asked for five devices per Patreon account *and* five per group. **They are the same
+count asked twice**, because a subject is bound to exactly one group and a re-claim *moves* that
+binding rather than adding a second — so there is no arrangement in which a subscription's devices
+and a group's devices are different sets. One constant, one table, both questions.
+
+```sql
+-- The device roll. Read by /token's two doors, /claim, and /rotate.
+CREATE TABLE IF NOT EXISTS group_devices (
+  group_id   TEXT    NOT NULL,
+  device_id  TEXT    NOT NULL,
+  first_seen INTEGER NOT NULL,
+  last_seen  INTEGER NOT NULL,
+  PRIMARY KEY (group_id, device_id)
+);
+```
+
+**There is no second index on it, and that is a decision rather than an omission.** SQLite builds
+one for a rowid table's `PRIMARY KEY`, `group_id` is its leading column, and `(group_id, device_id)`
+*covers* every read here — each is `WHERE group_id = ?` or that plus an equality on `device_id`. A
+`(group_id)` index would serve nothing and would cost a second b-tree write on every `/token`,
+which is the hottest route the relay has.
+
+`MAX_GROUP_DEVICES = 5` and `DEVICE_TTL_MS = 90 days` live in `groupauth.ts` beside
+`EPOCH_HISTORY`, with four functions over the table: `liveDeviceCount` (prune, then count),
+`admitDevice` (count, then one `INSERT … ON CONFLICT DO UPDATE SET last_seen`, so a *returning*
+device never trips the cap), `keepOnly` (delete the rows a manifest does not name) and
+`forgetGroup` (empty one group, for the rebind above).
+
+**`admitDevice` is called last on all three paths** — after the status has settled to something
+that would be served — so a membership on its way to a 401 never spends one of the reader's five
+slots, and the reader who *is* serving and has simply run out of devices is told that rather than
+being told they had stopped paying. On `/claim` it is called after `seedGroup` as well, which
+matters on exactly one path: re-claiming a group that already holds five devices from a wiped
+reinstall. Seeding first leaves that group able to rotate, which is how the reader frees a slot;
+refusing ahead of it would leave a bound group with no registered auth and every retry refusing in
+the same place for ever.
+
+**The relay is the fence and the client is the message.** This repository is public and readers
+build it, so a cap that lived only in `pairing::confirm` would be a suggestion — and the point of
+a device limit is precisely the case where somebody has reason to exceed it. What the client-side
+`identity::room_for` buys is that a reader meets the limit at the press rather than at a sync
+three minutes later. `complete`'s copy of the check is weak by construction and says so: a joining
+device cannot know the group's size, so on a first join its roster is empty and the check refuses
+nothing. The initiator's `confirm` is the meaningful client-side refusal.
+
+**A slot frees through the manifest, which is already the roster.** `/rotate` calls `keepOnly`
+with the manifest's key set, so a removal *and* a departure each free their slot with no new
+mechanism — both publish a manifest. `keepOnly` runs **after `recordRotation` succeeds and below
+the authorisation check**: only-after-the-record is what stops a refused rotation freeing
+anything, and below-the-401 is what stops any caller emptying the device roll of any group id they
+can name.
+
+**And a last-seen ages out what the manifest never mentions.** A device whose data folder is wiped
+mints a *new* id at `identity::ensure`, so its old row is named by no manifest and freed by
+nothing: five reinstalls would exhaust a reader's own account permanently, with a hand edit of D1
+the only way out. A row unseen for `DEVICE_TTL_MS` is not counted and is pruned when the count is
+taken. **Milliseconds rather than days, because every clock on the relay side is already one** —
+`decide` takes a `nowMs` and `GRACE_MS` is one, and a second unit here would be a conversion
+somebody eventually forgets. Ninety days is chosen against the case it must not break: a laptop
+put in a drawer for a season and brought back should find its slot where it left it.
+
+⚠️ **A 403 is not always the cap, and reading the status alone gets this wrong.** `/claim` answered
+403 to *that membership no longer exists* and to *that membership is not active* long before a
+device limit existed, so an app branching on the status alone tells a reader whose pledge has
+lapsed that they already have five devices — the wrong sentence about the wrong problem, sending
+them to remove a device instead of to renew. **So the relay stamps `code: "device_limit"` on the
+three refusals that really are the cap, and `entitlement::access_token` matches the code and never
+the sentence**, which is copy and free to be improved. Both sides pin the literal —
+`claim.ts`'s `DEVICE_LIMIT` and `entitlement::DEVICE_LIMIT` — because nothing at either end can
+see the other. **Neither suite could catch this**: each asserted its own half and both were green,
+and it was found by an agent reading the other side's file. It is the fourth defect in two PRs
+that crossed a language boundary no test spans, after the epoch guard above, the pairing blob's
+field order and the seconds-versus-milliseconds unit. **The pattern, not the entry: a constant
+that has to be equal on both sides of the wire is a defect neither suite can see, and pinning the
+literal in both files is the only fence there is.**
+
+**A 403 must never be routed through the 401 path** on the app side. That path calls
+`entitlement::revoke`, which sets the mark `membership_ended` reads, so a sixth device would be
+told its membership had ended.
 
 ⚠️ **One new failure follows from that and is worth stating rather than fixing.** A paired group
 with *no* membership now errors on every **Sync now**: `/keys` authenticates against those same
@@ -1137,12 +1349,17 @@ keeps its log rather than compacting away the state that device has not seen.
 pass on 2026-08-29 — a desktop holding 275 entries and a OnePlus 12 holding none, "both pointed
 at a deployed relay" — and "The first end-to-end pass" below is that same relay driven to
 convergence. ⚠️ **"Nothing is deployed" is history, corrected 2026-08-29**; it was contradicted
-twice inside this document before it was corrected here. **That is the only relay that has ever
-run.** It is the unauthenticated three-endpoint Worker, pointed at by hand through
-`sync_state.relay_url`; the hosted one above it has never been deployed and its Worker has not
-been written. **What has not changed is who created it: nothing on Cloudflare is provisioned by
-an agent.** When a resource is needed, Markus is asked and Markus creates it — no account,
-Worker, Durable Object namespace or API token in this project has ever been made by one.
+twice inside this document before it was corrected here. ⚠️ **This paragraph then said "that is
+the only relay that has ever run" and that the hosted Worker "has never been deployed and its
+Worker has not been written" — both false, and both corrected 2026-08-30.** The baseline pass is
+still the pass it was: two real devices converging over the unauthenticated three-endpoint Worker,
+pointed at by hand through `sync_state.relay_url`. What is no longer true is that nothing else has
+run — the hosted Worker is deployed at the same address and answers `/claim`, `/token`,
+`/g/{group}/rotate` and `/g/{group}/keys`, probed the same day. **What has not changed is who
+created it: nothing on Cloudflare is provisioned by an agent.** When a resource is needed, Markus
+is asked and Markus creates it — no account, Worker, Durable Object namespace or API token in this
+project has ever been made by one, and the probes above are `curl` against a public host, which is
+a read and not a provision.
 
 **And the address is in this repository.** ⚠️ **Also corrected 2026-08-29**: this said the URL
 a deploy produces goes in each reader's own `sync_state.relay_url`, through Settings, and
@@ -1161,12 +1378,16 @@ single-use code that expires in ten minutes, `/token` by the refresh secret or t
 is presenting, `/webhook/patreon` by its HMAC. **The hostname is real and is committed with
 Markus's approval** — it is the baseline relay the 2026-08-29 pass ran against.
 **The hosted Worker is deployed at it**, which reverses what this paragraph said until
-2026-08-30. Probed that day: `/claim` and `/token` answer **405** (the route is there and wants
-POST), `/oauth/patreon/callback` **400**, `/g/{group}/pull` **401** from the bearer gate, and
-`/g/{group}/push` **405** — while `/g/{group}/rotate` and `/g/{group}/keys` answer **404**. So the
-gate, the callback and the membership flow are live and **only this change's two routes are
-missing**; `wrangler.jsonc` carries a real `database_id`, so the D1 exists too and may hold live
-rows. The next deploy is an update to a running service, and
+2026-08-30. Probed that day, **after the group-key deploy**: `/claim` and `/token` answer **405**
+to a GET (the route is there and wants POST), `/oauth/patreon/callback` **400**,
+`/g/{group}/push` and `/g/{group}/ack` **405**, `/g/{group}/pull` **401** from the bearer gate,
+`/g/{group}/rotate` **401** to a POST, `/g/{group}/keys` **401** to a GET with a well-formed
+bearer, and `/g/{group}/bogus` **404**. So the gate, the callback, the membership flow **and the
+key distribution** are all live — an earlier reading of this line, taken before the deploy, said
+`/rotate` and `/keys` were the two routes still missing, and that is history. `wrangler.jsonc`
+carries a real `database_id`, so the D1 exists too and may hold live rows. **What is missing today
+is the device roll**: the deployed `/token` accepts a body with no `device` field, where this
+tree's code refuses one with a 400. The next deploy is an update to a running service, and
 [hosted-relay-deploy.md](hosted-relay-deploy.md)'s step 0 is how to check rather than assume —
 this paragraph is why it exists. **`PATREON_CLIENT_ID` is no longer the exception it was**: it was a placeholder until
 `a0eb0c6` (2026-08-30) and holds the real id now, verified live — `GET /oauth2/authorize` with it
@@ -1555,15 +1776,21 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
 - **A third device's tombstone against a third device's edit.** Add-wins reads this device's own
   history and the incoming batch; two *other* devices' ops only meet if they arrive together. A
   tombstone table would close it and is not built.
-- ~~**A revoked device's rewrapped key over the relay.**~~ **Built 2026-08-30** — `/rotate`
-  publishes it, `/keys` hands it over, and `client::check_keys` runs on every round trip before
-  push and pull, so the pull cursor an envelope from a newer epoch was holding now advances on its
-  own. See §7.6 above. **The deploy is what is left**, and it is the whole of what is left: none of
-  it has ever executed against a live Worker.
-- **A `Leave group` press.** A device can be made to leave by being removed elsewhere, and
-  `identity::leave_group` is the function that does it — but there is no control for a device
-  leaving on its own initiative, so a reader who wants off a group they still own has to be
-  removed from another device.
+- ~~**A revoked device's rewrapped key over the relay.**~~ **Built and deployed 2026-08-30** —
+  `/rotate` publishes it, `/keys` hands it over, and `client::check_keys` runs on every round trip
+  before push and pull, so the pull cursor an envelope from a newer epoch was holding now advances
+  on its own. See §7.6 above. ⚠️ **This bullet said "the deploy is what is left … none of it has
+  ever executed against a live Worker" for part of that same day**; both routes now answer on the
+  host, and step 2 of the runbook records what the deploy itself found.
+- ~~**A `Leave group` press.**~~ **Built 2026-08-30** — `sync_group_leave`, and a press on the
+  panel beside *Pair a device*, drawn on a paired device and on no other. See "The departure"
+  under §7.6. What it is still owed is the **live pass**: leaving on the phone and watching the
+  desktop's roster lose it, which is the check that found the group-key migration gap on its first
+  press.
+- **The device cap is not deployed.** `group_devices`, the `device` field on both `/token` doors
+  and on `/claim`, `/claim`'s rebind and `/rotate`'s `keepOnly` are all written and tested and
+  none of it is running: the live `/token` still accepts a body with no `device`. The migration
+  file and the order it goes in are in the runbook.
 - **No WebSocket fan-out for the rewrap either.** `/keys` is checked on the same manual cadence
   `round_trip` already has, so a removal reaches a remaining device the next time it syncs, not
   instantly. That is the same latency the bullet above describes and not a second problem.

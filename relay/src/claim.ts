@@ -723,8 +723,11 @@ export async function handleClaim(request: Request, env: Env): Promise<Response>
   // **After the binding and never before.** Every refusal above leaves this group's key alone,
   // which is what a 409 has to mean: a claim that registered an auth for a group it did not bind
   // would hand the *next* device to claim that group a `group_auth` it cannot match, and no
-  // amount of re-claiming would clear it — `seedGroup` is `INSERT OR IGNORE` precisely so that a
-  // re-claim does not overwrite a live manifest.
+  // amount of re-claiming would clear it — `seedGroup` guards both of its statements on *this
+  // epoch being at least the highest the group has*, precisely so that a re-claim does not
+  // overwrite a live manifest or re-point the mirror backwards. `INSERT OR IGNORE` alone did not
+  // do that, because `group_keys` is keyed `(group_id, epoch)` and a device claiming from behind
+  // conflicts with nothing; see that function's doc.
   //
   // Allowed to throw. The alternative is answering a grant while the group's first auth was
   // never registered, which is a device that syncs today and cannot rotate ever; a 500 is the

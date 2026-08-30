@@ -12,14 +12,26 @@ way every application's API base URL is public, and no longer a setting a reader
 Settings. What a reader supplies instead is a **membership**: they connect Patreon once, paste a
 claim code, and the app trades it for a pair of tokens.
 
-**What is deployed at that address today is the entitlement Worker, minus this change's two
-routes.** Probed 2026-08-30: `/claim` and `/token` answer **405** (the route is there and wants POST), `/oauth/patreon/callback` **400**, `/g/{group}/pull` **401** from the bearer gate, and `/g/{group}/rotate` and `/g/{group}/keys` **404**. So a device pointed there
-reaches a relay that speaks the membership flow and the log, and 404s only on the key
-distribution. **This paragraph said the opposite until 2026-08-30**, and was repeated into two
-`CLAUDE.md` files before anybody asked the host — which is why step 0 of the runbook is two
-`curl`s rather than a sentence. Deploying this tree is
-`npx wrangler deploy` from this directory, and it is the last of the four steps under
-**Deploying** below rather than the whole of them.
+**What is deployed at that address today is the whole entitlement Worker, key distribution
+included.** Probed 2026-08-30, after that day's second deploy: `/claim` and `/token` answer
+**405** to a GET (the route is there and wants POST), `/oauth/patreon/callback` **400**,
+`/g/{group}/pull` **401** from the bearer gate, `/g/{group}/push` and `/g/{group}/ack` **405**,
+`/g/{group}/rotate` **401** to a POST, `/g/{group}/keys` **401** to a GET carrying a well-formed
+bearer — and `/g/{group}/bogus` **404**, so a 404 here still means "no such route" and those 401s
+are handlers refusing rather than a router shrugging.
+
+⚠️ **This paragraph has now been wrong twice about the same host, in the same week.** It first
+said nothing was deployed at all, and that was repeated into two `CLAUDE.md` files before anybody
+asked; corrected, it then said `/rotate` and `/keys` were "this change's two routes" still
+missing, and survived a few hours past the deploy that shipped them. **Step 0 of the runbook is
+those `curl`s written down**, and it is the only sentence in any of these files that cannot rot.
+
+**What is *not* deployed is the device roll on this branch** — `group_devices`, the cap, `/claim`
+moving a binding, `keepOnly` — **and it adds no route, so no path probe can see it.** The tell is
+a body: `POST /token {"group":…,"auth":…}` with **no `device`** answers 401 from the entitlement
+lookup on the live Worker, where the code in this directory answers **400 `that is not a device
+id`** before reading anything. Deploying this tree is `npx wrangler deploy` from here, and it is
+the last of the steps under **Deploying** below rather than the whole of them.
 
 ## What it cannot do
 
@@ -60,15 +72,17 @@ within a day.
 
 **The four claim-layer routes are deliberately not behind the gate, and each is guarded by
 something else.** `/oauth/patreon/callback` by the authorization code Patreon redirects with,
-`/claim` by a single-use code that expires in ten minutes, `/token` by the refresh secret it is
-presenting, and `/webhook/patreon` by its HMAC. A bearer token could not guard any of them —
-three of the four exist precisely because the caller has no token yet.
+`/claim` by a single-use code that expires in ten minutes, `/token` by **the refresh secret or the
+group auth** it is presenting, and `/webhook/patreon` by its HMAC. A bearer token could not guard
+any of them — three of the four exist precisely because the caller has no token yet. **Two `/g/…`
+routes stand outside the gate too since 2026-08-30**, for a different reason and with credentials
+of their own; see "The endpoints".
 
 ## The entitlement table
 
-One D1 table, `relay/schema.sql`. The Patreon adapter is the only Patreon-shaped code in the
-design; everything downstream reads `status` and never asks who vouched, so **adding Paddle later
-is one adapter file, one webhook route, and rows with a different `source`.**
+`relay/schema.sql`, whose first table this is. The Patreon adapter is the only Patreon-shaped code
+in the design; everything downstream reads `status` and never asks who vouched, so **adding Paddle
+later is one adapter file, one webhook route, and rows with a different `source`.**
 
 ```
 entitlements(
@@ -110,6 +124,32 @@ arrives, which is the friction the subject indirection exists to avoid.
 rules** — there is no `used` column and no sweep — so both live at the call site: the expiry is
 `expires_at > now`, and single-use means the `DELETE` happens in the same transaction as the read.
 Read-then-delete would let two racing requests both claim.
+
+**Two more tables landed on 2026-08-30**, and `entitlements` gained `group_epoch` and `group_auth`
+beside them:
+
+| Table | Key | Answers |
+| --- | --- | --- |
+| `group_keys` | `(group_id, epoch)` | the key history `/keys` serves from, and the manifest whose key set **is** the roster. Pruned to `EPOCH_HISTORY` rows by the same statement that writes a new one. |
+| `group_devices` | `(group_id, device_id)` | the device roll, so `/token` and `/claim` can cap a membership at `MAX_GROUP_DEVICES`. `first_seen`, `last_seen`, and nothing else. |
+
+**One table answers both caps the reader asked for** — five per account and five per group —
+because a subject is bound to exactly one group and a re-claim *moves* that binding rather than
+adding a second, so there is no arrangement in which the two sets differ.
+
+**`group_devices` gets no secondary index, and that is a decision rather than an omission.**
+SQLite builds one for a rowid table's `PRIMARY KEY`, `group_id` is its leading column, and
+`(group_id, device_id)` *covers* every read here — each is `WHERE group_id = ?` or that plus an
+equality on `device_id`. A `(group_id)` index would serve nothing and cost a second b-tree write
+on every `/token`, the hottest route this Worker has.
+
+**It holds no name, on purpose.** What a device is called is `device_names`, is synced between the
+devices under the group key, and the relay never sees it.
+
+**A slot frees two ways and neither is a sweep.** `/rotate`'s `keepOnly` deletes the rows its
+manifest omits, so a removal and a departure each free one; and a row unseen for `DEVICE_TTL_MS`
+— ninety days — is not counted and is pruned when the count is taken, because a wiped data folder
+mints a *new* device id and would otherwise cost the reader a slot for ever.
 
 ## The flows
 
@@ -202,8 +242,8 @@ mass revocation in a job nobody is watching.
 
 ## The endpoints
 
-The `/g/…` family lives on one Durable Object, addressed by `idFromName(group)`. Every one of them
-is behind the bearer gate.
+**Three of the `/g/…` family live on one Durable Object, addressed by `idFromName(group)`, and
+those three are the ones behind the bearer gate.**
 
 | Request | Body | Answer |
 | --- | --- | --- |
@@ -211,6 +251,28 @@ is behind the bearer gate.
 | `GET /g/{group}/pull?since={cursor}&device={id}` | — | `200 {"envelopes": [...], "cursor": <head>}` |
 | `POST /g/{group}/ack` | `{"device": id, "cursor": n}` | `204` — and compaction runs |
 | `GET /g/{group}/ws` | — | `501`. See "What is not built" |
+
+**Two more `/g/…` routes stand *ahead* of the gate, and the placement is the point rather than an
+exemption.** ⚠️ **This section said "every one of them is behind the bearer gate" until
+2026-08-30**, when these landed.
+
+| Request | Body | Guarded by | Answer |
+| --- | --- | --- | --- |
+| `POST /g/{group}/rotate` | `{epoch, auth, keys}` | the group auth, or the refresh secret | `200 {epoch}`; `409` if the epoch does not advance |
+| `GET /g/{group}/keys?device={id}` | — | any auth the group has used in `EPOCH_HISTORY` epochs | `200 {epoch, blob, devices}` |
+
+A device that has just been rotated away from **cannot mint a token** — the auth it would present
+to `/token`'s group door is stale by definition — so a `/keys` behind the gate would refuse
+exactly the caller it exists to serve, and a removed device would sit for ever in a group it is no
+longer in. Both are D1 reads and writes in the Worker and **neither reaches the Durable Object**,
+which is what makes standing outside affordable: the gate is in front of the DO because a request
+that reaches one bills a Durable Object request whether it is honoured or refused, and nothing
+these two can be made to spend is on that line. They belong on the rate-limiting list instead —
+runbook step 8.
+
+`/rotate`'s manifest is capped at `MAX_GROUP_DEVICES` (**64 until 2026-08-30**, which was a bound
+on what D1 would store rather than a policy) and 4 KB per blob, and it calls `keepOnly` after
+`recordRotation` succeeds so a rotation frees the `group_devices` rows its manifest omits.
 
 `{group}` is constrained to `[A-Za-z0-9_-]{1,128}`, from **one** shared constant that `claim.ts`
 applies to the group id in a `/claim` body as well. Without the constraint, `%41` and `A` would
@@ -223,9 +285,30 @@ The entitlement layer's four routes are fixed paths, matched ahead of that patte
 | Request | Guarded by | Answer |
 | --- | --- | --- |
 | `GET /oauth/patreon/callback?code=…` | the authorization code | an HTML page carrying the claim code |
-| `POST /claim {code, group}` | the one-time code, ten minutes | `{access, refresh, expires, status, since}`; `409` if that membership or that group is already bound elsewhere |
-| `POST /token {refresh}` | the refresh secret | the same five fields, or `401` once revoked |
+| `POST /claim {code, group, epoch, auth, device}` | the one-time code, ten minutes | `{access, refresh, expires, status, since}`; `409` if **another subject** holds that group id |
+| `POST /token {refresh, device}` | the refresh secret | the same five fields, or `401` once revoked |
+| `POST /token {group, auth, device}` | `crypto::relay_auth` over the group key | four fields — **never a refresh secret** |
 | `POST /webhook/patreon` | `X-Patreon-Signature` (HMAC-MD5) | `204`, or `401` unverified |
+
+**Four routes, and `/token` is one of them wearing two bodies.** The shape is decided on the
+*presence* of `refresh`, not its validity, so a body carrying both fields cannot be steered onto
+the weaker door by sending a `refresh` the caller knows is malformed.
+
+⚠️ **`device` is required on all three of those bodies since 2026-08-30, and the refresh door is
+the one it would have been easiest to leave off** — the device that pressed Connect never reaches
+the group door, so a cap that counted only the group door would never count the one device that is
+certainly signed in. Required and not used-if-present, because a field the relay merely reads when
+it is there is a cap any caller opts out of by omitting it. A body without one is **400 `that is
+not a device id`**, before any lookup.
+
+⚠️ **`/claim`'s 409 changed meaning rather than going away.** A subject that already holds a
+*different* group is now **rebound**: bind the new group, `seedGroup` it, then release the old one
+(`group_keys` rows, `forgetGroup`'s `group_devices` rows, and the Durable Object's log last). The
+bind happens first and the teardown after, because the surviving 409 — another **subject** holding
+this group id — is caught from the unique violation and so cannot be predicted, and a
+teardown-first ordering would destroy a working group on the way to refusing the press that asked
+for it. What the rebind costs is stated in the app before the press: the devices left in the old
+group lose their log and their manifest.
 
 There is a fifth internal path, `drop`, which empties a group's log for §7.1. **It is not on the
 router's public pattern** — the Worker builds that request itself, and no device can ask for it.
@@ -258,10 +341,23 @@ tested).
 `src/claim.ts` — the callback landing page, the code mint, `/claim`, `/token`, the webhook and the
 cron's reconciliation.
 
+`src/groupauth.ts` — the group key store and the device roll: `seedGroup`, `recordRotation`,
+`authIsCurrent`/`authIsRecent`, and `liveDeviceCount`/`admitDevice`/`keepOnly`/`forgetGroup`, plus
+the three constants (`EPOCH_HISTORY`, `MAX_GROUP_DEVICES`, `DEVICE_TTL_MS`) that anything else
+capping or pruning must import rather than respell.
+
+`src/rotate.ts` — `POST /g/{group}/rotate` and `GET /g/{group}/keys`, the two routes that stand
+ahead of the bearer gate.
+
 `src/group.ts` — the Durable Object: two `sql.exec` tables, the handlers, and a call into `log.ts`
 for every decision about which rows.
 
 `src/index.ts` — the router and the auth gate.
+
+`src/fakeD1.ts` — the test double, and it **evaluates** SQL rather than matching shapes: it holds
+a `PRIMARY_KEY` map so that an upsert conflicts the way D1 would. Import it; never write a second.
+⚠️ **A table missing from that map makes its cap tests vacuous** — "a device already counted does
+not consume a second slot" passes trivially against a table that cannot hold a duplicate anyway.
 
 **Why the split.** `@cloudflare/vitest-pool-workers` would run the real class in workerd, but it
 pulls wrangler and workerd into a tree pinned to vitest 4.1.10 whose support it does not
@@ -278,7 +374,9 @@ loudly on the first request rather than quietly.
 
 ## Deploying
 
-Four steps, in order, and the first two are why `npx wrangler deploy` alone is not enough:
+Four steps, in order, and the first two are why `npx wrangler deploy` alone is not enough. The full
+runbook, with the probes that say which of them are already done, is
+[hosted-relay-deploy.md](../docs/reference/hosted-relay-deploy.md).
 
 1. `npx wrangler d1 create mtg-grimoire-relay`, then put the id it prints into
    `wrangler.jsonc`'s `d1_databases[0].database_id`. **Already done** — the committed value is a
@@ -286,9 +384,36 @@ Four steps, in order, and the first two are why `npx wrangler deploy` alone is n
    database exists and step 2 runs against it rather than creating it. Only that command can
    produce a real id, and a plausible-looking uuid invented here would be a value that gets copied
    into documentation and deployed against.
-2. `npx wrangler d1 execute mtg-grimoire-relay --remote --file=./schema.sql`.
+2. **The schema. `--file=./schema.sql` is for an empty database only** — on any other, run the
+   migrations in `migrations/` instead:
+   ```
+   # empty database only
+   npx wrangler d1 execute mtg-grimoire-relay --remote --file=./schema.sql
+
+   # every other database
+   npx wrangler d1 execute mtg-grimoire-relay --remote --file=./migrations/2026-08-30-group-keys.sql
+   npx wrangler d1 execute mtg-grimoire-relay --remote --file=./migrations/2026-08-30-group-devices.sql
+   npx wrangler d1 execute mtg-grimoire-relay --remote --command "ALTER TABLE entitlements ADD COLUMN group_epoch INTEGER"
+   npx wrangler d1 execute mtg-grimoire-relay --remote --command "ALTER TABLE entitlements ADD COLUMN group_auth TEXT"
+   ```
+   ⚠️ **The migration files exist because `wrangler d1 execute --file` is atomic**, which is the
+   whole of the reason and is worth reading before deciding to skip one. `schema.sql` ends with
+   two `ALTER TABLE ... ADD COLUMN`, D1 has no `ADD COLUMN IF NOT EXISTS`, and adding a column
+   that is already there is an error — so on a database those columns have reached, **the two
+   `ALTER`s fail and take every `CREATE` above them down with them**, including ones that come
+   first in the file and would have succeeded alone. **That is measured, not theoretical**: it is
+   what the 2026-08-30 deploy did to `CREATE TABLE group_keys`, and `/g/{group}/keys` answered a
+   **500** — `no such table` — against a Worker whose schema execute had reported nothing wrong.
+   Each `ALTER` above is its own invocation so that a `duplicate column name`, which is the
+   *correct* answer on a database that already has it, costs nothing else.
+
+   ⚠️ **`group_devices` goes in BEFORE the deploy that ships `admitDevice`.** Both `/token` doors
+   call it on every trip, so a Worker pointed at a database without that table answers 500 on the
+   route every device uses to sync. The reverse order costs nothing: a table nothing writes to yet
+   is inert.
 3. Set the three secrets, and add the two public `vars` beside `RELAY_BASE`.
-4. `npx wrangler deploy`, then register the redirect URI and the webhook with Patreon.
+4. `npx wrangler deploy`, then register the redirect URI and the webhook with Patreon. **Verify
+   against the host and never against an exit code** — that is what the 500 above was.
 
 **Three secrets, never in this repository and never in a committed `.dev.vars`:**
 
@@ -324,7 +449,10 @@ break-glass and it is worth having written down.
 
 Limits verified live 2026-08-29. **Every relay request bills twice** — one Worker invocation and
 one Durable Object request — **except one the auth gate refuses, which bills only the Worker.**
-That exception is the whole reason the gate is where it is.
+That exception is the whole reason the gate is where it is. ⚠️ **Two more routes joined that
+exception on 2026-08-30**: `/rotate` and `/keys` never reach a Durable Object either, so they bill
+one Worker invocation and D1 reads, which never bind. `/claim` and `/token` were always in that
+group.
 
 | | Free | Paid ($5/mo) |
 | --- | --- | --- |
@@ -336,7 +464,9 @@ That exception is the whole reason the gate is where it is.
 | D1 | 5 GB, 5 M reads/day, 100 k writes/day | — |
 
 Per group — three devices, plus about four token refreshes a day, since a 24-hour token with a
-six-hour margin refreshes a little over once per *device* per day:
+six-hour margin refreshes a little over once per *device* per day. **The device cap is what bounds
+the worst case at all**: five devices is the ceiling since 2026-08-30, so no group can be more
+than ~1.7× the row below, where before it was unbounded.
 
 | Cadence | Requests/day/group | Groups on **free** | 1 000 groups, **paid** |
 | --- | --- | --- | --- |

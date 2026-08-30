@@ -42,11 +42,17 @@ the webhook's HMAC). **Two `/g/…` routes stand outside it too** — `/rotate` 
 carry the group's own key material and are D1 only: a device that has just been rotated away from
 cannot mint a token, so a `/keys` behind the gate would refuse exactly the caller it exists to
 serve. Either way nothing follows from knowing where the relay lives. **The hosted Worker is
-deployed at that address**, which reverses what this file said until 2026-08-30. Probed 2026-08-30: `/claim` and `/token` answer **405** (the route is there and wants POST), `/oauth/patreon/callback` **400**, `/g/{group}/pull` **401** from the bearer gate, and `/g/{group}/rotate` and `/g/{group}/keys` **404** — so the gate, the callback, `/claim` and `/token` are live and only this
-change's two routes are missing. The next deploy is an **update** with a D1 that may hold real
-entitlements, not a first landing. **`PATREON_CLIENT_ID` beside it
-was a placeholder until 2026-08-30 and holds the real id now**, public on the same terms and
-verified live against Patreon's authorize endpoint.
+deployed at that address**, which reverses what this file said until 2026-08-30. Probed that day,
+after the group-key deploy: `/claim` and `/token` answer **405** to a GET (the route is there and
+wants POST), `/oauth/patreon/callback` **400**, `/g/{group}/pull` **401** from the bearer gate,
+`/g/{group}/rotate` **401** to a POST, `/g/{group}/keys` **401** to a GET with a well-formed
+bearer, and `/g/{group}/bogus` **404** — so the gate, the callback, the membership flow and the
+key distribution are all live. This sentence briefly said `/rotate` and `/keys` were the two
+routes still missing; that was true for part of one day. **What is not deployed is the device
+roll**, and it changes no route — the tell is that the live `/token` still accepts a body with no
+`device` field. The next deploy is an **update** with a D1 that holds real entitlements, not a
+first landing. **`PATREON_CLIENT_ID` beside it was a placeholder until 2026-08-30 and holds the
+real id now**, public on the same terms and verified live against Patreon's authorize endpoint.
 
 **An entitlement is a property of the GROUP, not of the device that pressed Connect** — so a
 reader may pair first and connect second, and every device in the group reads *Supporting since
@@ -55,7 +61,15 @@ which is why **pairing does not carry the refresh secret**: a device holding tha
 re-register the group's auth and evict the devices that removed it. **A removal reaches every
 device**: it rotates the group key, rewraps it per remaining device, publishes the set, and
 commits only when the relay accepts it — and the published manifest's key set *is* the roster, so
-a device it omits leaves the group on its next sync.
+a device it omits leaves the group on its next sync. **A device can also leave of its own accord,
+and that press is always possible** — everything after the in-a-group check is best effort,
+*planning included*, and the local clear runs whatever the relay answered; what a failure costs is
+the courtesy of telling the others, never the departure. Leaving takes the membership with it,
+which is why **`/claim` moves a binding rather than refusing one**: without that, the paying
+device that left could never connect anywhere again. **Five devices to a membership**, which is
+the same count as five to a group because a subject holds exactly one — the relay is the fence,
+the app is the message, and the cap's refusal is a **403 carrying `code: "device_limit"`**,
+matched on the code and never on the sentence.
 **What must never be committed are the three secrets the Worker holds** —
 `PATREON_CLIENT_SECRET`, `PATREON_WEBHOOK_SECRET` and `RELAY_HMAC_KEY`, in
 [the hosted-relay design](docs/superpowers/specs/2026-08-29-hosted-relay-and-patreon-design.md)

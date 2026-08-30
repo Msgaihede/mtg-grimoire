@@ -76,14 +76,21 @@ use serde::Deserialize;
 /// three secrets the relay holds. §9's table **listed** a fourth, `PATREON_CREATOR_TOKEN`, until
 /// 2026-08-29; nothing in the Worker consumes one, and that table says three now.
 ///
-/// **What is not on that host yet is this design's Worker, and the distinction matters.** The host
-/// is live — it is the relay the 2026-08-29 end-to-end pass ran against — but what is deployed
-/// there is the pre-entitlement code: no auth gate, no `/claim`, no `/token`, no `/g/…/rotate`,
-/// no `/g/…/keys`, no OAuth callback, no webhook, no D1 binding. **A device pointed at it today
-/// reaches a real relay that answers none of the endpoints this module calls.** That is Wave 2 and
-/// a deploy, not a placeholder, and it fails differently: a 404 from a server that is there,
-/// rather than a name that will not resolve. `docs/reference/hosted-relay-deploy.md`'s step 0 is
-/// how to check that claim against the host rather than against this comment.
+/// ⚠️ **This comment said "what is not on that host yet is this design's Worker" — no auth gate,
+/// no `/claim`, no `/token` — and it was false; corrected 2026-08-30.** It was one of five files
+/// that agreed the hosted relay was undeployed, and the agreement read as corroboration because
+/// nobody had asked the host. Probed that day: `/claim` and `/token` answer **405** to a GET and
+/// **400** to an empty POST body, `/oauth/patreon/callback` **400**, `/g/{group}/pull` **401**
+/// from the bearer gate, `/g/{group}/rotate` **401** to a POST, and `/g/{group}/keys` **401** to a
+/// GET carrying a well-formed bearer — while `/g/{group}/bogus` is still **404**, so those 401s
+/// are handlers refusing rather than a router shrugging. **A device pointed at this host today
+/// reaches the whole membership flow and the whole key distribution.**
+///
+/// **What is not deployed is the device roll this branch adds**, and it changes no route, so no
+/// path probe can see it: the tell is that the live `/token` accepts a body with **no `device`
+/// field**, where the code in this tree answers 400. `docs/reference/hosted-relay-deploy.md`'s
+/// step 0 is how to check any of this against the host rather than against this comment, and it
+/// exists because this comment was wrong.
 pub const RELAY_BASE: &str = "https://mtg-grimoire-relay.denmark-east.workers.dev";
 
 /// The OAuth client id, real since `a0eb0c6` (committed 2026-08-30, against the verification
@@ -974,7 +981,7 @@ mod tests {
         let url = authorize_url("state-abc");
         // Spelled out rather than run through `encoded`, so this is an independent statement of
         // what the bytes must be. The host is the only part taken from the constant, because it
-        // is the one part that changes when the relay is really deployed.
+        // is the one part that would change if the relay ever moved.
         let host = RELAY_BASE.trim_start_matches("https://");
         let expected = format!("redirect_uri=https%3A%2F%2F{host}%2Foauth%2Fpatreon%2Fcallback");
 
