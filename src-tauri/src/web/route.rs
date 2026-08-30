@@ -124,6 +124,17 @@ pub const COMMANDS: &[&str] = &[
     "card_image_uri",
     "printing_group_by",
     "set_printing_group_by",
+    // The Tagger, minus the two that download. See the arms for why.
+    "oracle_tags_status",
+    "art_tags_status",
+    "oracle_tags_for_cards",
+    "oracle_tags_for_printings",
+    "tag_search",
+    "tag_children",
+    "tag_resolve",
+    "tags_muted",
+    "tag_mute",
+    "tag_unmute",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -1301,6 +1312,122 @@ pub fn call(
             )
         }
 
+        // ── The Tagger ──────────────────────────────────────────────────────────────
+        //
+        // **Ten of twelve, and the two missing are the two that download.**
+        // `oracle_tags_refresh` and `art_tags_refresh` fetch a bulk file from Scryfall
+        // through `state.client` — a field wasm's `AppState` does not have — and report
+        // progress through an `AppHandle`. They are the download half of the split the
+        // compiler named in PR 10a, and porting them is its own piece of work rather than a
+        // `match` arm.
+        //
+        // **What the ten buy is the documented fallback instead of an error.** A database
+        // that has never fetched a taxonomy is a supported state — `src-tauri/CLAUDE.md` says
+        // the Tags page "says so and still answers from the oracle side" — and until now the
+        // web target could not even reach that state, because `tag_children` was an unknown
+        // command. Both `*_status` arms answer honestly on a browser: never fetched, stale.
+        "oracle_tags_status" => encode(
+            command,
+            crate::tags::status_of(&crate::tags::oracle::ORACLE, state),
+        ),
+
+        "art_tags_status" => encode(
+            command,
+            crate::tags::status_of(&crate::tags::art::ART, state),
+        ),
+
+        "oracle_tags_for_cards" => {
+            let oracle_ids: Vec<String> = field(command, args, "oracleIds")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::tags::oracle::read_card_tags(&conn, &oracle_ids)
+                    // The wrapper's own sentence, so the page sees one message whatever
+                    // target answered it.
+                    .map_err(|e| RouteError::Failed(format!("could not read the tags: {e}")))?,
+            )
+        }
+
+        "oracle_tags_for_printings" => {
+            let card_ids: Vec<String> = field(command, args, "cardIds")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::tags::oracle::read_printing_tags(&conn, &card_ids)
+                    .map_err(|e| RouteError::Failed(format!("could not read the tags: {e}")))?,
+            )
+        }
+
+        "tag_search" => {
+            let text: String = field(command, args, "text")?;
+            let namespace: String = field(command, args, "namespace")?;
+            let limit: u32 = field(command, args, "limit")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::tags::query::run_tag_search(&conn, &text, &namespace, limit)
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "tag_children" => {
+            let namespace: String = field(command, args, "namespace")?;
+            let slug: Option<String> = optional(command, args, "slug")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::tags::query::run_tag_children(&conn, &namespace, slug.as_deref())
+                    .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "tag_resolve" => {
+            let asks: Vec<crate::tags::query::TagLookup> = field(command, args, "asks")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::tags::query::run_tag_resolve(&conn, &asks).map_err(RouteError::Failed)?,
+            )
+        }
+
+        "tags_muted" => {
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::tags::muted::list(&conn).map_err(RouteError::Failed)?,
+            )
+        }
+
+        // **`now_from` and not `unix_now`**: the muted row carries a timestamp, and
+        // `SystemTime::now()` panics on `wasm32-unknown-unknown` rather than failing. The
+        // clock comes off the connection, which is the same answer `sync_engine::entitlement`
+        // reaches for the same reason.
+        "tag_mute" => {
+            let namespace: String = field(command, args, "namespace")?;
+            let tag_id: String = field(command, args, "tagId")?;
+            let slug: String = field(command, args, "slug")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |conn| {
+                    let now = crate::tags::now_from(conn);
+                    crate::tags::muted::mute(conn, &namespace, &tag_id, &slug, now)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
+        "tag_unmute" => {
+            let namespace: String = field(command, args, "namespace")?;
+            let tag_id: String = field(command, args, "tagId")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |conn| {
+                    crate::tags::muted::unmute(conn, &namespace, &tag_id)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
         other => Err(RouteError::Unknown(other.to_owned())),
     }
 }
@@ -1681,6 +1808,63 @@ mod tests {
         assert_eq!(out, json!(null));
     }
 
+    /// **A taxonomy that was never fetched is a supported state, and this is what it answers.**
+    ///
+    /// That is the whole value of routing the Tagger's queries without its two downloads: the
+    /// web target could not previously reach this state at all, because `tag_children` was an
+    /// `unknown command`. Now it reaches the documented fallback — a page that says it has
+    /// nothing yet — instead of an error.
+    #[test]
+    fn the_tagger_answers_honestly_before_any_taxonomy_has_been_fetched() {
+        let s = state("web-route-tags-cold");
+
+        let status = call(&s, "oracle_tags_status", &json!({})).unwrap();
+        // **`null`, not `0`** — `TagStatus::ingested_at`'s doc is explicit that `None` is
+        // "never ingested", which for the oracle taxonomy means the app is categorising by
+        // card type rather than by what a card does. A zero would have meant "fetched, and it
+        // was empty", which is a different and much worse thing to report.
+        assert_eq!(
+            status["ingestedAt"],
+            json!(null),
+            "nothing has been fetched"
+        );
+        assert_eq!(status["tagCount"], json!(null));
+        assert_eq!(status["stale"], json!(true), "never ingested is stale");
+        assert_eq!(
+            status["refreshing"],
+            json!(false),
+            "a browser never refreshes, so this can only ever be false there"
+        );
+
+        // The command the Tags page opens with, and the one the phone reported missing.
+        let children = call(
+            &s,
+            "tag_children",
+            &json!({ "namespace": "art", "slug": null }),
+        )
+        .unwrap();
+        assert_eq!(
+            children.as_array().expect("an array of children").len(),
+            0,
+            "an empty taxonomy is an empty list, not a refusal"
+        );
+    }
+
+    /// A card nothing has tagged answers an entry rather than dropping out — one per requested
+    /// id, in request order, which is the contract `src-tauri/CLAUDE.md` states for both tag
+    /// reads and the reason a deck add can never fail for want of a tag.
+    #[test]
+    fn a_tag_read_answers_one_entry_per_requested_id() {
+        let s = state("web-route-tags-per-id");
+        let out = call(
+            &s,
+            "oracle_tags_for_cards",
+            &json!({ "oracleIds": ["nobody-has-tagged-this", "nor-this"] }),
+        )
+        .unwrap();
+        assert_eq!(out.as_array().unwrap().len(), 2);
+    }
+
     /// **`mirror_rebuild`, and the choice of name is the point.** This used to reach for
     /// `deck_list`, which stopped being unknown the moment the Decks reads were routed — so
     /// the example is now one of the ten §6.3 names that are *permanently* desktop-only. A
@@ -1718,7 +1902,7 @@ mod tests {
         }
         assert_eq!(
             COMMANDS.len(),
-            87,
+            97,
             "update this number when a command is added"
         );
     }

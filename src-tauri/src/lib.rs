@@ -127,7 +127,6 @@ pub mod reconcile;
 pub mod reset;
 #[cfg(not(target_family = "wasm"))]
 pub mod scryfall;
-#[cfg(not(target_family = "wasm"))]
 pub mod tags;
 #[cfg(not(target_family = "wasm"))]
 pub mod transfer;

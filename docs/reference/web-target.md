@@ -77,12 +77,13 @@ the real 43-column one, `raw` included**.
   `Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy: require-corp` and
   it passed both ways. **Do not add those headers**, and do not let a future service worker
   re-attach them.
-- **Eighty-seven commands of 152**, as of 2026-08-30. The first four are the browse —
+- **Ninety-seven commands of 152**, as of 2026-08-30. The first four are the browse —
   `sync_status`, `search_cards`, `list_sets`, `facet_cards` — which is the read path spec §8
   wanted measured in wasm rather than guessed. The rest are the Decks destination (PR 10b's
   thirteen reads and 10c's thirty-three writes), the Collection (10d's seventeen), the
-  Wishlist (10e's fourteen) and the card pane (10f's six). Adding one, once its module is in the map, is a line in
-  `web::route::COMMANDS` and a `match` arm.
+  Wishlist (10e's fourteen), the card pane (10f's six) and the Tagger (10g's ten of twelve).
+  Adding one, once its module is in the map, is a line in `web::route::COMMANDS` and a
+  `match` arm.
 
   ⚠️ **This is not the intended end state.** Decided 2026-08-29, after the phone layout made
   the boundary visible: **all of them but ten**, by destination, worst broken first. The survey,
@@ -95,12 +96,15 @@ the real 43-column one, `raw` included**.
 
 | Compiled for wasm | Desktop/Android only |
 | --- | --- |
-| `app_meta` · `card` · `card_row` · `collection` · `collection_alloc` · `collection_folders` · `collection_source` · `combos` · `db` · `deck` · `deck_audit` · `deck_meta` · `deck_theory` · `deck_undo` · `errors` · `feed` · `filters` · `image_uri` · `index` · `ingest` · `legalities` · `maintenance` · `marketplace` · `schema` · `search` · `slug` · `sorting` · `split` · `sync` · `sync_engine` · `sync_pair` · `web` · `wishlist` · `wishlist_folders` | `export` · `flatten` · `images` · `import` · `listview` · `marketplace_feed` · `mirror` · `nav` · `paths` · `picked` · `reconcile` · `reset` · `scryfall` · `tags` · `transfer` · `update` · `window` · `zoom` |
+| `app_meta` · `card` · `card_row` · `collection` · `collection_alloc` · `collection_folders` · `collection_source` · `combos` · `db` · `deck` · `deck_audit` · `deck_meta` · `deck_theory` · `deck_undo` · `errors` · `feed` · `filters` · `image_uri` · `index` · `ingest` · `legalities` · `maintenance` · `marketplace` · `schema` · `search` · `slug` · `sorting` · `split` · `sync` · `sync_engine` · `sync_pair` · `tags` · `web` · `wishlist` · `wishlist_folders` | `export` · `flatten` · `images` · `import` · `listview` · `marketplace_feed` · `mirror` · `nav` · `paths` · `picked` · `reconcile` · `reset` · `scryfall` · `transfer` · `update` · `window` · `zoom` |
 
-**Twelve modules have moved left**: eleven on 2026-08-29 (PR 10a) and `card` on 2026-08-30 (PR 10f) — the deck domain, the collection, the
-wishlist, both folder tables and `marketplace`. Nothing in them changed: they were on the right
+**Thirteen modules have moved left**: eleven on 2026-08-29 (PR 10a) — the deck domain, the
+collection, the wishlist, both folder tables and `marketplace` — then `card` (PR 10f) and
+`tags` (PR 10g) on 2026-08-30. **Nothing in the first twelve changed**: they were on the right
 because each file *ends* in a block of `#[tauri::command]` wrappers, and the gate sat on the
-module instead of on the wrappers. See the PR 10a section at the foot of this file.
+module instead of on the wrappers. **`tags` is the exception and the first real split** — its
+ingest half is gated item by item inside an otherwise portable module, because that half
+downloads. See the PR 10a and 10g sections at the foot of this file.
 
 **Four of the exclusions are permanent** (spec §6.3): the plain-text `mirror`, the Rust
 `transfer` writer that exists only for it, the portable `update` swap, and `window`'s Win32
@@ -110,7 +114,7 @@ rewrite and not a port.
 
 **A module's column is a fact about its contents; being *routed* is a separate question.**
 Everything on the left compiles for the target. What the browser can actually call is
-`web::route::COMMANDS`, which is 87 of 152.
+`web::route::COMMANDS`, which is 97 of 152.
 
 `split` is the odd one in the left column. It compiles there and can never succeed —
 every path in it is `std::fs`, which builds for wasm and answers `Unsupported` — and gating it
@@ -349,7 +353,7 @@ of `main` at PR #301 with a 117 606-card corpus. Each nav destination was opened
 | Destination | Works | Missing |
 | --- | --- | --- |
 | **Search** | ✅ | — |
-| Tagger | ❌ | `tag_children` |
+| Tagger | ❌ *(queries routed 2026-08-30 - PR 10g; the two refresh commands are not; not yet driven on the device)* | `tag_children` |
 | Decks | ❌ *(reads routed 2026-08-29 — see PR 10b below; not yet driven on the device)* | `deck_folder_list`, `deck_list` |
 | Collection | ❌ *(routed 2026-08-29 - PR 10d; not yet driven on the device)* | `collection_list` |
 | Wishlist | ❌ *(routed 2026-08-30 - PR 10e; not yet driven on the device)* | `wishlist_list` |
@@ -644,6 +648,53 @@ it is what stops the call being an `unknown command` in the console while the pa
 Two tests: the reported call answering `Lightning Bolt` with its camelCase DTO intact, and an
 unknown id answering `null` rather than an error, which is the shape the pane draws an empty
 state for.
+
+## PR 10g: the Tagger — ten of twelve, and the two left out are the two that download
+
+**Shipped 2026-08-30.** `COMMANDS` reaches **97 of 152**. This is the first destination where
+the module genuinely split rather than simply moving, which is what PR 10a predicted for
+`tags/` and three others.
+
+**Routed (10):** both `*_status`, `oracle_tags_for_cards`, `oracle_tags_for_printings`,
+`tag_search`, `tag_children`, `tag_resolve`, `tags_muted`, `tag_mute`, `tag_unmute`.
+**Not routed (2):** `oracle_tags_refresh`, `art_tags_refresh` — they fetch a bulk file through
+`state.client`, a field wasm's `AppState` does not have, and report progress through an
+`AppHandle`.
+
+**What the ten buy is the documented fallback instead of an error.** A database that has never
+fetched a taxonomy is a supported state — the Tags page "says so and still answers from the
+oracle side" — and the web target could not previously *reach* that state, because
+`tag_children` was an unknown command. Both `*_status` arms now answer honestly on a browser:
+`ingestedAt: null`, `stale: true`, `refreshing: false`.
+
+### `SystemTime::now()` would have panicked the Worker, not failed
+
+`status_of` — which backs both `*_status` commands — called `unix_now()`, and
+**`SystemTime::now()` panics on `wasm32-unknown-unknown`**. Routing the status commands without
+noticing would not have produced an error the page could show; it would have taken the Worker
+down. `tags::now_from(conn)` reads `SELECT unixepoch()` instead, following
+`sync_engine::entitlement::now`, and `unix_now` is now gated as ingest-only. `tag_mute` needed
+the same treatment, because a muted row carries a timestamp.
+
+**This is the sharpest argument yet for the module map's rule about `SystemTime`.** It is in
+`src-tauri/CLAUDE.md` because it is invisible: it compiles, it passes every desktop test, and
+it fails only in a browser, loudly and unrecoverably.
+
+### One assumption the compiler corrected
+
+`Dataset::bulk_name` looked like pure download data and was gated off the web target — wrongly.
+Its own doc says it is *"the `/bulk-data/{name}` entry to check, **and** the `operation` a
+failure is logged under"*, and `is_refreshing(ds.bulk_name)` reads it on the **status** path.
+It is an identity, not a URL. The real problem was only that its *value* came from the gated
+`scryfall`, so each dataset now owns its `BULK_NAME` and **`scryfall` aliases that** rather than
+holding a second copy — one definition, no drift possible.
+
+### Nine items gated as ingest-only
+
+`RefreshGuard` and its `Drop`, `claim`, `temp_path`, `note_failure`, `closure_is_populated`,
+`DOWNLOAD_EMIT_BYTES`, `mark_checked`, `unix_now`. `is_refreshing` stays ungated and always
+answers `false` on a browser, which is correct rather than a stub: nothing there can ever claim
+the registry.
 
 **One test caught its own fixture, which is worth keeping.** The first draft of
 `a_wish_added_through_the_route_is_listed_by_it` sent `{ name, quantity }` and got
