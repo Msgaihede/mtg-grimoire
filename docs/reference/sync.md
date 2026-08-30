@@ -225,7 +225,7 @@ old constant argued the other way — a hostname is often a person's own name an
 to every paired device without anybody choosing to send it — and that cost is real and unchanged:
 `sync_identity.name` is the copy `create_group`, `join_group` and `pairing::accept` all send. What
 pays for it is that a roster a reader cannot act on is the worse failure, and that
-`sync_device_rename` is still one press away on every row that is not removed, this device's own
+`sync_device_rename` is still one press away on every row the panel draws, this device's own
 included. That press is why the panel keeps **Rename** beside the pill rather than replacing it.
 
 **Two dependency notes, because the obvious route for the Android arm does not work here.**
@@ -262,8 +262,13 @@ leaving the key alone would produce an app that says a device is gone while that
 read every op written afterwards. The epoch is what the remaining devices compare, and it is
 bumped in the same breath.
 
-**The removed row is kept rather than deleted**, so the roster can still say who was taken off
-and when, and so a rotation can be explained rather than merely happening.
+**The removed row is kept in `sync_devices` and filtered out of what the panel draws.** It is kept
+because `add_device` clears `revoked_at` on a re-pair and because `baseline::peers_needing` reads
+the mark to skip a peer that will never answer — not so the roster can show history. A reader who
+removed a device asked for it to be gone, and it is gone from the next render of the page.
+
+**The filter is in `pairing::status` and not in `identity::roster`**, because the roster is the
+record and has the two readers above; only the command the panel calls narrows it.
 
 Three refusals, each a sentence rather than a constraint failure:
 
@@ -385,10 +390,13 @@ restore-from-backup is exactly the thing that gets reused.
 six digits are derived from the code with a plain hash and the QR is a picture of the right shape
 rather than a readable code — the workbench has no X25519 and no encoder. What it models
 faithfully is what a panel is drawn against: two blobs carried by hand, one number both readers
-compare, a roster that keeps a removed device on it, and every refusal in the crate's own words.
+compare, a store that keeps a removed device the status command does not answer with, and every
+refusal in the crate's own words.
 
 - **`paired` is a seed**, not a fault: being paired is where a reader arrives after two presses,
-  and it is the only state the roster, a removed row and the key version are reachable from.
+  and it is the only state the roster, a removed row the panel filters away and the key version
+  are reachable from. The seed keeps its removed device precisely so the story asserting its
+  absence on screen is asserting something that could fail.
 - **`pairingReadError` is a fault**, and it lands on `sync_pairing_respond` alone: every other
   way that flow fails is a *shape* the handler raises itself, and what is left is the blob
   failing to open — which in the crate is an AEAD refusing to authenticate, and nothing a person

@@ -74,8 +74,8 @@ deliberately**: no screenshots are stored.
   no database write ever waits on a mirror write.
   **`paired` is a seed and `pairingReadError` is a fault, and the split is `combosMissing`'s
   read from both ends.** Being paired is not something that has gone wrong with a world — it is
-  where a reader arrives after two presses, and the only state the roster, a removed row and the
-  key version are reachable from. What *is* a fault is the one refusal in that flow a reader
+  where a reader arrives after two presses, and the only state the roster, a removed row **the
+  status command filters away** and the key version are reachable from. What *is* a fault is the one refusal in that flow a reader
   cannot produce by typing: every other way it fails is a shape the handler raises itself, and
   what is left is the blob the joining device carries back failing to open.
   **Re-count this list when you add one** — it said "four" for three faults' worth of drift, and

@@ -51,6 +51,12 @@ const REVIEWABLE: [(&str, &str); 6] = [
 /// entitlement, which [`SupporterStatus`] answers. The key stays as a test/dev override, and
 /// putting it on this struct again would put a field on the Settings page that a reader can
 /// only get wrong.
+///
+/// **No `last_error` either, and its absence is the change rather than an omission.** It read
+/// the newest `error_log` row with `source = 'relay'` — a row the Errors panel already draws —
+/// so the panel rendered one failure twice, in two registers, under two headings. The record is
+/// untouched: `errors::record(Source::Relay, …)` still writes every relay failure, and
+/// `client::lapsed` still writes none, for spec §10's reason.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct RelayStatus {
@@ -58,10 +64,6 @@ pub struct RelayStatus {
     /// Ops this device has written and not yet handed over.
     pub pending: i64,
     pub last_sync_at: Option<i64>,
-    /// The most recent relay failure, as the sentence `error_log` holds. `None` once a run has
-    /// succeeded is deliberately **not** the rule — the log is the record, and clearing it is
-    /// the Error log panel's button rather than a side effect of a later success.
-    pub last_error: Option<String>,
     /// Rows carrying a `needs_review` sentence, across all six tables that can.
     pub review_count: i64,
 }
@@ -91,19 +93,10 @@ fn read_status(conn: &Connection) -> Result<RelayStatus, String> {
         )
         .map_err(|e| e.to_string())?;
     let paired = identity::group(conn).map_err(|e| e.to_string())?.is_some();
-    let last_error: Option<String> = conn
-        .query_row(
-            "SELECT message FROM error_log WHERE source = 'relay'
-              ORDER BY last_at DESC LIMIT 1",
-            [],
-            |r| r.get(0),
-        )
-        .ok();
     Ok(RelayStatus {
         paired,
         pending,
         last_sync_at: client::get_state(conn, client::LAST_SYNC_AT).and_then(|v| v.parse().ok()),
-        last_error,
         review_count: review_count(conn)?,
     })
 }
@@ -502,19 +495,27 @@ mod tests {
         assert!(!json.contains("access"));
     }
 
+    /// Neither field the panel used to draw is on the wire any more.
+    ///
+    /// **`lastError` is asserted here because nothing else on this side can see it go.** Both
+    /// literals in this module compare a *whole* `RelayStatus`, and on a fresh database the field
+    /// was `None` either way — so reverting the whole change left all fifteen tests green, which
+    /// is a fence that only fails for the mistake nobody makes. The absence is the claim, so the
+    /// absence is what is asserted. `relayUrl` was already here for the same reason.
     #[test]
-    fn a_relay_status_no_longer_carries_a_url_for_the_reader_to_set() {
-        // The field is gone from Settings; the key survives only as a test/dev override.
+    fn a_relay_status_carries_neither_a_url_nor_a_failure_for_the_panel_to_draw() {
+        // The address survives only as a test/dev override; the failure survives in `error_log`,
+        // which is what the Errors panel reads and what `client::note` still writes to.
         let json = serde_json::to_string(&RelayStatus {
             paired: false,
             pending: 0,
             last_sync_at: None,
-            last_error: None,
             review_count: 0,
         })
         .expect("serialise");
 
         assert!(!json.contains("relayUrl"));
+        assert!(!json.contains("lastError"));
     }
 
     #[test]
@@ -527,7 +528,6 @@ mod tests {
                 paired: false,
                 pending: 0,
                 last_sync_at: None,
-                last_error: None,
                 review_count: 0,
             }
         );

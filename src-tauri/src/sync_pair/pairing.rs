@@ -403,7 +403,15 @@ pub fn status(conn: &Connection) -> Result<PairingStatus, String> {
         device_name: me.name,
         group_id: g.as_ref().map(|g| g.group_id.clone()),
         epoch: g.as_ref().map(|g| g.epoch),
-        devices: identity::roster(conn).map_err(err)?,
+        // **Filtered here rather than in `identity::roster`, which has other readers.** A
+        // removed device is not a row of history the reader asked for; the reader asked for it
+        // to be gone. The roster keeps the mark because `add_device` clears it on a re-pair and
+        // `baseline::peers_needing` reads it — this is only what the panel draws.
+        devices: identity::roster(conn)
+            .map_err(err)?
+            .into_iter()
+            .filter(|d| d.revoked_at.is_none())
+            .collect(),
     })
 }
 
@@ -971,6 +979,37 @@ mod tests {
         assert!(after.group_id.is_some());
         assert_eq!(after.epoch, Some(0));
         assert_eq!(after.devices.len(), 2);
+    }
+
+    /// A removed device is off the list the panel draws, and the roster underneath still has it.
+    ///
+    /// **Two assertions and not one.** `identity::roster` is the record — `add_device` clears
+    /// `revoked_at` on a re-pair and `baseline::peers_needing` reads the mark — so a fix that
+    /// deleted the row would pass a test that only counted what the panel sees, and would quietly
+    /// hand a full baseline to a device that is never going to answer.
+    #[test]
+    fn a_removed_device_is_not_on_the_panels_list() {
+        let conn = db();
+        let me = crate::sync_pair::identity::ensure(&conn).unwrap();
+        crate::sync_pair::identity::create_group(&conn, &me).unwrap();
+        crate::sync_pair::identity::add_device(&conn, "deadbeef", &[7u8; 32], "Phone").unwrap();
+        crate::sync_pair::identity::revoke_device(&conn, "deadbeef").unwrap();
+
+        let drawn = status(&conn).unwrap();
+        assert_eq!(
+            drawn
+                .devices
+                .iter()
+                .map(|d| d.device_id.as_str())
+                .collect::<Vec<_>>(),
+            vec![me.device_id.as_str()],
+            "the removed device is still being drawn"
+        );
+        assert_eq!(
+            crate::sync_pair::identity::roster(&conn).unwrap().len(),
+            2,
+            "the roster itself must keep the row"
+        );
     }
 
     /// The offer carries a QR of the code, and it is the code's own picture.
