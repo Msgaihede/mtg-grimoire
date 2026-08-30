@@ -160,6 +160,23 @@ function parseManifest(text: string, group: string): Record<string, string> {
  * would replace a manifest the relay is holding with an empty one, which is every remaining
  * device reading itself as removed. Ignoring leaves the distribution alone and still re-points
  * the entitlement's mirror, which is the half a re-claim actually needs to change.
+ *
+ * ⚠️ **And `OR IGNORE` alone is not enough, because the key is `(group_id, epoch)` rather than
+ * `group_id`.** A device re-claiming its own group while it is *behind* conflicts with nothing:
+ * it inserts a **second** row at its own older epoch and then re-points `entitlements.group_auth`
+ * at the auth it derived from a key the group has already rotated past. Every device that is
+ * caught up then fails `authIsCurrent` — a 401 on the group door — until somebody rotates again,
+ * and the stale row is meanwhile accepted by `authIsRecent`, so the behind device keeps working
+ * where it is the one that should not.
+ *
+ * That is reachable through the ordinary repair: "reconnect Patreon once" is what a group claimed
+ * before `group_keys` existed has to do, and nothing says which device to do it on. Pressed on
+ * the one that happens to be behind, the repair breaks the devices that were fine.
+ *
+ * **So both statements carry the same guard: this epoch must be at least the highest the group
+ * has.** Behind, the claim still succeeds and still mints a grant — it is a legitimate press by a
+ * paying reader — and simply leaves the group's key registration alone, which is the state that
+ * was already correct.
  */
 export async function seedGroup(
   env: Env,
@@ -167,14 +184,28 @@ export async function seedGroup(
   epoch: number,
   auth: string,
 ): Promise<void> {
-  await env.DB.batch([
-    env.DB.prepare(
-      `INSERT OR IGNORE INTO group_keys (group_id, epoch, auth, keys, created_at)
-       VALUES (?, ?, ?, ?, ?)`,
-    ).bind(group, epoch, auth, "{}", Date.now()),
-    env.DB.prepare(`UPDATE entitlements SET group_epoch = ?, group_auth = ? WHERE group_id = ?`)
-      .bind(epoch, auth, group),
-  ]);
+  // `>=` and not `>`: a re-claim at the epoch the group is already on is the ordinary case, and
+  // it has to reach the `UPDATE` below — the insert is swallowed by `OR IGNORE`, and the mirror
+  // it re-points is the half a re-claim exists to change.
+  await env.DB.prepare(
+    `INSERT OR IGNORE INTO group_keys (group_id, epoch, auth, keys, created_at)
+     SELECT ?, ?, ?, ?, ?
+      WHERE ? >= coalesce((SELECT max(epoch) FROM group_keys WHERE group_id = ?), -1)`,
+  )
+    .bind(group, epoch, auth, "{}", Date.now(), epoch, group)
+    .run();
+
+  // **Read after the insert, so `max(epoch)` includes the row just written.** Seeding at 5 leaves
+  // `5 >= 5`; arriving behind at 1 against a group at 5 leaves `1 >= 5`, and the mirror is left
+  // pointing where it already correctly pointed.
+  await env.DB.prepare(
+    `UPDATE entitlements
+        SET group_epoch = ?, group_auth = ?
+      WHERE group_id = ?
+        AND ? >= coalesce((SELECT max(epoch) FROM group_keys WHERE group_id = ?), -1)`,
+  )
+    .bind(epoch, auth, group, epoch, group)
+    .run();
 }
 
 /**

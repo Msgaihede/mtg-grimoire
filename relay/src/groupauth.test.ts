@@ -138,6 +138,34 @@ describe("seedGroup", () => {
     expect(await currentManifest(env, "g1")).toEqual({ epoch: 1, keys: { desk: "blob" } });
     expect(await authIsCurrent(env, "g1", "auth-1")).toBe(true);
   });
+
+  it("leaves the group alone when the device claiming it is behind", async () => {
+    // ⚠️ **`OR IGNORE` alone does not cover this, because the key is `(group_id, epoch)` and not
+    // `group_id`.** A device re-claiming its own group while behind conflicts with nothing: it
+    // inserts a *second* row at its own older epoch and re-points the entitlement's mirror at an
+    // auth derived from a key the group has already rotated past. Every caught-up device then
+    // 401s on the group door until somebody rotates again — and the stale row is meanwhile
+    // accepted by `authIsRecent`, so the one device that should have stopped keeps working.
+    //
+    // It is reachable through the ordinary repair. "Reconnect Patreon once" is what a group
+    // claimed before `group_keys` existed has to do, and nothing tells the reader which device to
+    // do it on; pressed on the one that is behind, the repair breaks the devices that were fine.
+    const env = fakeEnv("g1");
+    await seedGroup(env, "g1", 0, "auth-0");
+    await recordRotation(env, "g1", 3, "auth-3", { desk: "blob" });
+
+    await seedGroup(env, "g1", 1, "auth-1-stale");
+
+    // The mirror still names the epoch the group is actually on...
+    expect(await authIsCurrent(env, "g1", "auth-3")).toBe(true);
+    expect(await authIsCurrent(env, "g1", "auth-1-stale")).toBe(false);
+    // ...the manifest is untouched...
+    expect(await currentManifest(env, "g1")).toEqual({ epoch: 3, keys: { desk: "blob" } });
+    // ...and no row was written for the stale epoch, so `authIsRecent` cannot honour it either.
+    // Without this line the test passes against an implementation that guards only the UPDATE,
+    // which would leave a device that should have stopped able to reach `/keys`.
+    expect(await authIsRecent(env, "g1", "auth-1-stale")).toBe(false);
+  });
 });
 
 describe("a group the relay has never been told about", () => {

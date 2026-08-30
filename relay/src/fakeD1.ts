@@ -443,9 +443,13 @@ function execute(
     return insertRow(tables, table, row, ignore !== undefined, upsert);
   }
 
-  const insertSelect = /^INSERT INTO (\w+) \(([^)]+)\) SELECT (.+?) WHERE (.+)$/i.exec(text);
+  // `OR IGNORE` is optional here as it is on the VALUES form above. `seedGroup` needs both
+  // halves at once: the `WHERE` refuses an epoch behind the group, and the `OR IGNORE` swallows
+  // the duplicate when a re-claim arrives at the epoch the group is already on.
+  const insertSelect =
+    /^INSERT (OR IGNORE )?INTO (\w+) \(([^)]+)\) SELECT (.+?) WHERE (.+)$/i.exec(text);
   if (insertSelect) {
-    const [, table, columnList, selectList, where] = insertSelect;
+    const [, selectIgnore, table, columnList, selectList, where] = insertSelect;
     const columns = columnList.split(",").map((c) => c.trim());
     const terms = selectList.split(",").map((v) => v.trim());
     if (terms.some((term) => term !== "?")) throw new Error(`fake sql: only ? in SELECT`);
@@ -458,7 +462,7 @@ function execute(
     if (matching(where, [{}], params, terms.length, tables).length === 0) {
       return { results: [], changes: 0 };
     }
-    return insertRow(tables, table, row, false);
+    return insertRow(tables, table, row, selectIgnore !== undefined);
   }
 
   // **`RETURNING` is honoured, and it has to be.** `handleClaim`'s single-use guard is one
