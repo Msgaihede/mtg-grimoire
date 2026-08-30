@@ -151,6 +151,10 @@ pub const COMMANDS: &[&str] = &[
     // Commander Spellbook. `combos_refresh` downloads and is not here.
     "combos_status",
     "combos_for_cards",
+    // The last two gaps, closed. See the arms.
+    "marketplace_feed_status",
+    "import_resolve",
+    "deck_import_commit",
 ];
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -1575,6 +1579,57 @@ pub fn call(
             )
         }
 
+        // ── The last two gaps ───────────────────────────────────────────────────────
+        //
+        // Both were named in this file's own tally as gaps rather than decisions, and both are
+        // closed here. What is left after them is deliberate on every line.
+        //
+        // **`marketplace_feed_status` is a pure query that was stranded in a module that also
+        // downloads** — the same shape `tags` had, and split the same way. The arm maps
+        // `PROVIDERS` over `read_status` exactly as the wrapper does, rather than going
+        // through `status_of`: that helper is the *refresh* path's, and reaching for it here
+        // because the names match would have been the wrong function with the right label.
+        "marketplace_feed_status" => {
+            let conn = crate::sync::lock_db_read(state);
+            // The clock off the connection, for the third time in this file's history:
+            // `SystemTime::now()` panics on wasm rather than failing.
+            let now = conn
+                .query_row("SELECT unixepoch()", [], |r| r.get::<_, i64>(0))
+                .unwrap_or(0);
+            let out: Vec<_> = crate::marketplace_feed::PROVIDERS
+                .iter()
+                .map(|p| crate::marketplace_feed::read_status(&conn, *p, now))
+                .collect();
+            encode(command, out)
+        }
+
+        // **`import`'s two pure halves.** Only `import_read_file` needs the file handle §6.2
+        // specifies; resolving a pasted decklist against the corpus and committing the result
+        // are ordinary SQLite. The page can already paste a list without touching a file, so
+        // these two are the whole of the import that works on this target.
+        "import_resolve" => {
+            let lines: Vec<crate::import::ResolveLine> = field(command, args, "lines")?;
+            let conn = crate::sync::lock_db_read(state);
+            encode(
+                command,
+                crate::import::resolve_lines(&conn, &lines).map_err(RouteError::Failed)?,
+            )
+        }
+
+        "deck_import_commit" => {
+            let deck_id: i64 = field(command, args, "deckId")?;
+            let variant: String = field(command, args, "variant")?;
+            let mode: String = field(command, args, "mode")?;
+            let items: Vec<crate::import::ImportItem> = field(command, args, "items")?;
+            encode(
+                command,
+                crate::sync::with_write(state, |c| {
+                    crate::import::commit_import(c, deck_id, &variant, &mode, &items)
+                })
+                .map_err(RouteError::Failed)?,
+            )
+        }
+
         other => Err(RouteError::Unknown(other.to_owned())),
     }
 }
@@ -2102,7 +2157,7 @@ mod tests {
         }
         assert_eq!(
             COMMANDS.len(),
-            111,
+            114,
             "update this number when a command is added"
         );
     }
