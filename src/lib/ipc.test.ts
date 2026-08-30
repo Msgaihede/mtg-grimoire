@@ -1793,7 +1793,6 @@ describe("pairing", () => {
       paired: false,
       pending: 0,
       lastSyncAt: null,
-      lastError: null,
       reviewCount: 0,
     });
 

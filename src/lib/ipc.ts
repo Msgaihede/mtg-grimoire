@@ -3909,7 +3909,14 @@ export interface PairedDevice {
   deviceId: string;
   name: string;
   addedAt: number;
-  /** A stamp means this device was removed. The row is kept so the panel can say when. */
+  /**
+   * A stamp means this device was removed.
+   *
+   * **The row is kept and the panel does not draw it.** `add_device` clears the stamp on a
+   * re-pair and `baseline::peers_needing` reads it to skip a peer that will never answer, so the
+   * roster keeps the mark for the crate's sake — not so a reader can be shown history they asked
+   * to be rid of. It stays on this type because the column is still on the wire.
+   */
   revokedAt: number | null;
 }
 
@@ -3952,6 +3959,12 @@ export interface PairingSealedKey {
  * one hosted Worker whose address is compiled into the crate, so "sync is off" stopped being
  * *no URL* and became *no entitlement* — {@link SupporterStatus} is the field that answers it,
  * and this struct is only ever about what is waiting and how the last trip went.
+ *
+ * **There is no last-failure field either, and its absence is the change rather than an
+ * omission.** It carried the newest `error_log` row with `source = 'relay'` — a row the Errors
+ * panel further down the same page already draws — so one failure was rendered twice, in two
+ * registers, under two headings. The record is untouched: the crate still logs every relay
+ * failure, and this struct simply stops answering for it.
  */
 export interface RelayStatus {
   paired: boolean;
@@ -3959,11 +3972,6 @@ export interface RelayStatus {
   pending: number;
   /** Unix seconds, or null when no round trip has ever finished. */
   lastSyncAt: number | null;
-  /**
-   * The most recent relay failure, as `error_log` holds it. It is **not** cleared by a later
-   * success: the log is the record, and emptying it is the Error log panel's button.
-   */
-  lastError: string | null;
   /** Rows carrying a `needs_review` sentence, across all six tables that can hold one. */
   reviewCount: number;
 }

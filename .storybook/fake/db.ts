@@ -945,8 +945,10 @@ export interface FakePairedDevice {
   deviceId: string;
   name: string;
   addedAt: number;
-  /** A stamp means this device was removed. The row is **kept**, so the roster can still say
-   *  who was taken off and when — §7.6, and the reason it is not a delete. */
+  /** A stamp means this device was removed, and `sync_pairing_status` filters the row out of
+   *  what it answers. The row is **kept** for the two readers that need the mark rather than so
+   *  the panel can show history: a re-pair clears it, and the baseline trigger reads it to skip
+   *  a peer that will never answer — §7.6, and the reason it is not a delete. */
   revokedAt: number | null;
 }
 
@@ -977,8 +979,9 @@ export interface FakePending {
  * no X25519, no HKDF and no QR encoder, so the six digits are derived from the code with a
  * plain hash and the matrix below is a *picture of the right shape rather than a readable
  * code*. What the fake models faithfully is the part a panel is drawn against: two blobs
- * carried by hand, one number both readers compare, and a roster that keeps a removed device on
- * it. Every refusal these handlers raise is one the crate raises, in its own words.
+ * carried by hand, one number both readers compare, and a store that keeps a removed device the
+ * status command does not answer with. Every refusal these handlers raise is one the crate
+ * raises, in its own words.
  *
  * **The identity is minted here rather than on first read**, which is the one place this
  * diverges from `identity::ensure`: that function writes a row the first time anything asks,
@@ -1281,8 +1284,14 @@ export interface FakeDb {
  * has no network, no envelope and no `sync_ops` table, so {@link pending} is a number a story
  * sets rather than a count of rows — and `sync_now` moves it to zero rather than encrypting
  * anything. What the fake models faithfully is what the panel is drawn against: a `null` outcome
- * meaning there was nothing to do, and an error that survives a later success because the log is
- * the record.
+ * meaning there was nothing to do, and two figures a reader can read off the screen.
+ *
+ * **There is no `lastError` here either, and it went with the paragraph the panel drew from it.**
+ * The field mirrored the newest `error_log` row whose source is `relay` — a row the Errors panel
+ * further down the same page already draws — so this object was standing up a world in which one
+ * failure appeared twice, in two registers, under two headings. The record is untouched: the
+ * crate still writes every relay failure to `error_log`, and `error_log` is where a story that
+ * wants to see one reads it.
  *
  * **There is no `url` here any more and its absence is the change rather than an omission.** The
  * relay became one hosted service whose address is compiled into the crate, so `sync_relay_set_url`
@@ -1295,9 +1304,6 @@ export interface FakeRelay {
   pending: number;
   /** `sync_state.last_sync_at`, unix seconds, or `null` for a device that never finished one. */
   lastSyncAt: number | null;
-  /** The newest `error_log` row whose source is `relay`. **Not cleared by a later success**,
-   *  which is the crate's rule and the one thing about this field worth modelling. */
-  lastError: string | null;
 }
 
 /**
@@ -1821,7 +1827,7 @@ export function makeDb(init: Partial<FakeDb> = {}): FakeDb {
     // Nothing waiting and nothing ever synced. **This no longer says whether sync is on** —
     // that moved to `supporter` below with the address field, so a world switches sync on by
     // connecting a membership rather than by holding a URL.
-    relay: { pending: 0, lastSyncAt: null, lastError: null },
+    relay: { pending: 0, lastSyncAt: null },
     // **Not connected, which is what every installation is in until somebody presses Connect
     // Patreon.** All four fields are the crate's out-of-the-box read: no keys written at all,
     // so the status defaults to `dead`, there is no date, and `membership_ended` is false
@@ -6361,13 +6367,21 @@ export function readHandlers(db: FakeDb) {
      * the shipped command takes the write connection and can answer `BUSY`. This fake mints
      * its identity in {@link makeDb} instead, because a story wants a device id it can assert
      * against — so there is nothing to refuse and it sits with the reads.
+     *
+     * **The removed rows are filtered here and kept in the store, which is `pairing::status`'s
+     * own split.** The crate filters in the command rather than in `identity::roster`, because
+     * the roster has two other readers that need the mark — `add_device` clears it on a re-pair
+     * and `baseline::peers_needing` reads it to skip a peer that will never answer — while the
+     * panel is asking who is in the group *now*. A fake that filtered by deleting the row from
+     * {@link FakePairing.devices} would story the panel against a world where there is nothing
+     * to filter, and the assertion that the removed device is off the screen could not fail.
      */
     sync_pairing_status: (): PairingStatus => ({
       deviceId: db.pairing.deviceId,
       deviceName: db.pairing.deviceName,
       groupId: db.pairing.group?.groupId ?? null,
       epoch: db.pairing.group?.epoch ?? null,
-      devices: db.pairing.devices.map((d) => ({ ...d })),
+      devices: db.pairing.devices.filter((d) => d.revokedAt === null).map((d) => ({ ...d })),
     }),
 
     mirror_status: (): MirrorStatus => ({
@@ -12141,8 +12155,10 @@ export function writeHandlers(db: FakeDb) {
      * `sync_device_revoke` — take a device off the group and rotate the key.
      *
      * **The rotation is the removal**, so the epoch moves in the same breath as the stamp. The
-     * row is kept rather than deleted, and the two refusals are the crate's: this device cannot
-     * remove itself, and an id nobody on the roster answers to rotates nothing.
+     * row is kept rather than deleted — for the mark's two readers, not so the panel can draw
+     * history, which is why {@link readHandlers.sync_pairing_status} then filters it away — and
+     * the two refusals are the crate's: this device cannot remove itself, and an id nobody on
+     * the roster answers to rotates nothing.
      */
     sync_device_revoke: (args: { deviceId: string }): void => {
       refuseIfBusy(db);
@@ -12348,7 +12364,6 @@ function relayStatus(db: FakeDb): RelayStatus {
     paired: db.pairing.group !== null,
     pending: db.relay.pending,
     lastSyncAt: db.relay.lastSyncAt,
-    lastError: db.relay.lastError,
     reviewCount: reviewRows(db).length,
   };
 }

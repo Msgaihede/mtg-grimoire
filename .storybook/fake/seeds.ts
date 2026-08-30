@@ -1786,10 +1786,13 @@ function bracketMismatchSeed(): FakeDb {
  * presses — and every panel state that matters (the roster, a removed row, the key version) is
  * only reachable from it.
  *
- * **The removed device is what earns the third row.** §7.6 keeps a revoked device on the roster
- * rather than deleting it, so the panel has to draw a row that is history rather than a control,
- * and a seed with two live devices could never show it. `epoch: 2` is the consequence of that
- * removal having happened: the rotation *is* the removal.
+ * **The removed device is what earns the third row, and the third row is the one the panel must
+ * not draw.** §7.6 keeps a revoked device in `sync_devices` — `add_device` clears the mark on a
+ * re-pair and `baseline::peers_needing` reads it — and `pairing::status` filters it out of what
+ * the reader sees, so the row has to be *here* for the `Paired` story to be able to assert its
+ * absence on screen. A seed with two live devices would make that assertion pass against a
+ * fixture that could not fail. `epoch: 2` is the consequence of the removal having happened: the
+ * rotation *is* the removal, so the number is a count of them.
  */
 function pairedSeed(): FakeDb {
   const db = starterSeed();
@@ -1815,7 +1818,7 @@ function pairedSeed(): FakeDb {
   // when the *other* device had one (§6.2), and nothing in this world did. What it can come with
   // is something to send, which is the whole of what the Sync panel's *waiting* line and its
   // first round trip are drawn against.
-  db.relay = { pending: 3, lastSyncAt: null, lastError: null };
+  db.relay = { pending: 3, lastSyncAt: null };
   return db;
 }
 
