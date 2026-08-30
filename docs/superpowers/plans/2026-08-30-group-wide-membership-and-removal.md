@@ -1113,3 +1113,50 @@ const CONNECT_ORDER =
 
 - **Spec coverage.** §2.1 → Tasks 5, 8. §2.2 → Tasks 7, 9, 12. §2.3 → Tasks 5, 6, 10. §2.4 → Tasks 10, 11. §2.5 → Tasks 9, 11, 13. §3 → Tasks 1, 2, 3. §4's failure table → the tests named in 6, 7, 9, 10, 11. §5 → every task's own test step plus Task 15's live pass. §6 lists what is deliberately absent.
 - **The one thing the spec asks for that no task fully closes** is the ⚠️ in §2.3 about a claimed-but-never-rotated group. It is covered by Task 6's `/keys` current-epoch test and Task 11's `KeyOutcome::Current` test, and by Task 10's `adopt_epoch` only being called on a strictly higher epoch — three places, none of them a single named test for the empty-manifest case. **Task 11's first test must assert it explicitly**: a group at epoch 0 with an empty manifest leaves every device alone.
+
+---
+
+## Wave findings — read before Task 11
+
+Recorded as each wave landed. These are corrections to this plan, not suggestions.
+
+### From wave 1
+
+- **There is no vitest config in `relay/`.** Relay tests run from the **repo root** through the
+  root vitest's `relay/src/**/*.test.ts` glob. Every `cd relay && npx vitest` in this plan is
+  wrong.
+- **The D1 fake lives at `relay/src/fakeD1.ts`** and exports `fakeEnv(...groups: string[]): Env`.
+  It *evaluates* the SQL rather than matching statement shapes, which is the only reason the
+  monotonic guard's mutation goes red at all. Import it; never write a second. It is not named
+  `*.test.ts` so vitest does not collect it, and nothing in the Worker's entry graph imports it.
+- **`equalsConstantTime` is exported from `groupauth.ts`.** `token.ts`'s copy is private.
+- **`currentManifest` throws** on a manifest that will not parse rather than answering `{}` — an
+  empty manifest at a higher epoch is positive evidence of removal, so `{}` would evict every
+  device in a group nobody was removed from. `handleKeys` lets it 500.
+- ⚠️ **This plan's own `EPOCH_HISTORY` test could not fail.** Its four assertions read identically
+  whether the window was 8 or 9, because epoch 0 is outside both. The assertion that pins the
+  width is `authIsRecent("auth-1") === false`. **Ask of every remaining test what value would make
+  it red**, and prove it by mutation where unsure.
+
+### From wave 2 — Task 11 owns both of these
+
+- ⚠️ **`sync_engine::client::tests::no_grant_means_no_request_at_all` (`client/tests.rs:303`) now
+  fails, and that is the design working.** It uses `paired("dev-a", 0)` — a device in a group with
+  no grant — and asserts no request is made. Spec §2.2 reverses exactly that premise: a paired
+  device with no secret now mints through the group door, and no local signal could gate it,
+  because once Task 12 lands a pairing-joined device holds no status either. **Task 11 reconciles
+  it**: either give the fixture a grant, or invert it into "a device with **no group** and no
+  secret makes no request", which is what `entitlement`'s own
+  `no_group_and_no_secret_is_still_sync_off` already covers.
+- ⚠️ **`entitlement::membership_ended` now reads `true` for a group-entitled device.** It is
+  `refresh_secret.is_none() && SUPPORTER_STATUS.is_some()`, and a device entitled through its group
+  holds a status and no secret. `commands.rs` computes `group_bound = connected || membership_ended`,
+  so the panel would draw *Membership ended* over an `active` status. The `entitled` rename fixes
+  the panel because the first row of §10's table wins — but **the function's name and doc now
+  over-claim** ("the one function that separates the two silences"), and Task 11 should correct
+  them in the same change rather than leave a comment that is no longer true.
+- **`post_for_grant` is generic now** (`<T: DeserializeOwned>`) rather than concrete over `Grant`.
+  The `Grant`/`GroupGrant` split forces it; the plan did not mention it.
+- **`#[serde(default)]` on an `Option<T>` field is decorative** — serde's derive already treats
+  `Option` as optional, proven by mutation. It is documentation, not behaviour, on `Grant.since`
+  as well. Do not rely on removing it to make a test red.

@@ -8,6 +8,7 @@ import {
   reconcile,
 } from "./claim";
 import { required } from "./patreon";
+import { handleKeys, handleRotate } from "./rotate";
 import { verify } from "./token";
 
 /**
@@ -23,6 +24,12 @@ import { verify } from "./token";
  * who guessed a group id could previously only read bytes they cannot open; against a hosted
  * relay they can also spend somebody else's Durable Object requests, which is the line that
  * meters (spec §8).
+ *
+ * **Two of the `/g/…` routes stand ahead of that gate, and the same sentence is why.** `/rotate`
+ * and `/keys` are D1 only and never reach the Durable Object, so nothing they can be made to
+ * spend is on the metered line — and `/keys` in particular has to answer a device whose group
+ * auth is one epoch stale, which is a device that by construction cannot mint a token. Behind
+ * the gate it would refuse exactly the caller it exists to serve. See `rotate.ts`.
  */
 
 export interface Env {
@@ -62,13 +69,15 @@ export interface Env {
  * apply the same rule to the group id in a `/claim` body — see its doc for why the shared
  * string lives on that side.
  */
-const ROUTE = new RegExp(`^/g/(${GROUP_SEGMENT})/(push|pull|ack|ws)$`);
+const ROUTE = new RegExp(`^/g/(${GROUP_SEGMENT})/(push|pull|ack|ws|rotate|keys)$`);
 
 const METHOD: Record<string, string> = {
   push: "POST",
   pull: "GET",
   ack: "POST",
   ws: "GET",
+  rotate: "POST",
+  keys: "GET",
 };
 
 /**
@@ -114,6 +123,14 @@ export default {
     const [, group, action] = match;
     const expected = METHOD[action];
     if (request.method !== expected) return methodNotAllowed(expected);
+
+    // **Ahead of the bearer gate and never behind it, and that is the whole point of these two
+    // routes.** A device that has just been rotated away from cannot mint a token — its auth is
+    // stale — so a `/keys` behind the gate would refuse exactly the caller it exists to serve.
+    // They carry their own credential, they are D1 only, and they never reach the Durable
+    // Object, so nothing metered is exposed by their standing outside it.
+    if (action === "rotate") return handleRotate(request, env, group);
+    if (action === "keys") return handleKeys(request, url, env, group);
 
     // **The gate stands here and not inside the Durable Object, and the reason is the bill.**
     // A request that reaches a DO costs a Durable Object request whether it is honoured or

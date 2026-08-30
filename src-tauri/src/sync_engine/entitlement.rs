@@ -14,9 +14,21 @@
 //!   already issued dies of old age within a day.
 //!
 //! **"Sync is off" has moved from "no URL" to "no entitlement".** [`access_token`] answers
-//! `Ok(None)` when there is no refresh secret — exactly as `client::run_once` already answers
-//! `Ok(None)` for a device in no group, and just as much not an error. That is the state every
-//! existing installation is in.
+//! `Ok(None)` when there is neither a refresh secret nor a group — exactly as `client::run_once`
+//! already answers `Ok(None)` for a device in no group, and just as much not an error. That is
+//! the state every existing installation is in.
+//!
+//! **A group is half of that test because an entitlement belongs to a *group*, not to a device**
+//! (spec §2.2). [`access_token`] has two doors: the refresh secret opens one, and
+//! [`crypto::relay_auth`] — one-way from the group key, so every device in the group derives it
+//! and nothing is distributed — opens the other. A device that has only ever paired mints its own
+//! token through the second, which is what makes *Supporting since …* appear on every device in
+//! the group rather than on whichever one happened to open a browser. **The refresh secret stops
+//! travelling in the pairing blob** in the same change, and that is not a tidy-up: a device
+//! holding it could re-register the group's auth and evict the devices that removed it.
+//!
+//! **The two doors fail differently on the same status code**, which is the sharpest thing in
+//! this module: see [`STALE_GROUP_AUTH`].
 //!
 //! **A 401 is a sentence, not an `error_log` row** (spec §10). When the relay refuses the refresh
 //! secret the membership has ended: the grant is cleared and the panel offers the connect button
@@ -40,8 +52,9 @@
 //! there.
 
 use crate::sync_engine::client;
-use crate::sync_pair::identity;
+use crate::sync_pair::{crypto, identity};
 use rusqlite::Connection;
+use serde::de::DeserializeOwned;
 use serde::Deserialize;
 
 /// The relay's address. **Real, and committed to a public repository on purpose.**
@@ -148,6 +161,24 @@ pub const SECONDS_CEILING: i64 = 100_000_000_000;
 /// should have. This module reads the group and never makes one.
 pub const NO_GROUP: &str = "this device is in no sync group yet";
 
+/// What the **group door** answers when the relay refuses this device's group auth.
+///
+/// **A 401 here is not a lapse, and that is the whole reason this constant exists.** The group
+/// auth is derived from the group key ([`crypto::relay_auth`]), so a rotation this device has not
+/// caught up with produces *exactly* the refusal a cancelled membership does — same status, same
+/// body, same everything. [`revoke`]ing on it would tell a reader their membership ended because
+/// a **sibling device removed somebody an hour ago**, which is the wrong sentence about the wrong
+/// event, and it would clear a grant that is still good.
+///
+/// So the two are told apart out of band rather than guessed at: the caller asks `/keys`, which
+/// accepts an auth up to eight epochs old, and learns which of the two it is — a device merely
+/// behind gets a blob and adopts it, a device that was removed is not on the manifest at all.
+/// Only a second refusal, with the epoch confirmed current, is a lapse.
+///
+/// **Named so `client` can act on it without matching a sentence.** The wording is a reader's
+/// sentence and may be reworded; the comparison is against this constant.
+pub const STALE_GROUP_AUTH: &str = "the relay did not recognise this device's group key";
+
 /// Every key this module owns. [`clear`] deletes the lot.
 const GRANT_KEYS: [&str; 5] = [
     ACCESS_TOKEN,
@@ -175,6 +206,31 @@ struct Grant {
     status: String,
     /// Absent for a membership the relay cannot date. `Option` rather than a sentinel, because
     /// "no date" and "1970" must not draw the same. Unix seconds, like `expires`.
+    #[serde(default)]
+    since: Option<i64>,
+}
+
+/// What the **group door** answers: [`Grant`] without the refresh secret.
+///
+/// **A separate struct rather than an `Option<String>` on [`Grant`], and the omission is the
+/// point rather than an economy.** A device that reached `/token` by proving it is in the group
+/// has proved nothing about the Patreon account behind it; handing it the credential that can
+/// re-register the group auth would make every paired device able to evict every other one,
+/// which is the failure `pairing.rs` dropping the secret from its blob exists to prevent. So the
+/// field is not merely unread here — the relay never sends it.
+///
+/// The second reason is local: [`store_grant`] refuses an empty refresh secret today and should
+/// keep refusing one, because an access token with no refresh secret beside it reads as
+/// disconnected everywhere in this module. A guard that catches a real mistake must not be
+/// weakened to accommodate a case that is not one, so this path writes through [`store_access`]
+/// instead and the guard stands.
+#[derive(Debug, Clone, Deserialize)]
+struct GroupGrant {
+    access: String,
+    /// **Unix seconds**, [`Grant::expires`]' rule and [`SECONDS_CEILING`]'s reason — the same
+    /// relay, counting in milliseconds throughout, converting at the same boundary.
+    expires: i64,
+    status: String,
     #[serde(default)]
     since: Option<i64>,
 }
@@ -253,6 +309,35 @@ pub fn store_grant(
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     client::set_state(&tx, ACCESS_TOKEN, access).map_err(|e| e.to_string())?;
     client::set_state(&tx, REFRESH_SECRET, refresh).map_err(|e| e.to_string())?;
+    client::set_state(&tx, ACCESS_EXPIRES, &expires.to_string()).map_err(|e| e.to_string())?;
+    tx.commit().map_err(|e| e.to_string())
+}
+
+/// Store a token the **group door** minted, and the moment it dies.
+///
+/// **Two keys, and never [`REFRESH_SECRET`] — the absence is the whole function.** A device
+/// entitled through its group has no Patreon-side secret and must not appear to have one: every
+/// read in this module treats holding that key as "this device connected", so writing anything
+/// there would send the next [`access_token`] through the refresh door with a value the relay has
+/// never minted — a 401 that *is* read as a lapse, ending a membership that never ended. Writing
+/// the *access* token there would be worse still, because it expires in a day and the sentence
+/// the reader gets is *Membership ended*.
+///
+/// [`store_grant`]'s two guards, for [`store_grant`]'s reasons: a blank token is refused because
+/// every read here calls a blank absent, and a millisecond `expires` is refused because
+/// [`SECONDS_CEILING`] describes a failure that is silent and permanent.
+///
+/// The two writes go in one transaction. Neither half alone is a catastrophe — a token with no
+/// expiry refreshes on every call, an expiry with no token refreshes once — but they are one
+/// fact, and a half-written one leaves the margin comparison describing a token that is not
+/// there.
+pub fn store_access(conn: &Connection, access: &str, expires: i64) -> Result<(), String> {
+    if access.trim().is_empty() {
+        return Err("the relay answered a blank token".to_owned());
+    }
+    let expires = checked_seconds("expires", expires)?;
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    client::set_state(&tx, ACCESS_TOKEN, access).map_err(|e| e.to_string())?;
     client::set_state(&tx, ACCESS_EXPIRES, &expires.to_string()).map_err(|e| e.to_string())?;
     tx.commit().map_err(|e| e.to_string())
 }
@@ -389,12 +474,19 @@ fn http() -> reqwest::Client {
 /// `POST {base}{path}` with a JSON body, answering the grant the relay minted.
 ///
 /// `Ok(None)` is a **401 and nothing else**: the relay refused the credential. What that costs is
-/// the caller's decision, and neither caller records it anywhere.
-async fn post_for_grant(
+/// the caller's decision, and no caller records it anywhere — and the three callers now disagree
+/// about that cost completely: `/claim`'s 401 is a refused press, `/token`'s refresh door is a
+/// lapse, and `/token`'s group door is [`STALE_GROUP_AUTH`], which is neither.
+///
+/// **Generic over the answer because `/token` has two doors that answer two shapes** — [`Grant`]
+/// and [`GroupGrant`] — and the difference is one absent field. A single struct with an
+/// `Option<String>` would have made the two indistinguishable at the type level, which is exactly
+/// the distinction [`store_grant`]'s blank-secret guard rests on.
+async fn post_for_grant<T: DeserializeOwned>(
     conn: &Connection,
     path: &str,
     body: String,
-) -> Result<Option<Grant>, String> {
+) -> Result<Option<T>, String> {
     let url = format!("{}{path}", base(conn));
     let response = http()
         .post(&url)
@@ -420,19 +512,34 @@ async fn post_for_grant(
 
 /// The token to put in `Authorization: Bearer …`, refreshing it first if it is close to dying.
 ///
-/// Three answers, and only one of them is an error:
+/// **Two doors, and which one this device uses is decided by what it holds** (spec §2.2). The
+/// refresh door is for the device that pressed Connect; the group door is for **every other
+/// device in its group**, which is how "if any device in a group is supporting, all of them are"
+/// stopped being something pairing happened to carry and became a property of the protocol. A
+/// device holding both a secret and a group takes the refresh door, because that is the door
+/// that can also re-mint the secret.
 ///
-/// * **`Ok(None)`, no refresh secret** — sync is off. Not an error; it is where every existing
-///   installation stands.
-/// * **`Ok(None)`, a 401 from `/token`** — the membership has ended. The grant is [`revoke`]d, so
-///   the panel offers the connect button *and* can still say which of the two silences this is,
-///   and no `error_log` row is written (spec §10).
+/// Four answers, and only two of them are errors:
+///
+/// * **`Ok(None)`, no refresh secret *and* no group** — sync is off. Not an error; it is where
+///   every existing installation stands.
+/// * **`Ok(None)`, a 401 from the refresh door** — the membership has ended. The grant is
+///   [`revoke`]d, so the panel offers the connect button *and* can still say which of the two
+///   silences this is, and no `error_log` row is written (spec §10).
+/// * **`Err(STALE_GROUP_AUTH)`, a 401 from the group door** — which is *not* the same event, and
+///   nothing is cleared. See that constant.
 /// * **`Err`** — the relay could not be reached, or answered something else. A network failure is
 ///   a network failure and the caller reports it.
 pub async fn access_token(conn: &Connection) -> Result<Option<String>, String> {
-    let Some(refresh) = refresh_secret(conn) else {
+    let refresh = refresh_secret(conn);
+    let group = identity::group(conn).map_err(|e| e.to_string())?;
+    // **Neither is sync off, and it is the one silence this module answers rather than reports.**
+    // A device in a group is now worth a request even with no secret of its own, so the guard
+    // that used to be "no refresh secret" had to widen — but not to nothing, or a device that has
+    // neither paired nor connected would post to the relay on every press.
+    if refresh.is_none() && group.is_none() {
         return Ok(None);
-    };
+    }
     let stored = client::get_state(conn, ACCESS_TOKEN).filter(|t| !t.trim().is_empty());
     let expires: Option<i64> = client::get_state(conn, ACCESS_EXPIRES).and_then(|v| v.parse().ok());
     if let (Some(token), Some(expires)) = (stored, expires) {
@@ -442,12 +549,52 @@ pub async fn access_token(conn: &Connection) -> Result<Option<String>, String> {
             return Ok(Some(token));
         }
     }
+    match (refresh, group) {
+        (Some(refresh), _) => refresh_door(conn, &refresh).await,
+        (None, Some(group)) => group_door(conn, &group).await,
+        // Unreachable past the guard above, and **answered rather than panicked**: this arm and
+        // that guard mean the same thing, so the only cost of stating it twice is two lines,
+        // where an `unreachable!()` would put a panic in a network path to save one of them.
+        (None, None) => Ok(None),
+    }
+}
+
+/// Trade the long-lived secret for the next access token. Today's path, unchanged.
+///
+/// A 401 is a **lapse**: the relay deletes the refresh secret when a membership ends, so a
+/// refusal here is the relay saying there is nothing left to trade.
+async fn refresh_door(conn: &Connection, refresh: &str) -> Result<Option<String>, String> {
     let body = serde_json::json!({ "refresh": refresh }).to_string();
-    let Some(grant) = post_for_grant(conn, "/token", body).await? else {
+    let Some(grant) = post_for_grant::<Grant>(conn, "/token", body).await? else {
         revoke(conn)?;
         return Ok(None);
     };
     store_grant(conn, &grant.access, &grant.refresh, grant.expires)?;
+    store_status(conn, &grant.status, grant.since)?;
+    Ok(Some(grant.access))
+}
+
+/// Mint a token by proving membership of the group, with no Patreon-side secret at all.
+///
+/// The proof is [`crypto::relay_auth`], one-way from the group key — so every device in the group
+/// derives the same value, nothing is distributed, and the relay learns nothing it could use to
+/// open a single envelope. The answer carries `status` and `since` as well as the token, which is
+/// what lets a freshly paired device draw *Supporting since …* dated rather than the dateless
+/// line pairing used to leave it with.
+///
+/// **A 401 is [`STALE_GROUP_AUTH`] and clears nothing** — read that constant before changing this
+/// line to a [`revoke`], because the two failures it conflates are a cancelled membership and a
+/// sibling device having removed somebody an hour ago.
+///
+/// The grant is written through [`store_access`] and never [`store_grant`]: there is no refresh
+/// secret in this answer and this device must not appear to hold one.
+async fn group_door(conn: &Connection, group: &identity::Group) -> Result<Option<String>, String> {
+    let auth = crypto::relay_auth(&group.group_key, &group.group_id, group.epoch);
+    let body = serde_json::json!({ "group": group.group_id, "auth": auth }).to_string();
+    let Some(grant) = post_for_grant::<GroupGrant>(conn, "/token", body).await? else {
+        return Err(STALE_GROUP_AUTH.to_owned());
+    };
+    store_access(conn, &grant.access, grant.expires)?;
     store_status(conn, &grant.status, grant.since)?;
     Ok(Some(grant.access))
 }
@@ -474,8 +621,25 @@ pub async fn claim(conn: &Connection, code: &str) -> Result<(), String> {
     let Some(group) = identity::group(conn).map_err(|e| e.to_string())? else {
         return Err(NO_GROUP.to_owned());
     };
-    let body = serde_json::json!({ "code": code, "group": group.group_id }).to_string();
-    let Some(grant) = post_for_grant(conn, "/claim", body).await? else {
+    // **Four fields, and the two new ones are what register the group's relay key** (spec §2.1).
+    // A claim is the only moment the relay is ever told about a group, so it is the only place
+    // the first `relay_auth` can be seeded — and `recordRotation` will accept nothing but a
+    // *strictly higher* epoch afterwards, which means a claim that registered nothing leaves a
+    // group whose auth no device can ever match and whose rotations are all refused.
+    //
+    // **The relay refuses a body missing either one with a 400**, so this is not belt and braces:
+    // sending the old two-field body makes every Connect press fail with `malformed claim`, on a
+    // route whose whole job is the reader's first contact with the service.
+    let body = serde_json::json!({
+        "code": code,
+        "group": group.group_id,
+        "epoch": group.epoch,
+        "auth": crypto::relay_auth(&group.group_key, &group.group_id, group.epoch),
+    })
+    .to_string();
+    // `/claim` answers the **full** [`Grant`]: a claim is the one moment the refresh secret is
+    // minted, so this is the door that must receive one.
+    let Some(grant) = post_for_grant::<Grant>(conn, "/claim", body).await? else {
         return Err("the relay refused that claim code".to_owned());
     };
     store_grant(conn, &grant.access, &grant.refresh, grant.expires)?;
@@ -926,11 +1090,28 @@ mod tests {
         // token yet, that is the point of the call - so the body is the only channel there is. A
         // claim without it mints a token matching no group, and the reader connects Patreon
         // successfully and then finds every sync request 401ing for ever.
+        //
+        // **The epoch and the auth are the same argument one turn further on** (spec 2.1). They
+        // register the group's relay key, and a claim is the only moment the relay is ever told
+        // about a group - so a body without them leaves a group whose auth no device can match,
+        // and `recordRotation` refuses anything but a strictly higher epoch afterwards. The relay
+        // answers 400 to a body missing either, so the failure is every Connect press.
+        //
+        // **The expected auth is DERIVED here rather than written down**, from the fixture's own
+        // key, id and epoch. A hex literal would pass against a `claim` that derived its auth from
+        // the wrong epoch just as happily, because the literal would have been copied from
+        // whatever the code produced on the day it was written.
         let server = MockServer::start_async().await;
+        let expected_auth = crypto::relay_auth(&[0u8; 32], "grp-1", 0);
         let mock = server.mock(|when, then| {
             when.method(POST)
                 .path("/claim")
-                .json_body(serde_json::json!({ "code": "ABCD-1234", "group": "grp-1" }));
+                .json_body(serde_json::json!({
+                    "code": "ABCD-1234",
+                    "group": "grp-1",
+                    "epoch": 0,
+                    "auth": expected_auth,
+                }));
             then.status(200).body(
                 r#"{"access":"a1","refresh":"r1","expires":1756000000,
                     "status":"active","since":1740000000}"#,
@@ -1092,6 +1273,210 @@ mod tests {
             client::get_state(&conn, ACCESS_EXPIRES).as_deref(),
             Some("1900000000")
         );
+    }
+
+    // -----------------------------------------------------------------------------------
+    // The group door
+    // -----------------------------------------------------------------------------------
+
+    /// The group `db_in_a_group` seeds, spelled out so the expectations below do not read
+    /// themselves off the database the code under test read.
+    ///
+    /// A `zeroblob(32)` key, group `grp-1`, epoch `0`. Every one of the three is written
+    /// literally here, so an implementation that derived the auth from the wrong epoch — the
+    /// mistake `relay_auth`'s own doc calls the one the relay's monotonic check depends on — is
+    /// a body the mock does not match.
+    fn seeded_group_auth() -> String {
+        crate::sync_pair::crypto::relay_auth(&[0u8; 32], "grp-1", 0)
+    }
+
+    #[tokio::test]
+    async fn a_device_with_no_secret_mints_through_the_group_door() {
+        // **The whole of spec item 3.** Before this, reaching the relay needed a token, a token
+        // needed the refresh secret, and the refresh secret travelled only in a pairing blob - so
+        // a reader who paired first and connected second had a second device that could never
+        // become entitled. This device holds no secret at all and mints one anyway, on nothing
+        // but the group key every paired device already has.
+        let server = MockServer::start_async().await;
+        let mock = server.mock(|when, then| {
+            when.method(POST)
+                .path("/token")
+                .json_body(serde_json::json!({ "group": "grp-1", "auth": seeded_group_auth() }));
+            then.status(200).body(
+                r#"{"access":"a1","expires":1900000000,
+                    "status":"active","since":1740000000}"#,
+            );
+        });
+        let conn = db_in_a_group(&server);
+
+        let token = access_token(&conn).await.expect("minted");
+
+        mock.assert();
+        assert_eq!(token.as_deref(), Some("a1"));
+        assert_eq!(
+            client::get_state(&conn, ACCESS_TOKEN).as_deref(),
+            Some("a1")
+        );
+        assert_eq!(
+            client::get_state(&conn, ACCESS_EXPIRES).as_deref(),
+            Some("1900000000")
+        );
+        // `status` and `since` have no local source at all, so without them the panel could say
+        // "connected" and never "supporting since March" - which is the dateless line pairing
+        // used to leave a joined device holding, and the reason the group door answers them.
+        assert_eq!(
+            supporter_state(&conn),
+            ("active".to_owned(), Some(1_740_000_000))
+        );
+        // **And no refresh secret was invented.** One written here would send the next call
+        // through the refresh door with a value the relay never minted - a 401 that *is* read as
+        // a lapse, ending a membership that never ended.
+        assert_eq!(refresh_secret(&conn), None);
+    }
+
+    #[tokio::test]
+    async fn a_401_on_the_group_door_is_not_a_lapse_and_clears_nothing() {
+        // **The assertion this whole task turns on.** The group auth is derived from the group
+        // key, so a rotation this device has not caught up with produces exactly the refusal a
+        // cancelled membership does. `revoke`ing on it tells a reader their membership ended
+        // because a *sibling device removed somebody an hour ago* - the wrong sentence about the
+        // wrong event, over a grant that is still perfectly good.
+        let server = MockServer::start_async().await;
+        let mock = server.mock(|when, then| {
+            when.method(POST).path("/token");
+            then.status(401).body("");
+        });
+        let conn = db_in_a_group(&server);
+        // A device that is already entitled through its group: a token past its margin, so the
+        // door is really asked, and the status a previous successful mint left behind. Without
+        // these the deletion assertions below would pass under the mutation - `revoke`'s `clear`
+        // half deletes nothing from an empty row set.
+        store_access(&conn, "a1", 0).expect("a stale token");
+        store_status(&conn, "active", Some(1_740_000_000)).expect("status");
+
+        let error = access_token(&conn)
+            .await
+            .expect_err("a refusal, not a lapse");
+
+        mock.assert();
+        assert_eq!(error, STALE_GROUP_AUTH);
+        // `revoke` writes ("dead", None). Each of these three is red under it, and the third is
+        // the one a reader would see: the date under *Supporting since* disappearing.
+        assert_eq!(
+            supporter_state(&conn),
+            ("active".to_owned(), Some(1_740_000_000))
+        );
+        assert_eq!(
+            client::get_state(&conn, ACCESS_TOKEN).as_deref(),
+            Some("a1"),
+            "nothing was concluded, so nothing may be thrown away"
+        );
+        assert_eq!(
+            client::get_state(&conn, SUPPORTER_SINCE).as_deref(),
+            Some("1740000000")
+        );
+    }
+
+    #[tokio::test]
+    async fn no_group_and_no_secret_is_still_sync_off() {
+        // Where every existing installation stands, and it is not an error. The group half of
+        // the guard is new; the device half is not, and a widening that forgot the second half
+        // would have every device that has neither paired nor connected posting to the relay on
+        // every press. No mock is registered beyond the catch-all, so a request of any shape at
+        // all fails this.
+        let server = MockServer::start_async().await;
+        let never = server.mock(|when, then| {
+            when.any_request();
+            then.status(500).body("this must never be asked for");
+        });
+        let conn = db_with_no_group();
+        client::set_state(&conn, client::RELAY_URL, &server.base_url()).expect("override");
+
+        assert_eq!(access_token(&conn).await.expect("not an error"), None);
+
+        never.assert_calls(0);
+    }
+
+    #[test]
+    fn the_group_door_answers_four_fields_and_never_a_refresh_secret() {
+        // Pinning the shape without a server, `Grant`'s test one struct over. **The absent field
+        // is the point rather than an economy**: a device that reached `/token` by proving it is
+        // in the group has proved nothing about the Patreon account, and handing it the
+        // credential that can re-register the group auth would let every paired device evict
+        // every other one.
+        let body = r#"{"access":"a1","expires":1900000000,"status":"active","since":1740000000}"#;
+
+        let grant: GroupGrant = serde_json::from_str(body).expect("the four-field grant");
+
+        assert_eq!(grant.access, "a1");
+        assert_eq!(grant.expires, 1_900_000_000);
+        assert_eq!(grant.status, "active");
+        assert_eq!(grant.since, Some(1_740_000_000));
+        // Seconds, said out loud: the same instant in milliseconds is three orders of magnitude
+        // past the ceiling, and this wire comes from a relay that counts in them.
+        assert!(grant.expires < SECONDS_CEILING);
+
+        // A membership the relay cannot date, and the field is absent rather than null - the
+        // shape a `JSON.stringify` of an undefined field takes.
+        let dateless = r#"{"access":"a1","expires":1900000000,"status":"grace"}"#;
+        let grant: GroupGrant = serde_json::from_str(dateless).expect("a grant with no since");
+        assert_eq!(grant.since, None);
+    }
+
+    #[test]
+    fn store_access_writes_two_keys_and_never_the_refresh_secret() {
+        // **The absence is the function.** `store_grant` refuses a blank refresh secret and must
+        // go on refusing one, so the group door cannot go through it - and this is what it goes
+        // through instead. Writing REFRESH_SECRET here would make a device the relay minted a
+        // group token for look like a device that connected Patreon, and it would take the
+        // refresh door from then on with a value that door has never seen.
+        let held = db();
+        store_grant(&held, "a1", "r1", 1_756_000_000).expect("store");
+
+        store_access(&held, "a2", 1_900_000_000).expect("store_access");
+
+        assert_eq!(
+            client::get_state(&held, ACCESS_TOKEN).as_deref(),
+            Some("a2")
+        );
+        assert_eq!(
+            client::get_state(&held, ACCESS_EXPIRES).as_deref(),
+            Some("1900000000")
+        );
+        assert_eq!(
+            refresh_secret(&held).as_deref(),
+            Some("r1"),
+            "the secret this device connected with must survive a group-door mint"
+        );
+
+        // And on the device this path is actually for, which holds no secret at all: none may
+        // appear. This half is red under a mutation that writes REFRESH_SECRET *anything*,
+        // where the half above only catches one that overwrites.
+        let none_held = db();
+        store_access(&none_held, "a3", 1_900_000_000).expect("store_access");
+
+        assert_eq!(refresh_secret(&none_held), None);
+        assert_eq!(client::get_state(&none_held, REFRESH_SECRET), None);
+    }
+
+    #[test]
+    fn store_access_refuses_a_millisecond_expiry_and_a_blank_token() {
+        // `SECONDS_CEILING`'s failure, reached through the new path: `expires - now` becomes
+        // ~1.8e12, forever past the six-hour margin, so the token is never refreshed and every
+        // sync 401s a day later on a route that cannot re-mint. The relay half of this feature
+        // counts in milliseconds throughout, and it is the same relay answering both doors.
+        let conn = db();
+
+        let error = store_access(&conn, "a1", 1_900_000_000_000).expect_err("refused");
+
+        assert!(error.contains("milliseconds"), "{error}");
+        assert_eq!(client::get_state(&conn, ACCESS_TOKEN), None);
+        assert_eq!(client::get_state(&conn, ACCESS_EXPIRES), None);
+
+        // A blank is absent to every read in this module, so storing one would leave the device
+        // silently not connected while SUPPORTER_STATUS still said `active`.
+        assert!(store_access(&conn, "   ", 1_900_000_000).is_err());
+        assert_eq!(client::get_state(&conn, ACCESS_EXPIRES), None);
     }
 
     #[test]
