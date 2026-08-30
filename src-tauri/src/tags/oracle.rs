@@ -26,9 +26,11 @@
 //! fallback, and it is what the app did before this file existed.
 
 use super::{read_tags_keyed, Dataset, TagStatus};
+#[cfg(not(target_family = "wasm"))]
 use crate::sync::AppState;
 use rusqlite::Connection;
 use serde::Serialize;
+#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// The event a refresh reports itself through.
@@ -57,8 +59,16 @@ pub const REFRESH_INTERVAL_SECS: i64 = 7 * 86_400;
 ///
 /// The one place the oracle taxonomy's tables, columns and schedule are written down;
 /// everything above and below reaches [`super`] through it.
+/// Scryfall's name for this bulk entry, **and this dataset's `operation` in `error_log`**.
+///
+/// It lives here rather than in [`crate::scryfall`] because it is read on every target: it is
+/// the key [`super::is_refreshing`] answers a status query from, so a browser needs it even
+/// though a browser never downloads the file it names. `scryfall` aliases this rather than
+/// holding its own, so the two cannot drift.
+pub const BULK_NAME: &str = "oracle_tags";
+
 pub const ORACLE: Dataset = Dataset {
-    bulk_name: crate::scryfall::BULK_ORACLE_TAGS,
+    bulk_name: BULK_NAME,
     label: "Oracle tags",
     subject_column: "oracle_id",
     tags_table: "oracle_tags",
@@ -189,6 +199,7 @@ const BY_PRINTING_ID: &str = "SELECT c.id, t.slug
 /// Download the Oracle Tags file if it has changed and rebuild the taxonomy from it.
 ///
 /// `force` skips the weekly throttle, not the ETag check.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn oracle_tags_refresh(
     state: tauri::State<'_, Arc<AppState>>,
@@ -206,6 +217,7 @@ pub async fn oracle_tags_refresh(
 ///
 /// `async`, and answered on the blocking pool, because a sync command body runs inline on the
 /// IPC thread and this takes `db_read`'s mutex.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn oracle_tags_status(
     state: tauri::State<'_, Arc<AppState>>,
@@ -221,6 +233,7 @@ pub async fn oracle_tags_status(
 ///
 /// Read through `db_read` like every other read, so a decklist import answers during a sync
 /// rather than queueing behind the ingest.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn oracle_tags_for_cards(
     state: tauri::State<'_, Arc<AppState>>,
@@ -241,6 +254,7 @@ pub async fn oracle_tags_for_cards(
 ///
 /// This is the one most of the app wants: a quick add, every drag source and a resolved
 /// decklist line all hold a printing id, and `CardSummary` carries no oracle id at all.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn oracle_tags_for_printings(
     state: tauri::State<'_, Arc<AppState>>,
@@ -255,6 +269,7 @@ pub async fn oracle_tags_for_printings(
     .map_err(|e| format!("could not read the tags: {e}"))?
 }
 
+#[cfg(not(target_family = "wasm"))]
 /// Refresh the taxonomy at startup if it is due.
 ///
 /// **Silent, best-effort and never blocking** — [`super::refresh_if_due`]'s contract. The
