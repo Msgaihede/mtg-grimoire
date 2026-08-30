@@ -355,10 +355,10 @@ of `main` at PR #301 with a 117 606-card corpus. Each nav destination was opened
 | Destination | Works | Missing |
 | --- | --- | --- |
 | **Search** | ✅ | — |
-| Tagger | ❌ *(queries routed 2026-08-30 - PR 10g; the two refresh commands are not; not yet driven on the device)* | `tag_children` |
-| Decks | ❌ *(reads routed 2026-08-29 — see PR 10b below; not yet driven on the device)* | `deck_folder_list`, `deck_list` |
-| Collection | ❌ *(routed 2026-08-29 - PR 10d; not yet driven on the device)* | `collection_list` |
-| Wishlist | ❌ *(routed 2026-08-30 - PR 10e; not yet driven on the device)* | `wishlist_list` |
+| Tagger | ✅ *(queries routed 10g, driven 2026-08-30; the two refresh commands stay desktop-only)* | `tag_children` |
+| Decks | ✅ *(routed 10b/10c, driven on the phone 2026-08-30)* | `deck_folder_list`, `deck_list` |
+| Collection | ✅ *(routed 10d, driven 2026-08-30)* | `collection_list` |
+| Wishlist | ✅ *(routed 10e, driven 2026-08-30)* | `wishlist_list` |
 | Settings | ❌ *(routed 2026-08-30 - PR 10h, except `update_history` which is one of the permanent ten; not yet driven on the device)* | `update_history`, `tags_muted`, `error_log_list` |
 | The card pane, from Search | ❌ *(routed 2026-08-30 - PR 10f, the bug that started all of this; not yet driven on the device)* | `card_detail` — *"Could not read this card — unknown command `card_detail`"* |
 
@@ -734,6 +734,62 @@ and one command later: it was gated *and* called `unix_now()`, so routing `combo
 against it would have panicked the Worker. Its clock now comes off the connection too. **Two
 modules, one day, the same latent crash** — which is the argument for the module map's rule
 being stated as a rule rather than left to be noticed.
+
+## Driven on the phone, 2026-08-30: every destination works, and the pass found one bug
+
+**OnePlus, Chrome 152, portrait, 360×696, against a production build of PR 10's whole queue with
+the 117 606-card corpus already in OPFS.** Each nav destination opened in turn and its `main`
+scraped for `unknown command`, then a card tapped from the wall.
+
+| Destination | Before PR 10 | After |
+| --- | --- | --- |
+| Search | ✅ | ✅ |
+| Tagger | `tag_children` | ✅ *"No tags picked yet"* — the documented never-fetched state |
+| Decks | `deck_folder_list`, `deck_list` | ✅ folder tree and `All decks 0` |
+| Collection | `collection_list` | ✅ `Cards 0` |
+| Wishlist | `wishlist_list` | ✅ `Wishes 0` |
+| Settings | `update_history`, `tags_muted`, `error_log_list` | ✅ |
+| The card pane | **`card_detail`** | ✅ formats, printings, artist, both printings priced |
+
+**The reported bug is fixed on hardware**: tapping a card opens the pane with its legality list,
+`PRINTINGS`, the artist, two printings with set, year and price, and the Scryfall attribution.
+
+### The one thing the pass found that no test could
+
+**`update_history` was still on screen** — the only `unknown command` left in the app after 114
+commands were routed — printed on the Settings page, where §6.3's ten desktop-only commands are
+supposed to be *hidden rather than broken*.
+
+Three things were wrong and each hid the next:
+
+- **`SettingsPage` rendered `UpdatePanel` unconditionally.** Now `!isWebTarget()`.
+- **`useReleaseHistory` ran unconditionally**, which is what produced the visible error. Now
+  `enabled: !isWebTarget()`, and `loading` reads `fetchStatus !== "idle"` because a disabled
+  TanStack v5 query stays `pending` for ever and would otherwise report "loading" permanently.
+- **`useUpdate` polled `update_status` every minute for the life of the tab** and swallowed each
+  failure in a `catch` whose comment explains why one failure does not matter. Now it returns
+  early on the web target.
+
+**The panel's own guard could not have caught this, and that is the general lesson.** It tests
+`installKind === "managed"` — an answer from `update_status`, which is *itself* desktop-only. On
+a browser that answer never arrives, so the panel concluded it was **not** managed and drew the
+controls. **A feature gated on a backend answer is ungated wherever the backend cannot answer**,
+which is the opposite of the intended reading, and it is invisible to every test that has a
+backend.
+
+### Two operational notes, both of which cost time here
+
+- **The service worker served the previous build and the first sweep read exactly like a failed
+  port** — all six destinations still reporting the same `unknown command`s as before PR 10. It
+  was the PWA shell doing its job. Clearing `caches` and unregistering the worker, then
+  reloading, is what showed the new bundle; the **shell cache's build id is the tell**
+  (`grimoire-shell-<id>`), and it changing is proof the reload took.
+- **`navigator.serviceWorker.getRegistrations()[].unregister()` can hang** over CDP once a new
+  worker is waiting. Closing the tab and opening a fresh one is the reliable move, and it is also
+  the flow the app's own update actually uses.
+- **OPFS is untouched by any of that.** The 117 606-row corpus survived every cache clear and
+  every reload — a different storage API, so a shell-cache bust costs nothing but a re-fetch of
+  the bundle.
 
 ## Where PR 10 got to: 114 of 154 routed, and what the other 40 are
 
