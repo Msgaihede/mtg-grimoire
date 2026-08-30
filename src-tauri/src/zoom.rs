@@ -34,10 +34,12 @@
 //!
 //! No migration: `app_meta` is schema v6's key/value table, and this is a key in it.
 
+#[cfg(not(target_family = "wasm"))]
 use crate::sync::AppState;
 use rusqlite::Connection;
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
+#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// The `app_meta` key. The table is the *application's*, deliberately not `sync_meta` — a row in
@@ -145,6 +147,7 @@ pub fn store(conn: &Connection, section: &str, zoom: f64) -> Result<(), String> 
 /// `#[tauri::command(async)]` rather than a bare sync command: a sync body runs inline on the IPC
 /// thread, and this one takes `db_read`'s mutex, which a search may hold for tens of milliseconds
 /// — and this is called while the window is drawing its first frame.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command(async)]
 pub fn card_zoom(state: tauri::State<'_, Arc<AppState>>) -> BTreeMap<String, f64> {
     stored(&crate::sync::lock_db_read(state.inner()))
@@ -158,6 +161,7 @@ pub fn card_zoom(state: tauri::State<'_, Arc<AppState>>) -> BTreeMap<String, f64
 /// this function: the frontend writes on a trailing timer after a gesture has stopped, so a BUSY
 /// during a first-run sync costs the reader nothing they can see this session and only the next
 /// launch's starting size. Nothing on screen would be improved by saying so.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn set_card_zoom(
     state: tauri::State<'_, Arc<AppState>>,

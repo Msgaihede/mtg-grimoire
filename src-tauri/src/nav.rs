@@ -38,8 +38,10 @@
 //! — and this is a key in a table that has existed since v6. A preference that needed a schema
 //! step would be a preference that could fail a launch.
 
+#[cfg(not(target_family = "wasm"))]
 use crate::sync::AppState;
 use rusqlite::Connection;
+#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// The `app_meta` key.
@@ -104,6 +106,7 @@ pub fn store(conn: &Connection, collapsed: bool) -> Result<(), String> {
 /// — and this is called while the window is drawing its first frame. It is not an `async fn`
 /// because Tauri requires a `Result` from one that borrows `State`, and a `Result` here would be a
 /// failure mode this call does not have.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command(async)]
 pub fn nav_collapsed(state: tauri::State<'_, Arc<AppState>>) -> bool {
     stored(&crate::sync::lock_db_read(state.inner()))
@@ -116,6 +119,7 @@ pub fn nav_collapsed(state: tauri::State<'_, Arc<AppState>>) -> bool {
 /// about this function: the frontend writes optimistically and keeps the reader's choice for the
 /// session either way, so a BUSY during a first-run sync costs them nothing they can see now and
 /// only the next launch's starting state. Nothing on screen would be improved by saying so.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn set_nav_collapsed(
     state: tauri::State<'_, Arc<AppState>>,
