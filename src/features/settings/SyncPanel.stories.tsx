@@ -42,7 +42,12 @@ const meta = {
           "**Nor is there a Patreon.** The fake mints a claim code's answer rather than " +
           "exchanging one, so what these stories hold still is the thing that matters here: " +
           "that *not connected*, *payment problem* and *membership ended* are three " +
-          "different sentences, and that only one of them takes sync away.",
+          "different sentences, and that only one of them takes sync away.\n\n" +
+          "**A membership belongs to the group and not to the device that paid for it** " +
+          "(spec §2.2). Every device in a group with a live membership mints its own relay " +
+          "token from the group key, holding nothing Patreon ever issued — so the second " +
+          "device reads *Supporting since …* with no Connect button, in either pairing order. " +
+          "`SupportingThroughTheGroup` is that state, and it is the one this panel drew wrong.",
       },
     },
   },
@@ -412,6 +417,52 @@ export const Supporting: Story = {
     await expect(canvas.getByRole("button", { name: /sync now/i })).toBeInTheDocument();
     // ...and the advice about *which* device to connect on goes with the press it was about.
     await expect(canvas.queryByText(/pair this one to them first/i)).not.toBeInTheDocument();
+  },
+};
+
+/**
+ * **The second device — supporting on somebody else's membership, and never asked to connect.**
+ *
+ * This is the reader's own bug report (2026-08-30) and spec §2.2's answer to it. A phone paired
+ * to a desktop whose reader pays holds **no refresh secret at all**: the pairing blob stopped
+ * carrying one, because a device that holds it could re-register the group auth and evict the
+ * devices that removed it. What it holds instead is the group key, and `crypto::relay_auth` is
+ * one-way from that — so `/token`'s second door mints this device a token of its own, and the
+ * answer carries `status` and `since` with it. Hence a **dated** *Supporting since …* rather
+ * than the dateless *Supporting. Thank you.* the old sealed grant left behind.
+ *
+ * **What this story exists to hold still is the button that is not there.** *Connect Patreon*
+ * drawn here is the whole of what the reader reported: a supporter told, on every device but
+ * the one they pressed it on, that they are not connected. The sentence alone would not catch
+ * it — the bug drew *Not connected* **and** the button, so a story asserting only the absence of
+ * the button, or only the presence of the sentence, would pass against half of it.
+ *
+ * **It is a fault rather than a press for `patreonLapsed`'s reason**: the entitlement is another
+ * device's and it reaches this one over a relay the workbench has not got. It differs from that
+ * lapse in exactly one stored field — `active` against `dead` — which is why `db.ts` derives
+ * `entitled` instead of storing it.
+ */
+export const SupportingThroughTheGroup: Story = {
+  parameters: { fake: { seed: "paired", fault: "patreonGroupEntitled" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await expect(await canvas.findByText(/supporting since/i)).toBeInTheDocument();
+    // **The half the bug got wrong.** Both presses of the `offering` block are gone: the button
+    // and the field it sits above, because neither has anything to do on a device that is
+    // already covered.
+    await expect(canvas.queryByRole("button", { name: /connect patreon/i })).not.toBeInTheDocument();
+    await expect(canvas.queryByLabelText(/claim code/i)).not.toBeInTheDocument();
+    await expect(canvas.queryByText(/not connected/i)).not.toBeInTheDocument();
+    // ...nor the lapse, which is the state this one is a single stored field away from.
+    await expect(canvas.queryByText(/membership ended/i)).not.toBeInTheDocument();
+    // And it can sync, which is what the group door was built to give it — the difference
+    // between a panel that merely reads right and a device that actually works.
+    await expect(canvas.getByRole("button", { name: /sync now/i })).toBeInTheDocument();
+    // The advice about which device to connect on goes with the press it was about.
+    await expect(canvas.queryByText(/pair this one to them first/i)).not.toBeInTheDocument();
+    // Still in the group it is entitled through, at the key version the removal left.
+    await expect(canvas.getByText(/key version 2/i)).toBeInTheDocument();
   },
 };
 

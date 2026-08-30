@@ -1827,7 +1827,7 @@ describe("pairing", () => {
 
   it("sends the claim code under `code`", async () => {
     invoke.mockResolvedValue({
-      connected: true,
+      entitled: true,
       status: "active",
       since: 1_756_000_000,
       groupBound: true,
@@ -1836,20 +1836,29 @@ describe("pairing", () => {
     const supporter = await ipc.syncPatreonClaim("PQRS-TVWX-YZ01");
 
     expect(invoke).toHaveBeenCalledWith("sync_patreon_claim", { code: "PQRS-TVWX-YZ01" });
-    expect(supporter.connected).toBe(true);
+    expect(supporter.entitled).toBe(true);
   });
 
   /**
-   * **Four fields, `camelCase`, and `groupBound` is the one worth an assertion of its own.**
+   * **Four fields, `camelCase`, and two of them are worth an assertion of their own.**
+   *
    * The Rust is `group_bound` under `#[serde(rename_all = "camelCase")]`, and it is the only
    * signal separating *Membership ended* from *Not connected* — a lapse clears the refresh
-   * secret **and** the date, so `connected`, `status` and `since` all read exactly as they do on
-   * a device out of the box. A mirror that misspelled this one field would leave every lapsed
+   * secret **and** the date, so `entitled`, `status` and `since` all read exactly as they do on
+   * a device out of the box. A mirror that misspelled that one field would leave every lapsed
    * reader told they had never connected, with nothing red anywhere.
+   *
+   * ⚠️ **`entitled` is the second, and it is here because this file is the only fence there
+   * is.** The crate renamed `connected` → `entitled` in spec §2.5 and this hand-written mirror
+   * kept the old spelling for a wave: TypeScript compiled, every test passed, and
+   * `status.connected` was `undefined` in the shipped window — so `supporterState` fell to
+   * *Not connected* and drew **Connect Patreon at a paid-up supporter on every device but one**.
+   * Naming the field in a mock is what makes the next such rename a red build; a mock that keeps
+   * an old spelling is green for ever.
    */
-  it("reads the supporter status with no arguments, and names groupBound in camelCase", async () => {
+  it("reads the supporter status with no arguments, and names its fields in camelCase", async () => {
     invoke.mockResolvedValue({
-      connected: false,
+      entitled: false,
       status: "dead",
       since: null,
       groupBound: true,
@@ -1860,6 +1869,35 @@ describe("pairing", () => {
     expect(invoke).toHaveBeenCalledWith("sync_supporter_status");
     expect(supporter.groupBound).toBe(true);
     expect(supporter.since).toBeNull();
+    // Named rather than inferred: a DTO that stopped carrying this field would answer
+    // `undefined`, which is falsy and would satisfy a `toBeFalsy()` written for tidiness.
+    expect(supporter.entitled).toBe(false);
+  });
+
+  /**
+   * The other half of the same fence, and **it is a compile-time assertion rather than a
+   * runtime one**.
+   *
+   * A mirror that carried *both* names — the rename made as an addition — would satisfy every
+   * assertion above while a call site went on reading the dead one. Nothing at runtime can
+   * catch that: `invoke` is mocked here, so `Object.keys` would only ever report the keys this
+   * file's own fixture wrote, which is an assertion reading its own constant. `@ts-expect-error`
+   * is the check that bites — it fails the build when the line **stops** being an error, which
+   * is precisely the day `connected` comes back.
+   */
+  it("carries no `connected` field, which is the name that was renamed away", async () => {
+    invoke.mockResolvedValue({
+      entitled: true,
+      status: "active",
+      since: 1_756_000_000,
+      groupBound: true,
+    });
+
+    const supporter = await ipc.syncSupporterStatus();
+
+    // @ts-expect-error `connected` became `entitled` in spec §2.5. If this stops erroring the
+    // dead name is back on the interface and a call site can read it again.
+    expect(supporter.connected).toBeUndefined();
   });
 
   it("syncs now with no arguments, and null is not a failure", async () => {

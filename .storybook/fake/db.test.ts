@@ -10,6 +10,7 @@ import { invoke, registerCommands, resetCommands } from "./core";
 import {
   ART_TAGGED_PRINTINGS,
   ORACLE_TAGGED_NAMES,
+  SUPPORTING_SINCE,
   allHandlers,
   applySupporterFault,
   artTagIllustrations,
@@ -5642,8 +5643,12 @@ describe("the membership", () => {
   };
 
   it("opens not connected, which is what every install answers", () => {
+    // `toEqual` and never `toMatchObject`: the field this asserts was renamed `connected` →
+    // `entitled` (spec §2.5), and a partial match would have gone on passing against a DTO
+    // that had silently stopped carrying it — which is exactly how the rename reached the
+    // shipped window as `undefined`.
     expect(writeHandlers(makeDb()).sync_supporter_status()).toEqual({
-      connected: false,
+      entitled: false,
       status: "dead",
       since: null,
       groupBound: false,
@@ -5661,7 +5666,7 @@ describe("the membership", () => {
     const status = writeHandlers(lapsed()).sync_supporter_status();
 
     expect(status).toEqual({
-      connected: false,
+      entitled: false,
       status: "dead",
       since: null,
       groupBound: true,
@@ -5671,15 +5676,88 @@ describe("the membership", () => {
     expect(status.since).toBeNull();
   });
 
-  /** §7.2: a declined card is a state, not an ending — still connected, still dated, and the
+  /** §7.2: a declined card is a state, not an ending — still entitled, still dated, and the
    *  one supporter state where sync is expected to keep working. */
-  it("keeps a declined card connected and dated", () => {
+  it("keeps a declined card entitled and dated", () => {
     expect(writeHandlers(declined()).sync_supporter_status()).toMatchObject({
-      connected: true,
+      entitled: true,
       status: "grace",
       groupBound: true,
     });
     expect(writeHandlers(declined()).sync_supporter_status().since).not.toBeNull();
+  });
+
+  /**
+   * **The second device — spec §2.2, and the reader's item 3.**
+   *
+   * It has connected nothing: no refresh secret, no claim code ever pasted here. What it holds
+   * is a `supporter_status` written by `/token`'s group door, and `entitled` is *derived* from
+   * that rather than stored — which is the whole assertion. A fake that kept `entitled` as a
+   * fourth stored boolean could set it either way and this would prove nothing.
+   *
+   * **It differs from a lapse in exactly one field**, which the next test says as a pair, and it
+   * is the difference between drawing *Supporting since …* and drawing **Connect Patreon at a
+   * paid-up supporter on every device but one**.
+   */
+  it("makes a device entitled through its group without a secret of its own", () => {
+    const db = makeDb({ fault: "patreonGroupEntitled" });
+    applySupporterFault(db);
+
+    // The row half: this device holds nothing Patreon ever gave it. Written as an assertion
+    // rather than left to the fault, because a fault that quietly set it would story the
+    // *first* device and could never fail the bug this exists for.
+    expect(db.supporter.refreshSecret).toBe(false);
+    expect(writeHandlers(db).sync_supporter_status()).toEqual({
+      entitled: true,
+      status: "active",
+      since: SUPPORTING_SINCE,
+      groupBound: true,
+    });
+  });
+
+  /**
+   * The pair, side by side — **`status` is the only field between them.**
+   *
+   * Both hold no refresh secret and both are `groupBound`. Reading entitlement off the secret
+   * alone collapses them into the lapse, which is the shipped bug; reading it off "a status row
+   * exists" collapses every fresh install into the supporter, which takes the Connect button
+   * away from the one panel that needs it. Only `active`/`grace` against `dead` gets both.
+   */
+  it("tells a group-entitled device from a lapse on the status alone", () => {
+    const entitled = makeDb({ fault: "patreonGroupEntitled" });
+    applySupporterFault(entitled);
+    const ended = lapsed();
+
+    expect(entitled.supporter.refreshSecret).toBe(ended.supporter.refreshSecret);
+    expect(entitled.supporter.groupBound).toBe(ended.supporter.groupBound);
+    expect(writeHandlers(entitled).sync_supporter_status().entitled).toBe(true);
+    expect(writeHandlers(ended).sync_supporter_status().entitled).toBe(false);
+  });
+
+  /** ...and the half that is behaviour rather than a sentence: the second device syncs. Gated
+   *  on the refresh secret it would answer `null` here, which is the panel drawing *sync is
+   *  off* under a membership somebody is paying for. */
+  it("syncs on a group entitlement, with no secret on this device", () => {
+    const db = seed("paired");
+    db.fault = "patreonGroupEntitled";
+    applySupporterFault(db);
+
+    expect(db.supporter.refreshSecret).toBe(false);
+    expect(writeHandlers(db).sync_now()).toMatchObject({ pushed: 3 });
+  });
+
+  /** A second device may still connect a membership of its own, because it has claimed
+   *  nothing — the refusal is spent codes, not covered devices. */
+  it("still lets a group-entitled device claim a membership of its own", () => {
+    const db = seed("paired");
+    db.fault = "patreonGroupEntitled";
+    applySupporterFault(db);
+
+    expect(writeHandlers(db).sync_patreon_claim({ code: "PQRS-TVWX-YZ01" })).toMatchObject({
+      entitled: true,
+      status: "active",
+    });
+    expect(db.supporter.refreshSecret).toBe(true);
   });
 
   it("answers a URL for Connect Patreon and opens nothing", () => {
@@ -5696,7 +5774,7 @@ describe("the membership", () => {
     const db = makeDb();
 
     expect(writeHandlers(db).sync_patreon_claim({ code: " pqrs-tvwx-yz01 " })).toMatchObject({
-      connected: true,
+      entitled: true,
       status: "active",
       groupBound: true,
     });
