@@ -536,6 +536,41 @@ of 152, and the same reason `deck_meta.rs` is **19** commands rather than 20.
 `None` pattern made the `match` non-exhaustive, so the *compiler* caught it and the test never
 ran. A mutation has to leave the code compiling, or it measures rustc rather than the suite.
 
+## PR 10c: the Decks write path — `COMMANDS` reaches 50, and the deck cluster is done
+
+**Shipped 2026-08-29.** Thirty-three more arms, so the whole deck cluster is routed except one.
+`COMMANDS` is **50 of 152**.
+
+**`deck_set_cover_image` is the eleventh name on §6.3's desktop-only list**, and it is not
+"not yet": it writes a file into a covers directory, and `deck::set_cover_image` does not
+compile for wasm at all. Every *other* covers-touching command routes, because `delete_deck`
+and `duplicate_deck` take `covers: Option<&Path>` and web passes `None` — the answer that
+parameter was shaped for.
+
+### `with_write`, and a guard that only guards one target
+
+Every write arm goes through `crate::sync::with_write`, never `lock_db_read`.
+`a_deck_created_through_the_route_is_there_when_the_route_is_asked_again` catches the
+substitution — measured, it fails with *"attempt to write a readonly database"*.
+
+**But that guard is a desktop guard, and this is the caveat to know before trusting the green
+suite.** On the desktop `db_read` is `SQLITE_OPEN_READ_ONLY`, so the mistake is loud. **On wasm
+`lock_db_read` hands back the write connection** — this module's own header says so — so the
+same arm would commit happily there and cost only what `with_write` adds: the busy answer and
+the cross-file fence. `cargo test` runs on the desktop, so the test is real; it is simply not
+running on the target the bug would ship to.
+
+The assertion is a **read-back through the route**, not an `is_ok()`, for the related reason: a
+command that answered `Ok` and committed nothing would satisfy the weaker check forever.
+
+### One helper stopped being dead
+
+`deck_undo::apply_reversal` was one of the nine private helpers PR 10a marked
+`#[cfg_attr(target_family = "wasm", allow(dead_code))]` on the argument that they were what
+`web::route` would call next. It is now `pub(crate)` with two real callers and the attribute is
+gone — which is the intended lifecycle of that marker rather than an exception to it. **Eight
+remain**, and each is a command not yet routed.
+
 **Three families are not that shape** and need a browser mechanism that does not exist yet:
 `import`/`export`'s file handles (spec §6.2 already specifies `<input type=file>` and a `Blob`
 download), and `reset`'s OPFS deletion.
