@@ -1160,3 +1160,39 @@ Recorded as each wave landed. These are corrections to this plan, not suggestion
 - **`#[serde(default)]` on an `Option<T>` field is decorative** — serde's derive already treats
   `Option` as optional, proven by mutation. It is documentation, not behaviour, on `Grant.since`
   as well. Do not rely on removing it to make a test red.
+
+### From wave 3 — controller decisions Task 11 must follow
+
+- ⚠️ **`leave_group` clears pairing state only; the CALLER clears the grant.** Task 10's interface
+  said "clears `sync_group` and `sync_devices`, keeps `sync_identity`" while spec §2.4 said the
+  grant keys go too. Both are right under one reading and that reading is now binding: `identity`
+  owns pairing state and must not reach into `entitlement`, so **Task 11's `KeyOutcome::Removed`
+  calls `identity::leave_group` *and* `entitlement::clear`**.
+
+  **The grant must go, and the reason is the whole of item 2.** A removed device that keeps its
+  refresh secret keeps a *working credential for the group it was removed from*: the refresh door
+  mints a token whose `grp` is that group, and `/g/{group}/push` honours it. The key rotation stops
+  it reading anything new, but it could still spend the group's requests — which makes the removal
+  cosmetic at the relay, exactly the failure the reader reported.
+
+  **`clear` and never `revoke`.** The two differ by the mark `membership_ended` reads. Nothing
+  ended: the reader's Patreon membership is untouched and this device simply left a group. `revoke`
+  would draw *Membership ended* and §7.1's reassurance paragraph at somebody whose pledge is fine.
+  `clear` draws *Not connected*, and reconnecting is one press.
+
+- **`revoke_device` still exists as a three-line shim** (`plan_rotation` → `commit_rotation`, no
+  relay). Task 10 could not delete it without breaking `pairing.rs:606`, which it did not own.
+  **Task 11 deletes it and rewires `sync_device_revoke`** — left standing it is precisely the bug
+  this PR exists to end: a rotation that reaches nobody.
+
+- **Two tests outside Task 10's file are red and Task 11 owns both:**
+  - `sync_pair::pairing::tests::a_removed_device_is_not_on_the_panels_list` (`pairing.rs`) —
+    PR 1 asserted `roster().len() == 2`, "the roster itself must keep the row". Spec §2.3 reverses
+    that. Invert it **and rewrite its doc comment**, which argues that deleting the row would
+    "quietly hand a full baseline to a device that is never going to answer" — no longer true,
+    since `peers_needing` reads `WHERE revoked_at IS NULL` and a deleted row satisfies it.
+  - `sync_engine::client::tests::no_grant_means_no_request_at_all` — see the wave 2 note above.
+
+- **The plan's test sketches named two symbols wrongly**, both confirmed by Task 10:
+  `join_group` is `(conn, group_id: &str, epoch: i64, key: &[u8; 32], me: &Identity)`, and **`Op`
+  derives no `Default`** — build it by hand, and `Hlc` lives in `sync_engine::hlc`, not `merge`.
