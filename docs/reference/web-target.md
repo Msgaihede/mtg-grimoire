@@ -77,13 +77,14 @@ the real 43-column one, `raw` included**.
   `Cross-Origin-Opener-Policy: same-origin` + `Cross-Origin-Embedder-Policy: require-corp` and
   it passed both ways. **Do not add those headers**, and do not let a future service worker
   re-attach them.
-- **Ninety-seven commands of 152**, as of 2026-08-30. The first four are the browse —
+- **111 commands of 154**, as of 2026-08-30. The first four are the browse —
   `sync_status`, `search_cards`, `list_sets`, `facet_cards` — which is the read path spec §8
   wanted measured in wasm rather than guessed. The rest are the Decks destination (PR 10b's
   thirteen reads and 10c's thirty-three writes), the Collection (10d's seventeen), the
-  Wishlist (10e's fourteen), the card pane (10f's six) and the Tagger (10g's ten of twelve).
-  Adding one, once its module is in the map, is a line in `web::route::COMMANDS` and a
-  `match` arm.
+  Wishlist (10e's fourteen), the card pane (10f's six), the Tagger (10g's ten of twelve) and
+  Settings (10h's fourteen). Adding one, once its module is in the map, is a line in
+  `web::route::COMMANDS` and a `match` arm. **What the remaining 43 are, and why none of
+  them is an oversight, is tabulated at the foot of this file.**
 
   ⚠️ **This is not the intended end state.** Decided 2026-08-29, after the phone layout made
   the boundary visible: **all of them but ten**, by destination, worst broken first. The survey,
@@ -96,11 +97,12 @@ the real 43-column one, `raw` included**.
 
 | Compiled for wasm | Desktop/Android only |
 | --- | --- |
-| `app_meta` · `card` · `card_row` · `collection` · `collection_alloc` · `collection_folders` · `collection_source` · `combos` · `db` · `deck` · `deck_audit` · `deck_meta` · `deck_theory` · `deck_undo` · `errors` · `feed` · `filters` · `image_uri` · `index` · `ingest` · `legalities` · `maintenance` · `marketplace` · `schema` · `search` · `slug` · `sorting` · `split` · `sync` · `sync_engine` · `sync_pair` · `tags` · `web` · `wishlist` · `wishlist_folders` | `export` · `flatten` · `images` · `import` · `listview` · `marketplace_feed` · `mirror` · `nav` · `paths` · `picked` · `reconcile` · `reset` · `scryfall` · `transfer` · `update` · `window` · `zoom` |
+| `app_meta` · `card` · `card_row` · `collection` · `collection_alloc` · `collection_folders` · `collection_source` · `combos` · `db` · `deck` · `deck_audit` · `deck_meta` · `deck_theory` · `deck_undo` · `errors` · `feed` · `filters` · `flatten` · `listview` · `image_uri` · `index` · `ingest` · `legalities` · `maintenance` · `marketplace` · `schema` · `search` · `slug` · `nav` · `sorting` · `split` · `sync` · `sync_engine` · `sync_pair` · `tags` · `web` · `wishlist` · `wishlist_folders` · `zoom` | `export` · `images` · `import` · `marketplace_feed` · `mirror` · `paths` · `picked` · `reconcile` · `reset` · `scryfall` · `transfer` · `update` · `window` |
 
-**Thirteen modules have moved left**: eleven on 2026-08-29 (PR 10a) — the deck domain, the
+**Seventeen modules have moved left**: eleven on 2026-08-29 (PR 10a) — the deck domain, the
 collection, the wishlist, both folder tables and `marketplace` — then `card` (PR 10f) and
-`tags` (PR 10g) on 2026-08-30. **Nothing in the first twelve changed**: they were on the right
+`tags` (PR 10g), and the four view-state modules `flatten`, `listview`, `nav` and `zoom`
+(PR 10h), all on 2026-08-30. **Nothing in the first twelve changed**: they were on the right
 because each file *ends* in a block of `#[tauri::command]` wrappers, and the gate sat on the
 module instead of on the wrappers. **`tags` is the exception and the first real split** — its
 ingest half is gated item by item inside an otherwise portable module, because that half
@@ -114,7 +116,7 @@ rewrite and not a port.
 
 **A module's column is a fact about its contents; being *routed* is a separate question.**
 Everything on the left compiles for the target. What the browser can actually call is
-`web::route::COMMANDS`, which is 97 of 152.
+`web::route::COMMANDS`, which is 111 of 154.
 
 `split` is the odd one in the left column. It compiles there and can never succeed —
 every path in it is `std::fs`, which builds for wasm and answers `Unsupported` — and gating it
@@ -357,7 +359,7 @@ of `main` at PR #301 with a 117 606-card corpus. Each nav destination was opened
 | Decks | ❌ *(reads routed 2026-08-29 — see PR 10b below; not yet driven on the device)* | `deck_folder_list`, `deck_list` |
 | Collection | ❌ *(routed 2026-08-29 - PR 10d; not yet driven on the device)* | `collection_list` |
 | Wishlist | ❌ *(routed 2026-08-30 - PR 10e; not yet driven on the device)* | `wishlist_list` |
-| Settings | ❌ | `update_history`, `tags_muted`, `error_log_list` |
+| Settings | ❌ *(routed 2026-08-30 - PR 10h, except `update_history` which is one of the permanent ten; not yet driven on the device)* | `update_history`, `tags_muted`, `error_log_list` |
 | The card pane, from Search | ❌ *(routed 2026-08-30 - PR 10f, the bug that started all of this; not yet driven on the device)* | `card_detail` — *"Could not read this card — unknown command `card_detail`"* |
 
 **Nothing regressed.** `web/route.rs`'s own doc has always said so: *"This is a first slice and not
@@ -711,3 +713,52 @@ download), and `reset`'s OPFS deletion.
 pane, Tagger, Settings — so that every PR makes one nav destination genuinely work and can be
 driven on the phone. It front-loads the deck domain, which is the biggest cluster and where the
 surprises will be, and that is deliberate.
+
+## PR 10h: Settings — `COMMANDS` reaches 111, and every destination is routed
+
+**Shipped 2026-08-30.** Fourteen arms: the four view-state pairs (`nav`, `zoom`, `listview`,
+`flatten`, all four modules moved left), both `error_log` commands, both `marketplace` ones,
+and Commander Spellbook's two queries.
+
+**`error_log_list` and `error_log_clear` live in `desktop.rs`**, which can never compile for
+wasm — it is the Tauri app's own setup. Nothing needed lifting: they are thin over
+`errors::list`/`errors::clear`, and `errors` has been ungated all along.
+
+**`set_marketplace` routes to `store`, not to `set_marketplace_now`.** That wrapper is `store`
+plus `state.mirror.mark_all()`, because changing the marketplace changes what every mirrored
+CSV would say — and a browser has no plain-text mirror to re-render. The pure half is the whole
+of the feature on this target rather than a reduced version of it.
+
+**`combos::status_of` had the same `SystemTime::now()` trap `tags` did**, found the same way
+and one command later: it was gated *and* called `unix_now()`, so routing `combos_status`
+against it would have panicked the Worker. Its clock now comes off the connection too. **Two
+modules, one day, the same latent crash** — which is the argument for the module map's rule
+being stated as a rule rather than left to be noticed.
+
+## Where PR 10 got to: 111 of 154 routed, and what the other 43 are
+
+Counted 2026-08-30 by walking every `#[tauri::command]` in the crate — both attribute
+spellings, skipping doc-comment mentions — and diffing against `COMMANDS`. **The crate is 154
+now, not the 152 measured on 2026-08-29**: the hosted-relay work added two.
+
+| | |
+| --- | --- |
+| Commands in the crate | **154** |
+| Routed | **111** |
+| Not routed | **43** |
+
+**The 43, and none of them is an oversight:**
+
+| Count | What | Why not |
+| --- | --- | --- |
+| **16** | `sync_pair/pairing` (9) and `sync_engine/commands` (7) | The pairing and membership surface. `lib.rs` states `pairing` "does not and never will" compile for wasm; the relay work is live and moving, so this is its own decision rather than a port |
+| **7** | `desktop.rs` | The five §6.3 updater commands, `update_status`, and `sync_run` — the web target runs its own ingest through `glue.rs` |
+| **5** | `reset.rs` (4) and `deck_set_cover_image` | OPFS deletion, and a covers directory a browser has none of |
+| **4** | `mirror/settings.rs` | §6.3: a mirror in OPFS cannot be read by the programs a mirror exists for |
+| **4** | `import`/`export` file handles | `import_read_file` and `export_write_file` need §6.2's `<input type=file>` and `Blob`. **`import_resolve` and `deck_import_commit` do not and are a genuine gap** — the next thing to route |
+| **4** | The four `*_refresh` (oracle tags, art tags, combos, marketplace feed) | Each downloads through `state.client` |
+| **2** | `images.rs` | The byte cache is Cache Storage on web — a rewrite, not a port |
+| **1** | `marketplace_feed_status` | **The second genuine gap.** A pure query stranded in a module that also downloads; needs `tags`' split |
+
+**So two real gaps remain** — `marketplace_feed_status`, and `import`'s two pure halves — and
+they are written down here rather than left in the 43.

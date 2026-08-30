@@ -29,10 +29,12 @@
 //!   to answer one question.
 //! * **No migration**: `app_meta` is schema v6's key/value table, and this is a key in it.
 
+#[cfg(not(target_family = "wasm"))]
 use crate::sync::AppState;
 use rusqlite::Connection;
 use serde_json::{Map, Value};
 use std::collections::BTreeMap;
+#[cfg(not(target_family = "wasm"))]
 use std::sync::Arc;
 
 /// The `app_meta` key. The table is the *application's*, deliberately not `sync_meta` — a row in
@@ -116,6 +118,7 @@ pub fn store(conn: &Connection, section: &str, flattened: bool) -> Result<(), St
 /// reason: a sync body runs inline on the IPC thread, and this one takes `db_read`'s mutex, which
 /// a search may hold for tens of milliseconds — and this is called while the window is drawing its
 /// first frame.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command(async)]
 pub fn flatten_state(state: tauri::State<'_, Arc<AppState>>) -> BTreeMap<String, bool> {
     stored(&crate::sync::lock_db_read(state.inner()))
@@ -129,6 +132,7 @@ pub fn flatten_state(state: tauri::State<'_, Arc<AppState>>) -> BTreeMap<String,
 /// reason: the frontend writes optimistically and keeps the reader's choice for the session either
 /// way, so a BUSY during a first-run sync costs them nothing they can see now and only the next
 /// launch's starting state.
+#[cfg(not(target_family = "wasm"))]
 #[tauri::command]
 pub async fn set_flatten_state(
     state: tauri::State<'_, Arc<AppState>>,
