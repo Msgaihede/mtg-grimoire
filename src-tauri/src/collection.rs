@@ -649,7 +649,6 @@ fn set_entry(
     })
 }
 
-#[cfg_attr(target_family = "wasm", allow(dead_code))]
 /// **One transaction for the whole file**, which is the whole reason this exists rather than the
 /// page calling `collection_add` per line: a 500-row CSV would otherwise be 500 transactions, and
 /// a failure halfway through would leave a collection nobody can reason about.
@@ -680,7 +679,10 @@ fn set_entry(
 /// is "nothing was updated", which is exactly what happened. Clamped rather than restructured:
 /// `added` and `removed` each name statements that ran, and making `updated` the subtraction of
 /// two counts that can overlap is what costs the invariant, not the counters themselves.
-fn commit_import(
+/// **`pub(crate)` since 2026-08-29**, with the one-PR `allow(dead_code)` gone: `web::route`
+/// is the second caller. The *file read* stayed behind — this takes already-parsed items, so
+/// it is an ordinary port where `import_read_file` is not.
+pub(crate) fn commit_import(
     conn: &Connection,
     items: &[CollectionImportItem],
     mode: &str,
